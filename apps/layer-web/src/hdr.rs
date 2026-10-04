@@ -10,8 +10,8 @@ use wasm_bindgen_futures::future_to_promise;
 /// Chrome measurements exceed the combined renderer/GPU process budget at the
 /// larger photo sizes; never open by silently reducing precision or dimensions.
 pub(super) fn admit_document(document: &layer_core::Document) -> Result<(), JsValue> {
-    if document.color.depth.is_float()
-        && u64::from(document.width) * u64::from(document.height) > 12_000_000
+    if document.composition().color.depth.is_float()
+        && u64::from(document.composition().size[0]) * u64::from(document.composition().size[1]) > 12_000_000
     {
         return Err(js(
             "HDR drawings above 12 megapixels are not supported in this browser build. Open the editable master in the native app, or explicitly resize a copy there. Your current drawing is unchanged.",
@@ -38,7 +38,7 @@ pub struct WebTone {
     owner: Arc<std::sync::Mutex<Option<String>>>,
     guide: Arc<GpuToneGuide>,
     control: CaptureControl,
-    time: f32,
+    context: layer_core::EvaluationContext,
 }
 #[wasm_bindgen]
 impl WebApp {
@@ -115,17 +115,16 @@ impl WebApp {
             .ok_or_else(|| js("Canvas unavailable"))?
             .snapshot_gpu();
         let owner = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
-        let time = self.session.engine().animation_time();
+        let context = project.output().context.clone();
         let control = control.inner.clone();
         if let Some(previous) = self.tone.pending.replace(control.clone()) {
             previous.cancel();
         }
         Ok(future_to_promise(async move {
-            raster_project::wait_backing(&project).await?;
+            artwork_transfer::wait_backing(&project.artwork).await?;
             let mut capture = gpu
                 .capture(
                     project,
-                    time,
                     control.clone(),
                 )
                 .map_err(js)?;
@@ -134,7 +133,7 @@ impl WebApp {
             Ok(WebTone {
                 key,
                 owner,
-                time,
+                context,
                 guide,
                 control,
             }
@@ -153,7 +152,7 @@ impl WebApp {
             return Ok(false);
         }
         self.set_tone_guide(Some(tone.guide))?;
-        self.tone.analysed_time = tone.time;
+        self.tone.analysed_time = tone.context.elapsed;
         self.tone.published = Some(tone.key);
         self.tone.publications = self.tone.publications.wrapping_add(1);
         self.tone.ready = true;
@@ -165,7 +164,7 @@ impl WebApp {
 impl WebApp {
     pub(super) fn hdr_output(&self) -> bool {
         self.session.state().hdr_display_available
-            && self.session.engine().document().color.depth.is_float()
+            && self.session.engine().document().composition().color.depth.is_float()
             && self.session.hdr_presentation_allowed()
     }
 }
@@ -178,20 +177,18 @@ pub fn proof_texture_build(edge: u32) -> Vec<u8> {
 /// Comparison previews download only the bounded GPU guide for CPU mapping.
 pub(super) async fn preview_document(
     gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
-    project: layer_core::Project,
-    time: f32,
+    artwork: layer_core::authored::Artwork,
+    context: layer_core::EvaluationContext,
     control: layer_render_wgpu::snapshot::CaptureControl,
 ) -> Result<layer_render_wgpu::snapshot::SnapshotPreview, JsValue> {
-    let extent = [project.document.width, project.document.height];
-    let color = project.document.color;
-    let rendition = project.document.sdr_rendition;
+    let document=layer_core::Document::from_artwork(artwork).map_err(js)?;
+    let extent=document.composition().size;
+    let color=document.composition().color;
+    let rendition=document.output().sdr;
+    let scene=document.snapshot_with_context(context);
     let mut preview = layer_color::AreaPreview::new(extent, [512, 384]).map_err(js)?;
     let mut capture = gpu
-        .capture(
-            project,
-            time,
-            control.clone(),
-        )
+        .capture_scene(scene, layer_core::SceneScope::All, control.clone())
         .map_err(js)?;
     let guide = if color.depth.is_float() {
         Some(capture.local_tone_guide_async().await.map_err(js)?)

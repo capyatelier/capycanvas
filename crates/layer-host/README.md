@@ -30,6 +30,15 @@ The platform calls the host from one engine/render owner. Native callbacks queue
 work for that owner. Thread creation, native widgets, surfaces, frame callbacks and
 file access remain platform responsibilities.
 
+File and preview workers retain immutable `ArtworkCapture` resources and typed
+scene snapshots. Source-only package writing does not require a preview or GPU
+readback. Export and comparison previews use the captured output context,
+including its integrated effect phases; durable save completion remains a shared
+session decision. `OpenEnvironment` callers retain `ImportedDocument` until
+renderer admission completes. Unsupported preparation uses its retained backing,
+verified preview and output inventory for the shared read-only package view;
+cancelled or stale requests keep their existing refusal path.
+
 ## Where to start
 
 - [lib.rs](src/lib.rs) defines `NativeHost`, pointer batches, action dispatch,

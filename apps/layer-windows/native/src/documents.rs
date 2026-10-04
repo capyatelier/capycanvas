@@ -2,7 +2,8 @@
 //! One job and one completion are bounded. GPU/session destruction stays on the worker.
 //!
 use crate::document_io::{atomic_write, check_cancelled, io_error, location};
-use layer_core::Project;
+use layer_core::authored::ArtworkCapture;
+use layer_core::package::codec::PreparedPackage;
 use layer_host::{NativeHost, Renderer, open::OpenEnvironment};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, UiSession};
@@ -25,6 +26,7 @@ use std::{
 #[serde(tag = "operation", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum DocumentAction {
     Tabs { action: tabs::Action },
+    Package { id:u32, action:layer_ui::PackageAction, path:Option<String> },
     Palette { action: crate::palette_files::Action },
     NewPreferences { id: u32, action: layer_ui::NewDocumentAction },
     Recovery { action: crate::recovery::Action },
@@ -77,12 +79,13 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
+    WritePackage {view:layer_ui::PackageView,action:layer_ui::PackageAction,original:Option<PathBuf>,path:PathBuf,cancelled:Arc<AtomicBool>},
     Activate(Box<layer_host::window::Activation>),
     Spill { tiles: layer_core::raster_storage::RetainedTiles, directory: PathBuf },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
     Save {
-        project: Box<Project>,
+        project: Box<ArtworkCapture>,
         path: PathBuf,
     },
     Prepare {
@@ -92,6 +95,8 @@ enum Job {
     },
 }
 enum Completed {
+    Package(layer_ui::PackageView),
+    PackageWritten,
     Activated(Box<layer_host::window::Activation>),
     Spilled,
     Workflow(Box<crate::document_workflows::Task>),
@@ -230,12 +235,20 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
+        Job::WritePackage {view,action,original,path,cancelled} => {
+            match action {
+                layer_ui::PackageAction::CopyOriginal=>atomic_write(&path,&cancelled,|mut file|view.copy_original(&mut file,&cancelled))?,
+                layer_ui::PackageAction::ExportPreview=>export_preview(&view,&path,original.as_deref(),&cancelled)?,
+                layer_ui::PackageAction::Close=>return Err("Closing a package does not write a file".into()),
+            }
+            Ok(Completed::PackageWritten)
+        },
         Job::Activate(mut activation) => activation.work().map(|()| Completed::Activated(activation)),
         Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::Save { project, path } => {
-            atomic_write(&path, cancel, |file| project.write(file))?;
+            atomic_write(&path, cancel, |mut file| PreparedPackage::prepare(&project, None, cancel)?.write(&mut file, cancel))?;
             Ok(Completed::Saved)
         }
         Job::Prepare {
@@ -245,18 +258,39 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         } => prepare(*environment, source, &cancelled),
     }
 }
+fn export_preview(view:&layer_ui::PackageView,path:&std::path::Path,original:Option<&std::path::Path>,cancel:&AtomicBool)->Result<(),String> {
+    check_cancelled(cancel)?;
+    if !view.capabilities().export {return Err("This package has no verified preview".into());}
+    if !path.extension().and_then(|extension|extension.to_str()).is_some_and(|extension|extension.eq_ignore_ascii_case("png")) {return Err("Choose a new PNG destination".into());}
+    if let Some(original)=original {
+        let resolve=|path:&std::path::Path|->Result<PathBuf,String> {
+            std::fs::canonicalize(path).or_else(|_|{
+                let parent=path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;let name=path.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
+                std::fs::canonicalize(parent).map(|parent|parent.join(name))
+            }).map_err(|e|io_error("locate preview destination",e))
+        };
+        let original=resolve(original)?;let destination=resolve(path)?;
+        if destination.to_string_lossy().eq_ignore_ascii_case(&original.to_string_lossy()) {return Err("Choose a preview destination different from the original package".into());}
+    }
+    let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e|io_error("create preview",e))?;
+    let result=view.export_preview(&mut file,cancel).and_then(|()|file.sync_all().map_err(|e|io_error("flush preview",e))).and_then(|()|check_cancelled(cancel));
+    drop(file);
+    if result.is_err() {let _=std::fs::remove_file(path);}
+    result
+}
+
 fn prepare(
     environment: OpenEnvironment,
     source: Source,
     cancel: &AtomicBool,
 ) -> Result<Completed, String> {
     let imported = match source {
-        Source::Create(options) => layer_ui::ImportedDocument { project: options.project(&environment.localization)?, source: layer_ui::ImportSource::Master },
+        Source::Create(options) => layer_ui::ImportOutcome::Editable(layer_ui::ImportedDocument::new(options.project(&environment.localization)?,layer_ui::ImportSource::Master)),
         Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
             layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
         Source::Interpret(mut imported, profile) => {
             let profile=match profile.resolve(cancel, &environment.localization) { Ok(profile)=>profile,Err(reason)=>return Ok(Completed::ProfileFailure(reason)) };
-            imported.interpret(profile)?; *imported
+            imported.interpret(profile)?; layer_ui::ImportOutcome::Editable(*imported)
         },
         Source::Open(path) => {
             let file = File::open(&path).map_err(|e| io_error("open", e))?;
@@ -264,6 +298,7 @@ fn prepare(
                 path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"), cancel)?
         }
     };
+    let imported=match imported {layer_ui::ImportOutcome::Editable(imported)=>imported,layer_ui::ImportOutcome::Package(outcome)=>return layer_ui::PackageView::new(outcome).map(Completed::Package)};
     if imported.interpretation_required(environment.photo_policy).is_some() {
         let profiles=crate::color_storage::list(cancel)?;
         let profile_view=serde_json::json!(profiles.iter().map(|entry|entry.localized_view(&environment.localization)).collect::<Vec<_>>());
@@ -271,12 +306,26 @@ fn prepare(
         return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles, profile_view, language })));
     }
     let kind = imported.source;
-    let candidate = environment.prepare(imported.project, || cancel.load(Ordering::Acquire))?;
+    let candidate = match environment.prepare(imported.project.clone(), || cancel.load(Ordering::Acquire)) {
+        Ok(candidate)=>candidate,
+        Err(reason)=>{
+            check_cancelled(cancel)?;
+            return match imported.preserve_unsupported(reason.clone()) {
+                Some(outcome)=>layer_ui::PackageView::new(outcome).map(Completed::Package),
+                None=>Err(reason),
+            };
+        },
+    };
     Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(candidate) } else { Completed::Prepared(candidate) })
 }
-pub(crate) fn prepare_recovery(environment: OpenEnvironment, path: PathBuf, cancel: &AtomicBool) -> Result<Box<UiSession<Renderer>>, String> {
-    match prepare(environment, Source::Recovery(path), cancel)? {
-        Completed::Prepared(candidate) => Ok(candidate),
+pub(crate) enum RecoveryPrepared {
+    Editable(Box<UiSession<Renderer>>),
+    Package {view:layer_ui::PackageView,path:PathBuf},
+}
+pub(crate) fn prepare_recovery(environment: OpenEnvironment, path: PathBuf, cancel: &AtomicBool) -> Result<RecoveryPrepared, String> {
+    match prepare(environment, Source::Recovery(path.clone()), cancel)? {
+        Completed::Prepared(candidate) => Ok(RecoveryPrepared::Editable(candidate)),
+        Completed::Package(view) => Ok(RecoveryPrepared::Package {view,path}),
         _ => Err("Recovery is not a native drawing".into()),
     }
 }
@@ -287,7 +336,10 @@ struct Active {
     location: Option<DocumentLocation>,
     cancelled: Option<Arc<AtomicBool>>,
 }
+struct PackageOpening {id:u32,name:String,original:Option<PathBuf>,view:layer_ui::PackageView,summary:serde_json::Value,serial:u32,writing:Option<layer_ui::PackageAction>,close_requested:bool,cancelled:Arc<AtomicBool>}
 pub(crate) struct DocumentService {
+    package:Option<PackageOpening>,
+    next_package_id:u32,
     profile_copy: serde_json::Value,
     window: layer_host::window::DocumentWindow<tabs::Parked>,
     pub recovery: Option<crate::recovery::Service>,
@@ -321,6 +373,7 @@ impl DocumentService {
             opening.profile_view=serde_json::json!(opening.profiles.iter().map(|entry|entry.localized_view(&localization)).collect::<Vec<_>>());
             opening.language=localization.language();
         }
+        if let Some(package)=&mut self.package {package.summary=serde_json::to_value(package.view.summary(&localization)).map_err(|e|e.to_string())?;}
         if let Some(task) = &mut self.workflow { task.set_localization(localization)?; }
         Ok(())
     }
@@ -347,6 +400,7 @@ impl DocumentService {
             worker: Worker::start(move || notify())?,
             active: None,
             opening: None,
+            package:None,next_package_id:0,
             workflow: None,
             workflow_control: None,
             workflow_running: false,
@@ -356,8 +410,9 @@ impl DocumentService {
             recording_save: None,
         })
     }
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn status(&self) -> Option<serde_json::Value> {
+        if let Some(package)=&self.package {return Some(serde_json::json!({"type":if package.writing.is_some() {"package_busy"}else{"package"},"id":package.id,"name":package.name,"serial":package.serial,"summary":package.summary,"title":package.summary[if package.writing==Some(layer_ui::PackageAction::ExportPreview) {"export_preview"}else{"copy_original"}]}));}
         if self.opening.is_none() && let Some(active) = &self.active && active.cancelled.is_some() { return Some(serde_json::json!({"type":"opening_busy","id":active.id})); }
         if let Some(task) = &self.workflow { return Some(task.status()); }
         if self.workflow_running { return self.workflow_control.as_ref().filter(|_| !self.workflow_quiet).map(|(id, _)| serde_json::json!({"type":"workflow_busy","id":id,"title":self.workflow_title})); }
@@ -365,7 +420,7 @@ impl DocumentService {
             "type": "interpret", "id": self.active.as_ref().map(|a| a.id), "copy":self.profile_copy,
             "spaces": layer_core::color::RgbSpace::ALL.map(|s| (s, s.name())),
             "profiles": opening.profile_view,
-            "channels": opening.imported.project.document.layers.iter().find_map(|l| l.source.as_ref()).map(|s| s.interpretation.channels),
+            "channels": opening.imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref()).map(|s| s.interpretation.channels),
         }))
     }
     pub(crate) fn renderer_unavailable(&mut self, host: &mut NativeHost) -> Result<(), String> {
@@ -434,7 +489,7 @@ impl DocumentService {
     const MAX_QUEUED_OPENS: usize = 64;
     fn open_idle(&self, host: &NativeHost) -> bool {
         let state = host.session.state();
-        self.active.is_none() && self.workflow_control.is_none() && !self.activating
+        self.package.is_none() && self.active.is_none() && self.workflow_control.is_none() && !self.activating
             && !self.spilling && self.opening.is_none() && self.recovery.as_ref().is_none_or(|r| !r.restoring())
             && !state.document_file.busy && !state.document_file.close_ready
             && !state.requests.iter().any(|r| matches!(r.kind, HostRequestKind::Document { .. }))
@@ -495,6 +550,21 @@ impl DocumentService {
             host.invalidate_snapshot();
             return Ok(());
         }
+        if let DocumentAction::Package {id,action,path}=action {
+            let package=self.package.as_mut().filter(|p|p.id==id).ok_or("Package view expired")?;
+            match action {
+                layer_ui::PackageAction::Close=>{if package.writing.is_some() {package.close_requested=true;package.cancelled.store(true,Ordering::Release);}else{self.package=None;}},
+                action @ (layer_ui::PackageAction::CopyOriginal|layer_ui::PackageAction::ExportPreview)=>{
+                    if package.writing.is_some(){return Err("A package file is already being written".into());}
+                    if action==layer_ui::PackageAction::ExportPreview&&!package.view.capabilities().export {return Err("This package has no verified preview".into());}
+                    let path=path.ok_or("Choose a destination for the package file")?;location(&path)?;
+                    package.serial=package.serial.wrapping_add(1);package.writing=Some(action);package.cancelled=Arc::new(AtomicBool::new(false));
+                    self.worker.submit(Job::WritePackage {view:package.view.clone(),action,original:package.original.clone(),path:PathBuf::from(path),cancelled:package.cancelled.clone()});
+                },
+            }
+            host.invalidate_snapshot();return Ok(());
+        }
+        if self.package.is_some(){return Err("Close the package view before starting another document operation".into());}
         if let DocumentAction::OpenPaths { paths } = action {
             if paths.is_empty() || self.open_queue.len() + paths.len() > Self::MAX_QUEUED_OPENS {
                 return Err("Open up to 64 drawings at once".into());
@@ -535,7 +605,7 @@ impl DocumentService {
             }
             Self::matches(host, epoch, revision)?;
             if self.active.is_some() || self.workflow_control.is_some()
-                || host.session.engine().document().active_layer.0 != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
+                || host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap_or(0) != active_layer { return Err("The canvas changed while receiving images; try again".into()); }
             host.dispatch(layer_ui::UiAction::Invoke { command: layer_ui::CommandId::ImportImage })?;
             let id = host.session.state().requests.iter().find(|r| matches!(r.kind, HostRequestKind::Document { request: DocumentRequest::Place })).ok_or("Image placement request is missing")?.id;
             let prepared = (|| { let mut task = crate::document_workflows::Task::capture(host, id)?;task.place_at(host, screen, layer)?;Ok::<_, String>(task) })();
@@ -741,6 +811,9 @@ impl DocumentService {
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
+        if let Some(package)=self.recovery.as_mut().and_then(|recovery|recovery.take_package()) {
+            self.present_recovery_package(host,package)?;
+        }
         self.palettes.poll(host);
         self.open_queued(host);
         if let Some(result) = self.recording_save.as_ref().and_then(|receiver| receiver.try_recv().ok()) {
@@ -754,6 +827,12 @@ impl DocumentService {
         let Some(completed) = self.worker.take() else {
             return Ok(());
         };
+        if self.package.as_ref().is_some_and(|p|p.writing.is_some()) {
+            let package=self.package.as_mut().unwrap();package.writing=None;package.serial=package.serial.wrapping_add(1);
+            if !package.close_requested {match completed {Ok(Completed::PackageWritten)=>{},Err(error)=>host.error=Some(error),_=>return Err("Unexpected package write completion".into())}}
+            if package.close_requested {self.package=None;}
+            host.invalidate_snapshot();return Ok(());
+        }
         if self.activating { return self.activated(host, completed); }
         if self.spilling {
             self.spilling = false;
@@ -828,6 +907,8 @@ impl DocumentService {
                     Err("The completed file belongs to a document that is no longer open".into())
                 }
             }
+            Ok(Completed::Package(view))=>{self.present_package(host,view,active.location.as_ref().map(|location|PathBuf::from(&location.uri)))?;Self::complete(host,active.id,Ok(false))?;return Ok(());},
+            Ok(Completed::PackageWritten)=>return Err("Unexpected package write completion".into()),
             Ok(Completed::Prepared(candidate)) => return self.append_candidate(host, active, candidate),
             Ok(Completed::ProfileFailure(reason)) => {
                 let previous=host.session.state().revision;
@@ -838,12 +919,35 @@ impl DocumentService {
         };
         Self::complete(host, active.id, result)
     }
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    fn present_package(&mut self,host:&mut NativeHost,view:layer_ui::PackageView,original:Option<PathBuf>)->Result<(),String> {
+        let summary=serde_json::to_value(view.summary(host.session.localization())).map_err(|error|error.to_string())?;
+        let name=original.as_ref().and_then(|path|path.file_name()).and_then(|name|name.to_str()).unwrap_or("Drawing.capy").into();
+        self.next_package_id=self.next_package_id.wrapping_add(1);
+        self.package=Some(PackageOpening{id:self.next_package_id,name,original,view,summary,serial:0,writing:None,close_requested:false,cancelled:Arc::new(AtomicBool::new(false))});
+        host.invalidate_snapshot();Ok(())
+    }
+    fn present_recovery_package(&mut self,host:&mut NativeHost,package:crate::recovery::RecoveredPackage)->Result<(),String> {
+        let crate::recovery::RecoveredPackage {token,identity,view,path}=package;
+        let result=(||{
+            if self.active.is_some()||self.activating||self.package.is_some() {return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());}
+            Self::matches(host,identity.0,identity.1)?;
+            self.present_package(host,view,Some(path))
+        })();
+        self.recovery.as_mut().ok_or("Recovery service is unavailable")?.complete_package(&mut host.session,token,result)?;
+        host.invalidate_snapshot();Ok(())
+    }
+    #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn preview(&self, id: u32, index: usize) -> Result<crate::previews::CapyPreview, String> {
+        if let Some(package)=self.package.as_ref().filter(|p|p.id==id) {
+            if index!=0{return Err("Unknown package preview".into());}
+            let preview=package.view.preview().ok_or("Package has no preview")?;let [width,height]=preview.size();
+            return crate::previews::CapyPreview::packet(serde_json::json!({"id":id,"width":width,"height":height}),preview.pixels().to_vec());
+        }
         let task = self.workflow.as_ref().filter(|t| t.id == id).ok_or("Document preview expired")?;
         task.preview(index)
     }
     pub(crate) fn stop_worker(&mut self) -> Result<(), String> {
+        if let Some(package)=&self.package {package.cancelled.store(true,Ordering::Release);}
         if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { cancelled.store(true, Ordering::Release); }
         if let Some(recovery) = &mut self.recovery { recovery.stop()?; }
         for (_, parked) in self.window.documents.parked_mut() {
@@ -860,6 +964,7 @@ impl DocumentService {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::*;
     use super::*;
     use crate::test_support::TempDir;
     use layer_ui::{CommandId, Platform, UiAction};
@@ -927,6 +1032,38 @@ mod tests {
     }
 
     #[test]
+    fn package_outcomes_preserve_the_editor_and_write_original_or_verified_preview_on_the_worker() {
+        use layer_core::package::{ImmutableBacking,codec::OpenOutcome,preview::Preview,transport::ChunkedBytes};
+        let bytes=b"original package bytes including unsupported content";
+        for disposition in 0..3 {
+            let mut f=Fixture::new();f.invoke(CommandId::OpenDocument);let id=f.request();let before=f.host.session.engine().document().clone();let epoch=f.host.session.state().document_file.epoch;
+            let source=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();let preview=Preview::from_rgba([1,1],Arc::from([16,32,48,255])).unwrap();
+            let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported content".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into()},_=>OpenOutcome::Failure{source,reason:"invalid package".into()}};
+            f.service.active=Some(Active{id,epoch,revision:before.revision,location:Some(DocumentLocation{uri:f.path("original.capy"),name:"original.capy".into()}),cancelled:None});
+            f.service.worker.shared.mailbox.lock().unwrap().completed=Some(Ok(Completed::Package(layer_ui::PackageView::new(outcome).unwrap())));f.service.poll(&mut f.host).unwrap();
+            assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);assert!(f.service.active.is_none());assert!(f.host.session.state().requests.iter().all(|r|r.id!=id));
+            let status=f.service.status().unwrap();let id=status["id"].as_u64().unwrap() as u32;assert_eq!(status["type"],"package");assert_eq!(status["summary"]["capabilities"]["edit"],false);assert_eq!(status["summary"]["capabilities"]["save"],false);assert_eq!(status["summary"]["capabilities"]["export"],disposition!=2);assert_eq!(f.service.preview(id,0).is_ok(),disposition!=2);
+            let destination=f.path("copied.capy");f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::CopyOriginal,path:Some(destination.clone())});assert_eq!(f.service.status().unwrap()["type"],"package_busy");f.finish();assert_eq!(std::fs::read(&destination).unwrap(),bytes);assert_eq!(f.host.session.engine().document(),&before);
+            let cancelled=Arc::new(AtomicBool::new(true));let view=f.service.package.as_ref().unwrap().view.clone();assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::CopyOriginal,original:None,path:PathBuf::from(destination.clone()),cancelled},&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(destination).unwrap(),bytes);
+            let view=f.service.package.as_ref().unwrap().view.clone();let png=f.path("preview.png");
+            if disposition!=2 {
+                f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::ExportPreview,path:Some(png.clone())});
+                assert_eq!(f.service.status().unwrap()["type"],"package_busy");assert_eq!(f.service.status().unwrap()["title"],status["summary"]["export_preview"]);
+                f.finish();let exported=std::fs::read(&png).unwrap();assert_eq!(exported,view.preview().unwrap().encoded().as_ref());
+                assert_eq!(Preview::decode(exported.clone().into()).unwrap().pixels().as_ref(),&[16,32,48,255]);
+                assert!(export_preview(&view,std::path::Path::new(&png),None,&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&png).unwrap(),exported);
+                let original=f.path("original.png");std::fs::write(&original,bytes).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&original).unwrap(),bytes);std::fs::remove_file(&original).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&original).exists());
+                assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);
+            } else {
+                assert!(f.service.dispatch(&mut f.host,DocumentAction::Package{id,action:layer_ui::PackageAction::ExportPreview,path:Some(png.clone())}).is_err());
+                assert!(export_preview(&view,std::path::Path::new(&png),None,&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&png).exists());
+            }
+            let cancelled_png=f.path("cancelled.png");assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::ExportPreview,original:None,path:PathBuf::from(&cancelled_png),cancelled:Arc::new(AtomicBool::new(true))},&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&cancelled_png).exists());
+            f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::Close,path:None});assert!(f.service.package.is_none());assert_eq!(f.host.session.engine().document(),&before);
+        }
+    }
+
+    #[test]
     fn renderer_failure_preserves_an_accepted_save() {
         let mut f = Fixture::new();
         f.invoke(CommandId::AddLayer);
@@ -945,8 +1082,8 @@ mod tests {
             "retirement must retain the writing job"
         );
         f.finish();
-        let saved = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
-        assert_eq!(saved.document.layers, document.layers);
+        let saved = read_document(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_authored_eq(&saved,&document);
         assert!(!f.host.session.state().document_file.modified);
     }
 
@@ -958,9 +1095,9 @@ mod tests {
         let mut f = Fixture::new();
         let mut project = layer_ui::new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let bytes = [27, 89, 143, 255].repeat(256 * 256);
-        let descriptor = RasterPlane::Color.descriptor(project.document.color);
+        let descriptor = RasterPlane::Color.descriptor(project.composition().color);
         let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
-        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+        paint_mut(&mut project,0).raster = RasterRevision::backed(RasterData {
             tiles: std::collections::BTreeMap::from([(
                 TileKey {
                     plane: RasterPlane::Color,
@@ -979,8 +1116,7 @@ mod tests {
         f.host.suspend_renderer().unwrap();
         f.service.renderer_unavailable(&mut f.host).unwrap();
         assert!(
-            !f.host.session.engine().document().layers[0]
-                .raster
+            !paint_at(f.host.session.engine().document(),0).raster
                 .is_empty(),
             "suspension must retain completed raster edits"
         );
@@ -1009,11 +1145,11 @@ mod tests {
             "only durable completion clears dirty"
         );
         f.finish();
-        let project = Project::read(File::open(&path).unwrap(), Default::default()).unwrap();
+        let project = read_document(File::open(&path).unwrap(), Default::default()).unwrap();
         let mut expected = Vec::new();
-        Project { document: source }.write(&mut expected).unwrap();
+        write_document(&source,&mut expected).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), expected);
-        let saved = project.document.layers[0].raster.wait_data().unwrap();
+        let saved = paint_at(&project,0).raster.wait_data().unwrap();
         assert_eq!(
             saved
                 .tiles
@@ -1057,8 +1193,8 @@ mod tests {
             DocumentService::request(&f.host, f.request()).unwrap(),
             DocumentRequest::ConfirmClose { .. }
         ));
-        let project = Project::read(File::open(path).unwrap(), Default::default()).unwrap();
-        assert_eq!(project.document, saved);
+        let project = read_document(File::open(path).unwrap(), Default::default()).unwrap();
+        assert_authored_eq(&project,&saved);
         let state = &f.host.session.state().document_file;
         f.act(DocumentAction::RespondClose {
             id: f.request(),
@@ -1133,7 +1269,7 @@ mod tests {
         let mut f = Fixture::new();
         let epoch = f.host.session.state().document_file.epoch;
         let revision = f.host.session.engine().document().revision;
-        let active_layer = f.host.session.engine().document().active_layer.0;
+        let active_layer = f.host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         let drop = |paths: Vec<String>, layer: Option<(u64, f32)>| DocumentAction::DropImages {
             epoch, revision, active_layer, paths, screen: None, layer,
         };
@@ -1234,7 +1370,7 @@ mod tests {
                 assert!(f.host.session.state().host_error.is_some());
             } else {
                 let document = f.host.session.engine().document();
-                assert_eq!([document.width, document.height], [64, 48]);
+                assert_eq!([document.composition().size[0], document.composition().size[1]], [64, 48]);
                 assert_eq!(f.host.session.state().document_file.epoch, 1);
                 assert!(!f.host.session.state().document_file.modified);
                 assert!(f.host.dirty);
@@ -1392,16 +1528,7 @@ mod gpu_tests {
         })
         .unwrap();
         let clean = image(&mut host);
-        let paper = host
-            .session
-            .engine()
-            .document()
-            .layers
-            .iter()
-            .find(|l| l.id == layer_core::LayerId(2))
-            .unwrap()
-            .id
-            .0;
+        let paper=host.session.engine().document().scene().order().iter().copied().find(|h|host.session.engine().document().scene().effect(*h).is_some_and(|effect|effect.program.id.as_ref()=="solid_color")).map(layer_ui::occurrence_token).unwrap();
         host.dispatch(UiAction::SetLayerVisibility {
             id: paper,
             visible: false,
@@ -1439,7 +1566,7 @@ mod gpu_tests {
             .unwrap();
         finish(&mut service, &mut host, &done);
         assert!(host.session.state().host_error.is_none());
-        assert_eq!(host.session.engine().document().width, 96);
+        assert_eq!(host.session.engine().document().composition().size[0], 96);
         assert_eq!(host.session.state().document_file.epoch, epoch + 1);
         assert!(host.session.state().document_file.location.is_none());
         invoke(&mut host, CommandId::OpenDocument);
@@ -1457,7 +1584,7 @@ mod gpu_tests {
             .unwrap();
         finish(&mut service, &mut host, &done);
         assert!(host.session.state().host_error.is_none());
-        assert_eq!(host.session.engine().document().width, 64);
+        assert_eq!(host.session.engine().document().composition().size[0], 64);
         assert_eq!(host.session.state().document_file.epoch, epoch + 1);
         let reopened = image(&mut host);
         assert_eq!(

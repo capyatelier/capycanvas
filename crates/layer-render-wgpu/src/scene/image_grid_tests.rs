@@ -119,9 +119,16 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
     program.passes = vec![layer_core::EffectPass {
         entry: program.entry.clone(), sampling: layer_core::EffectSampling::Neighborhood { radius: 8 },
     }].into();
-    let mut layer = Layer::paint(LayerId(1), "Grid probe");
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
+    use layer_core::authored::*;
+    let mut artwork = Artwork::new(extent).unwrap();
+    let program = Arc::new(program);
+    let values = layer_core::EffectInstance::new(program.clone()).values;
+    let definition = artwork.definitions.insert(PortableId::random(), Definition { program, dimensions: Default::default() }).unwrap();
+    let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: extent }).unwrap();
+    let handle = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Grid probe")).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries.push(handle);
+    let document = layer_core::Document::from_artwork(artwork).unwrap();
     let center = |index: u32, origin: u32, end: u32, level: u32| {
         let start = origin + (index << level);
         (start as f32 + (start + (1 << level)).min(end) as f32) * 0.5
@@ -149,7 +156,7 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
         let original_image = upload(original);
         for execution in [effects::Execution::Image(0), effects::Execution::Preview] {
             let result = Image::new(&r, output, "effect grid result");
-            let prepared = scene.effects.prepare(&r, &[&layer], execution, 0., 0, Default::default()).unwrap();
+            let prepared = scene.effects.prepare(&r, document.scene(), &[handle], execution, 0., 0, Default::default()).unwrap();
             let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
             scene.begin_frame();
             scene.jobs.push(Job::Effect {

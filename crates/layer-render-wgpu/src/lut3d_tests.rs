@@ -1,29 +1,29 @@
 use crate::{WgpuRasterizer, PixelRect, scene, tests::fixture, test_support::{packet, floats, document_texture}};
-use layer_core::{EffectInstance, EffectKind, EffectValue, Layer, LayerId, LayerKind, Lut3d, Point};
+use layer_core::{EffectInstance, EffectKind, EffectValue, Document, OccurrenceHandle, Lut3d, Point};
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth, rgb};
 use layer_render::{CanvasRenderer, FramePacket};
 use std::sync::Arc;
+use crate::tests::native_effects::{effect_document,empty_document,insert_effect,insert_source,set_effect,mask,roundtrip};
 
-fn set(layer:&mut Layer,key:&str,value:EffectValue) {
-    Arc::make_mut(layer.effect.as_mut().unwrap()).set(key,value).unwrap();
+fn set(effect:&mut EffectInstance,key:&str,value:EffectValue) {effect.set(key,value).unwrap();}
+fn lookup(_id:u64,resource:Arc<Lut3d>,space:usize,intensity:f32,depth:SampleDepth)->EffectInstance {
+    let mut effect=EffectInstance::new(fixture("color_lookup").program().for_depth(depth));
+    set(&mut effect,"color_space",EffectValue::Choice(space as u32));set(&mut effect,"resource",EffectValue::Lut3d(Some(resource)));set(&mut effect,"intensity",EffectValue::Number(intensity));effect
 }
-fn lookup(id:u64,resource:Arc<Lut3d>,space:usize,intensity:f32,depth:SampleDepth)->Layer {
-    let mut layer=Layer::paint(LayerId(id),"Color Lookup");layer.kind=LayerKind::Effect;
-    layer.effect=Some(Arc::new(EffectInstance::new(fixture("color_lookup").program().for_depth(depth))));
-    set(&mut layer,"color_space",EffectValue::Choice(space as u32));
-    set(&mut layer,"resource",EffectValue::Lut3d(Some(resource)));
-    set(&mut layer,"intensity",EffectValue::Number(intensity));layer
-}
-fn pattern(colors:&[[f32;4]])->Layer {
-    let mut program=(*fixture("exposure").program()).clone();program.kind=EffectKind::Generator;
-    program.entry="lut_input_pattern".into();
+fn pattern(colors:&[[f32;4]])->EffectInstance {
+    let mut program=(*fixture("exposure").program()).clone();program.kind=EffectKind::Generator;program.entry="lut_input_pattern".into();
     let values=colors.iter().map(|c|format!("vec4<f32>({:?},{:?},{:?},{:?})",c[0],c[1],c[2],c[3])).collect::<Vec<_>>().join(",");
     program.wgsl=format!("fn lut_input_pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let values=array<vec4<f32>,{}>({values});return values[u32(p.x)%{}u];}}",colors.len(),colors.len()).into();
-    let mut layer=Layer::paint(LayerId(1),"LUT original");layer.kind=LayerKind::Effect;layer.effect=Some(Arc::new(EffectInstance::new(Arc::new(program))));layer
+    EffectInstance::new(Arc::new(program))
 }
-fn render(r:&mut WgpuRasterizer,layers:&[Layer])->Vec<[f32;4]> {
-    r.submit(packet(layers,[256;2])).unwrap();
-    floats(&crate::layer_tests::page_bytes(r,document_texture(r)))
+fn render_document(r:&mut WgpuRasterizer,document:&Document)->Vec<[f32;4]> {
+    r.submit(packet(document.scene().with_owner(0,0),document.composition().size)).unwrap();floats(&crate::layer_tests::page_bytes(r,document_texture(r)))
+}
+fn render(r:&mut WgpuRasterizer,effects:&[EffectInstance])->Vec<[f32;4]> {
+    let document=effect_document(effects,[256;2],r.document_color);render_document(r,&document)
+}
+fn program_mut(document:&mut Document,h:OccurrenceHandle)->&mut layer_core::EffectProgram {
+    let definition=document.scene().effect_application(h).unwrap().definition;Arc::make_mut(&mut document.artwork.definitions.get_mut(definition).unwrap().program)
 }
 fn transfer(v:f64,space:usize,decode:bool)->f64 {
     let x=v.abs();let y=match (space,decode) {
@@ -118,10 +118,10 @@ fn builtin_looks_preserve_alpha_hdr_and_match_known_srgb_knots_in_every_working_
         }
     }
 }
-fn capture(r:&mut WgpuRasterizer,scene:&mut scene::Scene,layers:&[Layer],output:scene::Output,crop:PixelRect)->Vec<[f32;4]> {
+fn capture(r:&mut WgpuRasterizer,scene:&mut scene::Scene,document:&Document,output:scene::Output,crop:PixelRect)->Vec<[f32;4]> {
     let (target,_)=crate::create_color_target(&r.device,[crop.width(),crop.height()],"LUT checkpoint oracle");
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
-    scene.capture_region(r,packet(layers,[256;2]),&target,crop,output,&mut encoder).unwrap();
+    scene.capture_region(r,packet(document.scene().with_owner(0,0),[256;2]),&target,crop,output,&mut encoder).unwrap();
     r.uploads.finish(&encoder);encoder.submit(&r.queue);floats(&crate::layer_tests::page_bytes(r,&target))
 }
 
@@ -164,19 +164,23 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
     let colors=[[0.24,0.41,0.69,0.37],[0.12,0.31,0.19,0.8],[0.,0.,0.,0.]];
     for working in 0..4{
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::ALL[working],depth:SampleDepth::F32}).unwrap();
-        let mut bottom=lookup(2,first.clone(),0,65.,SampleDepth::F32);let mut top=lookup(3,second.clone(),3,40.,SampleDepth::F32);
-        bottom.opacity=0.6;top.opacity=0.8;let mut mask=layer_core::LayerMask::reveal_all(LayerId(100),Point::default());mask.default_coverage=0.25;bottom.mask=Some(mask);
-        for clipped in [false,true]{top.properties.clipped=clipped;bottom.properties.clipped=clipped;let layers=[top.clone(),bottom.clone(),pattern(&colors)];let full=render(&mut r,&layers);
+        let bottom=lookup(2,first.clone(),0,65.,SampleDepth::F32);let top=lookup(3,second.clone(),3,40.,SampleDepth::F32);
+
+        for clipped in [false,true]{let mut document=effect_document(&[top.clone(),bottom.clone(),pattern(&colors)],[256;2],r.document_color);
+            let handles=document.scene().order().to_vec();let top_h=handles[0];let bottom_h=handles[1];
+            document.artwork.occurrences.get_mut(top_h).unwrap().opacity=0.8;document.artwork.occurrences.get_mut(top_h).unwrap().clipped=clipped;
+            document.artwork.occurrences.get_mut(bottom_h).unwrap().opacity=0.6;document.artwork.occurrences.get_mut(bottom_h).unwrap().clipped=clipped;mask(&mut document,bottom_h,0.25);
+            let full=render_document(&mut r,&document);
             let mut expected_mid=Vec::new();let mut expected_final=Vec::new();for input in colors{
                 let corrected=reference(&first,input,working,0,65.);let mid=std::array::from_fn::<_,4,_>(|i|if i==3{f64::from(input[i])}else{f64::from(input[i])+0.15*(corrected[i]-f64::from(input[i]))});
                 let second_input=mid.map(|v|v as f32);let corrected=reference(&second,second_input,working,3,40.);let output=std::array::from_fn(|i|if i==3{mid[i]}else{mid[i]+0.8*(corrected[i]-mid[i])});expected_mid.push(mid);expected_final.push(output);
             }
             for i in 0..3{close(full[i],expected_final[i],"stacked LUTs");}
-            let mut scene=scene::Scene::new(&r);let all=capture(&mut r,&mut scene,&layers,scene::Output::Artwork(None),PixelRect::full([256;2]));
+            let mut scene=scene::Scene::new(&r);let all=capture(&mut r,&mut scene,&document,scene::Output::Artwork(None),PixelRect::full([256;2]));
             for (i,p) in all.iter().enumerate(){close(*p,expected_final[(i%256)%3],"retained checkpoint full");}
-            let crop=PixelRect::new(131,7,149,19);let before_top=capture(&mut r,&mut scene,&layers,scene::Output::EffectInput(LayerId(3)),crop);
+            let crop=PixelRect::new(131,7,149,19);let before_top=capture(&mut r,&mut scene,&document,scene::Output::EffectInput(top_h),crop);
             for (i,p) in before_top.iter().enumerate(){close(*p,expected_mid[((i%crop.width() as usize)+131)%3],"checkpoint effect input");}
-            let cropped=capture(&mut r,&mut scene,&layers,scene::Output::Artwork(None),crop);for (i,p) in cropped.iter().enumerate(){close(*p,expected_final[((i%crop.width() as usize)+131)%3],"checkpoint crop");}
+            let cropped=capture(&mut r,&mut scene,&document,scene::Output::Artwork(None),crop);for (i,p) in cropped.iter().enumerate(){close(*p,expected_final[((i%crop.width() as usize)+131)%3],"checkpoint crop");}
         }
     }
 }
@@ -185,37 +189,47 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
 fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
     let resource=table(17,[[0.;3],[1.;3]],false);let bytes=resource.bytes() as u64;
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let cache=r.device.effect_resources.clone();
-    let source=pattern(&[[0.24,0.41,0.69,0.37]]);let mut layer=lookup(2,resource.clone(),0,100.,SampleDepth::F32);
-    render(&mut r,std::slice::from_ref(&source));let baseline=residency(&r);assert_eq!(baseline,(0,16));
-    render(&mut r,&[layer.clone(),source.clone()]);let initial=residency(&r);assert_eq!(initial,(1,bytes+baseline.1));
-    for intensity in 0..100{set(&mut layer,"intensity",EffectValue::Number(intensity as f32));let pixels=render(&mut r,&[layer.clone(),source.clone()]);close(pixels[0],reference(&resource,[0.24,0.41,0.69,0.37],0,0,intensity as f32),"intensity edit original input");assert_eq!(residency(&r),initial);}
-    for selected in 0..4{set(&mut layer,"color_space",EffectValue::Choice(selected));render(&mut r,&[layer.clone(),source.clone()]);assert_eq!(residency(&r),initial);}
+    let source=pattern(&[[0.24,0.41,0.69,0.37]]);let layer=lookup(2,resource.clone(),0,100.,SampleDepth::F32);
+    let mut document=effect_document(&[layer,source],[256;2],r.document_color);
+    let handles=document.scene().order().to_vec();let target=handles[0];let source=handles[1];let stack=document.composition().result;
+    document.artwork.stacks.get_mut(stack).unwrap().entries=vec![source];crate::tests::native_effects::refresh(&mut document);
+    render_document(&mut r,&document);let baseline=residency(&r);assert_eq!(baseline,(0,16));
+    document.artwork.stacks.get_mut(stack).unwrap().entries=handles;crate::tests::native_effects::refresh(&mut document);
+    render_document(&mut r,&document);let initial=residency(&r);assert_eq!(initial,(1,bytes+baseline.1));
+    for intensity in 0..100{set_effect(&mut document,target,"intensity",EffectValue::Number(intensity as f32));let pixels=render_document(&mut r,&document);close(pixels[0],reference(&resource,[0.24,0.41,0.69,0.37],0,0,intensity as f32),"intensity edit original input");assert_eq!(residency(&r),initial);}
+    for selected in 0..4{set_effect(&mut document,target,"color_space",EffectValue::Choice(selected));render_document(&mut r,&document);assert_eq!(residency(&r),initial);}
+    set_effect(&mut document,target,"resource",EffectValue::Lut3d(Some(Arc::new(resource.with_title("Retitled use".into()).unwrap()))));
+    render_document(&mut r,&document);assert_eq!(residency(&r),initial);
     let alias=Arc::new(Lut3d::from_samples(resource.size(),resource.domain(),"Alias".into(),resource.samples().unwrap().collect::<Vec<_>>().into()).unwrap());assert_eq!(alias.digest(),resource.digest());
-    let duplicate=lookup(3,alias,0,100.,SampleDepth::F32);render(&mut r,&[duplicate,layer.clone(),source.clone()]);assert_eq!(residency(&r),initial);
-    r.submit(FramePacket{composite_all:false,..packet(&[layer.clone(),source.clone()],[256;2])}).unwrap();assert_eq!(residency(&r),initial);
-    for _ in 0..3{render(&mut r,std::slice::from_ref(&source));}assert_eq!(residency(&r),(initial.0,baseline.1));
-    drop(layer);drop(resource);drop(r);assert_eq!(cache.lock().unwrap().bytes(),baseline.1);
+    let duplicate=insert_effect(&mut document,lookup(3,alias,0,100.,SampleDepth::F32));
+    document.artwork.stacks.get_mut(stack).unwrap().entries=vec![duplicate,target,source];crate::tests::native_effects::refresh(&mut document);
+    render_document(&mut r,&document);assert_eq!(residency(&r),initial);
+    r.submit(FramePacket{composite_all:false,..packet(document.scene().with_owner(0,0),[256;2])}).unwrap();assert_eq!(residency(&r),initial);
+    document.artwork.stacks.get_mut(stack).unwrap().entries=vec![source];crate::tests::native_effects::refresh(&mut document);
+    assert!(document.scene().position(target).is_none());assert!(document.scene().position(duplicate).is_none());
+    assert_eq!(document.scene().effect(target).unwrap().lut3d().unwrap().digest(),resource.digest());
+    assert_eq!(document.scene().effect(duplicate).unwrap().lut3d().unwrap().digest(),resource.digest());
+    for _ in 0..3{render_document(&mut r,&document);}assert_eq!(residency(&r),(initial.0,baseline.1));
+    drop(document);drop(resource);drop(r);assert_eq!(cache.lock().unwrap().bytes(),baseline.1);
 }
 
 #[test]
 fn archive_reopen_owns_resource_without_original_file_and_restores_editable_pixels() {
     let resource=table(3,[[0.;3],[1.;3]],false);let color=DocumentColor{space:RgbSpace::ProPhoto,depth:SampleDepth::F32};
-    let mut document=layer_core::Document::new("self contained LUT",256,256,layer_core::DocumentNames{paint:"Paint".into(),paper:"Paper".into()});document.color=color;
-    let mut source=Layer::paint(LayerId(1),"Retained pixels");source.source=Some(crate::test_support::depth_source([256;2],SampleDepth::F32,color.space,4*1024*1024,|x,y|[(x as f32+1.)/257.,(y as f32+1.)/257.,0.24,0.37]));
-    document.layers=vec![lookup(2,resource.clone(),0,67.,SampleDepth::F32),source];document.active_layer=LayerId(1);
-    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();let original=render(&mut r,&document.layers);
-    let mut bytes=Vec::new();layer_core::Project{document}.write(&mut bytes).unwrap();drop(resource);drop(r);
-    let mut reopened=layer_core::Project::read(bytes.as_slice(),Default::default()).unwrap();let ready=reopened.document.layers[0].effect.as_ref().unwrap().lut3d().unwrap().clone();assert!(ready.accepts(RgbSpace::Srgb));
-    let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();assert_eq!(render(&mut fresh,&reopened.document.layers),original);
-    set(&mut reopened.document.layers[0],"intensity",EffectValue::Number(0.));let neutral=render(&mut fresh,&reopened.document.layers);assert_ne!(neutral,original);
-    set(&mut reopened.document.layers[0],"intensity",EffectValue::Number(67.));assert_eq!(render(&mut fresh,&reopened.document.layers),original);
-    assert_eq!(residency(&fresh),(1,ready.bytes() as u64));
+    let mut document=empty_document([256;2],color);insert_effect(&mut document,lookup(2,resource.clone(),0,67.,SampleDepth::F32));
+    let source=insert_source(&mut document,"Retained pixels",crate::test_support::depth_source([256;2],SampleDepth::F32,color.space,4*1024*1024,|x,y|[(x as f32+1.)/257.,(y as f32+1.)/257.,0.24,0.37]));
+    document.working.occurrence=Some(source);document.working.target=document.scene().source_target(source);
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();let original=render_document(&mut r,&document);
+    let mut reopened=roundtrip(document);drop(resource);drop(r);let target=reopened.scene().order()[0];let ready=reopened.scene().effect(target).unwrap().lut3d().unwrap().clone();assert!(ready.accepts(RgbSpace::Srgb));
+    let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();assert_eq!(render_document(&mut fresh,&reopened),original);
+    set_effect(&mut reopened,target,"intensity",EffectValue::Number(0.));let neutral=render_document(&mut fresh,&reopened);assert_ne!(neutral,original);
+    set_effect(&mut reopened,target,"intensity",EffectValue::Number(67.));assert_eq!(render_document(&mut fresh,&reopened),original);assert_eq!(residency(&fresh),(1,ready.bytes() as u64));
 }
 
 #[test]
 fn unsafe_selected_space_is_refused_and_unrepresentable_residual_returns_source() {
     let unsafe_resource=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],"Near maximum".into(),vec![[1.1972514e16;3];8].into()).unwrap());assert!(!unsafe_resource.accepts(RgbSpace::Srgb));
-    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let before=layer.effect.clone();assert!(Arc::make_mut(layer.effect.as_mut().unwrap()).set("resource",EffectValue::Lut3d(Some(unsafe_resource))).is_err());assert_eq!(layer.effect,before);
+    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let before=layer.clone();assert!(layer.set("resource",EffectValue::Lut3d(Some(unsafe_resource))).is_err());assert_eq!(layer,before);
     let encoded=RgbSpace::Srgb.encode(f64::from(f32::MAX)*0.1) as f32;let resource=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],"Large but admitted".into(),vec![[encoded;3];8].into()).unwrap());assert!(resource.accepts(RgbSpace::Srgb));
     let source=[f32::MAX*0.9,f32::MAX*0.9,f32::MAX*0.9,1.];let expected=reference(&resource,source,0,0,100.);assert_eq!(expected,source.map(f64::from));
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let original=pattern(&[source]);assert_eq!(render(&mut r,std::slice::from_ref(&original))[0],source,"finite original reaches LUT stage unchanged");
@@ -228,13 +242,13 @@ fn literal_domain_coordinates_preserve_adjacent_normal_interiors_and_tetra_ties(
     for minimum in [f32::MIN_POSITIVE,f32::MIN_POSITIVE*2.,1e-30,1.,1e30,-1e-30]{
         let maximum=f32::from_bits(if minimum.is_sign_negative(){minimum.to_bits()-8}else{minimum.to_bits()+8});
         let resource=Arc::new(Lut3d::from_samples(2,[[minimum;3],[maximum;3]],"Normal precision probe".into(),vec![[0.;3];8].into()).unwrap());
-        let mut layer=lookup(2,resource,0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut Arc::make_mut(layer.effect.as_mut().unwrap()).program);
+        let mut layer=lookup(2,resource,0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut layer.program);
         let code=program.wgsl.sources().unwrap().iter().map(|v|v.as_ref()).collect::<Vec<_>>().join("\n");
         program.entry="cube_coordinate_probe".into();program.wgsl=format!("{code}\nfn cube_coordinate_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return vec4<f32>(fx_cube_coordinate(c.r,0u),fx_cube_coordinate(c.g,1u),fx_cube_coordinate(c.b,2u),1.);}}").into();
         let inputs=(0..=8).map(|i|{let v=f32::from_bits(if minimum.is_sign_negative(){minimum.to_bits()-i}else{minimum.to_bits()+i});[v,v,v,1.]}).collect::<Vec<_>>();
         let actual=render(&mut r,&[layer,pattern(&inputs)]);for i in 0..9{assert_eq!(actual[i],[i as f32/8.,i as f32/8.,i as f32/8.,1.],"normal coordinate {minimum:e}/{maximum:e}/step{i}");}
     }
-    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut Arc::make_mut(layer.effect.as_mut().unwrap()).program);
+    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut layer.program);
     let code=program.wgsl.sources().unwrap().iter().map(|v|v.as_ref()).collect::<Vec<_>>().join("\n");program.entry="tetra_offset_probe".into();program.wgsl=format!("{code}\nfn tetra_offset_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let t=tetrahedron(c.rgb);return vec4<f32>(vec3<f32>(select(t.first,t.second,fx_parameter(b,2u).x<50.)),1.);}}").into();
     let inputs=[[0.8,0.5,0.2,1.],[0.8,0.2,0.5,1.],[0.5,0.8,0.2,1.],[0.2,0.8,0.5,1.],[0.5,0.2,0.8,1.],[0.2,0.5,0.8,1.],[0.3,0.3,0.3,1.],[0.3,0.3,0.1,1.],[0.3,0.1,0.3,1.],[0.1,0.3,0.3,1.]];
     for (intensity,offset) in [(100.,0),(0.,1)]{set(&mut layer,"intensity",EffectValue::Number(intensity));let actual=render(&mut r,&[layer.clone(),pattern(&inputs)]);for (i,c) in inputs.iter().enumerate(){let mut axes=[0usize,1,2];axes.sort_by(|a,b|c[*b].total_cmp(&c[*a]));let mut expected=[0.,0.,0.,1.];expected[axes[offset]]=1.;assert_eq!(actual[i],expected,"tetra offset {offset}, {c:?}");}}
@@ -255,23 +269,19 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
         let mut window=WgpuRasterizer::new_native_headless(color).unwrap();
         let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
         for hdr in [false,true] {
-            let mut original=Layer::paint(LayerId(1),"Correlated LUT edges");
-            original.source=Some(crate::test_support::depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,16*1024*1024,|x,y|{
-                let gray=if hdr && (x/67+y/43)%5==0 {if x%2==0{-0.125}else{4.}}
-                    else {RgbSpace::Srgb.decode(if (x/3+y/2)%2==0{126./255.}else{130./255.}) as f32};
-                let alpha=if hdr{match (x/67+y/43)%3{0=>8e-8,1=>0.37,_=>1.}}else{1.};
-                [gray,gray,gray,alpha]
-            }));
-            let mut adjustment=lookup(2,resource.clone(),0,100.,SampleDepth::F32);
-            Arc::make_mut(&mut Arc::make_mut(adjustment.effect.as_mut().unwrap()).program).resolution=EffectResolution::Display;
+            let original=crate::test_support::depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,16*1024*1024,|x,y|{
+                let gray=if hdr && (x/67+y/43)%5==0 {if x%2==0{-0.125}else{4.}} else {RgbSpace::Srgb.decode(if (x/3+y/2)%2==0{126./255.}else{130./255.}) as f32};
+                let alpha=if hdr{match (x/67+y/43)%3{0=>8e-8,1=>0.37,_=>1.}}else{1.};[gray,gray,gray,alpha]
+            });
+            let mut adjustment=lookup(2,resource.clone(),0,100.,SampleDepth::F32);Arc::make_mut(&mut adjustment.program).resolution=EffectResolution::Display;
+            let mut document=empty_document(extent,color);let target=insert_effect(&mut document,adjustment);insert_source(&mut document,"Correlated LUT edges",original);
             if !hdr {
-                let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());
-                mask.initial=Some(layer_core::Selection::polygon(vec![Point{x:573.,y:237.},Point{x:1001.,y:257.},Point{x:987.,y:507.},Point{x:587.,y:479.}]).unwrap());
-                adjustment.mask=Some(mask);adjustment.opacity=0.7;adjustment.properties.clipped=true;
+                mask(&mut document,target,1.);let coverage=document.scene().mask(target).unwrap().0.source;
+                document.artwork.coverage.get_mut(coverage).unwrap().initial=Some(layer_core::Selection::polygon(vec![Point{x:573.,y:237.},Point{x:1001.,y:257.},Point{x:987.,y:507.},Point{x:587.,y:479.}]).unwrap());
+                let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.7;occurrence.clipped=true;
             }
-            let mut layers=[adjustment,original];
             for level in [1,2,3] {
-                let scale=1./(1<<level) as f32;let mut frame=packet(&layers,extent);
+                let scale=1./(1<<level) as f32;let mut frame=packet(document.scene().with_owner(0,0),extent);
                 frame.view.width_px=43;frame.view.height_px=25;
                 frame.view.document_to_surface=[scale,0.,0.,scale,-610.*scale,-270.*scale];
                 window.submit(frame).unwrap();exact.submit(frame).unwrap();
@@ -281,8 +291,8 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
                 println!("Color Lookup adjacent N65 {working:?} hdr={hdr} level={level} error={error:?}");
                 assert_eq!(window.readback_srgb_rgba8().unwrap(),exact.readback_srgb_rgba8().unwrap());
             }
-            Arc::make_mut(&mut Arc::make_mut(layers[0].effect.as_mut().unwrap()).program).resolution=EffectResolution::Native;
-            let scale=0.25;let mut frame=packet(&layers,extent);frame.view.width_px=43;frame.view.height_px=25;
+            program_mut(&mut document,target).resolution=EffectResolution::Native;
+            let scale=0.25;let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.width_px=43;frame.view.height_px=25;
             frame.view.document_to_surface=[scale,0.,0.,scale,-610.*scale,-270.*scale];
             window.submit(frame).unwrap();exact.submit(frame).unwrap();
             let cache=window.scale_display.as_ref().unwrap();assert!(cache.evaluation==Evaluation::Native);
@@ -328,20 +338,16 @@ fn near_maximum_admitted_tables_and_physical_profile_transforms_remain_finite() 
 
 #[test]
 fn auxiliary_lookup_is_pointwise_and_stays_out_of_neighbor_fusion_chains() {
-    let resource=table(2,[[0.;3],[1.;3]],false);
-    let lut=lookup(2,resource,0,100.,SampleDepth::F32);
-    let program=&lut.effect.as_ref().unwrap().program;
-    assert!(!program.image_boundary());assert!(program.fusion_boundary());
-    let ordinary=|id,name|{let mut layer=Layer::paint(LayerId(id),name);layer.kind=LayerKind::Effect;layer.effect=Some(Arc::new(EffectInstance::new(fixture(name).program())));layer};
-    let exposure=ordinary(3,"exposure");let invert=ordinary(4,"invert");let source=pattern(&[[0.2,0.4,0.6,1.]]);
-    let layers=[exposure.clone(),lut.clone(),invert.clone(),source.clone()];
-    let chains=scene::startup_effect_chains(&layers);
-    assert!(chains.iter().any(|(chain,execution)|chain[0].id==lut.id && chain.len()==1 && *execution==crate::effects::Execution::Fused));
-    assert!(chains.iter().all(|(chain,_)|chain.len()==1 || chain.iter().all(|layer|layer.id!=lut.id)));
-    let ordinary_layers=[exposure.clone(),invert,source];
-    assert!(scene::startup_effect_chains(&ordinary_layers).iter().any(|(chain,_)|chain.len()==2));
-    let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let mut scene=scene::Scene::new(&r);
-    assert!(scene.effects.prepare(&r,&[&lut,&exposure],crate::effects::Execution::Fused,0.,0,Default::default()).is_err());
+    let resource=table(2,[[0.;3],[1.;3]],false);let lut=lookup(2,resource,0,100.,SampleDepth::F32);
+    assert!(!lut.program.image_boundary());assert!(lut.program.fusion_boundary());
+    let exposure=EffectInstance::new(fixture("exposure").program());let invert=EffectInstance::new(fixture("invert").program());let source=pattern(&[[0.2,0.4,0.6,1.]]);
+    let document=effect_document(&[exposure.clone(),lut.clone(),invert.clone(),source.clone()],[256;2],Default::default());let lut_h=document.scene().order()[1];
+    let chains=scene::startup_effect_chains(document.scene());
+    assert!(chains.iter().any(|(chain,execution)|chain[0]==lut_h && chain.len()==1 && *execution==crate::effects::Execution::Fused));
+    assert!(chains.iter().all(|(chain,_)|chain.len()==1 || chain.iter().all(|h|*h!=lut_h)));
+    let ordinary=effect_document(&[exposure.clone(),invert,source],[256;2],Default::default());assert!(scene::startup_effect_chains(ordinary.scene()).iter().any(|(chain,_)|chain.len()==2));
+    let invalid=effect_document(&[lut,exposure],[256;2],Default::default());let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let mut scene=scene::Scene::new(&r);
+    assert!(scene.effects.prepare(&r,invalid.scene(),invalid.scene().order(),crate::effects::Execution::Fused,0.,0,Default::default()).is_err());
 }
 
 #[test]
@@ -350,17 +356,16 @@ fn resident_lookup_tiles_batch_with_immutable_auxiliary_and_bounded_sources() {
     let extent=[1795,773];let color=DocumentColor{space:RgbSpace::Srgb,depth:SampleDepth::F32};
     let resource=table(3,[[0.;3],[1.;3]],false);
     let codes=|id:u32|[20+id*5,40+id*3,220-id*4];
-    let mut original=Layer::paint(LayerId(1),"Distinct cold lookup tiles");
-    original.source=Some(layer_core::color::source::rgba8_source(extent,|x,y|{let c=codes(y/256*8+x/256);[c[0] as u8,c[1] as u8,c[2] as u8,255]}));
-    let mut layers=[lookup(2,resource.clone(),0,100.,SampleDepth::F32),original];
+    let original=layer_core::color::source::rgba8_source(extent,|x,y|{let c=codes(y/256*8+x/256);[c[0] as u8,c[1] as u8,c[2] as u8,255]});
+    let mut document=empty_document(extent,color);let target=insert_effect(&mut document,lookup(2,resource.clone(),0,100.,SampleDepth::F32));insert_source(&mut document,"Distinct cold lookup tiles",original);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.native_edit.as_mut().unwrap().display_complete_bytes=u64::MAX;
     drop(r.device.effect_resources.lock().unwrap().get(&r.device,&r.queue,None).unwrap());
     let baseline=residency(&r);assert_eq!(baseline,(0,16));
     let mut source_bytes=None;
     for (state,intensity) in [35.,70.,100.].into_iter().enumerate() {
-        set(&mut layers[0],"intensity",EffectValue::Number(intensity));
-        let coverage=if state==2 {let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());mask.default_coverage=0.25;layers[0].mask=Some(mask);layers[0].opacity=0.6;layers[0].properties.clipped=true;0.15}else{1.};
-        let mut frame=packet(&layers,extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];r.submit(frame).unwrap();
+        set_effect(&mut document,target,"intensity",EffectValue::Number(intensity));
+        let coverage=if state==2 {mask(&mut document,target,0.25);let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.6;occurrence.clipped=true;0.15}else{1.};
+        let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];r.submit(frame).unwrap();
         let cache=r.scale_display.as_ref().unwrap();assert!(cache.resident_bytes()>0);assert!(!cache.has_pending_work(&r));
         let passes=r.scene.as_ref().unwrap().effect_passes;assert!(passes<=2,"32 cold/warm pointwise LUT tiles must share at most two effect passes: state={state} passes={passes}");
         let expected=(0..32).map(|id|{

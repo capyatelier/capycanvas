@@ -1,5 +1,7 @@
 use super::*;
+use layer_core::{Document, authored::{Artwork, PaintSource, SourceTarget}};
 use layer_core::color::{ColorProfile, SampleDepth, RgbSpace, source::*};
+use layer_render::ThumbnailTarget;
 
 fn codes(x: u32, y: u32) -> [u16; 4] {
     [
@@ -34,8 +36,8 @@ fn photo(extent: [u32; 2]) -> Arc<SourceImage> {
     }
     Arc::new(builder.finish().unwrap())
 }
-pub(crate) fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
-    r.start_thumbnail(7, id).unwrap();
+pub(crate) fn thumbnail(r: &mut WgpuRasterizer, target: ThumbnailTarget) -> Vec<u8> {
+    r.start_thumbnail(7, target).unwrap();
     r.device
         .poll(wgpu::PollType::Wait {
             submission_index: None,
@@ -48,11 +50,13 @@ pub(crate) fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
 #[test]
 fn tiny_portrait_photo_thumbnail_has_color_and_checkered_letterbox() {
     let source = photo([24, 48]);
-    let mut layer = Layer::paint(LayerId(1), "tiny photo");
-    layer.source = Some(source);
+    let mut artwork = Artwork::new([24, 48]).unwrap();
+    let (_, SourceTarget::Paint(target)) = crate::test_support::add_paint(&mut artwork, "tiny photo", [24, 48]) else { unreachable!() };
+    artwork.paint.get_mut(target).unwrap().original = Some(source);
+    let document = Document::from_artwork(artwork).unwrap();
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    r.ensure_document_metadata([24, 48], &[layer]).unwrap();
-    let bytes = thumbnail(&mut r, LayerId(1));
+    r.submit(crate::test_support::packet(document.scene(), [24, 48])).unwrap();
+    let bytes = thumbnail(&mut r, ThumbnailTarget::Source(SourceTarget::Paint(target)));
     assert!(bytes.chunks_exact(4).all(|p| p[3] == 255));
     assert!(
         bytes
@@ -70,21 +74,26 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
     let extent = [768, 256];
     let source = photo(extent);
     let color = layer_core::color::DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-    let layer = |id, rgba: [u16; 4]| {
-        let mut layer = Layer::paint(LayerId(id), "photo");
-        layer.source = Some(source.clone());
+    let paint = |rgba: [u16; 4]| {
         let pixels: Vec<_> = rgba.into_iter().flat_map(u16::to_le_bytes).collect();
         let mut data = RasterData::default();
         for x in 0..3 {
             data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [x, 0] },
                 RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &pixels.repeat(256 * 256)).unwrap()));
         }
-        layer.raster = RasterRevision::backed(data);
-        layer
+        PaintSource { domain: extent, original: Some(source.clone()), raster: RasterRevision::backed(data), operations: Arc::default() }
     };
-    let mut layers = [layer(1, [45000, 1000, 1000, 65535]), layer(2, [1000, 45000, 1000, 65535])];
+    let mut artwork = Artwork::new(extent).unwrap();
+    artwork.compositions.get_mut(artwork.root).unwrap().color = color;
+    let targets = [[45000, 1000, 1000, 65535], [1000, 45000, 1000, 65535]].map(|rgba| {
+        let (_, target) = crate::test_support::add_paint(&mut artwork, "photo", extent);
+        let SourceTarget::Paint(handle) = target else { unreachable!() };
+        *artwork.paint.get_mut(handle).unwrap() = paint(rgba);
+        target
+    });
+    let mut document = Document::from_artwork(artwork).unwrap();
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.submit(crate::test_support::packet(&layers, extent)).unwrap();
+    r.submit(crate::test_support::packet(document.scene(), extent)).unwrap();
     let mut gpu = SourceThumbnails::new(&r);
     let prepare = |gpu: &mut SourceThumbnails, r: &mut WgpuRasterizer, id, discard: bool| {
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
@@ -92,28 +101,29 @@ fn photo_thumbnail_batches_survive_interleaved_layers_edits_and_discarded_comman
         if !discard { r.uploads.finish(&encoder); encoder.submit(&r.queue); }
         ready
     };
-    while !prepare(&mut gpu, &mut r, layers[0].id, false) {}
-    while !prepare(&mut gpu, &mut r, layers[1].id, false) {}
+    while !prepare(&mut gpu, &mut r, targets[0], false) {}
+    while !prepare(&mut gpu, &mut r, targets[1], false) {}
     assert_eq!(gpu.cache.len(), 1, "layers share the integrated original");
     r.thumbnails.sources = Some(gpu);
-    let before = thumbnail(&mut r, layers[0].id);
-    let other = thumbnail(&mut r, layers[1].id);
+    let before = thumbnail(&mut r, ThumbnailTarget::Source(targets[0]));
+    let other = thumbnail(&mut r, ThumbnailTarget::Source(targets[1]));
     assert_ne!(before, other);
-    layers[0] = layer(1, [1000, 1000, 45000, 65535]);
-    r.submit(crate::test_support::packet(&layers, extent)).unwrap();
+    let SourceTarget::Paint(handle) = targets[0] else { unreachable!() };
+    *document.artwork.paint.get_mut(handle).unwrap() = paint([1000, 1000, 45000, 65535]);
+    r.submit(crate::test_support::packet(document.scene(), extent)).unwrap();
     let mut gpu = r.thumbnails.sources.take().unwrap();
-    assert!(!prepare(&mut gpu, &mut r, layers[0].id, true));
+    assert!(!prepare(&mut gpu, &mut r, targets[0], true));
     let mut ready = [false; 2];
     for _ in 0..8 {
-        for i in 0..2 { ready[i] = prepare(&mut gpu, &mut r, layers[i].id, false); }
+        for i in 0..2 { ready[i] = prepare(&mut gpu, &mut r, targets[i], false); }
         if ready == [true; 2] { break; }
     }
     assert_eq!(ready, [true; 2]);
     assert_eq!(gpu.cache.len(), 1);
     r.thumbnails.sources = Some(gpu);
-    let after = thumbnail(&mut r, layers[0].id);
+    let after = thumbnail(&mut r, ThumbnailTarget::Source(targets[0]));
     assert_ne!(before, after, "an edit invalidates the prepared sums");
-    assert_eq!(other, thumbnail(&mut r, layers[1].id));
+    assert_eq!(other, thumbnail(&mut r, ThumbnailTarget::Source(targets[1])));
     r.thumbnails.sources = None;
-    assert_eq!(after, thumbnail(&mut r, layers[0].id), "discarded work cannot contaminate the completed image");
+    assert_eq!(after, thumbnail(&mut r, ThumbnailTarget::Source(targets[0])), "discarded work cannot contaminate the completed image");
 }

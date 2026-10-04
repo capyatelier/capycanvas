@@ -6,7 +6,7 @@ fn calibration_session() -> UiSession<Recorder> {
 }
 fn arm_calibration(s: &mut UiSession<Recorder>) {
     s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
-        layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch,
+        layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), epoch: s.state.layer_properties.epoch,
     } }).unwrap();
 }
 #[test]
@@ -14,7 +14,7 @@ fn calibration_stale_toolbar_action_preserves_released_pending_sample() {
     let mut s=calibration_session();arm_calibration(&mut s);release_calibration(&mut s);
     let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;
     let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
-    for action in stale_property_actions(s.engine.document().active_layer.0,s.state.layer_properties.epoch.wrapping_sub(1)) {
+    for action in stale_property_actions(occurrence_token(s.engine.document().working.occurrence.unwrap()),s.state.layer_properties.epoch.wrapping_sub(1)) {
         s.dispatch(UiAction::Effect {action}).unwrap();
         assert!(s.eyedropper.calibration.as_ref().is_some_and(|calibration|calibration.submitted));
         assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert_eq!(s.engine.backend().snapshot_cancels,cancels);
@@ -35,13 +35,13 @@ fn calibration_reply(s: &mut UiSession<Recorder>, result: Result<layer_core::Art
 #[test]
 fn calibration_release_uses_exact_input_and_commits_one_atomic_undo_without_paint() {
     let mut s = calibration_session();
-    let before = s.engine.document().layers.clone();
+    let before = s.engine.document().artwork.clone();
     let checkpoint = s.engine.checkpoint();
     let colors = s.state.display_colors().definition();
     let tool = s.layer_interaction.tool;
     arm_calibration(&mut s);
     assert!(s.eyedropper.calibration.is_some());
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     assert_eq!(s.engine.checkpoint(), checkpoint);
     pen_at(&mut s, 1, PenPhase::Down, [400., 400.]);
     s.frame(2, 2).unwrap();
@@ -49,7 +49,7 @@ fn calibration_release_uses_exact_input_and_commits_one_atomic_undo_without_pain
     pen_at(&mut s, 2, PenPhase::Up, [401., 402.]);
     s.frame(3, 3).unwrap();
     let layer_render::SnapshotRequest::ArtworkSample(request) = s.engine.backend().snapshot_requests.last().unwrap() else { panic!("expected sample"); };
-    assert_eq!(request.source, layer_core::ArtworkSource::EffectInput(s.engine.document().active_layer));
+    assert_eq!(request.source, layer_core::ArtworkSource::EffectInput(s.engine.document().working.occurrence.unwrap()));
     assert_eq!(request.position, [401., 402.]);
     assert_eq!(request.width, 5);
     calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
@@ -57,9 +57,9 @@ fn calibration_release_uses_exact_input_and_commits_one_atomic_undo_without_pain
     assert_eq!(s.layer_interaction.tool, tool);
     assert_eq!(s.state.display_colors().definition(), colors);
     assert_eq!(s.engine.backend().dabs, 0);
-    assert_ne!(s.engine.document().layers, before);
+    assert_ne!(s.engine.document().artwork, before);
     assert!(s.engine.undo().unwrap());
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     assert_eq!(s.engine.checkpoint(), checkpoint);
 }
 
@@ -103,7 +103,7 @@ fn calibration_failed_empty_outside_and_nonpositive_samples_preserve_history_and
 fn calibration_cancellation_discards_late_reply_and_restores_or_selects_requested_tool() {
     for cancellation in 0..4 {
         let mut s = calibration_session();
-        let before = s.engine.document().layers.clone();
+        let before = s.engine.document().artwork.clone();
         let checkpoint = s.engine.checkpoint();
         arm_calibration(&mut s);
         release_calibration(&mut s);
@@ -116,7 +116,7 @@ fn calibration_cancellation_discards_late_reply_and_restores_or_selects_requeste
         assert!(s.eyedropper.calibration.is_none());
         if cancellation == 2 { assert_eq!(s.layer_interaction.tool, LayerCanvasTool::Hand); }
         calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
-        assert_eq!(s.engine.document().layers, before);
+        assert_eq!(s.engine.document().artwork, before);
         assert_eq!(s.engine.checkpoint(), checkpoint);
     }
 }
@@ -125,23 +125,23 @@ fn calibration_cancellation_discards_late_reply_and_restores_or_selects_requeste
 fn calibration_stale_epoch_and_changed_artwork_cannot_publish() {
     let mut s = calibration_session();
     s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
-        layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch.wrapping_add(1),
+        layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), epoch: s.state.layer_properties.epoch.wrapping_add(1),
     } }).unwrap();
     assert!(s.eyedropper.calibration.is_none());
     for invalidation in 0..3 {
         let mut s = calibration_session();
         arm_calibration(&mut s);
         release_calibration(&mut s);
-        let mut changed = if invalidation == 2 { s.engine.document().layers.iter().find(|layer| layer.kind == layer_core::LayerKind::Paint).unwrap().clone() } else { s.engine.document().layers[0].clone() };
-        match invalidation {
-            0 => { changed.opacity = 0.5; }
-            1 => { std::sync::Arc::make_mut(changed.effect.as_mut().unwrap()).set("temperature", layer_core::EffectValue::Number(12.)).unwrap(); }
-            _ => { changed.source = Some(layer_core::color::source::rgba8_source([1, 1], |_, _| [32; 4])); }
-        }
-        s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(changed))).unwrap();
-        let expected = s.engine.document().layers.clone();
+        let document=s.engine.document();let target=document.working.occurrence.unwrap();
+        let edit=match invalidation {
+            0=>effect_test_occurrence_edit(document,target,|o|o.opacity=0.5),
+            1=>{let mut draft=effects::effect_draft(document,target).unwrap();draft.set("temperature",layer_core::EffectValue::Number(12.)).unwrap();effects::effect_edit(document,target,draft).unwrap()},
+            _=>{let paint=effect_test_paint(document);let layer_core::SourceTarget::Paint(handle)=document.scene().source_target(paint).unwrap() else {unreachable!()};let mut source=document.artwork.paint.get(handle).unwrap().clone();source.original=Some(layer_core::color::source::rgba8_source([1,1],|_,_|[32;4]));layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&document.artwork.paint,handle,Some(source)).unwrap())},
+        };
+        s.engine.apply_edit(edit).unwrap();
+        let expected = s.engine.document().artwork.clone();
         calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
-        assert_eq!(s.engine.document().layers, expected);
+        assert_eq!(s.engine.document().artwork, expected);
         assert!(s.eyedropper.calibration.is_none());
     }
 }
@@ -153,14 +153,14 @@ fn calibration_target_switch_or_document_replacement_discards_result() {
         arm_calibration(&mut s);
         release_calibration(&mut s);
         if change == 0 {
-            let id = s.engine.document().layers.iter().find(|layer| layer.kind == layer_core::LayerKind::Paint).unwrap().id;
-            s.engine.apply_edit(layer_core::Edit::SetActiveLayer { id }).unwrap();
+            let id = effect_test_paint(s.engine.document());
+            s.engine.apply_edit(s.engine.document().select_occurrence_edit(id).unwrap()).unwrap();
         } else {
             s.state.document_file.epoch += 1;
         }
-        let expected = s.engine.document().layers.clone();
+        let expected = s.engine.document().artwork.clone();
         calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
-        assert_eq!(s.engine.document().layers, expected);
+        assert_eq!(s.engine.document().artwork, expected);
         assert!(s.eyedropper.calibration.is_none());
     }
 }
@@ -171,12 +171,12 @@ fn calibration_time_only_advancement_preserves_released_frozen_sample() {
     arm_calibration(&mut s);
     release_calibration(&mut s);
     let layer_render::SnapshotRequest::ArtworkSample(request) = s.engine.backend().snapshot_requests.last().unwrap() else { panic!("expected sample"); };
-    let captured = request.time;
+    let captured = request.query.snapshot.context.elapsed;
     s.frame(5_000_000_000, 5_000_000_000).unwrap();
     assert!(s.engine.animation_time() > captured);
     calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
     assert!(s.eyedropper.calibration.is_none());
-    let effect = s.engine.document().layers[0].effect.as_ref().unwrap();
+    let effect = s.engine.document().scene().effect(s.engine.document().scene().order()[0]).unwrap();
     assert_eq!(effect.value("temperature"), Some(&layer_core::EffectValue::Number(125.)));
 }
 
@@ -185,19 +185,23 @@ fn calibration_save_waits_for_atomic_correction_then_captures_corrected_values()
     let mut s = calibration_session();
     arm_calibration(&mut s);
     release_calibration(&mut s);
-    let before = s.engine.document().layers.clone();
+    let before = s.engine.document().artwork.clone();
     assert!(!s.command(CommandId::SaveDocument).enabled);
     assert!(s.request_save(false).is_err());
     assert!(s.files.pending.is_none());
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 1.])));
     assert!(s.command(CommandId::SaveDocument).enabled);
     invoke(&mut s, CommandId::SaveDocument);
     let id = s.files.pending.as_ref().unwrap().0;
     let project = s.capture_project_save(id, DocumentLocation { uri: "file:///private-query.capy".into(), name: "private-query.capy".into() }).unwrap();
-    assert_eq!(project.document.layers, s.engine.document().layers);
-    assert_ne!(project.document.layers, before);
-    assert_eq!(project.document.layers[0].effect.as_ref().unwrap().value("temperature"), Some(&layer_core::EffectValue::Number(125.)));
+    let captured_document=layer_core::Document::from_artwork(project.artwork.as_ref().clone()).unwrap();
+    let captured=captured_document.scene();
+    let live=s.engine.document().scene();
+    assert_eq!(captured.effect_application(captured.order()[0]),live.effect_application(live.order()[0]));
+    assert_eq!(project.artwork.occurrences,s.engine.document().artwork.occurrences);
+    assert_ne!(*project.artwork,before);
+    assert_eq!(captured.effect(captured.order()[0]).unwrap().value("temperature"), Some(&layer_core::EffectValue::Number(125.)));
 }
 
 #[test]
@@ -235,7 +239,7 @@ fn last_calibration_request(s: &UiSession<Recorder>) -> &layer_core::ArtworkSamp
 #[test]
 fn calibration_touch_preview_coalesces_without_editing_and_release_waits_for_new_point() {
     let mut s = calibration_session();
-    let before = s.engine.document().layers.clone();
+    let before = s.engine.document().artwork.clone();
     let colors = s.state.preview_colors().into_owned();
     let checkpoint = s.engine.checkpoint();
     calibration_touch_hold(&mut s);
@@ -245,10 +249,10 @@ fn calibration_touch_preview_coalesces_without_editing_and_release_waits_for_new
     s.frame(3, 3).unwrap();
     assert_eq!(s.engine.backend().snapshot_requests.len(), 1);
     calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.125, 0.25, 0.5, 0.5])));
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     assert_eq!(s.engine.checkpoint(), checkpoint);
     assert_eq!(*s.state.preview_colors(), colors);
-    let preview = s.state.color_picker.preview.unwrap().linear_in(s.engine.document().color.space).unwrap();
+    let preview = s.state.color_picker.preview.unwrap().linear_in(s.engine.document().composition().color.space).unwrap();
     for (actual, expected) in preview.into_iter().zip([0.125, 0.25, 0.5, 1.]) { assert!((actual - expected).abs() < 1e-5); }
     assert_eq!(s.engine.backend().snapshot_requests.len(), 2);
     let point = s.state.camera.input_transform().map(Point { x: 420., y: 386. });
@@ -260,9 +264,9 @@ fn calibration_touch_preview_coalesces_without_editing_and_release_waits_for_new
     assert_eq!(s.engine.backend().snapshot_requests.len(), 3);
     let point = s.state.camera.input_transform().map(Point { x: 440., y: 406. });
     assert_eq!(last_calibration_request(&s).position, [point.x, point.y]);
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     calibration_reply(&mut s, Ok(layer_core::ArtworkSample::Color([0.25; 4])));
-    assert_eq!(s.engine.document().layers, before);
+    assert_eq!(s.engine.document().artwork, before);
     assert!(s.eyedropper.calibration.is_none());
 }
 
@@ -302,7 +306,7 @@ fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editi
         let colors = s.state.preview_colors().into_owned();
         let unavailable = s.localization().text(MessageId::RESOURCES_PICKER_UNAVAILABLE).to_string();
         let result = s.dispatch(UiAction::Effect { action: EffectAction::Calibrate { role:layer_core::levels::CalibrationRole::Gray,
-            layer: s.engine.document().active_layer.0, epoch: s.state.layer_properties.epoch,
+            layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), epoch: s.state.layer_properties.epoch,
         } });
         assert_eq!(result.unwrap_err(), unavailable);
         assert_eq!(s.engine.document(), &before);
@@ -347,7 +351,7 @@ fn calibration_failed_notice_language_refresh_preserves_picker_request_document_
         let tool = s.layer_interaction.tool;
         let calibration = |s: &UiSession<Recorder>| {
             let c = s.eyedropper.calibration.as_ref().unwrap();
-            (c.original.clone(), c.epoch, c.document_epoch, c.width, c.request.as_ref().map(|r| (r.document.clone(), std::sync::Arc::as_ptr(&r.document), r.source.clone(), r.position, r.width, r.time, r.effect_times.clone())), c.queued, c.submitted)
+            (c.original.clone(), c.epoch, c.document_epoch, c.width, c.request.as_ref().map(|r| (r.snapshot.clone(), std::sync::Arc::as_ptr(&r.snapshot), r.source.clone(), r.selection.clone(), r.position, r.width)), c.queued, c.submitted)
         };
         let pending = calibration(&s);
         let rendering = (s.engine.backend().snapshot_requests.len(), s.engine.backend().snapshot_cancels, s.engine.backend().dabs);
@@ -392,5 +396,5 @@ fn web_calibration_exposes_shared_action_and_commits_one_undo_without_changing_p
     let before=s.engine.document().clone();let paint=s.state.preview_colors().into_owned();let checkpoint=s.engine.checkpoint();arm_calibration(&mut s);release_calibration(&mut s);
     assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkSample(_))));
     calibration_reply(&mut s,Ok(layer_core::ArtworkSample::Color([0.6,0.3,0.2,1.])));
-    assert_ne!(s.engine.checkpoint(),checkpoint);assert_eq!(*s.state.preview_colors(),paint);invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.document().layers,before.layers);
+    assert_ne!(s.engine.checkpoint(),checkpoint);assert_eq!(*s.state.preview_colors(),paint);invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.document().artwork,before.artwork);
 }

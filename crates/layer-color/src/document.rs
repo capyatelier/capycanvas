@@ -1,7 +1,7 @@
 //! Atomic, worker-owned SDR interpretation and backing changes. Immutable source
 //! originals and sRGB-defined effect parameters retain their own color meaning.
 use crate::{OutputStatistics, WorkingDecoder, WorkingEncoder};
-use layer_core::{Edit, Project, color::source::*, color::*, raster::*};
+use layer_core::{Document, authored::RecordChange, color::source::*, color::*, raster::*};
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::{Duration, Instant};
 use std::{
@@ -45,7 +45,7 @@ impl DocumentColorChange {
 }
 
 pub struct PreparedDocumentColor {
-    pub project: Project,
+    pub document: Document,
     pub statistics: OutputStatistics,
 }
 
@@ -247,10 +247,9 @@ impl Converter<'_> {
     }
 }
 
-/// Prepare complete immutable layers; never alter the live document or original
-/// source samples. The caller admits total project/history ownership separately.
+/// Prepare immutable source records without changing the live artwork or originals.
 pub fn prepare_document_color(
-    project: &Project,
+    document: &Document,
     change: DocumentColorChange,
     max_bytes: usize,
     mut cancelled: impl FnMut() -> bool,
@@ -258,26 +257,20 @@ pub fn prepare_document_color(
     if cancelled() {
         return Err("Document color change cancelled".into());
     }
-    project.validate(Default::default())?;
-    let mut candidate = project.clone();
-    let old = candidate.document.color;
+    document.validate(Default::default())?;
+    validate_document_color(document)?;
+    let mut candidate = document.clone();
+    let old = candidate.composition().color;
     let target = change.target(old);
     if old.depth.is_float() && !target.depth.is_float() { return Err("Export an SDR rendition to reduce HDR range; the editable HDR master remains unchanged".into()); }
     change.encoding().validate(target.depth).map_err(|_| "Output dithering requires 8-bit delivery".to_string())?;
     if target == old {
         return Ok(PreparedDocumentColor {
-            project: candidate,
+            document: candidate,
             statistics: Default::default(),
         });
     }
-    // Effect colors retain their defining RGB space. GPU preparation derives
-    // new document coordinates; assignment/conversion never rewrites definitions.
-    if candidate.document.layers.iter().any(|l| {
-        !l.pending_operations.is_empty()
-            || l.mask
-                .as_ref()
-                .is_some_and(|m| !m.pending_operations.is_empty())
-    }) {
+    if candidate.scene().targets().any(|target| candidate.scene().operations(target).is_some_and(|operations| !operations.is_empty())) {
         return Err("Finish the pending raster operation before changing document color".into());
     }
     let source = SourceInterpretation {
@@ -310,30 +303,40 @@ pub fn prepare_document_color(
         roots: HashMap::new(),
         images: HashMap::new(),
     };
-    let mut layers = candidate.document.layers.clone();
-    let extent = [candidate.document.width, candidate.document.height];
-    for layer in &mut layers {
-        layer.raster = converter.root(&layer.raster, extent, false)?;
-        if let Some(mask) = &mut layer.mask {
-            mask.raster = converter.root(&mask.raster, extent, true)?;
-        }
-        if let Some(source) = &mut layer.source {
-            *source = converter.image(source)?;
-        }
+    let mut paint = Vec::with_capacity(candidate.artwork.paint.len());
+    for (handle, _, original) in candidate.artwork.paint.iter() {
+        let mut source = original.clone();
+        source.raster = converter.root(&source.raster, source.domain, false)?;
+        if let Some(original) = &mut source.original { *original = converter.image(original)?; }
+        paint.push(RecordChange::replace(&candidate.artwork.paint, handle, Some(source)).map_err(str::to_string)?);
+    }
+    let mut coverage = Vec::with_capacity(candidate.artwork.coverage.len());
+    for (handle, _, original) in candidate.artwork.coverage.iter() {
+        let mut source = original.clone();
+        source.raster = converter.root(&source.raster, source.domain, true)?;
+        coverage.push(RecordChange::replace(&candidate.artwork.coverage, handle, Some(source)).map_err(str::to_string)?);
     }
     converter.check()?;
-    candidate
-        .document
-        .apply(Edit::SetColor {
-            color: target,
-            layers,
-        })
-        .map_err(|e| e.to_string())?;
+    let edit = candidate.color_edit(target, paint, coverage).map_err(|error| error.to_string())?;
+    candidate.apply(edit).map_err(|error| error.to_string())?;
     candidate.validate(Default::default())?;
-    Ok(PreparedDocumentColor {
-        project: candidate,
-        statistics: converter.statistics,
-    })
+    validate_document_color(&candidate)?;
+    Ok(PreparedDocumentColor { document: candidate, statistics: converter.statistics })
+}
+
+pub fn validate_document_color(document: &Document) -> Result<(), String> {
+    let color = document.composition().color;
+    let mut sources = std::collections::HashSet::new();
+    for (_, _, paint) in document.artwork.paint.iter() {
+        let Some(source) = &paint.original else { continue; };
+        if !sources.insert(Arc::as_ptr(source) as usize) { continue; }
+        source.validate()?;
+        if source.interpretation.depth.is_float() && !color.depth.is_float() {
+            return Err("HDR placement requires an HDR document; export an SDR rendition for SDR placement".into());
+        }
+        WorkingDecoder::new(&source.interpretation, color.space, Default::default())?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

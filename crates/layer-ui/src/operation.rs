@@ -3,7 +3,8 @@
 use super::{error, refused};
 use crate::*;
 use crate::localization::MessageId;
-use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerId, LayerKind, MeshMap, Point, Projective, Rect, Selection, LayerPlacement};
+use layer_core::{Affine, Document, ImageTransform, Interpolation, LayerKind, MeshMap, Point, Projective, Rect, Selection, LayerPlacement};
+use layer_core::authored::{OccurrenceHandle, SourceTarget, SelectionHandle, RecordChange};
 use std::sync::Arc;
 use std::collections::BTreeSet;
 use layer_engine::{PenEvent, PenPhase};
@@ -168,7 +169,7 @@ pub(super) struct Operation {
     pub leave_copy: bool,
     /// The target and layer-local selection the renderer prepares a Move
     /// drag of.
-    moving_pixels: Option<(LayerId, Selection)>,
+    moving_pixels: Option<(SourceTarget, Selection)>,
     pub changed: bool,
 }
 impl Operation {
@@ -195,8 +196,8 @@ impl Operation {
     }
     pub fn original_size_available(&self) -> bool {
         self.current.as_ref().and_then(|t| t.placement.as_ref())
-            .is_some_and(|placement| placement.members.iter().all(|layer| layer.source.is_some()
-                && layer.properties.placement.as_affine().is_some()))
+            .is_some_and(|placement| placement.members.iter().all(|(h, o)| placement.source.view().paint_source(*h).is_some_and(|p| p.original.is_some())
+                && o.placement.as_affine().is_some()))
             && self.current.as_ref().is_some_and(|t| t.map().is_some_and(|map| map.as_affine().is_some()))
     }
     pub fn outline(&self) -> bool {
@@ -276,30 +277,33 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
 ];
 
 
-fn source_frame(doc: &Document, target: layer_core::LayerId) -> Rect {
-    Rect::from_extent(doc.layer(target).and_then(|layer| layer.source.as_ref())
-        .map_or_else(|| doc.target_extent(target), |source| source.extent))
+fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
+    Rect::from_extent(doc.scene().paint_source(target).and_then(|p| p.original.as_ref())
+        .map_or_else(|| doc.scene().local_extent(target), |source| source.extent))
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn transform_roots(&self) -> Vec<LayerId> {
+    pub(super) fn transform_roots(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
         let roots = doc.layer_roots(&self.layer_interaction.selected);
-        if roots.is_empty() { vec![doc.active_layer] } else { roots }
+        if roots.is_empty() { doc.working.occurrence.into_iter().collect() } else { roots }
     }
     pub(super) fn retained_transforming(&self) -> bool {
         let doc = self.engine.document();
-        !doc.active_mask && doc.selection.is_none()
+        !matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && doc.working.selection.is_none()
     }
     pub(super) fn can_transform(&self) -> bool {
         let doc = self.engine.document();
         if self.retained_transforming() {
             return doc.retained_transform_targets(&self.transform_roots()).is_ok();
         }
-        self.transform_roots().len() == 1 && !doc.is_locked(doc.active_target())
-            && doc.affine_edit_transform(doc.active_target()).is_some()
-            && doc.layer(doc.active_layer).is_some_and(|l| if doc.active_mask { l.mask.is_some() }
-                else { l.kind == LayerKind::Paint && (l.source.is_some() || !l.raster.is_empty() || !l.pending_operations.is_empty()) })
+        let Some(target) = doc.active_target() else { return false; };
+        self.transform_roots().len() == 1 && doc.target_owner(target).is_some_and(|h| !doc.is_locked(h))
+            && doc.affine_edit_transform(target).is_some()
+            && doc.working.occurrence.is_some_and(|h| doc.scene().occurrence(h).is_some_and(|o|
+                if matches!(target, SourceTarget::Coverage(_)) { o.mask.is_some() }
+                else { o.kind() == LayerKind::Paint && doc.scene().paint_source(h).is_some_and(|p|
+                    p.original.is_some() || !p.raster.is_empty() || !p.operations.is_empty()) }))
     }
     pub(super) fn begin_transform(&mut self) -> Result<(), String> {
         self.require_idle()?;
@@ -310,7 +314,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.document().retained_transform_targets(&self.transform_roots()).map_err(error)?;
         } else if self.transform_roots().len() > 1 {
             return Err("Clear the pixel selection to transform several layers".into());
-        } else if self.engine.document().affine_edit_transform(self.engine.document().active_target()).is_none() {
+        } else if self.engine.document().active_target().and_then(|t| self.engine.document().affine_edit_transform(t)).is_none() {
             return Err(self.localization().text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING).to_string());
         } else if !self.can_transform() {
             return Err("Select unlocked paint content or a layer mask".into());
@@ -322,8 +326,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.measured_target_bounds().is_none() {
             return self.request_content_bounds(super::image_geometry::ContentUse::Transform);
         }
-        if !self.engine.document().active_mask
-            && self.engine.document().selection.is_none()
+        if !matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_)))
+            && self.engine.document().working.selection.is_none()
         {
             return self.begin_layer_placement(None);
         }
@@ -340,13 +344,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// selected pixels.
     pub(super) fn move_refusal(&self) -> Option<&'static str> {
         let doc = self.engine.document();
-        let layer = doc.layer(doc.active_layer)?;
-        if doc.is_locked(layer.id) {
+        let handle = doc.working.occurrence?;
+        let layer = doc.scene().occurrence(handle)?;
+        if doc.is_locked(handle) {
             Some("The active layer is locked")
         } else if !self.moves_selected_pixels() {
-            (!doc.active_mask && doc.retained_transform_targets(&self.transform_roots()).is_err())
+            (!matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && doc.retained_transform_targets(&self.transform_roots()).is_err())
                 .then_some("The selected layers cannot be moved together")
-        } else if !doc.active_mask && layer.kind != LayerKind::Paint {
+        } else if !matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && layer.kind() != LayerKind::Paint {
             Some("Choose a paint layer or a mask to move selected pixels")
         } else if !self.can_transform() {
             Some("This layer has no pixels to move")
@@ -386,10 +391,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// A transform of the active target's pixels, bounded by the selection.
     fn pixel_transaction(&self) -> Result<Transaction, String> {
         let doc = self.engine.document();
-        let target = doc.active_target();
+        let target = doc.active_target().ok_or("Select a paint layer or mask first")?;
         let basis = doc.affine_edit_transform(target).ok_or("Apply Transform to Pixels before editing this layer")?;
         let inverse = basis.inverse().ok_or("Invalid layer placement")?;
-        let selection = doc.selection.as_ref().map(|s| s.transformed(inverse)).transpose().map_err(error)?;
+        let selection = doc.working.selection.as_ref().map(|s| s.transformed(inverse)).transpose().map_err(error)?;
         let serial = self.operation.serial.wrapping_add(1);
         let mut t = Transaction::new(serial, target, selection, doc.revision, basis, self.measured_target_bounds().ok_or("The content bounds are still being measured")?, Pose::identity());
         t.geometry.interpolation = self.operation.interpolation;
@@ -419,7 +424,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                 }
         };
-        match &self.engine.document().selection {
+        match &self.engine.document().working.selection {
             None => Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
             Some(s) if empty(s) => Some(l.text(MessageId::COMMANDS_REFUSAL_OPERATION_THE_SELECTION_IS_EMPTY)),
             Some(_) => None,
@@ -432,12 +437,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.outline_refusal())?;
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
-        let selection = doc.selection.clone().ok_or("Make a selection first")?;
-        let mut bounds = outline_bounds(&selection, [doc.width, doc.height]);
+        let selection = doc.working.selection.clone().ok_or("Make a selection first")?;
+        let mut bounds = outline_bounds(&selection, doc.composition().size);
         bounds.max.x = bounds.max.x.max(bounds.min.x + 1.);
         bounds.max.y = bounds.max.y.max(bounds.min.y + 1.);
         let serial = self.operation.serial.wrapping_add(1);
-        let t = Transaction::new(serial, doc.active_layer, None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
+        let t = Transaction::new(serial, doc.active_target().unwrap_or(SourceTarget::Selection(SelectionHandle::INVALID)), None, doc.revision, Affine::IDENTITY, bounds, Pose::identity());
         self.operation.serial = serial;
         self.operation.current = Some(Transaction { outline: Some(selection), ..t });
         self.layer_interaction.tool = LayerCanvasTool::Transform;
@@ -457,9 +462,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.operation.outline() {
             if apply
                 && let Some(selection) = self.operation.outline_selection()
-                && self.engine.document().selection.as_ref() != Some(&selection)
+                && self.engine.document().working.selection.as_ref() != Some(&selection)
             {
-                self.layer_edit(layer_core::Edit::SetSelection(Some(selection)))?;
+                let mut working = self.engine.document().working.clone();
+                working.selection = Some(selection);
+                self.layer_edit(layer_core::Edit::Working(working))?;
             }
             self.cancel_transform()?;
             return Ok(());
@@ -558,19 +565,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.sync_selection_overlay();
         } else if let Some(placement) = &t.placement {
             let mut edits = Vec::new();
-            for layer in placement.preview_layers(self.engine.document(), &t.request.transform.placement, t.geometry.interpolation)? {
-                if self.engine.document().is_locked(layer.id) {
+            for (handle, occurrence) in placement.preview_occurrences(self.engine.document(), &t.request.transform.placement, t.geometry.interpolation)? {
+                if self.engine.document().is_locked(handle) {
                     return Err("The destination layer is locked".into());
                 }
-                if self.engine.document().layer(layer.id) != Some(&layer) {
-                    edits.push(layer_core::Edit::ReplaceLayer(Box::new(layer)));
+                if self.engine.document().scene().occurrence(handle) != Some(&occurrence) {
+                    edits.push(layer_core::Edit::Occurrence(RecordChange::replace(&self.engine.document().artwork.occurrences, handle, Some(occurrence))?));
                 }
             }
             if !edits.is_empty() {
                 let edit = layer_core::Edit::Batch(edits);
                 let mut candidate = self.engine.document().clone();
                 candidate.apply(edit.clone()).map_err(error)?;
-                candidate.validate_paint_extents(&placement.members.iter().map(|l| l.id).collect::<Vec<_>>(),
+                candidate.validate_paint_extents(&placement.targets(&candidate),
                     self.engine.geometry_limits()).map_err(error)?;
                 self.engine.preview_edit(edit).map_err(error)?;
             }
@@ -766,7 +773,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edit = candidate.retained_transform_edit(&roots, delta).map_err(error)?;
         candidate.apply(edit.clone()).map_err(error)?;
         let mut edits = vec![edit];
-        edits.extend(candidate.paint_extent_plan(&targets, self.engine.geometry_limits()).map_err(error)?);
+        let sources: Vec<_> = targets.iter().flat_map(|h| [candidate.scene().source_target(*h), candidate.scene().occurrence(*h).and_then(|o| o.mask.as_ref()).map(|m| SourceTarget::Coverage(m.source))]).flatten().collect();
+        edits.extend(candidate.paint_extent_plan(&sources, self.engine.geometry_limits()).map_err(error)?);
         self.layer_edit(layer_core::Edit::Batch(edits))
     }
     pub(super) fn set_transform_reference(&mut self, reference: CanvasAnchor) -> Result<(), String> {
@@ -915,7 +923,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let p = self.state.camera.input_transform().map(Point { x: position[0], y: position[1] });
         let Some(t) = self.operation.current.as_ref() else {
             return self.moves_selected_pixels()
-                && self.engine.document().selection.as_ref().is_some_and(|s| {
+                && self.engine.document().working.selection.as_ref().is_some_and(|s| {
                     let b = s.coverage_bounds();
                     s.inverted != (b.min.x <= p.x && p.x < b.max.x && b.min.y <= p.y && p.y < b.max.y)
                 });
@@ -930,8 +938,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let target = doc.active_target();
         let next = (self.moves_selected_pixels() && self.move_refusal().is_none())
             .then(|| {
+                let target = target?;
                 let inverse = doc.affine_edit_transform(target)?.inverse()?;
-                Some((target, doc.selection.as_ref()?.transformed(inverse).ok()?))
+                Some((target, doc.working.selection.as_ref()?.transformed(inverse).ok()?))
             })
             .flatten();
         if self.operation.moving_pixels != next {
@@ -946,7 +955,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Move drags the selected pixels rather than the whole layer.
     pub(super) fn moves_selected_pixels(&self) -> bool {
         self.layer_interaction.tool == LayerCanvasTool::Move
-            && self.engine.document().selection.is_some()
+            && self.engine.document().working.selection.is_some()
             && self.selection_masks.target().is_none()
     }
     pub(super) fn update_transform_drag(&mut self) -> Result<bool, String> {
@@ -1239,14 +1248,14 @@ pub(super) fn inside_convex(quad: &[Point; 4], p: Point) -> bool {
     sides.iter().all(|s| *s >= 0.) || sides.iter().all(|s| *s <= 0.)
 }
 impl Transaction {
-    fn new(transaction: u64, layer: LayerId, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
+    fn new(transaction: u64, target: SourceTarget, selection: Option<Selection>, revision: u64, basis: Affine, bounds: Rect, pose: Pose) -> Self {
         let geometry = Geometry { pose, exact_affine: None, inner: None, mesh: None, frame: bounds, pivot: center(bounds), interpolation: None, nodes: BTreeSet::new() };
         Self {
             placement: None,
             request: TransformPreview {
                 transaction,
                 moving: false,
-                layer,
+                target,
                 selection,
                 transform: ImageTransform::default(),
             },
@@ -1699,7 +1708,7 @@ mod tests {
             min: Point { x: 20., y: 40. },
             max: Point { x: 240., y: 190. },
         };
-        Transaction::new(1, layer_core::LayerId(1), None, 0, Affine::translation(Point { x: 7., y: 11. }), bounds, Pose::identity())
+        Transaction::new(1, SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1)), None, 0, Affine::translation(Point { x: 7., y: 11. }), bounds, Pose::identity())
     }
     fn near(a: Point, b: Point) {
         assert!((a.x - b.x).hypot(a.y - b.y) < 0.001, "{a:?} != {b:?}");
@@ -1772,7 +1781,7 @@ mod tests {
         let side = [1., 0.];
         let press = local_handle(t.geometry.frame, side);
         let target = t.basis.map(add(press, Point { x: 8., y: 0. }));
-        let snapping = Snapping::new(vec![(layer_core::LayerId(2), Rect { min: target, max: add(target, Point { x: 1000., y: 1000. }) })], vec![]);
+        let snapping = Snapping::new(vec![(Some(OccurrenceHandle::from_index(2)), Rect { min: target, max: add(target, Point { x: 1000., y: 1000. }) })], vec![]);
         let drag = Drag { handle: Handle::Scale(side), press, current: press, start: t.geometry.clone(), anchor: t.reference_point(), snapping: Some(snapping) };
         t.drag = Some(drag.clone());
         t.apply_drag(drag, add(press, Point { x: 5., y: 0. }), Modifiers { alt: true, ..Default::default() }, false, 1.);

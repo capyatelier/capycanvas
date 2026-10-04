@@ -2,7 +2,7 @@
 use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::Project;
+use layer_core::Document;
 use layer_ui::*;
 use std::rc::Rc;
 
@@ -25,7 +25,7 @@ mod chooser;
 pub(crate) use chooser::choose_next_save;
 
 pub(crate) type OpenDocument =
-    Rc<dyn Fn(Project, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
+    Rc<dyn Fn(Document, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
 
 impl Workspace {
     pub(crate) fn install_document_close(self: &Rc<Self>) {
@@ -293,27 +293,26 @@ async fn document_request(
             let (policy, working) = {
                 let gpu = w.gpu.borrow();
                 let session = &gpu.as_ref().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
-                (session.state().settings.photo_open, session.engine().document().color.space)
+                (session.state().settings.photo_open, session.engine().document().composition().color.space)
             };
             let Some((project, location)) = open::prepare(&w.window, Some(w), file, policy, working, photo_document_names(&location.name, &w.localization()), &w.localization()).await? else {
                 return Ok(false);
             };
-            w.open_document
-                .borrow()
-                .as_ref()
-                .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization()))?(
-                project, location, None
-            );
+            w.documents.enqueue_imported(w, project, location, None);
         }
         DocumentRequest::Save { .. } => {
-            let project = w
-                .gpu
-                .borrow_mut()
-                .as_mut()
-                .ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?
-                .session
-                .capture_project_save(id, location)?;
-            gio::spawn_blocking(move || atomic_write(&path, |file| project.write(file)))
+            let (mut project, context) = {
+                let mut gpu = w.gpu.borrow_mut();
+                let session = &mut gpu.as_mut().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
+                let capture = session.capture_project_save(id, location)?;
+                (capture, session.engine().backend().capture_context()?)
+            };
+            gio::spawn_blocking(move || {
+                context.install(&mut project)?;
+                let cancelled = std::sync::atomic::AtomicBool::new(false);
+                let package = layer_core::package::codec::PreparedPackage::prepare(&project, None, &cancelled)?;
+                atomic_write(&path, |file| package.write(file, &cancelled))
+            })
                 .await
                 .map_err(|_| DocumentHostError::ProjectWriterFailed.message(&w.localization()))??;
         }

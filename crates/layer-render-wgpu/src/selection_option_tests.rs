@@ -69,7 +69,7 @@ fn selection_options_boolean_modes_antialias_and_gaussian_feather() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
-        &[Layer::paint(LayerId(1), "selection")],
+        paint_document([128; 2], "selection").scene(),
         &[],
         &[],
         true,
@@ -170,7 +170,7 @@ fn selection_resize_uses_circular_extrema_preserves_soft_values_and_clips_edges(
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
-        &[Layer::paint(LayerId(1), "resize")],
+        paint_document([128; 2], "resize").scene(),
         &[],
         &[],
         true,
@@ -290,7 +290,7 @@ fn chained(resize: i32, keep_canvas_edges: bool, previous: Option<Selection>) ->
 #[test]
 fn border_is_the_grown_selection_minus_the_shrunk_one() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "border")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "border").scene(), &[], &[], true);
     let square = binary(|x, y| (32..96).contains(&x) && (32..96).contains(&y));
     let edge = binary(|x, y| x < 40 && (48..80).contains(&y));
     for (input, radius) in [(&square, 5), (&square, 1), (&edge, 4)] {
@@ -317,7 +317,7 @@ fn border_is_the_grown_selection_minus_the_shrunk_one() {
 #[test]
 fn smooth_fills_notches_removes_spikes_and_keeps_the_canvas_edges() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "smooth")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "smooth").scene(), &[], &[], true);
     let smooth = |r: &mut WgpuRasterizer, input: &[u8], radius: i32| {
         let mut last = from_bytes(input);
         for (resize, keep) in [(radius, false), (-2 * radius, true), (radius, false)] {
@@ -394,7 +394,7 @@ fn resize(resize: i32) -> ModifyStep {
 #[test]
 fn modify_matches_its_steps_within_a_window_across_chunks_and_inverted() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "modify")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "modify").scene(), &[], &[], true);
     let square = binary(|x, y| (44..90).contains(&x) && (30..100).contains(&y));
     let edge = binary(|x, y| x < 40 && (48..80).contains(&y));
     let soft: Vec<u8> = (0..128 * 128)
@@ -440,7 +440,7 @@ fn modify_matches_its_steps_within_a_window_across_chunks_and_inverted() {
 #[test]
 fn a_modify_preview_covers_the_selection_window_on_cells_that_approximate_the_result() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "preview")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "preview").scene(), &[], &[], true);
     let square = binary(|x, y| (44..90).contains(&x) && (30..100).contains(&y));
     let steps = [ModifyStep { feather: 12., ..Default::default() }];
     let exact = bytes_of(&modify(&mut r, from_bytes(&square), &steps, None).pixels);
@@ -499,7 +499,7 @@ fn a_modify_preview_covers_the_selection_window_on_cells_that_approximate_the_re
 #[test]
 fn refinement_chunks_follow_the_timed_pace_of_the_gpu() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "pace")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "pace").scene(), &[], &[], true);
     let square = binary(|x, y| (4..124).contains(&x) && (4..124).contains(&y));
     let steps = [ModifyStep { feather: 60., ..Default::default() }];
     modify(&mut r, from_bytes(&square), &steps, None);
@@ -521,7 +521,7 @@ fn refinement_chunks_follow_the_timed_pace_of_the_gpu() {
 #[test]
 fn cancelling_a_modify_job_drops_its_result() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "cancel")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "cancel").scene(), &[], &[], true);
     let square = binary(|x, y| (44..90).contains(&x) && (30..100).contains(&y));
     r.set_refine_chunk(Some(3000.));
     let mut long = modify_request(from_bytes(&square), &[ModifyStep { feather: 20., ..Default::default() }], None);
@@ -545,7 +545,7 @@ fn cancelling_a_modify_job_drops_its_result() {
 #[test]
 fn replacing_a_displayed_preview_repaints_only_around_either_outline() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "outline")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "outline").scene(), &[], &[], true);
     let cells = |x0: i32, x1: i32| Selection {
         affine: Affine([4., 0., 0., 4., 16., 16.]),
         ..from_bytes(&binary(|x, y| (x0..x1).contains(&x) && (2..6).contains(&y)))
@@ -573,7 +573,7 @@ fn replacing_a_displayed_preview_repaints_only_around_either_outline() {
 #[test]
 fn moving_a_pixel_selection_outline_keeps_its_uploaded_coverage() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "outline")], &[], &[], true);
+    submit(&mut r, paint_document([128; 2], "outline").scene(), &[], &[], true);
     let selection = from_bytes(&binary(|x, y| x < 40 && y < 40));
     r.set_selection_outline(Some(&selection)).unwrap();
     let uploaded = r.display_selection.as_ref().unwrap().1.clone();
@@ -590,14 +590,8 @@ fn moving_a_pixel_selection_outline_keeps_its_uploaded_coverage() {
 #[ignore = "hardware completed-selection refinement benchmark; run serially"]
 fn selection_resize_latency() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(
-        &mut r,
-        &[Layer::paint(LayerId(1), "resize timing")],
-        &[],
-        &[],
-        true,
-    );
-    r.document_extent = [2048, 2048];
+    let document = paint_document([2048; 2], "resize timing");
+    r.submit(FramePacket {view:view(),reset_layers:true,..packet(document.scene(),[2048; 2])}).unwrap();
     let bytes: Vec<u8> = (0..2048 * 2048)
         .map(|i| (20 + (i % 2048 * 13 + i / 2048 * 7) % 200) as u8)
         .collect();

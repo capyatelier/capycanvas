@@ -24,11 +24,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn picker_layer_available(&self) -> bool {
         let doc = self.engine.document();
-        !doc.active_mask
-            && !doc.is_locked(doc.active_layer)
-            && doc
-                .layer(doc.active_layer)
-                .is_some_and(|l| l.kind == LayerKind::Paint && l.source.is_none())
+        matches!(doc.working.target, Some(layer_core::authored::SourceTarget::Paint(_)))
+            && doc.working.occurrence.is_some_and(|h| !doc.is_locked(h)
+                && doc.scene().paint_source(h).is_some_and(|p| p.original.is_none()))
     }
 
     pub(crate) fn start_picker(&mut self) -> Result<(), String> {
@@ -179,15 +177,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         // Even raw-layer sampling is limited to the document, never the surround.
         let inside = point.x >= 0.
             && point.y >= 0.
-            && point.x < doc.width as f32
-            && point.y < doc.height as f32;
+            && point.x < doc.composition().size[0] as f32
+            && point.y < doc.composition().size[1] as f32;
         let (source, extent) = if self.eyedropper.layer && self.picker_layer_available() {
             (
-                ColorSampleSource::Layer(doc.active_layer),
-                [doc.width, doc.height],
+                ColorSampleSource::Source(doc.working.target.expect("available paint target")),
+                doc.composition().size,
             )
         } else {
-            (ColorSampleSource::Composite, [doc.width, doc.height])
+            (ColorSampleSource::Composite, doc.composition().size)
         };
         if inside
             && point.x >= 0.
@@ -364,7 +362,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (center, sample, scale) = self.picker_geometry(position);
         let old = picking.original?;
         let new = self.state.color_picker.preview.unwrap_or(old);
-        let space = self.engine.document().color.space;
+        let space = self.engine.document().composition().color.space;
         let classic = self.state.color_picker.style == ColorPickerStyle::Eyedropper
             && picking.touch.is_none();
         Some(ColorPickerOverlay {

@@ -108,11 +108,12 @@ fn stroke(
     }
     Ok(timings)
 }
-fn roots(engine: &Engine) -> Result<Vec<(LayerId, layer_core::raster::TileKey, [u8; 32])>> {
+fn roots(engine: &Engine) -> Result<Vec<(SourceTarget, layer_core::raster::TileKey, [u8; 32])>> {
     let mut roots = Vec::new();
-    for layer in &engine.document().layers {
-        for (coord, tile) in &layer.raster.wait_data()?.tiles {
-            roots.push((layer.id, *coord, tile.wait_backing()?.digest));
+    for target in engine.document().scene().targets() {
+        let Some(raster)=engine.document().target_raster(target) else {continue;};
+        for (coord, tile) in &raster.wait_data()?.tiles {
+            roots.push((target, *coord, tile.wait_backing()?.content_digest()?));
         }
     }
     Ok(roots)
@@ -218,7 +219,7 @@ fn main() -> Result<()> {
         {
             continue;
         }
-        let document = Document::new("brush frames", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let document = Document::new(PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut brush = default_brush(preset);
         brush.diameter = 1000.;
         let mut gpu = WgpuRasterizer::from_wgpu_native_staged(

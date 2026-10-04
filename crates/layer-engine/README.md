@@ -24,10 +24,20 @@ replacement retain the same interpretation. See the
 The generator places contacts by distance traveled and evaluates brush dynamics
 on the CPU. Seeded variation makes stroke replay deterministic. Each frame collects
 new contacts and document changes into a borrowed `FramePacket` for the renderer.
+The packet lends the typed `SceneView`; each batch names its explicit paint or
+coverage `SourceTarget`. Occurrence handles identify placement and controls.
+Ordinary motion borrows authored stores and immutable source roots.
 
 Prediction uses separate preview work that real input replaces. Predicted samples
 do not enter saved strokes or undo history. Corrections to earlier estimated
 samples can revise the real stroke and trigger replay of the affected work.
+
+`capture_artwork` freezes committed source roots with the renderer's last submitted
+effect phases and the editor checkpoint. Active contact previews are excluded.
+Accepted pending raster promises remain owned by the capture and resolve on its
+worker. Hosts with an asynchronous render owner pair these roots with an ordered
+context capture before exact file or preview jobs. Renderer replacement starts
+from the same integrated playback context.
 
 ## Where to start
 

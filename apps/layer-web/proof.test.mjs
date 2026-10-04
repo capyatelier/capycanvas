@@ -1,4 +1,5 @@
 import {histogramJourney} from './histogram-journey.mjs';
+import {packageManifest,packageOutput,packageResources,readPackage,resourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -20,8 +21,8 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   const ready=async()=>{const expected=await evaluate(`document.querySelector('.proof-panel [aria-label="Proof profile"]')?.selectedOptions[0]?.textContent`);await wait(`${expected?`layerApp.app.proof_form().recipe.name===${JSON.stringify(expected)} &&`:''} !document.querySelector('.proof-panel [role="status"]')?.textContent && layerApp.app.proof_status().text.startsWith('Proof:') && !layerApp.app.proof_status().needed`);if(await evaluate(`!!document.querySelector('.proof-panel')`))await click('Close');};
   const choose=async(name,group='Saved Profiles')=>{const selector=`.proof-panel optgroup[label="${group}"] option`;await wait(`!![...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)})`);await evaluate(`(()=>{const s=document.querySelector('.proof-panel select[aria-label="Proof profile"]');s.value=[...document.querySelectorAll(${JSON.stringify(selector)})].find(o=>o.textContent===${JSON.stringify(name)}).value;s.dispatchEvent(new Event('change'));})()`);};
   const histogram=histogramJourney({evaluate,settle}).exact;
-  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('proofTest.manifest([...proofTest.files.values()].at(-1))');};
-  const backing=m=>({blobs:m.blobs,sources:m.tiled_sources?.images,layers:m.document.layers,color:m.document.color});
+  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return readPackage(evaluate, '[...proofTest.files.values()].at(-1)');};
+  const backing=m=>({objects:m.objects.filter(o=>o.type!=='capy.output/1'),resources:m.resources.filter(r=>r.type!=='capy.icc/1').map(r=>resourceIdentity(m,{ref:r.id}))});
   const exportPng=async()=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
     await set('Format','Png');await set('Output profile','0');await set('Bit depth','U8');await set('Dither','None');
@@ -32,7 +33,7 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
   await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
   await evaluate(`window.proofTest={files:new Map(),open:window.showOpenFilePicker,save:window.showSaveFilePicker};
     proofTest.recoveryTimer=setInterval(()=>[...document.querySelectorAll(':is(dialog[open],.proof-panel) button')].find(b=>b.textContent==='Keep for Later')?.click(),50);
-    proofTest.manifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));
+    proofTest.manifest=${packageManifest.toString()};
     window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){let bytes;return{async write(v){bytes=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){proofTest.files.set(o.suggestedName,bytes)},async abort(){}}}});`);
   try {
     await invoke('new_document');await wait(`!!document.querySelector('dialog[open]')`);
@@ -76,8 +77,8 @@ export async function checkProof({call,evaluate,settle}, {profileUrl='/pkg/proof
     assert.equal(await evaluate(`(await layerApp.app.profile_library('list')).some(p=>p.name===proofTest.original.name)`),true);
     assert.deepEqual(await evaluate(`(await layerApp.app.profile_library('get',(await layerApp.app.profile_library('list')).find(p=>p.name===proofTest.original.name).id)).profile`),await evaluate('proofTest.original.profile'));
     const replaced=await save();assert.deepEqual(backing(replaced),backing(base));
-    assert.equal(replaced.tiled_sources.proof.name,names[1]);
-    assert.equal(replaced.tiled_sources.profiles.length,1,'Only the active proof ICC is embedded');
+    assert.equal(packageOutput(replaced).data.proof.name,names[1]);
+    assert.equal(packageResources(replaced,'capy.icc/1').length,1,'Only the active proof ICC is embedded');
     console.log('First use, defaults, Document Profile retention, cancel, preservation failure/retry and exact local ICC copy passed');
     // Paint while proofing, compare one-step history and independent exports.
     await evaluate(`layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'DisplayP3',rgba:[1,0,.7,1]}}});layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'navigator',visible:true}});`);

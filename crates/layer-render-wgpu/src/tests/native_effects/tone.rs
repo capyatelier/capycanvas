@@ -57,7 +57,7 @@ fn native_neutral_tone_chains_preserve_extended_rgb_and_low_alpha_exactly() {
                             ][i as usize % 7],
                             image,
                         );
-                        if e.name.as_ref() == "gradient_map" {
+                        if e.program.id.as_ref() == "gradient_map" {
                             set(&mut e, "amount", EffectValue::Number(0.));
                         }
                         layers.insert(0, e);
@@ -129,9 +129,9 @@ fn native_levels_clipping_is_explicit_and_matches_profiled_signed_gamma_referenc
     }
 }
 
-fn table_probe(name: &str, image: bool, component: usize) -> Layer {
+fn table_probe(name: &str, image: bool, component: usize) -> EffectInstance {
     let mut l = effect(1, name, false);
-    let p = Arc::make_mut(&mut Arc::make_mut(l.effect.as_mut().unwrap()).program);
+    let p = Arc::make_mut(&mut l.program);
     p.kind = EffectKind::Generator;
     p.entry = "table_probe".into();
     p.wgsl = format!(
@@ -149,7 +149,7 @@ fn table_probe(name: &str, image: bool, component: usize) -> Layer {
     }
     l
 }
-fn samples(r: &mut WgpuRasterizer, layer: &Layer) -> Vec<f32> {
+fn samples(r: &mut WgpuRasterizer, layer: &EffectInstance) -> Vec<f32> {
     frame(r, std::slice::from_ref(layer));
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .chunks_exact(16)
@@ -281,7 +281,7 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
         for image in [false, true] {
             let alpha = 1. / 65535.;
             let mut input = source([0.; 3], alpha);
-            let p = Arc::make_mut(&mut Arc::make_mut(input.effect.as_mut().unwrap()).program);
+            let p = Arc::make_mut(&mut input.program);
             p.wgsl = format!(
                 "fn fixture(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{
                 let code=u32(p.y)*256u+u32(p.x);let x=f32(code)/65535.;
@@ -351,7 +351,8 @@ fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::Srgb,depth}).unwrap();
         let layers=[effect(2,"exposure",false),source([0.25,2.,-0.125],1.)];
         for extent in [[512,384],[513,385],[385,513]] {
-            r.submit(FramePacket{ commit_rasters: true,view:ViewState{width_px:extent[0],height_px:extent[1],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
+            let document=effect_document(&layers,extent,r.document_color);
+            r.submit(FramePacket{ commit_rasters: true,view:ViewState{width_px:extent[0],height_px:extent[1],..test_view()},document_extent:extent,scene:document.scene().with_owner(0,0),selection_visibility:None,inspect_mask:None,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
             let pixels=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for (i,p) in pixels.chunks_exact(16).enumerate() {
                 let actual: [f32;4]=std::array::from_fn(|c| f32::from_le_bytes(p[c*4..c*4+4].try_into().unwrap()));

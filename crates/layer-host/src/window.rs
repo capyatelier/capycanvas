@@ -325,7 +325,7 @@ impl<P: Parked> DocumentWindow<P> {
             selected: self.documents.selected(),
             epoch: host.session.state().document_file.epoch,
             gpu: self.gpu.clone(),
-            color: host.session.engine().document().color,
+            color: host.session.engine().document().composition().color,
             options,
             retired,
             renderer: None,
@@ -384,7 +384,7 @@ impl<P: Parked> DocumentWindow<P> {
             return Err("Wait for drawing capture before opening".into());
         }
         self.documents
-            .admit(&tiles, &next.capture_project_recovery()?).map_err(|reason| reason.message(host.session.localization()))?;
+            .admit(&tiles, next.engine().document()).map_err(|reason| reason.message(host.session.localization()))?;
         next.initialize_document_location(open.location)?;
         if open.recovered {
             next.mark_recovered();
@@ -437,8 +437,8 @@ mod tests {
     type Window = DocumentWindow<UiSession<Renderer>>;
 
     fn host() -> NativeHost {
-        let document = layer_core::Document::new("Window", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();
         host.session.set_document_replacement(false);
@@ -530,7 +530,7 @@ mod tests {
 
     fn digests(host: &NativeHost) -> Vec<[u8; 32]> {
         let tiles = host.session.retained_document_tiles();
-        let mut digests: Vec<_> = tiles.blobs().unwrap().iter().map(|b| b.digest).collect();
+        let mut digests: Vec<_> = tiles.blobs().unwrap().iter().map(|b| b.content_digest().unwrap()).collect();
         digests.sort();
         digests
     }
@@ -652,7 +652,7 @@ mod tests {
         assert!(window.set_localization(japanese.clone()));
         assert_eq!(host.session.state().document_file.epoch, epoch);
         drop(window.adopt(&mut host, &mut next, open, || true, |s| s).unwrap());
-        assert_eq!(host.session.engine().document().layers, candidate_document.layers);
+        assert_eq!(host.session.engine().document().artwork, candidate_document.artwork);
         assert_eq!(host.session.localization().language(), UiLanguage::Japanese);
         assert_eq!(host.localization_generation(), 1);
         settle(&mut host);

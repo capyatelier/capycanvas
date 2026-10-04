@@ -34,11 +34,16 @@ final class NativeProjectTask: @unchecked Sendable {
         defer { if let error { capy_apple_string_free(error) } }
         throw HostFailure(message: error.map { String(cString: $0) } ?? "Document operation failed")
     }
-    func write(to url: URL) throws {
+    func write(to url: URL, previewOnly: Bool = false, original: URL? = nil, destinationError: String = "") throws {
         try ProjectFileIO.coordinate(url, writing: true) { destination in
+            if previewOnly, let original {
+                let access = original.startAccessingSecurityScopedResource()
+                defer { if access { original.stopAccessingSecurityScopedResource() } }
+                if ProjectFileIO.sameFile(original, destination) { throw HostFailure(message: destinationError) }
+            }
             try ProjectFileIO.atomicWrite(to: destination, beforeCommit: { [self] in
                 guard capy_project_begin_commit(self.handle) == 0 else { throw HostFailure(message: "Document operation cancelled") }
-            }) { [self] descriptor in try self.check(capy_project_write(self.handle, descriptor)) }
+            }) { [self] descriptor in try self.check(previewOnly ? capy_project_export_preview(self.handle, descriptor) : capy_project_write(self.handle, descriptor)) }
         }
     }
     func read(from url: URL?, options: JSON? = nil) throws {
@@ -108,6 +113,28 @@ final class NativeProjectTask: @unchecked Sendable {
         return image
     }
 
+    func packageSummary() throws -> JSON {
+        guard let text = capy_project_package_summary(handle) else { throw HostFailure(message: "Document operation is unavailable") }
+        defer { capy_apple_string_free(text) }
+        return try JSON.decode(String(cString: text))
+    }
+    func packagePreview() throws -> CGImage? {
+        var preview = CapyProjectPreview()
+        try check(capy_project_package_preview(handle, &preview))
+        guard let pixels = preview.pixels else { return nil }
+        guard preview.width > 0, preview.height > 0, preview.width <= 1024, preview.height <= 1024,
+            preview.count == Int(preview.width * preview.height * 4),
+            let space = CGColorSpace(name: CGColorSpace.sRGB),
+            let provider = CGDataProvider(data: Data(bytes: pixels, count: preview.count) as CFData),
+            let image = CGImage(width: Int(preview.width), height: Int(preview.height), bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: Int(preview.width) * 4, space: space,
+                bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: true, intent: .relativeColorimetric) else {
+            throw HostFailure(message: "The drawing preview is unavailable")
+        }
+        return image
+    }
+
     func pendingProfile() throws -> JSON {
         guard let value = capy_project_profile(handle) else { throw HostFailure(message: "Document operation is unavailable") }
         defer { capy_apple_string_free(value) }
@@ -119,6 +146,14 @@ final class NativeProjectTask: @unchecked Sendable {
 }
 
 enum ProjectFileIO {
+    static func sameFile(_ original: URL, _ destination: URL) -> Bool {
+        if original.standardizedFileURL.resolvingSymlinksInPath() == destination.standardizedFileURL.resolvingSymlinksInPath() { return true }
+        guard let source = try? FileManager.default.attributesOfItem(atPath: original.path),
+            let target = try? FileManager.default.attributesOfItem(atPath: destination.path),
+            let sourceDevice = source[.systemNumber] as? NSNumber, let targetDevice = target[.systemNumber] as? NSNumber,
+            let sourceFile = source[.systemFileNumber] as? NSNumber, let targetFile = target[.systemFileNumber] as? NSNumber else { return false }
+        return sourceDevice == targetDevice && sourceFile == targetFile
+    }
     /// File providers can substitute the coordinated URL. Scope and coordination
     /// enclose the entire read/write, including Rust validation/compression.
     static func coordinate<Value>(_ url: URL, writing: Bool, work: @escaping (URL) throws -> Value) throws -> Value {

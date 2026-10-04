@@ -100,6 +100,7 @@ pub fn preview_recipe(
 
 pub struct ExportTask {
     original: DocumentExport,
+    document: layer_core::Document,
     gpu: SnapshotGpu,
     renderer: Option<SnapshotRenderer>,
     recipe: ExportRecipe,
@@ -119,6 +120,7 @@ impl ExportTask {
     ) -> Result<Self, String> {
         Ok(Self {
             original: session.capture_project_export(request)?,
+            document: session.document_snapshot()?,
             gpu: crate::tasks::gpu(session)?.snapshot_gpu(),
             renderer: None,
             recipe: ExportRecipe::web_share(),
@@ -131,7 +133,7 @@ impl ExportTask {
     }
 
     pub fn document(&self) -> &layer_core::Document {
-        &self.original.project.document
+        &self.document
     }
 
     pub fn recipe(&self) -> &ExportRecipe {
@@ -157,8 +159,7 @@ impl ExportTask {
             None => self
                 .gpu
                 .capture(
-                    self.original.project.clone(),
-                    self.original.time,
+                    self.original.capture.clone(),
                     control,
                 )
                 .map_err(|e| e.to_string())?,
@@ -203,15 +204,15 @@ impl ExportTask {
 
     pub fn details_localized(&self, localizer: &layer_ui::Localizer) -> Result<Value, String> {
         let document = self.document();
-        let extent = [document.width, document.height];
+        let extent = [document.composition().size[0], document.composition().size[1]];
         let name = std::path::Path::new(&self.name).file_stem();
         let mut form = json!(layer_ui::ExportForm::new_localized(document, localizer));
         form["recipe_profile_caption"] = json!(layer_ui::ExportProfileCaption::Profile { name:self.recipe.profile.name.clone() });
         form["recipe_profile_name"] = self.recipe.profile.display_name(localizer).into();
         Ok(json!({
-            "color": document.color,
+            "color": document.composition().color,
             "extent": extent,
-            "resolution": document.resolution,
+            "resolution": document.composition().resolution,
             "recipe": self.recipe,
             "form": form,
             "suggested_name": name.and_then(|s| s.to_str()).unwrap_or(localizer.text(layer_ui::MessageId::COLOR_FEATURES_EXPORT_EXPORT).as_ref()),
@@ -235,7 +236,7 @@ impl ExportTask {
         }
         let recipe = self.recipe.clone();
         let document = self.document();
-        let extent = recipe.output_extent([document.width, document.height])?;
+        let extent = recipe.output_extent([document.composition().size[0], document.composition().size[1]])?;
         let metadata = recipe.delivery_metadata(document)?;
         let renderer = self.renderer(control)?;
         renderer.set_output_extent(extent)?;
@@ -261,9 +262,9 @@ mod tests {
     use std::io::Cursor;
 
     fn export(pixel: [f32; 4]) -> (NativeHost, ExportTask) {
-        let mut document = layer_core::Document::new("Export", 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color.depth = SampleDepth::F32;
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::composition_mut(&mut document).color.depth = SampleDepth::F32;
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(
             Renderer(Some(gpu.into())),
@@ -337,8 +338,8 @@ mod tests {
 
     #[test]
     fn webp_export_writes_lossless_rgba_and_refuses_encoder_limits() {
-        let mut document = layer_core::Document::new("Export", 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.resolution = Some(layer_core::ImageResolution::ppi(240));
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 8, 6, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::composition_mut(&mut document).resolution = Some(layer_core::ImageResolution::ppi(240));
         let artist_and_gps = [
             b"II\x2a\0\x08\0\0\0\x02\0".as_slice(),
             b"\x3b\x01\x02\0\x04\0\0\0Ada\0",
@@ -346,11 +347,9 @@ mod tests {
             b"\x01\0\x01\0\x02\0\x02\0\0\0N\0\0\0\0\0\0\0",
         ]
         .concat();
-        document.metadata.exif = Some(artist_and_gps.into());
-        for paper in document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
-            paper.visible = false;
-        }
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        std::sync::Arc::make_mut(&mut document.artwork.metadata).exif = Some(artist_and_gps.into());
+        crate::test_support::hide_paper(&mut document);
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, [8, 6], layer_ui::Platform::Mac).unwrap();
         let pixel = |x: u32, y: u32| [(x * 30) as u8, (y * 40) as u8, 200, if x < 4 { 255 } else { 0 }];
@@ -417,7 +416,7 @@ mod tests {
         let (host, mut task) = export([4., 2., 1., 1.]);
         let recipe = ExportRecipe::web_share()
             .draft_for_color_canonical(
-                task.document().color,
+                task.document().composition().color,
                 ExportDraftAction::Format(ExportFormat::AvifHdr),
             )
             .recipe;

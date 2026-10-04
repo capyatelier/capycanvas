@@ -1,7 +1,7 @@
 //! Real GPU readback: circular coverage, perceptual averaging and exact points.
 use super::*;
 use layer_core::{
-    Document,
+    Document, authored::{PortableId,SourceTarget},
     color::{DocumentColor, RgbSpace, SampleDepth},
     raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey},
 };
@@ -14,9 +14,11 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
             space,
             depth: SampleDepth::F32,
         };
-        let mut doc = Document::new("picker", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        doc.color = color;
-        doc.layers[1].visible = false;
+        let mut doc = Document::new(PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let root = doc.artwork.root;
+        doc.artwork.compositions.get_mut(root).unwrap().color = color;
+        let paper = doc.scene().order()[1];
+        doc.artwork.occurrences.get_mut(paper).unwrap().visible = false;
         let mut bytes = Vec::with_capacity(256 * 256 * 16);
         for y in 0..256i32 {
             for x in 0..256i32 {
@@ -50,17 +52,19 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
             },
             RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &bytes).unwrap()),
         );
-        doc.layers[0].raster = RasterRevision::backed(data);
+        let target = doc.scene().source_target(doc.scene().order()[0]).unwrap();
+        let SourceTarget::Paint(handle) = target else { unreachable!() };
+        doc.artwork.paint.get_mut(handle).unwrap().raster = RasterRevision::backed(data);
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         r.submit(FramePacket {
-            ..packet(&doc.layers, [128, 128])
+            ..packet(doc.scene(), [128, 128])
         })
         .unwrap();
         for area in [ColorSampleArea::Point, ColorSampleArea::Circle5] {
             assert!(
                 r.request_color_sample(ColorSampleRequest {
                     request_id: 2,
-                    source: ColorSampleSource::Layer(doc.layers[0].id),
+                    source: ColorSampleSource::Source(target),
                     position: [8, 8],
                     area
                 })
@@ -87,7 +91,7 @@ fn color_picker_circular_oklab_averaging_keeps_points_alpha_and_extended_values(
             assert!((rgba[3] - alpha).abs() < 1e-6, "{rgba:?}");
         }
         for source in [
-            ColorSampleSource::Layer(doc.layers[0].id),
+            ColorSampleSource::Source(target),
             ColorSampleSource::Composite,
         ] {
             for (area, position, expected) in [

@@ -80,10 +80,6 @@ fn external_copy(png: &[u8]) {
     until(|| child.try_wait().unwrap().is_some(), "wl-copy offers the image");
 }
 
-fn active_layer(w: &Workspace) -> layer_core::Layer {
-    let doc = document(w);
-    doc.layer(doc.active_layer).unwrap().clone()
-}
 
 /// Mouse and touch only: the tablet proxy does not forward clipboard
 /// requests, so `--tablet` runs lose their Wayland connection on the first copy.
@@ -97,8 +93,8 @@ fn native_clipboard_copy_paste_round_trips() {
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
-    let paint = document(&w).active_layer;
-    filled_selection(&w, paint.0);
+    let paint = document(&w).working.occurrence.unwrap();
+    filled_selection(&w, layer_ui::occurrence_token(paint));
     let mut native = remote_input();
 
     let clip = {
@@ -106,7 +102,7 @@ fn native_clipboard_copy_paste_round_trips() {
         chord(&mut native, &[CONTROL], 0x63);
         copied(&w, before, "Ctrl+C")
     };
-    let selection = document(&w).selection.clone().unwrap().coverage_bounds();
+    let selection = document(&w).working.selection.clone().unwrap().coverage_bounds();
     assert_eq!(clip.origin, [selection.min.x.floor() as u32, selection.min.y.floor() as u32]);
     assert_eq!(clip.source.kind, SourceKind::Rasterized);
     let formats = clipboard_formats(&w);
@@ -117,15 +113,15 @@ fn native_clipboard_copy_paste_round_trips() {
     w.window.present();
     pump(300);
 
-    let layers = document(&w).layers.len();
+    let layers = document(&w).scene().order().len();
     chord(&mut native, &[CONTROL], 0x76);
-    until(|| document(&w).layers.len() == layers + 1 && idle(&w), "Ctrl+V pastes a new layer");
-    let pasted = active_layer(&w);
-    assert_eq!(pasted.source.as_deref(), Some(&clip.source_for(document(&w).color)));
-    assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], clip.origin.map(|v| v as f32), "at the copied position");
+    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Ctrl+V pastes a new layer");
+    let pasted = document(&w);
+    assert_source_samples(active_paint(&pasted).original.as_deref().unwrap(), &clip.source_for(document(&w).composition().color));
+    assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], clip.origin.map(|v| v as f32), "at the copied position");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "no handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layers.len() == layers, "one undo step");
+    until(|| document(&w).scene().order().len() == layers, "one undo step");
 
     let merged = {
         let before = nonce();
@@ -134,33 +130,33 @@ fn native_clipboard_copy_paste_round_trips() {
     };
     assert_eq!(merged.name, "Merged copy");
 
-    let erased = document(&w).layer(paint).unwrap().raster.identity();
+    let erased = document(&w).scene().paint_source(paint).unwrap().raster.identity();
     let cut = {
         let before = nonce();
         chord(&mut native, &[CONTROL], 0x78);
         copied(&w, before, "Ctrl+X")
     };
-    until(|| document(&w).layer(paint).unwrap().raster.identity() != erased, "Cut erases the copied pixels");
+    until(|| document(&w).scene().paint_source(paint).unwrap().raster.identity() != erased, "Cut erases the copied pixels");
     assert_eq!(cut.source.extent, clip.source.extent);
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
 
     for device in [Device::Mouse, Device::Touch] {
-        filled_selection(&w, paint.0);
+        filled_selection(&w, layer_ui::occurrence_token(paint));
         let before = nonce();
         choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Copy, &["Copy Merged"]);
         assert_eq!(copied(&w, before, &format!("{device:?}: Copy ▾ › Copy Merged")).name, "Merged copy");
-        let layers = document(&w).layers.len();
+        let layers = document(&w).scene().order().len();
         w.dispatch(UiAction::Invoke { command: CommandId::PasteInto });
-        until(|| document(&w).layers.len() == layers + 1 && idle(&w), &format!("{device:?}: Paste Into"));
-        let into = active_layer(&w);
-        assert!(into.mask.as_ref().is_some_and(|m| m.initial.is_some()), "a mask from the selection");
-        assert!(document(&w).selection.is_none());
+        until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), &format!("{device:?}: Paste Into"));
+        let into = document(&w);
+        assert!(active_occurrence(&into).mask.as_ref().is_some_and(|m| into.artwork.coverage.get(m.source).unwrap().initial.is_some()), "a mask from the selection");
+        assert!(document(&w).working.selection.is_none());
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-        until(|| document(&w).layers.len() == layers && document(&w).selection.is_some(), "Paste Into undoes in one step");
+        until(|| document(&w).scene().order().len() == layers && document(&w).working.selection.is_some(), "Paste Into undoes in one step");
     }
 
     let mut other = new_drawing(640, 480, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    other.document.color = layer_core::color::DocumentColor {
+    composition_mut(&mut other).color = layer_core::color::DocumentColor {
         space: layer_core::color::RgbSpace::DisplayP3,
         depth: layer_core::color::SampleDepth::U16,
     };
@@ -170,29 +166,29 @@ fn native_clipboard_copy_paste_round_trips() {
     pump(600);
     let copy = current().unwrap();
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
-    until(|| document(&second).layers.len() == 3 && idle(&second), "Paste in Place into another drawing");
-    let pasted = active_layer(&second);
-    assert_eq!(pasted.source.as_ref().unwrap().kind, SourceKind::Original, "another colour mode keeps an explicit profile");
-    assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], copy.origin.map(|v| v as f32));
+    until(|| document(&second).scene().order().len() == 3 && idle(&second), "Paste in Place into another drawing");
+    let pasted = document(&second);
+    assert_eq!(active_paint(&pasted).original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode keeps an explicit profile");
+    assert_eq!(active_occurrence(&pasted).placement.as_affine().unwrap().0[4..], copy.origin.map(|v| v as f32));
     second.window.destroy();
     w.window.present();
     pump(400);
 
     external_copy(&png);
     until(|| !clipboard_formats(&w).iter().any(|m| m == CLIP_MIME), "the clipboard now holds another application's image");
-    let layers = document(&w).layers.len();
+    let layers = document(&w).scene().order().len();
     chord(&mut native, &[CONTROL], 0x76);
-    until(|| document(&w).layers.len() == layers + 1, "an image from another app pastes");
+    until(|| document(&w).scene().order().len() == layers + 1, "an image from another app pastes");
     until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Placement), "with placement handles");
     w.dispatch(UiAction::Invoke { command: CommandId::CancelTransform });
-    until(|| document(&w).layers.len() == layers && idle(&w), "cancelling the placement removes it");
+    until(|| document(&w).scene().order().len() == layers && idle(&w), "cancelling the placement removes it");
     chord(&mut native, &[CONTROL, SHIFT], 0x76);
-    until(|| document(&w).layers.len() == layers + 1 && idle(&w), "Paste in Place of another app's image");
+    until(|| document(&w).scene().order().len() == layers + 1 && idle(&w), "Paste in Place of another app's image");
     assert!(state(&w).canvas_bar.is_none_or(|b| b.context.kind != layer_ui::CanvasBarKind::Placement), "centred without handles");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layers.len() == layers, "one undo step");
+    until(|| document(&w).scene().order().len() == layers, "one undo step");
 
-    w.dispatch(UiAction::Layer { action: LayerAction::BeginRename { id: paint.0 } });
+    w.dispatch(UiAction::Layer { action: LayerAction::BeginRename { id: layer_ui::occurrence_token(paint) } });
     let entry: gtk::Entry = until_some(
         || find_css(w.layer_panel.root.upcast_ref(), "layer-name-entry").and_then(|e| e.downcast::<gtk::Entry>().ok()).filter(|e| e.is_mapped()),
         "the rename field",
@@ -230,7 +226,7 @@ fn native_clipboard_copy_latency_24mp() {
         let row: Vec<u8> = (0..width).flat_map(|x| [(x / 24) as u8, (y / 16) as u8, ((x ^ y) & 255) as u8]).collect();
         builder.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
     let app = native_test_app("art.capycanvas.ClipboardLatency");
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
@@ -262,7 +258,7 @@ fn native_clipboard_copy_latency_24mp() {
     };
     w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
     let whole = timed(&mut native, "24 MP photo, Select All");
-    let photo = document(&w).layers[0].source.clone().unwrap();
+    let photo = paint_at(&document(&w), 0).original.clone().unwrap();
     assert!(std::sync::Arc::ptr_eq(&whole.source, &photo), "an untouched photo keeps its original samples");
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     native_pen_path(&w, &[[100., 100.], [5900., 150.], [5850., 3900.], [150., 3850.], [100., 100.]]);

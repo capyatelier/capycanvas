@@ -236,7 +236,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.canvas_geometry_refusal())?;
         self.cancel_layer_gesture()?;
         let doc = self.engine.document();
-        let canvas = [doc.width, doc.height];
+        let canvas = doc.composition().size;
         let previous = match self.layer_interaction.tool {
             LayerCanvasTool::Crop | LayerCanvasTool::Transform => LayerCanvasTool::Move,
             tool => tool,
@@ -297,7 +297,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// A canvas change from elsewhere, such as Undo, leaves the frame stale.
     pub(super) fn reconcile_crop(&mut self) {
         let doc = self.engine.document();
-        if self.operation.crop.as_ref().is_some_and(|s| s.canvas != [doc.width, doc.height]) {
+        if self.operation.crop.as_ref().is_some_and(|s| s.canvas != doc.composition().size) {
             let _ = self.finish_crop(false);
         }
     }

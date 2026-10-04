@@ -2,6 +2,8 @@
 //! crops and pipelines, and small asynchronous image readbacks.
 use super::metadata::PreviewMetadata;
 use super::*;
+use layer_core::{SceneSnapshot,SceneScope,SceneView};
+use layer_core::authored::{Artwork,SceneIndex,PortableId,Occurrence,OccurrenceContent,Definition,EffectApplication};
 use layer_render::{FilterPreviewImage, FilterPreviewRequest, FilterPreviewSource};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
@@ -12,14 +14,16 @@ enum Ready {
     ProbeNext(Result<u32, GpuRasterError>),
     Pixels(Result<ReadbackImage, GpuRasterError>),
 }
-type SourceKey = (u64, FilterPreviewSource, [u32; 2], layer_core::BlendSpace);
+/// Source revision, insertion scope, extent and blend space.
+type SourceKey = (u64, (u64,FilterPreviewSource), [u32; 2], layer_core::BlendSpace);
 pub(crate) struct FilterPreviews {
     scene: Scene,
     source_scene: Scene,
     probe_next: u32,
     probe_winner: Option<wgpu::Buffer>,
     cancelled: bool,
-    programs: HashMap<Arc<str>, Layer>,
+    programs: HashMap<Arc<str>, OccurrenceHandle>,
+    program_snapshot:Option<Arc<SceneSnapshot>>,
     probe: Deferred<wgpu::ComputePipeline>,
     mask: Image,
     source: Option<Image>,
@@ -95,6 +99,7 @@ impl FilterPreviews {
             probe_winner: None,
             cancelled: false,
             programs: HashMap::new(),
+            program_snapshot:None,
             probe,
             mask,
             source: None,
@@ -116,13 +121,9 @@ impl FilterPreviews {
         if let Some(request) = &self.request {
             self.cancelled |= self
                 .key
-                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent || key.3 != packet.blend_space)
-                || source_scope(packet.layers, request.source).is_none_or(|(_, mut scope)| {
-                    let mut old = self.source_layers.iter();
-                    !scope.all(|(layer, _)| {
-                        old.next()
-                            .is_some_and(|old| *old == PreviewMetadata::new(layer))
-                    }) || old.next().is_some()
+                .is_none_or(|key| key.0 != epoch || key.1.0 != packet.scene.owner() || key.2 != packet.document_extent || key.3 != packet.blend_space)
+                || source_scope(packet.scene.with_scope(&request.scope),request.source).is_none_or(|(_,scope)|{
+                    let current:Vec<_>=scope.into_iter().map(|h|PreviewMetadata::new(packet.scene,h)).collect();current!=self.source_layers
                 });
         }
     }
@@ -139,35 +140,37 @@ impl FilterPreviews {
             || request.size.contains(&0)
             || request.size[0] > 512
             || request.size[1] > 128
-            || request.extent != r.document_extent
+            || request.snapshot.view().composition().size != r.document_extent
         {
             return Ok(false);
         }
+        let mut artwork=request.snapshot.artwork.clone();
+        let mut programs=HashMap::new();
+        let mut analyses_changed=false;
         for effect in &request.filters {
-            effect
-                .validate()
-                .map_err(|e| GpuRasterError::Effect(e.into()))?;
-            let id = effect.program.id.clone();
-            let count = self.programs.len();
-            let layer = self
-                .programs
-                .entry(id.clone())
-                .or_insert_with(|| Layer::paint(LayerId(u64::MAX - count as u64), ""));
-            if layer.effect.as_ref() != Some(effect) {
-                self.rows.remove(&id);
-                layer.effect = Some(effect.clone());
-            }
+            effect.validate().map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let id=effect.program.id.clone();
+            let previous=self.program_snapshot.as_ref().and_then(|snapshot|self.programs.get(&id).and_then(|h|snapshot.view().effect(*h)));
+            analyses_changed|=previous.map(|e|e.program.analysis())!=Some(effect.program.analysis());
+            if previous.is_none_or(|old|old.program!=effect.program.as_ref()||old.values!=effect.values){self.rows.remove(&id);}
+            let definition=artwork.definitions.insert(PortableId::random(),Definition{program:effect.program.clone(),dimensions:Default::default()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let application=artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values.clone(),domain:request.snapshot.view().composition().size}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let handle=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"")).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            programs.insert(id,handle);
         }
+        if analyses_changed||programs!=self.programs{self.clear_analysis();}
+        let index=Arc::new(SceneIndex::build(&artwork).map_err(GpuRasterError::Effect)?);
+        self.program_snapshot=Some(Arc::new(SceneSnapshot::new(artwork,index,request.snapshot.owner,request.snapshot.revision,request.snapshot.context.clone())));
+        self.programs=programs;
         if let Some(startup) = &r.startup {
             // Visible rows prepare just their own preview variants. No draw or
             // readback is admitted until their asynchronous pipelines are ready.
             for effect in &request.filters {
-                self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect, request.blend_space))?;
+                self.scene.effects.prepare(r, self.program_snapshot.as_ref().unwrap().view(), &[self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect.view(), request.snapshot.view().composition().blend))?;
             }
-            let source_layers = source_scope(&request.layers, request.source)
-                .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
-            for (layers, execution) in scene::startup_effect_chains(&source_layers) {
-                self.source_scene.effects.prepare(r, &layers, execution, 0., 0, request.blend_space)?;
+            let source=source_snapshot(&request)?;
+            for (layers,execution) in scene::startup_effect_chains(source.view()){
+                self.source_scene.effects.prepare(r,source.view(),&layers,execution,source.context.elapsed,0,request.snapshot.view().composition().blend)?;
             }
             let mut ready = self.scene.effects.enqueue(&startup.compiler, startup::OTHER);
             ready &= self.source_scene.effects.enqueue(&startup.compiler, startup::OTHER);
@@ -180,21 +183,16 @@ impl FilterPreviews {
         self.cancelled = false;
         let key = (
             r.filter_source_epoch,
-            request.source,
-            request.extent,
-            request.blend_space,
+            (request.snapshot.owner,request.source),
+            request.snapshot.view().composition().size,
+            request.snapshot.view().composition().blend,
         );
         let resized = self.size != request.size;
         if resized {
             self.rows.clear();
             self.size = request.size;
         }
-        let source_layers: Vec<_> =
-            source_scope(&request.layers, request.source).map_or_else(Vec::new, |(_, scope)| {
-                scope
-                    .map(|(layer, _)| PreviewMetadata::new(layer))
-                    .collect()
-            });
+        let source_layers=source_scope(request.snapshot.view().with_scope(&request.scope),request.source).map_or_else(Vec::new,|(_,scope)|scope.into_iter().map(|h|PreviewMetadata::new(request.snapshot.view(),h)).collect());
         let changed = self.key != Some(key) || self.source_layers != source_layers || resized;
         // The common UI driver retains delivered rows. Keep only the current
         // bounded request here, rather than a second catalog-sized pixel cache.
@@ -227,28 +225,27 @@ impl FilterPreviews {
         r.effect_analyses = live;
         result
     }
-    fn queue_analyses(&mut self, r: &WgpuRasterizer) -> Result<(), GpuRasterError> {
-        let request = self.request.as_ref().unwrap();
-        let (parent, layers) = source_layers(&request.layers, request.source)
-            .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
-        let mut document = layer_core::Document::new("", request.extent[0], request.extent[1],
-            layer_core::DocumentNames {paint:"".into(), paper:"".into()});
-        document.layers = layers;document.color = r.document_color;document.blend_space = request.blend_space;
-        for layer in &document.layers {
-            if layer_core::layer_is_visible(&document.layers, layer.id)
-                && layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())
-                && !self.analyses.iter().any(|entry| entry.layer() == layer.id) {
-                self.analysis_queries.push(layer_core::ArtworkQuery::new(&document, layer_core::ArtworkSource::EffectInput(layer.id)));
+    fn queue_analyses(&mut self,_r:&WgpuRasterizer)->Result<(),GpuRasterError>{
+        let request=self.request.as_ref().unwrap();
+        let source=source_snapshot(request)?;
+        for &h in source.view().order(){
+            if source.view().visible(h)&&source.view().effect(h).is_some_and(|e|e.program.analysis().is_some())&&!self.analyses.iter().any(|entry|entry.layer()==h){
+                self.analysis_queries.push(layer_core::ArtworkQuery::from_snapshot(source.clone(),layer_core::ArtworkSource::EffectInput(h),None));
             }
         }
         for effect in &request.filters {
-            if effect.program.analysis().is_none() {continue;}
-            let mut layer = self.programs[&effect.program.id].clone();
-            layer.kind = LayerKind::Effect;layer.properties.parent = parent;
-            if self.analyses.iter().any(|entry| entry.layer() == layer.id) {continue;}
-            let mut source = document.clone();source.layers.insert(0,layer.clone());
-            let query = layer_core::ArtworkQuery::new(&source, layer_core::ArtworkSource::EffectInput(layer.id));
-            self.analysis_queries.push(query);
+            if effect.program.analysis().is_none(){continue;}
+            let handle=self.programs[&effect.program.id];
+            if self.analyses.iter().any(|entry|entry.layer()==handle){continue;}
+            let mut snapshot=self.program_snapshot.as_ref().unwrap().as_ref().clone();
+            let target=source_target(request.source);let source_scene=source.view();let stack=source_scene.stack(target).ok_or(GpuRasterError::InvalidExtent)?;
+            let entries=&mut snapshot.artwork.stacks.get_mut(stack).unwrap().entries;
+            let position=entries.iter().position(|h|*h==target).ok_or(GpuRasterError::InvalidExtent)?;
+            entries.insert(position,handle);
+            snapshot.index=Arc::new(SceneIndex::build(&snapshot.artwork).map_err(GpuRasterError::Effect)?);
+            let (_,mut members)=source_scope(source_scene,request.source).ok_or(GpuRasterError::InvalidExtent)?;members.push(handle);
+            snapshot.scope=SceneScope::Members(members.into());
+            self.analysis_queries.push(layer_core::ArtworkQuery::from_snapshot(Arc::new(snapshot),layer_core::ArtworkSource::EffectInput(handle),None));
         }
         Ok(())
     }
@@ -264,16 +261,14 @@ impl FilterPreviews {
         while let Some(query) = self.analysis_queries.pop() {
             let layer = match query.source {layer_core::ArtworkSource::EffectInput(id)=>id,_=>unreachable!()};
             if self.analyses.iter().any(|entry| entry.layer() == layer) {continue;}
-            let kind = query.document.layer(layer)
-                .and_then(|layer| layer.effect.as_ref()).and_then(|effect| effect.program.analysis()).unwrap();
-            if self.programs.values().any(|program| program.id == layer)
+            let kind=query.snapshot.view().effect(layer).and_then(|e|e.program.analysis()).unwrap();
+            if self.programs.values().any(|program| *program == layer)
                 && let Some(resource) = self.analyses.iter().find(|entry| entry.kind == kind
-                    && self.programs.values().any(|program| program.id == entry.layer())).map(|entry| entry.resource.clone()) {
+                    && self.programs.values().any(|program| *program == entry.layer())).map(|entry| entry.resource.clone()) {
                 self.analyses.push(Arc::new(crate::effect_analysis::Prepared {query,kind,resource}));continue;
             }
-            let document = &query.document;
-            let input = crate::effect_analysis::BakeInput {members:document.layers.clone().into(), offset:Default::default(),
-                extent:[document.width,document.height],color:document.color,blend:document.blend_space,time:query.time};
+            let snapshot=query.snapshot.clone();let scene=snapshot.view();
+            let input=crate::effect_analysis::BakeInput{scene:snapshot.clone(),scope:snapshot.scope.clone(),offset:Default::default(),extent:scene.composition().size,color:scene.composition().color,blend:scene.composition().blend,time:snapshot.context.elapsed};
             self.analysis = Some(self.with_analyses(r, |_,r| crate::effect_analysis::Job::frame(r.snapshot_gpu(), input))
                 .map_err(GpuRasterError::Effect)?);
             return Ok(());
@@ -286,7 +281,7 @@ impl FilterPreviews {
     /// the retained source and spatial boundaries cover the tile plus its halo.
     fn probe_batch(&mut self, r: &mut WgpuRasterizer) -> Result<(), GpuRasterError> {
         let request = self.request.as_ref().unwrap();
-        let extent = request.extent;
+        let extent = request.snapshot.view().composition().size;
         let columns = extent[0].div_ceil(PAGE_SIZE);
         let count = columns * extent[1].div_ceil(PAGE_SIZE);
         // Every tile uses the same queue-ordered window. Allocating a texture
@@ -311,14 +306,16 @@ impl FilterPreviews {
             encoder.clear_buffer(winner, 0, None);
         }
         let mut backdrop = [0.; 4];
-        let (parent, layers) = source_layers(&request.layers, request.source)
+        let source = source_snapshot(request)?;
+        let source_view = source.view();
+        let (parent, _) = source_scope(request.snapshot.view().with_scope(&request.scope), request.source)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
         if parent.is_none() {
-            for layer in layer_core::constant_backdrop(&layers).iter().rev().filter(|l| l.visible) {
-                let [red, green, blue, alpha] = layer.effect.as_ref().unwrap().constant_color().unwrap()
+            for &handle in source_view.constant_backdrop().iter().rev().filter(|&&h| source_view.visible(h)) {
+                let [red, green, blue, alpha] = source_view.effect(handle).unwrap().constant_color().unwrap()
                     .linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?;
-                let alpha = alpha * layer.opacity;
-                let color = request.blend_space.composite(r.device.working_space(), [red * alpha, green * alpha, blue * alpha, alpha]);
+                let alpha = alpha * source_view.occurrence(handle).unwrap().opacity;
+                let color = source_view.composition().blend.composite(r.device.working_space(), [red * alpha, green * alpha, blue * alpha, alpha]);
                 backdrop = std::array::from_fn(|c| color[c] + backdrop[c] * (1. - alpha));
             }
         }
@@ -444,7 +441,7 @@ impl FilterPreviews {
         self.scene.jobs.clear();
         let [width, height] = request.size;
         let extent = if self.point.is_some() {
-            request.extent
+            request.snapshot.view().composition().size
         } else {
             [width, height]
         };
@@ -479,7 +476,7 @@ impl FilterPreviews {
             fallback.1.clone()
         };
         let pad = self.rendering.iter().try_fold(0u32, |pad, id| {
-            Some(pad.max(self.programs[id].effect.as_ref()?.damage_radius()?))
+            Some(pad.max(self.program_snapshot.as_ref()?.view().effect(self.programs[id])?.damage_radius()?))
         });
         let source_bounds = pad.map_or(PixelRect::full(extent), |pad| {
             PixelRect::new(
@@ -510,7 +507,7 @@ impl FilterPreviews {
         } else {
             fallback_source
         };
-        let spaces: Vec<_> = self.rendering.iter().map(|id| preview_space(self.programs[id].effect.as_ref().unwrap(), request.blend_space)).collect();
+        let spaces: Vec<_> = self.rendering.iter().map(|id| preview_space(self.program_snapshot.as_ref().unwrap().view().effect(self.programs[id]).unwrap(), request.snapshot.view().composition().blend)).collect();
         let encoded;
         let encoded_source = if spaces.contains(&layer_core::BlendSpace::Perceptual) {
             let size = if self.point.is_some() { [source_bounds.width(), source_bounds.height()] } else { extent };
@@ -543,13 +540,15 @@ impl FilterPreviews {
             // compile every expensive kernel before showing even the first row.
             let prepared = self.scene.effects.prepare(
                 r,
-                &[&self.programs[id]],
+                self.program_snapshot.as_ref().unwrap().view(),
+                &[self.programs[id]],
                 effects::Execution::Preview,
                 0.,
                 0,
                 space,
             )?;
-            let program = self.programs[id].effect.as_ref().unwrap().program.clone();
+            let effect=self.program_snapshot.as_ref().unwrap().view().effect(self.programs[id]).unwrap();
+            let program=effect.program;
             // A document-remapping pass after another pass genuinely needs its
             // complete input. Bounded programs otherwise render only crop+halo.
             let whole = program
@@ -557,12 +556,7 @@ impl FilterPreviews {
                 .iter()
                 .skip(1)
                 .any(|p| p.sampling == layer_core::EffectSampling::Document);
-            let pad = self.programs[id]
-                .effect
-                .as_ref()
-                .unwrap()
-                .damage_radius()
-                .unwrap_or(0);
+            let pad=effect.damage_radius().unwrap_or(0);
             let crop = if whole {
                 [0, 0]
             } else {
@@ -669,7 +663,7 @@ impl FilterPreviews {
                         self.probe_winner = None;
                         if score != 0 {
                             let rank = u32::MAX - score;
-                            let extent = self.request.as_ref().unwrap().extent;
+                            let extent = self.request.as_ref().unwrap().snapshot.view().composition().size;
                             let decode = |v: u32| {
                                 if v & 1 == 0 {
                                     (v / 2) as i32
@@ -749,21 +743,23 @@ impl Scene {
         previous
     }
 
-    pub(crate) fn generator_preview(&mut self, r: &mut WgpuRasterizer, layer: &Layer, grid: display_mips::Plan,
+    pub(crate) fn generator_preview(&mut self, r: &mut WgpuRasterizer, handle: OccurrenceHandle, grid: display_mips::Plan,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<Vec<Image>>, GpuRasterError> {
         self.begin_frame();
         self.jobs.clear();
-        let frame = r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
-        self.effects.retain(&frame.layers);
-        let prepared = self.effects.prepare(r, &[layer], effects::Execution::Preview, frame.time, grid.level,
-            preview_space(layer.effect.as_ref().unwrap(), frame.blend_space))?;
+        let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        let scene = frame.scene.view();
+        let effect = scene.effect(handle).ok_or(GpuRasterError::InvalidExtent)?;
+        self.effects.retain(scene);
+        let prepared = self.effects.prepare(r, scene, &[handle], effects::Execution::Preview, frame.time, grid.level,
+            preview_space(effect, frame.blend_space))?;
         if let Some(startup) = &r.startup {
             let ready = self.effects.enqueue(&startup.compiler, startup::VALIDATION);
             startup.compiler.start();
             if !ready { return Ok(None); }
         }
-        let count = layer.effect.as_ref().unwrap().program.passes.len().max(1);
+        let count = effect.program.passes.len().max(1);
         let targets: Vec<_> = (0..count.min(2)).map(|_| create_color_target(&r.device, grid.size, "generator thumbnail")).collect();
         self.preview_passes(r, prepared, grid, (r.empty_view.clone(), grid), &targets, count);
         self.encode_jobs(r, encoder)?;
@@ -772,78 +768,38 @@ impl Scene {
 }
 /// The blend space a filter's preview compiles for: the document's when the
 /// filter reads the document's encoded values, otherwise Linear.
-fn preview_space(effect: &layer_core::EffectInstance, blend: layer_core::BlendSpace) -> layer_core::BlendSpace {
+fn preview_space(effect: layer_core::EffectView<'_>, blend: layer_core::BlendSpace) -> layer_core::BlendSpace {
     if effect.program.space.encoded(blend) { blend } else { layer_core::BlendSpace::Linear }
 }
 // Keep only the insertion scope and its ancestors: the target, its subtree
 // and what composites below it, through Pass Through groups. An excluded
 // global effect above the target must not force a full-document dependency.
-fn source_scope(
-    layers: &[Layer],
-    source: FilterPreviewSource,
-) -> Option<(Option<LayerId>, impl Iterator<Item = (&Layer, bool)>)> {
-    let (target, include) = match source {
-        FilterPreviewSource::LayerStack(id) => (id, true),
-        FilterPreviewSource::EffectInput(id) => (id, false),
-    };
-    let index = layers.iter().position(|l| l.id == target)?;
-    let parent = layers[index].properties.parent;
-    let parent_of = |id: LayerId| {
-        layers
-            .iter()
-            .find(|l| l.id == id)
-            .and_then(|l| l.properties.parent)
-    };
-    let mut below = vec![false; layers.len()];
-    for i in layer_core::backdrop_layers(layers, index) {
-        below[i] = true;
-    }
-    let scope = layers.iter().enumerate().filter_map(move |(i, layer)| {
-        if std::iter::successors(parent, |&id| parent_of(id)).any(|id| id == layer.id) {
-            return Some((layer, true));
-        }
-        (below[i] || include && (i == index || layer_core::descends_from(layers, layer, Some(target)))).then_some((layer, false))
-    });
-    Some((layer_core::isolated_scope(layers, parent), scope))
+fn source_target(source: FilterPreviewSource) -> OccurrenceHandle {
+    match source { FilterPreviewSource::LayerStack(h) | FilterPreviewSource::EffectInput(h) => h }
 }
-fn source_layers(layers: &[Layer], source: FilterPreviewSource) -> Option<(Option<LayerId>, Vec<Layer>)> {
-    let (parent, scope) = source_scope(layers, source)?;
-    Some((parent, scope.map(|(layer, ancestor)| {
-        let mut layer = layer.clone();
-        if ancestor {
-            layer.effect = None;
-            if layer.passes_through() {layer.opacity = 1.;layer.mask = None;}
-        }
-        layer
-    }).collect()))
+fn source_scope(scene:SceneView<'_>,source:FilterPreviewSource)->Option<(Option<OccurrenceHandle>,Vec<OccurrenceHandle>)>{
+    let target=source_target(source);
+    scene.occurrence(target)?;
+    let mut members=layer_core::backdrop_layers(scene,target);
+    if matches!(source,FilterPreviewSource::LayerStack(_)) {
+        members.extend(scene.order().iter().copied().filter(|h|*h==target||layer_core::descends_from(scene,*h,Some(target))));
+    }
+    let mut parent=scene.parent(target);
+    while let Some(h)=parent{if !scene.occurrence(h)?.passes_through(){members.push(h);}parent=scene.parent(h);}
+    members.retain(|h|scene.includes(*h));members.sort_by_key(|h|scene.position(*h));members.dedup();
+    Some((layer_core::isolated_scope(scene,scene.parent(target)),members))
+}
+fn source_snapshot(request:&FilterPreviewRequest)->Result<Arc<SceneSnapshot>,GpuRasterError>{
+    let (_,members)=source_scope(request.snapshot.view().with_scope(&request.scope),request.source).ok_or_else(||GpuRasterError::Effect("Missing filter insertion layer".into()))?;
+    Ok(Arc::new(request.snapshot.as_ref().clone().with_scope(SceneScope::Members(members.into()))))
 }
 impl Scene {
-    fn capture_filter_source(
-        &mut self,
-        r: &mut WgpuRasterizer,
-        request: &FilterPreviewRequest,
-        destination: &wgpu::Texture,
-        region: PixelRect,
-        encoder: &mut crate::submission::CommandEncoder,
-    ) -> Result<(), GpuRasterError> {
-        let (parent, layers) = source_layers(&request.layers, request.source)
-            .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
-        self.jobs.clear();
-        self.used.fill(false);
-        let packet = FramePacket {
-            commit_rasters: true,
-            time_seconds: 0.,
-            view: request.view,
-            document_extent: request.extent,
-            layers: &layers,
-            dabs: &[],
-            dab_batches: &[],
-            restore_rasters: &[],
-            reset_layers: false,
-            composite_all: false,
-            blend_space: request.blend_space,
-        };
-        self.capture_region(r, packet, destination, region, scene::Output::Artwork(parent), encoder)
+    fn capture_filter_source(&mut self,r:&mut WgpuRasterizer,request:&FilterPreviewRequest,destination:&wgpu::Texture,region:PixelRect,encoder:&mut crate::submission::CommandEncoder)->Result<(),GpuRasterError>{
+        let snapshot=source_snapshot(request)?;let scene=snapshot.view();
+        let (parent,_)=source_scope(request.snapshot.view(),request.source).ok_or(GpuRasterError::InvalidExtent)?;
+        self.jobs.clear();self.used.fill(false);
+        let packet=FramePacket{commit_rasters:true,time_seconds:snapshot.context.elapsed,view:request.view,document_extent:scene.composition().size,scene,selection_visibility:None,inspect_mask:None,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:false,composite_all:false,blend_space:scene.composition().blend};
+        self.capture_region(r,packet,destination,region,scene::Output::Artwork(parent),encoder)
     }
 }
 impl WgpuRasterizer {
@@ -898,7 +854,8 @@ impl FilterPreviews {
     fn clear_analysis(&mut self) {
         self.analysis = None;self.analysis_queries.clear();self.analyses.clear();self.preparing = false;
         self.scene.jobs.clear();self.source_scene.jobs.clear();
-        self.scene.effects.retain(&[]);self.source_scene.effects.retain(&[]);
+        let artwork=Artwork::new([1;2]).expect("empty preview artwork");let index=Arc::new(SceneIndex::build(&artwork).expect("empty preview index"));let scene=SceneView::new(&artwork,&index);
+        self.scene.effects.retain(scene);self.source_scene.effects.retain(scene);
     }
     fn missing_rows(&self) -> bool {
         self.request.as_ref().is_some_and(|r| r.filters.iter().any(|f| !self.rows.contains_key(&f.program.id)))
@@ -928,26 +885,76 @@ mod tests {
             std::thread::sleep(Duration::from_millis(2));
         }
     }
-    fn pattern(id: LayerId) -> Layer {
-        let mut pattern = Layer::paint(id, "source");
+    use layer_core::{Document, Edit, RecordChange};
+    use layer_core::authored::Stack;
+
+    fn paint(artwork: &mut Artwork, original: Option<Arc<layer_core::color::source::SourceImage>>) -> OccurrenceHandle {
+        let extent=artwork.compositions.get(artwork.root).unwrap().size;
+        let (handle,target)=crate::test_support::add_paint(artwork,"paint",extent);
+        let SourceTarget::Paint(source)=target else {unreachable!()};
+        artwork.paint.get_mut(source).unwrap().original=original;
+        handle
+    }
+    fn effect(artwork: &mut Artwork, effect: layer_core::EffectInstance) -> OccurrenceHandle {
+        let definition = artwork.definitions.insert(PortableId::random(), Definition { program: effect.program, dimensions: Default::default() }).unwrap();
+        let application = artwork.effects.insert(PortableId::random(), EffectApplication {
+            definition, values: effect.values, domain: artwork.compositions.get(artwork.root).unwrap().size,
+        }).unwrap();
+        artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "effect")).unwrap()
+    }
+    fn generated(artwork: &mut Artwork, code: &str) -> OccurrenceHandle {
         let mut program = (*fixture("exposure").program()).clone();
         program.kind = layer_core::EffectKind::Generator;
         program.entry = "pattern".into();
-        program.wgsl = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p.x/fx_extent().x,p.y/fx_extent().y,.2,1.);}".into();
-        pattern.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
-        pattern.kind = LayerKind::Effect;
-        pattern
+        program.wgsl = code.into();
+        effect(artwork, layer_core::EffectInstance::new(Arc::new(program)))
+    }
+    fn pattern(artwork: &mut Artwork) -> OccurrenceHandle {
+        generated(artwork, "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p.x/fx_extent().x,p.y/fx_extent().y,.2,1.);}")
+    }
+    fn document(mut artwork: Artwork, entries: Vec<OccurrenceHandle>) -> Document {
+        let stack = artwork.compositions.get(artwork.root).unwrap().result;
+        artwork.stacks.get_mut(stack).unwrap().entries = entries;
+        Document::from_artwork(artwork).unwrap()
+    }
+    fn group_document(extent: [u32;2], blend: layer_core::LayerBlend, upper: &str) -> (Document, OccurrenceHandle) {
+        let mut artwork = Artwork::new(extent).unwrap();
+        let target = paint(&mut artwork, None);
+        let above = effect(&mut artwork, fixture(upper).preview().unwrap());
+        let stack = artwork.stacks.insert(PortableId::random(), Stack { entries: vec![above,target] }).unwrap();
+        let mut group = Occurrence::new(OccurrenceContent::Stack(stack), "group");
+        group.blend = blend; group.opacity = 0.5;
+        let group = artwork.occurrences.insert(PortableId::random(), group).unwrap();
+        let source = pattern(&mut artwork);
+        (document(artwork,vec![group,source]),target)
+    }
+    fn flat_document(extent: [u32;2]) -> (Document, OccurrenceHandle) {
+        let mut artwork = Artwork::new(extent).unwrap();
+        let target = paint(&mut artwork, None);
+        let source = pattern(&mut artwork);
+        (document(artwork,vec![target,source]),target)
+    }
+    fn request(document: &Document, target: OccurrenceHandle, request_id: u64, size: [u32;2], view: layer_render::ViewState, filters: Vec<Arc<layer_core::EffectInstance>>) -> FilterPreviewRequest {
+        FilterPreviewRequest {request_id,source:FilterPreviewSource::LayerStack(target),size,view,snapshot:document.snapshot(),scope:SceneScope::All,filters}
+    }
+    fn occurrence_edit(document: &mut Document, handle: OccurrenceHandle, f: impl FnOnce(&mut Occurrence)) {
+        let mut value=document.artwork.occurrences.get(handle).unwrap().clone();f(&mut value);
+        document.apply(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences,handle,Some(value)).unwrap())).unwrap();
     }
     #[test]
     fn replacing_the_bottom_fill_captures_transparent_input() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let layers = vec![Layer::solid_color(LayerId(1), "Fill", layer_core::color::RgbColor::WHITE)];
-        r.submit(crate::test_support::packet(&layers, [64; 2])).unwrap();
-        let source = FilterPreviewSource::EffectInput(LayerId(1));
-        assert!(source_layers(&layers, source).unwrap().1.is_empty());
+        let mut artwork=Artwork::new([64;2]).unwrap();
+        let mut fill=fixture("solid_color").preview().unwrap();
+        fill.set("color",layer_core::EffectValue::Color(layer_core::color::RgbColor::WHITE)).unwrap();
+        let fill=effect(&mut artwork,fill);
+        let document=document(artwork,vec![fill]);
+        r.submit(crate::test_support::packet(document.scene(), [64; 2])).unwrap();
+        let source = FilterPreviewSource::EffectInput(fill);
+        assert!(source_scope(document.scene(), source).unwrap().1.is_empty());
         r.request_filter_previews(FilterPreviewRequest {
-            request_id: 1, source, size: [120, 40], extent: [64; 2], view: crate::test_support::view([64; 2]),
-            blend_space: Default::default(), layers, filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
+            request_id: 1, source, size: [120, 40], view: crate::test_support::view([64; 2]),
+            snapshot:document.snapshot(),scope:SceneScope::All,filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
         }).unwrap();
         let atlas = finish(&mut r);
         assert_eq!(atlas.image.bytes.len(), 120 * 40 * 4);
@@ -962,36 +969,35 @@ mod tests {
             height_px: extent[1],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
-        let mut stripes = Layer::paint(LayerId(1), "stripes");
-        stripes.source = Some(layer_core::color::source::rgba8_source(extent, |x, y| {
+        let stripes = layer_core::color::source::rgba8_source(extent, |x, y| {
             let v = if (x / 9) % 2 == 0 { 20 } else { 235 };
             [v, (y / 2) as u8, 255 - v, 255]
-        }));
+        });
         let definition = fixture("gaussian_blur");
         assert_eq!(definition.program().space, layer_core::EffectSpace::Blending);
         for space in layer_core::BlendSpace::ALL {
             let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-            let layers = [Layer::paint(LayerId(7), "target"), stripes.clone()];
-            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(&layers, extent) }).unwrap();
+            let mut artwork=Artwork::new(extent).unwrap();
+            artwork.compositions.get_mut(artwork.root).unwrap().blend=space;
+            let target=paint(&mut artwork,None);let source=paint(&mut artwork,Some(stripes.clone()));
+            let mut doc=document(artwork,vec![target,source]);
+            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
             let size = [120, 40];
-            r.request_filter_previews(FilterPreviewRequest {
-                request_id: 1,
-                source: FilterPreviewSource::LayerStack(LayerId(7)),
-                size,
-                extent,
-                view,
-                blend_space: space,
-                layers: layers.iter().map(Layer::composite_snapshot).collect(),
-                filters: vec![Arc::new(definition.preview().unwrap())],
-            })
-            .unwrap();
+            r.request_filter_previews(request(&doc,target,1,size,view,vec![Arc::new(definition.preview().unwrap())])).unwrap();
             let preview = finish(&mut r).image.bytes;
             let point = r.filter_previews.as_ref().unwrap().point.unwrap();
             let origin: [u32; 2] = std::array::from_fn(|i| (point[i] - size[i] / 2).min(extent[i] - size[i]));
-            let mut blurred = layers.clone();
-            blurred[0].kind = LayerKind::Effect;
-            blurred[0].effect = Some(Arc::new(definition.preview().unwrap()));
-            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(&blurred, extent) }).unwrap();
+            let mut authored=doc.artwork.clone();
+            let replacement=effect(&mut authored,definition.preview().unwrap());
+            let content=authored.occurrences.get(replacement).unwrap().content.clone();
+            let OccurrenceContent::Effect(application)=content else {unreachable!()};
+            let definition_handle=authored.effects.get(application).unwrap().definition;
+            doc.apply(Edit::Batch(vec![
+                Edit::Definition(RecordChange::replace(&authored.definitions,definition_handle,authored.definitions.get(definition_handle).cloned()).unwrap()),
+                Edit::Effect(RecordChange::replace(&authored.effects,application,authored.effects.get(application).cloned()).unwrap()),
+                Edit::Occurrence({let mut value=doc.artwork.occurrences.get(target).unwrap().clone();value.content=content;RecordChange::replace(&doc.artwork.occurrences,target,Some(value)).unwrap()}),
+            ])).unwrap();
+            r.submit(FramePacket { view, blend_space: space, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
             let live = r.readback_srgb_rgba8().unwrap();
             let mut compared = 0;
             for y in 0..size[1] {
@@ -1019,34 +1025,12 @@ mod tests {
             height_px: extent[1],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
-        let mut group = Layer::paint(LayerId(5), "Pass Through");
-        group.kind = LayerKind::Group;
-        group.properties.blend = layer_core::LayerBlend::PassThrough;
-        group.opacity = 0.5;
-        let mut above = Layer::paint(LayerId(6), "above the target");
-        above.kind = LayerKind::Effect;
-        above.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
-        above.properties.parent = Some(group.id);
-        let mut target = Layer::paint(LayerId(7), "target");
-        target.properties.parent = Some(group.id);
-        let grouped = vec![group.clone(), above, target.clone(), pattern(LayerId(1))];
-        target.properties.parent = None;
-        let flat = vec![target, pattern(LayerId(1))];
-        group.properties.blend = layer_core::LayerBlend::Normal;
-        let isolated = [vec![group], grouped[1..].to_vec()].concat();
-        let mut preview = |layers: &[Layer], request_id| {
-            r.submit(FramePacket { view, ..crate::test_support::packet(layers, extent) }).unwrap();
-            r.request_filter_previews(FilterPreviewRequest {
-                request_id,
-                source: FilterPreviewSource::LayerStack(LayerId(7)),
-                size: [120, 40],
-                extent,
-                view,
-                blend_space: Default::default(),
-                layers: layers.iter().map(Layer::composite_snapshot).collect(),
-                filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
-            })
-            .unwrap();
+        let grouped=group_document(extent,layer_core::LayerBlend::PassThrough,"black_white");
+        let flat=flat_document(extent);
+        let isolated=group_document(extent,layer_core::LayerBlend::Normal,"black_white");
+        let mut preview = |(doc,target): &(Document,OccurrenceHandle), request_id| {
+            r.submit(FramePacket { view, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
+            r.request_filter_previews(request(doc,*target,request_id,[120,40],view,vec![Arc::new(fixture("exposure").preview().unwrap())])).unwrap();
             finish(&mut r).image.bytes
         };
         let passing = preview(&grouped, 1);
@@ -1062,71 +1046,41 @@ mod tests {
         })
         .unwrap();
         let extent = [2049, 513]; // 27 tiles, including partial right/bottom edges.
-        let pattern = pattern(LayerId(1));
-        let mut blur = Layer::paint(LayerId(2), "spatial source");
+        let mut artwork=Artwork::new(extent).unwrap();
+        artwork.compositions.get_mut(artwork.root).unwrap().color=DocumentColor {space:RgbSpace::ProPhoto,depth:SampleDepth::U16};
+        let pattern=pattern(&mut artwork);
         let mut program = (*fixture("exposure").program()).clone();
         program.entry = "blur".into();
         program.wgsl = "fn blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p+vec2<f32>(3.,0.))+c+fx_sample(p-vec2<f32>(3.,0.)))/3.;}".into();
-        program.passes = vec![layer_core::EffectPass {
-            entry: "blur".into(),
-            sampling: layer_core::EffectSampling::Neighborhood { radius: 3 },
-        }]
-        .into();
-        blur.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
-        blur.kind = LayerKind::Effect;
-        let mut upper = Layer::paint(LayerId(3), "excluded upper correction");
-        upper.kind = LayerKind::Effect;
-        upper.effect = Some(Arc::new(fixture("black_white").preview().unwrap()));
-        Arc::make_mut(&mut Arc::make_mut(upper.effect.as_mut().unwrap()).program).passes =
-            vec![layer_core::EffectPass {
-                entry: upper.effect.as_ref().unwrap().program.entry.clone(),
-                sampling: layer_core::EffectSampling::Document,
-            }]
-            .into();
-        let mut paper = Layer::solid_color(LayerId(4), "partial paper",
-            layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb, [0.1, 0.2, 0.3, 1.]).unwrap());
-        paper.opacity = 0.5;
-        let mut layers = vec![upper, blur, pattern, paper];
+        program.passes = vec![layer_core::EffectPass {entry:"blur".into(),sampling:layer_core::EffectSampling::Neighborhood {radius:3}}].into();
+        let blur=effect(&mut artwork,layer_core::EffectInstance::new(Arc::new(program)));
+        let mut upper_effect=fixture("black_white").preview().unwrap();
+        Arc::make_mut(&mut upper_effect.program).passes=vec![layer_core::EffectPass {entry:upper_effect.program.entry.clone(),sampling:layer_core::EffectSampling::Document}].into();
+        let upper=effect(&mut artwork,upper_effect);
+        let mut fill=fixture("solid_color").preview().unwrap();
+        fill.set("color",layer_core::EffectValue::Color(layer_core::color::RgbColor::WHITE)).unwrap();
+        let paper=effect(&mut artwork,fill);
+        artwork.occurrences.get_mut(paper).unwrap().opacity=0.5;
+        let mut doc=document(artwork,vec![upper,blur,pattern,paper]);
         let view = layer_render::ViewState {
             width_px: extent[0],
             height_px: extent[1],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
-        let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {
-            r.submit(FramePacket {
-                commit_rasters: true,
-                time_seconds: 0.,
-                view,
-                document_extent: extent,
-                layers,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: false,
-                composite_all: true,
-                blend_space: Default::default(),
-            })
-            .unwrap()
+        let frame = |r: &mut WgpuRasterizer, doc: &Document| {
+            r.submit(FramePacket {commit_rasters:true,time_seconds:0.,view,composite_all:true,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
         };
-        frame(&mut r, &layers);
-        let request = |layers: &[Layer], id| FilterPreviewRequest {
-            request_id: id,
-            source: FilterPreviewSource::LayerStack(LayerId(2)),
-            size: [200, 40],
-            extent,
-            view,
-            blend_space: Default::default(),
-            layers: layers.iter().map(Layer::composite_snapshot).collect(),
-            filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
-        };
-        r.request_filter_previews(request(&layers[1..], 1)).unwrap();
+        frame(&mut r,&doc);
+        let preview_request=|doc:&Document,id|request(doc,blur,id,[200,40],view,vec![Arc::new(fixture("exposure").preview().unwrap())]);
+        let mut scoped=preview_request(&doc,1);scoped.scope=SceneScope::Members(vec![blur,pattern,paper].into());
+        r.request_filter_previews(scoped).unwrap();
         let p = r.filter_previews.as_ref().unwrap();
         assert_eq!(p.probe_next, 4, "first call submits one bounded chunk");
         assert!(p.request.is_some());
         let probe_texture = p.source.as_ref().unwrap().0.clone();
         // A view-only frame must compare the caller's paper color, before the
         // compositor applies paper opacity. It must not cancel this scan.
-        frame(&mut r, &layers);
+        frame(&mut r, &doc);
         let mut callbacks = 0;
         let mut previous_probe_next = 4;
         loop {
@@ -1164,9 +1118,9 @@ mod tests {
         // A metadata edit between chunks cancels the old request after its
         // in-flight callback. It cannot combine different document revisions.
         r.filter_previews.as_mut().unwrap().key = None;
-        r.request_filter_previews(request(&layers, 2)).unwrap();
-        layers[1].opacity = 0.5;
-        frame(&mut r, &layers);
+        r.request_filter_previews(preview_request(&doc, 2)).unwrap();
+        occurrence_edit(&mut doc,blur,|o|o.opacity=0.5);
+        frame(&mut r, &doc);
         r.device
             .poll(wgpu::PollType::Wait {
                 submission_index: None,
@@ -1176,22 +1130,22 @@ mod tests {
         assert!(matches!(r.take_filter_previews(), Some(Err(GpuRasterError::FilterPreviewCancelled))));
         assert!(!r.filter_previews_pending());
         assert_eq!(r.filter_previews.as_ref().unwrap().probe_next, 4);
-        r.request_filter_previews(request(&layers, 3)).unwrap();
+        r.request_filter_previews(preview_request(&doc, 3)).unwrap();
         assert_eq!(finish(&mut r).image.request_id, 3);
         // Explicit hide/input cancellation never waits for the old callback.
         // A replacement request can start immediately on a fresh channel.
         r.filter_previews.as_mut().unwrap().key = None;
-        r.request_filter_previews(request(&layers, 30)).unwrap();
+        r.request_filter_previews(preview_request(&doc, 30)).unwrap();
         let old_sender = r.filter_previews.as_ref().unwrap().tx.clone();
         r.cancel_filter_previews();
         assert!(!r.filter_previews_pending());
         assert!(r.take_filter_previews().is_none());
         assert!(old_sender.send(Ready::ProbeNext(Ok(0))).is_err());
-        r.request_filter_previews(request(&layers, 31)).unwrap();
+        r.request_filter_previews(preview_request(&doc, 31)).unwrap();
         assert_eq!(finish(&mut r).image.request_id, 31);
         // A valid conservative support declaration can exceed the adapter's
         // texture dimension. Its actual dependency still ends at the document.
-        let mut wide = request(&layers, 4);
+        let mut wide = preview_request(&doc, 4);
         let mut program = (*fixture("exposure").program()).clone();
         program.id = "test:wide-support".into();
         program.passes = (0..3)
@@ -1211,30 +1165,27 @@ mod tests {
     fn p25_full_source_thumbnail_guides_reuse_invalidate_and_cancel() {
         let extent = [512, 256];
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let mut source = Layer::paint(LayerId(1), "source");
-        source.source = Some(layer_core::color::source::rgba8_source(extent, |x,y| {
+        let mut artwork=Artwork::new(extent).unwrap();
+        let source=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent, |x,y| {
             let v = if x < 260 {12 + ((x/11+y/9)%2) as u8*55} else {160+(x%71) as u8};
             [v,v.saturating_add(8),v.saturating_add(16),255]
-        }));
-        let mut layers = vec![Layer::paint(LayerId(7), "picker target"), source];
-        let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {r.submit(crate::test_support::packet(layers,extent)).unwrap();};
-        frame(&mut r, &layers);
-        let request = |layers: &[Layer], request_id, zero: bool| layer_render::FilterPreviewRequest {
-            request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view:crate::test_support::packet(layers,extent).view,
-            blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
-            filters:[("shadows_highlights","shadows"),("clarity","amount")].into_iter().map(|(id,key)| {
-                let mut effect=fixture(id).preview().unwrap();effect.set(key,layer_core::EffectValue::Number(if zero {0.} else {50.})).unwrap();Arc::new(effect)
-            }).collect(),
-        };
-        assert!(r.request_filter_previews(request(&layers,1,false)).unwrap());
+        })));
+        let target=paint(&mut artwork,None);let mut doc=document(artwork,vec![target,source]);
+        let frame=|r:&mut WgpuRasterizer,doc:&Document|{r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();};
+        frame(&mut r,&doc);
+        let preview_request=|doc:&Document,request_id,zero:bool|request(doc,target,request_id,[120,40],crate::test_support::packet(doc.scene(),extent).view,
+            [("shadows_highlights","shadows"),("clarity","amount")].into_iter().map(|(id,key)|{
+                let mut effect=fixture(id).preview().unwrap();effect.set(key,layer_core::EffectValue::Number(if zero {0.}else{50.})).unwrap();Arc::new(effect)
+            }).collect());
+        assert!(r.request_filter_previews(preview_request(&doc,1,false)).unwrap());
         let nonzero=finish(&mut r).image.bytes;
         let previews=r.filter_previews.as_ref().unwrap();
-        let entries:Vec<_>=previews.analyses.iter().filter(|entry|previews.programs.values().any(|layer|layer.id==entry.layer())).collect();
+        let entries:Vec<_>=previews.analyses.iter().filter(|entry|previews.programs.values().any(|layer|*layer==entry.layer())).collect();
         assert_eq!(entries.len(),2);assert!(Arc::ptr_eq(&entries[0].resource,&entries[1].resource));
         let resource=Arc::downgrade(&entries[0].resource);
         let origin=previews.point.unwrap();assert!(origin[0]>0 || origin[1]>0);
         assert!(r.effect_analyses.is_empty(),"private preview guides never replace live document guides");
-        assert!(r.request_filter_previews(request(&layers,2,true)).unwrap());
+        assert!(r.request_filter_previews(preview_request(&doc,2,true)).unwrap());
         let identity=finish(&mut r).image.bytes;
         for row in 0..2 {
             let start=row*120*40*4;let end=start+120*40*4;
@@ -1242,9 +1193,12 @@ mod tests {
         }
         let current=&r.filter_previews.as_ref().unwrap().analyses[0].resource;
         assert!(std::sync::Weak::ptr_eq(&resource,&Arc::downgrade(current)),"same full source reuses immutable guide");
-        layers[1].source=Some(layer_core::color::source::rgba8_source(extent,|x,y|[20+(x%101) as u8,35+(y%113) as u8,25,255]));
-        frame(&mut r,&layers);
-        assert!(r.request_filter_previews(request(&layers,3,false)).unwrap());
+        let OccurrenceContent::Paint(paint)=doc.artwork.occurrences.get(source).unwrap().content else {unreachable!()};
+        let mut value=doc.artwork.paint.get(paint).unwrap().clone();
+        value.original=Some(layer_core::color::source::rgba8_source(extent,|x,y|[20+(x%101) as u8,35+(y%113) as u8,25,255]));
+        doc.apply(Edit::Paint(RecordChange::replace(&doc.artwork.paint,paint,Some(value)).unwrap())).unwrap();
+        frame(&mut r,&doc);
+        assert!(r.request_filter_previews(preview_request(&doc,3,false)).unwrap());
         let edited=finish(&mut r).image.bytes;
         assert_ne!(nonzero,edited,"source edit invalidates rows");
         let current=&r.filter_previews.as_ref().unwrap().analyses[0].resource;
@@ -1254,7 +1208,7 @@ mod tests {
         assert!(!r.filter_previews_pending());
         assert!(r.filter_previews.as_ref().unwrap().analyses.is_empty());
         assert!(released.upgrade().is_none(),"hide cancels and releases completed private guide resources");
-        assert!(r.request_filter_previews(request(&layers,4,false)).unwrap());
+        assert!(r.request_filter_previews(preview_request(&doc,4,false)).unwrap());
         r.cancel_filter_previews();
         assert!(!r.filter_previews_pending());
         assert!(r.filter_previews.as_ref().unwrap().analysis.is_none());
@@ -1266,23 +1220,12 @@ mod tests {
         let extent = [300,200];
         for id in ["shadows_highlights", "clarity"] {
             let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-            let mut group = Layer::paint(LayerId(5), "group");
-            group.kind = LayerKind::Group; group.properties.blend = layer_core::LayerBlend::PassThrough; group.opacity = 0.5;
-            let mut target = Layer::paint(LayerId(7), "target"); target.properties.parent = Some(group.id);
-            let mut above = Layer::paint(LayerId(6), "excluded upper effect"); above.kind = LayerKind::Effect;
-            above.effect = Some(Arc::new(fixture("invert").preview().unwrap())); above.properties.parent = Some(group.id);
-            let source = pattern(LayerId(1));
-            let grouped = vec![group.clone(),above,target.clone(),source.clone()];
-            target.properties.parent = None;
-            let flat = vec![target,source];
-            group.properties.blend = layer_core::LayerBlend::Normal;
-            let isolated = [vec![group],grouped[1..].to_vec()].concat();
-            let mut preview = |layers: &[Layer], request_id| {
-                let packet = crate::test_support::packet(layers,extent); let view = packet.view;
-                r.submit(packet).unwrap();
-                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view,
-                    blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
-                    filters:vec![Arc::new(fixture(id).preview().unwrap())]}).unwrap());
+            let grouped=group_document(extent,layer_core::LayerBlend::PassThrough,"invert");
+            let flat=flat_document(extent);
+            let isolated=group_document(extent,layer_core::LayerBlend::Normal,"invert");
+            let mut preview=|(doc,target):&(Document,OccurrenceHandle),request_id|{
+                let packet=crate::test_support::packet(doc.scene(),extent);let view=packet.view;r.submit(packet).unwrap();
+                assert!(r.request_filter_previews(request(doc,*target,request_id,[120,40],view,vec![Arc::new(fixture(id).preview().unwrap())])).unwrap());
                 finish(&mut r).image.bytes
             };
             let passing = preview(&grouped,1);
@@ -1294,25 +1237,19 @@ mod tests {
     #[test]
     fn p25_source_aware_thumbnail_preserves_selected_clipping_base() {
         let extent = [300,200];
-        let generated = |id, code: &str| {
-            let mut layer = pattern(id);
-            let mut effect = (**layer.effect.as_ref().unwrap()).clone();
-            Arc::make_mut(&mut effect.program).wgsl = code.into();
-            layer.effect = Some(Arc::new(effect)); layer
-        };
         let upper_code = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(.08+p.x/fx_extent().x*.15,.04+p.y/fx_extent().y*.12,.1,1.);}";
         let flat_code = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{if p.x>=fx_extent().x*.5{return vec4<f32>(0.);}return vec4<f32>(.08+p.x/fx_extent().x*.15,.04+p.y/fx_extent().y*.12,.1,1.);}";
         let base_code = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{if p.x>=fx_extent().x*.5{return vec4<f32>(0.);}return vec4<f32>(0.,0.,0.,1.);}";
-        let mut selected = generated(LayerId(7),upper_code);selected.properties.clipped = true;
-        let clipped = vec![selected,generated(LayerId(1),base_code)];
-        let flat = vec![Layer::paint(LayerId(7),"target"),generated(LayerId(1),flat_code)];
+        let mut artwork=Artwork::new(extent).unwrap();let selected=generated(&mut artwork,upper_code);
+        artwork.occurrences.get_mut(selected).unwrap().clipped=true;
+        let base=generated(&mut artwork,base_code);let clipped=(document(artwork,vec![selected,base]),selected);
+        let mut artwork=Artwork::new(extent).unwrap();let target=paint(&mut artwork,None);let source=generated(&mut artwork,flat_code);
+        let flat=(document(artwork,vec![target,source]),target);
         for id in ["shadows_highlights","clarity"] {
             let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-            let mut preview = |layers: &[Layer], request_id| {
-                let packet = crate::test_support::packet(layers,extent);let view = packet.view;r.submit(packet).unwrap();
-                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view,
-                    blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
-                    filters:vec![Arc::new(fixture(id).preview().unwrap())]}).unwrap());
+            let mut preview=|(doc,target):&(Document,OccurrenceHandle),request_id|{
+                let packet=crate::test_support::packet(doc.scene(),extent);let view=packet.view;r.submit(packet).unwrap();
+                assert!(r.request_filter_previews(request(doc,*target,request_id,[120,40],view,vec![Arc::new(fixture(id).preview().unwrap())])).unwrap());
                 finish(&mut r).image.bytes
             };
             assert_eq!(preview(&clipped,1),preview(&flat,2),"{id}: clipping input and equivalent composed source match");

@@ -52,7 +52,10 @@ impl WgpuRasterizer {
         let extent = self.document_extent;
         let inside = x < extent[0] && y < extent[1];
         if !inside {
-            let _ = self.color_sampler.tx.send(Ok(ColorSample { request_id, rgba: [0.; 4] }));
+            let _ = self.color_sampler.tx.send(Ok(ColorSample {
+                request_id,
+                rgba: [0.;4],
+            }));
             self.color_sampler.pending = true;
             return Ok(true);
         }
@@ -121,7 +124,7 @@ impl WgpuRasterizer {
                 let y1 = bottom.min((ty + 1) * PAGE_SIZE);
                 let (source, origin) = match request.source {
                     ColorSampleSource::Composite => (composite.clone().unwrap(), [left, top]),
-                    ColorSampleSource::Layer(id) => {
+                    ColorSampleSource::Source(id) => {
                         let mut capture = mem::take(&mut self.color_sampler.capture);
                         let result = capture.layer_tile(self, id, [tx, ty], &mut encoder);
                         self.color_sampler.capture = capture;

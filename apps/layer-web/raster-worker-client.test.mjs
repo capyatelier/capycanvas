@@ -78,3 +78,26 @@ test('already cancelled analysis sends nothing and preserves a parallel output o
   f.workers[0].reply('encoded');assert.equal(await encoded,'encoded');
   const next=f.run(request());assert.equal(f.workers.length,3);f.workers[2].reply('next');assert.equal(await next,'next');
 }));
+
+
+test('manual save retains its output owner until publication completes',()=>withFixture(async f=>{
+  const pending=f.run(request('write')),worker=f.workers[0];worker.reply({token:'archive',blob:new Blob(['exact archive'])});
+  const output=await pending;assert.equal(worker.terminated,false);assert.equal(await output.blob.text(),'exact archive');
+  const closed=f.run(request('output-close',{metadata:output.token}));worker.reply(true);assert.equal(await closed,true);
+  assert.deepEqual(worker.messages.map(m=>m.request.operation),['write','output-close']);assert.equal(worker.terminated,true);
+}));
+
+test('separate save outputs retain independent owners',()=>withFixture(async f=>{
+  const first=f.run(request('write')),a=f.workers[0];a.reply({token:'first',blob:new Blob(['first'])});await first;
+  const second=f.run(request('write')),b=f.workers[1];b.reply({token:'second',blob:new Blob(['second'])});await second;
+  await assert.rejects(f.run(request('write')),/Finish the current output/);
+  const closeFirst=f.run(request('output-close',{metadata:'first'}));a.reply(true);await closeFirst;
+  assert.equal(a.terminated,true);assert.equal(b.terminated,false);
+  const closeSecond=f.run(request('output-close',{metadata:'second'}));b.reply(true);await closeSecond;assert.equal(b.terminated,true);
+}));
+
+test('failed saves and completed recovery release archive workers',()=>withFixture(async f=>{
+  const pending=f.run(request('write'));const rejected=assert.rejects(pending,/Publication failed/);
+  f.workers[0].reply(undefined,{error:'Publication failed'});await rejected;assert.equal(f.workers[0].terminated,true);
+  const recovery=f.run(request('recover-write'));f.workers[1].reply(true);assert.equal(await recovery,true);assert.equal(f.workers[1].terminated,true);
+}));

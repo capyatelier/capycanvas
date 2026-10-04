@@ -25,8 +25,8 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             app.draw_until_idle();
             let painted = app.pixels();
             assert_ne!(painted, imported);
-            for layer in &unsafe { &*app.0 }.host.session.engine().document().layers {
-                raster_samples(&layer.raster);
+            for (_, _, source) in unsafe { &*app.0 }.host.session.engine().document().artwork.paint.iter() {
+                raster_samples(&source.raster);
             }
             app.invoke("undo");
             app.draw_until_idle();
@@ -43,7 +43,7 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             app.draw_frame();
             assert!(unsafe { &*app.0 }.host.session.engine().has_active_stroke());
             let document = unsafe { &*app.0 }.host.session.engine().document().clone();
-            assert_eq!(document.layers, committed.layers);
+            assert_project_document(&document, &committed);
             assert_eq!(document.revision, committed.revision);
             // Starting a contact reserves its unique ID even if later canceled.
             match fault {
@@ -79,9 +79,9 @@ fn renderer_failure_retains_sources_history_settings_and_durable_recovery_on_bot
             assert_eq!(std::thread::spawn(move || unsafe { capy_project_write(pointer as *const CapyProjectTask, fd) }).join().unwrap(), 0, "{:?}", task.error());
             file.sync_all().unwrap();
             file.rewind().unwrap();
-            let saved = layer_core::Project::read(&mut file, Default::default()).unwrap();
-            assert_project_document(&saved.document, &document);
-            assert!(saved.document.layers.iter().any(|layer| layer.source.is_some()));
+            let saved = read_document(&mut file);
+            assert_saved_document(&saved, &document);
+            assert!(saved.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()));
 
             install(&app);
             app.draw_until_idle();

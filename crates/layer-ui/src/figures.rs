@@ -1,6 +1,6 @@
 //! Figure tools use the same GPU paint operation and selection path as fills.
 use crate::*;
-use layer_core::{Figure, LayerOperationKind, Point};
+use layer_core::{Figure, RasterOperationKind, Point};
 use layer_render::CanvasRenderer;
 
 pub(crate) fn modes(shape: FigureShape, paint: FigurePaint, localizer: &crate::localization::Localizer) -> Vec<ToolSetItem> {
@@ -52,8 +52,8 @@ impl<B: CanvasRenderer> UiSession<B> {
         };
         let doc = self.engine.document();
         let id = doc.drawing_content()?;
-        let layer = doc.layer(id)?;
-        let offset = doc.layer_offset(id);
+        let layer = doc.scene().occurrence(doc.target_owner(id)?)?;
+        let offset = doc.target_offset(id);
         let local = |p: Point| Point {
             x: p.x - offset.x,
             y: p.y - offset.y,
@@ -68,7 +68,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         ];
         let mut colors = [[0.; 4]; 2];
         for (value, definition) in colors.iter_mut().zip(definitions) {
-            *value = definition.linear_in(doc.color.space).ok()?;
+            *value = definition.linear_in(doc.composition().color.space).ok()?;
             value[3] *= self.state.brush.opacity;
         }
         Some(Figure {
@@ -78,7 +78,7 @@ impl<B: CanvasRenderer> UiSession<B> {
             end: local(end),
             width: self.state.brush.diameter,
             colors,
-            alpha_locked: layer.properties.alpha_locked,
+            alpha_locked: layer.alpha_locked,
             erase: self.state.colors.transparent(),
         })
     }
@@ -102,8 +102,8 @@ impl<B: CanvasRenderer> UiSession<B> {
             [self.state.colors.definition(); 2]
         };
         self.paint_operation(
-            self.engine.document().selection.clone(),
-            LayerOperationKind::Figure(figure),
+            self.engine.document().working.selection.clone(),
+            RasterOperationKind::Figure(figure),
             &colors[..if both { 2 } else { 1 }],
         )
     }

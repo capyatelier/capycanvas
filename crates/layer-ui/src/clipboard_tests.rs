@@ -1,7 +1,7 @@
 mod clipboard_checks {
     use super::*;
     use layer_core::{
-        Edit, Layer, LayerBlend, LayerOperationKind,
+        Edit, LayerBlend, RasterOperationKind,
         color::{
             DocumentColor, RgbSpace, SampleDepth,
             source::{SourceKind, rgba8_source},
@@ -12,7 +12,7 @@ mod clipboard_checks {
     fn clip_session() -> UiSession<Recorder> {
         let mut s = UiSession::new(
             Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("clipboard", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(PortableId::random(), 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [800, 600],
             Platform::Gtk,
         )
@@ -47,7 +47,7 @@ mod clipboard_checks {
 
     fn translation(s: &UiSession<Recorder>) -> [f32; 2] {
         let doc = s.engine.document();
-        let placement = doc.layer(doc.active_layer).unwrap().properties.placement.as_affine().unwrap();
+        let placement = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().placement.as_affine().unwrap();
         assert_eq!(placement.0[..4], [1., 0., 0., 1.], "pasted at full size");
         [placement.0[4], placement.0[5]]
     }
@@ -55,22 +55,26 @@ mod clipboard_checks {
     #[test]
     fn copy_captures_the_active_layer_alone_before_its_properties() {
         let mut s = clip_session();
-        let paint = s.engine.document().active_layer;
+        let paint = s.engine.document().working.occurrence.unwrap();
         invoke(&mut s, CommandId::AddLayer);
-        let group = s.engine.allocate_layer_id();
-        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(Layer { kind: LayerKind::Group, ..Layer::paint(group, "Group") }) }).unwrap();
-        let mut layer = s.engine.document().layer(paint).unwrap().clone();
-        layer.properties.parent = Some(group);
-        layer.properties.offset = Point { x: 7., y: 3. };
-        layer.properties.blend = LayerBlend::Multiply;
-        layer.properties.clipped = false;
-        layer.opacity = 0.4;
-        layer.visible = false;
-        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
-        let mut moved = s.engine.document().layer(group).unwrap().clone();
-        moved.properties.offset = Point { x: 10., y: 20. };
-        s.layer_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
-        s.layer_edit(Edit::SetActiveLayer { id: paint }).unwrap();
+        let doc = s.engine.document();
+        let stack = RecordChange::insert(&doc.artwork.stacks, Stack { entries: vec![paint] });
+        let mut group = Occurrence::new(OccurrenceContent::Stack(stack.handle), "Group");
+        group.translation = Point { x: 10., y: 20. };
+        let group = RecordChange::insert(&doc.artwork.occurrences, group);
+        let root = doc.composition().result;
+        let mut containing = doc.artwork.stacks.get(root).unwrap().clone();
+        containing.entries.retain(|h| *h != paint);
+        containing.entries.insert(0, group.handle);
+        let mut occurrence = doc.scene().occurrence(paint).unwrap().clone();
+        occurrence.translation = Point { x: 7., y: 3. };
+        occurrence.blend = LayerBlend::Multiply;
+        occurrence.clipped = false;
+        occurrence.opacity = 0.4;
+        occurrence.visible = false;
+        let edit = Edit::Batch(vec![Edit::Stack(stack), Edit::Occurrence(group), Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, paint, Some(occurrence)).unwrap()), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, root, Some(containing)).unwrap())]);
+        s.layer_edit(edit).unwrap();
+        s.layer_edit(s.engine.document().select_occurrence_edit(paint).unwrap()).unwrap();
         select(&mut s, Some(rectangle([30.2, 40., 130., 90.5])));
         assert!(s.command(CommandId::Copy).enabled, "{:?}", s.command_disabled_reason(CommandId::Copy));
         invoke(&mut s, CommandId::Copy);
@@ -82,15 +86,14 @@ mod clipboard_checks {
         assert!(capture.coverage.is_some());
         assert!(capture.original.is_none());
         assert_eq!((capture.name.as_str(), capture.large), ("Current ink", false));
-        let document = &capture.project.document;
-        assert_eq!(document.layers.len(), 1);
-        let copied = &document.layers[0];
-        assert_eq!(copied.id, paint);
-        assert!(copied.visible && copied.opacity == 1. && copied.mask.is_none());
-        assert_eq!(copied.properties.parent, None);
-        assert_eq!(copied.properties.offset, Point { x: 17., y: 23. }, "the group's offset is kept");
-        assert_eq!(copied.properties.blend, LayerBlend::Normal);
-        assert!(document.selection.is_none());
+        let scene = capture.scene.view();
+        let target = scene.source_target(paint).unwrap();
+        assert_eq!(capture.scope, SceneScope::Raw(target), "only the active source, before occurrence properties");
+        assert_eq!(scene.target_geometry(target).as_affine().unwrap(), layer_core::Affine::translation(Point { x: 17., y: 23. }), "the group's offset is kept");
+        let occurrence = scene.occurrence(paint).unwrap();
+        assert!(!occurrence.visible && occurrence.opacity == 0.4 && occurrence.mask.is_none());
+        assert!(scene.parent(paint).is_some());
+        assert_eq!(occurrence.blend, LayerBlend::Multiply, "raw capture keeps authored properties untouched");
         s.complete_document_request(id, Ok(true)).unwrap();
         assert!(s.command(CommandId::Copy).enabled);
 
@@ -98,7 +101,8 @@ mod clipboard_checks {
         let (id, request) = pending(&s);
         assert!(matches!(request, DocumentRequest::Copy { merged: true, cut: false }));
         let merged = s.capture_clipboard(id).unwrap();
-        assert_eq!(merged.project.document.layers.len(), s.engine.document().layers.len());
+        assert_eq!(merged.scene.view().order().len(), s.engine.document().scene().order().len());
+        assert_eq!(merged.scope, SceneScope::All);
         assert_eq!(merged.name, "Merged copy");
         s.complete_document_request(id, Ok(true)).unwrap();
 
@@ -123,7 +127,7 @@ mod clipboard_checks {
         assert!(capture.coverage.is_none(), "Select All needs no coverage");
         assert!(capture.large == (400 * 300 > LARGE_CLIP_PIXELS));
         let original = capture.original.expect("the photo's own source");
-        assert_eq!(*original, *s.engine.document().layer(s.engine.document().active_layer).unwrap().source.clone().unwrap());
+        assert_eq!(*original, *s.engine.document().scene().paint_source(s.engine.document().working.occurrence.unwrap()).unwrap().original.clone().unwrap());
         s.complete_document_request(id, Ok(true)).unwrap();
 
         select(&mut s, Some(rectangle([10., 10., 50., 50.])));
@@ -147,15 +151,15 @@ mod clipboard_checks {
         assert!(s.state.requests.is_empty());
         select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         assert!(s.command(CommandId::Cut).enabled && s.command(CommandId::PasteInto).enabled);
-        let paper = s.engine.document().layers.iter().find(|l| l.id == layer_core::LayerId(2)).unwrap().id;
-        s.layer_edit(Edit::SetActiveLayer { id: paper }).unwrap();
+        let paper = occurrence_handle(2).unwrap();
+        s.layer_edit(s.engine.document().select_occurrence_edit(paper).unwrap()).unwrap();
         assert_eq!(reason(&s, CommandId::Copy).as_deref(), Some("An effect layer has no pixels of its own"));
         assert!(s.command(CommandId::CopyMerged).enabled, "Copy Merged ignores the active layer");
-        let paint = s.engine.document().layers[0].id;
-        s.layer_edit(Edit::SetActiveLayer { id: paint }).unwrap();
-        let mut layer = s.engine.document().layer(paint).unwrap().clone();
-        layer.properties.alpha_locked = true;
-        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        let paint = s.engine.document().scene().order()[0];
+        s.layer_edit(s.engine.document().select_occurrence_edit(paint).unwrap()).unwrap();
+        let mut layer = s.engine.document().scene().occurrence(paint).unwrap().clone();
+        layer.alpha_locked = true;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, paint, Some(layer)).unwrap())).unwrap();
         assert!(s.command(CommandId::Copy).enabled);
         assert_eq!(reason(&s, CommandId::Cut).as_deref(), Some("Alpha lock keeps transparency; unlock the layer first"));
         invoke(&mut s, CommandId::QuickMask);
@@ -193,27 +197,35 @@ mod clipboard_checks {
     #[test]
     fn paste_keeps_a_visible_position_and_otherwise_centres_in_one_step() {
         let mut s = clip_session();
-        let before = s.engine.document().layers.len();
-        let visible = clip([20, 10], [100, 50], s.engine.document().color);
+        let before = s.engine.document().scene().order().len();
+        let visible = clip([20, 10], [100, 50], s.engine.document().composition().color);
         s.paste_clip(&visible, PasteMode::Paste).unwrap();
-        assert_eq!(s.engine.document().layers.len(), before + 1);
+        assert_eq!(s.engine.document().scene().order().len(), before + 1);
         assert_eq!(translation(&s), [100., 50.]);
         assert!(!s.operation.placing(), "no handles");
         let doc = s.engine.document();
-        let layer = doc.layer(doc.active_layer).unwrap();
+        let layer = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
         assert_eq!(layer.name.as_ref(), "Ink");
-        assert_eq!(layer.source.as_ref().unwrap().kind, SourceKind::Rasterized);
+        assert_eq!(doc.target_extent(doc.working.target.unwrap()), [400, 300]);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().extent, [20, 10]);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().kind, SourceKind::Rasterized);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().layers.len(), before, "one undo step");
+        assert_eq!(s.engine.document().scene().order().len(), before, "one undo step");
 
         s.state.camera.zoom = 8.;
         s.state.camera.center_on([30., 30.]);
-        let hidden = clip([20, 10], [300, 250], s.engine.document().color);
+        let hidden = clip([20, 10], [300, 250], s.engine.document().composition().color);
         s.paste_clip(&hidden, PasteMode::Paste).unwrap();
         assert_eq!(translation(&s), [20., 25.], "centred in the view");
         invoke(&mut s, CommandId::Undo);
         s.paste_clip(&hidden, PasteMode::InPlace).unwrap();
         assert_eq!(translation(&s), [300., 250.], "Paste in Place keeps the position");
+        invoke(&mut s, CommandId::Undo);
+        let wide = clip([600, 10], [0, 0], s.engine.document().composition().color);
+        s.paste_clip(&wide, PasteMode::InPlace).unwrap();
+        let doc = s.engine.document();
+        assert_eq!(doc.target_extent(doc.working.target.unwrap()), [600, 300]);
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().extent, [600, 10]);
     }
 
     #[test]
@@ -225,16 +237,17 @@ mod clipboard_checks {
         let clip = clip([20, 10], [100, 50], DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U8 });
         s.paste_clip(&clip, PasteMode::Into).unwrap();
         let doc = s.engine.document();
-        let layer = doc.layer(doc.active_layer).unwrap();
-        assert_eq!(layer.source.as_ref().unwrap().kind, SourceKind::Original, "another colour mode");
+        let layer = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
+        assert_eq!(doc.scene().paint_source(doc.working.occurrence.unwrap()).unwrap().original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode");
         let mask = layer.mask.as_ref().expect("a mask from the selection");
+        let mask = doc.artwork.coverage.get(mask.source).unwrap();
         assert_eq!(mask.initial.as_ref().unwrap().shape, selection.shape);
         assert_eq!(mask.default_coverage, 0.);
-        assert!(doc.selection.is_none(), "the selection became the mask");
+        assert!(doc.working.selection.is_none(), "the selection became the mask");
         assert_eq!(translation(&s), [100., 50.]);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().layers, before.layers);
-        assert_eq!(s.engine.document().selection, before.selection, "one undo step restores the selection");
+        assert_live_artwork_eq(s.engine.document(), &before);
+        assert_eq!(s.engine.document().working.selection, before.working.selection, "one undo step restores the selection");
         select(&mut s, None);
         assert!(s.paste_clip(&clip, PasteMode::Into).is_err());
     }
@@ -261,7 +274,7 @@ mod clipboard_checks {
     #[test]
     fn cut_erases_only_when_the_drawing_is_unchanged() {
         let mut s = clip_session();
-        let paint = s.engine.document().active_layer;
+        let paint = s.engine.document().working.occurrence.unwrap();
         select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         invoke(&mut s, CommandId::Cut);
         let (id, request) = pending(&s);
@@ -270,14 +283,15 @@ mod clipboard_checks {
         s.complete_document_request(id, Ok(true)).unwrap();
         s.frame(2, 2).unwrap();
         let erased = s.renderer_mut().pending_operations.clone();
-        assert!(matches!(erased.as_slice(), [(layer, op)] if *layer == paint && matches!(op.kind, LayerOperationKind::Erase { .. })));
-        assert!(s.engine.document().selection.is_some(), "the selection stays");
+        assert!(matches!(erased.as_slice(), [(layer, op)] if Some(*layer) == s.engine.document().scene().source_target(paint) && matches!(op.kind, RasterOperationKind::Erase { .. })));
+        assert!(s.engine.document().working.selection.is_some(), "the selection stays");
 
         s.renderer_mut().pending_operations.clear();
         invoke(&mut s, CommandId::Cut);
         let (id, _) = pending(&s);
         s.capture_clipboard(id).unwrap();
-        s.layer_edit(Edit::SetLayerOpacity { id: paint, opacity: 0.5 }).unwrap();
+        let mut occurrence = s.engine.document().scene().occurrence(paint).unwrap().clone(); occurrence.opacity = 0.5;
+        s.layer_edit(Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, paint, Some(occurrence)).unwrap())).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
         s.frame(3, 3).unwrap();
         assert!(s.renderer_mut().pending_operations.is_empty(), "the drawing changed while cutting");
@@ -343,7 +357,7 @@ mod clipboard_checks {
     #[test]
     fn the_selection_bar_offers_copy_on_every_host() {
         for platform in Platform::ALL {
-            let mut s = UiSession::new(Recorder::default(), Document::new("bar", 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], platform).unwrap();
+            let mut s = UiSession::new(Recorder::default(), Document::new(PortableId::random(), 400, 300, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }), [800, 600], platform).unwrap();
             invoke(&mut s, CommandId::SelectAll);
             invoke(&mut s, CommandId::Move);
             let offered = s.state.canvas_bar.unwrap().items.iter().any(|i| i.menu == Some(CanvasBarMenu::Copy));

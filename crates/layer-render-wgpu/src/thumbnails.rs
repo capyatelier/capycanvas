@@ -1,6 +1,7 @@
 //! Asynchronous 32px previews. The GPU worker never waits for thumbnail maps.
 use super::*;
 use wgpu::util::DeviceExt;
+use layer_render::ThumbnailTarget;
 pub(super) struct Thumbnails {
     tx: mpsc::Sender<Result<ReadbackImage, GpuRasterError>>,
     rx: mpsc::Receiver<Result<ReadbackImage, GpuRasterError>>,
@@ -8,7 +9,7 @@ pub(super) struct Thumbnails {
     gpu: Option<PreviewPipeline>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) sources: Option<crate::source_thumbnails::SourceThumbnails>,
-    pub source_placements: std::collections::BTreeMap<LayerId, layer_core::LayerPlacement>,
+    pub source_placements: std::collections::BTreeMap<SourceTarget, layer_core::LayerPlacement>,
 }
 impl Thumbnails {
     pub fn new() -> Self {
@@ -79,12 +80,33 @@ impl WgpuRasterizer {
         Ok(())
     }
 
+    fn validate_thumbnail(&self, target: ThumbnailTarget) -> Result<(), GpuRasterError> {
+        let Some(frame) = &self.artwork_frame else { return Err(GpuRasterError::ThumbnailUnavailable(target)); };
+        let scene = frame.scene.view();
+        let available = match target {
+            ThumbnailTarget::Occurrence(handle) => scene.occurrence(handle).is_some(),
+            ThumbnailTarget::Source(SourceTarget::Paint(handle)) => scene.paint(handle).is_some(),
+            ThumbnailTarget::Source(SourceTarget::Coverage(handle)) => scene.coverage(handle).is_some(),
+            ThumbnailTarget::Source(SourceTarget::Selection(handle)) => scene.artwork().selections.get(handle).is_some(),
+            ThumbnailTarget::QuickMask => true,
+        };
+        if available { Ok(()) } else { Err(GpuRasterError::ThumbnailUnavailable(target)) }
+    }
+    pub(super) fn thumbnail_source(&self, target: ThumbnailTarget) -> Option<SourceTarget> {
+        match target {
+            ThumbnailTarget::Source(source) => Some(source),
+            ThumbnailTarget::QuickMask => Some(SourceTarget::Selection(layer_core::authored::SelectionHandle::INVALID)),
+            ThumbnailTarget::Occurrence(handle) => self.artwork_frame.as_ref()?.scene.view().source_target(handle),
+        }
+    }
     pub fn thumbnails_pending(&self) -> bool {
         self.thumbnails.pending > 0
     }
     /// Prepare at most four source or paint pages before requesting readback.
-    pub fn prepare_thumbnail_batch(&mut self, target: LayerId) -> Result<bool, GpuRasterError> {
-        if !self.prepare_selection_thumbnail(target)? {return Ok(false)}
+    pub fn prepare_thumbnail_batch(&mut self, target: ThumbnailTarget) -> Result<bool, GpuRasterError> {
+        self.validate_thumbnail(target)?;
+        let source_target = self.thumbnail_source(target);
+        if let Some(source) = source_target && !self.prepare_selection_thumbnail(source)? { return Ok(false); }
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -92,16 +114,16 @@ impl WgpuRasterizer {
             },
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if self.tiled_sources.contains_key(&target) && self.thumbnails.source_placements.get(&target).is_some_and(|p| p.as_affine().is_some()) {
+        let source = if source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) && source_target.and_then(|source| self.thumbnails.source_placements.get(&source)).is_some_and(|p| p.as_affine().is_some()) {
             let mut gpu = self.thumbnails.sources.take()
                 .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
-            let result = gpu.prepare(self, target, &mut encoder, 4);
+            let result = gpu.prepare(self, source_target.unwrap(), &mut encoder, 4);
             self.thumbnails.sources = Some(gpu);
             Some(result)
         } else { None };
         #[cfg(target_arch = "wasm32")]
         let source = None;
-        let result = if self.selection_previews.definitions.contains_key(&target) { Ok(true) }
+        let result = if source_target.is_some_and(|source| self.selection_previews.definitions.contains_key(&source)) { Ok(true) }
         else if let Some(source) = source { source }
         else {
             let mut gpu = self.thumbnails.gpu.take().unwrap_or_else(|| PreviewPipeline::new(self));
@@ -117,8 +139,10 @@ impl WgpuRasterizer {
     pub(super) fn start_thumbnail(
         &mut self,
         id: u64,
-        target: LayerId,
+        target: ThumbnailTarget,
     ) -> Result<(), GpuRasterError> {
+        self.validate_thumbnail(target)?;
+        let source_target = self.thumbnail_source(target);
         let mut encoder = crate::submission::CommandEncoder::new(
             &self.device,
             &wgpu::CommandEncoderDescriptor {
@@ -126,13 +150,13 @@ impl WgpuRasterizer {
             },
         );
         #[cfg(not(target_arch = "wasm32"))]
-        let source = if self.tiled_sources.contains_key(&target) && self.thumbnails.source_placements.get(&target).is_some_and(|p| p.as_affine().is_some()) {
+        let source = if source_target.is_some_and(|source| self.tiled_sources.contains_key(&source)) && source_target.and_then(|source| self.thumbnails.source_placements.get(&source)).is_some_and(|p| p.as_affine().is_some()) {
             let mut gpu = self
                 .thumbnails
                 .sources
                 .take()
                 .unwrap_or_else(|| crate::source_thumbnails::SourceThumbnails::new(self));
-            let result = gpu.render(self, target, &mut encoder);
+            let result = gpu.render(self, source_target.unwrap(), &mut encoder);
             self.thumbnails.sources = Some(gpu);
             Some(result?)
         } else {
@@ -140,8 +164,8 @@ impl WgpuRasterizer {
         };
         #[cfg(target_arch = "wasm32")]
         let source: Option<PageSurface> = None;
-        let source = if self.selection_previews.definitions.contains_key(&target) {
-            self.render_selection_thumbnail(target, &mut encoder)?
+        let source = if source_target.is_some_and(|source| self.selection_previews.definitions.contains_key(&source)) {
+            self.render_selection_thumbnail(source_target.unwrap(), &mut encoder)?
         } else if let Some(source) = source {
             source
         } else {
@@ -316,13 +340,13 @@ struct PreviewPipeline {
     generators: Option<scene::Scene>,
 }
 struct PreparedPreview {
-    id: LayerId,
+    id: ThumbnailTarget,
     revision: (u64, u64),
     rendition: [f32; 8],
     sources: Vec<Option<[u32; 2]>>,
     mask: bool,
     placed: bool,
-    generator: Option<Layer>,
+    generator: Option<OccurrenceHandle>,
     generated: Vec<(wgpu::Texture, wgpu::TextureView)>,
     records: wgpu::Buffer,
     stride: u32,
@@ -383,18 +407,24 @@ impl PreviewPipeline {
     fn begin(
         &self,
         r: &WgpuRasterizer,
-        id: LayerId,
+        target: ThumbnailTarget,
     ) -> PreparedPreview {
+        let source = r.thumbnail_source(target);
+        let id = source.unwrap_or_default();
         let mask = r.layer_masks.definitions.get(&id).cloned();
+        let inverted=r.artwork_frame.as_ref().and_then(|f| f.scene.view().source_owner(id).and_then(|h| f.scene.view().mask(h))).is_some_and(|(use_,_)| use_.inverted);
         let gray = mask.as_ref().map_or(0., |m| {
-            if m.inverted {
+            if inverted {
                 1. - m.default_coverage
             } else {
                 m.default_coverage
             }
         });
-        let generator = r.artwork_frame.as_ref().and_then(|frame| frame.layers.iter().find(|layer| layer.id == id))
-            .filter(|layer| layer.effect.as_ref().is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Generator)).cloned();
+        let generator = match target {
+            ThumbnailTarget::Occurrence(handle) => r.artwork_frame.as_ref().and_then(|frame|
+                frame.scene.view().effect(handle).filter(|e| e.program.kind == layer_core::EffectKind::Generator).map(|_| handle)),
+            _ => None,
+        };
         let background = [gray, gray, gray, f32::from(mask.is_some())];
         let full = generator.is_some() || gray > 0.;
         let bounds = r
@@ -438,8 +468,11 @@ impl PreviewPipeline {
             coordinates.extend(layer.pages.iter().map(|p| p.coordinate));
             coordinates.extend(r.native_color_coordinates(id));
         }
-        let geometry = r.artwork_frame.as_ref().map(|frame| layer_core::target_geometry(&frame.layers,id));
-        let placed = generator.is_none() && geometry.as_ref().is_some_and(|geometry| !geometry.is_identity());
+        let geometry = r.artwork_frame.as_ref().map(|frame| frame.scene.view().target_geometry(id));
+        let mut placed = generator.is_none() && geometry.as_ref().is_some_and(|geometry| !geometry.is_identity());
+        if source.is_none() && generator.is_none() {
+            coordinates.extend(page_coordinates(PixelRect::full(r.document_extent))); placed = true;
+        }
         if let Some(geometry) = geometry.filter(|_| placed) {
             let mut local = coordinates.iter().fold(PixelRect::EMPTY, |bounds,c| bounds.union(page_rect(*c)));
             if let Some(source) = r.tiled_sources.get(&id) { local = local.union(PixelRect::full(source.extent)); }
@@ -465,8 +498,8 @@ impl PreviewPipeline {
                 r.document_extent[1],
             ]);
             record[4] = if i == 0 { 2 } else if generator.is_some() { 4 } else { u32::from(mask.is_some()) };
-            record[5] = u32::from(!placed && mask.as_ref().is_some_and(|m| m.inverted));
             record[6] = footprint;
+            record[5] = u32::from(!placed && inverted);
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
             if mask.is_none() { record[12..20].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
             for (dst, value) in bytes[i * stride..i * stride + 80]
@@ -487,29 +520,28 @@ impl PreviewPipeline {
             });
         let result = create_page_surface(&r.device, &r.texture_layout, &r.sampler, [32, 32],
             r.device.working_format(), "layer thumbnail");
-        PreparedPreview { id, revision: (r.artwork_revision, r.selection_paint_revision),
+        PreparedPreview { id:target, revision: (r.artwork_revision, r.selection_paint_revision),
             rendition: r.ui_rendition_parameters(), measure: if full { sources.len() } else { 1 },
             sources, mask: mask.is_some(), placed, generator, generated: Vec::new(), records, stride: stride as u32, read, write, result, draw: 0,
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)) }
     }
-    fn prepare(&mut self, r: &mut WgpuRasterizer, id: LayerId,
+    fn prepare(&mut self, r: &mut WgpuRasterizer, target: ThumbnailTarget,
         encoder: &mut crate::submission::CommandEncoder, mut limit: usize,
     ) -> Result<bool, GpuRasterError> {
         let revision = (r.artwork_revision, r.selection_paint_revision);
         let rendition = r.ui_rendition_parameters();
         self.prepared.retain(|p| p.revision == revision && p.rendition == rendition
             && p.valid.load(std::sync::atomic::Ordering::Acquire));
-        let cached = self.prepared.iter().position(|p| p.id == id);
-        let mut prepared = if let Some(i) = cached { self.prepared.remove(i).unwrap() } else { self.begin(r, id) };
-        if let Some(layer) = &prepared.generator && prepared.generated.is_empty() {
-            let scene = self.generators.get_or_insert_with(|| scene::Scene::new(r));
-            let grid = generator_grid(r.document_extent);
-            let Some(images) = scene.generator_preview(r, layer, grid, encoder)? else {
+        let id = r.thumbnail_source(target).unwrap_or_default();
+        let cached = self.prepared.iter().position(|p| p.id == target);
+        let mut prepared = if let Some(i) = cached { self.prepared.remove(i).unwrap() } else { self.begin(r, target) };
+        if let Some(generator) = prepared.generator.filter(|_| prepared.generated.is_empty()) {
+            if self.generators.is_none() { self.generators = Some(scene::Scene::new(r)); }
+            let Some(generated) = self.generators.as_mut().unwrap().generator_preview(r, generator, generator_grid(r.document_extent), encoder)? else {
                 self.prepared.push_back(prepared);
-                while self.prepared.len() > 8 { self.prepared.pop_front(); }
                 return Ok(false);
             };
-            prepared.generated = images;
+            prepared.generated = generated;
         }
         let write = crate::submission::CacheWrite::new();
         let capture = &mut self.capture;
@@ -523,10 +555,10 @@ impl PreviewPipeline {
                     let view = match coordinate {
                         None => r.empty_view.clone(),
                         Some(_) if prepared.generator.is_some() => {
-                            let count = prepared.generator.as_ref().unwrap().effect.as_ref().unwrap().program.passes.len().max(1);
-                            prepared.generated[(count - 1) % prepared.generated.len()].1.clone()
-                        }
-                        Some(c) if prepared.placed => capture.layer_tile(r,id,*c,encoder)?.view,
+                            let count = r.artwork_frame.as_ref().unwrap().scene.view().effect(prepared.generator.unwrap()).unwrap().program.passes.len().max(1);
+                            prepared.generated[(count-1)%prepared.generated.len()].1.clone()
+                        },
+                        Some(c) if prepared.placed => capture.thumbnail_tile(r,target,*c,encoder)?.view,
                         Some(c) if prepared.mask => r.layer_masks.pages[&(id, *c)].view.clone(),
                         Some(c) => {
                             r.raw_layer_tile(id, *c, encoder)?
@@ -600,10 +632,12 @@ impl PreviewPipeline {
         while self.prepared.len() > 8 { self.prepared.pop_front(); }
         Ok(ready)
     }
-    fn render(&mut self, r: &mut WgpuRasterizer, id: LayerId,
+    fn render(&mut self, r: &mut WgpuRasterizer, target: ThumbnailTarget,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
-        if !self.prepare(r, id, encoder, usize::MAX)? { return Err(GpuRasterError::Effect("Thumbnail shader preparation pending".into())); }
+        if !self.prepare(r, target, encoder, usize::MAX)? {
+            return Err(GpuRasterError::Effect("Thumbnail shader preparation pending".into()));
+        }
         Ok(self.prepared.pop_back().unwrap().result)
     }
 }

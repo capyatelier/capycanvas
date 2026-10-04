@@ -25,12 +25,13 @@ small on-chip tiles used internally by some GPU architectures.
 
 ### Layer extents and the canvas window
 
-Each layer's pages live in its own local extent,
-[`Layer::local_extent`](../../crates/layer-core/src/layers.rs): the canvas size, the
-extent a canvas change left behind (`LayerProperties.extent`) and a placed photo's
-size, whichever is larger. The canvas is a window over those extents. Composition,
-presentation and export cover the canvas only; pixels outside it stay on their
-layers, hidden, and count toward the project's tile and byte limits.
+Paint and coverage pages live in explicit source-local domains,
+`PaintSource.domain` and `CoverageSource.domain` in the
+[authored model](../reference/authored-model.md). A placed photo also retains its
+independent original extent. `SceneView::local_extent` and `target_extent` expose
+these domains in [`authored/scene.rs`](../../crates/layer-core/src/authored/scene.rs).
+The composition frame is a window over those pixels; changing the canvas does not
+discard pixels outside it. Retained pixels count toward tile and byte limits.
 
 `Rect::from_extent` gives the local pixel bounds used by geometry, merges and sampling.
 
@@ -80,19 +81,17 @@ through `CanvasRenderer::max_document_dimension`.
 
 ### Merges
 
-A merge inserts its result with a pending `LayerOperationKind::Bake` holding the
-merged layers as they were. The frame that runs it composites them with
-`Scene::group` over transparency, isolated and moved into the result's pixels,
-in the document's blend space, and copies each tile into the result's pages,
-decoded to linear pixels in a Perceptual document so the result looks the same
-([`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs)). Placed
-photos are sampled as for export, never from the display's mip levels, and
-watercolor settles into the result, which keeps no wet state. The same edit
-removes the merged layers, so the engine appends them, hidden, to that frame's
-layers, and the renderer keeps their pages, masks and photo tiles until the bake
-has run (`frame_layers` in
-[`canvas.rs`](../../crates/layer-engine/src/canvas.rs)). The bake is frame work
-on the render owner; the UI thread only plans it. Large bakes advance through
+A merge plans a `RasterOperationKind::Bake` with an immutable `SceneSnapshot`
+and explicit `SceneScope`. Its `SourceTarget` selects the new paint source. The
+frame composites the retained scope over transparency, isolated and moved into
+the result's pixels, in the document's blend space. It copies each tile into the
+result's pages, decoded to linear pixels in a Perceptual document so the result
+looks the same ([`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs)).
+Placed photos are sampled as for export, never from the display's mip levels, and
+watercolor settles into the result, which keeps no wet state. The authored edit
+removes the merged occurrences; the accepted bake snapshot retains their sources,
+masks and original image tiles until the job finishes. The bake runs on the
+render owner; the UI thread only plans it. Large bakes advance through
 512 × 512 regions. Each submission captures its native tiles before cache
 eviction can discard them. Intermediate native backing belongs to the renderer;
 history publishes the complete edit after the last region. Hosts poll readiness
@@ -113,8 +112,9 @@ from the original and the captured Low with `FrequencyDetail`. High stores
 reconstructs the original. The blur runs once, and High uses Low's native
 quantization. Both layers fit one undo step because they reserve only their
 pages. The dialog's blur preview is
-a layer the document does not hold: `CanvasEngine::set_layer_preview` places it
-directly above its target in each frame's layers until the dialog closes.
+an immutable typed preview scene supplied by `CanvasEngine::set_scene_preview`.
+`ScenePreview` retains that scene and the target occurrence; it does not add an
+authored occurrence or history entry to the live document.
 
 The Crop tool's shield is drawn by the presentation pass itself. `set_crop_overlay`
 passes a `CropOverlay` (the map from document pixels onto the crop's unit square,
@@ -274,8 +274,8 @@ the *composite* holds the document's encoded values, premultiplied:
 `enc(c / a) · a`, where `enc` is the document's transfer curve (`sdr_encode` with
 `WORKING_SPACE`): sRGB for sRGB and Display P3, 563/256 for Adobe RGB, and 1.8
 with a linear toe for ProPhoto. Only 8- and 16-bit documents blend perceptually;
-float documents are Linear. `FramePacket.blend_space` carries it to the renderer,
-and a change recomposes everything.
+float documents are Linear. `FramePacket.scene.composition().blend` supplies the
+domain to the renderer, and a change recomposes everything.
 
 Normal layers keep hardware premultiplied blending, which is correct on encoded
 values. Blend modes, clipping, masks, opacity and groups work on the encoded
@@ -299,7 +299,7 @@ reduced first and converted after.
   last pass of an image filter. A filter that follows the document's Blending
   ([filter spaces](../reference/runtime-filters.md#filter-spaces)) reads and
   writes the composite's encoded values with no conversion;
-- the paper and every constant backdrop, encoded on the CPU
+- constant fill colors and backdrops, encoded on the CPU
   (`BlendSpace::composite`);
 - drag frames that draw a moving layer into the display
   ([`display_resample.wgsl`](../../crates/layer-render-wgpu/src/display_resample.wgsl)
@@ -637,7 +637,8 @@ source composition without raising the memory allowance.
 
 The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
 prepares document metadata independently of the live display cache. A file or
-inspection worker owns an immutable project snapshot and a native Float32
+inspection worker owns an immutable `ArtworkCapture` or scoped `SceneSnapshot`
+and a native Float32
 renderer. Region requests restore only the translated paint, material and mask
 pages needed by composition and its halos. Compressed backing remains shared;
 restoration uses the same integer decoder as live editing. Initial masks use the
@@ -723,7 +724,7 @@ input never waits on the GPU. Move frames and presentation do not perform full
 canvas readback. The exposed host export still requests a full image; the native
 snapshot API streams bounded strips. Thumbnails and color sampling use separate
 bounded requests. Source bytes and immutable compressed
-tile backing are shared with save snapshots. See the [raster project contract](../reference/project-format.md).
+tile backing are shared with save snapshots. See the [artwork capture and package contract](../reference/project-format.md).
 
 Layer-thumbnail preparation shares a four-page budget across original
 photo tiles, painted overrides, alpha-bounds scans and thumbnail drawing.
@@ -752,7 +753,7 @@ platform APIs may still need staging or copies.
 ## Startup
 
 GPU preparation is staged so the platform can display its controls first.
-Startup prepares the paper, then the open document, then the selected brush and
+Startup prepares the canvas, then the open document, then the selected brush and
 eraser; unused brushes and filters compile on first use
 ([shader readiness](shared-shader-readiness.md)). Required
 dependencies are ready before drawing uses them, so pipeline creation never lands

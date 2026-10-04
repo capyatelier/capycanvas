@@ -84,6 +84,13 @@ impl WebApp {
         self.documents.budget.inactive_ram =
             (bytes as usize).min(layer_ui::DocumentBudget::default().inactive_ram);
     }
+    pub fn await_document_backing(&self) -> js_sys::Promise {
+        let artwork = self.session.engine().document().artwork.clone();
+        future_to_promise(async move {
+            artwork_transfer::wait_backing(&artwork).await?;
+            Ok(JsValue::UNDEFINED)
+        })
+    }
     pub fn document_storage_result(&mut self, error: Option<String>) {
         self.documents.storage_completed(error.map_or(Ok(()), Err));
     }

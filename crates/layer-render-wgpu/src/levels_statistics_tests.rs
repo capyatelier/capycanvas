@@ -1,16 +1,13 @@
-use crate::{artwork_sample_tests::gpu,artwork_statistics_tests::generated,snapshot::CaptureControl};
-use layer_core::{ArtworkQuery,ArtworkSource,Document,EffectInstance,EffectValue,Layer,LayerId,LayerKind};
+use crate::{artwork_sample_tests::{gpu,insert_effect,effect_draft,set_effect,paint_mut,refresh},artwork_statistics_tests::generated,snapshot::CaptureControl};
+use layer_core::{ArtworkQuery,ArtworkSource,Document,EffectInstance,EffectValue};
 use layer_core::color::{DocumentColor,RgbSpace,SampleDepth};
-use std::sync::Arc;
 
 fn fixture(space:RgbSpace,depth:SampleDepth,pixels:&[[f32;4]])->Document {
     let mut doc=generated([pixels.len() as u32,1],DocumentColor {space,depth},pixels);
-    let mut layer=Layer::paint(LayerId(90),"Levels");layer.kind=LayerKind::Effect;
-    layer.effect=Some(Arc::new(EffectInstance::new(crate::tests::fixture("levels").program().for_depth(depth))));
-    doc.layers.insert(0,layer);doc
+    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program().for_depth(depth)),0);doc
 }
 fn stats(doc:&Document,channels:bool)->Result<layer_core::levels::LevelsStatistics,String> {
-    let source=if channels {ArtworkSource::EffectChannels(LayerId(90))}else{ArtworkSource::EffectInput(LayerId(90))};
+    let source=if channels {ArtworkSource::EffectChannels(doc.scene().children(None)[0])}else{ArtworkSource::EffectInput(doc.scene().children(None)[0])};
     pollster::block_on(gpu().levels_statistics(ArtworkQuery::new(doc,source),CaptureControl::default()))
 }
 fn close(a:f64,b:f64,tolerance:f64) {assert!((a-b).abs()<=tolerance,"{a} != {b}, tolerance{tolerance}");}
@@ -19,8 +16,7 @@ fn close(a:f64,b:f64,tolerance:f64) {assert!((a-b).abs()<=tolerance,"{a} != {b},
 fn levels_statistics_full_tiles_cover_every_pixel_across_window_edges() {
     let extent=[517,259];let pixels=[[0.02,0.11,0.33,1.],[0.27,0.39,0.51,1.],[0.83,0.72,0.61,1.]];
     let mut doc=generated(extent,DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::F32},&pixels);
-    let mut layer=fixture(RgbSpace::Srgb,SampleDepth::F32,&pixels).layers.remove(0);
-    layer.id=LayerId(90);doc.layers.insert(0,layer);
+    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program().for_depth(SampleDepth::F32)),0);
     let result=stats(&doc,false).unwrap();let count=u64::from(extent[0])*u64::from(extent[1]);
     assert_eq!(result.pixels,count);
     for c in 0..3 {
@@ -59,8 +55,8 @@ fn levels_statistics_quantiles_match_independent_sorted_samples_across_profiles_
 fn levels_statistics_reads_real_integer_and_float_source_codecs_at_every_profile() {
     let pixels=[[0.,0.,0.,1.],[1.;4],[1.,0.,0.,1.],[0.,1.,0.,1.],[0.,0.,1.,1.],[0.;4]];
     for space in RgbSpace::ALL {for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
-        let mut doc=fixture(space,depth,&pixels);doc.layers.remove(1);
-        doc.layers[1].source=Some(crate::test_support::depth_source([6,1],depth,space,8*1024*1024,|x,_|pixels[x as usize]));
+        let mut doc=fixture(space,depth,&pixels);let generator=doc.scene().children(None)[1];let root=doc.composition().result;doc.artwork.stacks.get_mut(root).unwrap().entries.retain(|h|*h!=generator);refresh(&mut doc);
+        paint_mut(&mut doc).raster=Default::default();paint_mut(&mut doc).original=Some(crate::test_support::depth_source([6,1],depth,space,8*1024*1024,|x,_|pixels[x as usize]));
         let result=stats(&doc,false).unwrap();assert_eq!(result.pixels,5);
         for c in 0..3 {
             close(result.minimum[c],0.,1e-6);close(result.maximum[c],1.,1e-6);
@@ -75,10 +71,11 @@ fn levels_statistics_reads_real_integer_and_float_source_codecs_at_every_profile
 fn levels_statistics_channels_precede_master_and_complete_shader_uses_channels_then_master() {
     let pixels=[[0.04,0.18,0.39,0.5],[0.4,0.6,0.8,1.],[0.;4]];
     let mut doc=fixture(RgbSpace::Srgb,SampleDepth::F32,&pixels);
-    let effect=Arc::make_mut(doc.layers[0].effect.as_mut().unwrap());
+    let owner=doc.scene().children(None)[0];let mut effect=effect_draft(&doc,owner);
     for (key,value) in [("output_black",0.1),("output_white",0.8),("gamma",1.8),("red_output_white",0.5),("green_gamma",1.4),("blue_output_black",0.1)] {
         effect.set(key,EffectValue::Number(value)).unwrap();
     }
+    set_effect(&mut doc,owner,effect);
     for channels in [false,true] {
         let result=stats(&doc,channels).unwrap();assert_eq!(result.pixels,2);
         for c in 0..3 {
@@ -126,6 +123,6 @@ fn levels_statistics_constant_empty_hdr_tiny_alpha_and_cancellation_are_explicit
             assert_eq!(result.bins[c].iter().sum::<u64>(),2);
         }
         let control=CaptureControl::default();control.cancel();
-        assert!(pollster::block_on(gpu().levels_statistics(ArtworkQuery::new(&doc,ArtworkSource::EffectInput(LayerId(90))),control)).is_err());
+        assert!(pollster::block_on(gpu().levels_statistics(ArtworkQuery::new(&doc,ArtworkSource::EffectInput(doc.scene().children(None)[0])),control)).is_err());
     }
 }

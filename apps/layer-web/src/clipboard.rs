@@ -36,18 +36,18 @@ async fn copy(
     nonce: String,
 ) -> Result<JsValue, JsValue> {
     let capture = task.capture;
-    raster_project::wait_backing(&capture.project).await?;
-    let document = &capture.project.document;
+    artwork_transfer::wait_backing(&capture.scene.artwork).await?;
+    let document = capture.scene.view();
     let crop = capture.crop;
-    let rendition = document.color.depth.is_float().then_some(document.sdr_rendition);
+    let rendition = document.composition().color.depth.is_float().then_some(document.artwork().outputs.get(document.artwork().default_output).unwrap().sdr);
     let clip = output::ClipMetadata {
         origin: [crop[0], crop[1]],
-        document: [document.width, document.height],
+        document: document.composition().size,
         source: capture.original.is_none(),
     };
     let mut snapshot = task
         .gpu
-        .capture(capture.project.clone(), capture.time, control.clone())
+        .capture_scene(capture.scene.clone(), capture.scope.clone(), control.clone())
         .map_err(js)?;
     let buffers = js_sys::Array::new();
     let guide = if rendition.is_some() {
@@ -102,12 +102,11 @@ async fn copy(
             let metadata = js_sys::Reflect::get(&result, &js("metadata"))?
                 .as_string()
                 .ok_or_else(|| js("Missing clipboard source"))?;
-            raster_project::unpack(&metadata, parts, true)
+            artwork_transfer::unpack(&metadata, parts)
                 .await?
-                .document
-                .layers
-                .into_iter()
-                .find_map(|l| l.source)
+                .paint
+                .iter()
+                .find_map(|(_,_,paint)| paint.original.clone())
                 .ok_or_else(|| js("Missing clipboard source"))?
         }
     };

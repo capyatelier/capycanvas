@@ -10,7 +10,7 @@ impl SnapshotGpu {
             layer_render::SnapshotRequest::ArtworkSample(request) => self.artwork_sample(request, control).await.map(layer_render::SnapshotResult::ArtworkSample),
             layer_render::SnapshotRequest::Bounds(request) => self.content_bounds(request, control).await.map(layer_render::SnapshotResult::Bounds),
             layer_render::SnapshotRequest::TransformPixels(plan) => self.transform_pixels(plan, control).await
-                .map(|layer| layer_render::SnapshotResult::TransformPixels(Box::new(layer))),
+                .map(layer_render::SnapshotResult::TransformPixels),
         }
     }
 }

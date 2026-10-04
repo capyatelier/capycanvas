@@ -2,6 +2,8 @@
 //! moving transform every frame, then the frames that release it, with CPU
 //! submission, GPU execution and serialized completion kept apart.
 use super::*;
+use super::placement::{paint_document, paint_mut, target, set_source};
+use layer_core::{Document, authored::*};
 use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth, source::*};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, LayerPlacement};
@@ -138,13 +140,13 @@ fn corner(t: f32) -> Point {
     Point { x: EXTENT[0] as f32 * 0.17 * t.sin(), y: EXTENT[1] as f32 * 0.13 * (t * 1.3).sin() }
 }
 
-/// A drag of `layer` among `layers`, shown in `view`, `step` apart per frame.
+/// A source drag in a scene, shown in `view`, `step` apart per frame.
 /// A native drag first draws until the transform is prepared and times every
 /// frame of its release; otherwise only the first release frame is timed.
 struct Workload<'a> {
     label: &'a str,
-    layers: &'a [Layer],
-    layer: LayerId,
+    scene: SceneView<'a>,
+    target: SourceTarget,
     view: ViewState,
     step: f32,
     native: bool,
@@ -155,7 +157,7 @@ fn submit(r: &mut WgpuRasterizer, work: &Workload<'_>, reset: bool) {
         view: work.view,
         reset_layers: reset,
         composite_all: reset,
-        ..packet(work.layers, EXTENT)
+        ..packet(work.scene, EXTENT)
     })
     .unwrap();
 }
@@ -201,7 +203,7 @@ fn drag(r: &mut WgpuRasterizer, work: &Workload<'_>, cases: &[Case]) -> f64 {
         let mut preview = layer_render::TransformPreview {
             transaction: transaction as u64 + 1,
             moving: true,
-            layer: work.layer,
+            target: work.target,
             selection: Some(selection.clone()),
             transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map(0.) }, ..Default::default() },
         };
@@ -258,12 +260,12 @@ fn drag(r: &mut WgpuRasterizer, work: &Workload<'_>, cases: &[Case]) -> f64 {
 }
 
 /// The drag of a lone 24-megapixel layer fitted to a 1920x1080 view.
-fn fitted_drag(r: &mut WgpuRasterizer, layer: &Layer, label: &str) -> f64 {
+fn fitted_drag(r: &mut WgpuRasterizer, layer: &Document, label: &str) -> f64 {
     let zoom = (1920. / EXTENT[0] as f32).min(1080. / EXTENT[1] as f32);
     let work = Workload {
         label,
-        layers: std::slice::from_ref(layer),
-        layer: layer.id,
+        scene: layer.scene(),
+        target: target(&layer),
         view: ViewState { width_px: 1920, height_px: 1080, document_to_surface: [zoom, 0., 0., zoom, 0., 0.], ..view() },
         step: 0.04,
         native: false,
@@ -320,8 +322,8 @@ fn large_paint_transform_latency() {
             );
         }
     }
-    let mut layer = Layer::paint(LayerId(1), "large paint transform");
-    layer.raster = RasterRevision::backed(data);
+    let mut layer = paint_document(EXTENT, "large paint transform");
+    paint_mut(&mut layer).raster = RasterRevision::backed(data);
     let worst = fitted_drag(&mut r, &layer, "paint");
     assert!(worst < 8.333, "a transform drag exceeds the 120 Hz budget");
 }
@@ -329,8 +331,8 @@ fn large_paint_transform_latency() {
 #[test]
 #[ignore = "hardware 24-megapixel photo transform benchmark; release, serial"]
 fn large_photo_transform_latency() {
-    let mut layer = Layer::paint(LayerId(1), "large photo transform");
-    layer.source = Some(u16_source(RgbSpace::Srgb, |x, y| {
+    let mut layer = paint_document(EXTENT, "large photo transform");
+    set_source(&mut layer, u16_source(RgbSpace::Srgb, |x, y| {
         [
             ((x * 8191 + y * 31) % 65536) as u16,
             ((x * 17 + y * 16381) % 65536) as u16,
@@ -350,12 +352,12 @@ fn large_photo_transform_latency() {
 /// photo in a native document, alone or with painted strokes above it and a
 /// second photo below.
 fn native_photo_document(layered: bool) -> layer_core::Document {
-    let mut document = layer_core::Document::new("photo", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = layer_core::color::DocumentColor {
+    let mut document = layer_core::Document::new(PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = layer_core::color::DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    document.layers[0].source = Some(u16_source(RgbSpace::ProPhoto, |x, y| {
+    set_source(&mut document, u16_source(RgbSpace::ProPhoto, |x, y| {
         [
             ((x * 55000 / EXTENT[0] + (x * 7 + y * 13) % 1024) % 65536) as u16,
             ((y * 55000 / EXTENT[1] + (x * 11 + y * 5) % 1024) % 65536) as u16,
@@ -364,8 +366,7 @@ fn native_photo_document(layered: bool) -> layer_core::Document {
         ]
     }));
     if layered {
-        let mut strokes = Layer::paint(document.allocate_layer_id(), "strokes");
-        strokes.source = Some(u16_source(RgbSpace::ProPhoto, |x, y| {
+        let strokes_source = u16_source(RgbSpace::ProPhoto, |x, y| {
             let band = (x + 2 * y) % 900;
             let alpha = if band < 60 {
                 65535
@@ -375,18 +376,25 @@ fn native_photo_document(layered: bool) -> layer_core::Document {
                 0
             };
             [52000, 21000, 9000, alpha]
-        }));
-        let mut backdrop = Layer::paint(document.allocate_layer_id(), "backdrop");
-        backdrop.source = Some(u16_source(RgbSpace::ProPhoto, |x, y| {
+        });
+        let backdrop_source = u16_source(RgbSpace::ProPhoto, |x, y| {
             [
                 (x * 11 % 50000) as u16,
                 (y * 13 % 50000) as u16,
                 ((x ^ y) % 40000) as u16,
                 65535,
             ]
-        }));
-        document.layers.insert(0, strokes);
-        document.layers.insert(2, backdrop);
+        });
+        let roots = document.scene().children(None).to_vec();
+        let (strokes, stroke_target) = crate::test_support::add_paint(&mut document.artwork, "strokes", EXTENT);
+        let (backdrop, backdrop_target) = crate::test_support::add_paint(&mut document.artwork, "backdrop", EXTENT);
+        for (target, source) in [(stroke_target, strokes_source), (backdrop_target, backdrop_source)] {
+            let SourceTarget::Paint(handle) = target else { unreachable!() };
+            document.artwork.paint.get_mut(handle).unwrap().original = Some(source);
+        }
+        let root = document.composition().result;
+        document.artwork.stacks.get_mut(root).unwrap().entries = vec![strokes, roots[0], backdrop, roots[1]];
+        document = Document::from_artwork(document.artwork).unwrap();
     }
     document
 }
@@ -405,13 +413,13 @@ fn native_photo_transform_latency() {
         let document = native_photo_document(layered);
         let work = Workload {
             label: if layered { "layered photo" } else { "photo" },
-            layers: &document.layers,
-            layer: document.layers[usize::from(layered)].id,
+            scene: document.scene(),
+            target: document.scene().source_target(document.scene().order()[usize::from(layered)]).unwrap(),
             view: ViewState { width_px: width, height_px: height, document_to_surface: [zoom, 0., 0., zoom, offset[0], offset[1]], ..view() },
             step: 1. / 60.,
             native: true,
         };
-        let mut r = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         submit(&mut r, &work, true);
         r.wait_idle().unwrap();
         for _ in 0..3 {

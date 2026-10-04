@@ -198,7 +198,7 @@ impl LocalToneView {
                 let c = control.clone();
                 let result = gio::spawn_blocking(move || {
                     let mut renderer = gpu
-                        .capture(project, time, c)
+                        .capture(project, c)
                         .map_err(|e| e.to_string())?;
                     renderer.gpu_local_tone_guide()
                 })

@@ -1,4 +1,30 @@
 use super::*;
+use layer_core::{Document, authored::PortableId};
+use crate::layer_tests::placement::{paint_document, target, paint, paint_mut, occurrence_id, set_mask, reveal_all};
+
+fn mask_target(document: &Document) -> SourceTarget {
+    SourceTarget::Coverage(document.scene().occurrence(occurrence_id(document)).unwrap().mask.as_ref().unwrap().source)
+}
+fn mask_raster(document: &Document) -> &RasterRevision {
+    document.target_raster(mask_target(document)).unwrap()
+}
+fn set_color(document: &mut Document, color: DocumentColor) {
+    let root = document.artwork.root;
+    document.artwork.compositions.get_mut(root).unwrap().color = color;
+}
+fn write_capture(capture: &layer_core::ArtworkCapture, bytes: &mut Vec<u8>) -> Result<(),String> {
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    layer_core::package::codec::PreparedPackage::prepare(capture,None,&cancelled)?.write(bytes,&cancelled)
+}
+fn read_document(bytes: Vec<u8>) -> Document {
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let source = layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+    let layer_core::package::codec::OpenOutcome::Candidate {artwork,..} =
+        layer_core::package::codec::open(source,Default::default(),&cancelled).unwrap() else {panic!("Expected editable native raster package")};
+    let document = Document::from_artwork(artwork).unwrap();
+    document.validate(Default::default()).unwrap();
+    document
+}
 use layer_core::color::{SampleDepth, RgbSpace};
 use layer_engine::{
     CanvasEngine, InputProducer, PenEvent, PenPhase, SampleFlags, ViewTransform,
@@ -41,7 +67,7 @@ fn stroke(
         flush(engine);
     }
 }
-fn working(r: &WgpuRasterizer, id: LayerId) -> BTreeMap<TileKey, Vec<u8>> {
+fn working(r: &WgpuRasterizer, id: SourceTarget) -> BTreeMap<TileKey, Vec<u8>> {
     r.raster_textures(id)
         .0
         .into_iter()
@@ -57,9 +83,13 @@ fn backing(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
         .collect()
 }
 fn engine(
-    document: layer_core::Document,
+    mut document: layer_core::Document,
 ) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
-    let r = WgpuRasterizer::new_native_headless(document.color).unwrap();
+    if document.active_target().is_none() {
+        document.working.occurrence = Some(occurrence_id(&document));
+        document.working.target = Some(target(&document));
+    }
+    let r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let (input, consumer) = input_queue(64);
     let mut engine =
         CanvasEngine::new(r, document, consumer, view(), ViewTransform::IDENTITY).unwrap();
@@ -81,25 +111,25 @@ fn engine(
 
 #[test]
 fn partial_bakes_back_tiles_without_publishing_the_layer() {
-    let mut document = layer_core::Document::new("incremental capture", 1280, 768, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.blend_space = layer_core::BlendSpace::Perceptual;
-    document.layers[0].source = Some(layer_core::color::source::rgba8_source([1280, 768], |x, y| {
+    let mut document = layer_core::Document::new(PortableId::random(), 1280, 768, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let root = document.artwork.root;
+    document.artwork.compositions.get_mut(root).unwrap().blend = layer_core::BlendSpace::Perceptual;
+    paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source([1280, 768], |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
-    let photo = document.layers[0].id;
+    let photo = occurrence_id(&document);
     let (_, mut engine) = engine(document);
     let pixels = |engine: &mut CanvasEngine<WgpuRasterizer>| {
         engine.backend_mut().readback_srgb_rgba8().unwrap()
     };
     let original = pixels(&mut engine);
     engine.backend_mut().native_edit.as_mut().unwrap().color_cache_bytes = 4 << 20;
-    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
     let filters = layer_core::SeparationFilters::new(layer_core::bundled_effect_catalog(), 8.).unwrap();
-    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
+    let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let low = plan.operations[0].0;
     engine.insert_with_operations(plan.edits, plan.operations, None).unwrap();
     engine.render_frame().unwrap();
-    let root = engine.document().layer(low).unwrap().raster.clone();
+    let root = engine.document().target_raster(low).unwrap().clone();
     assert!(root.try_data().is_none());
     let r = engine.backend();
     let data = &r.native_edit.as_ref().unwrap().backing[&low];
@@ -116,22 +146,22 @@ fn partial_bakes_back_tiles_without_publishing_the_layer() {
     flush(&mut engine);
     assert!(engine.redo().unwrap());
     flush(&mut engine);
-    assert_eq!(engine.document().layer(low).unwrap().raster.wait_data().unwrap().tiles.len(), 15);
+    assert_eq!(engine.document().target_raster(low).unwrap().wait_data().unwrap().tiles.len(), 15);
     assert_eq!(pixels(&mut engine), actual);
 }
 
 #[test]
 fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
-    use layer_core::{Affine, Figure, FigurePaint, FigureShape, LayerMask, LayerOperation, LayerOperationKind, Point};
+    use layer_core::{Affine, Figure, FigurePaint, FigureShape, RasterOperation, RasterOperationKind, Point};
     use layer_core::color::{RgbColor, f16};
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16] {
             let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("portable paint", 384, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            document.color = color;
-            let id = document.layers[0].id;
+            let mut document = layer_core::Document::new(PortableId::random(), 384, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            set_color(&mut document,color);
+            let id = target(&document);
             let (_, mut live) = engine(document);
-            let empty = backing(&live.document().layers[0].raster);
+            let empty = backing(&paint(live.document()).raster);
             let colors = if depth.is_float() {
                 [[8., -0.125, 2., 0.625], [-0.25, 3., 0.5, 0.375]]
             } else {
@@ -140,37 +170,37 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             };
             let start = Point { x: 64., y: 32. };
             let end = Point { x: 320., y: 96. };
-            let mut kinds = vec![LayerOperationKind::Fill { color: colors[0], alpha_locked: false }];
+            let mut kinds = vec![RasterOperationKind::Fill { color: colors[0], alpha_locked: false }];
             for radial in [false, true] {
                 for transparent in [false, true] {
                     let mut colors = colors;
                     if transparent { colors[1][3] = 0.; }
-                    kinds.push(LayerOperationKind::Gradient { start, end, colors, radial, alpha_locked: false });
+                    kinds.push(RasterOperationKind::Gradient { start, end, colors, radial, alpha_locked: false });
                 }
             }
-            kinds.push(LayerOperationKind::Figure(Figure {
+            kinds.push(RasterOperationKind::Figure(Figure {
                 shape: FigureShape::Rectangle, paint: FigurePaint::Fill,
                 start, end, width: 4., colors, alpha_locked: false, erase: false,
             }));
-            kinds.push(LayerOperationKind::Figure(Figure {
+            kinds.push(RasterOperationKind::Figure(Figure {
                 shape: FigureShape::Rectangle, paint: FigurePaint::Both,
                 start, end, width: 4., colors, alpha_locked: false, erase: false,
             }));
             for kind in kinds {
-                live.append_layer_operation(id, LayerOperation {
+                live.append_raster_operation(id, RasterOperation {
                     placement: Affine::IDENTITY,
-                    coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
+                    coverage: reveal_all(live.document().composition().size, Point::default()),
                     kind: kind.clone(),
                 }).unwrap();
                 flush(&mut live);
-                let pixels = backing(&live.document().layers[0].raster);
+                let pixels = backing(&paint(live.document()).raster);
                 assert_ne!(pixels, empty, "{color:?} {kind:?}");
                 // Independent straight-linear reference, including both sides
                 // of the 256px page boundary and outside the figure.
                 for (x, y) in [(16, 64), (128, 64), (300, 64), (368, 64)] {
                     let expected = match &kind {
-                        LayerOperationKind::Fill { color, .. } => *color,
-                        LayerOperationKind::Gradient { colors: [a, b], radial, .. } => {
+                        RasterOperationKind::Fill { color, .. } => *color,
+                        RasterOperationKind::Gradient { colors: [a, b], radial, .. } => {
                             let p = [x as f64 + 0.5 - 64., y as f64 + 0.5 - 32.];
                             let t = (if *radial { p[0].hypot(p[1]) / 256f64.hypot(64.) }
                                 else { (p[0]*256. + p[1]*64.) / (256.*256. + 64.*64.) }).clamp(0., 1.);
@@ -178,7 +208,7 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
                             std::array::from_fn(|i| if i == 3 { alpha as f32 } else if alpha == 0. { 0. }
                                 else { (((1.-t)*f64::from(a[i])*f64::from(a[3]) + t*f64::from(b[i])*f64::from(b[3])) / alpha) as f32 })
                         },
-                        LayerOperationKind::Figure(f) => if (64..320).contains(&x) {
+                        RasterOperationKind::Figure(f) => if (64..320).contains(&x) {
                             colors[usize::from(f.paint == FigurePaint::Both)]
                         } else { [0.; 4] },
                         _ => unreachable!(),
@@ -204,14 +234,14 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
                     }
                 }
                 assert!(live.undo().unwrap()); flush(&mut live);
-                assert_eq!(backing(&live.document().layers[0].raster), empty);
+                assert_eq!(backing(&paint(live.document()).raster), empty);
                 assert!(live.redo().unwrap()); flush(&mut live);
-                assert_eq!(backing(&live.document().layers[0].raster), pixels);
-                let project = layer_core::Project { document: live.document().clone() };
-                let mut bytes = Vec::new(); project.write(&mut bytes).unwrap();
-                let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-                assert_eq!(loaded.document.color, color);
-                assert_eq!(backing(&loaded.document.layers[0].raster), pixels);
+                assert_eq!(backing(&paint(live.document()).raster), pixels);
+                let capture = live.capture_artwork(0).unwrap();
+                let mut bytes = Vec::new(); write_capture(&capture,&mut bytes).unwrap();
+                let loaded = read_document(bytes);
+                assert_eq!(loaded.composition().color, color);
+                assert_eq!(backing(&paint(&loaded).raster), pixels);
                 assert!(live.undo().unwrap()); flush(&mut live);
             }
         }
@@ -223,23 +253,23 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("native workflow", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            document.color = color;
-            let id = document.layers[0].id;
+            let mut document = layer_core::Document::new(PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            set_color(&mut document,color);
+            let id = target(&document);
             let (mut input, mut live) = engine(document);
             stroke(&mut live, &mut input, 1, 60.);
-            let first = live.document().layers[0].raster.clone();
+            let first = paint(live.document()).raster.clone();
             let native_first = backing(&first);
             assert!(!native_first.is_empty(), "{color:?}");
             let working_first = working(live.backend(), id);
             stroke(&mut live, &mut input, 10, 68.);
-            let second = live.document().layers[0].raster.clone();
+            let second = paint(live.document()).raster.clone();
             let native_second = backing(&second);
             let working_second = working(live.backend(), id);
             assert_ne!(native_first, native_second, "{color:?}");
             assert!(live.undo().unwrap());
             flush(&mut live);
-            assert_eq!(backing(&live.document().layers[0].raster), native_first);
+            assert_eq!(backing(&paint(live.document()).raster), native_first);
             assert_eq!(working(live.backend(), id), working_first, "undo {color:?}");
             assert!(live.redo().unwrap());
             flush(&mut live);
@@ -248,32 +278,33 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
                 working_second,
                 "redo {color:?}"
             );
-            let project = layer_core::Project {
-                document: live.document().clone(),
-            };
+            let capture = live.capture_artwork(0).unwrap();
             let mut bytes = Vec::new();
-            project.write(&mut bytes).unwrap();
-            let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-            assert_eq!(loaded.document.color, color);
-            let (mut reopened_input, mut reopened) = engine(loaded.document);
+            write_capture(&capture,&mut bytes).unwrap();
+            let loaded = read_document(bytes);
+            assert_eq!(loaded.composition().color, color);
+            let (mut reopened_input, mut reopened) = engine(loaded);
             assert_eq!(
-                backing(&reopened.document().layers[0].raster),
+                backing(&paint(reopened.document()).raster),
                 native_second
             );
             assert_eq!(
-                working(reopened.backend(), id),
+                working(reopened.backend(), target(reopened.document())),
                 working_second,
                 "reopen {color:?}"
             );
+            let next = live.document().next_stroke_id();
+            for _ in reopened.document().next_stroke_id().0..next.0 { reopened.allocate_stroke_id(); }
+            assert_eq!(reopened.document().next_stroke_id(), next);
             stroke(&mut live, &mut input, 20, 73.);
             stroke(&mut reopened, &mut reopened_input, 20, 73.);
-            let third = backing(&live.document().layers[0].raster);
+            let third = backing(&paint(live.document()).raster);
             assert_eq!(
                 third,
-                backing(&reopened.document().layers[0].raster),
+                backing(&paint(reopened.document()).raster),
                 "continue {color:?}"
             );
-            assert_eq!(working(live.backend(), id), working(reopened.backend(), id));
+            assert_eq!(working(live.backend(), id), working(reopened.backend(), target(reopened.document())));
             let checkpoint = live.checkpoint();
             let before_recovery = working(live.backend(), id);
             let replacement = WgpuRasterizer::new_native_headless(color).unwrap();
@@ -282,7 +313,7 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
             drop(retired);
             flush(&mut live);
             assert_eq!(live.checkpoint(), checkpoint);
-            assert_eq!(backing(&live.document().layers[0].raster), third);
+            assert_eq!(backing(&paint(live.document()).raster), third);
             assert_eq!(
                 working(live.backend(), id),
                 before_recovery,
@@ -290,7 +321,7 @@ fn native_engine_paint_undo_save_reopen_and_device_replacement_share_canonical_s
             );
             assert!(live.undo().unwrap());
             flush(&mut live);
-            assert_eq!(backing(&live.document().layers[0].raster), native_second);
+            assert_eq!(backing(&paint(live.document()).raster), native_second);
         }
     }
 }
@@ -300,12 +331,10 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
     use layer_core::color::{ColorProfile, source::*};
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for in_place in [false, true] {
-            let mut document = layer_core::Document::new("photo pen", 4353, 769, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            document.color = DocumentColor {
-                space: RgbSpace::Srgb,
-                depth,
-            };
-            document.layers[1].visible = false;
+            let mut document = layer_core::Document::new(PortableId::random(), 4353, 769, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            set_color(&mut document,DocumentColor {space:RgbSpace::Srgb,depth});
+            let paper = document.scene().order()[1];
+            document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
             let mut source = SourceBuilder::new(
                 [4353, 769],
                 SourceInterpretation {
@@ -320,7 +349,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             for _ in 0..769 {
                 source.push_row(&[70, 140, 210].repeat(4353)).unwrap();
             }
-            document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+            paint_mut(&mut document).original = Some(Arc::new(source.finish().unwrap()));
             let (mut input, mut live) = engine(document);
             let r = live.backend_mut();
             let transfer = r.prepare_native_transfer(RgbSpace::Srgb).unwrap();
@@ -329,7 +358,7 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
             brush.color_rgba_linear = [1., 0., 0.7, 1. / 3.];
             live.set_brush(brush).unwrap();
             stroke(&mut live, &mut input, 1, 60.);
-            let stored = backing(&live.document().layers[0].raster);
+            let stored = backing(&paint(live.document()).raster);
             let tile = &stored[&TileKey {
                 plane: RasterPlane::Color,
                 coordinate: [0, 0],
@@ -358,12 +387,13 @@ fn native_gpen_keeps_original_photo_pixels_in_touched_tiles() {
     }
 }
 
-fn packet<'a>(layers: &'a [Layer], reset: bool) -> FramePacket<'a> {
-    FramePacket { view: view(), reset_layers: reset, ..crate::test_support::packet(layers, [256 * 17, 256]) }
+fn packet<'a>(layers: &'a Document, reset: bool) -> FramePacket<'a> {
+    FramePacket { view: view(), reset_layers: reset, ..crate::test_support::packet(layers.scene(), layers.composition().size) }
 }
-fn restored_fixture(r: &mut WgpuRasterizer) -> Vec<Layer> {
+fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     let color = r.document_color();
-    let mut layers = vec![Layer::paint(LayerId(1), "many tiles")];
+    let mut layers = paint_document([256 * 17, 256], "many tiles");
+    set_color(&mut layers,color);
     let mut data = RasterData::default();
     for plane in [
         RasterPlane::Color,
@@ -412,17 +442,18 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Vec<Layer> {
             .collect(),
         watercolor: None,
     };
-    let mut mask = layer_core::LayerMask::reveal_all(LayerId(2), Default::default());
-    mask.raster = RasterRevision::backed(mask_data);
-    layers[0].mask = Some(mask);
-    layers[0].raster = RasterRevision::backed(data);
+    let mut mask = reveal_all(layers.composition().size, Default::default());
+    mask.source.raster = RasterRevision::backed(mask_data);
+    set_mask(&mut layers,mask);
+    paint_mut(&mut layers).raster = RasterRevision::backed(data);
     r.submit(packet(&layers, true)).unwrap();
     layers
 }
-fn mark_changed(r: &mut WgpuRasterizer, layers: &mut [Layer]) {
-    layers[0].raster = RasterRevision::pending();
-    layers[0].mask.as_mut().unwrap().raster = RasterRevision::pending();
-    for id in [LayerId(1), LayerId(2)] {
+fn mark_changed(r: &mut WgpuRasterizer, layers: &mut Document) {
+    paint_mut(layers).raster = RasterRevision::pending();
+    let mask = mask_target(layers);
+    *layers.target_raster_mut(mask).unwrap() = RasterRevision::pending();
+    for id in [target(layers), mask_target(layers)] {
         r.raster
             .as_mut()
             .unwrap()
@@ -442,8 +473,8 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
     };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
-    let before = backing(&layers[0].raster);
-    let mask_before = backing(&layers[0].mask.as_ref().unwrap().raster);
+    let before = backing(&paint(&layers).raster);
+    let mask_before = backing(mask_raster(&layers));
     let scratch = r.native_edit.as_ref().unwrap().storage_bytes();
     for _ in 0..3 {
         mark_changed(&mut r, &mut layers);
@@ -451,21 +482,21 @@ fn native_commit_reuses_scratch_across_color_and_coverage_chunks_without_changin
             std::thread::yield_now();
         }
         r.submit(packet(&layers, false)).unwrap();
-        assert_eq!(backing(&layers[0].raster), before);
+        assert_eq!(backing(&paint(&layers).raster), before);
         assert_eq!(
-            backing(&layers[0].mask.as_ref().unwrap().raster),
+            backing(mask_raster(&layers)),
             mask_before
         );
         assert_eq!(r.native_edit.as_ref().unwrap().storage_bytes(), scratch);
     }
     // An unchanged pending revision reuses every backing ticket, with no copies.
-    let previous = layers[0].raster.wait_data().unwrap();
-    layers[0].raster = RasterRevision::pending();
+    let previous = paint(&layers).raster.wait_data().unwrap();
+    paint_mut(&mut layers).raster = RasterRevision::pending();
     while !r.raster_ready() {
         std::thread::yield_now();
     }
     r.submit(packet(&layers, false)).unwrap();
-    let current = layers[0].raster.wait_data().unwrap();
+    let current = paint(&layers).raster.wait_data().unwrap();
     assert!(
         current
             .tiles
@@ -516,7 +547,7 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
         // promotion even though a later page rejects the whole publication.
         set_pixel(&r, &first, &[0.01234567, 0.2345678, 0.7890123, 1.]);
         let bad = if mask_failure {
-            r.layer_masks.pages[&(LayerId(2), [16, 0])].texture.clone()
+            r.layer_masks.pages[&(mask_target(&layers), [16, 0])].texture.clone()
         } else {
             r.paint_layers[0]
                 .pages
@@ -536,29 +567,29 @@ fn invalid_late_color_or_mask_rejects_every_chunk_without_partial_canonical_adop
                 &[f32::NAN, 0., 0., 1.]
             },
         );
-        let before = working(&r, LayerId(1));
-        let mask_before = working(&r, LayerId(2));
+        let before = working(&r, target(&layers));
+        let mask_before = working(&r, mask_target(&layers));
         mark_changed(&mut r, &mut layers);
         while !r.raster_ready() {
             std::thread::yield_now();
         }
         r.submit(packet(&layers, false)).unwrap();
-        for root in [&layers[0].raster, &layers[0].mask.as_ref().unwrap().raster] {
+        for root in [&paint(&layers).raster, mask_raster(&layers)] {
             for tile in root.wait_data().unwrap().tiles.values() {
                 assert!(tile.wait_backing().is_err(), "all capture chunks must fail");
             }
             assert!(!root.host_backed());
         }
-        assert_eq!(working(&r, LayerId(1)), before);
-        assert_eq!(working(&r, LayerId(2)), mask_before);
+        assert_eq!(working(&r, target(&layers)), before);
+        assert_eq!(working(&r, mask_target(&layers)), mask_before);
         // The last host-backed checkpoint is independent of the failed frame.
-        assert!(checkpoint[0].raster.host_backed());
-        assert!(checkpoint[0].mask.as_ref().unwrap().raster.host_backed());
+        assert!(paint(&checkpoint).raster.host_backed());
+        assert!(mask_raster(&checkpoint).host_backed());
         let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
         replacement.submit(packet(&checkpoint, true)).unwrap();
         assert_eq!(
-            backing(&checkpoint[0].raster),
-            backing(&replacement.raster.as_ref().unwrap().targets[&LayerId(1)].revision)
+            backing(&paint(&checkpoint).raster),
+            backing(&replacement.raster.as_ref().unwrap().targets[&target(&checkpoint)].revision)
         );
     }
 }
@@ -571,14 +602,14 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
     };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
-    let before = working(&r, LayerId(1));
+    let before = working(&r, target(&layers));
     mark_changed(&mut r, &mut layers);
     while !r.raster_ready() {
         std::thread::yield_now();
     }
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());
     let frame = r
-        .encode_native_rasters(&layers, &mut encoder)
+        .encode_native_rasters(layers.scene(), &mut encoder)
         .unwrap()
         .unwrap();
     let tickets: Vec<_> = frame
@@ -588,14 +619,14 @@ fn abandoned_native_frame_fails_roots_and_tile_waiters_without_submitting_edits(
         .collect();
     drop(frame);
     drop(encoder);
-    assert!(layers[0].raster.wait_data().is_err());
-    assert!(layers[0].mask.as_ref().unwrap().raster.wait_data().is_err());
+    assert!(paint(&layers).raster.wait_data().is_err());
+    assert!(mask_raster(&layers).wait_data().is_err());
     assert!(
         tickets
             .iter()
             .all(|tile| matches!(tile.try_backing(), Some(Err(_))))
     );
-    assert_eq!(working(&r, LayerId(1)), before);
+    assert_eq!(working(&r, target(&layers)), before);
 }
 
 #[test]
@@ -622,8 +653,8 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         plane: RasterPlane::Color,
         coordinate: [0, 0],
     };
-    let mut layer = Layer::paint(LayerId(1), "sRGB code/coverage grid");
-    layer.raster = RasterRevision::backed(RasterData {
+    let mut layers = paint_document([256; 2], "sRGB code/coverage grid");
+    paint_mut(&mut layers).raster = RasterRevision::backed(RasterData {
         tiles: [(
             key,
             RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()),
@@ -631,9 +662,8 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         .into(),
         watercolor: None,
     });
-    let mut layers = [layer];
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    let submit = |r: &mut WgpuRasterizer, layers: &[Layer], reset| {
+    let submit = |r: &mut WgpuRasterizer, layers: &Document, reset| {
         r.submit(FramePacket {
             document_extent: [256, 256],
             ..packet(layers, reset)
@@ -641,7 +671,7 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         .unwrap();
     };
     submit(&mut r, &layers, true);
-    let samples = working(&r, LayerId(1));
+    let samples = working(&r, target(&layers));
     for (i, (encoded, actual)) in bytes
         .chunks_exact(4)
         .zip(samples[&key].chunks_exact(16))
@@ -668,12 +698,12 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
         }
     }
     for _ in 0..16 {
-        layers[0].raster = RasterRevision::pending();
+        paint_mut(&mut layers).raster = RasterRevision::pending();
         r.raster
             .as_mut()
             .unwrap()
             .targets
-            .get_mut(&LayerId(1))
+            .get_mut(&target(&layers))
             .unwrap()
             .changed
             .insert([0, 0]);
@@ -681,7 +711,7 @@ fn srgb8_codes_and_coverage_are_independent_through_native_publication() {
             std::thread::yield_now();
         }
         submit(&mut r, &layers, false);
-        assert_eq!(backing(&layers[0].raster)[&key], bytes);
+        assert_eq!(backing(&paint(&layers).raster)[&key], bytes);
     }
 }
 
@@ -753,8 +783,8 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
-    let before = backing(&layers[0].raster);
-    let mask_before = backing(&layers[0].mask.as_ref().unwrap().raster);
+    let before = backing(&paint(&layers).raster);
+    let mask_before = backing(mask_raster(&layers));
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
     mark_changed(&mut r, &mut layers);
@@ -762,7 +792,7 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
     let first = layers.clone();
     let page = r.paint_layers[0].pages.iter().find(|p| p.coordinate == [0, 0]).unwrap().active().texture.clone();
     set_pixel(&r, &page, &[0.; 4]);
-    let mask = r.layer_masks.pages[&(LayerId(2), [0, 0])].texture.clone();
+    let mask = r.layer_masks.pages[&(mask_target(&layers), [0, 0])].texture.clone();
     set_pixel(&r, &mask, &[0.5]);
     mark_changed(&mut r, &mut layers);
     r.submit(packet(&layers, false)).unwrap();
@@ -773,45 +803,45 @@ fn deferred_native_outputs_preserve_versions_and_status_during_following_frames(
     r.submit(packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
     for snapshot in [&first, &second, &layers] {
-        for root in [&snapshot[0].raster, &snapshot[0].mask.as_ref().unwrap().raster] {
+        for root in [&paint(&snapshot).raster, mask_raster(&snapshot)] {
             assert!(root.wait_data().unwrap().tiles.values().all(|t| t.try_backing().is_none()));
         }
     }
     assert_eq!(r.raster_buffers.transfer.load(Ordering::Relaxed), 0);
     drop(presentation);
-    assert_eq!(backing(&first[0].raster), before);
-    assert_eq!(backing(&first[0].mask.as_ref().unwrap().raster), mask_before);
+    assert_eq!(backing(&paint(&first).raster), before);
+    assert_eq!(backing(mask_raster(&first)), mask_before);
     let mut expected = before;
     expected.get_mut(&TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }).unwrap()[..8].fill(0);
     let mut mask_expected = mask_before;
     mask_expected.get_mut(&TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }).unwrap()[..2].copy_from_slice(&32768u16.to_le_bytes());
-    assert_eq!(backing(&second[0].raster), expected);
-    assert_eq!(backing(&second[0].mask.as_ref().unwrap().raster), mask_expected);
-    for root in [&layers[0].raster, &layers[0].mask.as_ref().unwrap().raster] {
+    assert_eq!(backing(&paint(&second).raster), expected);
+    assert_eq!(backing(mask_raster(&second)), mask_expected);
+    for root in [&paint(&layers).raster, mask_raster(&layers)] {
         assert!(root.wait_data().unwrap().tiles.values().all(|t| t.wait_backing().is_err()));
     }
 }
 
 #[test]
 fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_backing() {
-    let mut document = layer_core::Document::new("pending backing", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
+    let mut document = layer_core::Document::new(PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    set_color(&mut document,DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 });
     let (mut input, mut live) = engine(document);
     while !live.backend().raster_ready() { std::thread::yield_now(); }
     let presentation = live.backend().prioritize_raster_presentation();
     stroke(&mut live, &mut input, 1, 60.);
-    let first = live.document().layers[0].raster.clone();
+    let first = paint(live.document()).raster.clone();
     stroke(&mut live, &mut input, 10, 75.);
-    let second = live.document().layers[0].raster.clone();
+    let second = paint(live.document()).raster.clone();
     assert!(!first.host_backed());
     assert!(!second.host_backed());
-    let project = layer_core::Project { document: live.document().clone() };
+    let capture = live.capture_artwork(0).unwrap();
     let (started, ready) = mpsc::channel();
     let save = std::thread::spawn(move || {
         started.send(()).unwrap();
         let mut bytes = Vec::new();
-        project.write(&mut bytes).unwrap();
-        layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap()
+        write_capture(&capture,&mut bytes).unwrap();
+        read_document(bytes)
     });
     ready.recv_timeout(READBACK_TIMEOUT).unwrap();
     assert!(live.undo().unwrap());
@@ -823,12 +853,12 @@ fn pending_native_save_and_immediate_undo_finish_after_presentation_releases_bac
     let first_bytes = backing(&first);
     let second_bytes = backing(&second);
     assert_ne!(first_bytes, second_bytes);
-    assert_eq!(backing(&live.document().layers[0].raster), first_bytes);
+    assert_eq!(backing(&paint(live.document()).raster), first_bytes);
     let saved = save.join().unwrap();
-    assert_eq!(backing(&saved.document.layers[0].raster), second_bytes);
+    assert_eq!(backing(&paint(&saved).raster), second_bytes);
     assert!(live.redo().unwrap());
     flush(&mut live);
-    assert_eq!(backing(&live.document().layers[0].raster), second_bytes);
+    assert_eq!(backing(&paint(live.document()).raster), second_bytes);
 }
 
 #[test]
@@ -837,22 +867,22 @@ fn device_loss_before_deferred_native_backing_keeps_the_last_checkpoint() {
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
     let mut layers = restored_fixture(&mut r);
     let checkpoint = layers.clone();
-    let expected = backing(&checkpoint[0].raster);
+    let expected = backing(&paint(&checkpoint).raster);
     while !r.raster_ready() { std::thread::yield_now(); }
     let presentation = r.prioritize_raster_presentation();
     mark_changed(&mut r, &mut layers);
     r.submit(packet(&layers, false)).unwrap();
     r.device.poll(wgpu::PollType::Wait { submission_index: r.last_submission.clone(), timeout: Some(READBACK_TIMEOUT) }).unwrap();
-    assert!(!layers[0].raster.host_backed());
+    assert!(!paint(&layers).raster.host_backed());
     r.device.destroy();
     drop(presentation);
-    for root in [&layers[0].raster, &layers[0].mask.as_ref().unwrap().raster] {
+    for root in [&paint(&layers).raster, mask_raster(&layers)] {
         assert!(root.wait_data().unwrap().tiles.values().all(|tile| tile.wait_backing().is_err()));
     }
-    assert!(checkpoint[0].raster.host_backed());
+    assert!(paint(&checkpoint).raster.host_backed());
     let mut replacement = WgpuRasterizer::new_native_headless(color).unwrap();
     replacement.submit(packet(&checkpoint, true)).unwrap();
-    assert_eq!(backing(&checkpoint[0].raster), expected);
+    assert_eq!(backing(&paint(&checkpoint).raster), expected);
 }
 
 #[test]
@@ -862,16 +892,16 @@ fn native_in_place_runtime_matches_candidate_fallback_for_mixed_planes() {
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         assert!(r.native_edit.as_ref().unwrap().promoter.is_none(), "in-place feature must be active for this comparison");
         let mut layers = restored_fixture(&mut r);
-        let expected = backing(&layers[0].raster);
-        let mask_expected = backing(&layers[0].mask.as_ref().unwrap().raster);
+        let expected = backing(&paint(&layers).raster);
+        let mask_expected = backing(mask_raster(&layers));
         for in_place in [false, true] {
             let transfer = r.prepare_native_transfer(color.space).unwrap();
             r.native_edit = Some(NativeEdit::with_mode(&r, transfer, in_place));
             mark_changed(&mut r, &mut layers);
             while !r.raster_ready() { std::thread::yield_now(); }
             r.submit(packet(&layers, false)).unwrap();
-            assert_eq!(backing(&layers[0].raster), expected);
-            assert_eq!(backing(&layers[0].mask.as_ref().unwrap().raster), mask_expected);
+            assert_eq!(backing(&paint(&layers).raster), expected);
+            assert_eq!(backing(mask_raster(&layers)), mask_expected);
         }
     }
 }

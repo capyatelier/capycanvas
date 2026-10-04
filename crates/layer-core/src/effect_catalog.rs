@@ -1,6 +1,6 @@
 //! Runtime filter packages. Hosts supply bytes; no files, GPU types, built-in
 //! switches or filter-specific constructors are involved in loading a catalog.
-use crate::{EffectInstance, EffectProgram, EffectShader, EffectValue};
+use crate::{EffectInstance, EffectProgram, EffectShader, EffectValue, EffectView};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{BTreeMap, HashSet},
@@ -78,6 +78,9 @@ impl EffectDefinition {
     }
     pub fn program(&self) -> Arc<EffectProgram> {
         self.program.clone()
+    }
+    pub fn view<'a>(&'a self, values: &'a [EffectValue]) -> EffectView<'a> {
+        EffectView::new(&self.program, values)
     }
     pub fn preview(&self) -> Result<EffectInstance, String> {
         let mut instance = EffectInstance::new(self.program.clone());
@@ -457,7 +460,7 @@ fn gaussian_consumers_admit_extended_sigma_with_bounded_preparation_and_support(
         assert_eq!((lookup.values,lookup.workgroup_size,lookup.workgroups),(129,[256,1,1],[1,1,1]),"{id}");
         assert_eq!(lookup.dependencies.iter().map(|k|k.as_ref()).collect::<Vec<_>>(),["sigma"],"{id}");
         effect.set("sigma",EffectValue::Number(85.)).unwrap();
-        let radii=effect.program.passes.iter().map(|pass|pass.sampling.radius(&effect).unwrap()).collect::<Vec<_>>();
+        let radii=effect.program.passes.iter().map(|pass|pass.sampling.radius((&effect).into()).unwrap()).collect::<Vec<_>>();
         assert_eq!(radii,[255,255],"{id}");assert_eq!(radii.iter().sum::<u32>(),510);
         let encoded=serde_json::to_vec(&effect).unwrap();let restored:crate::EffectInstance=serde_json::from_slice(&encoded).unwrap();
         assert_eq!(restored,effect);assert!(effect.set("sigma",EffectValue::Number(85.1)).is_err(),"{id}");

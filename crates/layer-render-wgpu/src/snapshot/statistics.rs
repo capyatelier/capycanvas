@@ -40,12 +40,12 @@ impl SnapshotGpu {
     pub async fn artwork_statistics(&self, request: ArtworkStatisticsRequest, control: CaptureControl) -> Result<Histogram, String> {
         control.check().map_err(|e| e.to_string())?;
         let (mut snapshot, output) = self.artwork_capture(&request.query, control.clone()).await?;
-        let selection = request.selection.then(|| request.query.document.selection.clone().map(Arc::new)).flatten();
+        let selection = request.selection.then(|| request.query.selection.clone().map(Arc::new)).flatten();
         if request.selection && selection.is_none() { return Err("Select an area to inspect".into()); }
         let extent = snapshot.extent;
         let mut histogram = Histogram::new(snapshot.color());
         if let layer_core::ArtworkSource::EffectInput(id) | layer_core::ArtworkSource::EffectChannels(id) = request.query.source
-            && let Some(effect)=request.query.document.layer(id).and_then(|layer|layer.effect.as_ref())
+            && let Some(effect)=request.query.snapshot.view().effect(id)
                 && matches!(effect.program.id.as_ref(),"curves"|"levels") {
                 histogram.domain = match (effect.choice("domain"),effect.value("hdr_stops")) {
                     (Some("Log HDR"),Some(layer_core::EffectValue::Number(stops)))=>layer_core::color::histogram::HistogramDomain::CurveLog {stops:*stops},

@@ -6,11 +6,15 @@ import android.content.Intent
 import android.net.Uri
 import android.os.ParcelFileDescriptor
 import android.provider.OpenableColumns
+import android.provider.DocumentsContract
+import android.system.Os
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -59,6 +63,65 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     private var exportDestination = 0
     var profilePrompt by mutableStateOf<JSONObject?>(null)
         private set
+    var packagePrompt by mutableStateOf<JSONObject?>(null)
+        private set
+    var packagePreview by mutableStateOf<android.graphics.Bitmap?>(null)
+        private set
+    var packageCopying by mutableStateOf(false)
+        private set
+    private var packageDecision: CompletableDeferred<Pair<Uri,Boolean>?>? = null
+    fun choosePackageCopy(uri: Uri?, preview: Boolean = false) { packageDecision?.complete(uri?.let {it to preview}) }
+    suspend fun showPackage(task: Long, original: Uri?, beforeShow: () -> Unit = {}): Boolean {
+        val summary = withContext(Dispatchers.IO) { Native.projectPackagePrompt(task) }
+        if (summary == "null") return false
+        val preview = withContext(Dispatchers.IO) {
+            val bytes = Native.projectPackagePreview(task)
+            if (bytes.isEmpty()) null else android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size)
+        }
+        val decision = CompletableDeferred<Pair<Uri,Boolean>?>()
+        packageDecision = decision
+        exportCancelled = false
+        beforeShow()
+        packagePreview = preview
+        packagePrompt = JSONObject(summary)
+        var spool: File? = null
+        try {
+            val (uri, previewOnly) = decision.await() ?: return true
+            packageCopying = true
+            if (previewOnly && original != null && withContext(Dispatchers.IO) { samePackageDestination(original, uri) }) {
+                error(JSONObject(summary).getString("destination_error"))
+            }
+            spool = withContext(Dispatchers.IO) {File.createTempFile("capy-package-",if(previewOnly)".png" else ".capy",application.cacheDir)}
+            withContext(Dispatchers.IO) {
+                Native.projectPackageWrite(task,ParcelFileDescriptor.open(spool,ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),previewOnly)
+                if (exportCancelled) throw CancellationException("Drawing copy cancelled")
+                application.contentResolver.openOutputStream(uri,"wt")?.use {out ->
+                    spool!!.inputStream().use {it.copyTo(out)};out.flush()
+                } ?: error("The selected file cannot be written")
+            }
+        } finally {
+            packagePrompt = null; packagePreview = null; packageDecision = null; packageCopying = false
+            withContext(NonCancellable + Dispatchers.IO) {spool?.delete()}
+        }
+        return true
+    }
+    private fun samePackageDestination(original: Uri, destination: Uri): Boolean {
+        if (original.normalizeScheme() == destination.normalizeScheme()) return true
+        if (original.scheme == "file" && destination.scheme == "file") {
+            return runCatching { java.nio.file.Files.isSameFile(File(original.path!!).toPath(), File(destination.path!!).toPath()) }.getOrDefault(false)
+        }
+        if (original.authority == destination.authority &&
+            DocumentsContract.isDocumentUri(application, original) && DocumentsContract.isDocumentUri(application, destination) &&
+            DocumentsContract.getDocumentId(original) == DocumentsContract.getDocumentId(destination)) return true
+        return runCatching {
+            application.contentResolver.openFileDescriptor(original, "r")?.use { source ->
+                application.contentResolver.openFileDescriptor(destination, "r")?.use { target ->
+                    val a = Os.fstat(source.fileDescriptor); val b = Os.fstat(target.fileDescriptor)
+                    a.st_dev == b.st_dev && a.st_ino == b.st_ino
+                } ?: false
+            } ?: false
+        }.getOrDefault(false)
+    }
     private var profileDecision: CompletableDeferred<JSONObject?>? = null
     fun chooseProfile(value: JSONObject?) { profileDecision?.complete(value); profilePrompt = null }
     var opening by mutableStateOf(false)
@@ -71,7 +134,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         private set
     private var exportControl = 0L
     fun cancelExport() {
-        if ((exporting || opening) && !publishing) { exportCancelled = true; profileDecision?.complete(null); if (exportControl != 0L) Native.captureCancel(exportControl) }
+        if ((exporting || opening) && !publishing) { exportCancelled = true; profileDecision?.complete(null); packageDecision?.complete(null); if (exportControl != 0L) Native.captureCancel(exportControl) }
     }
     private var activeId: Pair<Long, Int>? = null
     private val queuedOpen = java.util.ArrayDeque<Uri>()
@@ -250,6 +313,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         Native.projectWork(task, fd, width, height)
                     }
                     if (exportCancelled) { finish(id, false); return@launch }
+                    if (showPackage(task, uri)) { finish(id, false); return@launch }
                     val prompt = withContext(Dispatchers.IO) { Native.projectProfilePrompt(task) }
                     if (prompt != "null") {
                         val decision = CompletableDeferred<JSONObject?>(); profileDecision = decision; profilePrompt = JSONObject(prompt)
@@ -309,7 +373,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     LaunchedEffect(host.drawingTabs.switching) { if(host.drawingTabs.switching)histogramOpen=false }
     if (histogramOpen) HistogramWindow(host) { histogramOpen = false }
     val controller = host.documents
-    if (controller.exporting || controller.opening) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
+    if ((controller.exporting || controller.opening) && controller.packagePrompt == null) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
         properties = androidx.compose.ui.window.PopupProperties(focusable = false)) {
         Surface(shadowElevation = 8.dp, tonalElevation = 4.dp, shape = MaterialTheme.shapes.medium, modifier = Modifier.padding(16.dp)) {
             Row(Modifier.padding(12.dp), verticalAlignment = androidx.compose.ui.Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -318,6 +382,23 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 TextButton(controller::cancelExport, enabled = !controller.publishing && !controller.exportCancelled) { Text(common.getString("cancel")) }
             }
         }
+    }
+    val packageCopy = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-capycanvas")) {uri -> controller.choosePackageCopy(uri)}
+    val packagePreviewExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) {uri -> controller.choosePackageCopy(uri,true)}
+    controller.packagePrompt?.let {summary ->
+        AlertDialog(onDismissRequest = {if(!controller.packageCopying)controller.choosePackageCopy(null)},
+            title = {Text(summary.getString("status"))},
+            text = {Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                controller.packagePreview?.let {Image(it.asImageBitmap(),null,Modifier.fillMaxWidth().heightIn(max=320.dp))}
+                Text(summary.getString("reason"))
+                if(controller.packageCopying)CircularProgressIndicator(Modifier.size(20.dp),strokeWidth=2.dp)
+            }},
+            confirmButton = {Column {
+                if(summary.getJSONObject("capabilities").optBoolean("export"))TextButton({packagePreviewExport.launch("Preview.png")},enabled=!controller.packageCopying,modifier=Modifier.testTag("export-package-preview")) {Text(summary.getString("export_preview"))}
+                TextButton({packageCopy.launch("Copy.capy")},enabled=!controller.packageCopying,modifier=Modifier.testTag("copy-original-package")) {Text(summary.getString("copy_original"))}
+            }},
+            dismissButton = {TextButton({controller.choosePackageCopy(null)},enabled=!controller.packageCopying) {Text(summary.getString("close"))}},
+            modifier = Modifier.testTag("preserved-package-preview"))
     }
     controller.profilePrompt?.let { SourceProfileDialog(host,it, controller::chooseProfile) }
     controller.exportRequest?.let { pending ->

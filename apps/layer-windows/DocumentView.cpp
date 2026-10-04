@@ -24,7 +24,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     static hstring depthValue(int index){return std::array<hstring,4>{L"U8",L"U16",L"F16",L"F32"}.at(index);}
     Dispatch send,report;
     PreviewTransport query;
-    hstring workflowStamp,recoveryStamp;
+    hstring workflowStamp,recoveryStamp,packageStamp;
     bool busyDialog=false,busyCompleted=false,recoveryProgress=false;
     std::function<void()> changed;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
@@ -360,13 +360,40 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             queue.TryEnqueue([packet,image,id]{if(!packet)return;
                 try{auto meta=J::Parse(to_hstring(capy_preview_metadata(packet.get())));if(uint32_t(num(meta,L"id"))!=id)return;
                     uint32_t width=uint32_t(num(meta,L"width")),height=uint32_t(num(meta,L"height"));size_t length=0;auto bytes=capy_preview_bytes(packet.get(),&length);
-                    if(!width||!height||width>512||height>384||length!=size_t(width)*height*4)return;
+                    if(!width||!height||width>1024||height>1024||length!=size_t(width)*height*4)return;
                     Imaging::WriteableBitmap bitmap(width,height);uint8_t* output=nullptr;check_hresult(bitmap.PixelBuffer().as<::Windows::Storage::Streams::IBufferByteAccess>()->Buffer(&output));
                     for(size_t i=0;i<length;i+=4){auto a=bytes[i+3];output[i]=uint8_t((uint32_t(bytes[i+2])*a+127)/255);output[i+1]=uint8_t((uint32_t(bytes[i+1])*a+127)/255);output[i+2]=uint8_t((uint32_t(bytes[i])*a+127)/255);output[i+3]=a;}
                     bitmap.Invalidate();image.Source(bitmap);
                 }catch(hresult_error const&){}
             });
         });
+    }
+    fire_and_forget package(J request){
+        auto lifetime=shared_from_this();showing=true;changed();auto id=uint32_t(num(request,L"id"));auto summary=object(request,L"summary");hstring destination,action=L"close";
+        try{
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.RequestedTheme(str(object(model,L"state"),L"theme")==L"dark"?ElementTheme::Dark:ElementTheme::Light);
+            AutomationProperties::SetAutomationId(dialog,L"package-view");dialog.Title(box_value(str(summary,L"status")));dialog.PrimaryButtonText(str(summary,L"copy_original"));dialog.SecondaryButtonText(flag(object(summary,L"capabilities"),L"export")?str(summary,L"export_preview"):L"");dialog.CloseButtonText(str(summary,L"close"));
+            StackPanel body;body.Spacing(12);body.MaxWidth(640);
+            auto text=[body](hstring value){TextBlock label;label.Text(value);label.TextWrapping(TextWrapping::Wrap);body.Children().Append(label);};text(str(summary,L"reason"));
+            for(auto value:array(summary,L"outputs"))text(str(value.GetObject(),L"name"));
+            if(flag(object(summary,L"capabilities"),L"view")){Image image;image.MaxHeight(384);image.Stretch(Stretch::Uniform);body.Children().Append(image);preview(image,id,0);}
+            dialog.Content(body);presentationChanged=[this]{auto summary=object(object(model,L"windows_document"),L"summary");dialog.Title(box_value(str(summary,L"status")));dialog.PrimaryButtonText(str(summary,L"copy_original"));dialog.SecondaryButtonText(flag(object(summary,L"capabilities"),L"export")?str(summary,L"export_preview"):L"");dialog.CloseButtonText(str(summary,L"close"));};
+            auto result=co_await dialog.ShowAsync();dialog=nullptr;presentationChanged={};
+            if((result==ContentDialogResult::Primary||result==ContentDialogResult::Secondary)&&!stopping){
+                bool exporting=result==ContentDialogResult::Secondary;Pickers::FileSavePicker save(window.AppWindow().Id());
+                if(exporting){
+                    std::wstring name(str(request,L"name"));auto extension=name.find_last_of(L'.');if(extension!=std::wstring::npos&&extension!=0)name.resize(extension);
+                    save.DefaultFileExtension(L".png");save.SuggestedFileName(hstring(name));save.FileTypeChoices().Insert(str(summary,L"export_preview"),single_threaded_vector<hstring>({L".png"}));
+                }else{
+                    save.DefaultFileExtension(L".capy");save.SuggestedFileName(str(request,L"name"));save.FileTypeChoices().Insert(str(object(catalog,L"delivery"),L"drawing_type"),single_threaded_vector<hstring>({L".capy"}));
+                }
+                picker=save.PickSaveFileAsync();auto selected=co_await picker;picker=nullptr;
+                if(selected){destination=selected.Path();action=exporting?L"export_preview":L"copy_original";}
+            }
+        }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
+        dialog=nullptr;presentationChanged={};
+        if(!stopping)send(to_string(O({{L"operation",S(L"package")},{L"id",N(id)},{L"action",S(action)},{L"path",action!=L"close"?S(destination):JsonValue::CreateNullValue()}}).Stringify()));
+        showing=false;changed();
     }
     fire_and_forget workflow(J request){
         auto lifetime=shared_from_this();auto id=uint32_t(num(request,L"id"));
@@ -611,7 +638,8 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             ProgressRing progress;progress.IsActive(true);progress.Width(48);progress.Height(48);dialog.Content(progress);co_await dialog.ShowAsync();
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;presentationChanged={};
-        if(!stopping&&!busyCompleted&&str(state,L"type")==L"opening_busy")send(to_string(O({{L"operation",S(L"cancel")},{L"id",N(num(state,L"id"))}}).Stringify()));
+        if(!stopping&&!busyCompleted&&str(state,L"type")==L"package_busy")send(to_string(O({{L"operation",S(L"package")},{L"id",N(num(state,L"id"))},{L"action",S(L"close")},{L"path",JsonValue::CreateNullValue()}}).Stringify()));
+        else if(!stopping&&!busyCompleted&&str(state,L"type")==L"opening_busy")send(to_string(O({{L"operation",S(L"cancel")},{L"id",N(num(state,L"id"))}}).Stringify()));
         else if(!stopping&&!busyCompleted)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(num(state,L"id"))},{L"action",O({{L"op",S(L"cancel")}})}}).Stringify()));
         busyDialog=false;showing=false;changed();
     }
@@ -627,7 +655,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             if(recoveryProgress)dialog.Title(box_value(recovery(L"restoring")));
         }
         if(creationPresetsChanged)creationPresetsChanged();
-        if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"&&str(object(model,L"windows_document"),L"type")!=L"opening_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
+        if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"&&str(object(model,L"windows_document"),L"type")!=L"opening_busy"&&str(object(model,L"windows_document"),L"type")!=L"package_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
         if(recoveryProgress&&!flag(object(model,L"windows_recovery"),L"restoring")){if(dialog)dialog.Hide();}
         if(stopping||blocked||showing)return;
         auto recovery=object(model,L"windows_recovery");auto offer=str(recovery,L"offer"),failure=str(recovery,L"error");
@@ -637,7 +665,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
             auto stamp=offer+L"/"+failure+L"/"+(flag(recovery,L"closing")?L"close":L"open");if(stamp!=recoveryStamp){recoveryStamp=stamp;recovering(recovery);return;}
         }
         auto document=object(model,L"windows_document");
-        if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}
+        if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"||str(document,L"type")==L"package_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}
+        if(str(document,L"type")==L"package"){
+            auto stamp=to_hstring(uint32_t(num(document,L"id")))+L"/"+to_hstring(uint32_t(num(document,L"serial")));if(stamp!=packageStamp){packageStamp=stamp;package(document);}return;
+        }
         if(str(document,L"type")==L"workflow"){
             auto stamp=to_hstring(uint32_t(num(document,L"id")))+L"/"+to_hstring(uint32_t(num(document,L"serial")));
             if(stamp!=workflowStamp){workflowStamp=stamp;workflow(document);}return;

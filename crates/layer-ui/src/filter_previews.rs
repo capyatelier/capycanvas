@@ -298,7 +298,7 @@ mod tests {
     fn session() -> UiSession<Recorder> {
         let mut session = UiSession::new(
             Recorder::default(),
-            Document::new("preview", 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [512, 512],
             crate::Platform::Gtk,
         )

@@ -168,3 +168,10 @@ documents-refusal-switch-gpu-changed = A GPU mudou durante a troca de desenhos; 
 documents-refusal-painting-unavailable = A pintura não está disponível. Este desenho ainda pode ser salvo ou fechado.
 documents-refusal-recovery-service-unavailable = Serviço de recuperação indisponível.
 documents-refusal-recovery-in-progress = Aguarde a recuperação terminar.
+documents-package-preserved = This drawing can be viewed, but cannot be edited.
+documents-package-recovered = Only a preview of this drawing could be recovered.
+documents-package-failed = This drawing could not be opened.
+documents-package-copy-original = Copy Original File…
+
+documents-package-export-preview = Export Preview Image…
+documents-package-choose-different = Choose a different file.

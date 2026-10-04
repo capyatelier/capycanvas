@@ -8,6 +8,7 @@ fn native_fullscreen_prediction() {
     let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
     crate::install_actions(&app, &windows);
     app.activate_action("new-window", None);
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "prediction window mapped");
     let w = windows.borrow()[0].clone();
     w.window.fullscreen();
     pump(400);

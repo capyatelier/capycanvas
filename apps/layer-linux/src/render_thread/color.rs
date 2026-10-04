@@ -1,14 +1,14 @@
 //! One cancellable color candidate, prepared on the existing GPU owner/device.
 use super::*;
-use layer_core::{BrushSnapshot, Project, color::DocumentColor};
+use layer_core::{BrushSnapshot, Document, color::DocumentColor};
 use std::time::Instant;
 
 pub(super) struct Request {
     id: u64,
-    project: Project,
+    project: Document,
+    context: EvaluationContext,
     brush: BrushSnapshot,
     view: ViewState,
-    time: f32,
     cancelled: Arc<AtomicBool>,
     reply: mpsc::Sender<Result<(), String>>,
 }
@@ -28,11 +28,11 @@ pub(super) struct Prepared {
 impl RenderWorker {
     pub(crate) fn prepare_color(
         &mut self,
-        project: Project,
+        project: Document,
+        mut context: EvaluationContext,
         brush: BrushSnapshot,
         view: ViewState,
-        time: f32,
-    ) -> Result<(), String> {
+        ) -> Result<(), String> {
         if self.pending_color.is_some() {
             return Err("A color renderer is already being prepared".into());
         }
@@ -41,15 +41,16 @@ impl RenderWorker {
             .checked_add(1)
             .ok_or("Color requests exhausted")?;
         let id = self.next_color_request;
-        let color = project.document.color;
+        let color = project.composition().color;
+        context.retain_effects(&project.artwork);
         let cancelled = Arc::new(AtomicBool::new(false));
         let (reply, receiver) = mpsc::channel();
         self.send(Command::PrepareColor(Box::new(Request {
             id,
             project,
+            context,
             brush,
             view,
-            time,
             cancelled: cancelled.clone(),
             reply,
         })))
@@ -166,7 +167,7 @@ impl Worker {
             .join("shaders");
         let mut renderer = self.renderer.color_candidate_staged_cached(
             &cache,
-            request.project.document.color,
+            request.project.composition().color,
         )
         .map_err(error)?;
         renderer.configure_ui_previews(self.view_color.space()).map_err(error)?;
@@ -174,7 +175,7 @@ impl Worker {
             .resize_surface(request.view.width_px, request.view.height_px)
             .map_err(error)?;
         renderer
-            .prepare_startup(&request.project.document, &request.brush, false)
+            .prepare_startup(&request.project, &request.brush, false)
             .map_err(error)?;
         renderer.finish_startup_cache();
         while !renderer.poll_startup().map_err(error)?.brush_ready {
@@ -186,27 +187,24 @@ impl Worker {
             std::thread::sleep(Duration::from_millis(2));
         }
         check()?;
-        let document = &request.project.document;
-        let restored: Vec<_> = document
-            .layers
-            .iter()
-            .flat_map(|l| {
-                std::iter::once((l.id, l.raster.clone()))
-                    .chain(l.masks().map(|m| (m.id, m.raster.clone())))
-            })
-            .collect();
+        let document = &request.project;
+        renderer.seed_evaluation_context(request.context.clone());
+        let scene = document.scene();
+        let restored: Vec<_> = scene.targets().filter_map(|t| scene.raster(t).map(|r| (t,r.clone()))).collect();
         let packet = FramePacket {
             commit_rasters: true,
-            time_seconds: request.time,
+            time_seconds: request.context.elapsed,
             view: request.view,
-            document_extent: [document.width, document.height],
-            layers: &document.layers,
+            document_extent: document.composition().size,
+            scene,
+            inspect_mask: None,
+            selection_visibility: Some(&document.working.selection_visibility),
             dabs: &[],
             dab_batches: &[],
             restore_rasters: &restored,
             reset_layers: true,
             composite_all: true,
-            blend_space: document.blend_space,
+            blend_space: document.composition().blend,
         };
         while !renderer.raster_dependencies_ready(packet) {
             check()?;
@@ -236,7 +234,7 @@ impl Worker {
             self.hdr_encoding.unwrap_or_else(|| self.view_color.surface()),
         )
         .map_err(error)?;
-        presenter.set_hdr_view(&renderer, request.project.document.color.depth.is_float().then_some(request.project.document.sdr_rendition), if self.preview_sdr { 1. } else { self.display_headroom }).map_err(error)?;
+        presenter.set_hdr_view(&renderer, request.project.composition().color.depth.is_float().then_some(request.project.output().sdr), if self.preview_sdr { 1. } else { self.display_headroom }).map_err(error)?;
         presenter.prepare_overviews(&renderer);
         check()?;
         Ok(Prepared {

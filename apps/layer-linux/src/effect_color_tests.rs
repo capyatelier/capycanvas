@@ -1,6 +1,6 @@
 //! Tagged effect definitions through retained GTK controls and native archives.
 use super::new_photo::{capture_ui, combo, ready, response};
-use super::place_source::snapshot;
+use super::place_source::authored_snapshot as snapshot;
 use super::*;
 use layer_core::{
     EffectValue, GradientStop,
@@ -33,7 +33,7 @@ fn value(w: &Rc<Workspace>, key: &str) -> EffectValue {
 fn curve_points(w: &Rc<Workspace>, key: &str) -> Vec<[f32; 2]> {
     let session = ui_session(w);
     let document = session.engine().document();
-    let EffectValue::Curve(points) = document.layer(document.active_layer).unwrap().effect.as_ref().unwrap().value(key).unwrap() else { panic!("curve property") };
+    let EffectValue::Curve(points) = active_effect(document).value(key).unwrap() else { panic!("curve property") };
     points.clone()
 }
 fn curve_graph(w: &Rc<Workspace>, key: &str) -> gtk::Widget {
@@ -132,7 +132,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.EffectColors");
     let mut project = new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
@@ -188,12 +188,11 @@ fn native_effect_colors_gradients_and_retained_controls() {
     });
     ready(&w);
     let current =
-        layer_core::Project::read(std::io::Cursor::new(snapshot(&w)), Default::default()).unwrap();
-    let mut previous =
-        layer_core::Project::read(std::io::Cursor::new(&before), Default::default()).unwrap();
-    previous.document.revision = current.document.revision;
+        open_native_document(std::io::Cursor::new(snapshot(&w)));
+    let previous =
+        open_native_document(std::io::Cursor::new(&before));
     assert_eq!(
-        current, previous,
+        artwork_manifest(&current), artwork_manifest(&previous),
         "undo restores all stored state; revision remains monotonic"
     );
     w.dispatch(UiAction::Invoke {
@@ -265,8 +264,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
     let reopened = Workspace::with_project(
         &app,
         Some((
-            layer_core::Project::read(std::io::Cursor::new(saved.clone()), Default::default())
-                .unwrap(),
+            open_native_document(std::io::Cursor::new(saved.clone())),
             None,
         )),
     );
@@ -377,12 +375,11 @@ fn native_curve_graph_numbers_pages_and_history() {
     native.click(screen_point(&graph, &w.window, [0.5, 0.5]));
     assert_eq!(state(&w).layer_properties.controls.iter().find(|c| c.key == key).unwrap().curve.as_ref().unwrap().selected, Some(1));
     assert_eq!(curve_points(&w, key), vec![[0., 0.], [0.5, 0.5], [1., 1.]], "zero-motion selection retains exact knots");
-    let current = layer_core::Project::read(std::io::Cursor::new(snapshot(&w)), Default::default()).unwrap();
-    let mut original = layer_core::Project::read(std::io::Cursor::new(before), Default::default()).unwrap();
-    original.document.revision = current.document.revision;
-    assert_eq!(current.document.layers, original.document.layers, "point selection does not change layer values");
-    assert_eq!(current.document.sdr_rendition, original.document.sdr_rendition, "point selection does not change rendition");
-    assert!(current == original, "point selection does not change stored values");
+    let current = open_native_document(std::io::Cursor::new(snapshot(&w)));
+    let original = open_native_document(std::io::Cursor::new(before));
+    assert_eq!(artwork_manifest(&current), artwork_manifest(&original), "point selection does not change layer values");
+    assert_eq!(current.output().sdr, original.output().sdr, "point selection does not change rendition");
+    assert_live_artwork_eq(&current, &original);
     for axis in ["input", "output"] {
         let control = state(&w).layer_properties.controls.into_iter().find(|c| c.key == key).unwrap().curve.unwrap();
         let expected = if axis == "input" { control.input.unwrap() } else { control.output.unwrap() };
@@ -585,8 +582,8 @@ fn native_curve_graph_numbers_pages_and_history() {
     capture_ui(&w, &output, "curves-hdr.png");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"curves-hdr"}])); }
     let saved = snapshot(&w);
-    let reopened = layer_core::Project::read(std::io::Cursor::new(&saved), Default::default()).unwrap();
-    assert_eq!(reopened.document.layers, ui_session(&w).engine().document().layers);
+    let reopened = open_native_document(std::io::Cursor::new(&saved));
+    assert_live_artwork_eq(&reopened, ui_session(&w).engine().document());
     native.finish();
     w.window.destroy(); pump(100);
 }

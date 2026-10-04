@@ -1,222 +1,96 @@
-# Editable raster projects
+# Editable artwork and saving
 
 [Technical documentation](../README.md)
 
-`layer-core::Project` stores editable `.capy` drawings. GTK uses the raster
-container described here. Other host integration and qualification remain
-outstanding. Profiled PNG/JPEG/TIFF exports transform a copy of the composition;
-they are separate from the editable project.
+`.capy` saves typed authored artwork in the lossless
+[Capy package](capy-package.md). `ArtworkCapture` and `PreparedPackage` are the
+shared capture and writer interfaces. Every host uses the same record adapters;
+there is no direct `Document` serialization or separate Web artwork schema.
+Photo export is a separate operation that renders a captured output.
 
-## Pixels and revisions
+## Authored and working state
 
-`DocumentColor` records one of sRGB, Display P3, Adobe RGB or ProPhoto RGB and
-independent integer8/integer16 SDR depth. The GTK working renderer uses linear
-Float32 math; editing and effect processing domains are independent of stored
-precision. No FP16 working buffer is an implicit integer16 boundary.
+An artwork contains compositions, ordered stacks, placed occurrences, paint and
+coverage sources, effect applications and definitions, saved selections, guides
+and outputs. Occurrences own placement, opacity, masks, clipping and names.
+Sources own original images, sparse raster revisions and material state. See the
+[authored model](authored-model.md) for field ownership and editable validation.
+Hidden and unplaced content remains authored work and is validated and saved.
 
-GTK paint stores straight profile-encoded RGB and linear coverage at the declared
-integer depth in all four spaces, including sRGB8. Working composition associates
-RGB in linear light. Mask/wetness backing uses linear integer coverage at the
-document depth. Descriptors identify each stored plane.
+Working selection, saved-selection overlay visibility, editing targets, camera,
+preferences, GPU handles, active
+contacts and undo history stay outside the portable manifest. Saved selection
+objects and initial mask coverage are authored data. Embedded effect definitions
+retain their exact program and keyed values independently of the installed
+catalog. Output contexts preserve captured integrated effect phases.
 
-Hosts awaiting native integration still produce an explicit sRGB8 attachment
-layout: `sRGB_encode(linear_RGB × alpha)` plus linear alpha. Shared storage accepts
-that descriptor only for sRGB8 color planes; it is no longer inferred from the
-document mode. The normalized-attachment renderer rejects native straight tiles
-instead of uploading them with the wrong alpha semantics. Integrating other hosts
-remains separate work requiring approval.
+An original image retains its independent extent, channels, depth, profile and
+resolution. Rasterization replaces that original with document-space samples
+without discarding its extent, painted overrides or placement. Undo can retain
+the original owner. Assign and Convert publish prepared backing, interpretation
+and history together; failed admission leaves the current document unchanged.
 
-A tiled image can be an **Original** with its independent RGB/gray/CMYK samples,
-integer depth, profile bytes or explicit assumption, or **Rasterized** RGBA pixels
-in the document's builtin profile and depth. Rasterization converts the original
-image without cropping its extent or replacing painted overrides, masks or layer
-placement. The rasterized image is no longer offered as an original for profile
-repair. Its original survives only through retained undo history; history is not
-saved in the project. Rasterized-image interpretation must match the document.
+Canvas size is a window over source-local domains. Cropping does not discard
+retained pixels outside the canvas. Transforms retain geometry until explicitly
+applied to pixels; masks retain their own coverage sources and placement.
+Watercolor material planes and edge settings survive saving because they affect
+composition and future painting.
 
-GTK document color changes publish completed backing, mode and history atomically
-after preparing the matching GPU configuration. Assign changes the interpretation
-of committed RGB numbers; Convert transforms editable backing, including full
-rasterized image extents. Retained originals preserve their independent samples
-and profiles. Bit depth changes rescale scalar coverage without gamma or dithering;
-optional 8-bit dithering applies only to RGB. Undo/Redo restores exact backing and
-the previous mode. A flattened conversion creates a separate one-layer drawing;
-the layered original stays open. These operations do not add serialized history.
+## Lossless storage
 
-Each layer or mask owns an immutable sparse raster revision. Tile size is 256².
-Changed physical pages are captured at a completed contact or raster-operation
-boundary. Unchanged tile backing is shared across revisions, history and saves.
-Undo/redo restores changed pages directly. Fills, gradients, figures, Apply mask
-and transforms are transient submission commands; their recipes and historical
-brush contacts are not stored. Embedded live effects retain their exact WGSL,
-parameters and metadata and remain editable after reopening.
+Raster tiles use bounded raw LZ4 blocks. Multibyte channels use reversible byte
+shuffling before compression. Integer samples, finite float bit patterns, hidden
+RGB and scalar coverage remain exact; saving does not quantize image or channel
+data. Selection coverage uses binary compressed chunks instead of JSON arrays.
+ICC, photo metadata, shader code and LUT resources use lossless LZ4 when smaller.
 
-The project also retains dimensions, layer/group order and properties, source
-images, masks, selection, rulers, references, allocators and the edit target.
-A document opened from a photo keeps that photo's descriptive metadata (see
-[Photo metadata](#photo-metadata)).
-The canvas is a window over each layer's local extent. A layer may store the
-extent a canvas crop left behind (`properties.extent`), so tiles outside the canvas
-are saved and reappear when the canvas grows; they count toward the tile limit.
-Per-contact reservoirs, prediction, accumulation coverage, UI preferences, GPU
-handles, source filenames and undo history are excluded. Watercolor wetness and
-live edge settings are committed because they affect composition and later paint.
+Unchanged immutable resources retain their IDs, encoding and compressed bytes
+across snapshots and saves. GPU caches follow the
+[resource identity contract](authored-model.md#source-and-material-resources);
+ordinary installation does not decode pixels to compute a hash.
+The package reader checks transport integrity, bounded decoding and semantic
+validity before editable adoption. Unknown required semantics remain preserved
+with the original package; they never become empty artwork. Preserved and
+recovered views can copy the original or export a verified preview as exact PNG
+bytes to a different destination. Neither action adopts an editable document.
 
-## Container and validation
+The writer streams indexed resources through bounded I/O. ZIP members are STORED
+because heavy resources already carry their own lossless encoding. The
+[package contract](capy-package.md) specifies ZIP64, strict references, byte
+layouts, limits, ancillary preservation and unsupported-content outcomes.
 
-The header is the twelve bytes `CAPYRASTER\x0f\0`, followed by a little-endian
-u64 metadata length, a 32-byte SHA-256 metadata digest, JSON metadata and payload.
-The metadata indexes raster targets, tile coordinates/planes, unique compressed
-blobs and image roles/interpretations. Payload offsets are relative to the payload start.
-Only version 15 is accepted, including recovery files. Earlier pre-release
-containers are rejected; there is no compatibility reader.
+## Capture, publication and recovery
 
-Effect resources have a typed binary index. Bindings identify a layer, parameter
-key and value/default role; descriptors carry the table size, domain, title and
-SHA-256 digest. Unique canonical LUT payloads follow raster blobs, source
-profiles and photo metadata. The reader validates every owner, role, descriptor,
-byte count, offset and asset budget before reading payloads, then verifies each
-unique payload once and shares its storage across aliases. Inline unresolved
-resource values are refused. The private Web worker transport carries the same
-bindings plus bounded binary blocks; verified worker results adopt validated
-storage without repeating table scans on the input thread.
+The ordered editor owner captures immutable artwork roots, its checkpoint and
+working generation. The renderer supplies the exact evaluation context. Pending
+raster publications retain their owners while workers await backing; failed
+backing remains a failure for all dependent snapshots. Accepted jobs, undo/redo
+and parked tabs retain resources independently of the active renderer.
 
-Layer placement stores an outer homography, an optional immutable cubic mesh
-and one interpolation choice. The mesh stores its affine source frame,
-nonuniform unit breakpoints on both axes and its control net. Each axis has at
-most 32 cells, with adjacent breakpoints separated by at least 1/65536. Splits
-preserve the represented surface rather than fitting it onto a new grid.
-Outer edits preserve the mesh root. The complete map must be finite and
-conditioned over its covered domain before adoption.
+A manual save acknowledges only the captured checkpoint after successful host
+publication. Painting can continue during writing, and newer work stays modified.
+Undo/Redo compares exact checkpoint identity. Cancellation, failure and stale
+completion cannot acknowledge a different document or newer edits. Source-only
+saves are valid; an optional preview must match both the checkpoint and captured
+output context and is never required to preserve editable content.
 
-Masks store a homographic pre-map and their own optional local extent. Linked
-masks follow the owner's winning source coordinates; independent masks keep
-their document-space placement. Baking mask coverage does not enlarge or
-replace the owner's source, raster domain or material planes. Linked masks
-under nonlinear owners bake with that owner in one edit. Undo history charges
-shared mesh roots, control nets and breakpoint arrays once; history is not
-serialized.
+Hosts perform picker and storage operations. Local atomic writers publish through
+a temporary file and replacement; provider transports retain their actual
+platform guarantees. Non-seekable input is spooled into private bounded storage.
+Web workers use the shared resource transfer and stream to private browser
+storage before publication, preserving the original Blob for unsupported files.
 
-The document blend space is `Linear` or `Perceptual`; float documents use
-`Linear`. Embedded filters record their read space, and catalog labels keep
-stable option values separate from display labels. Localization never rewrites
-stored layer names, option values or pixels.
-
-Tile encoding is one lossless LZ4 block per tile, without a
-frame header or prepended size. The pixel descriptor determines the exact decoded
-size, bounded to 1 MiB; the library's compression bound caps stored bytes. Painted
-and imported tiles use the same `lz4_flex` encoder with safe, checked Rust paths.
-There is no native codec, vendor patch, compression-level policy or codec dispatch.
-Multibyte U16/F16/F32 samples use reversible byte-plane shuffling; the SHA-256 tile
-digest covers the descriptor and original decoded bytes, before shuffling.
-Reconstruction uses fixed-width loops for the validated sample layout; every
-decode still checks that digest and validates floating-point samples.
-Image profiles are binary payloads with independent hashes; builtins are explicit
-identifiers. There are no paths to extract.
-
-Identical tile blobs are deduplicated in a save. Repeated saves reuse immutable
-compressed backing without readback, conversion or recompression. The writer
-streams payload after indexing; it does not build another full archive in RAM.
-Readers reject malformed/unsupported headers, descriptors, references, duplicate
-keys, noncanonical offsets, truncated or trailing data, integrity failures and
-unused blobs before adopting a candidate. The former `CAPYPROJECT` codec is gone,
-and earlier containers, including v4/v5 Zstd and v6 files, are unsupported. The
-project format remains subject to further incompatible changes.
-
-Selection masks use indexed, zero-padded 64 KiB chunks of little-endian packed
-words with the coverage descriptor. The index preserves extent, bounds and byte
-or nibble coverage; affine placement and inversion stay in document
-metadata. Current selections, saved selection layers and initial layer masks
-share one immutable allocation when they reference the same mask. Coverage never
-expands into JSON numeric arrays. Chunk padding, bounds, descriptors, references
-and the decoded selection budget are checked before adoption.
-
-Default decoded limits are 64 MiB metadata, 512 MiB sources, 1 GiB raster data,
-16384 tile instances, 32768 pixels per axis and 4096 layers. Repeated references
-to one compressed blob still count as separate physical tile instances. Device
-limits and shader/resource preparation remain separate checks during opening.
+Recovery publication is separate from manual-save acknowledgement. Current
+recovery writes ordinary artwork packages and retains its existing policy.
+Resource enumeration does not require archive assembly, so later session and
+bounded-history capture can use the same owners and generations. The
+[automatic recovery plan](../development/autorecovery.md) remains separate work.
 
 ## Photo metadata
 
-Opening a photo reads its descriptive metadata into the document:
-
-- **Exif:** IFD0's description, make, model, software, date, artist and
-  copyright, the Exif directory (camera settings, lens, dates) and the GPS
-  directory. It is stored as one little-endian TIFF block. Orientation and
-  print density are applied on open, and maker notes, interoperability data,
-  thumbnails and stale pixel dimensions are left out.
-- **XMP:** the packet from JPEG APP1, PNG iTXt, TIFF tag 700, WebP, and AVIF or
-  HEIF `mime` items. An unreadable packet is left out.
-- **IPTC-IIM:** the records from JPEG APP13 or TIFF tag 33723. Export does not
-  write them.
-
-The three blocks share a 64 MiB allowance; a block that does not fit is left
-out, and none of them stops a photo from opening. Imports, pastes and new
-drawings never change a document's metadata. The manifest's optional
-`metadata` index records each block's offset, size and SHA-256 digest; the
-blocks follow the source profiles in the payload and are verified on reading.
-
-## Submission, recovery and durability
-
-These are distinct boundaries:
-
-- A frame submission orders drawing and changed-tile copies on the GPU queue.
-- A raster revision becomes host-backed when its readbacks and lossless
-  compression finish. Failed/abandoned backing stays an error for every owner.
-- A manual save becomes durable only after successful atomic publication by the
-  host. Capture or autosave never acknowledges a manual save checkpoint.
-
-GTK transfers immutable roots to its GPU owner. Native commits retain at most
-1 GiB of immutable integer output per publication, allowing a full 60 MP U16
-photo plus linked mask. Readback mapping/compression runs on a separate worker,
-transferring at most 16 MiB at a time after canvas presentation submission.
-Admission allows at most 16 jobs and requires earlier pending storage below
-240 MiB, reserving room for the next publication. Total live pending output plus
-one transfer is bounded by 1.25 GiB; the separate 64 MiB spare pool reuses
-outputs and unmapped transfer buffers. These are ceilings, not eager allocations.
-The mapped-only host path retains 256 MiB per frame and 512 MiB pending staging.
-Compression copies at most four chunks into cached CPU memory (64 MiB scratch)
-and runs at most four compression jobs per capture, including within smaller
-chunks. Capture pressure defers pen-up/correction/operation boundaries; ordinary
-move frames continue. The separate native frame mailbox stays bounded to two.
-History retains at most 256 edits within a conservative 512 MiB backing/metadata budget,
-excluding current document ownership. No precision is reduced to fit a budget.
-Before admitting a larger native output, its revision records the pending byte
-reservation shared by all owners. Once the index is published, history charges
-actual tile identities and layouts instead; completed compression replaces raw
-sample reservations with retained blob sizes.
-Changes to retained sources are admitted in both Undo and Redo directions before
-publication. An oversized source edit fails without changing the document or
-existing history. Import, source repair and rasterization also validate aggregate
-retained-source ownership before publishing; provisional layer IDs are allocated
-only after validation. Pending raster transactions still use the existing capture
-reservations; combined source/raster/history accounting remains under qualification.
-
-Contact reconstruction is limited to the active contact and the most recently
-completed contact's two-second correction window. Starting a new contact,
-editing document metadata, or navigating undo/redo closes the late-correction
-window. Accepted corrections replace the current raster root without adding an
-undo step; earlier save snapshots stay immutable. Live input is limited to
-131072 points and 32 predictions. Exceeding the contact budget cancels the
-uncommitted contact with an error.
-
-## GTK file workflow
-
-New/Open create another window, preserving the current drawing if loading or GPU
-startup fails. Save/Save As snapshots the last committed boundary even while a
-stroke is active; that active stroke keeps the document modified. Workers await
-pending backing and perform validation and file I/O. Cancelled/failed saves do
-not acknowledge checkpoints. Undoing to a successfully saved checkpoint clears
-modified state unless active input or recovered unsaved work remains.
-
-Close waits for interactions to finish and rechecks the saved checkpoint after
-an asynchronous save. Its Save/Discard/Cancel decisions remain shared Rust policy.
-Local saves write a sibling temporary file, sync its contents, rename it over the
-destination and sync the containing directory. Failure before replacement retains
-the previous destination; a publication/sync failure never reports a clean save.
-
-GTK autosave attempts a private checkpoint every 15 seconds when modified, with
-one file worker per window. It uses the same immutable revision model and atomic
-writer. A failed capture/write retains the previous copy. Startup offers copies
-from terminated processes for recovery; recovery opens a new, modified document
-requiring an explicit Save. Active GPU-only samples are not promised recoverable.
+Opening a photo retains admitted Exif, XMP and IPTC blocks as immutable resources.
+Orientation and print density are applied during import; stale dimensions and
+thumbnails are excluded from the descriptive Exif block. The three blocks share
+a 64 MiB import allowance. Imports, pastes and new drawings do not replace the
+current drawing's descriptive metadata. The package preserves the exact admitted
+bytes, while photo export applies its separate metadata delivery policy.

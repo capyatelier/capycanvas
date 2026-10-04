@@ -8,7 +8,7 @@ use std::{collections::{BTreeMap, BTreeSet}, sync::{Mutex, atomic::AtomicUsize}}
 
 fn identity(n: u128) -> PortableId { PortableId::from_bytes(n.to_be_bytes()) }
 fn checkpoint(artwork: &Artwork) -> CaptureCheckpoint {
-    CaptureCheckpoint {document:artwork.id,session_generation:3,artwork_generation:7,working_generation:11,edit_checkpoint:13}
+    CaptureCheckpoint {owner:17,document:artwork.id,session_generation:3,artwork_generation:7,working_generation:11,edit_checkpoint:13}
 }
 fn capture(artwork: &Artwork) -> ArtworkCapture { artwork.capture(checkpoint(artwork)).unwrap() }
 fn preview() -> Preview { Preview::from_rgba([2,1],Arc::from([255,0,64,0,0,128,255,255])).unwrap() }
@@ -17,7 +17,7 @@ fn serialize(prepared: &PreparedPackage) -> Vec<u8> {
 }
 fn prepare(artwork: &Artwork, with_preview: bool) -> PreparedPackage {
     let capture=capture(artwork);
-    PreparedPackage::prepare(&capture,with_preview.then(||CapturedPreview {checkpoint:capture.checkpoint,preview:preview()}),&AtomicBool::new(false)).unwrap()
+    PreparedPackage::prepare(&capture,with_preview.then(||CapturedPreview {checkpoint:capture.checkpoint,context:capture.artwork.outputs.get(capture.artwork.default_output).unwrap().context.clone(),preview:preview()}),&AtomicBool::new(false)).unwrap()
 }
 fn backing(bytes: Vec<u8>) -> ImmutableBacking {
     let chunks=bytes.chunks(MAX_RANGE_BYTES).map(Arc::<[u8]>::from).collect();
@@ -63,11 +63,11 @@ fn fixture(depth: SampleDepth) -> Artwork {
     let tile=TileBlob::from_profiled_package(tile.resource_id(),tile.descriptor,tile.compressed().unwrap(),profile.clone()).unwrap();
     let original=Arc::new(SourceImage {kind:SourceKind::Original,extent:[256;2],resolution:Some(crate::ImageResolution::ppi(300)),
         tiles:[([0,0],Arc::new(tile))].into(),interpretation});
-    let source=PaintSource {domain:[256;2],raster,original:Some(original)};
+    let source=PaintSource {domain:[256;2],raster,original:Some(original),operations:Default::default()};
     let first=artwork.paint.insert(identity(10),source.clone()).unwrap();
     let second=artwork.paint.insert(identity(11),source).unwrap();
     let selection=Selection::pixels(Arc::new(SelectionPixels::bytes([5,2],[0,0,5,2],vec![0xff804020,0x7f,0x804020ff,1]).unwrap()));
-    let mask=artwork.coverage.insert(identity(12),CoverageSource {domain:[256;2],default_coverage:0.75,initial:Some(selection.clone()),
+    let mask=artwork.coverage.insert(identity(12),CoverageSource {operations:Default::default(),domain:[256;2],default_coverage:0.75,initial:Some(selection.clone()),
         raster:RasterRevision::backed(RasterData {tiles:[(TileKey{plane:RasterPlane::Mask,coordinate:[0,0]},RasterTile::backed_shared(material))].into(),watercolor:None})}).unwrap();
     let mut occurrence=Occurrence::new(OccurrenceContent::Paint(first),"Original source");
     occurrence.translation=Point{x:1.25,y:-0.}; occurrence.opacity=0.625; occurrence.locked=true;
@@ -85,7 +85,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
         let effect=artwork.effects.insert(identity(40+index as u128),EffectApplication {definition,values:instance.values,domain:[256;2]}).unwrap();
         let occurrence=artwork.occurrences.insert(identity(50+index as u128),Occurrence::new(OccurrenceContent::Effect(effect),key)).unwrap();
         artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
-        artwork.outputs.get_mut(artwork.default_output).unwrap().context.phases.push((effect,2.125+index as f32));
+        Arc::make_mut(&mut artwork.outputs.get_mut(artwork.default_output).unwrap().context.phases).push((effect,2.125+index as f32));
     }
     artwork.guides.insert(identity(60),Guides {rulers:vec![(identity(61),crate::RulerGeometry::Radial {center:Point{x:12.5,y:8.}})]}).unwrap();
     artwork.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![0,255,17,5])),
@@ -157,8 +157,8 @@ fn preview_is_checkpoint_bound_and_does_not_replace_editable_authorship() {
     let artwork=fixture(SampleDepth::U8); let capture=capture(&artwork);
     let mut stale=capture.checkpoint; stale.artwork_generation+=1;
     for (provided,status,expected_preview) in [(None,PreviewStatus::Unavailable,false),
-        (Some(CapturedPreview {checkpoint:stale,preview:preview()}),PreviewStatus::Stale,false),
-        (Some(CapturedPreview {checkpoint:capture.checkpoint,preview:preview()}),PreviewStatus::Included,true)] {
+        (Some(CapturedPreview {checkpoint:stale,context:capture.artwork.outputs.get(capture.artwork.default_output).unwrap().context.clone(),preview:preview()}),PreviewStatus::Stale,false),
+        (Some(CapturedPreview {checkpoint:capture.checkpoint,context:capture.artwork.outputs.get(capture.artwork.default_output).unwrap().context.clone(),preview:preview()}),PreviewStatus::Included,true)] {
         let prepared=PreparedPackage::prepare(&capture,provided,&AtomicBool::new(false)).unwrap();
         assert_eq!(prepared.checkpoint,capture.checkpoint); assert_eq!(prepared.preview_status,status);
         let bytes=serialize(&prepared);
@@ -173,6 +173,23 @@ fn preview_is_checkpoint_bound_and_does_not_replace_editable_authorship() {
     }
     let mut wrong=capture; wrong.checkpoint.document=PortableId::random();
     assert!(PreparedPackage::prepare(&wrong,None,&AtomicBool::new(false)).is_err());
+}
+
+#[test]
+fn preview_from_an_earlier_phase_is_stale_at_the_same_edit_checkpoint() {
+    let editor=crate::Editor::new(crate::Document::from_artwork(fixture(SampleDepth::U8)).unwrap());
+    let context=editor.document().artwork.outputs.get(editor.document().artwork.default_output).unwrap().context.clone();
+    let first=editor.capture(3,context.clone()).unwrap();
+    let mut later=context.clone();
+    Arc::make_mut(&mut later.phases)[0].1+=1.;
+    let second=editor.capture(3,later.clone()).unwrap();
+    assert_eq!(first.checkpoint,second.checkpoint);
+    let provided=CapturedPreview {checkpoint:first.checkpoint,context,preview:preview()};
+    let prepared=PreparedPackage::prepare(&second,Some(provided),&AtomicBool::new(false)).unwrap();
+    assert_eq!(prepared.preview_status,PreviewStatus::Stale);
+    assert!(Directory::read(&mut Cursor::new(serialize(&prepared)),262144,64*1024*1024).unwrap().member("preview.png").is_none());
+    let matching=CapturedPreview {checkpoint:second.checkpoint,context:later,preview:preview()};
+    assert_eq!(PreparedPackage::prepare(&second,Some(matching),&AtomicBool::new(false)).unwrap().preview_status,PreviewStatus::Included);
 }
 
 #[test]
@@ -262,8 +279,8 @@ fn opaque_attachment_ranges_are_bounded_and_live_until_the_last_captured_save_ow
     let attachment=Arc::new(OpaqueResource {id:identity(701),kind:"future.samples/1".into(),data:json!({"mode":3}),encoding:"future.binary/1".into(),
         extra_fields:[("future_descriptor".into(),json!([1,2,3]))].into_iter().collect(),backing:ImmutableBacking::new(source.clone()).unwrap(),offset:0,
         length:payload.len() as u64,crc32:crc32fast::hash(&payload)});
-    artwork.extensions.resources.insert(attachment.id,attachment.clone());
-    artwork.extensions.records.insert(identity(700),json!({"id":identity(700),"type":"future.note/1","ancillary":true,"copy_safe":true,
+    Arc::make_mut(&mut artwork.extensions).resources.insert(attachment.id,attachment.clone());
+    Arc::make_mut(&mut artwork.extensions).records.insert(identity(700),json!({"id":identity(700),"type":"future.note/1","ancillary":true,"copy_safe":true,
         "data":{"subject":resources::reference(identity(10)),"payload":resources::reference(attachment.id)}}));
     let capture=capture(&artwork); let prepared=PreparedPackage::prepare(&capture,None,&AtomicBool::new(false)).unwrap();
     drop(artwork); drop(capture); drop(attachment); assert_eq!(drops.load(Ordering::Relaxed),0);
@@ -299,3 +316,6 @@ fn valid_preview_remains_independent_when_its_png_is_corrupt_or_mismatched() {
         OpenOutcome::Candidate {preview,..}=>assert!(preview.is_none()), outcome=>panic!("mismatched preview replaced authored content: {outcome:?}"),
     }
 }
+
+#[path = "roundtrip_semantics.rs"]
+mod roundtrip_semantics;

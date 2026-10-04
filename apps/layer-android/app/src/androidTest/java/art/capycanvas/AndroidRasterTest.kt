@@ -9,8 +9,10 @@ import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.graphics.toPixelMap
 import androidx.compose.ui.test.junit4.createEmptyComposeRule
 import androidx.test.core.app.ActivityScenario
+import androidx.lifecycle.viewModelScope
 import android.view.WindowManager
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
 import androidx.test.platform.app.InstrumentationRegistry
 import kotlinx.coroutines.runBlocking
 import org.json.JSONObject
@@ -45,6 +47,13 @@ class AndroidRasterTest {
         // are enabled. Wait for the same admission state as the visible Open UI.
         compose.waitUntil(120_000) {host.failure!=null || native{state(it).array("commands").objects().any{c->c.optString("id")=="open_document"&&c.optBoolean("enabled")}}}
         assertNull(host.failure)
+        InstrumentationRegistry.getArguments().getString("theme")?.let { theme ->
+            require(theme == "light" || theme == "dark") { "theme must be light or dark" }
+            native { Native.dispatch(it, obj("type" to "set_theme", "theme" to theme).toString()) }
+            compose.runOnUiThread { host.documentChanged() }
+            compose.waitUntil(30_000) { host.snapshot?.optJSONObject("state")?.optString("theme") == theme }
+            assertEquals(theme, native { state(it).getString("theme") })
+        }
     }
     @Before fun isolatedWindow() {
         wakeDevice()
@@ -152,7 +161,17 @@ class AndroidRasterTest {
     }
         // Direct JNI input bypasses CanvasHost.wake(). Honor frame()'s retry
         // contract before capturing the completed stroke on a nonblocking surface.
-        if (phase == 3) compose.waitUntil(10_000) { !tick() }
+        if (phase == 3) {
+            try { compose.waitUntil(10_000) { !tick() } }
+            catch (failure: Throwable) {
+                val diagnostics=runCatching { native { handle ->
+                    val display=JSONObject(Native.displayStatus(handle))
+                    val state=state(handle)
+                    obj("display" to display,"document_file" to state.optJSONObject("document_file"),"layer_tools" to state.optJSONObject("layer_tools"),"layers" to state.optJSONArray("layers"))
+                } }.getOrElse { obj("inspection_error" to it.toString()) }
+                throw AssertionError("Completed stroke kept requesting frames: $diagnostics",failure)
+            }
+        }
     }
     private fun stroke(dy: Double) {
         point(1,0.0,dy)
@@ -175,15 +194,37 @@ class AndroidRasterTest {
     private fun open(file: File, corrupt: Boolean=false) {
         val job=native {handle -> val (id,state)=request(handle,"open_document")
             Native.projectTask(handle,id,"null",state.getLong("epoch"),state.getLong("revision")) to id }
+        val incumbent=native {state(it).getJSONObject("document_file")}
         try {
-            try {
+            val prepared=try {
                 Native.projectWork(job.first,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
-                if(corrupt)fail("Corrupt file was accepted")
-                compose.waitUntil(120_000){tick();native{Native.projectParkReady(it,job.first)}}
-                native {Native.projectAdopt(it,job.first,"null")}
+                true
             } catch(e: Exception) {
                 if(!corrupt)throw e
                 native {Native.documentComplete(it,job.second,false,JSONObject.quote(e.message ?: "Corrupt file"))}
+                false
+            }
+            if(prepared) {
+                val packageSummary=Native.projectPackagePrompt(job.first)
+                if(corrupt) {
+                    assertNotEquals("Corrupt native file requires a package view","null",packageSummary)
+                    val summary=JSONObject(packageSummary);val capabilities=summary.getJSONObject("capabilities")
+                    assertEquals("failed",summary.getString("disposition"));assertFalse(capabilities.getBoolean("edit"));assertFalse(capabilities.getBoolean("save"));assertFalse(capabilities.getBoolean("view"));assertFalse(capabilities.getBoolean("export"));assertTrue(capabilities.getBoolean("copy_original"))
+                    assertEquals(0,Native.projectPackagePreview(job.first).size)
+                    var presented=false;var dialog:Job?=null
+                    compose.runOnUiThread {dialog=host.viewModelScope.launch {presented=host.documents.showPackage(job.first,android.net.Uri.fromFile(file))}}
+                    compose.waitUntil(10_000){host.documents.packagePrompt!=null}
+                    compose.onNodeWithTag("preserved-package-preview").assertIsDisplayed()
+                    assertTrue(native{state(it).getJSONObject("document_file").getBoolean("busy")})
+                    compose.onNode(hasText(summary.getString("close")) and hasAnyAncestor(hasTestTag("preserved-package-preview"))).performClick()
+                    compose.waitUntil(10_000){dialog?.isCompleted==true&&host.documents.packagePrompt==null};assertTrue(presented)
+                    native {Native.documentComplete(it,job.second,false,"null")}
+                    val current=native{state(it).getJSONObject("document_file")};assertFalse(current.getBoolean("busy"));assertEquals(incumbent.getLong("epoch"),current.getLong("epoch"));assertEquals(incumbent.getLong("revision"),current.getLong("revision"))
+                } else {
+                    assertEquals("Editable input cannot be a package view","null",packageSummary)
+                    compose.waitUntil(120_000){tick();native{Native.projectParkReady(it,job.first)}}
+                    native {Native.projectAdopt(it,job.first,"null")}
+                }
             }
         } finally {Native.projectFree(job.first)}
         tick()
@@ -205,19 +246,8 @@ class AndroidRasterTest {
             return file.readBytes()
         } catch(e:Exception){native{Native.documentComplete(it,id,false,"null")};throw e} finally {Native.projectFree(task)}
     }
-    private fun manifest(bytes: ByteArray): JSONObject {
-        assertArrayEquals("CAPYRASTER".toByteArray(),bytes.copyOfRange(0,10))
-        assertTrue("Native archive version", bytes[10].toInt() == 15 && bytes[11].toInt() == 0)
-        val size=ByteBuffer.wrap(bytes,12,8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
-        return JSONObject(bytes.copyOfRange(52,52+size).decodeToString())
-    }
-    private fun sourceIdentity(manifest: JSONObject): String {
-        val sources = JSONObject(manifest.getJSONObject("tiled_sources").toString())
-        for (image in sources.getJSONArray("images").objects()) for (tile in image.getJSONArray("tiles").objects()) {
-            val blob=JSONObject(manifest.getJSONArray("blobs").getJSONObject(tile.getInt("blob")).toString());blob.remove("offset");tile.put("blob",blob)
-        }
-        return sources.getJSONArray("images").toString()
-    }
+    private fun manifest(bytes: ByteArray): JSONObject = packageManifest(bytes)
+    private fun sourceIdentity(manifest: JSONObject): String = manifest.originalIdentity()
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
     @Test fun webpExportThroughTheDialogDecodes() {
@@ -846,8 +876,8 @@ class AndroidRasterTest {
             val started=SystemClock.uptimeMillis();open(input);refresh()
             report.put("open_ms",SystemClock.uptimeMillis()-started)
             val master=save("large-master.capy")
-            val document=manifest(master).getJSONObject("document")
-            val extent=listOf(document.getInt("width"),document.getInt("height"))
+            val document=manifest(master).compositionSize()
+            val extent=listOf(document.getInt(0),document.getInt(1))
             report.put("extent",org.json.JSONArray(extent))
             val original=histogram()
             assertEquals("F16",original.getJSONObject("color").getString("depth"))
@@ -876,8 +906,8 @@ class AndroidRasterTest {
                 val color=histogram()
                 assertEquals("F16",color.getJSONObject("color").getString("depth"))
                 assertTrue(color.getJSONArray("channels").objects().any{it.getLong("above")>0})
-                val restored=manifest(save("large-reopened.capy")).getJSONObject("document")
-                assertEquals(extent,listOf(restored.getInt("width"),restored.getInt("height")))
+                val restored=manifest(save("large-reopened.capy")).compositionSize()
+                assertEquals(extent,listOf(restored.getInt(0),restored.getInt(1)))
                 output.writeText(report.toString(2))
             }
             assertNull(host.failure)
@@ -1060,8 +1090,8 @@ class AndroidRasterTest {
         automation.takeScreenshot()?.let { screenshot->File(activity.getExternalFilesDir(null),"hdr-proof.png").outputStream().use{screenshot.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};screenshot.recycle() }
         compose.runOnUiThread{host.customize(obj("type" to "set_panel_visible","panel" to "proof","visible" to false))};refresh()
         val saved=save("hdr-master.capy");val manifest=manifest(saved)
-        assertEquals(first.getJSONArray("blobs").toString(),manifest.getJSONArray("blobs").toString())
-        assertEquals(first.getJSONObject("document").getJSONArray("layers").toString(),manifest.getJSONObject("document").getJSONArray("layers").toString())
+        assertEquals(first.rasterResources().toString(),manifest.rasterResources().toString())
+        assertEquals(first.artworkRecords().toString(),manifest.artworkRecords().toString())
         open(File(files,"hdr-master.capy"));refresh();ready();assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString())
         File(activity.getExternalFilesDir(null),"hdr-sdr-rendition.json").writeText(form().getJSONObject("rendition").toString())
         val sdr=png("hdr-sdr.png")
@@ -1387,7 +1417,7 @@ class AndroidRasterTest {
         compose.onAllNodesWithText(embedded.getString("name")).onFirst().assertExists()
         compose.onNodeWithText("Done").performClick();pick(target.getString("name"));cancel()
         assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
-        assertEquals(baseline.getJSONObject("tiled_sources").getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).getJSONObject("tiled_sources").getJSONObject("proof").toString())
+        assertEquals(baseline.outputData().getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).outputData().getJSONObject("proof").toString())
         // An unwritable library path fails before document/history publication.
         val oldDirectory=ColorPreferencesStore.directoryForTest
         val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
@@ -1406,8 +1436,8 @@ class AndroidRasterTest {
         val preserved=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
         assertEquals(array.toString(),runBlocking{ProfileStore.get(activity,preserved.getString("id"))}.getJSONObject("profile").getJSONArray("Icc").toString())
         val replacement=manifest(save("proof-replacement.capy"))
-        assertEquals(target.getString("name"),replacement.getJSONObject("tiled_sources").getJSONObject("proof").getString("name"))
-        assertEquals(baseline.getJSONArray("blobs").toString(),replacement.getJSONArray("blobs").toString())
+        assertEquals(target.getString("name"),replacement.outputData().getJSONObject("proof").getString("name"))
+        assertEquals(baseline.rasterResources().toString(),replacement.rasterResources().toString())
         println("Proof UI first use, cancel, Document Profile retention, preservation failure/retry and exact original ICC copy passed")
         native{Native.dispatch(it,obj("type" to "select_brush","id" to 1).toString());Native.dispatch(it,obj("type" to "set_color","rgba" to org.json.JSONArray(listOf(1.0,0.0,.7,1.0))).toString())}
         val before=hist();stroke(0.0);val painted=hist();assertNotEquals(before,painted)
@@ -1423,7 +1453,7 @@ class AndroidRasterTest {
         open(File(files,"proof-painted.capy"));compose.runOnUiThread{host.documentChanged()};compose.waitForIdle()
         assertFalse(native{state(it).getBoolean("soft_proof")||state(it).getBoolean("gamut_warning")})
         assertEquals("",status().getString("text"));assertEquals(target.getString("name"),current().getString("name"))
-        assertEquals(manifest(master).getJSONArray("blobs").toString(),manifest(save("proof-reopened.capy")).getJSONArray("blobs").toString())
+        assertEquals(manifest(master).rasterResources().toString(),manifest(save("proof-reopened.capy")).rasterResources().toString())
         action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
         assertEquals(painted,hist())
         compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.snapshot?.optBoolean("brush_ready")==true&&host.failure==null}
@@ -1467,8 +1497,8 @@ class AndroidRasterTest {
             action("soft_proof");compose.waitUntil(120_000){status().getString("text").startsWith("Proof:")}
             assertEquals(exact,hist());assertEquals(hash(plain),hash(png("web-portable-proof.png")))
             val archive=manifest(save("proof-from-web-resaved.capy"))
-            assertEquals(1,archive.getJSONObject("tiled_sources").getJSONArray("profiles").length())
-            assertEquals("DisplayP3",archive.getJSONObject("document").getJSONObject("color").getString("space"))
+            assertEquals(1,archive.resourcesOf("capy.icc/1").length())
+            assertEquals("display_p3",archive.compositionColor().optString("space","srgb"))
             println("Web-created P3/U16 file opened, proofed, resaved and exported on Android without installed profiles")
         }
     }
@@ -1603,10 +1633,10 @@ class AndroidRasterTest {
         }
         press("apply_transform");memoryStage("applied batch")
         val fitted=manifest(save("batch-placement.capy"));val identity=sourceIdentity(fitted)
-        val images=fitted.getJSONObject("tiled_sources").getJSONArray("images")
+        val images=fitted.originalImages()
         for(i in photos.indices) {
             val extent=images.getJSONObject(i).getJSONArray("extent");val w=extent.getDouble(0);val h=extent.getDouble(1);val scale=minOf(1.0,2000/w,1500/h)
-            val pose=fitted.getJSONObject("document").getJSONArray("layers").getJSONObject(i).getJSONObject("properties").affinePlacement()
+            val pose=fitted.occurrenceRecords().getJSONObject(i).getJSONObject("data").authoredAffine()
             assertEquals(scale,pose.getDouble(0),1e-6);assertEquals(scale,pose.getDouble(3),1e-6)
             assertEquals((2000-w*scale)/2,pose.getDouble(4),.01);assertEquals((1500-h*scale)/2,pose.getDouble(5),.01)
         }
@@ -1617,7 +1647,7 @@ class AndroidRasterTest {
         invoke("scale_rotate");press("placement_original_size");press("apply_transform")
         val originalSize=manifest(save("batch-original-size.capy"))
         memoryStage("after original size")
-        assertEquals(1.0,originalSize.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").affinePlacement().getDouble(0),1e-6)
+        assertEquals(1.0,originalSize.occurrenceRecords().getJSONObject(0).getJSONObject("data").authoredAffine().getDouble(0),1e-6)
         assertEquals(identity,sourceIdentity(originalSize))
         val before=count();val malformed=File(files,"batch-malformed.png").apply { writeText("not a photo") }
         try { batch(listOf(photos.first(),malformed)); fail("Malformed second file was accepted") } catch (_: Exception) { assertEquals(before,count()) }
@@ -1633,8 +1663,8 @@ class AndroidRasterTest {
         }
         assertEquals(identity,sourceIdentity(manifest(save("batch-after-errors.capy"))))
         }
-        fun backing(project: JSONObject) = project.array("blobs").objects().map {
-            JSONObject(it.toString()).apply { remove("offset") }.toString()
+        fun backing(project: JSONObject) = project.rasterResources().objects().map {
+            JSONObject(it.toString()).toString()
         }.sorted()
         val originalTheme = host.snapshot!!.getJSONObject("state").opt("settings")?.let { it as JSONObject }?.opt("theme") ?: JSONObject.NULL
         val motions = org.json.JSONArray()
@@ -1643,8 +1673,9 @@ class AndroidRasterTest {
                 if (!affineSmoke) open(File(files, "batch-placement.capy"))
                 memoryStage("$theme: before affine")
                 action(obj("type" to "set_theme", "theme" to theme))
-                val owner = fitted.getJSONObject("document").array("layers").getJSONObject(0).getLong("id")
-                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to owner, "mask" to false)))
+                val owner = fitted.occurrenceRecords().getJSONObject(0).getString("id")
+                val ownerToken = native { state(it).array("layers").getJSONObject(0).getLong("id") }
+                action(obj("type" to "layer", "action" to obj("op" to "select", "id" to ownerToken, "mask" to false)))
                 invoke("fit_canvas")
                 if (!affineSmoke || InstrumentationRegistry.getArguments().getString("affineSmokeWatercolor") == "true") {
                     invoke("brush")
@@ -1676,16 +1707,16 @@ class AndroidRasterTest {
                     println("Android minimal retained-photo affine smoke passed")
                     return
                 }
-                fun ownerRaster(project: JSONObject) = project.array("rasters").objects().first { it.getLong("target") == owner }
+                fun ownerRaster(project: JSONObject) = project.paintData(owner)
                 fun assertMaterial(project: JSONObject) {
                     val raster = ownerRaster(project)
-                    assertFalse("$theme: watercolor style remains stored", raster.isNull("watercolor"))
-                    val planes = raster.array("tiles").objects().map { it.getJSONObject("key").getString("plane") }
-                    assertTrue("$theme: native pigment remains stored", "Color" in planes)
-                    assertTrue("$theme: native wetness remains stored", "WatercolorWetness" in planes)
+                    assertFalse("$theme: watercolor style remains stored", raster.optJSONObject("material")?.isNull("watercolor") != false)
+                    val planes = raster.array("tiles").objects().map { it.getString("plane") }
+                    assertTrue("$theme: native pigment remains stored", "color" in planes)
+                    assertTrue("$theme: native wetness remains stored", "watercolor_wetness" in planes)
                 }
                 assertMaterial(retained)
-                fun ownerProperties(project: JSONObject) = project.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
+                fun ownerProperties(project: JSONObject) = project.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data")
                 fun published() = host.snapshot!!.getJSONObject("state")
                 fun setting(id: String) = published().array("tool_settings").objects().first { it.getString("id") == id }.getDouble("value")
                 fun key(code: Int, pressed: Boolean, repeat: Int = 0) {
@@ -1770,8 +1801,8 @@ class AndroidRasterTest {
                 if (settingsDrawer) toggleSettingsDrawer()
                 press("apply_transform")
                 val rotated = manifest(save("$theme-reference-pivot.capy"))
-                val original = ownerProperties(retained).affinePlacement()
-                val rotatedMap = ownerProperties(rotated).affinePlacement()
+                val original = ownerProperties(retained).authoredAffine()
+                val rotatedMap = ownerProperties(rotated).authoredAffine()
                 val determinant = original.getDouble(0) * original.getDouble(3) - original.getDouble(1) * original.getDouble(2)
                 val px = pivot.first - original.getDouble(4); val py = pivot.second - original.getDouble(5)
                 val u = (original.getDouble(3) * px - original.getDouble(2) * py) / determinant
@@ -1809,8 +1840,8 @@ class AndroidRasterTest {
                     corner.getDouble(2) to corner.getDouble(3) - 20.0 / zoom).put("theme", theme).put("mode", "Distort"))
                 press("apply_transform")
                 val distorted = manifest(save("$theme-retained-distort.capy"))
-                val properties = distorted.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
-                val outer = properties.getJSONObject("placement").getJSONArray("outer")
+                val properties = distorted.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data")
+                val outer = properties.authoredPlacement().getJSONArray("projective")
                 assertTrue("$theme: corner drag retains a projective map", outer.getDouble(6) != 0.0 || outer.getDouble(7) != 0.0)
                 assertEquals(sourceIdentity(retained), sourceIdentity(distorted))
                 assertEquals(backing(retained), backing(distorted))
@@ -1823,13 +1854,13 @@ class AndroidRasterTest {
                     .put("theme", theme).put("mode", "Warp"))
                 press("apply_transform")
                 retained = manifest(save("$theme-retained-warp.capy"))
-                val warpedProperties = retained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
-                assertFalse("$theme: bent grid persists", warpedProperties.getJSONObject("placement").isNull("mesh"))
+                val warpedProperties = retained.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data")
+                assertFalse("$theme: bent grid persists", warpedProperties.authoredPlacement().isNull("mesh"))
                 assertEquals(sourceIdentity(distorted), sourceIdentity(retained))
                 assertEquals(backing(distorted), backing(retained))
                 open(File(files, "$theme-retained-warp.capy"))
                 val reopenedRetained = manifest(save("$theme-retained-warp-reopened.capy"))
-                assertEquals(warpedProperties.toString(), reopenedRetained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties").toString())
+                assertEquals(warpedProperties.toString(), reopenedRetained.occurrenceRecords().objects().first { it.getString("id") == owner }.getJSONObject("data").toString())
                 assertEquals(backing(retained), backing(reopenedRetained))
                 assertMaterial(reopenedRetained)
                 invoke("scale_rotate")
@@ -1844,8 +1875,8 @@ class AndroidRasterTest {
                     .put("theme", theme).put("mode", "Warp split cross"))
                 press("apply_transform")
                 retained = manifest(save("$theme-retained-split.capy"))
-                val splitPlacement = retained.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
-                    .getJSONObject("properties").getJSONObject("placement")
+                val splitPlacement = retained.occurrenceRecords().objects().first { it.getString("id") == owner }
+                    .getJSONObject("data").authoredPlacement()
                 val splitBreakpoints = splitPlacement.getJSONObject("mesh").getJSONArray("breakpoints")
                 assertEquals("$theme: cross split inserts a vertical line", 5, splitBreakpoints.getJSONArray(0).length())
                 assertEquals("$theme: cross split inserts a horizontal line", 5, splitBreakpoints.getJSONArray(1).length())
@@ -1853,8 +1884,8 @@ class AndroidRasterTest {
                 assertEquals(backing(reopenedRetained), backing(retained))
                 open(File(files, "$theme-retained-split.capy"))
                 val reopenedSplit = manifest(save("$theme-retained-split-reopened.capy"))
-                assertEquals(splitPlacement.toString(), reopenedSplit.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
-                    .getJSONObject("properties").getJSONObject("placement").toString())
+                assertEquals(splitPlacement.toString(), reopenedSplit.occurrenceRecords().objects().first { it.getString("id") == owner }
+                    .getJSONObject("data").authoredPlacement().toString())
                 assertEquals(backing(retained), backing(reopenedSplit))
                 memoryStage("$theme: before pixel bake")
                 if (compose.onAllNodesWithTag("application-menu-edit").fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag("application-menu-edit").performClick()
@@ -1870,10 +1901,10 @@ class AndroidRasterTest {
                 memoryStage("$theme: after pixel bake")
                 val baked = manifest(save("$theme-baked.capy"))
                 assertMaterial(baked)
-                assertEquals(ownerRaster(retained).getJSONObject("watercolor").toString(), ownerRaster(baked).getJSONObject("watercolor").toString())
-                assertEquals("$theme: only the chosen source is baked", retained.getJSONObject("tiled_sources").array("images").length() - 1, baked.getJSONObject("tiled_sources").array("images").length())
-                val bakedOwner = baked.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }
-                val pose = bakedOwner.getJSONObject("properties").affinePlacement()
+                assertEquals(ownerRaster(retained).getJSONObject("material").getJSONObject("watercolor").toString(), ownerRaster(baked).getJSONObject("material").getJSONObject("watercolor").toString())
+                assertEquals("$theme: only the chosen source is baked", retained.originalImages().length() - 1, baked.originalImages().length())
+                val bakedOwner = baked.occurrenceRecords().objects().first { it.getString("id") == owner }
+                val pose = bakedOwner.getJSONObject("data").authoredAffine()
                 assertEquals(listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0), (0 until 6).map { pose.getDouble(it) })
                 invoke("brush"); action(obj("type" to "select_brush", "id" to 1)); action(obj("type" to "set_brush_size", "value" to 80.0))
                 stroke(0.0)
@@ -2038,8 +2069,8 @@ class AndroidRasterTest {
             press("apply_transform")
             DocumentController.nativeFileJobsForTest = true
             val dropped = manifest(save("external-drop.capy"))
-            val pose = dropped.getJSONObject("document").getJSONArray("layers").getJSONObject(0).getJSONObject("properties").affinePlacement()
-            val extent = dropped.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("extent")
+            val pose = dropped.occurrenceRecords().getJSONObject(0).getJSONObject("data").authoredAffine()
+            val extent = dropped.originalImages().getJSONObject(0).getJSONArray("extent")
             assertEquals(400.0 - extent.getDouble(0) * pose.getDouble(0) / 2, pose.getDouble(4), 2.0)
             assertEquals(300.0 - extent.getDouble(1) * pose.getDouble(3) / 2, pose.getDouble(5), 2.0)
             invoke("undo"); assertEquals(before, count())
@@ -2053,7 +2084,10 @@ class AndroidRasterTest {
             press("apply_transform")
             DocumentController.nativeFileJobsForTest = true
             val nested = manifest(save("external-group-drop.capy"))
-            assertTrue(nested.getJSONObject("document").getJSONArray("layers").objects().any { it.getJSONObject("properties").optLong("parent", -1) == group })
+            val groupName = native { state(it).array("layers").objects().single { it.getLong("id") == group }.getString("label") }
+            val authoredGroup = nested.occurrenceRecords().objects().single {it.getJSONObject("data").optString("name") == groupName}
+            val children = nested.packageData(authoredGroup.getJSONObject("data").getJSONObject("content").getJSONObject("stack").getString("ref")).getJSONArray("entries")
+            assertTrue(children.objects().any {nested.packageData(it.getString("ref")).getJSONObject("content").has("paint")})
             println("Android global URI drag: canvas captured point, group center insertion, Apply and one-step Undo passed")
 
             val clipboard = activity.getSystemService(android.content.ClipboardManager::class.java)
@@ -2073,10 +2107,10 @@ class AndroidRasterTest {
                 compose.runOnUiThread { previous?.let { clipboard.setPrimaryClip(it) } ?: clipboard.clearPrimaryClip() }
             }
 
-            val retained = nested.getJSONObject("tiled_sources").toString()
+            val retained = nested.originalIdentity()
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
-            assertEquals(retained, manifest(save("placement-recreated.capy")).getJSONObject("tiled_sources").toString())
+            assertEquals(retained, manifest(save("placement-recreated.capy")).originalIdentity())
             val control = Native.captureControl()
             val (task, requestId) = native { h -> val (id, _) = request(h, "import_image"); Native.imageImportTask(h, id, Native.imageImportContext(h, "null", "null"), control) to id }
             try {
@@ -2087,15 +2121,15 @@ class AndroidRasterTest {
                 compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
                 try { native { Native.imageImportAdopt(it, task) }; fail("Prepared batch survived a GPU generation change") } catch (_: IllegalStateException) { }
                 native { Native.documentComplete(it, requestId, false, "null") }
-                assertEquals(retained, manifest(save("placement-gpu-recreated.capy")).getJSONObject("tiled_sources").toString())
+                assertEquals(retained, manifest(save("placement-gpu-recreated.capy")).originalIdentity())
             } finally { Native.imageImportFree(task); Native.captureFree(control) }
             assertNull(host.failure)
             println("Android placed source survived activity/GPU replacement; retired GPU batch rejected")
             if (configured != null) for ((file, expected) in configured.zip(listOf(9504 to 6336, 4000 to 6000))) {
                 open(file); invoke("fit_canvas")
                 val opened = manifest(save("opened-${file.name}.capy"))
-                assertEquals(expected.first, opened.getJSONObject("document").getInt("width"))
-                assertEquals(expected.second, opened.getJSONObject("document").getInt("height"))
+                assertEquals(expected.first, opened.compositionSize().getInt(0))
+                assertEquals(expected.second, opened.compositionSize().getInt(1))
             }
         } finally {
             DocumentController.nativeFileJobsForTest = true
@@ -2168,12 +2202,12 @@ class AndroidRasterTest {
             motion(android.view.MotionEvent.TOOL_TYPE_STYLUS, 30, 3000.0 to 2000.0)
             compose.waitUntil(60_000) { !tick() }
             val painted = manifest(save("spatial-painted.capy"))
-            assertNotEquals(before.get("rasters").toString(), painted.get("rasters").toString())
+            assertNotEquals(before.paintRecords().toString(), painted.paintRecords().toString())
             assertEquals(sourceIdentity(before), sourceIdentity(painted))
             invoke("undo")
-            assertEquals(before.get("rasters").toString(), manifest(save("spatial-undo.capy")).get("rasters").toString())
+            assertEquals(before.paintRecords().toString(), manifest(save("spatial-undo.capy")).paintRecords().toString())
             invoke("redo")
-            assertEquals(painted.get("rasters").toString(), manifest(save("spatial-redo.capy")).get("rasters").toString())
+            assertEquals(painted.paintRecords().toString(), manifest(save("spatial-redo.capy")).paintRecords().toString())
             assertNull(host.failure); assertNull(host.actionError)
             instrumentation.uiAutomation.takeScreenshot()?.let { shot ->
                 try { File(output, "$theme.png").outputStream().use { shot.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
@@ -2368,35 +2402,35 @@ class AndroidRasterTest {
         native { Native.dispatch(it, obj("type" to "invoke", "command" to "fit_canvas").toString()) }; tick()
         stroke(0.0)
         val before = manifest(save("wide16.capy"))
-        assertEquals("ProPhoto", before.getJSONObject("document").getJSONObject("color").getString("space"))
-        assertEquals("U16", before.getJSONObject("document").getJSONObject("color").getString("depth"))
-        assertTrue(before.getJSONArray("blobs").length() > 0)
-        assertTrue(before.getJSONArray("blobs").objects().all { it.getJSONObject("descriptor").getInt("bits_per_channel") == 16 })
+        assertEquals("pro_photo", before.compositionColor().optString("space","srgb"))
+        assertEquals("u16", before.compositionColor().optString("depth","u8"))
+        assertTrue(before.rasterResources().length() > 0)
+        assertTrue(before.rasterResources().objects().all { it.getJSONObject("data").optString("depth","u8") == "u16" })
         native { Native.destroyGpuForTest(it) }; compose.runOnUiThread { host.documentChanged() }
         compose.waitUntil(10_000) { host.failure != null }
         compose.runOnUiThread { host.restartCanvas() }
         compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready") == true }
         assertNull(host.failure)
-        assertEquals(before.getJSONArray("blobs").toString(), manifest(save("wide16-recovered.capy")).getJSONArray("blobs").toString())
+        assertEquals(before.rasterResources().toString(), manifest(save("wide16-recovered.capy")).rasterResources().toString())
         open(File(files, "wide16.capy"))
         val after = manifest(save("wide16-reopened.capy"))
-        assertEquals(before.getJSONObject("document").getJSONObject("color").toString(), after.getJSONObject("document").getJSONObject("color").toString())
-        assertEquals(before.getJSONArray("blobs").toString(), after.getJSONArray("blobs").toString())
+        assertEquals(before.compositionColor().toString(), after.compositionColor().toString())
+        assertEquals(before.rasterResources().toString(), after.rasterResources().toString())
         val recipe = builtinRecipe(2).put("format", "Png")
         val output = png("wide16.png", recipe)
         assertEquals("PNG uses 16-bit samples", 16, output[24].toInt())
         open(File(files, "wide16.png"))
         val imported = manifest(save("wide16-image.capy"))
-        val original = imported.getJSONObject("tiled_sources")
-        assertEquals("U16", original.getJSONArray("images").getJSONObject(0).getString("depth"))
+        val original = imported
+        assertEquals("u16", original.originalImages().getJSONObject(0).getJSONObject("interpretation").optString("depth","u8"))
         val profiles = native { JSONObject(Native.query(it, obj("type" to "export_form").toString())).getJSONArray("profiles") }
         recipe.put("profile", profiles.getJSONObject(profiles.length()-1))
         for ((format, extension) in listOf("Png" to "png", "Tiff" to "tif")) {
             png("identity.$extension", JSONObject(recipe.toString()).put("format", format))
             open(File(files, "identity.$extension"))
-            val restored = manifest(save("identity-$extension.capy")).getJSONObject("tiled_sources")
-            assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), restored.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
-            assertEquals(original.getJSONArray("profiles").toString(), restored.getJSONArray("profiles").toString())
+            val restored = manifest(save("identity-$extension.capy"))
+            assertEquals(original.originalTileIdentity(original.originalImages().getJSONObject(0)), restored.originalTileIdentity(restored.originalImages().getJSONObject(0)))
+            assertEquals(original.profileIdentity(), restored.profileIdentity())
         }
         // Remove only interpretation chunks; the unchanged IDAT and its CRC
         // exercise Ask without introducing a second decoder or image codec.
@@ -2424,8 +2458,8 @@ class AndroidRasterTest {
             native { Native.projectAdopt(it, pending, "null") }
         } finally { Native.projectFree(pending) }
         val assumed = manifest(save("assumed16.capy"))
-        assertEquals("AdobeRgb", assumed.getJSONObject("document").getJSONObject("color").getString("space"))
-        assertEquals(original.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(), assumed.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString())
+        assertEquals("adobe_rgb", assumed.compositionColor().optString("space","srgb"))
+        assertEquals(original.originalTileIdentity(original.originalImages().getJSONObject(0)), assumed.originalTileIdentity(assumed.originalImages().getJSONObject(0)))
         native { Native.dispatch(it, obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "missing_profile", "value" to 0)).toString()) }
     }
     @Test fun profileLibraryKeepsExactCopiesAndPresetOwnership() {
@@ -2543,14 +2577,14 @@ class AndroidRasterTest {
             assertEquals(original, sourceIdentity(saved))
             open(File(files, name)); refresh()
             val reopened = manifest(save("p21-reopened.capy"))
-            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(), reopened.getJSONObject("document").getJSONArray("layers").toString())
-            assertEquals(saved.getJSONObject("document").get("color").toString(), reopened.getJSONObject("document").get("color").toString())
+            assertEquals(saved.artworkRecords().toString(), reopened.artworkRecords().toString())
+            assertEquals(saved.compositionColor().toString(), reopened.compositionColor().toString())
             assertEquals(original, sourceIdentity(reopened))
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
             refresh()
             val recreated = manifest(save("p21-recreated.capy"))
-            assertEquals(reopened.getJSONObject("document").getJSONArray("layers").toString(), recreated.getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(reopened.artworkRecords().toString(), recreated.artworkRecords().toString())
             assertEquals(original, sourceIdentity(recreated))
             assertNull(host.failure); assertNull(host.actionError)
         }
@@ -2595,7 +2629,7 @@ class AndroidRasterTest {
             invoke("redo"); ready(); assertEquals(85.0,value(),.0001); assertEquals(adjusted,pixels("p27-redo.png"))
             val name = "p27-$effect-$theme-$portrait.capy"; val saved = manifest(save(name))
             open(File(files,name)); ready(); assertEquals(85.0,value(),.0001); assertEquals(adjusted,pixels("p27-reopened.png"))
-            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(),manifest(save("p27-reopened.capy")).getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(saved.artworkRecords().toString(),manifest(save("p27-reopened.capy")).artworkRecords().toString())
             records.put(obj("effect" to effect,"theme" to theme,"portrait" to portrait,"typed_radius" to value(),"typed_completion_ms" to (completed-began)/1e6,
                 "memory_before" to memoryBefore,"memory_after" to native { JSONObject(Native.rendererMemory(it)) }))
             assertNull(host.failure); assertNull(host.actionError)
@@ -2684,7 +2718,7 @@ class AndroidRasterTest {
             open(File(files, name)); refresh(); for (layer in layers) select(layer)
             assertEquals(painted, pixels("p25-$theme-reopened.png"))
             val reopened = manifest(save("p25-$theme-reopened.capy"))
-            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(), reopened.getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(saved.artworkRecords().toString(), reopened.artworkRecords().toString())
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
             refresh(); for (layer in layers) select(layer)
@@ -2699,32 +2733,72 @@ class AndroidRasterTest {
         val measurements = org.json.JSONArray()
         fun memory() = android.os.Debug.MemoryInfo().also { android.os.Debug.getMemoryInfo(it) }.let { obj("pss_kb" to it.totalPss, "private_dirty_kb" to it.totalPrivateDirty) }
         val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
-        fun pixels(name: String) = hash(png(name, recipe))
+        fun pixels(name: String): List<Byte> {
+            val bytes = png(name, recipe)
+            File(activity.getExternalFilesDir(null), name).writeBytes(bytes)
+            return hash(bytes)
+        }
+        fun assertClipboardPixels(expectedName: String, actualName: String, rgbTolerance: Int) {
+            fun decode(name: String) = checkNotNull(android.graphics.BitmapFactory.decodeFile(File(activity.getExternalFilesDir(null), name).absolutePath,
+                android.graphics.BitmapFactory.Options().apply { inPreferredConfig = android.graphics.Bitmap.Config.ARGB_8888; inPremultiplied = false; inScaled = false }))
+            val expected = decode(expectedName)
+            try {
+                val actual = decode(actualName)
+                try {
+                    assertEquals("$actualName width", expected.width, actual.width)
+                    assertEquals("$actualName height", expected.height, actual.height)
+                    val reference = IntArray(expected.width * expected.height)
+                    val pixels = IntArray(reference.size)
+                    expected.getPixels(reference, 0, expected.width, 0, 0, expected.width, expected.height)
+                    actual.getPixels(pixels, 0, actual.width, 0, 0, actual.width, actual.height)
+                    for (i in reference.indices) {
+                        assertEquals("$actualName alpha at pixel $i", reference[i] ushr 24, pixels[i] ushr 24)
+                        for (shift in listOf(0, 8, 16)) {
+                            val channel = (reference[i] ushr shift) and 255
+                            val copied = (pixels[i] ushr shift) and 255
+                            assertTrue("$actualName RGB channel ${shift / 8} at pixel $i: $channel != $copied", kotlin.math.abs(channel - copied) <= rgbTolerance)
+                        }
+                    }
+                } finally { actual.recycle() }
+            } finally { expected.recycle() }
+        }
         fun resources(bytes: ByteArray): String {
-            val index = JSONObject(manifest(bytes).getJSONObject("resources").toString())
-            val body = 52 + ByteBuffer.wrap(bytes, 12, 8).order(ByteOrder.LITTLE_ENDIAN).long.toInt()
-            assertTrue(index.getJSONArray("bindings").length() > 0)
-            for (binding in index.getJSONArray("bindings").objects())
-                assertTrue("Small LUT descriptor", binding.getJSONObject("descriptor").toString().length < 4096)
-            for (payload in index.getJSONArray("payloads").objects()) {
-                val start = body + payload.getLong("offset").toInt()
-                val binary = bytes.copyOfRange(start, start + payload.getLong("bytes").toInt())
-                assertEquals(payload.getJSONArray("digest").toString(), org.json.JSONArray(hash(binary).map { it.toInt() and 255 }).toString())
-                payload.remove("offset")
+            val index = manifest(bytes)
+            val lookups = index.resourcesOf("capy.lut3d/1")
+            assertTrue(lookups.length() > 0)
+            for (payload in lookups.objects()) {
+                assertTrue("Small LUT descriptor", payload.getJSONObject("data").toString().length < 4096)
+                val location = payload.getJSONObject("location")
+                val pack = packageMember(bytes,location.getString("pack"))
+                val start = location.getString("offset").toInt()
+                val binary = pack.copyOfRange(start,start+payload.getString("bytes").toInt())
+                val crc = java.util.zip.CRC32().apply {update(binary)}.value.toString(16).padStart(8,'0')
+                assertEquals(payload.getString("crc32"),crc)
             }
-            return index.toString()
+            return index.getJSONArray("resources").objects().map { payload ->
+                val location = payload.getJSONObject("location"); val pack = packageMember(bytes,location.getString("pack"))
+                val start = location.getString("offset").toInt()
+                JSONObject(payload.toString()).apply {remove("location");put("payload_sha256",org.json.JSONArray(hash(pack.copyOfRange(start,start+payload.getString("bytes").toInt())).map {it.toInt() and 255}))}.toString()
+            }.sorted().toString()
         }
         val original = manifest(fixture.readBytes())
         val resourceIdentity = resources(fixture.readBytes())
         val source = sourceIdentity(original)
-        val layer = original.getJSONObject("document").getJSONArray("layers").objects().first {
-            it.optJSONObject("effect")?.optJSONObject("program")?.optString("id") == "color_lookup"
-        }.getLong("id")
+        val authoredLookup = original.occurrenceRecords().objects().single {
+            val effect = it.getJSONObject("data").getJSONObject("content").optJSONObject("effect") ?: return@single false
+            val definition = original.packageData(original.packageData(effect.getString("ref")).getJSONObject("definition").getString("ref"))
+            definition.getString("key") == "color_lookup"
+        }
+        val lookupName = authoredLookup.getJSONObject("data").optString("name")
+        fun selectLookup() {
+            val token = native { state(it).array("layers").objects().single { row -> row.getString("label") == lookupName }.getLong("id") }
+            action(obj("type" to "select_layer", "id" to token))
+        }
         for (portrait in listOf(false, true)) for (theme in listOf("light", "dark")) {
             if (portrait) device.portrait(scenario) else device.landscape(scenario)
             open(fixture); refresh(); invoke("fit_canvas")
             action(obj("type" to "set_theme", "theme" to theme))
-            action(obj("type" to "select_layer", "id" to layer))
+            selectLookup()
             fun properties() = native { state(it).getJSONObject("layer_properties") }
             fun value(key: String) = properties().getJSONArray("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
             assertEquals(listOf("color_space", "intensity"), properties().getJSONArray("controls").objects().map { it.getString("key") })
@@ -2738,7 +2812,7 @@ class AndroidRasterTest {
             for (preset in properties().getJSONArray("actions").objects().filter { it.getJSONObject("action").getString("op") == "lookup_preset" }) {
                 val began = SystemClock.elapsedRealtimeNanos()
                 compose.onNodeWithTag("property-resource-choice").performScrollTo().performClick()
-                compose.onAllNodesWithText(preset.getString("label"), useUnmergedTree = true).onLast().performClick()
+                compose.onNode(hasText(preset.getString("label")) and hasAnyAncestor(isPopup())).performClick()
                 refresh()
                 assertFalse(properties().isNull("resource_selection"))
                 pixels("p24-$theme-preset.png")
@@ -2789,7 +2863,7 @@ class AndroidRasterTest {
                 open(File(files, "p24-$theme-imported.capy")); refresh()
                 assertEquals(imported, pixels("p24-$theme-imported-reopened.png"))
                 assertEquals(source, sourceIdentity(manifest(importedFile)))
-                open(fixture); refresh(); action(obj("type" to "select_layer", "id" to layer))
+                open(fixture); refresh(); selectLookup()
             } finally {
                 DocumentController.nativeFileJobsForTest = true
                 instrumentation.removeMonitor(monitor)
@@ -2807,11 +2881,15 @@ class AndroidRasterTest {
                 try {
                     if (stale) {
                         Native.projectWork(lookupTask, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
-                        action(obj("type" to "select_layer", "id" to original.getJSONObject("document").getJSONArray("layers").objects().first { it.getLong("id") != layer }.getLong("id")))
+                        val other = native { handle ->
+                            val current = state(handle).getJSONObject("layer_properties").getLong("layer")
+                            state(handle).array("layers").objects().first { it.getLong("id") != current }.getLong("id")
+                        }
+                        action(obj("type" to "select_layer", "id" to other))
                         val unchanged = native { state(it).getJSONObject("document_file").getLong("revision") }
                         native { Native.projectAdopt(it, lookupTask, "null") }
                         assertEquals(unchanged, native { state(it).getJSONObject("document_file").getLong("revision") })
-                        action(obj("type" to "select_layer", "id" to layer))
+                        selectLookup()
                     } else {
                         assertNotNull("Incomplete cube must reject", runCatching { Native.projectWork(lookupTask, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0) }.exceptionOrNull())
                         native { Native.documentComplete(it, requestId, false, "null") }
@@ -2819,6 +2897,7 @@ class AndroidRasterTest {
                 } finally { Native.projectFree(lookupTask) }
                 assertEquals(baseline, pixels("p24-$theme-rejected-$stale.png"))
             }
+
             val before = value("intensity")
             assertTrue("Fixture LUT must be active", before > 0)
             compose.onNodeWithTag("number-value-intensity").performScrollTo().performClick()
@@ -2831,21 +2910,25 @@ class AndroidRasterTest {
             assertEquals(baseline, pixels("p23-$theme-undo.png"))
             invoke("redo"); assertEquals(0.0, value("intensity"), .0001)
             assertEquals(unadjusted, pixels("p23-$theme-redo.png")); invoke("undo")
+            val beforeSpace = value("color_space")
+            val selectedSpace = if (beforeSpace == 0.0) 1.0 else 0.0
             compose.onNodeWithTag("property-color_space").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
-            compose.onNodeWithText("Display P3").performClick()
-            compose.waitUntil(30_000) { value("color_space") == 1.0 }
-            invoke("undo"); assertEquals(0.0, value("color_space"), .0001)
+            compose.onNode(hasText(if (selectedSpace == 1.0) "Display P3" else "sRGB") and hasAnyAncestor(isPopup())).performClick()
+            compose.waitUntil(30_000) { value("color_space") == selectedSpace }
+            invoke("undo"); assertEquals(beforeSpace, value("color_space"), .0001)
             var task = 0L; var clip = 0L
             val control = Native.captureControl()
             try {
                 val id = native { handle -> request(handle, "copy_merged").first.also { task = Native.clipTask(handle, it) } }
                 val consumed = task; task = 0
                 clip = Native.clipRun(consumed, control, "p23-$theme")
-                Native.clipWritePng(clip, File(files, "p23-$theme-copy.png").absolutePath)
+                Native.clipWritePng(clip, File(activity.getExternalFilesDir(null), "p23-$theme-copy.png").absolutePath)
+                assertClipboardPixels("p23-$theme-original.png", "p23-$theme-copy.png", 0)
                 val adopted = clip; clip = 0
                 native { Native.clipAdopt(it, id, adopted) }
                 native { handle -> Native.pasteClip(handle, request(handle, "paste_in_place").first) }
-                refresh(); assertEquals(baseline, pixels("p23-$theme-paste.png"))
+                refresh(); pixels("p23-$theme-paste.png")
+                assertClipboardPixels("p23-$theme-original.png", "p23-$theme-paste.png", 2)
                 invoke("undo")
             } finally {
                 if (task != 0L) Native.clipTaskFree(task)
@@ -2863,7 +2946,7 @@ class AndroidRasterTest {
             assertEquals(baseline, pixels("p23-$theme-recreated.png"))
             val recreated = save("p23-$theme-recreated.capy")
             assertEquals(resourceIdentity, resources(recreated)); assertEquals(source, sourceIdentity(manifest(recreated)))
-            assertEquals(original.getJSONObject("document").get("color").toString(), manifest(recreated).getJSONObject("document").get("color").toString())
+            assertEquals(original.compositionColor().toString(), manifest(recreated).compositionColor().toString())
             assertNull(host.failure); assertNull(host.actionError)
         }
     }
@@ -2912,15 +2995,15 @@ class AndroidRasterTest {
             assertEquals(original, sourceIdentity(saved))
             open(File(files, name)); refresh()
             val reopened = manifest(save("p22-reopened.capy"))
-            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(), reopened.getJSONObject("document").getJSONArray("layers").toString())
-            assertEquals(saved.getJSONObject("document").get("color").toString(), reopened.getJSONObject("document").get("color").toString())
+            assertEquals(saved.artworkRecords().toString(), reopened.artworkRecords().toString())
+            assertEquals(saved.compositionColor().toString(), reopened.compositionColor().toString())
             assertEquals(original, sourceIdentity(reopened))
             assertEquals(pixels, hash(png("p22-reopened.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))))
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
             refresh()
             val recreated = manifest(save("p22-recreated.capy"))
-            assertEquals(reopened.getJSONObject("document").getJSONArray("layers").toString(), recreated.getJSONObject("document").getJSONArray("layers").toString())
+            assertEquals(reopened.artworkRecords().toString(), recreated.artworkRecords().toString())
             assertEquals(original, sourceIdentity(recreated))
             assertEquals(pixels, hash(png("p22-recreated.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))))
             assertNull(host.failure); assertNull(host.actionError)
@@ -2942,7 +3025,7 @@ class AndroidRasterTest {
         val recipe=builtinRecipe(2).put("format","Png")
         val pixels=png("placement-original.png",recipe)
         open(File(files,"placement-original.png"))
-        val source=manifest(save("placement-original.capy")).getJSONObject("tiled_sources")
+        val source=manifest(save("placement-original.capy"))
         fresh("DisplayP3","U8")
         val before=manifest(save("placement-master.capy"))
         val fileBefore=native {state(it).getJSONObject("document_file")}
@@ -2959,15 +3042,15 @@ class AndroidRasterTest {
         native { Native.dispatch(it,obj("type" to "invoke","command" to "apply_transform").toString()) };tick()
         assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         val placed=manifest(save("placement-result.capy"))
-        assertEquals(before.getJSONObject("document").getJSONObject("color").toString(),placed.getJSONObject("document").getJSONObject("color").toString())
-        assertEquals(source.getJSONArray("images").toString(),placed.getJSONObject("tiled_sources").getJSONArray("images").toString())
-        assertEquals(source.getJSONArray("profiles").toString(),placed.getJSONObject("tiled_sources").getJSONArray("profiles").toString())
+        assertEquals(before.compositionColor().toString(),placed.compositionColor().toString())
+        assertEquals(source.originalIdentity(),placed.originalIdentity())
+        assertEquals(source.profileIdentity(),placed.profileIdentity())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick()
-        assertEquals(before.getJSONObject("tiled_sources").toString(),manifest(save("placement-undo.capy")).getJSONObject("tiled_sources").toString())
+        assertEquals(before.originalIdentity(),manifest(save("placement-undo.capy")).originalIdentity())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick()
-        assertEquals(placed.getJSONObject("tiled_sources").toString(),manifest(save("placement-redo.capy")).getJSONObject("tiled_sources").toString())
+        assertEquals(placed.originalIdentity(),manifest(save("placement-redo.capy")).originalIdentity())
         open(File(files,"placement-result.capy"))
-        assertEquals(placed.getJSONObject("tiled_sources").toString(),manifest(save("placement-reopened.capy")).getJSONObject("tiled_sources").toString())
+        assertEquals(placed.originalIdentity(),manifest(save("placement-reopened.capy")).originalIdentity())
         val infoTask=native {Native.documentInfoTask(it)}
         val info=Native.documentInfo(infoTask)
         assertTrue(info.contains("Display P3"));assertTrue(info.contains("16-bit RGB"));assertTrue(info.contains("embedded ICC retained"))
@@ -2992,19 +3075,26 @@ class AndroidRasterTest {
                 clipboard.setPrimaryClip(android.content.ClipData.newUri(resolver,"Capy test images",uri).apply { addItem(android.content.ClipData.Item(uri)) })
                 host.invoke("paste_image")
             }
-            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.getJSONObject("document").getJSONArray("layers").length()+2}
+            compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONArray("layers")?.length()==placed.occurrenceRecords().length()+2}
             compose.waitUntil(30_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
             assertNull(host.actionError)
             pressCanvasBar("apply_transform")
             compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.first { it.getString("id")=="placement_original_size" }?.getBoolean("enabled")==false }
             DocumentController.nativeFileJobsForTest=true
             val pasted=manifest(save("placement-pasted.capy"))
-            assertEquals("U8",pasted.getJSONObject("document").getJSONObject("color").getString("depth"))
-            for(image in pasted.getJSONObject("tiled_sources").getJSONArray("images").objects()) {
-                assertEquals("U16",image.getString("depth"))
-                assertEquals(source.getJSONArray("images").getJSONObject(0).getJSONArray("tiles").toString(),image.getJSONArray("tiles").toString())
+            assertEquals("u8",pasted.compositionColor().optString("depth","u8"))
+            assertEquals(placed.occurrenceRecords().length()+2,pasted.occurrenceRecords().length())
+            assertEquals(placed.originalImages().length()+2,pasted.originalImages().length())
+            for(image in pasted.originalImages().objects()) {
+                assertEquals("u16",image.getJSONObject("interpretation").optString("depth","u8"))
+                assertEquals(source.originalTileIdentity(source.originalImages().getJSONObject(0)),pasted.originalTileIdentity(image))
             }
-            assertEquals(source.getJSONArray("profiles").toString(),pasted.getJSONObject("tiled_sources").getJSONArray("profiles").toString())
+            val retainedProfiles = pasted.profileRecordsById()
+            assertEquals("ICC resource IDs are distinct",pasted.resourcesOf("capy.icc/1").length(),retainedProfiles.size)
+            for ((id, record) in placed.profileRecordsById()) {
+                assertEquals("Existing ICC resource $id survives unchanged",record,retainedProfiles[id])
+            }
+            assertEquals("Every pasted ICC resource retains the original contents",source.profileContentIdentity(),pasted.profileContentIdentity())
         } finally {
             DocumentController.nativeFileJobsForTest=true
             compose.runOnUiThread {previous?.let {clipboard.setPrimaryClip(it)} ?: clipboard.clearPrimaryClip()}
@@ -3032,36 +3122,36 @@ class AndroidRasterTest {
                 tick();return stats
             }finally{Native.sourceFree(task);Native.captureFree(flag)}
         }
-        fun backingEqual(a:JSONObject,b:JSONObject){for(key in listOf("blobs","rasters","tiled_sources"))assertEquals(key,a.get(key).toString(),b.get(key).toString())}
-        fun activeSource(m:JSONObject):JSONObject {
-            val id=m.getJSONObject("document").getLong("active_layer");val s=m.getJSONObject("tiled_sources")
-            val index=s.getJSONArray("layers").objects().first{it.getLong("target")==id}.getInt("image")
-            return s.getJSONArray("images").getJSONObject(index)
+        fun backingEqual(a:JSONObject,b:JSONObject){
+            assertEquals(a.rasterResources().toString(),b.rasterResources().toString())
+            assertEquals(a.paintRecords().toString(),b.paintRecords().toString())
+            assertEquals(a.originalIdentity(),b.originalIdentity())
         }
+        fun activeSource(m:JSONObject):JSONObject = m.originalImages().getJSONObject(0)
         val before=manifest(save("source-before.capy"))
         change("rasterize_source",cancel=true);backingEqual(before,manifest(save("source-cancel-worker.capy")))
         change("repair_source_profile",obj("Builtin" to "AdobeRgb"),apply=false);backingEqual(before,manifest(save("source-cancel-preview.capy")))
         assertFalse(change("repair_source_profile",obj("Builtin" to "AdobeRgb"))!!.getBoolean("adds_layer"))
         val repaired=manifest(save("source-repaired.capy"))
-        assertEquals(before.getJSONArray("blobs").toString(),repaired.getJSONArray("blobs").toString())
-        assertEquals("AdobeRgb",activeSource(repaired).getJSONObject("profile").getString("Builtin"))
+        assertEquals(before.rasterResources().toString(),repaired.rasterResources().toString())
+        assertEquals("adobe_rgb",activeSource(repaired).getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(before,manifest(save("source-repair-undo.capy")))
         native {Native.dispatch(it,obj("type" to "invoke","command" to "redo").toString())};tick();backingEqual(repaired,manifest(save("source-repair-redo.capy")))
         change("rasterize_source")
         val rasterized=manifest(save("source-rasterized.capy"));val image=activeSource(rasterized)
-        assertEquals("Rasterized",image.getString("kind"));assertEquals("U8",image.getString("depth"));assertEquals("DisplayP3",image.getJSONObject("profile").getString("Builtin"))
+        assertEquals("rasterized",image.optString("role","original"));assertEquals("u8",image.getJSONObject("interpretation").optString("depth","u8"));assertEquals("display_p3",image.getJSONObject("interpretation").getJSONObject("profile").getString("builtin"))
         assertEquals(activeSource(repaired).getJSONArray("extent").toString(),image.getJSONArray("extent").toString())
         native {Native.dispatch(it,obj("type" to "invoke","command" to "undo").toString())};tick();backingEqual(repaired,manifest(save("source-rasterize-undo.capy")))
         native {
             Native.dispatch(it,obj("type" to "invoke","command" to "fit_canvas").toString())
             Native.dispatch(it,obj("type" to "invoke","command" to "pen").toString())
         };tick();stroke(0.0)
-        val painted=manifest(save("source-painted.capy"));val oldId=painted.getJSONObject("document").getLong("active_layer")
+        val painted=manifest(save("source-painted.capy"));val oldId=painted.occurrenceRecords().objects().first {it.getJSONObject("data").getJSONObject("content").has("paint")}.getString("id")
         assertTrue(change("repair_source_profile",obj("Builtin" to "ProPhoto"))!!.getBoolean("adds_layer"))
         val added=manifest(save("source-corrected-layer.capy"))
-        assertEquals(painted.getJSONObject("document").getJSONArray("layers").length()+1,added.getJSONObject("document").getJSONArray("layers").length())
-        assertEquals(painted.getJSONObject("document").getJSONArray("layers").objects().first{it.getLong("id")==oldId}.toString(),added.getJSONObject("document").getJSONArray("layers").objects().first{it.getLong("id")==oldId}.toString())
-        assertEquals(painted.getJSONArray("blobs").toString(),added.getJSONArray("blobs").toString())
+        assertEquals(painted.occurrenceRecords().length()+1,added.occurrenceRecords().length())
+        assertEquals(painted.occurrenceRecords().objects().first{it.getString("id")==oldId}.toString(),added.occurrenceRecords().objects().first{it.getString("id")==oldId}.toString())
+        assertEquals(painted.rasterResources().toString(),added.rasterResources().toString())
         open(File(files,"source-corrected-layer.capy"));backingEqual(added,manifest(save("source-corrected-reopened.capy")))
         DocumentController.nativeFileJobsForTest=false
         compose.runOnUiThread {host.invoke("rasterize_source")}
@@ -3104,25 +3194,25 @@ class AndroidRasterTest {
             } finally {Native.colorFree(task);Native.captureFree(flag)}
         }
         fun sameBacking(a:JSONObject,b:JSONObject) {
-            assertEquals(a.getJSONArray("blobs").toString(),b.getJSONArray("blobs").toString())
-            assertEquals(a.getJSONObject("document").getJSONObject("color").toString(),b.getJSONObject("document").getJSONObject("color").toString())
+            assertEquals(a.rasterResources().toString(),b.rasterResources().toString())
+            assertEquals(a.compositionColor().toString(),b.compositionColor().toString())
         }
         val before=manifest(save("color-before.capy"))
         change("assign_profile",obj("Assign" to "AdobeRgb"),true)
         sameBacking(before,manifest(save("color-cancel.capy")))
         change("assign_profile",obj("Assign" to "AdobeRgb"))
         val assigned=manifest(save("color-assigned.capy"))
-        assertEquals(before.getJSONArray("blobs").toString(),assigned.getJSONArray("blobs").toString())
-        assertEquals("AdobeRgb",assigned.getJSONObject("document").getJSONObject("color").getString("space"))
+        assertEquals(before.rasterResources().toString(),assigned.rasterResources().toString())
+        assertEquals("adobe_rgb",assigned.compositionColor().optString("space","srgb"))
         change("undo");sameBacking(before,manifest(save("color-undo.capy")))
         change("redo");sameBacking(assigned,manifest(save("color-redo.capy")))
         change("convert_color_space",obj("Convert" to obj("space" to "ProPhoto","options" to obj("intent" to "RelativeColorimetric","black_point_compensation" to false))))
         val converted=manifest(save("color-converted.capy"))
-        assertEquals("ProPhoto",converted.getJSONObject("document").getJSONObject("color").getString("space"))
-        assertNotEquals(assigned.getJSONArray("blobs").toString(),converted.getJSONArray("blobs").toString())
+        assertEquals("pro_photo",converted.compositionColor().optString("space","srgb"))
+        assertNotEquals(assigned.rasterResources().toString(),converted.rasterResources().toString())
         change("change_bit_depth",obj("Depth" to obj("depth" to "U8","dither" to "None")))
         val reduced=manifest(save("color-depth.capy"))
-        assertTrue(reduced.getJSONArray("blobs").objects().all {it.getJSONObject("descriptor").getInt("bits_per_channel")==8})
+        assertTrue(reduced.rasterResources().objects().all {it.getJSONObject("data").optString("depth","u8")=="u8"})
         change("undo");sameBacking(converted,manifest(save("color-depth-undo.capy")))
         change("redo");sameBacking(reduced,manifest(save("color-depth-redo.capy")))
 
@@ -3142,10 +3232,10 @@ class AndroidRasterTest {
         for(key in listOf("epoch","revision","modified","location"))assertEquals(originalState.get(key).toString(),afterCopy.get(key).toString())
         sameBacking(reduced,manifest(save("copy-master-unchanged.capy")))
         val copied=manifest(copyFile.readBytes())
-        assertEquals(1,copied.getJSONObject("document").getJSONArray("layers").length())
-        assertEquals("Srgb",copied.getJSONObject("document").getJSONObject("color").getString("space"))
-        assertEquals("U8",copied.getJSONObject("document").getJSONObject("color").getString("depth"))
-        assertEquals("Rasterized",copied.getJSONObject("tiled_sources").getJSONArray("images").getJSONObject(0).getString("kind"))
+        assertEquals(1,copied.occurrenceRecords().length())
+        assertEquals("srgb",copied.compositionColor().optString("space","srgb"))
+        assertEquals("u8",copied.compositionColor().optString("depth","u8"))
+        assertEquals("rasterized",copied.originalImages().getJSONObject(0).optString("role","original"))
         open(copyFile);sameBacking(copied,manifest(save("copy-reopened.capy")))
 
         open(File(files,"color-depth.capy"));sameBacking(reduced,manifest(save("color-reopened.capy")))
@@ -3340,18 +3430,43 @@ class AndroidRasterTest {
             native { Native.dispatch(it,obj("type" to "invoke","command" to command).toString()) }
             compose.waitUntil(10_000) { !tick() }
         }
+        compose.waitUntil(60_000) { !tick() }
         stroke(0.0)
         val first=save("first.capy")
-        assertTrue(manifest(first).getJSONArray("blobs").length()>0)
+        assertTrue(manifest(first).rasterResources().length()>0)
+        assertTrue("Source-only save omits output Preview", manifest(first).outputData().isNull("representation"))
+        java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(first)).use { zip ->
+            while (true) {
+                val entry = zip.nextEntry ?: break
+                assertNotEquals("Source-only save omits Preview pixels", "preview.png", entry.name)
+            }
+        }
         val firstPng=png("first.png")
         point(1,0.0,120.0);point(2,40.0,120.0)
         val during=saveTask() // Must exclude this active contact without blocking it.
         point(3,90.0,120.0)
         val duringBytes=finishSave(during,"during.capy")
-        assertEquals(manifest(first).getJSONArray("blobs").toString(),manifest(duringBytes).getJSONArray("blobs").toString())
+        assertEquals(manifest(first).rasterResources().toString(),manifest(duringBytes).rasterResources().toString())
         assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
         val secondPng=png("second.png")
         assertNotEquals(hash(firstPng),hash(secondPng))
+        val beforeFailedSave = native { state(it).getJSONObject("document_file").toString() }
+        val previousFile = File(files,"failed-save.capy").apply { writeBytes(first) }
+        val failedSave = saveTask()
+        try {
+            assertNotNull("Read-only JNI output rejects the save", runCatching {
+                Native.projectWork(failedSave.first,ParcelFileDescriptor.open(previousFile,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
+            }.exceptionOrNull())
+            assertArrayEquals("Failed write preserves the previous file",first,previousFile.readBytes())
+            native { Native.documentComplete(it,failedSave.second,false,"null") }
+        } finally { Native.projectFree(failedSave.first) }
+        assertEquals("Failed save preserves the file checkpoint",beforeFailedSave,native { state(it).getJSONObject("document_file").toString() })
+        assertNotNull("Finished old save request cannot acknowledge newer paint",runCatching {
+            native { Native.documentComplete(it,during.second,true,"null") }
+        }.exceptionOrNull())
+        assertEquals("Stale acknowledgement preserves the file checkpoint",beforeFailedSave,native { state(it).getJSONObject("document_file").toString() })
+        assertTrue(native { state(it).getJSONObject("document_file").getBoolean("modified") })
+        assertEquals(hash(secondPng),hash(png("failed-save-retained.png")))
         native { Native.destroyGpuForTest(it) }
         compose.runOnUiThread { host.documentChanged() }
         compose.waitUntil(10_000) {host.failure != null}
@@ -3360,12 +3475,14 @@ class AndroidRasterTest {
         assertNull(host.failure)
         assertEquals(hash(secondPng),hash(png("replaced.png")))
         history("undo")
+        assertFalse("Undo reaches the acknowledged save boundary",native { state(it).getJSONObject("document_file").getBoolean("modified") })
         assertEquals(hash(firstPng),hash(png("undo.png")))
         history("redo")
+        assertTrue("Redo retains newer unsaved paint",native { state(it).getJSONObject("document_file").getBoolean("modified") })
         assertEquals(hash(secondPng),hash(png("redo.png")))
         open(File(files,"first.capy"))
         assertEquals(hash(firstPng),hash(png("opened.png")))
-        assertEquals(manifest(first).getJSONArray("blobs").toString(),manifest(save("roundtrip.capy")).getJSONArray("blobs").toString())
+        assertEquals(manifest(first).rasterResources().toString(),manifest(save("roundtrip.capy")).rasterResources().toString())
         val corrupt=File(files,"corrupt.capy");corrupt.writeBytes(first.copyOf().also {it[it.lastIndex]=(it.last().toInt() xor 1).toByte()})
         val epoch=native {state(it).getJSONObject("document_file").getLong("epoch")}
         open(corrupt,true)
@@ -3454,13 +3571,13 @@ class AndroidRasterTest {
         fun order(value:JSONObject){native{Native.documentTabs(it,value.toString())}}
         fun trim(){while(true){val task=native{Native.documentSpillTask(it)};if(task==0L)break;Native.documentSpillWork(task)}}
         val first=tabs().getLong("selected")
-        stroke(0.0);val exact=manifest(save("tabs-exact.capy")).getJSONArray("blobs").toString()
+        stroke(0.0);val exact=manifest(save("tabs-exact.capy")).rasterResources().toString()
         action("undo") // Its only ink is now retained exclusively by redo history.
         val second=fresh();assertEquals(listOf(first,second),ids())
         trim();assertEquals(0,tabs().getInt("parked_renderers"))
         action("add_layer");val secondLayers=native{state(it).array("layers").length()}
         select(first);action("redo")
-        assertEquals(exact,manifest(save("tabs-redo.capy")).getJSONArray("blobs").toString())
+        assertEquals(exact,manifest(save("tabs-redo.capy")).rasterResources().toString())
         select(second);assertEquals(secondLayers,native{state(it).array("layers").length()})
         action("undo");assertEquals(secondLayers-1,native{state(it).array("layers").length()})
         val third=fresh()
@@ -3469,7 +3586,7 @@ class AndroidRasterTest {
         order(obj("op" to "history","redo" to true));assertEquals(listOf(third,first,second),ids())
         val retained=host;scenario.recreate();scenario.onActivity{activity=it};assertSame(retained,host)
         compose.waitUntil(60_000){host.surfaceReady};assertEquals(listOf(third,first,second),ids())
-        assertEquals(exact,manifest(save("tabs-recreated.capy")).getJSONArray("blobs").toString())
+        assertEquals(exact,manifest(save("tabs-recreated.capy")).rasterResources().toString())
         val bad=File(files,"tabs-invalid.capy").apply{writeText("invalid")};open(bad,true);assertEquals(3,ids().size)
         select(second);stroke(80.0);ready()
         assertTrue("The close fixture must contain committed ink",native{state(it).getJSONObject("document_file").getBoolean("modified")})
@@ -3504,8 +3621,14 @@ class AndroidRasterTest {
         action("add_layer");action("add_layer")
         val secondLayers=native{state(it).array("layers").length()}
         var write:Job?=null
-        compose.runOnUiThread{host.documentChanged();write=host.recovery.capture()};runBlocking{write?.join()}
-        assertEquals(2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
+        compose.runOnIdle{host.documentChanged();write=host.recovery.capture()}
+        assertNotNull("Recovery capture is started for the ready drawing window",write)
+        runBlocking{write!!.join()}
+        val observations=native {handle -> JSONObject(Native.documentTabs(handle,obj("op" to "view").toString())).array("tabs").objects().map {tab ->
+            Native.documentTabs(handle,obj("op" to "recovery","id" to tab.getLong("id")).toString())
+        }}
+        assertNull("Recovery capture failed: observations=$observations; tabs=${tabs()}",host.actionError)
+        assertEquals("Recovery observations=$observations; tabs=${tabs()}",2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
         assertEquals(listOf(true,true),tabs().array("tabs").objects().map{it.getBoolean("modified")})
         scenario.close();launch()
         repeat(2) {
@@ -3519,7 +3642,7 @@ class AndroidRasterTest {
             assertTrue(tab.getBoolean("modified"));assertTrue(tab.isNull("uri"))
             val capture=native{Native.projectRecoveryFor(it,tab.getLong("id"))};val file=File(files,"recovered-tab-${tab.getLong("id")}.capy")
             try{Native.projectPublish(capture,file.absolutePath)}finally{Native.projectFree(capture)}
-            manifest(file.readBytes()).getJSONObject("document").getJSONArray("layers").length()
+            manifest(file.readBytes()).occurrenceRecords().length()
         }
         assertEquals(setOf(firstLayers,secondLayers),counts.toSet())
         assertEquals(2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})

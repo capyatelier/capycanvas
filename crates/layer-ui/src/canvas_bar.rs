@@ -1,5 +1,6 @@
 //! The canvas action bar: the next steps for the object being edited, shown beside it.
 use super::*;
+use layer_core::authored::SourceTarget;
 use layer_core::{Point, Rect};
 use serde::{Deserialize, Serialize};
 
@@ -302,7 +303,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.canvas_bar.armed = false;
         }
         let history = std::mem::take(&mut self.canvas_bar.history);
-        let selection = self.engine.document().selection.as_ref();
+        let selection = self.engine.document().working.selection.as_ref();
         let previous = self.canvas_bar.selection.as_ref().map(|s| &s.0);
         if (selection.is_none() && previous.is_none()) || selection.zip(previous).is_some_and(|(a, b)| same_selection(a, b)) {
             return;
@@ -318,7 +319,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn selection_plan(&self) -> Option<Plan> {
-        self.engine.document().selection.as_ref()?;
+        self.engine.document().working.selection.as_ref()?;
         let tool = self.layer_interaction.tool;
         let offered = tool.selection_tool().is_some()
             || tool == LayerCanvasTool::Move
@@ -376,12 +377,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             ),
             Some(layer_core::SelectionTarget::Saved(id)) => (
                 CanvasBarKind::SelectionLayer,
-                CanvasBarCaption::Editing { message: MessageId::TOOLBAR_EDITING_LAYER, name: doc.layer(id)?.name.clone() },
+                CanvasBarCaption::Editing { message: MessageId::TOOLBAR_EDITING_LAYER, name: doc.scene().occurrence(id)?.name.clone() },
                 vec![command(CommandId::LoadSelectionLayer), command(CommandId::InvertSelectionLayer)],
                 PlanItem::Button(CommandId::ReturnToArtwork, MessageId::TOOLBAR_RETURN_TO_ARTWORK),
             ),
-            None if doc.active_mask => {
-                let layer = doc.layer(doc.active_layer)?;
+            None if matches!(doc.working.target, Some(SourceTarget::Coverage(_))) => {
+                let layer = doc.scene().occurrence(doc.working.occurrence?)?;
                 let enabled = layer.mask.as_ref()?.enabled;
                 (
                     CanvasBarKind::LayerMask,
@@ -570,7 +571,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             kind: plan.kind,
             toolbar: ToolbarContext { generation: 0, ..self.state.toolbar_context() },
             transaction: if self.operation.active() { self.operation.serial() } else { 0 },
-            guide: self.rulers.selected.filter(|_| plan.kind == CanvasBarKind::Guide),
+            guide: self.selected_ruler_token().filter(|_| plan.kind == CanvasBarKind::Guide),
             label: plan.label.clone(),
             anchor: self.canvas_bar_anchor(plan.kind),
             flags: plan

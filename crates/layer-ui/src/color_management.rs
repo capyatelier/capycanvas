@@ -21,12 +21,12 @@ pub fn proof_view<R: CanvasRenderer>(session: &UiSession<R>) -> Value {
             }
             numbers
             };
-    json!({"mode":session.proof_panel_mode(), "hdr":document.color.depth.is_float(), "depth":document.color.depth,
+    json!({"mode":session.proof_panel_mode(), "hdr":document.composition().color.depth.is_float(), "depth":document.composition().color.depth,
         "recipe":recipe, "pad":crate::proof_panel::sdr_pad_values(recipe),
         "readouts":[format!("{:.0}%",recipe.contrast*100.), format!("{:+.0}%",recipe.balance*100.),
             format!("{:+.0}%",recipe.exposure*25.),format!("{:.0}%",recipe.highlight_color*100.)],
         "numbers":numbers, "icons":crate::proof_panel::SDR_READOUT_ICONS,
-        "print":document.proof.as_ref().map(|p|json!({"name":p.name})), "gamut_warning":session.state().gamut_warning,
+        "print":document.output().proof.as_ref().map(|p|json!({"name":p.name})), "gamut_warning":session.state().gamut_warning,
         "intents":crate::proof_panel::proof_intents(session.localization()), "simulations":crate::proof_panel::proof_simulations(session.localization())})
 }
 

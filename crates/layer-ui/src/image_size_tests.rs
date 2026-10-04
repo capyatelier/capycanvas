@@ -6,12 +6,12 @@ fn image_size_view(s: &UiSession<Recorder>) -> ImageSizeView {
     s.state.layer_tools.image_size.clone().expect("Image Size is open")
 }
 
-fn resampled(s: &mut UiSession<Recorder>) -> Vec<(LayerId, layer_core::ImageTransform)> {
+fn resampled(s: &mut UiSession<Recorder>) -> Vec<(layer_core::authored::SourceTarget, layer_core::ImageTransform)> {
     s.renderer_mut()
         .pending_operations
         .iter()
         .map(|(id, op)| match &op.kind {
-            layer_core::LayerOperationKind::Transform(transform) => (*id, transform.clone()),
+            layer_core::RasterOperationKind::Transform(transform) => (*id, transform.clone()),
             kind => panic!("a resample, not {kind:?}"),
         })
         .collect()
@@ -20,7 +20,7 @@ fn resampled(s: &mut UiSession<Recorder>) -> Vec<(LayerId, layer_core::ImageTran
 #[test]
 fn image_size_scales_down_with_constrained_proportions_in_one_undo_step() {
     let mut s = crop_session();
-    let paint = s.engine.document().layers[0].id;
+    let paint = s.engine.document().working.target.unwrap();
     rectangle_selection(&mut s, [100., 100., 300., 200.]);
     let before = s.engine.document().clone();
     invoke(&mut s, CommandId::ImageSize);
@@ -42,19 +42,19 @@ fn image_size_scales_down_with_constrained_proportions_in_one_undo_step() {
     assert!(s.state.layer_tools.image_size.is_none());
     s.frame(20, 20).unwrap();
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [500, 400]);
+    assert_eq!(doc.composition().size, [500, 400]);
     let [(id, transform)] = resampled(&mut s).try_into().unwrap();
     assert_eq!(id, paint);
     assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Lanczos, "Automatic keeps detail when reducing");
     let half = layer_core::Affine([0.5, 0., 0., 0.5, 0., 0.]);
-    assert_eq!(s.engine.document().selection, Some(before.selection.as_ref().unwrap().transformed(half).unwrap()));
+    assert_eq!(s.engine.document().working.selection, Some(before.working.selection.as_ref().unwrap().transformed(half).unwrap()));
     invoke(&mut s, CommandId::Undo);
     s.frame(21, 21).unwrap();
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 800]);
-    assert_eq!(s.engine.document().layers, before.layers);
+    assert_eq!(s.engine.document().composition().size, [1000, 800]);
+    assert_live_artwork_eq(s.engine.document(), &before);
     assert!(s.engine.can_undo(), "only the Image Size step was undone");
     invoke(&mut s, CommandId::Undo);
-    assert!(s.engine.document().selection.is_none());
+    assert!(s.engine.document().working.selection.is_none());
 }
 
 #[test]
@@ -74,7 +74,7 @@ fn image_size_in_percent_with_free_proportions_and_a_chosen_filter() {
     image_size(&mut s, ImageSizeAction::Resample { resample: ImageResample::Nearest });
     image_size(&mut s, ImageSizeAction::Apply);
     s.frame(20, 20).unwrap();
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1500, 800]);
+    assert_eq!(s.engine.document().composition().size, [1500, 800]);
     let [(_, transform)] = resampled(&mut s).try_into().unwrap();
     assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Nearest);
     assert_eq!(transform.as_affine(), Some(layer_core::Affine([1.5, 0., 0., 1., 0., 0.])));
@@ -99,8 +99,8 @@ fn image_size_changes_only_the_resolution_or_both_in_one_step() {
     image_size(&mut s, ImageSizeAction::Apply);
     s.frame(20, 20).unwrap();
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [1000, 800]);
-    assert_eq!(doc.resolution, Some(layer_core::ImageResolution::ppi(300)));
+    assert_eq!(doc.composition().size, [1000, 800]);
+    assert_eq!(doc.composition().resolution, Some(layer_core::ImageResolution::ppi(300)));
     assert!(s.renderer_mut().pending_operations.is_empty(), "no pixel work");
     invoke(&mut s, CommandId::ImageSize);
     assert_eq!(image_size_view(&s).resolution, 300.);
@@ -109,11 +109,11 @@ fn image_size_changes_only_the_resolution_or_both_in_one_step() {
     image_size(&mut s, ImageSizeAction::Apply);
     s.frame(21, 21).unwrap();
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [2000, 1600]);
-    assert_eq!(doc.resolution, Some(layer_core::ImageResolution::ppi(150)), "whole pixels per inch");
+    assert_eq!(doc.composition().size, [2000, 1600]);
+    assert_eq!(doc.composition().resolution, Some(layer_core::ImageResolution::ppi(150)), "whole pixels per inch");
     invoke(&mut s, CommandId::Undo);
     let doc = s.engine.document();
-    assert_eq!(([doc.width, doc.height], doc.resolution), ([1000, 800], Some(layer_core::ImageResolution::ppi(300))), "one step");
+    assert_eq!((doc.composition().size, doc.composition().resolution), ([1000, 800], Some(layer_core::ImageResolution::ppi(300))), "one step");
 }
 
 #[test]

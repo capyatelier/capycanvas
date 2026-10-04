@@ -2,12 +2,11 @@
 
 [Technical documentation](../README.md)
 
-This is the target contract for the [format cutover](../development/capy-format.md).
-The shared `layer-core::package` library implements this envelope, typed record
-adapters, immutable resource visitor, bounded transport and package I/O. The
-running application still uses the pre-release format described in
-[project format](project-format.md) until M3 replaces it. Library tests do not
-qualify host journeys, device admission or frame performance.
+The shared `layer-core::package` library implements the application's portable
+`.capy` envelope, typed record adapters, immutable resource visitor, bounded
+transport and package I/O. The [authored model](authored-model.md) defines runtime
+ownership; [project saving](project-format.md) describes capture and publication.
+Library tests do not qualify host journeys, device admission or frame performance.
 
 ## Envelope and references
 
@@ -195,7 +194,7 @@ simulation; absolute colorimetric intent forbids black-point compensation.
 Effect `values` maps stable parameter keys to `{kind,value}` values: `number`
 (F32), `toggle` (boolean), `choice` (stable option string), `color` (portable
 color), `curve` (ordered `[x,y]` pairs), `gradient` (ordered
-`{position,color}` stops), or `lut3d` (visible resource reference or explicit
+`{position,color}` stops), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
 null). Omission means the definition default; null LUT means intentionally empty.
 Definition parameters are a map keyed by stable keys, with required `kind`,
 `default`, `label`, and optional `section`, `page`, `visible_when`, `soft_bounds`,
@@ -255,7 +254,7 @@ Pack partition and range changes never change source or resource identity.
 | `capy.icc/1` | `raw`; exact profile bytes, profile interpretation validated by the color subsystem. |
 | `capy.photo-metadata/1` | `raw`; `kind` is `exif`, `xmp` or `iptc`; retain exact supplied bytes. |
 | `capy.wgsl/1` | `utf8`; resolved shader text, local dependency slots only. |
-| `capy.lut3d/1` | `capy.lut3d-block/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain/title. |
+| `capy.lut3d/1` | `capy.lut3d-block/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain. Titles belong to individual parameter bindings. |
 
 ICC, photo metadata, WGSL and LUT resources may use `capy.lz4-bytes/1` instead
 of their raw encoding. In that case `data.decoded_bytes` is required and gives
@@ -394,8 +393,8 @@ The complete shared opening operation yields these outcomes:
 
 Unsupported packages without previews remain Preserved and permit copying the
 source and reporting any understood output inventory. A preserved/recovered view
-is not an editable preview `Project`. It cannot
-replace the original with flattened pixels, acknowledge an editable save, or
+never constructs an editable `Document`. It cannot replace the original with
+flattened pixels, acknowledge an editable save, or
 enter paint/history code. Converting a representation into new artwork requires
 an explicit operation with a new document identity and destination.
 
@@ -424,8 +423,8 @@ are copied in bounded chunks before random-access ZIP parsing. Browser workers
 retain package/Blob or private-store owners and service bounded range requests;
 U64 values cross bridges as strings or explicit integer halves, never JavaScript
 numbers. No input callback reads files, decompresses samples or copies pixels.
-M3 may eagerly prepare admitted resources through this interface. It need not
-implement M4 demand loading, but cannot require every host to build another full
+The integrated baseline uses bounded eager preparation through this interface.
+Optional M4 demand loading remains separate work; hosts do not build another full
 archive or recreate an artwork schema beside shared Rust.
 
 A shared capture from the ordered editor owner contains immutable artwork roots,
@@ -470,6 +469,28 @@ without constructing, reopening or unpacking an archive. Session selection,
 targets, camera, tab order and bounded history remain outside the portable
 manifest; their shared owners/generations remain available for later coherent
 capture under the [recovery boundary](../development/autorecovery.md).
+
+## Worker transport
+
+`package::transfer::PreparedTransfer` captures the same typed artwork and final
+manifest adapters without assembling an archive. Its private descriptor also
+carries runtime store slots, checkpoint, verified resource receipts and optional
+working selection. These execution fields are outside the portable manifest.
+Workers retain compact handle identity, including vacant slots, so returned
+results can be matched to the captured source targets.
+
+Payload chunks are bounded by `MAX_RANGE_BYTES`. `TransferReceiver` adopts
+complete verified payloads into immutable owners; incomplete transfers fail.
+Coverage word storage is shared across aliases. Worker admission verifies external
+bytes before this trusted internal transfer, so main-thread adoption does not
+repeat image decoding, color-profile preparation or decoded-content hashing.
+Unchanged encoding receipts and copy-safe ancillary payloads retain their exact
+bytes and resource identities.
+
+The Web host sends bounded transferable buffers and yields between chunks.
+Its worker streams package writes into private browser storage, returning a file
+handle for publication. Preserved packages keep the original browser `Blob`;
+showing their summary or preview does not reconstruct an editable document.
 
 ## Fixtures and acceptance cases
 

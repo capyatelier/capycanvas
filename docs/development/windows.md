@@ -53,6 +53,15 @@ Preferences live in `settings.json` and workspaces in `workspaces.sqlite3` under
 File workers use `color_storage::export_profile` for imported profiles in export
 options, export presets and print-proof setup.
 
+Packages with unsupported or damaged authored content open in a separate read-only
+view. The current drawing remains open. The view presents the shared package
+status, available output names and bounded preview, with Copy Original, Export
+Preview and Close actions. Copy Original writes the retained package bytes on the
+document worker. Export Preview appears when the package has a verified preview
+and writes those exact PNG bytes to a new destination on the document worker.
+Recovery files opened in this view remain on disk. Only editable recovery
+adoption acknowledges a restore.
+
 Language changes prepare shared copy on the profile worker, then update retained
 controls in every window using that private profile. Publication waits for native
 text composition keys, canvas contacts and shared gestures to retire. System

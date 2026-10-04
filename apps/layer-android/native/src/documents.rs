@@ -6,7 +6,9 @@ use jni::{
     objects::{JClass, JString},
     sys::{jboolean, jint, jlong},
 };
-use layer_core::Project;
+use layer_core::authored::{ArtworkCapture, SourceTarget};
+use layer_core::package::codec::PreparedPackage;
+use std::sync::atomic::AtomicBool;
 use layer_host::{Renderer, export::ExportTask, open::OpenEnvironment, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, UiSession};
@@ -29,7 +31,8 @@ impl Environment {
 }
 enum Payload {
     Lookup { resource:Option<std::sync::Arc<layer_core::Lut3d>>, name:String },
-    Save(Option<Project>),
+    Save(Option<ArtworkCapture>),
+    Package {view: layer_ui::PackageView, localization: std::sync::Arc<layer_ui::Localizer>},
     Export {
         export: Box<ExportTask>,
         control: layer_render_wgpu::snapshot::CaptureControl,
@@ -53,7 +56,7 @@ struct Task {
     request: u32,
     recovered: bool,
     source: layer_ui::ImportSource,
-    place: Option<layer_core::LayerId>,
+    place: Option<SourceTarget>,
     gpu_generation: u64,
     open_control: layer_render_wgpu::snapshot::CaptureControl,
     payload: Payload,
@@ -82,7 +85,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
         let request = session.document_request(id as u32)
             .map_err(|_| "The document request is no longer active")?.clone();
         let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste { .. })
-            .then_some(session.engine().document().active_target());
+            .then(|| session.engine().document().active_target()).flatten();
         let payload = match request {
             DocumentRequest::ImportLookup {..} => Payload::Lookup {resource:None,
                 name:serde_json::from_str::<Option<DocumentLocation>>(&read(&mut env,&location)?).map_err(error)?.map(|location|location.name).unwrap_or_default()},
@@ -104,7 +107,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
                 Payload::Open {
                     environment: Some(Environment::new(
                         OpenEnvironment::capture(session, admission, options)?,
-                        session.engine().document().color.space,
+                        session.engine().document().composition().color.space,
                         serde_json::from_str::<Option<DocumentLocation>>(&read(
                             &mut env, &location,
                         )?)
@@ -148,43 +151,47 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         return Err("Not an open request".into());
     };
     let mut e = environment.take().ok_or("Project worker already ran")?;
-    let project = match input {
+    let imported = match input {
         Some(file) => {
-            let imported = e.open.read(file,
+            let outcome = e.open.read(file,
                 if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
                 &e.source_name, control.cancellation_flag())?;
+            let imported = match outcome {
+                layer_ui::ImportOutcome::Editable(imported) => imported,
+                layer_ui::ImportOutcome::Package(outcome) => {
+                    if control.is_cancelled() { return Err("Opening cancelled".into()); }
+                    t.payload = Payload::Package {view:layer_ui::PackageView::new(outcome)?,localization:e.open.localization};
+                    return Ok(());
+                }
+            };
             t.source = imported.source;
             if imported.interpretation_required(e.open.photo_policy).is_some() {
-                e.source_name = imported.project.document.layers[0].name.to_string();
+                e.source_name = imported.project.scene().order().first().and_then(|h| imported.project.scene().occurrence(*h)).map_or_else(|| "Photo".into(), |o| o.name.to_string());
                 e.pending_import = Some(imported);
                 *environment = Some(e);
                 return Ok(());
             }
-            if imported.source == layer_ui::ImportSource::Photo { e.source_name = imported.project.document.layers[0].name.to_string(); }
-            imported.project
+            if imported.source == layer_ui::ImportSource::Photo { e.source_name = imported.project.scene().order().first().and_then(|h| imported.project.scene().occurrence(*h)).map_or_else(|| "Photo".into(), |o| o.name.to_string()); }
+            imported
         }
         None => {
             if let Some(imported) = e.pending_import.take() {
                 if imported.interpretation_required(e.open.photo_policy).is_some() {
                     return Err("Choose an image interpretation before opening".into());
                 }
-                imported.project
+                imported
             } else {
-                layer_ui::NewDocumentOptions {
+                layer_ui::ImportedDocument::new(layer_ui::NewDocumentOptions {
                     extent: [width, height],
                     ..e.open.new_options
                 }
-                .project(&e.open.localization)?
+                .project(&e.open.localization)?, layer_ui::ImportSource::Master)
             }
         }
     };
     if control.is_cancelled() { return Err("Opening cancelled".into()); }
     if t.place.is_some() {
-        let source = project
-            .document
-            .layers
-            .iter()
-            .find_map(|l| l.source.as_ref())
+        let source = imported.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref())
             .ok_or("The selected file is not a photo")?;
         layer_color::WorkingDecoder::new(
             &source.interpretation,
@@ -207,8 +214,47 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
         };
         return Ok(());
     }
-    *candidate = Some(e.open.prepare(project, || control.is_cancelled())?);
+    match e.open.prepare(imported.project.clone(), || control.is_cancelled()) {
+        Ok(prepared) => *candidate = Some(prepared),
+        Err(reason) => {
+            if control.is_cancelled() { return Err("Opening cancelled".into()); }
+            let Some(outcome) = imported.preserve_unsupported(reason.clone()) else { return Err(reason); };
+            t.payload = Payload::Package {view:layer_ui::PackageView::new(outcome)?,localization:e.open.localization};
+        }
+    }
     Ok(())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectPackagePrompt(mut env:JNIEnv,_:JClass,handle:jlong)->jni::sys::jstring {
+    let summary = match &unsafe {crate::inspection::borrow_ref::<Task>(handle)}.payload {
+        Payload::Package {view,localization} => serde_json::to_string(&view.summary(localization)).map_err(error),
+        _ => Ok("null".into()),
+    };
+    crate::android::string(&mut env,summary)
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectPackagePreview(mut env:JNIEnv,_:JClass,handle:jlong)->jni::sys::jbyteArray {
+    let bytes = match &unsafe {crate::inspection::borrow_ref::<Task>(handle)}.payload {
+        Payload::Package {view,..} => view.preview().map(|p| p.encoded().as_ref()).unwrap_or(&[]),
+        _ => &[],
+    };
+    let result = env.byte_array_from_slice(bytes).map(|bytes| bytes.into_raw()).map_err(error);
+    or_throw(&mut env,result,std::ptr::null_mut())
+}
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_projectPackageWrite(mut env:JNIEnv,_:JClass,handle:jlong,fd:jint,preview:jboolean) {
+    let result = crate::inspection::on_worker("capy-original-copy","Drawing copy worker failed",move || {
+        if fd < 0 {return Err("Missing drawing copy output".into());}
+        let mut output = BufWriter::new(unsafe {File::from_raw_fd(fd)});
+        let task = unsafe {crate::inspection::borrow_ref::<Task>(handle)};
+        let Payload::Package {view,..} = &task.payload else{return Err("No preserved drawing to copy".into());};
+        if preview != 0 { view.export_preview(&mut output, task.open_control.cancellation_flag())?; }
+        else { view.copy_original(&mut output,task.open_control.cancellation_flag())?; }
+        output.flush().map_err(error)?;
+        output.get_ref().sync_all().map_err(error)
+    });
+    fail(&mut env,result);
 }
 
 #[unsafe(no_mangle)]
@@ -221,8 +267,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectProfilePrompt(
         Payload::Open {
             environment: Some(e),
             ..
-        } => e.pending_import.as_ref().and_then(|i| i.project.document.layers.first())
-            .and_then(|l| l.source.as_ref()).map(|s| &s.interpretation),
+        } => e.pending_import.as_ref().and_then(|i| i.project.artwork.paint.iter().find_map(|(_,_,p)| p.original.as_ref())).map(|s| &s.interpretation),
         _ => None,
     };
     crate::android::string(&mut env, serde_json::to_string(&source).map_err(error))
@@ -295,7 +340,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
         Payload::Save(project) => {
             let project = project.take().ok_or("Save already encoded")?;
             let mut out = BufWriter::new(input.ok_or("Missing project output")?);
-            project.write(&mut out)?;
+            let cancelled = AtomicBool::new(false);
+            PreparedPackage::prepare(&project, None, &cancelled)?.write(&mut out, &cancelled)?;
             out.flush().map_err(error)?;
             out.get_ref().sync_all().map_err(error)
         }
@@ -308,7 +354,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
         Payload::Open { .. } => {
             prepare(t, input, width.max(0) as u32, height.max(0) as u32)
         }
-        Payload::Retired { .. } | Payload::Placed { .. } => {
+        Payload::Retired { .. } | Payload::Placed { .. } | Payload::Package { .. } => {
             Err("Project already prepared or adopted".into())
         }
     });
@@ -340,7 +386,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
             let s = &mut a.host.session;
             if s.state().document_file.epoch != t.epoch
                 || s.engine().document().revision != t.revision
-                || s.engine().document().active_target() != target
+                || s.engine().document().active_target() != Some(target)
                 || a.gpu_generation != t.gpu_generation
             {
                 return Err(
@@ -508,7 +554,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
                         a.window.documents.admission(&session.retained_document_tiles()),
                         a.host.renderer_options(Some(a.cache_directory.clone().into())),
                     )?,
-                    session.engine().document().color.space,
+                    session.engine().document().composition().color.space,
                     "Recovered drawing".into(),
                 )),
                 candidate: None,
@@ -540,7 +586,11 @@ pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
             return Err("Not a recovery save".into());
         };
         let project = project.take().ok_or("Recovery already encoded")?;
-        layer_core::atomic_write(std::path::Path::new(&path), |output| project.write(output))
+        {
+            let cancelled = AtomicBool::new(false);
+            let package = PreparedPackage::prepare(&project, None, &cancelled)?;
+            layer_core::atomic_write(std::path::Path::new(&path), |output| package.write(output, &cancelled))
+        }
     })();
     fail(&mut env, result);
 }

@@ -25,6 +25,7 @@ pub enum RangeState { Pending, Ready(ByteRange) }
 
 pub trait ByteSource: Send + Sync {
     fn byte_len(&self) -> u64;
+    fn resident_bytes(&self) -> usize { self.byte_len().min(usize::MAX as u64) as usize }
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String>;
 }
 impl ByteSource for Arc<[u8]> {
@@ -59,6 +60,7 @@ impl ImmutableBacking {
     }
     pub fn identity(&self) -> u64 { self.owner.identity }
     pub fn byte_len(&self) -> u64 { self.owner.length }
+    pub fn resident_bytes(&self) -> usize { self.owner.source.resident_bytes() }
     pub fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String> {
         if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let end = offset.checked_add(len as u64).ok_or("Package range overflow")?;

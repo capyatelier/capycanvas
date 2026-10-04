@@ -5,12 +5,13 @@
 //! a paste of their own copy reads the full-depth source instead.
 use super::*;
 use layer_core::{
-    Affine, Edit, Layer, LayerBlend, Point, Project, Rect, Selection,
+    Affine, Edit, Point, Rect, Selection,
     color::{
         DocumentColor,
         source::{SourceImage, SourceKind},
     },
 };
+use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, RecordChange, SceneSnapshot, SceneScope, SourceTarget};
 use std::sync::Arc;
 
 /// Copies larger than this show the import-style progress with Cancel.
@@ -61,8 +62,8 @@ impl PixelClip {
 #[derive(Clone)]
 pub struct ClipboardCapture {
     /// The active layer alone for Copy, the whole drawing for Copy Merged.
-    pub project: Project,
-    pub time: f32,
+    pub scene: Arc<SceneSnapshot>,
+    pub scope: SceneScope,
     /// `[x, y, width, height]` of the copied document pixels.
     pub crop: [u32; 4],
     /// Coverage the worker multiplies into the captured rows.
@@ -75,13 +76,13 @@ pub struct ClipboardCapture {
 }
 impl ClipboardCapture {
     pub fn color(&self) -> DocumentColor {
-        self.project.document.color
+        self.scene.view().composition().color
     }
     pub fn finish(self, nonce: String, source: Arc<SourceImage>, png: Vec<u8>) -> PixelClip {
         PixelClip {
             nonce,
             name: self.name,
-            color: self.project.document.color,
+            color: self.scene.view().composition().color,
             source,
             origin: [self.crop[0], self.crop[1]],
             png: png.into(),
@@ -93,7 +94,8 @@ impl ClipboardCapture {
 pub(super) struct PendingCut {
     epoch: u64,
     revision: u64,
-    layer: LayerId,
+    layer: OccurrenceHandle,
+    target: SourceTarget,
 }
 
 /// Whether `selection` covers every pixel of `canvas` fully, as Select All does.
@@ -131,11 +133,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         if command == CommandId::CopyMerged {
             return None;
         }
-        if document.active_mask {
+        if matches!(document.working.target, Some(SourceTarget::Coverage(_))) {
             return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));
         }
-        let layer = document.layer(document.active_layer)?;
-        match layer.kind {
+        let layer = document.scene().occurrence(document.working.occurrence?)?;
+        match layer.kind() {
             LayerKind::Paint => {}
             LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
             LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
@@ -154,20 +156,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.selection_masks.target().is_some() {
             return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST));
         }
-        self.engine.document().selection.is_none().then_some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_MAKE_A_SELECTION_TO_PASTE_INTO))
+        self.engine.document().working.selection.is_none().then_some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_MAKE_A_SELECTION_TO_PASTE_INTO))
     }
 
     /// Whether the selection's conservative bounds reach the canvas. Command
     /// states read this every frame, so it never scans pixel coverage.
     fn selection_meets_canvas(&self) -> bool {
         let document = self.engine.document();
-        document.selection.as_ref().filter(|s| !s.inverted).is_none_or(|selection| {
+        document.working.selection.as_ref().filter(|s| !s.inverted).is_none_or(|selection| {
             let bounds = selection.bounds();
             !bounds.is_empty()
                 && bounds.max.x > 0.
                 && bounds.max.y > 0.
-                && bounds.min.x < document.width as f32
-                && bounds.min.y < document.height as f32
+                && bounds.min.x < document.composition().size[0] as f32
+                && bounds.min.y < document.composition().size[1] as f32
         })
     }
 
@@ -175,8 +177,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// or the whole canvas.
     fn clipboard_crop(&self) -> Result<[u32; 4], String> {
         let document = self.engine.document();
-        let canvas = [document.width, document.height];
-        let Some(selection) = document.selection.as_ref().filter(|s| !s.inverted) else {
+        let canvas = document.composition().size;
+        let Some(selection) = document.working.selection.as_ref().filter(|s| !s.inverted) else {
             return Ok([0, 0, canvas[0], canvas[1]]);
         };
         let bounds = selection.coverage_bounds();
@@ -224,54 +226,37 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         refused(self.copy_refusal(command))?;
         let crop = self.clipboard_crop()?;
-        let selection = self.engine.document().selection.clone();
-        let canvas = [self.engine.document().width, self.engine.document().height];
+        let selection = self.engine.document().working.selection.clone();
+        let canvas = self.engine.document().composition().size;
         let coverage = selection.filter(|s| !selects_everything(s, canvas)).map(Arc::new);
-        let mut project = self.capture_project_recovery()?;
-        let document = &mut project.document;
-        let active = document.active_layer;
-        let (name, original) = if merged {
-            ("Merged copy".to_string(), None)
+        self.require_raster_snapshot()?;
+        let scene = self.engine.scene_snapshot();
+        let document = self.engine.document();
+        let active = document.working.occurrence;
+        let (scope, name, original) = if merged {
+            (SceneScope::All, "Merged copy".to_string(), None)
         } else {
+            let active = active.ok_or("Select a layer first")?;
+            let occurrence = document.scene().occurrence(active).ok_or("Select a layer first")?;
+            let paint = document.scene().paint_source(active).ok_or("Select a paint layer first")?;
+            let target = document.scene().source_target(active).ok_or("Select a paint layer first")?;
             let offset = document.layer_offset(active);
-            let mut layer = document.layer(active).ok_or("Select a layer first")?.clone();
-            let original = layer
-                .source
-                .clone()
-                .filter(|source| {
-                    coverage.is_none()
-                        && !source_edit::baked(&layer)
-                        && layer.mask.is_none()
-                        && offset == Point::default()
-                        && layer.properties.placement.as_affine() == Some(Affine::IDENTITY)
-                        && source.extent == [document.width, document.height]
-                });
-            layer.visible = true;
-            layer.opacity = 1.;
-            if let Some(mask) = &mut layer.mask { mask.offset = document.layer_offset(mask.id); }
-            layer.properties.parent = None;
-            layer.properties.offset = offset;
-            layer.properties.clipped = false;
-            layer.properties.blend = LayerBlend::Normal;
-            layer.properties.locked = false;
-            layer.properties.alpha_locked = false;
-            let name = layer.name.to_string();
-            document.layers = vec![layer];
-            document.active_mask = false;
-            document.selection = None;
-            document.reference_layers.clear();
-            document.rulers.clear();
-            (name, original)
+            let original = paint.original.clone().filter(|source| coverage.is_none()
+                && !source_edit::baked(paint) && occurrence.mask.is_none()
+                && offset == Point::default() && occurrence.placement.as_affine() == Some(Affine::IDENTITY)
+                && source.extent == document.composition().size);
+            (SceneScope::Raw(target), occurrence.name.to_string(), original)
         };
         let pixels = u64::from(crop[2]) * u64::from(crop[3]);
         self.files.cut = cut.then(|| PendingCut {
             epoch: self.state.document_file.epoch,
             revision: self.engine.document().revision,
-            layer: active,
+            layer: active.expect("cut requires an active paint layer"),
+            target: document.working.target.expect("cut requires an active paint source"),
         });
         Ok(ClipboardCapture {
-            project,
-            time: self.engine.animation_time(),
+            scene,
+            scope,
             crop,
             coverage,
             original,
@@ -286,7 +271,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let document = self.engine.document();
         if cut.epoch != self.state.document_file.epoch
             || cut.revision != document.revision
-            || cut.layer != document.active_layer
+            || Some(cut.layer) != document.working.occurrence
+            || Some(cut.target) != document.working.target
         {
             self.notify("The drawing changed while cutting, so the pixels were copied but not erased");
         } else if let Err(error) = self.clear_selection(false) {
@@ -308,8 +294,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         Rect {
             min: Point { x: visible.min.x.max(0.), y: visible.min.y.max(0.) },
             max: Point {
-                x: visible.max.x.min(document.width as f32),
-                y: visible.max.y.min(document.height as f32),
+                x: visible.max.x.min(document.composition().size[0] as f32),
+                y: visible.max.y.min(document.composition().size[1] as f32),
             },
         }
     }
@@ -341,7 +327,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Paste the window's clip as one new layer, with no placement handles.
     pub fn paste_clip(&mut self, clip: &PixelClip, mode: PasteMode) -> Result<(), String> {
         let position = self.clip_position(clip, mode);
-        let source = clip.source_for(self.engine.document().color);
+        let source = clip.source_for(self.engine.document().composition().color);
         self.insert_pasted(vec![(clip.name.clone(), source)], |_, _| position, mode == PasteMode::Into)
     }
 
@@ -382,38 +368,43 @@ impl<R: CanvasRenderer> UiSession<R> {
         let (index, parent) = self.image_layer_destination(None)?;
         let document = self.engine.document();
         let parent_offset = parent.map_or(Point::default(), |id| document.layer_offset(id));
-        let mut probe = document.clone();
-        let mut edits = Vec::with_capacity(sources.len() + 2);
-        let mut ids = Vec::new();
+        let containing = parent.and_then(|h| match document.scene().occurrence(h)?.content { OccurrenceContent::Stack(stack) => Some(stack), _ => None }).unwrap_or(document.composition().result);
+        let mut artwork = document.artwork.clone();
+        let mut stack = artwork.stacks.get(containing).ok_or("Missing destination group")?.clone();
+        let mut edits = Vec::with_capacity(sources.len() * 3 + 2);
         let mut layers = Vec::new();
         for (offset, (name, source)) in sources.into_iter().enumerate() {
             source.validate()?;
             let at = position(self, source.extent);
-            let id = probe.allocate_layer_id();
-            ids.push(id);
-            let mut layer = Layer::paint(id, name.trim());
-            layer.properties.parent = parent;
-            layer.properties.placement =
-                layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: at.x - parent_offset.x, y: at.y - parent_offset.y }));
-            layer.source = Some(Arc::new(source));
+            let paint = RecordChange::insert(&artwork.paint, PaintSource {
+                domain: std::array::from_fn(|i| document.composition().size[i].max(source.extent[i])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default(),
+            });
+            artwork.paint.change(paint.handle, paint.id, paint.value.clone())?;
+            let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint.handle), name.trim());
+            occurrence.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: at.x - parent_offset.x, y: at.y - parent_offset.y }));
             if masked {
-                let mask = probe.allocate_layer_id();
-                ids.push(mask);
-                layer.mask = Some(self.selection_mask_with_id(&layer, false, mask)?);
+                let (source, mut mask) = self.selection_mask(&occurrence, false, parent, artwork.paint.get(paint.handle).unwrap().domain)?;
+                let coverage = RecordChange::insert(&artwork.coverage, source.value.ok_or("Missing pasted mask")?);
+                mask.source = coverage.handle;
+                artwork.coverage.change(coverage.handle, coverage.id, coverage.value.clone())?;
+                edits.push(Edit::Coverage(coverage));
+                occurrence.mask = Some(mask);
             }
-            layers.push(id);
-            edits.push(Edit::InsertLayer { index: index + offset, layer: Box::new(layer) });
+            let occurrence = RecordChange::insert(&artwork.occurrences, occurrence);
+            artwork.occurrences.change(occurrence.handle, occurrence.id, occurrence.value.clone())?;
+            stack.entries.insert(index + offset, occurrence.handle);
+            layers.push(occurrence.handle);
+            edits.extend([Edit::Paint(paint), Edit::Occurrence(occurrence)]);
         }
-        edits.push(Edit::SetActiveLayer { id: layers[0] });
-        if masked {
-            edits.push(Edit::SetSelection(None));
-        }
+        edits.push(Edit::Stack(RecordChange::replace(&artwork.stacks, containing, Some(stack))?));
+        let mut working = document.working.clone();
+        working.occurrence = Some(layers[0]);
+        working.target = match artwork.occurrences.get(layers[0]).unwrap().content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), _ => unreachable!() };
+        working.inspect_mask = None;
+        if masked { working.selection = None; }
+        edits.push(Edit::Working(working));
         let edit = Edit::Batch(edits);
-        self.source_edit_candidates(&edit, &ids, Default::default())?;
-        for id in &ids {
-            let allocated = self.engine.allocate_layer_id();
-            debug_assert_eq!(allocated, *id);
-        }
+        self.source_edit_candidates(&edit, Default::default())?;
         self.layer_edit(edit)?;
         self.layer_interaction.selected = layers.into_iter().collect();
         self.refresh_document();

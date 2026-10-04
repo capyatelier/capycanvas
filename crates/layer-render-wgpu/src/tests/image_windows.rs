@@ -1,9 +1,43 @@
 //! Cropped captures must be the same document, including halos and clipping.
 use super::*;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
-use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, LayerMask, Selection};
+use layer_core::authored::*;
+use layer_core::{EffectInstance, EffectKind, EffectPass, EffectSampling, Document, CoverageSnapshot, Selection};
 
-pub(crate) fn effect(id: u64, generator: bool, global: bool) -> Layer {
+pub(crate) fn document(extent: [u32; 2], color: DocumentColor) -> Document {
+    let mut artwork = Artwork::new(extent).unwrap();
+    artwork.compositions.get_mut(artwork.root).unwrap().color = color;
+    Document::from_artwork(artwork).unwrap()
+}
+pub(crate) fn effect(doc: &mut Document, generator: bool, global: bool) -> OccurrenceHandle {
+    add_effect(doc, program(generator, global))
+}
+pub(crate) fn add_effect(doc: &mut Document, instance: EffectInstance) -> OccurrenceHandle {
+    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program, dimensions: Default::default() }).unwrap();
+    let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values, domain: doc.composition().size }).unwrap();
+    doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "window fixture")).unwrap()
+}
+pub(crate) fn set_entries(doc: &mut Document, entries: Vec<OccurrenceHandle>) {
+    let root = doc.composition().result;
+    let edit = RecordChange::replace(&doc.artwork.stacks, root, Some(Stack { entries })).unwrap();
+    doc.apply(layer_core::Edit::Stack(edit)).unwrap();
+}
+pub(crate) fn set_mask(doc: &mut Document, owner: OccurrenceHandle, mask: CoverageSnapshot) {
+    doc.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+    doc.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
+    let entries = doc.artwork.stacks.get(doc.composition().result).unwrap().entries.clone();
+    set_entries(doc, entries);
+}
+
+pub(crate) fn insert_effect(doc: &mut Document, instance: EffectInstance) -> OccurrenceHandle {
+    let owner = add_effect(doc, instance);
+    let mut entries = doc.artwork.stacks.get(doc.composition().result).unwrap().entries.clone();
+    entries.insert(0, owner);
+    set_entries(doc, entries);
+    owner
+}
+
+pub(crate) fn program(generator: bool, global: bool) -> EffectInstance {
     let mut p = (*fixture("exposure").program()).clone();
     p.kind = if generator {
         EffectKind::Generator
@@ -40,10 +74,7 @@ pub(crate) fn effect(id: u64, generator: bool, global: bool) -> Layer {
         }
         .into();
     }
-    let mut layer = Layer::paint(LayerId(id), "window fixture");
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(EffectInstance::new(Arc::new(p))));
-    layer
+    EffectInstance::new(Arc::new(p))
 }
 
 fn capture(
@@ -76,38 +107,27 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
         })
         .unwrap();
         for clipped in [false, true] {
-            let mut group = Layer::paint(LayerId(10), "isolated");
-            group.kind = LayerKind::Group;
-            group.opacity = 0.79;
-            let mut first = effect(2, false, false);
-            first.opacity = 0.63;
-            first.properties.clipped = clipped;
-            let mut second = first.clone();
-            second.id = LayerId(3);
-            let mut mask = LayerMask::reveal_all(LayerId(20), Point { x: 7., y: -9. });
-            mask.default_coverage = 0.;
-            mask.initial = Some(
-                Selection::polygon(vec![
-                    Point { x: 0., y: 0. },
-                    Point { x: 760., y: 99. },
-                    Point { x: 440., y: 533. },
-                ])
-                .unwrap(),
-            );
-            first.mask = Some(mask);
-            let mut layers = vec![
-                group,
-                first,
-                second,
-                effect(1, true, false),
-                effect(4, true, false),
-            ];
-            for l in &mut layers[1..4] {
-                l.properties.parent = Some(LayerId(10));
+            let mut document = document(extent, DocumentColor { space, depth: SampleDepth::U16 });
+            let first = effect(&mut document, false, false);
+            let second = effect(&mut document, false, false);
+            for owner in [first, second] {
+                let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
+                occurrence.opacity = 0.63;
+                occurrence.clipped = clipped;
             }
-            let packet = FramePacket {
-                ..crate::test_support::packet(&layers, extent)
-            };
+            let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, Point { x: 7., y: -9. });
+            mask.source.default_coverage = 0.;
+            mask.source.initial = Some(Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap());
+            document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+            document.artwork.occurrences.get_mut(first).unwrap().mask = Some(mask.use_);
+            let inside = effect(&mut document, true, false);
+            let outside = effect(&mut document, true, false);
+            let stack = document.artwork.stacks.insert(PortableId::random(), Stack { entries: vec![first, second, inside] }).unwrap();
+            let mut group = Occurrence::new(OccurrenceContent::Stack(stack), "isolated");
+            group.opacity = 0.79;
+            let group = document.artwork.occurrences.insert(PortableId::random(), group).unwrap();
+            set_entries(&mut document, vec![group, outside]);
+            let packet = crate::test_support::packet(document.scene(), extent);
             r.submit(packet).unwrap(); // Initializes real mask pages and renderer metadata.
             let mut scene = scene::Scene::new(&r);
             let full = capture(&mut r, &mut scene, packet, PixelRect::full(extent));
@@ -158,12 +178,10 @@ fn image_windows_keep_document_sampler_dependencies_complete() {
     })
     .unwrap();
     let extent = [333, 291];
-    let layers = [
-        effect(3, false, true),
-        effect(2, false, false),
-        effect(1, true, false),
-    ];
-    let packet = FramePacket { view: test_view(), ..crate::test_support::packet(&layers, extent) };
+    let mut document = document(extent, DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+    let entries = vec![effect(&mut document, false, true), effect(&mut document, false, false), effect(&mut document, true, false)];
+    set_entries(&mut document, entries);
+    let packet = FramePacket { view: test_view(), ..crate::test_support::packet(document.scene(), extent) };
     r.submit(packet).unwrap();
     let mut scene = scene::Scene::new(&r);
     let full = capture(&mut r, &mut scene, packet, PixelRect::full(extent));

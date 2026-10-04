@@ -2,9 +2,11 @@
 //! document layer; stored masks use ordinary tree identity and shared history.
 use super::*;
 use layer_core::{
-    Edit, Layer, Selection, SelectionMaskProperties, SelectionTarget,
+    Edit, Selection, SelectionMaskProperties, SelectionTarget,
+    authored::{OccurrenceHandle, OccurrenceContent, Occurrence, RecordChange, SourceTarget, SavedSelection},
 };
 use std::sync::Arc;
+use super::session::{occurrence_token, occurrence_handle};
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -100,7 +102,7 @@ pub struct MaskEditingView {
 
 struct Editing {
     target: SelectionTarget,
-    artwork: LayerId,
+    artwork: Option<OccurrenceHandle>,
     tool: LayerCanvasTool,
 }
 pub(super) struct SelectionMasks {
@@ -116,7 +118,7 @@ pub(super) struct SelectionMasks {
     pub quick_properties: SelectionMaskProperties,
     pub quick_visible: bool,
     pub quick_property_gesture: Option<(String, SelectionMaskProperties)>,
-    previews: std::collections::BTreeMap<LayerId, (Selection, u64)>,
+    previews: std::collections::BTreeMap<Option<OccurrenceHandle>, (Selection, u64)>,
     preview_revision: u64,
 }
 impl Default for SelectionMasks {
@@ -150,42 +152,24 @@ fn mask_gray(color: layer_core::color::RgbColor) -> f32 {
 }
 
 impl SelectionMasks {
-    pub fn preview_revision(&self, id: LayerId) -> u64 {
+    pub fn preview_revision(&self, id: Option<OccurrenceHandle>) -> u64 {
         self.previews.get(&id).map_or(0, |(_, revision)| *revision)
     }
     fn update_previews(&mut self, doc: &layer_core::Document) {
-        self.previews.retain(|id, _| {
-            id.0 == 0
-                || doc
-                    .layer(*id)
-                    .is_some_and(|l| l.kind == LayerKind::Selection)
-        });
+        self.previews.retain(|id,_| id.is_none() || id.is_some_and(|id|matches!(doc.scene().source_target(id),Some(SourceTarget::Selection(_)))));
         if self.quick() {
-            let mask = doc.selection.clone().unwrap_or_else(Selection::empty);
-            if self
-                .previews
-                .get(&LayerId(0))
-                .is_none_or(|(old, _)| *old != mask)
-            {
-                self.preview_revision = self.preview_revision.wrapping_add(1);
-                self.previews
-                    .insert(LayerId(0), (mask, self.preview_revision));
+            let mask=doc.working.selection.clone().unwrap_or_else(Selection::empty);
+            if self.previews.get(&None).is_none_or(|(old,_)|*old!=mask) {
+                self.preview_revision=self.preview_revision.wrapping_add(1);
+                self.previews.insert(None,(mask,self.preview_revision));
             }
-        } else {
-            self.previews.remove(&LayerId(0));
-        }
-        for layer in doc.layers.iter().filter(|l| l.kind == LayerKind::Selection) {
-            let Ok(mask) = doc.saved_selection(layer.id) else {
-                continue;
-            };
-            if self
-                .previews
-                .get(&layer.id)
-                .is_none_or(|(old, _)| *old != mask)
-            {
-                self.preview_revision = self.preview_revision.wrapping_add(1);
-                self.previews
-                    .insert(layer.id, (mask, self.preview_revision));
+        } else {self.previews.remove(&None);}
+        for &id in doc.scene().order() {
+            if !matches!(doc.scene().source_target(id),Some(SourceTarget::Selection(_))) {continue;}
+            let Ok(mask)=doc.saved_selection(id) else {continue;};
+            if self.previews.get(&Some(id)).is_none_or(|(old,_)|*old!=mask) {
+                self.preview_revision=self.preview_revision.wrapping_add(1);
+                self.previews.insert(Some(id),(mask,self.preview_revision));
             }
         }
     }
@@ -207,8 +191,8 @@ impl SelectionMasks {
     pub fn erases(&self) -> bool {
         self.colors.transparent()
     }
-    pub fn artwork(&self) -> Option<LayerId> {
-        self.editing.as_ref().map(|e| e.artwork)
+    pub fn artwork(&self) -> Option<OccurrenceHandle> {
+        self.editing.as_ref().and_then(|e| e.artwork)
     }
 }
 
@@ -243,7 +227,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         item
     }
     /// Grow… to Smooth… with their short labels, as commands or for one Selection Layer.
-    pub(super) fn refine_items(&self, layer: Option<LayerId>) -> Vec<ContextMenuItem> {
+    pub(super) fn refine_items(&self, layer: Option<OccurrenceHandle>) -> Vec<ContextMenuItem> {
         use super::selection_refine::RefineKind;
         RefineKind::ALL
             .into_iter()
@@ -255,7 +239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         enabled: self.require_document_idle().is_ok() && !self.engine.document().is_locked(id),
                         ..ContextMenuItem::command(
                             label.as_ref(),
-                            UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(id.0) } },
+                            UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(occurrence_token(id)) } },
                         )
                     },
                 }
@@ -287,9 +271,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             ],
         }
     }
-    pub(super) fn selection_layer_menu(&self, id: LayerId) -> Result<ContextMenu, String> {
+    pub(super) fn selection_layer_menu(&self, id: OccurrenceHandle) -> Result<ContextMenu, String> {
         let doc = self.engine.document();
-        let layer = doc.layer(id).ok_or("Unknown selection layer")?;
+        let layer = doc.scene().occurrence(id).ok_or("Unknown selection layer")?;
         let unlocked = !doc.is_locked(id);
         let action = |label: &str, action, enabled| {
             let mut item = ContextMenuItem::command(label, UiAction::Selection { action });
@@ -311,7 +295,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ..ContextMenuItem::command(label, UiAction::Invoke { command })
             }
         };
-        let mut load = load_selection_items(id.0, self.localization()).into_iter();
+        let mut load = load_selection_items(occurrence_token(id), self.localization()).into_iter();
         let load: Vec<_> = load
             .next()
             .map(|item| edited(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_LOAD_SELECTION).as_ref(), CommandId::LoadSelectionLayer, item))
@@ -321,13 +305,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         let roots = doc.layer_roots(&self.layer_interaction.selected);
         let multiple = roots.len() > 1 && self.layer_interaction.selected.contains(&id);
         let mut organize_items = vec![
-            organize(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_RENAME).as_ref(), LayerAction::BeginRename { id: id.0 }, unlocked),
+            organize(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_RENAME).as_ref(), LayerAction::BeginRename { id: occurrence_token(id) }, unlocked),
             organize(
                 self.localization().text(if multiple { MessageId::RESOURCES_SELECTION_MENU_DUPLICATE_SELECTED_LAYERS } else { MessageId::RESOURCES_SELECTION_MENU_DUPLICATE }).as_ref(),
                 if multiple {
                     LayerAction::DuplicateSelected
                 } else {
-                    LayerAction::Duplicate { id: id.0 }
+                    LayerAction::Duplicate { id: occurrence_token(id) }
                 },
                 true,
             ),
@@ -336,7 +320,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if multiple {
                     LayerAction::DeleteSelected
                 } else {
-                    LayerAction::Delete { id: id.0 }
+                    LayerAction::Delete { id: occurrence_token(id) }
                 },
                 doc.can_delete_layers(if multiple {
                     &roots
@@ -345,19 +329,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }),
             ),
             organize(
-                self.localization().text(if layer.properties.locked { MessageId::RESOURCES_SELECTION_MENU_UNLOCK_EDITING } else { MessageId::RESOURCES_SELECTION_MENU_LOCK_EDITING }).as_ref(),
+                self.localization().text(if layer.locked { MessageId::RESOURCES_SELECTION_MENU_UNLOCK_EDITING } else { MessageId::RESOURCES_SELECTION_MENU_LOCK_EDITING }).as_ref(),
                 LayerAction::Lock {
-                    id: id.0,
-                    value: !layer.properties.locked,
+                    id: occurrence_token(id),
+                    value: !layer.locked,
                 },
-                !layer.properties.parent.is_some_and(|p| doc.is_locked(p)),
+                !doc.scene().parent(id).is_some_and(|p| doc.is_locked(p)),
             ),
             organize(
                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_GROUP_SELECTED_LAYERS).as_ref(),
                 LayerAction::GroupSelected,
                 doc.group_layers_edit(
                     &doc.layer_roots(&self.layer_interaction.selected),
-                    LayerId(0),
                     layer_core::LayerBlend::Normal,
                     "",
                 )
@@ -366,53 +349,24 @@ impl<R: CanvasRenderer> UiSession<R> {
             organize(
                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_TO_ROOT).as_ref(),
                 LayerAction::Reparent {
-                    id: id.0,
+                    id: occurrence_token(id),
                     parent: None,
                     index: 0,
                 },
-                unlocked && layer.properties.parent.is_some(),
+                unlocked && doc.scene().parent(id).is_some(),
             ),
         ];
-        let position = doc.layers.iter().position(|l| l.id == id).unwrap();
-        for (label, up) in [(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_UP), true), (self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_DOWN), false)] {
-            let neighbor = if up {
-                doc.layers[..position]
-                    .iter()
-                    .rposition(|l| l.properties.parent == layer.properties.parent)
-            } else {
-                doc.layers[position + 1..]
-                    .iter()
-                    .position(|l| {
-                        l.properties.parent == layer.properties.parent
-                    })
-                    .map(|i| position + 1 + i)
-            };
-            organize_items.push(organize(
-                label.as_ref(),
-                LayerAction::Reparent {
-                    id: id.0,
-                    parent: layer.properties.parent.map(|p| p.0),
-                    index: neighbor.unwrap_or(position) as u32,
-                },
-                unlocked && neighbor.is_some(),
-            ));
+        let siblings=doc.scene().children(doc.scene().parent(id));
+        let position=siblings.iter().position(|h|*h==id).unwrap();
+        for (label,up) in [(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_UP),true),(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_DOWN),false)] {
+            let neighbor=if up {position.checked_sub(1)} else {(position+1<siblings.len()).then_some(position+1)};
+            organize_items.push(organize(label.as_ref(),LayerAction::Reparent {
+                id:occurrence_token(id),parent:doc.scene().parent(id).map(occurrence_token),index:neighbor.unwrap_or(position) as u32,
+            },unlocked && neighbor.is_some()));
         }
-        let groups = doc
-            .layers
-            .iter()
-            .filter(|l| l.kind == LayerKind::Group)
-            .map(|l| {
-                organize(
-                    &l.name,
-                    LayerAction::Reparent {
-                        id: id.0,
-                        parent: Some(l.id.0),
-                        index: 0,
-                    },
-                    unlocked && !doc.is_locked(l.id),
-                )
-            })
-            .collect();
+        let groups=doc.scene().order().iter().copied().filter(|h|doc.scene().occurrence(*h).is_some_and(|o|o.kind()==LayerKind::Group)).map(|group| {
+            organize(&doc.scene().occurrence(group).unwrap().name,LayerAction::Reparent {id:occurrence_token(id),parent:Some(occurrence_token(group)),index:0},unlocked && !doc.is_locked(group))
+        }).collect();
         organize_items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_MOVE_INTO_GROUP).as_ref(), vec![groups]));
         Ok(ContextMenu {
             title: layer.name.to_string(),
@@ -424,18 +378,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                         vec![
                             action(
                                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_REPLACE_FROM_CURRENT_SELECTION).as_ref(),
-                                SelectionAction::ReplaceLayer { id: id.0 },
+                                SelectionAction::ReplaceLayer { id: occurrence_token(id) },
                                 unlocked && self.current_selection().is_some(),
                             ),
                             edited(
                                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_INVERT).as_ref(),
                                 CommandId::InvertSelectionLayer,
-                                action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_INVERT).as_ref(), SelectionAction::InvertLayer { id: id.0 }, unlocked),
+                                action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_INVERT).as_ref(), SelectionAction::InvertLayer { id: occurrence_token(id) }, unlocked),
                             ),
                             action(
                                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_SELECT_ALL).as_ref(),
                                 SelectionAction::ClearLayer {
-                                    id: id.0,
+                                    id: occurrence_token(id),
                                     full: true,
                                 },
                                 unlocked,
@@ -443,12 +397,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                             action(
                                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_CLEAR).as_ref(),
                                 SelectionAction::ClearLayer {
-                                    id: id.0,
+                                    id: occurrence_token(id),
                                     full: false,
                                 },
                                 unlocked,
                             ),
-                            action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_FILL).as_ref(), SelectionAction::FillLayer { id: id.0 }, unlocked),
+                            action(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_FILL).as_ref(), SelectionAction::FillLayer { id: occurrence_token(id) }, unlocked),
                         ],
                         self.refine_items(Some(id)),
                     ],
@@ -462,69 +416,34 @@ impl<R: CanvasRenderer> UiSession<R> {
         })
     }
 
-    fn saved_selection_label(&self, layer: &Layer) -> String {
-        let mut names = vec![layer.name.to_string()];
-        let mut parent = layer.properties.parent;
-        while let Some(id) = parent {
-            let Some(layer) = self.engine.document().layer(id) else {
-                break;
-            };
-            names.push(layer.name.to_string());
-            parent = layer.properties.parent;
+    fn saved_selection_label(&self, id: OccurrenceHandle) -> String {
+        let scene=self.engine.document().scene();
+        let mut names=Vec::new();let mut current=Some(id);
+        while let Some(id)=current {
+            let Some(o)=scene.occurrence(id) else {break;};names.push(o.name.to_string());current=scene.parent(id);
         }
-        names.reverse();
-        names.join(" / ")
+        names.reverse();names.join(" / ")
     }
     pub(super) fn replace_selection_menu_items(&self) -> Vec<ContextMenuItem> {
-        let doc = self.engine.document();
-        doc.layers
-            .iter()
-            .filter(|l| l.kind == LayerKind::Selection)
-            .map(|l| {
-                let mut item = ContextMenuItem::command(
-                    self.saved_selection_label(l),
-                    UiAction::Selection {
-                        action: SelectionAction::ReplaceLayer { id: l.id.0 },
-                    },
-                );
-                item.enabled = self.current_selection().is_some() && !doc.is_locked(l.id);
-                item
-            })
-            .collect()
+        let doc=self.engine.document();
+        doc.scene().order().iter().copied().filter(|h|matches!(doc.scene().source_target(*h),Some(SourceTarget::Selection(_)))).map(|id| {
+            let mut item=ContextMenuItem::command(self.saved_selection_label(id),UiAction::Selection {action:SelectionAction::ReplaceLayer {id:occurrence_token(id)}});
+            item.enabled=self.current_selection().is_some() && !doc.is_locked(id);item
+        }).collect()
     }
     pub(super) fn selection_source_menu_items(&self) -> Vec<ContextMenuItem> {
-        let id = self
-            .selection_masks
-            .artwork()
-            .unwrap_or(self.engine.document().active_layer);
-        let Some(layer) = self.engine.document().layer(id) else {
-            return Vec::new();
-        };
-        let mut items = Vec::new();
-        if layer.kind == LayerKind::Paint {
-            items.push(ContextMenuItem::submenu(
-                self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_OPACITY).as_ref(),
-                vec![self.coverage_menu_items(id.0, false)],
-            ));
-        }
-        if layer.mask.is_some() {
-            items.push(ContextMenuItem::submenu(
-                self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_MASK).as_ref(),
-                vec![self.coverage_menu_items(id.0, true)],
-            ));
-        }
+        let doc=self.engine.document();
+        let Some(id)=self.selection_masks.artwork().or(doc.working.occurrence) else {return Vec::new();};
+        let Some(layer)=doc.scene().occurrence(id) else {return Vec::new();};let mut items=Vec::new();
+        if layer.kind()==LayerKind::Paint {items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_OPACITY).as_ref(),vec![self.coverage_menu_items(occurrence_token(id),false)]));}
+        if layer.mask.is_some() {items.push(ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_COVERAGE_FROM_LAYER_MASK).as_ref(),vec![self.coverage_menu_items(occurrence_token(id),true)]));}
         items
     }
     pub(super) fn saved_selection_menu_items(&self) -> Vec<ContextMenuItem> {
-        self.engine
-            .document()
-            .layers
-            .iter()
-            .filter(|l| l.kind == LayerKind::Selection)
-            .map(|l| {
-                ContextMenuItem::submenu(&self.saved_selection_label(l), vec![load_selection_items(l.id.0, self.localization())])
-            })
-            .collect()
+        let scene=self.engine.document().scene();
+        scene.order().iter().copied().filter(|h|matches!(scene.source_target(*h),Some(SourceTarget::Selection(_)))).map(|id| {
+            ContextMenuItem::submenu(&self.saved_selection_label(id),vec![load_selection_items(occurrence_token(id),self.localization())])
+        }).collect()
     }
     pub(super) fn coverage_menu_items(&self, id: u64, mask: bool) -> Vec<ContextMenuItem> {
         let labels = if mask {
@@ -562,12 +481,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     /// `current_selection().is_some()` without copying the selection.
     pub(super) fn has_selection(&self) -> bool {
-        self.engine.document().selection.is_some() || self.selection_masks.quick()
+        self.engine.document().working.selection.is_some() || self.selection_masks.quick()
     }
     pub(super) fn current_selection(&self) -> Option<Selection> {
         self.engine
             .document()
-            .selection
+            .working.selection
             .clone()
             .or_else(|| self.selection_masks.quick().then(Selection::empty))
     }
@@ -610,7 +529,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let previous = self.selection_masks.editing.take();
         let artwork = previous
             .as_ref()
-            .map_or(self.engine.document().active_layer, |e| e.artwork);
+            .map_or(self.engine.document().working.occurrence, |e| e.artwork);
         let tool = previous.map_or(self.layer_interaction.tool, |e| e.tool);
         self.selection_masks.editing = Some(Editing {
             target,
@@ -627,62 +546,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
     pub(super) fn reconcile_selection_mask(&mut self) {
-        let doc = self.engine.document();
-        self.selection_masks.update_previews(doc);
-        if let Some(SelectionTarget::Saved(id)) = self.selection_masks.target()
-            && (doc.active_layer != id
-                || doc.layer(id).is_none_or(|l| l.kind != LayerKind::Selection))
-        {
-            self.selection_masks.editing = None;
+        let doc=self.engine.document();self.selection_masks.update_previews(doc);
+        if let Some(SelectionTarget::Saved(id))=self.selection_masks.target()
+            && (doc.working.occurrence!=Some(id) || !matches!(doc.scene().source_target(id),Some(SourceTarget::Selection(_)))) {
+            self.selection_masks.editing=None;
         }
         if self.selection_masks.target().is_none()
-            && doc
-                .layer(doc.active_layer)
-                .is_some_and(|l| l.kind == LayerKind::Selection)
-        {
-            let artwork = doc
-                .layers
-                .iter()
-                .find(|l| l.kind == LayerKind::Paint)
-                .map_or(doc.active_layer, |l| l.id);
-            self.selection_masks.editing = Some(Editing {
-                target: SelectionTarget::Saved(doc.active_layer),
-                artwork,
-                tool: LayerCanvasTool::Paint,
-            });
-            self.layer_interaction.tool = LayerCanvasTool::Paint;
+            && let Some(id)=doc.working.occurrence.filter(|id|matches!(doc.scene().source_target(*id),Some(SourceTarget::Selection(_)))) {
+            let artwork=doc.scene().order().iter().copied().find(|h|matches!(doc.scene().source_target(*h),Some(SourceTarget::Paint(_))));
+            self.selection_masks.editing=Some(Editing {target:SelectionTarget::Saved(id),artwork,tool:LayerCanvasTool::Paint});
+            self.layer_interaction.tool=LayerCanvasTool::Paint;
         }
     }
     pub(super) fn return_to_artwork(&mut self) -> Result<(), String> {
-        let Some(editing) = self.selection_masks.editing.take() else {
-            return Ok(());
-        };
-        let tonal = self.tonal_active();
-        let changing_target = tonal && editing.target != SelectionTarget::Current;
-        if changing_target {self.cancel_tonal();}
+        let Some(editing)=self.selection_masks.editing.take() else {return Ok(());};
+        let tonal=self.tonal_active();if tonal && editing.target!=SelectionTarget::Current {self.cancel_tonal();}
         self.cancel_selection_contact();
-        let doc = self.engine.document();
-        let artwork = doc
-            .layer(editing.artwork)
-            .filter(|l| l.is_artwork())
-            .map(|l| l.id)
-            .or_else(|| {
-                doc.layers
-                    .iter()
-                    .find(|l| l.kind == LayerKind::Paint)
-                    .map(|l| l.id)
-            });
-        if let Some(id) = artwork.filter(|id| *id != self.engine.document().active_layer) {
-            self.engine.set_active_layer(id).map_err(error)?;
+        let doc=self.engine.document();
+        let artwork=editing.artwork.filter(|h|doc.scene().occurrence(*h).is_some_and(Occurrence::is_artwork)).or_else(||
+            doc.scene().order().iter().copied().find(|h|matches!(doc.scene().source_target(*h),Some(SourceTarget::Paint(_)))));
+        if let Some(id)=artwork.filter(|id|Some(*id)!=doc.working.occurrence) {self.engine.set_active_layer(id).map_err(error)?;}
+        let doc=self.engine.document();
+        if matches!(doc.working.target,Some(SourceTarget::Coverage(_))) {
+            let mut working=doc.working.clone();working.target=working.occurrence.and_then(|h|doc.scene().source_target(h));working.inspect_mask=None;
+            self.engine.apply_edit(Edit::Working(working)).map_err(error)?;
         }
-        if self.engine.document().active_mask {
-            self.engine.apply_edit(Edit::SetMaskTarget(false)).map_err(error)?;
-        }
-        self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {editing.tool};
-        self.engine.set_selection_display(None);
-        self.refresh_document();
-        self.sync_selection_overlay();
-        Ok(())
+        self.layer_interaction.tool=if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {editing.tool};
+        self.engine.set_selection_display(None);self.refresh_document();self.sync_selection_overlay();Ok(())
     }
     pub(super) fn selection_mask_command(&mut self, command: CommandId) -> Result<bool, String> {
         match command {
@@ -700,9 +590,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Err("Edit a Selection Layer first".into());
                 };
                 self.selection_action(if command == CommandId::LoadSelectionLayer {
-                    SelectionAction::LoadLayer { id: id.0, mode: SelectionMode::New, inverted: false }
+                    SelectionAction::LoadLayer { id: occurrence_token(id), mode: SelectionMode::New, inverted: false }
                 } else {
-                    SelectionAction::InvertLayer { id: id.0 }
+                    SelectionAction::InvertLayer { id: occurrence_token(id) }
                 })?
             }
             CommandId::NewSelectionLayer | CommandId::SaveSelectionLayer => {
@@ -718,7 +608,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .clone()
                     .ok_or("No selection to restore")?;
                 self.return_to_artwork()?;
-                self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                self.set_mask_coverage(SelectionTarget::Current,selection)?;
             }
             CommandId::SelectionOutline => {
                 self.selection_tools.options.display.outline =
@@ -733,7 +623,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 // their toggle select the coupled mode, not a second polarity.
                 let layer = match self.selection_masks.target().ok_or("Select a mask first")? {
                     SelectionTarget::Current => 0,
-                    SelectionTarget::Saved(id) => id.0,
+                    SelectionTarget::Saved(id) => occurrence_token(id),
                 };
                 self.effect_action(EffectAction::Set {
                     layer,
@@ -807,30 +697,32 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     Selection::empty()
                 };
-                let parent = parent.map(LayerId);
+                let parent = parent.map(occurrence_handle).transpose()?;
                 if let Some(id) = parent {
                     let doc = self.engine.document();
-                    let group = doc.layer(id).ok_or("Unknown group")?;
-                    if group.kind != LayerKind::Group || doc.is_locked(id) {
+                    let group = doc.scene().occurrence(id).ok_or("Unknown group")?;
+                    if group.kind() != LayerKind::Group || doc.is_locked(id) {
                         return Err("Choose an unlocked group".into());
                     }
                     selection = selection
                         .transformed(
-                            doc.affine_edit_transform(id)
+                            group.placement.as_affine().map(|map|map.then(layer_core::Affine::translation(doc.layer_offset(id))))
                                 .and_then(layer_core::Affine::inverse)
                                 .ok_or("Invalid group placement")?,
                         )
                         .map_err(error)?;
                 }
-                let id = self.engine.allocate_layer_id();
-                let mut layer = Layer::selection(id, self.numbered_document_name(MessageId::DOCUMENTS_SELECTION_NAME, id.0), selection);
-                layer.properties.parent = parent;
-                if save_current && self.selection_masks.target().is_some() {
-                    layer.properties.selection_mask = Some(self.mask_properties());
-                }
-                self.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) })?;
+                let doc=self.engine.document();
+                let saved=RecordChange::insert(&doc.artwork.selections,SavedSelection {selection,display:if save_current && self.selection_masks.target().is_some() {self.mask_properties()} else {Default::default()}});
+                let occurrence=RecordChange::insert(&doc.artwork.occurrences,Occurrence::new(OccurrenceContent::Selection(saved.handle),
+                    self.numbered_document_name(MessageId::DOCUMENTS_SELECTION_NAME,u64::from(doc.artwork.occurrences.next_handle().index())+1)));
+                let id=occurrence.handle;
+                let stack=match parent {Some(h)=>match doc.scene().occurrence(h).map(|o|o.content.clone()) {Some(OccurrenceContent::Stack(s))=>s,_=>return Err("Choose a group".into())},None=>doc.composition().result};
+                let mut entries=doc.artwork.stacks.get(stack).ok_or("Missing stack")?.clone();entries.entries.insert(0,id);
+                let stack=RecordChange::replace(&doc.artwork.stacks,stack,Some(entries)).map_err(error)?;
+                self.layer_edit(Edit::Batch(vec![Edit::SavedSelection(saved),Edit::Occurrence(occurrence),Edit::Stack(stack)]))?;
                 self.begin_selection_mask(SelectionTarget::Saved(id))?;
-                self.state.layer_tools.rename_layer = Some(id.0);
+                self.state.layer_tools.rename_layer=Some(occurrence_token(id));
             }
             SelectionAction::LoadThumbnail {
                 id,
@@ -847,8 +739,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let saved = self
                     .engine
                     .document()
-                    .layer(LayerId(id))
-                    .is_some_and(|l| l.kind == LayerKind::Selection);
+                    .scene().occurrence(occurrence_handle(id)?)
+                    .is_some_and(|l| l.kind() == LayerKind::Selection);
                 self.selection_action(if saved && !mask {
                     SelectionAction::LoadLayer {
                         id,
@@ -861,20 +753,20 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             SelectionAction::LoadCoverage { id, mask, mode } => {
                 let doc = self.engine.document();
-                let layer = doc.layer(LayerId(id)).ok_or("Unknown layer")?;
+                let layer = doc.scene().occurrence(occurrence_handle(id)?).ok_or("Unknown layer")?;
                 let target = if mask {
-                    layer.mask.as_ref().ok_or("This layer has no mask")?.id
+                    SourceTarget::Coverage(layer.mask.as_ref().ok_or("This layer has no mask")?.source)
                 } else {
-                    if layer.kind != LayerKind::Paint {
+                    if layer.kind() != LayerKind::Paint {
                         return Err("Choose a drawable layer with content alpha".into());
                     }
-                    layer.id
+                    doc.scene().source_target(occurrence_handle(id)?).ok_or("Missing paint source")?
                 };
                 self.return_to_artwork()?;
                 let options = layer_render::SelectionRefinement {
                     resize: 0,
                     mode,
-                    previous: self.engine.document().selection.clone().map(Arc::new),
+                    previous: self.engine.document().working.selection.clone().map(Arc::new),
                     antialias: true,
                     feather: 0.,
                     source_to_document: layer_core::Affine::IDENTITY,
@@ -900,17 +792,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut selection = self
                     .engine
                     .document()
-                    .saved_selection(LayerId(id))
+                    .saved_selection(occurrence_handle(id)?)
                     .map_err(error)?;
                 selection.inverted ^= inverted;
                 self.return_to_artwork()?;
                 if mode == SelectionMode::New {
-                    self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                    self.set_mask_coverage(SelectionTarget::Current,selection)?;
                 } else {
                     let options = layer_render::SelectionRefinement {
                         resize: 0,
                         mode,
-                        previous: self.engine.document().selection.clone().map(Arc::new),
+                        previous: self.engine.document().working.selection.clone().map(Arc::new),
                         antialias: true,
                         feather: 0.,
                         source_to_document: layer_core::Affine::IDENTITY,
@@ -935,16 +827,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             SelectionAction::ReplaceLayer { id } => {
                 let selection = self.current_selection().ok_or("Make a selection first")?;
-                self.set_mask_coverage(SelectionTarget::Saved(LayerId(id)), selection)?;
+                self.set_mask_coverage(SelectionTarget::Saved(occurrence_handle(id)?), selection)?;
             }
             SelectionAction::InvertLayer { id } => {
-                let target = SelectionTarget::Saved(LayerId(id));
+                let target = SelectionTarget::Saved(occurrence_handle(id)?);
                 let mut selection = self.mask_coverage(target)?;
                 selection.inverted = !selection.inverted;
                 self.set_mask_coverage(target, selection)?;
             }
             SelectionAction::ClearLayer { id, full } => self.set_mask_coverage(
-                SelectionTarget::Saved(LayerId(id)),
+                SelectionTarget::Saved(occurrence_handle(id)?),
                 if full {
                     Selection::full()
                 } else {
@@ -952,7 +844,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 },
             )?,
             SelectionAction::FillLayer { id } => {
-                self.queue_mask_fill(SelectionTarget::Saved(LayerId(id)), Selection::full())?
+                self.queue_mask_fill(SelectionTarget::Saved(occurrence_handle(id)?), Selection::full())?
             }
         }
         self.refresh_document();
@@ -965,9 +857,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             SelectionTarget::Saved(id) => Some(id),
         };
         Some(MaskEditingView {
-            layer: layer.map(|id| id.0),
+            layer: layer.map(occurrence_token),
             label: layer
-                .and_then(|id| self.engine.document().layer(id))
+                .and_then(|id| self.engine.document().scene().occurrence(id))
                 .map_or_else(|| "Quick Mask".into(), |l| l.name.to_string()),
             gray: self.selection_masks.colors.foreground.rgba[0],
             background: self.selection_masks.colors.background.rgba[0],

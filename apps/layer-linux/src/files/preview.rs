@@ -16,16 +16,15 @@ struct Image {
 }
 fn thumbnail(
     gpu: &SnapshotGpu,
-    project: Project,
-    time: f32,
+    project: layer_core::authored::ArtworkCapture,
     control: CaptureControl,
     view: crate::display_color::ViewColor,
     headroom: f32,
     output: Option<ExportRecipe>,
 ) -> Result<Image, layer_ui::ColorFeatureError> {
-    let hdr_document = project.document.color.depth.is_float();
+    let hdr_document = project.composition().color.depth.is_float();
     let mut renderer =
-        gpu.capture(project, time, control)
+        gpu.capture(project, control)
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
@@ -76,8 +75,7 @@ fn present(preview:layer_render_wgpu::snapshot::SnapshotPreview,display_hdr:bool
 }
 
 struct Pending {
-    project: Project,
-    time: f32,
+    project: layer_core::authored::ArtworkCapture,
     serial: u64,
     output: Option<ExportRecipe>,
 }
@@ -97,7 +95,8 @@ pub(super) struct Comparison {
     labels: [gtk::Label; 2],
     pub status: gtk::Label,
     status_copy: RefCell<Option<((u8, bool, layer_core::color::RgbSpace), String)>>,
-    original: RefCell<Option<Project>>,
+    original: RefCell<Option<layer_core::authored::ArtworkCapture>>,
+    context: layer_core::authored::EvaluationContext,
     before_ready: Cell<bool>,
     headroom: Cell<f32>,
     pending: RefCell<Option<Pending>>,
@@ -113,22 +112,22 @@ pub(super) struct Comparison {
     pub changed: RefCell<Option<Box<dyn Fn(bool)>>>,
 }
 impl Comparison {
-    pub fn new(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
+    pub fn new(gpu: SnapshotGpu, original: Document, context: layer_core::authored::EvaluationContext, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let copy = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
         let labels = [copy.before.clone(), copy.after.clone()];
-        Self::with_labels(gpu, original, view, labels, copy, localization.clone())
+        Self::with_labels(gpu, layer_host::tasks::capture_document_at(&original, context), view, labels, copy, localization.clone())
     }
-    pub fn for_output(gpu: SnapshotGpu, original: Project, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
+    pub fn for_output(gpu: SnapshotGpu, original: layer_core::authored::ArtworkCapture, view: crate::display_color::ViewColor, localization: &std::sync::Arc<layer_ui::Localizer>) -> Rc<Self> {
         let copy = layer_ui::color_feature_copy::ComparisonCopy::new(localization);
         let labels = [copy.master.clone(), copy.output.clone()];
-        let hdr_document = original.document.color.depth.is_float();
+        let hdr_document = original.composition().color.depth.is_float();
         let comparison = Self::with_labels(gpu, original, view, labels, copy, localization.clone());
         comparison.output_labels.set(Some((hdr_document, false)));
         comparison
     }
     fn with_labels(
         gpu: SnapshotGpu,
-        original: Project,
+        original: layer_core::authored::ArtworkCapture,
         view: crate::display_color::ViewColor,
         labels: [std::sync::Arc<str>; 2],
         copy: layer_ui::color_feature_copy::ComparisonCopy,
@@ -176,6 +175,7 @@ impl Comparison {
             labels,
             status,
             status_copy: RefCell::new(None),
+            context: original.output().context.clone(),
             original: RefCell::new(Some(original)),
             before_ready: Cell::new(false),
             headroom: Cell::new(1.),
@@ -225,8 +225,8 @@ impl Comparison {
             glib::timeout_future(std::time::Duration::from_millis(10)).await;
         }
     }
-    pub fn request(self: &Rc<Self>, project: Project, time: f32) {
-        self.request_image(project, time, None);
+    pub fn request(self: &Rc<Self>, project: Document) {
+        self.request_image(layer_host::tasks::capture_document_at(&project, self.context.clone()), None);
     }
     pub fn set_headroom(&self, headroom: f32) -> bool {
         if self.headroom.replace(headroom) == headroom { return false; }
@@ -296,24 +296,21 @@ impl Comparison {
         localization.format(layer_ui::MessageId::COLOR_FEATURES_COMPARISON_STATUS, &args)
     }
     pub fn request_output(self: &Rc<Self>, snapshot: &DocumentExport, recipe: ExportRecipe) {
-        self.output_labels.set(Some((snapshot.project.document.color.depth.is_float(), recipe.format.is_hdr())));
+        self.output_labels.set(Some((snapshot.composition().color.depth.is_float(), recipe.format.is_hdr())));
         self.refresh_labels();
         self.request_image(
-            snapshot.project.clone(),
-            snapshot.time,
+            snapshot.capture.clone(),
             Some(recipe),
         );
     }
     fn request_image(
         self: &Rc<Self>,
-        project: Project,
-        time: f32,
-        output: Option<ExportRecipe>,
+        project: layer_core::authored::ArtworkCapture,
+            output: Option<ExportRecipe>,
     ) {
         self.invalidate(self.copy.borrow().rendering.as_ref());
         *self.pending.borrow_mut() = Some(Pending {
             project,
-            time,
             serial: self.serial.get(),
             output,
         });
@@ -342,7 +339,6 @@ impl Comparison {
                             thumbnail(
                                 &gpu,
                                 project,
-                                next.time,
                                 control.clone(),
                                 view,
                                 headroom,
@@ -353,7 +349,6 @@ impl Comparison {
                     let after = thumbnail(
                         &gpu,
                         next.project,
-                        next.time,
                         control,
                         view,
                         headroom,

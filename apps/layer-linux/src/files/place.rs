@@ -86,7 +86,7 @@ pub(super) async fn run(w: &Rc<Workspace>, mode: Option<layer_ui::PasteMode>) ->
         let context = if let Some(d) = &incoming {
             layer_ui::ImagePlacementContext { epoch: d.epoch, revision: d.revision, target: d.target, center: d.center, destination: d.destination }
         } else { session.image_placement_context(None, None)? };
-        (context, session.state().settings.photo_open, session.engine().document().color.space)
+        (context, session.state().settings.photo_open, session.engine().document().composition().color.space)
     };
     let paths = if paste {
         Vec::new()

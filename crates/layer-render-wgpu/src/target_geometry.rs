@@ -5,12 +5,12 @@ use std::collections::BTreeMap;
 
 #[derive(Default)]
 pub(super) struct TargetGeometry {
-    targets: BTreeMap<LayerId, [u32; 2]>,
+    targets: BTreeMap<SourceTarget, [u32; 2]>,
     bases: BTreeMap<[u32; 2], usize>,
 }
 
 impl WgpuRasterizer {
-    pub(crate) fn target_extent(&self, id: LayerId) -> [u32; 2] {
+    pub(crate) fn target_extent(&self, id: SourceTarget) -> [u32; 2] {
         self.target_geometry
             .targets
             .get(&id)
@@ -20,17 +20,10 @@ impl WgpuRasterizer {
 
     pub(super) fn update_target_geometry(
         &mut self,
-        layers: &[Layer],
+        scene: SceneView<'_>,
         resized: bool,
     ) -> Result<(), GpuRasterError> {
-        let targets: BTreeMap<_, _> = layers
-            .iter()
-            .flat_map(|layer| {
-                let extent = layer.local_extent(self.document_extent);
-                std::iter::once((layer.id, extent))
-                    .chain(layer.masks().map(move |mask| (mask.id, mask.local_extent(extent))))
-            })
-            .collect();
+        let targets: BTreeMap<_, _> = source_access::placed_targets(scene).map(|target| (target, scene.target_extent(target))).collect();
         if !resized && targets == self.target_geometry.targets {
             return Ok(());
         }
@@ -90,7 +83,7 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    pub(super) fn layer_target_offset(&self, id: LayerId, coordinate: [u32; 2]) -> u32 {
+    pub(super) fn layer_target_offset(&self, id: SourceTarget, coordinate: [u32; 2]) -> u32 {
         let extent = self.target_extent(id);
         let base = self.target_geometry.bases[&extent];
         let index = base + (coordinate[1] * extent[0].div_ceil(PAGE_SIZE) + coordinate[0]) as usize;

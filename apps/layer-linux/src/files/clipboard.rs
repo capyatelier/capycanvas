@@ -19,12 +19,14 @@ pub(crate) fn current() -> Option<PixelClip> {
 }
 
 pub(super) async fn copy(w: &Rc<Workspace>, id: u32, request: &layer_ui::DocumentRequest) -> Result<bool, String> {
-    let task = {
+    let (mut task, context) = {
         let gpu = w.snapshot_gpu()?;
         let mut owner = w.gpu.borrow_mut();
         let session = &mut owner.as_mut().ok_or("Canvas unavailable")?.session;
-        layer_host::clipboard::ClipTask::new(session, id, gpu)?
+        let task = layer_host::clipboard::ClipTask::new(session, id, gpu)?;
+        (task, session.engine().backend().capture_context()?)
     };
+    task.set_evaluation_context(context.resolve().await?);
     let details = task.capture_details();
     let progress = details.large.then(|| {
         let dialog = adw::AlertDialog::builder().heading(request.title(&w.localization()).as_ref()).build();

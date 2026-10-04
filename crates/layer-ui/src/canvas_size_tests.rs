@@ -23,7 +23,7 @@ fn canvas_size_session() -> UiSession<Recorder> {
 #[test]
 fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() {
     let mut s = canvas_size_session();
-    let paint = s.engine.document().layers[0].id;
+    let paint = s.engine.document().working.occurrence.unwrap();
     invoke(&mut s, CommandId::CanvasSize);
     let view = canvas_view(&s);
     assert_eq!((view.title.as_ref(), view.values, view.unit, view.relative), ("Canvas Size", [1000.; 2], CanvasSizeUnit::Pixels, false));
@@ -43,11 +43,11 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     assert_ne!(change.regions & regions::DOCUMENT, 0);
     assert!(s.state.layer_tools.canvas_size.is_none());
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [1200, 1100]);
-    assert_eq!(doc.layer(paint).unwrap().properties.offset, Point::default(), "a top-left anchor keeps the origin");
+    assert_eq!(doc.composition().size, [1200, 1100]);
+    assert_eq!(doc.scene().occurrence(paint).unwrap().translation, Point::default(), "a top-left anchor keeps the origin");
     assert_eq!(on_screen(&s, [10., 20.]), screen);
     invoke(&mut s, CommandId::Undo);
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 1000]);
+    assert_eq!(s.engine.document().composition().size, [1000, 1000]);
     assert!(!s.engine.can_undo(), "one undo step");
 
     invoke(&mut s, CommandId::CanvasSize);
@@ -57,7 +57,7 @@ fn canvas_size_grows_from_an_anchor_in_one_undo_step_and_keeps_the_view_still() 
     let screen = on_screen(&s, [10., 20.]);
     canvas_size(&mut s, CanvasSizeAction::Apply);
     let doc = s.engine.document();
-    assert_eq!(doc.layer(paint).unwrap().properties.offset, Point { x: 300. - 512., y: 150. - 256. }, "rebased by whole tiles");
+    assert_eq!(doc.scene().occurrence(paint).unwrap().translation, Point { x: 300. - 512., y: 150. - 256. }, "rebased by whole tiles");
     assert!(doc.extents_cover_canvas());
     assert_eq!(on_screen(&s, [310., 170.]), screen, "the image stays where it was");
     assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
@@ -97,9 +97,9 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
     canvas_size(&mut s, CanvasSizeAction::Width { value: 500. });
     canvas_size(&mut s, CanvasSizeAction::Apply);
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [500, 1000]);
-    assert_eq!(doc.layers[0].properties.offset, Point { x: -250., y: 0. }, "centered");
-    assert_eq!(doc.layers[0].properties.extent, Some([1000, 1000]), "the cropped pixels stay");
+    assert_eq!(doc.composition().size, [500, 1000]);
+    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().translation, Point { x: -250., y: 0. }, "centered");
+    assert_eq!(doc.scene().local_extent(doc.working.occurrence.unwrap()), [1000, 1000], "the cropped pixels stay");
     invoke(&mut s, CommandId::CanvasSize);
     canvas_size(&mut s, CanvasSizeAction::Cancel);
     assert!(s.state.layer_tools.canvas_size.is_none());
@@ -109,9 +109,10 @@ fn canvas_size_converts_percent_and_relative_values_and_validates_limits() {
 #[test]
 fn a_refused_apply_keeps_the_canvas_size_draft() {
     let mut s = canvas_size_session();
-    let mut layer = s.engine.document().layers[0].clone();
-    layer.raster = layer_core::raster::RasterRevision::pending();
-    s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer.clone()))).unwrap();
+    let layer_core::authored::SourceTarget::Paint(paint) = s.engine.document().working.target.unwrap() else { panic!("paint") };
+    let mut source = s.engine.document().artwork.paint.get(paint).unwrap().clone();
+    source.raster = layer_core::raster::RasterRevision::pending();
+    s.engine.apply_edit(layer_core::Edit::Paint(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.paint, paint, Some(source.clone())).unwrap())).unwrap();
     invoke(&mut s, CommandId::CanvasSize);
     canvas_size(&mut s, CanvasSizeAction::Anchor { anchor: CanvasAnchor::BottomRight });
     canvas_size(&mut s, CanvasSizeAction::Width { value: 1100. });
@@ -120,8 +121,8 @@ fn a_refused_apply_keeps_the_canvas_size_draft() {
     let error = s.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Apply }).unwrap_err();
     assert_eq!(error, "Raster backing is busy; retry the edit");
     assert_eq!((canvas_view(&s).values, canvas_view(&s).anchor), ([1100., 1000.], CanvasAnchor::BottomRight), "the draft survives");
-    assert_eq!(s.engine.document().width, 1000);
-    layer.raster.publish(Ok(Default::default())).unwrap();
+    assert_eq!(s.engine.document().composition().size[0], 1000);
+    source.raster.publish(Ok(Default::default())).unwrap();
     invoke(&mut s, CommandId::QuickMask);
     let error = s.dispatch(UiAction::CanvasSize { action: CanvasSizeAction::Apply }).unwrap_err();
     assert_eq!(error, "Return to the artwork first", "a mode entered beside the open panel is refused");
@@ -129,7 +130,7 @@ fn a_refused_apply_keeps_the_canvas_size_draft() {
     invoke(&mut s, CommandId::QuickMask);
     canvas_size(&mut s, CanvasSizeAction::Apply);
     assert!(s.state.layer_tools.canvas_size.is_none());
-    assert_eq!(s.engine.document().width, 1100);
+    assert_eq!(s.engine.document().composition().size[0], 1100);
 }
 
 #[test]
@@ -150,14 +151,14 @@ fn crop_canvas_to_selection_uses_the_coverage_bounds_and_refuses_inverted_select
     let screen = on_screen(&s, [150., 100.]);
     s.dispatch(UiAction::CanvasBarEdit { context: bar.context, action: Box::new(UiAction::Invoke { command: crop }) }).unwrap();
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [201, 200]);
-    assert_eq!(doc.layers[0].properties.offset, Point { x: -100., y: -50. });
-    assert_eq!(doc.selection, before.selection.as_ref().map(|sel| sel.translated(Point { x: -100., y: -50. })));
+    assert_eq!(doc.composition().size, [201, 200]);
+    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().translation, Point { x: -100., y: -50. });
+    assert_eq!(doc.working.selection, before.working.selection.as_ref().map(|sel| sel.translated(Point { x: -100., y: -50. })));
     assert_eq!(on_screen(&s, [50., 50.]), screen);
-    assert!(doc.layers[0].raster == before.layers[0].raster, "a crop changes only metadata");
+    assert!(doc.scene().raster(doc.working.target.unwrap()) == before.scene().raster(before.working.target.unwrap()), "a crop changes only metadata");
     invoke(&mut s, CommandId::Undo);
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 1000]);
-    assert_eq!(s.engine.document().selection, before.selection);
+    assert_eq!(s.engine.document().composition().size, [1000, 1000]);
+    assert_eq!(s.engine.document().working.selection, before.working.selection);
     invoke(&mut s, CommandId::SelectAll);
     assert!(s.dispatch(UiAction::Invoke { command: crop }).unwrap_err().contains("whole canvas"));
 }
@@ -195,12 +196,12 @@ fn edit_image_submenu_holds_the_geometry_commands_and_photo_keymaps_bind_canvas_
 fn unselected_paint_operations_stay_inside_the_canvas_window() {
     let mut s = canvas_size_session();
     s.frame(2, 2).unwrap();
-    let paint = s.engine.document().layers[0].id;
+    let paint = s.engine.document().working.target.unwrap();
     let fill = s.fill_operation();
     s.paint_operation(None, fill.clone(), &[]).unwrap();
     s.frame(3, 3).unwrap();
     let (_, operation) = s.renderer_mut().pending_operations[0].clone();
-    assert!(operation.coverage.initial.is_none(), "a layer without hidden pixels needs no bound");
+    assert!(operation.coverage.source.initial.is_none(), "a layer without hidden pixels needs no bound");
     rectangle_selection(&mut s, [0., 0., 400., 400.]);
     invoke(&mut s, CommandId::CropCanvasToSelection);
     invoke(&mut s, CommandId::Deselect);
@@ -217,8 +218,9 @@ fn unselected_paint_operations_stay_inside_the_canvas_window() {
 fn active_size_dialog_copy_is_retained_across_brush_and_camera_publication() {
     let localization = Localizer::shared(UiLanguage::Japanese);
     let mut s = UiSession::new_localized(Recorder::default(),
-        Document::new("写真 {document} 🖌", 1000, 800, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
+        Document::new(layer_core::PortableId::random(), 1000, 800, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
         [1000, 800], Platform::Gtk, localization.clone()).unwrap();
+    s.state.document_file.unsaved_name = Some("写真 {document} 🖌".into());
     invoke(&mut s, CommandId::CanvasSize);
     let view = canvas_view(&s);
     assert_eq!(view.title.as_ref(), "キャンバスサイズ");
@@ -241,7 +243,7 @@ fn active_size_dialog_copy_is_retained_across_brush_and_camera_publication() {
     assert!(std::sync::Arc::ptr_eq(&image.labels[0], &image_size_view(&s).labels[0]));
     assert_eq!(image.labels[0].as_ref(), "幅");
     assert_eq!(image.resamples.iter().map(|choice| choice.resample).collect::<Vec<_>>(), ImageResample::ALL);
-    assert_eq!(s.engine.document().id.as_ref(), "写真 {document} 🖌");
+    assert_eq!(s.state.document_file.title(), "写真 {document} 🖌");
 }
 
 #[test]
@@ -249,9 +251,9 @@ fn active_layer_menu_keeps_typed_actions_and_literal_mask_names() {
     let localization = Localizer::shared(UiLanguage::Japanese);
     let literal = "水彩 {name} 🖌";
     let mut s = UiSession::new_localized(Recorder::default(),
-        Document::new("Literal document", 64, 64, layer_core::DocumentNames { paint: literal.into(), paper: "Literal paper".into() }),
+        Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: literal.into(), paper: "Literal paper".into() }),
         [640, 480], Platform::Gtk, localization.clone()).unwrap();
-    let id = s.engine.document().active_layer.0;
+    let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     let menu = s.layer_menu(id, false).unwrap();
     assert_eq!(menu.title, format!("レイヤー：{literal}"));
     let new = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| matches!(item.action, Some(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }))).unwrap();
@@ -262,11 +264,11 @@ fn active_layer_menu_keeps_typed_actions_and_literal_mask_names() {
     assert!(menu.sections.iter().flatten().any(|item| matches!(item.action, Some(UiAction::Invoke { command: CommandId::EditLayerContent }))));
     let index = ApplicationMenu::ALL.iter().position(|menu| *menu == ApplicationMenu::Layer).unwrap();
     let primary = s.header_view_with(true).primary_menu.unwrap();
-    let on_open = s.layer_menu(id, s.engine.document().active_mask).unwrap();
+    let on_open = s.layer_menu(id, s.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap();
     assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: true } }).unwrap();
     let primary = s.header_view_with(true).primary_menu.unwrap();
-    let on_open = s.layer_menu(id, s.engine.document().active_mask).unwrap();
+    let on_open = s.layer_menu(id, s.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap();
     assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&on_open.sections).unwrap());
     let coverage = s.coverage_menu_items(id, true);
     assert_eq!(coverage.len(), 4);
@@ -279,10 +281,10 @@ fn active_layer_menu_keeps_typed_actions_and_literal_mask_names() {
 fn primary_layer_menu_follows_quick_mask_and_return_to_artwork() {
     let mut session = canvas_size_session();
     let index = ApplicationMenu::ALL.iter().position(|menu| *menu == ApplicationMenu::Layer).unwrap();
-    let artwork = session.engine.document().active_layer;
+    let artwork = session.engine.document().working.occurrence;
     invoke(&mut session, CommandId::QuickMask);
     assert!(session.selection_masks.quick());
-    assert_eq!(session.engine.document().active_layer, artwork);
+    assert_eq!(session.engine.document().working.occurrence, artwork);
     let primary = session.header_view_with(true).primary_menu.unwrap();
     let direct = session.application_menu(ApplicationMenu::Layer);
     assert_eq!(serde_json::to_value(&primary.sections[0][index].sections).unwrap(), serde_json::to_value(&direct.sections).unwrap());

@@ -3,13 +3,8 @@ use super::place_source::{snapshot, source};
 use super::*;
 use layer_core::color::{ColorProfile, RgbSpace};
 
-fn layer(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
-    ui_session(&w)
-        .engine()
-        .document()
-        .layer(id)
-        .unwrap()
-        .clone()
+fn layer(w: &Rc<Workspace>, id: layer_core::OccurrenceHandle) -> layer_core::PaintSource {
+    ui_session(w).engine().document().scene().paint_source(id).unwrap().clone()
 }
 
 #[test]
@@ -19,15 +14,13 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.SourceRepair");
     let mut project = new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    let id = project.document.active_layer;
+    let id = project.working.occurrence.unwrap();
     let original = std::sync::Arc::new(source());
-    project
-        .document
-        .layers
-        .iter_mut()
-        .find(|l| l.id == id)
-        .unwrap()
-        .source = Some(original);
+    let target = project.working.target.unwrap();
+    let layer_core::SourceTarget::Paint(handle) = target else { panic!("Paint source") };
+    let paint = project.artwork.paint.get_mut(handle).unwrap();
+    paint.domain = original.extent;
+    paint.original = Some(original);
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
@@ -47,7 +40,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
         .unwrap();
     // Exercise both the layer action and the File menu command routes.
     w.dispatch(UiAction::Layer {
-        action: LayerAction::RepairSourceProfile { id: id.0 },
+        action: LayerAction::RepairSourceProfile { id: layer_ui::occurrence_token(id) },
     });
     apply_dialog(&w, "source-profile-dialog", false);
     super::new_photo::profile_action(&w, "source", "builtin-0");
@@ -149,7 +142,7 @@ fn native_source_profile_repair_preserves_originals_and_baked_edits() {
     ready(&w);
     let saved = snapshot(&w);
     let project =
-        layer_core::Project::read(std::io::Cursor::new(saved.clone()), Default::default()).unwrap();
+        open_native_document(std::io::Cursor::new(saved.clone()));
     let restored = Workspace::with_project(&app, Some((project, None)));
     restored.window.present();
     ready(&restored);

@@ -5,7 +5,7 @@ use wasm_bindgen_futures::{JsFuture, future_to_promise};
 impl WebApp {
     pub fn localize_export_presets(&self, view: JsValue) -> Result<JsValue, JsValue> {
         let mut view: layer_ui::ExportPresetView = serde_wasm_bindgen::from_value(view).map_err(js)?;
-        view.localize_names(self.session.engine().document().color, self.session.localization());
+        view.localize_names(self.session.engine().document().composition().color, self.session.localization());
         serialize(&view)
     }
     pub fn profile_entry_copy(&self, entry: JsValue) -> Result<JsValue, JsValue> {
@@ -88,10 +88,10 @@ impl WebApp {
         let action: layer_ui::ExportPresetAction =
             serde_wasm_bindgen::from_value(action).map_err(js)?;
         let metadata = serde_json::to_string(
-            &serde_json::json!({"action":action,"color":self.session.engine().document().color}),
+            &serde_json::json!({"action":action,"color":self.session.engine().document().composition().color}),
         )
         .map_err(js)?;
-        let color = self.session.engine().document().color;
+        let color = self.session.engine().document().composition().color;
         let localizer = self.session.localization().clone();
         Ok(future_to_promise(async move {
             let result = JsFuture::from(raster_worker::call("export-presets", &metadata, &js_sys::Array::new())?).await.map_err(|error|color_feature_rejection(color_feature_reason(error)))?;

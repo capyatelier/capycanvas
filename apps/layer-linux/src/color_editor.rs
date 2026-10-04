@@ -635,7 +635,7 @@ mod tests {
             {
                 let gpu=w.gpu.borrow();let session=&gpu.as_ref().unwrap().session;
                 assert_ne!(session.state().document_file.epoch,before_epoch);
-                assert_eq!([session.engine().document().width,session.engine().document().height],[80,80]);
+                assert_eq!(session.engine().document().composition().size,[80,80]);
             }
             let replacement = w.gpu.borrow().as_ref().unwrap().session.engine().checkpoint();
             crate::workspace::tests::new_photo::response(&w, "apply");

@@ -9,41 +9,92 @@ mod fills;
 #[path = "native_effects/color.rs"]
 mod color;
 
-fn effect(id: u64, name: &str, image: bool) -> Layer {
+use layer_core::authored::{Artwork, PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, Definition, EffectApplication};
+use layer_core::Document;
+
+pub(crate) fn empty_document(extent: [u32;2], color: DocumentColor) -> Document {
+    let mut artwork = Artwork::new(extent).unwrap();
+    artwork.compositions.get_mut(artwork.root).unwrap().color = color;
+    Document::from_artwork(artwork).unwrap()
+}
+pub(crate) fn refresh(document: &mut Document) {
+    let owner = document.owner; let revision = document.revision; let working = document.working.clone();
+    *document = Document::from_artwork(document.artwork.clone()).unwrap();
+    document.owner = owner; document.revision = revision; document.working = working;
+}
+pub(crate) fn insert_effect(document: &mut Document, effect: EffectInstance) -> OccurrenceHandle {
+    let name = effect.program.id.clone();
+    let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program:effect.program, dimensions:Default::default()}).unwrap();
+    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values:effect.values,domain:document.composition().size}).unwrap();
+    let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();
+    document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
+    refresh(document);
+    occurrence
+}
+pub(crate) fn insert_source(document: &mut Document, name: &str, source: Arc<layer_core::color::source::SourceImage>) -> OccurrenceHandle {
+    let source = document.artwork.paint.insert(PortableId::random(),PaintSource {domain:source.extent,original:Some(source),raster:Default::default(),operations:Default::default()}).unwrap();
+    let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
+    document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
+    refresh(document);
+    occurrence
+}
+pub(crate) fn effect_document(effects: &[EffectInstance], extent: [u32;2], color: DocumentColor) -> Document {
+    let mut document = empty_document(extent,color);
+    for effect in effects {insert_effect(&mut document,effect.clone());}
+    document
+}
+pub(crate) fn set_effect(document: &mut Document, occurrence: OccurrenceHandle, key: &str, value: EffectValue) {
+    let view = document.scene().effect(occurrence).unwrap();
+    let mut draft = EffectInstance {program: document.artwork.definitions.get(document.scene().effect_application(occurrence).unwrap().definition).unwrap().program.clone(), values:view.values.to_vec()};
+    draft.set(key,value).unwrap();
+    let handle = document.scene().effect_handle(occurrence).unwrap();
+    document.artwork.effects.get_mut(handle).unwrap().values = draft.values;
+}
+pub(crate) fn mask(document: &mut Document, owner: OccurrenceHandle, default: f32) {
+    let coverage = document.artwork.coverage.next_handle();
+    let mut snapshot = layer_core::CoverageSnapshot::reveal_all(coverage,document.composition().size,Default::default());
+    snapshot.source.default_coverage = default;
+    document.artwork.coverage.insert(PortableId::random(),snapshot.source).unwrap();
+    document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(snapshot.use_);
+    refresh(document);
+}
+pub(crate) fn roundtrip(document: Document) -> Document {
+    let capture = layer_core::Editor::new(document).capture(0,Default::default()).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let mut bytes = Vec::new();
+    layer_core::package::codec::PreparedPackage::prepare(&capture,None,&cancel).unwrap().write(&mut bytes,&cancel).unwrap();
+    read_document(std::io::Cursor::new(bytes))
+}
+pub(crate) fn read_document(mut input: impl std::io::Read + std::io::Seek) -> Document {
+    let mut bytes = Vec::new(); input.read_to_end(&mut bytes).unwrap();
+    let backing = layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+    let layer_core::package::codec::OpenOutcome::Candidate {artwork,..} = layer_core::package::codec::open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() else { panic!("Expected editable effect fixture") };
+    let document = Document::from_artwork(artwork).unwrap();
+    document.validate(Default::default()).unwrap();
+    layer_color::validate_document_color(&document).unwrap();
+    document
+}
+fn effect(_id: u64, name: &str, image: bool) -> EffectInstance {
     let mut program = (*fixture(name).program()).clone();
-    if image {
-        program.passes = vec![EffectPass {
-            entry: program.entry.clone(),
-            sampling: EffectSampling::Neighborhood { radius: 0 },
-        }]
-        .into();
-    }
-    let mut layer = Layer::paint(LayerId(id), name);
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    layer
+    if image {program.passes = vec![EffectPass {entry:program.entry.clone(),sampling:EffectSampling::Neighborhood {radius:0}}].into();}
+    EffectInstance::new(Arc::new(program))
 }
-fn set(layer: &mut Layer, name: &str, value: EffectValue) {
-    Arc::make_mut(layer.effect.as_mut().unwrap())
-        .set(name, value)
-        .unwrap();
+fn set(effect: &mut EffectInstance, name: &str, value: EffectValue) {effect.set(name,value).unwrap();}
+fn source(rgb: [f32;3], alpha: f32) -> EffectInstance {
+    let mut effect = effect(1,"exposure",false);
+    let program = Arc::make_mut(&mut effect.program);
+    program.kind = EffectKind::Generator; program.entry = "fixture".into();
+    program.wgsl = format!("fn fixture(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return vec4<f32>({:?},{:?},{:?},{:?});}}",rgb[0]*alpha,rgb[1]*alpha,rgb[2]*alpha,alpha).into();
+    effect
 }
-fn source(rgb: [f32; 3], alpha: f32) -> Layer {
-    let mut layer = effect(1, "exposure", false);
-    let p = Arc::make_mut(&mut Arc::make_mut(layer.effect.as_mut().unwrap()).program);
-    p.kind = EffectKind::Generator;
-    p.entry = "fixture".into();
-    p.wgsl = format!("fn fixture(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return vec4<f32>({:?},{:?},{:?},{:?});}}",
-        rgb[0]*alpha, rgb[1]*alpha, rgb[2]*alpha, alpha).into();
-    layer
+fn frame_document(r: &mut WgpuRasterizer, document: &Document) -> [f32;4] {
+    r.submit(packet(document.scene().with_owner(0,0),document.composition().size)).unwrap();
+    let bytes = crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
+    std::array::from_fn(|c| f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
 }
-fn frame(r: &mut WgpuRasterizer, layers: &[Layer]) -> [f32; 4] {
-    r.submit(FramePacket {
-        ..packet(layers, [256; 2])
-    })
-    .unwrap();
-    let bytes = crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r));
-    std::array::from_fn(|c| f32::from_le_bytes(bytes[c * 4..c * 4 + 4].try_into().unwrap()))
+fn frame(r: &mut WgpuRasterizer, effects: &[EffectInstance]) -> [f32;4] {
+    let document = effect_document(effects,[256;2],r.document_color);
+    frame_document(r,&document)
 }
 fn close(actual: [f32; 4], rgb: [f32; 3], alpha: f32, context: &str) {
     assert_eq!(actual[3], alpha, "coverage {context}");
@@ -163,144 +214,46 @@ fn native_white_balance_and_encoded_tone_helpers_use_document_primaries_and_tran
 
 #[test]
 fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
-    use layer_core::color::{ColorProfile, source::*};
+    use layer_core::color::ColorProfile;
     for space in RgbSpace::ALL {
-        for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let color = DocumentColor { space, depth };
-            let mut document = layer_core::Document::new("editable photo", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            document.color = color;
-            let mut builder = SourceBuilder::new(
-                [256; 2],
-                SourceInterpretation {
-                    channels: SourceChannels::Rgba,
-                    depth,
-                    profile: ColorProfile::Builtin(space),
-                    profile_assumed: false,
-                },
-                4 * 1024 * 1024,
-            )
-            .unwrap();
-            for y in 0..256u32 {
-                let bytes: Vec<_> = (0..256u32)
-                    .flat_map(|x| {
-                        [x * 257, y * 257, (x * 101 + y * 237) % 65536, 65535]
-                            .into_iter()
-                            .flat_map(move |v| {
-                                let value = if depth == SampleDepth::U8 {
-                                    v / 257
-                                } else {
-                                    v
-                                };
-                                (value as u16).to_le_bytes().into_iter().take(depth.bytes())
-                            })
-                    })
-                    .collect();
-                builder.push_row(&bytes).unwrap();
+        for depth in [SampleDepth::U8,SampleDepth::U16] {
+            let color = DocumentColor {space,depth};
+            let mut document = empty_document([256;2],color);
+            let mut effects = Vec::new();
+            for name in ["exposure","white_balance","levels","curves","hue_saturation","color_balance"] {
+                let mut draft = effect(0,name,false);
+                match name {
+                    "exposure" => set(&mut draft,"exposure",EffectValue::Number(0.75)),
+                    "white_balance" => set(&mut draft,"temperature",EffectValue::Number(25.)),
+                    "hue_saturation" => set(&mut draft,"hue",EffectValue::Number(10.)),
+                    "levels" => {set(&mut draft,"black",EffectValue::Number(0.03));set(&mut draft,"gamma",EffectValue::Number(0.9));set(&mut draft,"clamp_input",EffectValue::Toggle(true));},
+                    "curves" => set(&mut draft,"curve_0",EffectValue::Curve(vec![[0.,0.],[0.213,0.13],[0.79,0.9],[1.,1.]])),
+                    "color_balance" => {set(&mut draft,"midtones_red",EffectValue::Number(12.));set(&mut draft,"shadows_blue",EffectValue::Number(-5.));},
+                    _ => unreachable!(),
+                }
+                effects.push(draft);
             }
-            let source_id = document.allocate_layer_id();
-            let mut photo = Layer::paint(source_id, "retained original");
-            photo.source = Some(Arc::new(builder.finish().unwrap()));
-            document.active_layer = source_id;
-            document.layers = vec![photo];
-            for name in [
-                "exposure",
-                "white_balance",
-                "levels",
-                "curves",
-                "hue_saturation",
-                "color_balance",
-            ] {
-                let mut layer = effect(document.allocate_layer_id().0, name, false);
-                if name == "exposure" {
-                    set(&mut layer, "exposure", EffectValue::Number(0.75));
-                }
-                if name == "white_balance" {
-                    set(&mut layer, "temperature", EffectValue::Number(25.));
-                }
-                if name == "hue_saturation" {
-                    set(&mut layer, "hue", EffectValue::Number(10.));
-                }
-                if name == "levels" {
-                    set(&mut layer, "black", EffectValue::Number(0.03));
-                    set(&mut layer, "gamma", EffectValue::Number(0.9));
-                    set(&mut layer, "clamp_input", EffectValue::Toggle(true));
-                }
-                if name == "curves" {
-                    set(
-                        &mut layer,
-                        "curve_0",
-                        EffectValue::Curve(vec![[0., 0.], [0.213, 0.13], [0.79, 0.9], [1., 1.]]),
-                    );
-                }
-                if name == "color_balance" {
-                    set(&mut layer, "midtones_red", EffectValue::Number(12.));
-                    set(&mut layer, "shadows_blue", EffectValue::Number(-5.));
-                }
-                let mut mask = layer_core::LayerMask::reveal_all(
-                    document.allocate_layer_id(),
-                    Point::default(),
-                );
-                mask.default_coverage = 0.5;
-                layer.mask = Some(mask);
-                document.layers.insert(0, layer);
-            }
-            let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-            frame(&mut r, &document.layers);
-            let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
-            let project = layer_core::Project { document };
-            let mut archive = Vec::new();
-            project.write(&mut archive).unwrap();
-            let mut loaded =
-                layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
-            assert_eq!(loaded.document.color, color);
-            assert!(
-                loaded.document.layers[..6]
-                    .iter()
-                    .all(|l| l.effect.is_some() && l.mask.is_some())
-            );
-            let mut fresh = WgpuRasterizer::new_native_headless(color).unwrap();
-            frame(&mut fresh, &loaded.document.layers);
-            assert_eq!(
-                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
-                before
-            );
-            let exposure = loaded
-                .document
-                .layers
-                .iter()
-                .position(|l| l.name.as_ref() == "exposure")
-                .unwrap();
-            set(
-                &mut loaded.document.layers[exposure],
-                "exposure",
-                EffectValue::Number(-1.),
-            );
-            frame(&mut fresh, &loaded.document.layers);
-            assert_ne!(
-                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
-                before
-            );
-            set(
-                &mut loaded.document.layers[exposure],
-                "exposure",
-                EffectValue::Number(0.75),
-            );
-            frame(&mut fresh, &loaded.document.layers);
-            assert_eq!(
-                crate::layer_tests::page_bytes(&fresh, crate::test_support::document_texture(&fresh)),
-                before
-            );
-            let source = loaded
-                .document
-                .layers
-                .last()
-                .unwrap()
-                .source
-                .as_ref()
-                .unwrap();
-            assert_eq!(source.interpretation.profile, ColorProfile::Builtin(space));
-            assert_eq!(source.interpretation.depth, depth);
-            assert!(loaded.document.layers.last().unwrap().raster.is_empty());
+            for draft in effects.into_iter().rev() {let h=insert_effect(&mut document,draft);mask(&mut document,h,0.5);}
+            let original = crate::test_support::depth_source([256;2],depth,space,4*1024*1024,|x,y| {
+                let codes = [x*257,y*257,(x*101+y*237)%65536,65535];
+                codes.map(|code| if depth==SampleDepth::U8 {(code/257) as f32/255.} else {code as f32/65535.})
+            });
+            let source = insert_source(&mut document,"retained original",original);
+            document.working.occurrence = Some(source);document.working.target=document.scene().source_target(source);
+            let mut r=WgpuRasterizer::new_native_headless(color).unwrap();frame_document(&mut r,&document);
+            let before=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
+            let mut loaded=roundtrip(document);assert_eq!(loaded.composition().color,color);
+            assert!(loaded.scene().order()[..6].iter().all(|h|loaded.scene().effect(*h).is_some()&&loaded.scene().mask(*h).is_some()));
+            let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();frame_document(&mut fresh,&loaded);
+            assert_eq!(crate::layer_tests::page_bytes(&fresh,crate::test_support::document_texture(&fresh)),before);
+            let exposure=loaded.scene().order().iter().copied().find(|h|loaded.scene().occurrence(*h).unwrap().name.as_ref()=="exposure").unwrap();
+            set_effect(&mut loaded,exposure,"exposure",EffectValue::Number(-1.));frame_document(&mut fresh,&loaded);
+            assert_ne!(crate::layer_tests::page_bytes(&fresh,crate::test_support::document_texture(&fresh)),before);
+            set_effect(&mut loaded,exposure,"exposure",EffectValue::Number(0.75));frame_document(&mut fresh,&loaded);
+            assert_eq!(crate::layer_tests::page_bytes(&fresh,crate::test_support::document_texture(&fresh)),before);
+            let source=loaded.scene().paint_source(*loaded.scene().order().last().unwrap()).unwrap();
+            assert_eq!(source.original.as_ref().unwrap().interpretation.profile,ColorProfile::Builtin(space));
+            assert_eq!(source.original.as_ref().unwrap().interpretation.depth,depth);assert!(source.raster.is_empty());
         }
     }
 }

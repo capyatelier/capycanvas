@@ -8,12 +8,12 @@ fn native_local_tone_sustained_qualification() {
     let prefix = std::path::PathBuf::from(std::env::var_os("LAYER_PACING_REPORT").unwrap());
     let path = std::env::var_os("LAYER_HDR_LARGE_INPUT").unwrap();
     let mut p =
-        layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
-    let extent = [p.document.width, p.document.height];
+        open_native_document(std::fs::File::open(path).unwrap());
+    let extent = [p.composition().size[0], p.composition().size[1]];
     assert!(u64::from(extent[0]) * u64::from(extent[1]) >= 59_000_000);
-    assert_eq!(p.document.color.depth, SampleDepth::F16);
-    p.document.sdr_rendition = Default::default();
-    let original_layers = p.document.layers.clone();
+    assert_eq!(p.composition().color.depth, SampleDepth::F16);
+    p.artwork.outputs.get_mut(p.artwork.default_output).unwrap().sdr = Default::default();
+    let original_sources = (p.artwork.paint.clone(), p.artwork.coverage.clone(), p.artwork.occurrences.clone(), p.artwork.effects.clone());
     let app = native_test_app("art.capycanvas.LocalToneQualification");
     let started = Instant::now();
     let w = Workspace::with_project(&app, Some((p, None)));
@@ -37,8 +37,7 @@ fn native_local_tone_sustained_qualification() {
         let photo = std::path::Path::new(
             "../../artifacts/color-m4/proof-polish/images/abandoned_hall_01_2k.capy",
         );
-        let p = layer_core::Project::read(std::fs::File::open(photo).unwrap(), Default::default())
-            .unwrap();
+        let p = open_native_document(std::fs::File::open(photo).unwrap());
         let other = Workspace::with_project(&app, Some((p, None)));
         other.window.present();
         ready(&other);
@@ -50,17 +49,17 @@ fn native_local_tone_sustained_qualification() {
         let gpu = w.snapshot_gpu().unwrap();
         let snapshot = {
             let g = w.gpu.borrow(); let session = &g.as_ref().unwrap().session;
-            DocumentExport { project: session.capture_project_recovery().unwrap(),
+            DocumentExport { capture: session.capture_project_recovery().unwrap(),
                 time: session.engine().animation_time() }
         };
         let prefix = prefix.clone();
         std::thread::spawn(move || {
             let start = Instant::now();
             let master = prefix.with_extension("capy");
-            layer_core::atomic_write(&master, |f| snapshot.project.write(f)).unwrap();
+            layer_core::atomic_write(&master, |f| write_capture(&snapshot.capture, f)).unwrap();
             let save_ms = start.elapsed().as_secs_f64() * 1000.;
-            let restored = layer_core::Project::read(std::fs::File::open(&master).unwrap(), Default::default()).unwrap();
-            assert_eq!(restored.document, snapshot.project.document, "exact saved master and rendition");
+            let restored = open_native_document(std::fs::File::open(&master).unwrap());
+            assert_live_artwork_eq(&restored, &capture_document(&snapshot.capture));
             drop(restored);
             let mut exports = Vec::new();
             for (format, name) in [(layer_ui::ExportFormat::JpegHdrMapped, "jpg"), (layer_ui::ExportFormat::AvifHdrMapped, "avif")] {
@@ -70,7 +69,7 @@ fn native_local_tone_sustained_qualification() {
                 recipe.format = format;
                 recipe.depth = SampleDepth::U16;
                 recipe.background = if name == "jpg" { layer_ui::ExportBackground::White } else { layer_ui::ExportBackground::Preserve };
-                let copy = DocumentExport { project: snapshot.project.clone(), time: snapshot.time };
+                let copy = DocumentExport { capture: snapshot.capture.clone(), time: snapshot.time };
                 let clipped = crate::files::export::write_snapshot(gpu.clone(), copy, recipe, &destination, &Default::default()).unwrap();
                 let export_ms = started.elapsed().as_secs_f64() * 1000.;
                 let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&destination).unwrap()), Default::default()).unwrap();
@@ -110,7 +109,7 @@ fn native_local_tone_sustained_qualification() {
         ui_session(&w)
             .engine()
             .document()
-            .sdr_rendition
+            .output().sdr
     };
     let before = rendition();
     ui_session_mut(&w)
@@ -193,13 +192,8 @@ fn native_local_tone_sustained_qualification() {
     invoke(&w, CommandId::Undo);
     ready(&w);
     assert_eq!(rendition(), before, "one drag remains one undo step");
-    assert_eq!(
-        ui_session(&w)
-            .engine()
-            .document()
-            .layers,
-        original_layers
-    );
+    let document = ui_session(&w).engine().document().clone();
+    assert_eq!((document.artwork.paint, document.artwork.coverage, document.artwork.occurrences, document.artwork.effects), original_sources);
     if let Some(worker) = worker {
         let deadline = Instant::now() + Duration::from_secs(900);
         while !worker.is_finished() {

@@ -76,14 +76,14 @@ impl WebApp {
         };
         let localization = self.session.localization().clone();
         let photo_policy = self.session.state().settings.photo_open;
-        let working_space = self.session.engine().document().color.space;
+        let working_space = self.session.engine().document().composition().color.space;
         let control = control.inner.clone();
         Ok(future_to_promise(async move {
             if files.length() == 0 {
                 return Err(js("Choose at least one image"));
             }
             let mut images = layer_ui::ImageImportBatch::new(photo_policy, working_space,
-                layer_color::photo::DecodeLimits::from_memory_budget(raster_project::photo_memory_budget()));
+                layer_color::photo::DecodeLimits::from_memory_budget(artwork_transfer::photo_memory_budget()));
             for file in files.iter() {
                 output::cancelled(&control)?;
                 if request.lost.lock().unwrap().is_some() {
@@ -103,9 +103,9 @@ impl WebApp {
                 let buffer = JsFuture::from(js_sys::Promise::resolve(&read.call0(&file)?)).await?;
                 output::cancelled(&control)?;
                 let bytes = js_sys::Uint8Array::new(&buffer);
-                let project = raster_project::open(
+                let imported = artwork_transfer::open(
                     bytes,
-                    raster_project::OpenOptions {
+                    artwork_transfer::OpenOptions {
                         dimension: layer_core::ProjectLimits::default().dimension,
                         photo_policy,
                         names: layer_ui::photo_document_names(&name, &localization),
@@ -113,16 +113,22 @@ impl WebApp {
                         source_bytes: Some(images.limits().source_bytes),
                     },
                 )
-                .await?.project;
+                .await?;
+                let project=match imported {
+                    artwork_transfer::Opened::Editable {document,..}=>document.project,
+                    artwork_transfer::Opened::Package{..}=>{
+                        layer_ui::ImportSource::identify(b"PK\x03\x04",layer_ui::ImportIntent::Place).map_err(js)?;
+                        unreachable!()
+                    }
+                };
                 output::cancelled(&control)?;
-                let layer = project
-                    .document
-                    .layers
-                    .iter()
-                    .find(|l| l.source.is_some())
-                    .ok_or_else(|| js("The selected file is not a photo"))?;
-                let name = layer.name.to_string();
-                images.append(name, (**layer.source.as_ref().unwrap()).clone(), control.is_cancelled()).map_err(js)?;
+                let scene=project.scene();
+                let (occurrence,source)=scene.order().iter().find_map(|&handle| {
+                    let source=scene.paint_source(handle)?.original.as_ref()?;
+                    Some((scene.occurrence(handle)?,source))
+                }).ok_or_else(|| js("The selected file is not a photo"))?;
+                let name=occurrence.name.to_string();
+                images.append(name,(**source).clone(),control.is_cancelled()).map_err(js)?;
                 if let Some(source) = images.pending_source() {
                     let choice = interpret.call1(&JsValue::NULL, &serialize(&source.interpretation)?)?;
                     let choice = JsFuture::from(js_sys::Promise::resolve(&choice)).await?;

@@ -81,7 +81,7 @@ impl MetalHost {
     }
     pub(crate) fn display_status(&self, host: &NativeHost) -> serde_json::Value {
         let s = &host.session;
-        let hdr = s.engine().document().color.depth.is_float();
+        let hdr = s.engine().document().composition().color.depth.is_float();
         let hdr_output = hdr && self.surface.is_some() && self.headroom > 1. && s.hdr_presentation_allowed();
         let retained = self.local_tone.current(host).is_some();
         serde_json::json!({"hdr":hdr,"hdr_output":hdr_output,"retained":retained,"error":self.local_tone.error,
@@ -192,7 +192,7 @@ impl MetalHost {
                 }))
                 .map_err(error)?;
             let context = layer_host::GpuContext { adapter, device, queue };
-            let (color, options) = (host.session.engine().document().color, host.renderer_options(self.cache.clone()));
+            let (color, options) = (host.session.engine().document().composition().color, host.renderer_options(self.cache.clone()));
             let renderer = std::thread::scope(|scope| -> Result<Box<WgpuRasterizer>, String> {
                 std::thread::Builder::new()
                     .name("capy-renderer".into())

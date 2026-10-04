@@ -57,7 +57,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
             *created.borrow_mut() = Some(project);
         })
     });
-    let original = super::place_source::snapshot(&w);
+    let original = super::place_source::authored_snapshot(&w);
     let output = std::path::PathBuf::from(format!(
         "../../artifacts/color-m2/color-preferences-ui/{}",
         std::process::id()
@@ -92,7 +92,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         crate::preferences::load().unwrap().unwrap(),
         state(&w).settings
     );
-    assert_eq!(super::place_source::snapshot(&w), original);
+    assert_eq!(super::place_source::authored_snapshot(&w), original);
     capture_ui(&w, &output, "color-settings.png");
     click_named(w.preferences.dialog.upcast_ref(), "color-drawing-defaults");
     dialog(&w, "drawing-defaults-dialog");
@@ -154,7 +154,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     response(&w, "cancel");
     finish(&w);
     assert!(created.borrow().is_none());
-    assert_eq!(super::place_source::snapshot(&w), original);
+    assert_eq!(super::place_source::authored_snapshot(&w), original);
     invoke(&w, CommandId::OpenDocument);
     choose(&path);
     dialog(&w, "untagged-profile-dialog");
@@ -165,17 +165,17 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     finish(&w);
     let project = created.borrow_mut().take().unwrap();
     assert_eq!(
-        project.document.color,
+        project.composition().color,
         DocumentColor {
             space: RgbSpace::AdobeRgb,
             depth: SampleDepth::U16
         }
     );
-    let retained = project.document.layers[0].source.as_ref().unwrap();
+    let retained = paint_at(&project, 0).original.as_ref().unwrap();
     assert_eq!(retained.interpretation.depth, SampleDepth::U8);
     let mut expected = source.clone();
     expected.interpretation = retained.interpretation.clone();
-    assert_eq!(retained.as_ref(), &expected);
+    assert_source_samples(retained, &expected);
     assert!(!retained.interpretation.profile_assumed);
     assert_eq!(
         retained.interpretation.profile,
@@ -211,7 +211,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
         delivery.interpretation.profile,
         ColorProfile::Icc(profile_bytes.clone().into())
     );
-    assert_eq!(super::place_source::snapshot(&w), original);
+    assert_eq!(super::place_source::authored_snapshot(&w), original);
 
     preferences(&w);
     click_named(w.preferences.dialog.upcast_ref(), "color-profile-library");
@@ -227,11 +227,8 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     pump(200);
     assert_eq!(std::fs::read(&profile).unwrap(), profile_bytes);
     let mut archive = Vec::new();
-    project.write(&mut archive).unwrap();
-    assert_eq!(
-        layer_core::Project::read(std::io::Cursor::new(archive), Default::default()).unwrap(),
-        project
-    );
+    write_document(&project, &mut archive).unwrap();
+    assert_live_artwork_eq(&open_native_document(std::io::Cursor::new(archive)), &project);
 
     // Place/Paste use the same missing-profile policy without promoting the
     // destination or modifying source numbers. Cancellation leaves it exact.
@@ -244,7 +241,7 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     dialog(&w, "untagged-profile-dialog");
     response(&w, "cancel");
     finish(&w);
-    assert_eq!(super::place_source::snapshot(&w), original);
+    assert_eq!(super::place_source::authored_snapshot(&w), original);
     invoke(&w, CommandId::PasteImage);
     dialog(&w, "untagged-profile-dialog");
     super::new_photo::profile_action(&w, "source", "builtin-1");
@@ -253,19 +250,14 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     ready(&w);
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
-    assert_eq!(document.color, DocumentColor::default());
-    let pasted = document
-        .layer(document.active_layer)
-        .unwrap()
-        .source
-        .as_ref()
-        .unwrap();
+    assert_eq!(document.composition().color, DocumentColor::default());
+    let pasted = active_paint(document).original.as_ref().unwrap();
     assert_eq!(
         pasted.interpretation.profile,
         ColorProfile::Builtin(RgbSpace::DisplayP3)
     );
     expected.interpretation = pasted.interpretation.clone();
-    assert_eq!(pasted.as_ref(), &expected);
+    assert_source_samples(pasted, &expected);
     drop(gpu);
     w.window
         .clipboard()

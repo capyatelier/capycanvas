@@ -4,7 +4,7 @@ use crate::{
     wayland::{Geometry, Parent},
 };
 use gtk::prelude::*;
-use layer_render::ReadbackImage;
+use layer_render::{CanvasRenderer, ReadbackImage};
 use layer_ui::{CanvasCursor, UiChange, UiSession};
 
 pub struct GpuCanvas {
@@ -24,7 +24,7 @@ impl GpuCanvas {
         let renderer = RenderWorker::new(
             Parent::new(&parent)?,
             area.downgrade().into(),
-            self.session.engine().document().color,
+            self.session.engine().document().composition().color,
         )?;
         let (previous, _) = self.session.replace_renderer(renderer)?;
         drop(previous);
@@ -48,7 +48,7 @@ impl GpuCanvas {
     }
     pub fn with_project_localized(
         area: &gtk::Picture,
-        project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+        project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
         localization: std::sync::Arc<layer_ui::Localizer>,
         settings: Option<layer_ui::Settings>,
     ) -> Result<Self, String> {
@@ -69,7 +69,7 @@ impl GpuCanvas {
             Some(project) => project,
             None => (settings.new_document.defaults.project(&localization)?, None),
         };
-        let color = project.document.color;
+        let color = project.composition().color;
         let renderer = RenderWorker::new(Parent::new(&parent)?, area.downgrade().into(), color)?;
         let mut session =
             UiSession::from_project_localized(renderer, project, location, extent(area), layer_ui::Platform::Gtk, localization)?;
@@ -101,6 +101,33 @@ impl GpuCanvas {
             _parent: parent,
             needs_present: true,
         })
+    }
+    pub async fn prepare_import(&mut self, cancelled: impl Fn() -> bool) -> Result<(), String> {
+        let document = self.session.engine().document().clone();
+        let brush = self.session.engine().configured_brush().clone();
+        let mut programs = Vec::new();
+        for (_, _, definition) in document.artwork.definitions.iter() {
+            if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
+        }
+        let mut validating = !programs.is_empty();
+        let renderer = self.session.renderer_mut();
+        if validating {
+            renderer.request_effect_validation(layer_render::EffectValidationRequest {request_id:1,namespace:programs.clone(),programs}).map_err(|error|error.to_string())?;
+        }
+        renderer.prepare_import(document, brush)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+        loop {
+            if cancelled() { return Err("Opening cancelled".into()); }
+            let renderer = self.session.renderer_mut();
+            renderer.ready()?;
+            if validating && let Some(result) = renderer.take_effect_validation() {
+                result.result?;
+                validating = false;
+            }
+            if !validating && renderer.startup.canvas_ready && renderer.startup.brush_ready { return Ok(()); }
+            if std::time::Instant::now() >= deadline { return Err("Project canvas preparation timed out".into()); }
+            gtk::glib::timeout_future(std::time::Duration::from_millis(2)).await;
+        }
     }
     pub fn stroke_pacing(&self) -> bool {
         let engine = self.session.engine();

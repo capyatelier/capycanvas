@@ -862,10 +862,12 @@ impl Input {
                 && gpu.session.state().layer_tools.tool == layer_ui::LayerCanvasTool::Transform
             {
                 let doc = gpu.session.engine().document();
-                if let Some(layer) = doc.layer(doc.active_layer).filter(|layer| layer.source.is_some()) {
+                if let Some(handle) = doc.working.occurrence
+                    && doc.scene().paint_source(handle).is_some_and(|source| source.original.is_some())
+                    && let Some(occurrence) = doc.scene().occurrence(handle) {
                     gpu.session.engine().backend().stats.lock().unwrap().photo_inputs.push((
-                        delivered_ns, layer.id.0,
-                        [event.surface_position.x, event.surface_position.y], layer.properties.placement.clone(),
+                        delivered_ns, layer_ui::occurrence_token(handle),
+                        [event.surface_position.x, event.surface_position.y], occurrence.placement.clone(),
                     ));
                 }
             }

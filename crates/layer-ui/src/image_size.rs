@@ -136,7 +136,7 @@ impl ImageSizeDraft {
     }
 
     pub(super) fn set_localization(&mut self, document: &Document, limits: layer_core::GeometryLimits, localization: &Localizer) {
-        self.view = Self::new(self.current, document.resolution, localization).view;
+        self.view = Self::new(self.current, document.composition().resolution, localization).view;
         self.update(document, limits, localization);
     }
 
@@ -209,7 +209,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
-        let mut draft = ImageSizeDraft::new([doc.width, doc.height], doc.resolution, self.localization());
+        let mut draft = ImageSizeDraft::new(doc.composition().size, doc.composition().resolution, self.localization());
         draft.update(doc, self.engine.geometry_limits(), self.localization());
         self.image_size = Some(draft);
         self.refresh_tools();
@@ -253,15 +253,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.canvas_geometry_refusal())?;
         let draft = self.image_size.as_ref().ok_or("Image Size is not open")?;
         let doc = self.engine.document();
-        if draft.current != [doc.width, doc.height] {
+        if draft.current != doc.composition().size {
             self.image_size = None;
             self.refresh_tools();
             return Err("The canvas changed; open Image Size again".into());
         }
         let size = draft.size().ok_or_else(|| layer_core::CanvasGeometryError::Empty.to_string())?;
-        let resolution = draft
-            .resolution_changed()
-            .then(|| Edit::SetResolution(Some(ImageResolution::ppi(draft.resolution as u32))));
+        let resolution = draft.resolution_changed().then(|| {
+            let mut composition = doc.composition().clone();
+            composition.size = size;
+            composition.resolution = Some(ImageResolution::ppi(draft.resolution as u32));
+            Edit::Composition(layer_core::authored::RecordChange::replace(
+                &doc.artwork.compositions, doc.artwork.root, Some(composition),
+            ).expect("admitted composition"))
+        });
         if size != draft.current {
             let geometry = CanvasGeometry::resize(draft.current, size, draft.resample.interpolation(draft.current, size));
             self.apply_canvas_geometry(&geometry, resolution.into_iter().collect()).map_err(|e| e.to_string())?;

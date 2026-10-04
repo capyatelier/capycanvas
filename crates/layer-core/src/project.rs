@@ -1,8 +1,7 @@
-//! Native project transport. Hosts supply streams and perform atomic file I/O
-//! off the drawing thread. No filenames, GPU handles or platform state are saved.
+//! Shared brush resources and artwork admission limits.
 use crate::*;
 use serde::{Deserialize, Serialize};
-use std::io::{Read, Write};
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ProjectAssetFormat {
@@ -57,11 +56,6 @@ impl ProjectAsset {
     }
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct Project {
-    pub document: Document,
-}
-
 /// Raster bounds cover decoded instances. Source bounds cover retained tiled
 /// source/profile ownership; source decoding is tile/band bounded. Hosts may
 /// set stricter limits; GPU limits are checked separately.
@@ -87,264 +81,70 @@ impl Default for ProjectLimits {
     }
 }
 
-impl Project {
-    /// Snapshot current reachable raster and source content. History is separate.
-    pub fn snapshot(document: &Document) -> Result<Self, String> {
-        let project = Self { document: document.clone() };
-        project.validate(ProjectLimits::default())?;
-        Ok(project)
+impl Document {
+    pub fn validate(&self,limits:ProjectLimits)->Result<(),String>{
+        self.validate_payloads().map_err(|e|e.to_string())?;
+        self.admit(limits)?;
+        self.validate_integrity()
     }
-
-    pub fn validate(&self, limits: ProjectLimits) -> Result<(), String> {
-        validate_document(&self.document, limits)?;
-        let mut source_tiles = 0usize;
-        let mut seen_sources = BTreeSet::new();
-        for layer in &self.document.layers {
-            if let Some(source) = &layer.source {
-                source.validate()?;
-                if source.extent.iter().any(|v| *v > limits.dimension) {
-                    return Err("Source image exceeds the dimension limit".into());
-                }
-                if seen_sources.insert(Arc::as_ptr(source) as usize) {
-                    source_tiles = source_tiles.saturating_add(source.tiles.len());
-                }
-                if source_tiles > limits.tiles {
-                    return Err("Project has too many source tiles".into());
-                }
-            }
+    pub fn validate_integrity(&self)->Result<(),String>{
+        self.validate_payloads().map_err(|e|e.to_string())?;
+        if self.revision==u64::MAX{return Err("Invalid artwork revision".into());}
+        let mut roots=RootInventory::default();roots.document(self);
+        for source in roots.sources {source.validate()?;}
+        for selection in roots.selections {
+            selection.validate().map_err(|e|e.to_string())?;
+            if let SelectionShape::Pixels(p)=&selection.shape {p.validate_package()?;}
         }
-        if asset_bytes(&self.document) > limits.asset_bytes {
-            return Err("Project images exceed the memory limit".into());
+        for target in self.scene().targets(){
+            let Some(revision)=self.scene().raster(target)else{continue;};
+            match revision.try_data(){
+                Some(Ok(data))=>data.validate(self.scene().target_extent(target),matches!(target,SourceTarget::Coverage(_)),self.composition().color)?,
+                Some(Err(error))=>return Err(error),None=>{},
+            }
         }
         Ok(())
     }
-
-    /// Indexed lossless raster transport. Run on a file worker: pending captures
-    /// are awaited here, never by the input owner.
-    pub fn write(&self, output: impl Write) -> Result<(), String> {
-        crate::project_storage::write(self, output)
-    }
-
-    pub fn read(input: impl Read, limits: ProjectLimits) -> Result<Self, String> {
-        crate::project_storage::read(input, limits)
-    }
-}
-
-pub(super) fn asset_bytes(document: &Document) -> u64 {
-    let mut total = 0u64;
-    let mut resources = crate::history_budget::Accounting::default();
-    let mut sources = color::source::SourceAccounting::default();
-    for layer in &document.layers {
-        let mut roots = Vec::new(); layer.resource_roots(&mut roots);
-        for resource in roots { total = total.saturating_add(resources.charge_resource(resource) as u64); }
-        if let Some(source) = &layer.source { total = total.saturating_add(sources.charge(source) as u64); }
-    }
-    total
-}
-
-pub(super) fn io_error(e: std::io::Error) -> String {
-    format!("Project I/O failed: {e}")
-}
-
-pub(super) fn metadata(value: &impl Serialize, limit: u64) -> Result<Vec<u8>, String> {
-    struct Bounded {
-        bytes: Vec<u8>,
-        limit: u64,
-    }
-    impl Write for Bounded {
-        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
-            if bytes.len() as u64 > self.limit.saturating_sub(self.bytes.len() as u64) {
-                return Err(std::io::Error::other(
-                    "Project metadata exceeds the memory limit",
-                ));
-            }
-            self.bytes.extend_from_slice(bytes);
-            Ok(bytes.len())
+    pub fn admit(&self,limits:ProjectLimits)->Result<(),String>{
+        let composition=self.composition();
+        if composition.size.contains(&0)||composition.size.iter().any(|v|*v>limits.dimension)||self.artwork.occurrences.len()>limits.layers{return Err("Invalid or oversized artwork".into());}
+        if self.artwork.occurrences.iter().any(|(_,_,o)|o.name.len()>4096){return Err("Oversized occurrence name".into());}
+        let mut roots=RootInventory::default();roots.document(self);
+        let mut sources=color::source::SourceAccounting::default();
+        let mut resources=history_budget::Accounting::default();
+        let mut asset_bytes=0u64;let mut source_tiles=0usize;let mut source_owners=BTreeSet::new();
+        for source in roots.sources {
+            if source.extent.iter().any(|v|*v>limits.dimension){return Err("Source image exceeds the dimension limit".into());}
+            if source_owners.insert(Arc::as_ptr(source) as usize){source_tiles=source_tiles.saturating_add(source.tiles.len());}
+            asset_bytes=asset_bytes.saturating_add(sources.charge(source) as u64);
         }
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-    let mut output = Bounded {
-        bytes: Vec::new(),
-        limit,
-    };
-    serde_json::to_writer(&mut output, value).map_err(|e| e.to_string())?;
-    Ok(output.bytes)
-}
-pub(super) fn read_block(input: &mut impl Read, size: u64, limit: u64) -> Result<Vec<u8>, String> {
-    if size > limit {
-        return Err("Project data exceeds the memory limit".into());
-    }
-    let mut bytes = Vec::new();
-    bytes.try_reserve_exact(usize::try_from(size).map_err(|_| "Project allocation size overflow")?)
-        .map_err(|_| "Project allocation failed")?;
-    input.take(size).read_to_end(&mut bytes).map_err(io_error)?;
-    if bytes.len() as u64 != size {
-        return Err("The project is incomplete".into());
-    }
-    Ok(bytes)
-}
-
-fn validate_selection(selection: &Selection, limits: ProjectLimits) -> Result<(), String> {
-    selection.validate().map_err(|e| e.to_string())?;
-    match &selection.shape {
-        SelectionShape::Contours(_) => (),
-        SelectionShape::Pixels(p) => {
-            p.validate().map_err(|e| e.to_string())?;
-            if p.extent().iter().any(|v| *v > limits.dimension) {
+        for resource in roots.resources {asset_bytes=asset_bytes.saturating_add(resources.charge_resource(resource) as u64);}
+        let mut byte_owners=BTreeSet::new();
+        for profile in roots.profiles {if let color::ColorProfile::Icc(bytes)=profile && byte_owners.insert(bytes.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(bytes.len() as u64);}}
+        for block in self.artwork.metadata.blocks().into_iter().flatten(){if byte_owners.insert(block.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(block.len() as u64);}}
+        for program in roots.programs {if let Ok(sources)=program.wgsl.sources(){for source in sources{if byte_owners.insert(source.as_ptr() as usize){asset_bytes=asset_bytes.saturating_add(source.len() as u64);}}}}
+        if asset_bytes>limits.asset_bytes{return Err("Artwork resources exceed the memory limit".into());}
+        let mut selection_bytes=0u64;
+        for selection in roots.selections {
+            if let SelectionShape::Pixels(p)=&selection.shape && p.extent().iter().any(|v|*v>limits.dimension) {
                 return Err("Selection exceeds the image limit".into());
             }
-            // Bounds may be conservative, but must not omit nonzero coverage.
-            // Check nonempty words, not each pixel, and reject row padding too.
-            let count = p.pixels_per_word();
-            let bits = 32 / count;
-            let stride = p.extent()[0].div_ceil(count) as usize;
-            let [x0, y0, x1, y1] = p.bounds();
-            for (i, &word) in p.words().iter().enumerate().filter(|(_, w)| **w != 0) {
-                let y = (i / stride) as u32;
-                let x = (i % stride) as u32 * count;
-                if y < y0
-                    || y >= y1
-                    || x + word.trailing_zeros() / bits < x0
-                    || x + count - 1 - word.leading_zeros() / bits >= x1
-                {
-                    return Err("Selection bounds omit coverage".into());
+            selection_bytes=selection_bytes.saturating_add(resources.charge_selection(selection) as u64);
+        }
+        if selection_bytes>limits.raster_bytes{return Err("Selection coverage exceeds the artwork memory limit".into());}
+        let mut tiles=source_tiles;let mut raster_bytes=selection_bytes;
+        for target in self.scene().targets(){
+            if self.scene().target_extent(target).iter().any(|v|*v>limits.dimension){return Err("Target exceeds the dimension limit".into());}
+            let Some(revision)=self.scene().raster(target) else{continue;};
+            match revision.try_data(){
+                Some(Ok(data))=>{
+                    tiles=tiles.saturating_add(data.tiles.len());
+                    for tile in data.tiles.values(){raster_bytes=raster_bytes.saturating_add(tile.descriptor().byte_len([raster::TILE_SIZE;2]).ok_or("Unsupported raster pixels")? as u64);}
                 }
+                Some(Err(error))=>return Err(error),None=>raster_bytes=raster_bytes.saturating_add(revision.pending_bytes() as u64),
             }
         }
-    }
-    Ok(())
-}
-
-pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result<(), String> {
-    doc.sdr_rendition.validate().map_err(str::to_string)?;
-    if let Some(resolution) = doc.resolution { resolution.validate()?; }
-    doc.metadata.validate()?;
-    if doc.blend_space != doc.blend_space.for_depth(doc.color.depth) {
-        return Err("Float documents blend in linear light".into());
-    }
-    if let Some(recipe) = &doc.proof {
-        recipe.validate()?;
-        if let color::ColorProfile::Icc(bytes) = &recipe.profile
-            && (bytes.is_empty() || bytes.len() > color::source::MAX_PROFILE_BYTES)
-        {
-            return Err("Invalid proof profile size".into());
-        }
-    }
-    if doc.width == 0
-        || doc.height == 0
-        || doc.width > limits.dimension
-        || doc.height > limits.dimension
-        || doc.layers.len() > limits.layers
-        || doc.id.len() > 1024
-        || doc.revision == u64::MAX
-    {
-        return Err("Invalid or oversized project document".into());
-    }
-    let mut ids = BTreeSet::new();
-    for l in &doc.layers {
-        if l.properties.extent.is_some_and(|e|e.contains(&0)||e.iter().any(|v|*v>limits.dimension)) || l.mask.as_ref().is_some_and(|m|m.extent.is_some_and(|e|e.contains(&0)||e.iter().any(|v|*v>limits.dimension))) {return Err("Invalid or oversized target extent".into());}
-        if l.id.0 == 0 || !ids.insert(l.id) || l.name.len() > 4096 {
-            return Err("Invalid project layer identity".into());
-        }
-    }
-    for l in &doc.layers {
-        if let Some(m) = &l.mask
-            && (m.id.0 == 0 || !ids.insert(m.id))
-        {
-            return Err("Invalid project mask identity".into());
-        }
-    }
-    let max_id = ids.iter().map(|id| id.0).max().unwrap_or(0);
-    if doc.next_layer_id <= max_id
-        || doc.next_layer_id == u64::MAX
-        || doc.next_stroke_id == u64::MAX
-    {
-        return Err("Invalid project ID allocator".into());
-    }
-    if if doc.layers.is_empty() { doc.active_layer != LayerId(0) || doc.active_mask }
-        else { doc.layer(doc.active_layer).is_none_or(|l| doc.active_mask && l.mask.is_none()) }
-    {
-        return Err("Invalid editing target".into());
-    }
-    let mut selection_bytes = 0u64;
-    let mut pixel_owners = BTreeSet::new();
-    for selection in doc.selection.iter().chain(doc.layers.iter().flat_map(|l| {
-        l.selection.iter().chain(l.mask.iter().filter_map(|m| m.initial.as_ref()))
-    })) {
-        selection.validate().map_err(|e| e.to_string())?;
-        if let SelectionShape::Pixels(p) = &selection.shape
-            && !pixel_owners.insert(Arc::as_ptr(p) as usize) { continue; }
-        validate_selection(selection, limits)?;
-        selection_bytes = selection_bytes.saturating_add(match &selection.shape {
-            SelectionShape::Pixels(p) => p.words().len() as u64 * 4,
-            SelectionShape::Contours(paths) => paths.iter().map(|p| p.len() as u64 * 8).sum(),
-        });
-    }
-    if selection_bytes > limits.raster_bytes {
-        return Err("Selection coverage exceeds the project memory limit".into());
-    }
-    rulers::validate_rulers(&doc.rulers).map_err(|e| e.to_string())?;
-    for id in &doc.reference_layers {
-        if doc.layer(*id).is_none_or(|l| !matches!(l.kind, LayerKind::Paint | LayerKind::Group)) {
-            return Err("Invalid reference layer".into());
-        }
-    }
-    for l in &doc.layers {
-        let mut parent = l.properties.parent;
-        for _ in 0..32 {
-            parent = match parent {
-                None => break,
-                Some(id) => {
-                    doc.layer(id)
-                        .ok_or("Missing layer group")?
-                        .properties
-                        .parent
-                }
-            };
-        }
-        if parent.is_some() {
-            return Err("Layer groups are too deeply nested or cyclic".into());
-        }
-        doc.validate_layer(l).map_err(|e| e.to_string())?;
-    }
-    Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn byte_selection_project_roundtrip_rejects_omitted_coverage_and_padding() {
-        use std::sync::Arc;
-        let pixels = crate::SelectionPixels::bytes([5, 1], [1, 0, 5, 1], vec![0xff804000, 0x20]).unwrap();
-        let encoded = serde_json::to_string(&pixels).unwrap();
-        let restored: crate::SelectionPixels = serde_json::from_str(&encoded).unwrap();
-        assert_eq!(pixels, restored);
-        let mut document = Document::new("selection", 5, 1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.selection = Some(Selection::pixels(Arc::new(restored)));
-        assert!(validate_document(&document, ProjectLimits::default()).is_ok());
-        for (bounds, words) in [([2,0,5,1],vec![0xff804000,0x20]),([0,0,5,1],vec![0,0x2000])] {
-            document.selection = Some(Selection::pixels(Arc::new(crate::SelectionPixels::bytes([5,1],bounds,words).unwrap())));
-            assert!(validate_document(&document, ProjectLimits::default()).is_err());
-        }
-    }
-
-    #[test]
-    fn malformed_metadata_is_rejected_before_raster_adoption() {
-        let document = Document::new("metadata", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        for mutate in [
-            |d: &mut Document| d.width = 0,
-            |d: &mut Document| d.active_layer = LayerId(999),
-            |d: &mut Document| d.next_layer_id = 1,
-            |d: &mut Document| d.layers[0].opacity = f32::NAN,
-            |d: &mut Document| d.layers[0].properties.parent = Some(d.layers[0].id),
-        ] {
-            let mut invalid = document.clone();
-            mutate(&mut invalid);
-            assert!(validate_document(&invalid, ProjectLimits::default()).is_err());
-        }
+        if tiles>limits.tiles || raster_bytes>limits.raster_bytes{return Err("Artwork pixels exceed the memory limit".into());}
+        Ok(())
     }
 }

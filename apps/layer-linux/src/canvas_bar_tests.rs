@@ -95,7 +95,7 @@ fn native_canvas_bar_input() {
     w.dispatch(UiAction::SetColor {
         rgba: [0.12, 0.38, 0.72, 1.],
     });
-    let id = ui_session(&w).engine().document().active_layer.0;
+    let id = ui_session(&w).engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
     w.dispatch(UiAction::Layer { action: LayerAction::AddMask { id, replace: false } });
     w.dispatch(UiAction::Layer { action: LayerAction::Select { id, mask: false } });
     pump(200);
@@ -332,7 +332,7 @@ fn native_canvas_bar_polygon_input() {
     until(|| finish.is_sensitive(), "Finish is available with three points");
     native.click(center(&w, &finish));
     until(
-        || ui_session(&w).engine().document().selection.is_some(),
+        || ui_session(&w).engine().document().working.selection.is_some(),
         "Finish creates the selection",
     );
     until(
@@ -358,7 +358,7 @@ fn native_canvas_bar_distorts_a_pixel_selection() {
     w.dispatch(UiAction::Invoke { command: CommandId::ColorSelect });
     pump(200);
     let pixels = |w: &Workspace| {
-        ui_session(&w).engine().document().selection.as_ref()
+        ui_session(&w).engine().document().working.selection.as_ref()
             .is_some_and(|s| matches!(s.shape, layer_core::SelectionShape::Pixels(_)))
     };
     let mut native = remote_input();
@@ -605,7 +605,7 @@ fn native_canvas_bar_selection_menus() {
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
-    let paint = document(&w).active_layer.0;
+    let paint = document(&w).working.occurrence.map(layer_ui::occurrence_token).unwrap();
     let curves = {
         let g = w.gpu.borrow();
         let filters = g.as_ref().unwrap().session.application_menu(layer_ui::ApplicationMenu::Filter);
@@ -619,23 +619,23 @@ fn native_canvas_bar_selection_menus() {
     let mut native = remote_input();
     for device in [Device::Mouse, Device::Touch, Device::Pen] {
         filled_selection(&w, paint);
-        let layers = document(&w).layers.len();
+        let layers = document(&w).scene().order().len();
         choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::CopyToLayer, &["Copy Selection to New Layer"]);
         until(
             || {
                 let doc = document(&w);
-                doc.layers.len() == layers + 1 && doc.selection.is_none() && doc.active_layer.0 != paint
+                doc.scene().order().len() == layers + 1 && doc.working.selection.is_none() && doc.working.occurrence.map(layer_ui::occurrence_token).unwrap() != paint
             },
             &format!("{device:?}: Copy to Layer puts the selection on a new layer"),
         );
 
         filled_selection(&w, paint);
-        let pixels = document(&w).layer(layer_core::LayerId(paint)).unwrap().raster.identity();
+        let pixels = document(&w).scene().paint_source(layer_ui::occurrence_handle(paint).unwrap()).unwrap().raster.identity();
         choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Clear, &["Clear Outside Selection"]);
         until(
             || {
                 let doc = document(&w);
-                doc.layer(layer_core::LayerId(paint)).unwrap().raster.identity() != pixels && doc.selection.is_some()
+                doc.scene().paint_source(layer_ui::occurrence_handle(paint).unwrap()).unwrap().raster.identity() != pixels && doc.working.selection.is_some()
             },
             &format!("{device:?}: Clear Outside erases around the kept selection"),
         );
@@ -645,8 +645,8 @@ fn native_canvas_bar_selection_menus() {
         until(
             || {
                 let doc = document(&w);
-                let effect = doc.layer(doc.active_layer).unwrap();
-                effect.kind == layer_core::LayerKind::Effect && effect.mask.is_some() && doc.selection.is_none()
+                let effect = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
+                effect.kind() == layer_core::LayerKind::Effect && effect.mask.is_some() && doc.working.selection.is_none()
             },
             &format!("{device:?}: Adjust › Curves masks a new Curves layer to the selection"),
         );
@@ -662,14 +662,14 @@ fn native_delete_clears_pixels_unless_a_guide_is_selected() {
     w.window.maximize();
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
-    let paint = document(&w).active_layer;
-    filled_selection(&w, paint.0);
+    let paint = document(&w).working.occurrence.unwrap();
+    filled_selection(&w, layer_ui::occurrence_token(paint));
     let mut native = remote_input();
-    let pixels = |w: &Workspace| document(w).layer(paint).unwrap().raster.identity();
+    let pixels = |w: &Workspace| document(w).scene().paint_source(paint).unwrap().raster.identity();
     let filled = pixels(&w);
     native.key(0xffff);
     until(|| pixels(&w) != filled, "Delete clears the selected pixels");
-    assert!(document(&w).selection.is_some(), "clearing keeps the selection");
+    assert!(document(&w).working.selection.is_some(), "clearing keeps the selection");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| pixels(&w) == filled, "one undo step restores them");
 
@@ -680,9 +680,9 @@ fn native_delete_clears_pixels_unless_a_guide_is_selected() {
         {"point": [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]}, {"wait_ms": 20},
         {"point": to}, {"wait_ms": 20}, {"down": false}
     ]));
-    until(|| document(&w).rulers.len() == 1, "the drag draws a guide");
+    until(|| document(&w).artwork.guides.len() == 1, "the drag draws a guide");
     native.key(0xffff);
-    until(|| document(&w).rulers.is_empty(), "Delete removes the selected guide under the Ruler tool");
+    until(|| document(&w).artwork.guides.is_empty(), "Delete removes the selected guide under the Ruler tool");
     pump(200);
     assert_eq!(pixels(&w), filled, "and leaves the pixels alone");
 }
@@ -727,20 +727,20 @@ fn native_canvas_bar_modes() {
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     let mut native = remote_input();
-    let paint = document(&w).active_layer;
+    let paint = document(&w).working.occurrence.unwrap();
     for device in [Device::Mouse, Device::Touch] {
         w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
         w.dispatch(UiAction::Invoke { command: CommandId::QuickMask });
         assert_mode_bar(&w, layer_ui::CanvasBarKind::QuickMask, "Quick Mask");
-        let inverted = || document(&w).selection.as_ref().is_some_and(|s| s.inverted);
+        let inverted = || document(&w).working.selection.as_ref().is_some_and(|s| s.inverted);
         tap_bar(&w, &mut native, device, CommandId::InvertSelection, inverted, "Invert inverts the Quick Mask");
         assert_eq!(bar_kind(&w), Some(layer_ui::CanvasBarKind::QuickMask), "Invert stays in Quick Mask");
         tap_bar(&w, &mut native, device, CommandId::ReturnToArtwork, || !state(&w).layer_tools.quick_mask, "Exit leaves Quick Mask");
 
         w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
         w.dispatch(UiAction::Invoke { command: CommandId::SaveSelectionLayer });
-        let saved = document(&w).active_layer;
-        let name = document(&w).layer(saved).unwrap().name.to_string();
+        let saved = document(&w).working.occurrence.unwrap();
+        let name = document(&w).scene().occurrence(saved).unwrap().name.to_string();
         assert_mode_bar(&w, layer_ui::CanvasBarKind::SelectionLayer, &format!("Editing {name}"));
         let stored = document(&w).saved_selection(saved).unwrap();
         tap_bar(
@@ -751,20 +751,20 @@ fn native_canvas_bar_modes() {
             || document(&w).saved_selection(saved).is_ok_and(|s| s.inverted != stored.inverted),
             "Invert inverts the stored coverage",
         );
-        assert_eq!(document(&w).active_layer, saved, "Invert stays on the Selection Layer");
+        assert_eq!(document(&w).working.occurrence.unwrap(), saved, "Invert stays on the Selection Layer");
         tap_bar(
             &w,
             &mut native,
             device,
             CommandId::ReturnToArtwork,
-            || document(&w).active_layer == paint && bar_kind(&w) != Some(layer_ui::CanvasBarKind::SelectionLayer),
+            || document(&w).working.occurrence.unwrap() == paint && bar_kind(&w) != Some(layer_ui::CanvasBarKind::SelectionLayer),
             "Return to Artwork leaves Selection Layer editing",
         );
 
         w.dispatch(UiAction::Invoke { command: CommandId::MaskSelection });
-        let name = document(&w).layer(paint).unwrap().name.to_string();
+        let name = document(&w).scene().occurrence(paint).unwrap().name.to_string();
         assert_mode_bar(&w, layer_ui::CanvasBarKind::LayerMask, &format!("Editing {name} mask"));
-        let enabled = || document(&w).layer(paint).unwrap().mask.as_ref().is_some_and(|m| m.enabled);
+        let enabled = || document(&w).scene().occurrence(paint).unwrap().mask.as_ref().is_some_and(|m| m.enabled);
         tap_bar(&w, &mut native, device, CommandId::LayerMaskEnabled, || !enabled(), "Disable turns the mask off");
         let offers_enable = || {
             find_named(w.canvas_bar.root.upcast_ref(), "canvas-bar-LayerMaskEnabled")
@@ -777,18 +777,18 @@ fn native_canvas_bar_modes() {
             &mut native,
             device,
             CommandId::EditLayerContent,
-            || !document(&w).active_mask && state(&w).canvas_bar.is_none(),
+            || !document(&w).working.target.is_some_and(|t| t.is_coverage()) && state(&w).canvas_bar.is_none(),
             "Edit Content leaves mask editing",
         );
-        w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::DeleteMask { id: paint.0 } });
+        w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::DeleteMask { id: layer_ui::occurrence_token(paint) } });
         pump(100);
     }
 
     w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
     w.dispatch(UiAction::Invoke { command: CommandId::MaskSelection });
-    assert_mode_bar(&w, layer_ui::CanvasBarKind::LayerMask, &format!("Editing {} mask", document(&w).layer(paint).unwrap().name));
+    assert_mode_bar(&w, layer_ui::CanvasBarKind::LayerMask, &format!("Editing {} mask", document(&w).scene().occurrence(paint).unwrap().name));
     w.dispatch(UiAction::Invoke { command: CommandId::Move });
-    w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Lock { id: paint.0, value: true } });
+    w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Lock { id: layer_ui::occurrence_token(paint), value: true } });
     let area = w.area.compute_bounds(&w.window).unwrap();
     native.click([area.x() + area.width() * 0.5, area.y() + area.height() * 0.4]);
     until(|| w.notice.root.is_visible() && state(&w).notice.is_some(), "Move on the locked mask shows a notice");
@@ -821,12 +821,12 @@ fn native_canvas_bar_guide() {
             {"point": [(from[0] + to[0]) * 0.5, (from[1] + to[1]) * 0.5]}, {"wait_ms": 20},
             {"point": to}, {"wait_ms": 20}, {"down": false}
         ]));
-        until(|| document(&w).rulers.len() == 1, "the drag draws a guide");
+        until(|| document(&w).artwork.guides.len() == 1, "the drag draws a guide");
         until(|| bar_kind(&w) == Some(layer_ui::CanvasBarKind::Guide) && shown(&w), "the guide bar appears");
         let bar = w.canvas_bar.root.compute_bounds(&w.window).unwrap();
         let lowest = from[1].max(to[1]);
         assert!(bar.y() > lowest + 12., "the bar clears the guide's handles: {bar:?} {from:?} {to:?}");
-        tap_bar(&w, &mut native, device, CommandId::DeleteRuler, || document(&w).rulers.is_empty(), "Delete removes the guide");
+        tap_bar(&w, &mut native, device, CommandId::DeleteRuler, || document(&w).artwork.guides.is_empty(), "Delete removes the guide");
         until(|| bar_kind(&w).is_none(), "the bar leaves with the guide");
     }
     native.finish();
@@ -846,30 +846,30 @@ fn native_crop_on_the_selection_bar_then_canvas_size_shows_the_hidden_pixels() {
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.1, 0.3, 0.8, 1.] });
     let before = document(&w);
-    let [width, height] = [before.width as f32, before.height as f32];
-    let paint = before.active_layer;
+    let [width, height] = [before.composition().size[0] as f32, before.composition().size[1] as f32];
+    let paint = before.working.occurrence.unwrap();
     let rectangle = |[x0, y0, x1, y1]: [f32; 4]| [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     native_pen_path(&w, &rectangle([width * 0.2, height * 0.2, width * 0.8, height * 0.8]));
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
-    until(|| !document(&w).layer(paint).unwrap().raster.is_empty(), "the fill paints the selection");
-    let filled = document(&w).layer(paint).unwrap().raster.clone();
+    until(|| !document(&w).scene().paint_source(paint).unwrap().raster.is_empty(), "the fill paints the selection");
+    let filled = document(&w).scene().paint_source(paint).unwrap().raster.clone();
     native_pen_path(&w, &rectangle([width * 0.4, height * 0.4, width * 0.6, height * 0.6]));
     until(|| state(&w).canvas_bar.is_some_and(|b| b.context.kind == layer_ui::CanvasBarKind::Selection) && shown(&w), "the selection bar");
     let mut native = remote_input();
     press_bar_command(&w, &mut native, "canvas-bar-CropCanvasToSelection", "Crop Canvas to Selection");
-    until(|| document(&w).width < before.width, "Crop on the selection bar crops the canvas");
+    until(|| document(&w).composition().size[0] < before.composition().size[0], "Crop on the selection bar crops the canvas");
     let cropped = document(&w);
-    assert!((cropped.width as f32 - width * 0.2).abs() <= 2. && (cropped.height as f32 - height * 0.2).abs() <= 2.);
-    assert!(cropped.layer(paint).unwrap().raster == filled, "a crop changes only metadata");
+    assert!((cropped.composition().size[0] as f32 - width * 0.2).abs() <= 2. && (cropped.composition().size[1] as f32 - height * 0.2).abs() <= 2.);
+    assert!(cropped.scene().paint_source(paint).unwrap().raster == filled, "a crop changes only metadata");
     w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
     until(|| state(&w).layer_tools.canvas_size.is_some(), "Canvas Size opens");
-    for (axis, value) in [("width", before.width), ("height", before.height)] {
+    for (axis, value) in [("width", before.composition().size[0]), ("height", before.composition().size[1])] {
         edit_number(&canvas_size_number(&w, axis), &value.to_string());
     }
     apply_canvas_size(&w, &mut native);
     let grown = document(&w);
-    assert_eq!([grown.width, grown.height], [before.width, before.height]);
+    assert_eq!([grown.composition().size[0], grown.composition().size[1]], [before.composition().size[0], before.composition().size[1]]);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     pump(400);
     let hidden = pixel(&w, [width * 0.3, height * 0.5]);
@@ -917,12 +917,12 @@ fn native_canvas_bar_refine() {
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
-    let paint = layer_core::LayerId(document(&w).active_layer.0);
-    let selection = |w: &Workspace| document(w).selection;
+    let paint = document(&w).working.occurrence.unwrap();
+    let selection = |w: &Workspace| document(w).working.selection;
     let dir = artifact_dir("../../artifacts/canvas-action-bar");
     let mut native = remote_input();
     for device in [Device::Mouse, Device::Touch, Device::Pen] {
-        filled_selection(&w, paint.0);
+        filled_selection(&w, layer_ui::occurrence_token(paint));
         let hard = selection(&w).unwrap();
         choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Refine, &["Feather…"]);
         let field = until_some(
@@ -973,10 +973,10 @@ fn native_canvas_bar_refine() {
         w.dispatch(UiAction::Invoke { command: CommandId::Redo });
         until(|| selection(&w).as_ref() == Some(&feathered), "Redo feathers it again");
 
-        filled_selection(&w, paint.0);
+        filled_selection(&w, layer_ui::occurrence_token(paint));
         let (outline, pixels) = {
             let doc = document(&w);
-            (doc.selection.clone().unwrap(), doc.layer(paint).unwrap().raster.identity())
+            (doc.working.selection.clone().unwrap(), doc.scene().paint_source(paint).unwrap().raster.identity())
         };
         choose_from_bar_menu(&w, &mut native, device, CanvasBarMenu::Refine, &["Transform Outline"]);
         until(
@@ -1004,10 +1004,10 @@ fn native_canvas_bar_refine() {
         tap(&mut native, device, center(&w, &bar_widget(&w, "canvas-bar-ApplyTransform")));
         until(|| !transforming(&w) && selection(&w).as_ref() != Some(&outline), "Apply moves the outline");
         let doc = document(&w);
-        let applied = doc.selection.clone().unwrap();
+        let applied = doc.working.selection.clone().unwrap();
         assert_eq!(applied.shape, outline.shape, "the outline keeps its shape");
         assert!(applied.bounds().max.x > outline.bounds().max.x);
-        assert_eq!(doc.layer(paint).unwrap().raster.identity(), pixels, "{device:?}: the pixels stay where they are");
+        assert_eq!(doc.scene().paint_source(paint).unwrap().raster.identity(), pixels, "{device:?}: the pixels stay where they are");
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
         until(|| selection(&w).as_ref() == Some(&outline), "one Undo restores the outline");
     }
@@ -1033,7 +1033,7 @@ fn native_move_drags_selected_pixels() {
     pump(900);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
-    let paint = document(&w).active_layer;
+    let paint = document(&w).working.occurrence.unwrap();
     let context = glib::MainContext::default();
     let mut readback = 9700;
     let mut pixels = |w: &Rc<Workspace>| {
@@ -1046,7 +1046,7 @@ fn native_move_drags_selected_pixels() {
         .flat_map(|device| [(device, false, false), (device, true, false)])
         .chain([(Device::Mouse, false, true)]);
     for (device, leave_copy, alt) in runs {
-        filled_selection(&w, paint.0);
+        filled_selection(&w, layer_ui::occurrence_token(paint));
         w.dispatch(UiAction::Invoke { command: CommandId::Move });
         until(
             || {
@@ -1070,7 +1070,7 @@ fn native_move_drags_selected_pixels() {
                 capture_reference(&w, &format!("{dir}/leave-copy-{theme:?}.png"), 1.);
             }
         }
-        let selection = document(&w).selection.clone().unwrap();
+        let selection = document(&w).working.selection.clone().unwrap();
         let bounds = selection.coverage_bounds();
         let kept = [bounds.min.x + 6., bounds.min.y + 6.];
         let original = pixels(&w);
@@ -1087,7 +1087,7 @@ fn native_move_drags_selected_pixels() {
         let moved = until_some(
             || {
                 let doc = document(&w);
-                let placed = doc.selection.as_ref()?.affine;
+                let placed = doc.working.selection.as_ref()?.affine;
                 (placed != selection.affine).then_some(placed)
             },
             &format!("{device:?}: the selection follows the dragged pixels"),
@@ -1106,7 +1106,7 @@ fn native_move_drags_selected_pixels() {
             "{device:?} Leave Copy {leave_copy} Alt {alt}: the original stays only with a copy"
         );
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-        until(|| document(&w).selection.as_ref() == Some(&selection), &format!("{device:?}: one Undo restores the selection"));
+        until(|| document(&w).working.selection.as_ref() == Some(&selection), &format!("{device:?}: one Undo restores the selection"));
         let undone = pixels(&w);
         for p in [kept, copy] {
             assert_eq!(document_pixel(&undone, p), document_pixel(&original, p), "{device:?}: and the pixels");

@@ -9,8 +9,8 @@ pub(crate) async fn show(w: &Rc<Workspace>) -> Result<bool, String> {
         .as_ref()
         .ok_or("Canvas unavailable")?
         .session
-        .capture_project_recovery()?;
-    let info = layer_color::DocumentInfo::capture(&project.document);
+        .document_snapshot()?;
+    let info = layer_color::DocumentInfo::capture(&project);
     let inspected = gtk::gio::spawn_blocking(move || info.inspect()).await
         .map_err(|_| "Cannot read source color details")??;
     let view = layer_ui::document_properties(&inspected, &w.localization());

@@ -137,6 +137,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
                 host.drawingTabs.waitReady();host.drawingTabs.trim()
                 task=host.withNative{Native.projectRecoveryTask(it,true)}
                 withContext(Dispatchers.IO){Native.projectWork(task,ParcelFileDescriptor.open(held.path,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)}
+                if(host.documents.showPackage(task,android.net.Uri.fromFile(held.path)){candidate=null}){dismiss(false);return@launch}
                 host.drawingTabs.beforeAdopt(task);transition=true
                 host.withNative{Native.projectAdopt(it,task,"null")};adopted=true
                 ensureOwners()

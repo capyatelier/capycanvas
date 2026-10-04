@@ -37,7 +37,7 @@ impl StartupProgress {
 /// Ordinary raster/parameter edits reuse their prepared dependencies. The
 /// revision memo avoids scanning layers on unchanged display callbacks.
 pub struct ShaderDocument {
-    id: Arc<str>,
+    id: layer_core::authored::PortableId,
     revision: std::cell::Cell<layer_core::Revision>,
     key: DocumentKey,
 }
@@ -58,33 +58,34 @@ struct DocumentKey {
 }
 impl DocumentKey {
     fn new(document: &Document) -> Self {
+        let scene = document.scene();
+        let operations = || scene.targets().filter_map(|t| scene.operations(t)).flatten();
         Self {
-            extent: [document.width, document.height], color: document.color,
-            selection: document.selection.is_some(), mask: document.active_mask,
-            locked: document.layers.iter().any(|l| l.id == document.active_layer && l.properties.alpha_locked),
-            source: document.layers.iter().any(|l| l.source.is_some()),
-            operations: document.layers.iter().any(|l| l.mask.is_some() || !l.pending_operations.is_empty()),
-            transform: document.layers.iter().any(|l| l.pending_operations.iter()
-                .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
-                .any(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_)))),
-            mesh: document.layers.iter().any(|l| l.properties.placement.mesh.is_some() || l.pending_operations.iter()
-                .chain(l.masks().flat_map(|m| m.pending_operations.iter()))
-                .any(|op| matches!(&op.kind, layer_core::LayerOperationKind::Transform(t)
-                    if t.placement.mesh.is_some()))),
-            nonlinear: document.layers.iter().flat_map(|l| std::iter::once(l.id).chain(l.masks().map(|m| m.id)))
-                .any(|id| document.layer_geometry(id).as_affine().is_none()),
-            blend_space: document.blend_space,
-            chains: scene::startup_effect_chains(&document.layers).into_iter()
-                .map(|(layers, execution)| (layers.into_iter().filter_map(|l| l.effect.as_ref().map(|e| e.program.clone())).collect(), execution)).collect(),
+            extent: document.composition().size, color: document.composition().color,
+            selection: document.working.selection.is_some(), mask: document.working.target.is_some_and(SourceTarget::is_coverage),
+            locked: document.working.occurrence.and_then(|h| scene.occurrence(h)).is_some_and(|o| o.alpha_locked),
+            source: scene.targets().any(|t| scene.original(t).is_some()),
+            operations: scene.order().iter().any(|&h| scene.mask(h).is_some()) || operations().next().is_some(),
+            transform: operations().any(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))),
+            mesh: scene.order().iter().any(|&h| scene.occurrence(h).is_some_and(|o| o.placement.mesh.is_some()))
+                || operations().any(|op| matches!(&op.kind, layer_core::RasterOperationKind::Transform(t) if t.placement.mesh.is_some())),
+            nonlinear: scene.targets().any(|t| scene.target_geometry(t).as_affine().is_none()),
+            blend_space: document.composition().blend,
+            chains: scene::startup_effect_chains(scene).into_iter().map(|(handles, execution)| {
+                (handles.into_iter().filter_map(|h| {
+                    let application = scene.effect_application(h)?;
+                    Some(scene.artwork().definitions.get(application.definition)?.program.clone())
+                }).collect(), execution)
+            }).collect(),
         }
     }
 }
 impl ShaderDocument {
     pub fn new(document: &Document) -> Self {
-        Self { id: document.id.clone(), revision: std::cell::Cell::new(document.revision), key: DocumentKey::new(document) }
+        Self { id: document.artwork.id, revision: std::cell::Cell::new(document.revision), key: DocumentKey::new(document) }
     }
     pub fn matches(&self, document: &Document) -> bool {
-        if self.id != document.id { return false; }
+        if self.id != document.artwork.id { return false; }
         if self.revision.get() == document.revision { return true; }
         if self.key != DocumentKey::new(document) { return false; }
         self.revision.set(document.revision);
@@ -362,10 +363,10 @@ impl WgpuRasterizer {
             required.enqueue(&startup.compiler, DOCUMENT);
             startup.document = required;
             startup.document_key = Some(shader);
-            let chains = scene::startup_effect_chains(&document.layers);
+            let chains = scene::startup_effect_chains(document.scene());
             let cached = self.scene.as_ref().map(|s| &s.effects).or(self.validated_effects.as_ref());
-            let blend_space = document.blend_space;
-            if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(layers, *execution, blend_space))) {
+            let blend_space = document.composition().blend;
+            if !chains.iter().all(|(layers, execution)| cached.is_some_and(|cache| cache.chain_ready(document.scene(), layers, *execution, blend_space))) {
                 let mut candidate = self
                     .scene
                     .as_ref()
@@ -377,14 +378,14 @@ impl WgpuRasterizer {
                     queue: self.queue.clone(),
                 };
                 let (tx, rx) = mpsc::channel();
-                let chains: Vec<_> = chains.into_iter().map(|(layers, execution)|
-                    (layers.into_iter().cloned().collect::<Vec<_>>(), execution)).collect();
+                let snapshot = document.snapshot();
                 let work = move || {
                     let result = (|| {
                         for (layers, execution) in chains {
                             candidate.prepare(
                                 &gpu,
-                                &layers.iter().collect::<Vec<_>>(),
+                                snapshot.view(),
+                                &layers,
                                 execution,
                                 0.,
                                 0,
@@ -428,19 +429,19 @@ impl WgpuRasterizer {
         // Native publication must be ready before accepting a brush contact,
         // but blank paper does not depend on writeback/promotion/validation.
         if let Some(native) = &self.native_edit {
-            current.compute.extend(native.required_pipelines(document.color.depth).cloned());
+            current.compute.extend(native.required_pipelines(document.composition().color.depth).cloned());
         }
         let locked = startup.document_key.as_ref().unwrap().key.locked;
         // A physical eraser can select the erase variant without a UI change.
         for tool in [StrokeTool::Brush, StrokeTool::Eraser] {
             let style = layer_render::DabStyle {
                 alpha_locked: locked,
-                selection: document.selection.clone().map(Arc::new),
-                blend_space: if document.active_mask { layer_core::BlendSpace::Linear } else { document.blend_space },
+                selection: document.working.selection.clone().map(Arc::new),
+                blend_space: if document.working.target.is_some_and(SourceTarget::is_coverage) { layer_core::BlendSpace::Linear } else { document.composition().blend },
                 ..layer_render::DabStyle::for_brush(brush, tool)
             };
             startup.masks.style(&startup.compiler, &style, BRUSH);
-            current.style(self, &style, document.active_mask, true);
+            current.style(self, &style, document.working.target.is_some_and(SourceTarget::is_coverage), true);
         }
         // Live transforms do not change document revision or brush settings.
         // They still need their own shaders before an interactive frame runs.
@@ -555,37 +556,41 @@ mod tests {
     }
     #[test]
     fn shader_document_reuses_raster_and_parameter_edits_but_tracks_new_dependencies() {
-        let mut doc = Document::new("readiness", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut doc = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let key = ShaderDocument::new(&doc);
-        doc.layers[0].opacity = 0.5;
+        let paint = doc.scene().children(None)[0];
+        doc.artwork.occurrences.get_mut(paint).unwrap().opacity = 0.5;
         doc.revision += 1;
         assert!(key.matches(&doc));
-        doc.selection = Some(layer_core::Selection::polygon(vec![
+        doc.working.selection = Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 0., y: 0. }, layer_core::Point { x: 64., y: 0. },
             layer_core::Point { x: 0., y: 64. },
         ]).unwrap());
         doc.revision += 1;
         assert!(!key.matches(&doc));
         let key = ShaderDocument::new(&doc);
-        doc.width *= 2;
+        doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().size[0] *= 2;
         doc.revision += 1;
         assert!(!key.matches(&doc));
-        let mut layer = Layer::paint(LayerId(10), "curves");
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(layer_core::EffectInstance::new(
-            layer_core::bundled_effect_catalog().get("curves").unwrap().program(),
-        )));
-        doc.layers.insert(0, layer);
+        use layer_core::authored::*;
+        let program = layer_core::bundled_effect_catalog().get("curves").unwrap().program();
+        let values = layer_core::EffectInstance::new(program.clone()).values;
+        let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program, dimensions: Default::default() }).unwrap();
+        let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: doc.composition().size }).unwrap();
+        let occurrence = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "curves")).unwrap();
+        let stack=doc.composition().result;
+        doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, occurrence);
+        crate::artwork_sample_tests::refresh(&mut doc);
         doc.revision += 1;
         let key = ShaderDocument::new(&doc);
-        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).values[0] = layer_core::EffectValue::Number(0.5);
+        doc.artwork.effects.get_mut(effect).unwrap().values[0] = layer_core::EffectValue::Number(0.5);
         doc.revision += 1;
         assert!(key.matches(&doc), "a parameter edit uses the same pipeline");
-        doc.layers[0].visible = false;
+        doc.artwork.occurrences.get_mut(occurrence).unwrap().visible = false;
         doc.revision += 1;
         assert!(!key.matches(&doc), "visibility changes the fused chains");
         let key = ShaderDocument::new(&doc);
-        doc.active_mask = true;
+        doc.working.target = Some(SourceTarget::Coverage(CoverageHandle::from_index(0)));
         doc.revision += 1;
         assert!(!key.matches(&doc));
     }
@@ -637,7 +642,7 @@ mod gpu_tests {
                 .all(|p| !p.ready())
         );
         assert!(renderer.pipelines.dry_material.kernels.iter().all(|p| !p.ready()));
-        let document = Document::new("native staged startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
@@ -658,7 +663,7 @@ mod gpu_tests {
                 .native_edit
                 .as_ref()
                 .unwrap()
-                .required_pipelines(document.color.depth)
+                .required_pipelines(document.composition().color.depth)
                 .all(Deferred::ready)
         );
         for coverage in [false, true] {
@@ -689,15 +694,15 @@ mod gpu_tests {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut renderer = crate::test_support::staged_renderer(&reference, color);
-        let mut document = Document::new("perceptual startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.blend_space = layer_core::BlendSpace::Perceptual;
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend=layer_core::BlendSpace::Perceptual;
         let mut brush = layer_core::default_brush(layer_core::DefaultBrushPreset::Airbrush);
         brush.rendering.accumulation = BrushAccumulation::Flow;
         brush.rendering.wet_edge = 0.5;
         renderer.prepare_startup(&document, &brush, false).unwrap();
         let deadline = std::time::Instant::now() + Duration::from_secs(30);
         crate::test_support::wait_startup(&mut renderer, deadline, |progress| progress.brush_ready, format_args!("compilation timed out"));
-        let style = layer_render::DabStyle { blend_space: document.blend_space, ..layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush) };
+        let style = layer_render::DabStyle { blend_space: document.composition().blend, ..layer_render::DabStyle::for_brush(&brush, StrokeTool::Brush) };
         let plan = BrushPassPlan::for_device(&style, &renderer.device);
         assert!(plan.direct.is_none() && plan.material == MaterialOperation::Deposit);
         let pipelines = &renderer.pipelines;
@@ -710,7 +715,7 @@ mod gpu_tests {
         let color = layer_core::color::DocumentColor::default();
         let reference = WgpuRasterizer::new_native_headless(color).unwrap();
         let mut renderer = crate::test_support::staged_renderer(&reference, color);
-        let document = Document::new("retouching startup", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         for preset in [layer_core::DefaultBrushPreset::CloneStamp, layer_core::DefaultBrushPreset::HealingBrush] {
             let brush = layer_core::default_brush(preset);
             renderer.prepare_startup(&document, &brush, false).unwrap();

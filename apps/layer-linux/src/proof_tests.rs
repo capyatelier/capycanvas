@@ -1,6 +1,6 @@
 //! Native controls, persistence and explicit RGB delivery with a CMYK proof.
 use super::new_photo::{chooser, combo, finish, invoke, ready, response};
-use super::place_source::snapshot;
+use super::place_source::authored_snapshot as snapshot;
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace};
 use std::sync::Arc;
@@ -52,7 +52,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
     use layer_core::color::ProofRecipe;
     let app = native_test_app("art.capycanvas.ProofCancellation");
     let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U8,
     };
@@ -119,7 +119,7 @@ fn native_proof_cancellation_supersession_and_failed_profile() {
         ui_session(&w)
             .engine()
             .document()
-            .color
+            .composition().color
             .depth,
         SampleDepth::U8
     );
@@ -459,7 +459,7 @@ fn native_profile_picker_add_reuse_remove_and_simulation_choices() {
         let proof = ui_session(&w)
             .engine()
             .document()
-            .proof
+            .output().proof
             .clone()
             .unwrap();
         assert_eq!(proof.name, expected);
@@ -517,16 +517,10 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
         glib::compute_checksum_for_data(glib::ChecksumType::Sha256, &a).unwrap()
     ));
     let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.proof = Some(ProofRecipe::new(a_name.clone(), a_profile.clone()));
+    project.artwork.outputs.get_mut(project.artwork.default_output).unwrap().proof = Some(ProofRecipe::new(a_name.clone(), a_profile.clone()));
     let original_file = output.join("embedded-original.capy");
-    project
-        .write(std::fs::File::create(&original_file).unwrap())
-        .unwrap();
-    let project = layer_core::Project::read(
-        std::fs::File::open(&original_file).unwrap(),
-        Default::default(),
-    )
-    .unwrap();
+    write_document(&project, &mut std::fs::File::create(&original_file).unwrap()).unwrap();
+    let project = open_native_document(std::fs::File::open(&original_file).unwrap());
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
@@ -570,8 +564,8 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
         archive.windows(b.len()).filter(|bytes| *bytes == b).count(),
         1
     );
-    let reopened = layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
-    assert_eq!(reopened.document.proof.as_ref().unwrap().profile, b_profile);
+    let reopened = open_native_document(std::io::Cursor::new(archive.as_slice()));
+    assert_eq!(reopened.output().proof.as_ref().unwrap().profile, b_profile);
     w.window.destroy();
     let restored = Workspace::with_project(&app, Some((reopened, None)));
     restored.window.present();
@@ -588,7 +582,7 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
 
     // Another machine receives only B; it can still use B without the library.
     std::fs::rename(&library, &held_library).unwrap();
-    let reopened = layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
+    let reopened = open_native_document(std::io::Cursor::new(archive.as_slice()));
     let other = Workspace::with_project(&app, Some((reopened, None)));
     other.window.present();
     ready(&other);
@@ -615,11 +609,11 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| "/usr/share/color/icc/krita/cmyk.icm".into());
     let mut project = new_drawing(128, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    project.document.layers[0].source = Some(Arc::new(super::place_source::source()));
+    paint_at_mut(&mut project, 0).original = Some(Arc::new(super::place_source::source()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
@@ -676,7 +670,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let recipe = ui_session(&w)
         .engine()
         .document()
-        .proof
+        .output().proof
         .clone()
         .unwrap();
     assert_eq!(
@@ -719,7 +713,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         ui_session(&w)
             .engine()
             .document()
-            .proof
+            .output().proof
             .is_none()
     );
     invoke(&w, CommandId::Redo);
@@ -728,7 +722,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         ui_session(&w)
             .engine()
             .document()
-            .proof
+            .output().proof
             .as_ref(),
         Some(&recipe)
     );
@@ -761,9 +755,8 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     finish(&w);
     assert!(!state(&w).document_file.modified);
     let reopened =
-        layer_core::Project::read(std::fs::File::open(&master).unwrap(), Default::default())
-            .unwrap();
-    assert_eq!(reopened.document.proof.as_ref(), Some(&recipe));
+        open_native_document(std::fs::File::open(&master).unwrap());
+    assert_eq!(reopened.output().proof.as_ref(), Some(&recipe));
     let restored = Workspace::with_project(
         &app,
         Some((
@@ -821,9 +814,11 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let snapshot = {
         let gpu = restored.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
+        let capture = session.capture_project_recovery().unwrap();
+        let time = capture.output().context.elapsed;
         DocumentExport {
-            project: session.capture_project_recovery().unwrap(),
-            time: session.engine().animation_time(),
+            capture,
+            time,
         }
     };
     let mut export = ExportRecipe::further_editing(DocumentColor {
@@ -850,7 +845,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     named::<adw::ActionRow>(dialog.upcast_ref(),"export-print-profile").emit_by_name::<()>("activated",&[]);
     let deadline=Instant::now()+Duration::from_secs(30);
     while !find_named(dialog.upcast_ref(),"export-print-profile").unwrap().is_sensitive(){pump(20);assert!(Instant::now()<deadline);}
-    assert_eq!(super::new_photo::profile_name(&restored,"export-space"),ui_session(&restored).engine().document().proof.as_ref().unwrap().name);
+    assert_eq!(super::new_photo::profile_name(&restored,"export-space"),ui_session(&restored).engine().document().output().proof.as_ref().unwrap().name);
     assert_eq!(combo(&restored,"export-format").selected(),1);
     super::new_photo::capture_ui(&restored,&output,"print-profile-delivery.png");response(&restored,"cancel");finish(&restored);
 
@@ -1083,12 +1078,12 @@ fn native_proof_panel_layout_preview_and_immediate_tab_drag() {
         drag.update([f64::from(w.surface.width())*0.5-f64::from(bounds.x()+10.),150.]);
         assert!(state(&w).workspace.layout.floating.iter().any(|f| matches!(&f.root, DockNode::Tabs {panels,..} if panels.contains(&Panel::Proof))),"Proof tab drags without a hold");
         drag.end();pump(250);
-        assert_eq!(ui_session(&w).engine().document().sdr_rendition.exposure,-1.);
+        assert_eq!(ui_session(&w).engine().document().output().sdr.exposure,-1.);
         assert_eq!(snapshot(&w),edited);
         super::new_photo::capture_ui(&w,output,&format!("{}-floating.png",preset.name()));
         invoke(&w,CommandId::Undo);pump(100);
         // Undo restores authored data but advances the document revision.
-        let normalize=|bytes:&[u8]| { let mut project=layer_core::Project::read(bytes, Default::default()).unwrap(); project.document.revision=0; let mut bytes=Vec::new(); project.write(&mut bytes).unwrap(); bytes };
+        let normalize=|bytes:&[u8]| artwork_manifest(&open_native_document(std::io::Cursor::new(bytes)));
         assert_eq!(normalize(&snapshot(&w)),normalize(&before));
     }
     w.window.destroy();pump(100);

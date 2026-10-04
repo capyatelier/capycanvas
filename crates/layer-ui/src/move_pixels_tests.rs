@@ -1,6 +1,6 @@
 mod move_pixels_checks {
     use super::*;
-    use layer_core::{Affine, ImageTransform, Interpolation, LayerOperationKind, LayerPlacement};
+    use layer_core::{Affine, ImageTransform, Interpolation, RasterOperationKind, LayerPlacement};
 
     fn surface(s: &UiSession<Recorder>, p: [f32; 2]) -> [f32; 2] {
         let m = s.state.camera.document_to_surface();
@@ -40,7 +40,7 @@ mod move_pixels_checks {
             .pending_operations
             .iter()
             .filter_map(|(_, op)| match &op.kind {
-                LayerOperationKind::Transform(t) => Some(t.clone()),
+                RasterOperationKind::Transform(t) => Some(t.clone()),
                 _ => None,
             })
             .collect()
@@ -69,17 +69,17 @@ mod move_pixels_checks {
         assert!(!s.operation.moving_pixels());
         assert!(s.renderer_mut().transform.is_none());
         assert_eq!(committed(&s), [moved([30., 12.], false)]);
-        let selection = s.engine.document().selection.clone().unwrap();
+        let selection = s.engine.document().working.selection.clone().unwrap();
         assert_eq!(selection.affine, Affine::translation(Point { x: 30., y: 12. }), "the selection moves with the pixels");
         let bar = s.state.canvas_bar.clone().expect("the selection bar returns");
         assert_eq!(bar.context.kind, CanvasBarKind::Selection);
         assert_eq!(bar.anchor.map(|a| [a[0], a[1]]), Some([129., 111.]), "beside the moved selection");
         invoke(&mut s, CommandId::Undo);
         s.frame(5, 5).unwrap();
-        assert_eq!(s.engine.document().layers, before.layers, "one undo step");
-        assert_eq!(s.engine.document().selection, before.selection);
+        assert_live_artwork_eq(s.engine.document(), &before);
+        assert_eq!(s.engine.document().working.selection, before.working.selection);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().selection, Some(selection));
+        assert_eq!(s.engine.document().working.selection, Some(selection));
     }
 
     #[test]
@@ -120,19 +120,20 @@ mod move_pixels_checks {
         let mut s = filled_selection_session();
         invoke(&mut s, CommandId::Deselect);
         invoke(&mut s, CommandId::Move);
-        let raw = super::transform_pixels::raw_revision(s.engine.document().color,
+        let paint = s.engine.document().working.target.unwrap();
+        let raw = super::transform_pixels::raw_revision(s.engine.document().composition().color,
             &[layer_core::raster::RasterPlane::Color], 30);
         let original_tile = raw.wait_data().unwrap().tiles.values().next().unwrap().clone();
-        s.engine.apply_edit(layer_core::Edit::SetRaster { target: LayerId(1), revision: raw }).unwrap();
+        s.engine.apply_edit(layer_core::Edit::SetRaster { target: paint, revision: raw }).unwrap();
         send(&mut s, 1, PenPhase::Down, [200., 200.]);
         send(&mut s, 2, PenPhase::Move, [230.5, 211.25]);
         assert!(!s.operation.moving_pixels() && s.renderer_mut().transform.is_none());
         send(&mut s, 3, PenPhase::Up, [230.5, 211.25]);
         s.frame(2, 2).unwrap();
-        let data = s.engine.document().target_raster(LayerId(1)).unwrap().wait_data().unwrap();
+        let data = s.engine.document().target_raster(paint).unwrap().wait_data().unwrap();
         let (key, tile) = data.tiles.iter().next().unwrap();
         assert!(tile.same_capture(&original_tile), "the same captured pixels survive tile rebasing");
-        let origin = s.engine.document().affine_edit_transform(LayerId(1)).unwrap().map(layer_core::Point {
+        let origin = s.engine.document().affine_edit_transform(paint).unwrap().map(layer_core::Point {
             x: key.coordinate[0] as f32 * layer_core::raster::TILE_SIZE as f32,
             y: key.coordinate[1] as f32 * layer_core::raster::TILE_SIZE as f32,
         });
@@ -201,16 +202,17 @@ mod move_pixels_checks {
     #[test]
     fn the_renderer_prepares_the_next_move_of_the_selected_pixels_while_idle() {
         let mut s = filled_selection_session();
+        let paint = s.engine.document().working.target.unwrap();
         let hint = |s: &mut UiSession<Recorder>| s.renderer_mut().moving_pixels.clone();
         assert_eq!(hint(&mut s), None, "only under Move");
         invoke(&mut s, CommandId::Move);
         s.frame(2, 2).unwrap();
-        let selection = s.engine.document().selection.clone().unwrap();
-        assert_eq!(hint(&mut s), Some((LayerId(1), selection)));
+        let selection = s.engine.document().working.selection.clone().unwrap();
+        assert_eq!(hint(&mut s), Some((paint, selection)));
         drag(&mut s, [200., 200.], [230., 190.]);
-        let moved = s.engine.document().selection.clone().unwrap();
+        let moved = s.engine.document().working.selection.clone().unwrap();
         s.frame(5, 5).unwrap();
-        assert_eq!(hint(&mut s), Some((LayerId(1), moved)), "the moved selection is prepared next");
+        assert_eq!(hint(&mut s), Some((paint, moved)), "the moved selection is prepared next");
         s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 1, value: true } }).unwrap();
         s.frame(6, 6).unwrap();
         assert_eq!(hint(&mut s), None, "nothing to prepare where Move refuses");
@@ -223,10 +225,10 @@ mod move_pixels_checks {
     #[test]
     fn a_linked_mask_moves_with_the_selected_pixels() {
         let mut s = filled_selection_session();
-        let selection = s.engine.document().selection.clone();
+        let selection = s.engine.document().working.selection.clone();
         s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: 1, replace: false } }).unwrap();
         s.dispatch(UiAction::Layer { action: LayerAction::Select { id: 1, mask: false } }).unwrap();
-        s.layer_edit(layer_core::Edit::SetSelection(selection)).unwrap();
+        s.layer_edit(canvas_bar_selection_edit(s.engine.document(), selection)).unwrap();
         invoke(&mut s, CommandId::Move);
         drag(&mut s, [200., 200.], [216., 190.]);
         let transforms = committed(&s);

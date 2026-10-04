@@ -2,7 +2,7 @@
 //! Small dab/layer records cross threads; live canvas pixels remain on the GPU.
 use crate::wayland::{Child, Geometry, Parent};
 use gtk::prelude::WidgetExt;
-use layer_core::{AssetId, Layer};
+use layer_core::{AssetId, authored::{SceneSnapshot, SceneScope, OccurrenceHandle, SourceTarget, EvaluationContext, ArtworkCapture}};
 use layer_render::{
     BackendError, BrushSource, CanvasRenderer, CursorSegment, Dab, DabBatch, FramePacket, HostImage,
     ReadbackImage, TipOutline, ViewState,
@@ -34,14 +34,47 @@ fn wake_canvas(area: &gtk::glib::SendWeakRef<gtk::Picture>) {
     });
 }
 
+#[derive(Clone)]
+pub(crate) struct ContextCapture(Arc<std::sync::OnceLock<Result<EvaluationContext, String>>>);
+struct ContextRequest {value: Arc<std::sync::OnceLock<Result<EvaluationContext, String>>>}
+impl Drop for ContextRequest {
+    fn drop(&mut self) { let _ = self.value.set(Err("GPU worker stopped before capture".into())); }
+}
+impl ContextCapture {
+    fn context(&self) -> Result<EvaluationContext, String> {
+        while self.0.get().is_none() { std::thread::sleep(Duration::from_millis(1)); }
+        self.0.get().unwrap().clone()
+    }
+    pub(crate) async fn resolve(self) -> Result<EvaluationContext, String> {
+        gtk::gio::spawn_blocking(move || self.context()).await.map_err(|_| "Capture worker failed".to_string())?
+    }
+    pub(crate) fn install(&self, capture: &mut ArtworkCapture) -> Result<(), String> {
+        let mut context = self.context()?;
+        context.retain_effects(&capture.artwork);
+        let artwork = Arc::make_mut(&mut capture.artwork);
+        artwork.outputs.get_mut(artwork.default_output).ok_or("Captured output unavailable")?.context = context;
+        Ok(())
+    }
+}
+impl RenderWorker {
+    pub(super) fn take_cancelled_thumbnail(&mut self) -> Option<u64> { self.cancelled_thumbnails.pop_front() }
+    pub(crate) fn capture_context(&self) -> Result<ContextCapture, String> {
+        let value = Arc::new(std::sync::OnceLock::new());
+        self.send(Command::CaptureContext(ContextRequest {value: value.clone()})).map_err(error)?;
+        Ok(ContextCapture(value))
+    }
+}
+
 struct Frame {
     time_seconds: f32,
     view: ViewState,
     extent: [u32; 2],
-    layers: Vec<Layer>,
+    scene: Arc<SceneSnapshot>,
+    inspect_mask: Option<OccurrenceHandle>,
+    selection_visibility: Arc<std::collections::BTreeMap<OccurrenceHandle, bool>>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
-    restore_rasters: Vec<(layer_core::LayerId, layer_core::raster::RasterRevision)>,
+    restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
     reset: bool,
     composite: bool,
     commit_rasters: bool,
@@ -76,7 +109,9 @@ impl Frame {
             time_seconds: self.time_seconds,
             view: self.view,
             document_extent: self.extent,
-            layers: &self.layers,
+            scene: self.scene.view(),
+            inspect_mask: self.inspect_mask,
+            selection_visibility: Some(&self.selection_visibility),
             dabs: &self.dabs,
             dab_batches: &self.batches,
             restore_rasters: &self.restore_rasters,
@@ -86,7 +121,12 @@ impl Frame {
         }
     }
 }
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum StartupMode { VisibleFirst, Unpresented }
+
 enum Command {
+    SeedContext(EvaluationContext),
+    CaptureContext(ContextRequest),
     LocalTone(Option<Arc<layer_render_wgpu::local_tone::GpuToneGuide>>, mpsc::Sender<Result<(),String>>),
     Proof(Option<Arc<layer_color::ProofLut>>, bool, bool, mpsc::Sender<Result<(), String>>),
     Screen(u64, f32, Option<layer_render_wgpu::ScreenCheck>),
@@ -95,12 +135,13 @@ enum Command {
     AdoptColor(u64),
     DiscardColor(u64, mpsc::Sender<()>),
     TransformPreview(Option<layer_render::TransformPreview>),
-    MovingLayer(Option<layer_core::LayerId>),
-    MovingPixels(Option<(layer_core::LayerId, layer_core::Selection)>),
+    MovingLayer(Option<OccurrenceHandle>),
+    MovingPixels(Option<(SourceTarget, layer_core::Selection)>),
     Retouch(Option<layer_render::RetouchPreparation>),
     RetireStrokeSources,
     Startup(
         u64,
+        StartupMode,
         Box<(layer_core::Document, layer_core::BrushSnapshot, bool)>,
     ),
     FinishStartupCache,
@@ -115,10 +156,10 @@ enum Command {
     CancelRegion(u64),
     EffectValidation(layer_render::EffectValidationRequest),
     Telemetry(bool),
-    Thumbnail(u64, layer_core::LayerId),
+    Thumbnail(u64, layer_render::ThumbnailTarget),
     Analysis(layer_core::ArtworkQuery, mpsc::Sender<Result<layer_render_wgpu::effect_analysis::Job, String>>),
     AcceptAnalysis(layer_render_wgpu::effect_analysis::Candidate),
-    RetainAnalyses(Vec<layer_core::LayerId>),
+    RetainAnalyses(Vec<OccurrenceHandle>),
     Snapshot(layer_render::SnapshotRequest, mpsc::Sender<Result<layer_render_wgpu::snapshot::SnapshotJob, String>>),
     ColorSample(layer_render::ColorSampleRequest),
     FilterPreviews(u64, layer_render::FilterPreviewRequest),
@@ -137,6 +178,7 @@ enum Command {
 /// What the render thread reports after each frame for the session to read.
 #[derive(Default)]
 struct FrameReport {
+    context: std::sync::RwLock<EvaluationContext>,
     pending_work: AtomicBool,
     retouch_miss: std::sync::atomic::AtomicU64,
 }
@@ -153,6 +195,7 @@ enum Reply {
     SelectionPaint(u64, Result<layer_render::SelectionPaintResult, String>),
     EffectValidation(layer_render::EffectValidationResult),
     Thumbnail(ReadbackImage),
+    ThumbnailCancelled(u64),
     ColorSample(Result<layer_render::ColorSample, String>),
     FilterPreviews(u64, Result<layer_render::FilterPreviewImage, String>),
     DisplayHeadroom(f32, Option<layer_render_wgpu::SdrSurfaceColor>),
@@ -198,8 +241,8 @@ pub struct RenderWorker {
     pub(crate) proof_owner: u64,
     hdr_view: Option<(Option<layer_core::color::hdr::SdrRendition>, bool)>,
     transform_preview: Option<layer_render::TransformPreview>,
-    moving_layer: Option<layer_core::LayerId>,
-    moving_pixels: Option<(layer_core::LayerId, layer_core::Selection)>,
+    moving_layer: Option<OccurrenceHandle>,
+    moving_pixels: Option<(SourceTarget, layer_core::Selection)>,
     initialized: bool,
     pub(crate) display_headroom: f32,
     pub(crate) display_encoding: Option<layer_render_wgpu::SdrSurfaceColor>,
@@ -210,6 +253,8 @@ pub struct RenderWorker {
     snapshot_gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
+    context_seed: EvaluationContext,
+    selection_visibility: Arc<std::collections::BTreeMap<OccurrenceHandle, bool>>,
     settling_roots: Vec<layer_core::raster::RasterRevision>,
     settling_view: Option<(ViewState, Vec<CursorSegment>)>,
     pub(super) startup: layer_render_wgpu::StartupProgress,
@@ -243,6 +288,7 @@ pub struct RenderWorker {
     awaiting_color_adoption: Option<u64>,
     brush_sources: HashMap<AssetId, BrushSource>,
     thumbnails: VecDeque<ReadbackImage>,
+    cancelled_thumbnails: VecDeque<u64>,
     color_sample: Option<Result<layer_render::ColorSample, String>>,
     color_sample_pending: bool,
     filter_previews: VecDeque<Result<layer_render::FilterPreviewImage, String>>,
@@ -389,6 +435,8 @@ impl RenderWorker {
             })
             .map_err(error)?;
         Ok(Self {
+            context_seed: EvaluationContext::default(),
+            selection_visibility: Arc::default(),
             snapshot_job: None,
             analysis_job: None,
             analysis_candidate: None,
@@ -444,6 +492,7 @@ impl RenderWorker {
             awaiting_color_adoption: None,
             brush_sources: HashMap::new(),
             thumbnails: VecDeque::new(),
+            cancelled_thumbnails: VecDeque::new(),
             color_sample: None,
             color_sample_pending: false,
             filter_previews: VecDeque::new(),
@@ -491,11 +540,28 @@ impl RenderWorker {
         brush: layer_core::BrushSnapshot,
         transform: bool,
     ) -> Result<(), String> {
+        self.prepare_startup_mode(document, brush, transform, StartupMode::VisibleFirst)
+    }
+    pub(super) fn prepare_import(
+        &mut self,
+        document: layer_core::Document,
+        brush: layer_core::BrushSnapshot,
+    ) -> Result<(), String> {
+        self.prepare_startup_mode(document, brush, false, StartupMode::Unpresented)
+    }
+    fn prepare_startup_mode(
+        &mut self,
+        document: layer_core::Document,
+        brush: layer_core::BrushSnapshot,
+        transform: bool,
+        mode: StartupMode,
+    ) -> Result<(), String> {
         self.startup_generation += 1;
         self.startup_key = Some((layer_render_wgpu::ShaderDocument::new(&document), brush.clone(), transform));
         self.startup = Default::default();
         self.send(Command::Startup(
             self.startup_generation,
+            mode,
             Box::new((document, brush, transform)),
         ))
         .map_err(error)
@@ -565,6 +631,7 @@ impl RenderWorker {
                     self.effect_validation = Some(result);
                 }
                 Reply::Thumbnail(image) => self.thumbnails.push_back(image),
+                Reply::ThumbnailCancelled(id) => self.cancelled_thumbnails.push_back(id),
                 Reply::ColorSample(color) => {
                     self.color_sample = Some(color);
                     self.color_sample_pending = false;
@@ -650,6 +717,14 @@ impl CanvasRenderer for RenderWorker {
         }
         Ok(())
     }
+    fn evaluation_context(&self) -> EvaluationContext {
+        self.report.context.try_read().map(|context| context.clone()).unwrap_or_else(|_| self.context_seed.clone())
+    }
+    fn seed_evaluation_context(&mut self, context: EvaluationContext) {
+        self.context_seed = context.clone();
+        if let Ok(mut value) = self.report.context.try_write() { *value = context.clone(); }
+        let _ = self.send(Command::SeedContext(context));
+    }
     fn has_pending_submission(&self) -> bool { self.settling_roots.iter().any(|r| r.try_data().is_none()) }
     fn can_submit(&self) -> bool {
         !self.has_pending_submission() && self.in_flight.load(Ordering::Acquire) < 2
@@ -667,12 +742,12 @@ impl CanvasRenderer for RenderWorker {
         }
         Ok(())
     }
-    fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
+    fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
         if self.moving_layer != layer && self.send(Command::MovingLayer(layer)).is_ok() {
             self.moving_layer = layer;
         }
     }
-    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+    fn prepare_moving_pixels(&mut self, pixels: Option<(SourceTarget, layer_core::Selection)>) {
         if self.moving_pixels != pixels && self.send(Command::MovingPixels(pixels.clone())).is_ok() {
             self.moving_pixels = pixels;
         }
@@ -796,7 +871,7 @@ impl CanvasRenderer for RenderWorker {
     fn request_thumbnail(
         &mut self,
         id: u64,
-        target: layer_core::LayerId,
+        target: layer_render::ThumbnailTarget,
     ) -> Result<(), Self::Error> {
         self.send(Command::Thumbnail(id, target))
     }
@@ -824,7 +899,7 @@ impl CanvasRenderer for RenderWorker {
         Ok(())
     }
     fn cancel_effect_analysis(&mut self) { self.analysis_job = None; self.analysis_candidate = None; }
-    fn retain_effect_analyses(&mut self, layers: &[layer_core::LayerId]) -> Result<(), Self::Error> {
+    fn retain_effect_analyses(&mut self, layers: &[OccurrenceHandle]) -> Result<(), Self::Error> {
         self.send(Command::RetainAnalyses(layers.to_vec()))
     }
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
@@ -927,19 +1002,20 @@ impl CanvasRenderer for RenderWorker {
         if self.in_flight.load(Ordering::Acquire) >= 2 {
             return Err(BackendError("Canvas frame queue full"));
         }
+        match packet.selection_visibility {
+            Some(visibility) if visibility != self.selection_visibility.as_ref() => self.selection_visibility = Arc::new(visibility.clone()),
+            None if !self.selection_visibility.is_empty() => self.selection_visibility = Arc::default(),
+            _ => (),
+        }
         let frame = Frame {
             time_seconds: packet.time_seconds,
             view: packet.view,
             extent: packet.document_extent,
-            // Immutable raster roots and sources cross threads by shared ownership.
-            layers: packet.layers.to_vec(),
-            pending_rasters: packet
-                .layers
-                .iter()
-                .flat_map(|l| std::iter::once(&l.raster).chain(l.mask.iter().map(|m| &m.raster)))
-                .filter(|r| packet.commit_rasters && r.try_data().is_none())
-                .cloned()
-                .collect(),
+            scene: Arc::new(packet.scene.snapshot(self.evaluation_context())),
+            inspect_mask: packet.inspect_mask,
+            selection_visibility: self.selection_visibility.clone(),
+            pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
+                .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
             dabs: packet.dabs.to_vec(),
             batches: packet.dab_batches.to_vec(),
             restore_rasters: packet.restore_rasters.to_vec(),
@@ -1063,6 +1139,7 @@ impl Worker {
         let mut startup_input = None;
         let mut startup_progress = layer_render_wgpu::StartupProgress::default();
         let mut pending_frames: VecDeque<Box<Frame>> = VecDeque::new();
+        let mut context_capture: Option<ContextRequest> = None;
         let mut deferred = VecDeque::new();
         let mut selection_generation = 0;
         let mut region_generation = 0;
@@ -1095,8 +1172,8 @@ impl Worker {
                 self.update_hdr_view()?;
                 self.report_display(reply)?;
             }
-            if self.paper_ready.load(Ordering::Acquire)
-                && let Some((generation, document, brush, transform)) = &startup_input
+            if let Some((generation, document, brush, transform, mode)) = &startup_input
+                && (*mode == StartupMode::Unpresented || self.paper_ready.load(Ordering::Acquire))
             {
                 if self
                     .renderer
@@ -1182,6 +1259,15 @@ impl Worker {
             // the quiet period keeps those batches from competing every frame.
             let thumbnail_ready = !pending_thumbnails.is_empty()
                 && last_canvas_frame.elapsed() >= Duration::from_millis(50);
+            if context_capture.is_some() {
+                if pending_frames.is_empty() && !self.renderer.has_pending_submission() {
+                    let request = context_capture.take().unwrap();
+                    let _ = request.value.set(Ok(self.renderer.evaluation_context()));
+                } else {
+                    std::thread::sleep(Duration::from_millis(1));
+                    continue;
+                }
+            }
             let next = if document_drawn && !deferred.is_empty() {
                 Ok(deferred.pop_front().unwrap())
             } else if !startup_progress.complete
@@ -1235,10 +1321,20 @@ impl Worker {
                     // ~200 ms even though every camera frame rendered in <2 ms.
                     if thumbnail_ready && count.load(Ordering::Acquire) == 0
                         && let Some(&(id, target)) = pending_thumbnails.front()
-                        && self.renderer.prepare_thumbnail_batch(target).map_err(error)?
                     {
-                        self.renderer.request_thumbnail(id, target).map_err(error)?;
-                        pending_thumbnails.pop_front();
+                        let result = self.renderer.prepare_thumbnail_batch(target).and_then(|ready| {
+                            if ready { self.renderer.request_thumbnail(id, target).map(|_| true) } else { Ok(false) }
+                        });
+                        match result {
+                            Ok(false) => (),
+                            Ok(true) => { pending_thumbnails.pop_front(); },
+                            Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => {
+                                pending_thumbnails.pop_front();
+                                reply.send(Reply::ThumbnailCancelled(id)).map_err(error)?;
+                                wake_canvas(&self.area);
+                            }
+                            Err(failure) => return Err(error(failure)),
+                        }
                     }
                     continue;
                 }
@@ -1262,6 +1358,8 @@ impl Worker {
                 continue;
             }
             match command {
+                Command::SeedContext(context) => self.renderer.seed_evaluation_context(context),
+                Command::CaptureContext(request) => context_capture = Some(request),
                 Command::LocalTone(guide, reply) => {
                     let result = self
                         .presenter
@@ -1317,9 +1415,9 @@ impl Worker {
                 Command::MovingPixels(pixels) => self.renderer.prepare_moving_pixels(pixels),
                 Command::Retouch(retouch) => self.renderer.prepare_retouch(retouch.as_ref()),
                 Command::RetireStrokeSources => self.renderer.retire_stroke_sources(),
-                Command::Startup(generation, inputs) => {
+                Command::Startup(generation, mode, inputs) => {
                     let (document, brush, transform) = *inputs;
-                    startup_input = Some((generation, document, brush, transform));
+                    startup_input = Some((generation, document, brush, transform, mode));
                     startup_progress = Default::default();
                 }
                 Command::FinishStartupCache => self.renderer.finish_startup_cache(),
@@ -1612,6 +1710,7 @@ impl Worker {
     /// idle canvas when it newly does. A retouching stroke that missed its
     /// source is kept for the session to replay.
     fn report_frame(&mut self, report: &FrameReport) {
+        if let Ok(mut context) = report.context.try_write() { *context = self.renderer.evaluation_context(); }
         if let Some(stroke) = self.renderer.take_retouch_miss() {
             report.retouch_miss.store(stroke.0, Ordering::Release);
         }
@@ -1679,9 +1778,7 @@ impl Worker {
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
         let draw_start = std::time::Instant::now();
-        while frame.layers.iter().any(|l| {
-            l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
-        }) && !self.renderer.raster_ready()
+        while frame.scene.view().targets().any(|t| frame.scene.view().raster(t).is_some_and(|r| r.try_data().is_none())) && !self.renderer.raster_ready()
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
@@ -1693,15 +1790,17 @@ impl Worker {
             .map_err(error)?;
         let _presentation = self.renderer.prioritize_raster_presentation();
         #[cfg(test)]
-        if !backdrop && frame.layers.iter().any(|layer| layer.raster.try_data().is_none()
-            || layer.masks().any(|mask| mask.raster.try_data().is_none())) {
+        if !backdrop && frame.scene.view().targets().any(|t| frame.scene.view().raster(t).is_some_and(|r| r.try_data().is_none())) {
             timing.raster_commit();
         }
         if backdrop {
-            let layers = layer_core::constant_backdrop(&frame.layers);
+            let scene = frame.scene.view();
+            let scope = SceneScope::Members(Arc::from(scene.constant_backdrop()));
             self.renderer
                 .submit(FramePacket {
-                    layers: &layers,
+                    scene: scene.with_scope(&scope),
+                    inspect_mask: None,
+                    selection_visibility: None,
                     dabs: &[],
                     dab_batches: &[],
                     restore_rasters: &[],
@@ -1715,7 +1814,7 @@ impl Worker {
             self.renderer.submit(frame.packet()).map_err(error)?;
             if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
             #[cfg(test)]
-            timing.photo_frame(&frame.layers);
+            timing.photo_frame(frame.scene.view());
         }
         #[cfg(test)]
         timing.mark(0);

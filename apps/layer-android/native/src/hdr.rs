@@ -36,7 +36,7 @@ pub extern "system" fn Java_art_capycanvas_Native_toneStatus(
     let mut status = a.tone.status();
     for (key, value) in [
         ("changed", changed.into()),
-        ("hdr", (s.engine().document().color.depth.is_float() && !s.rendering_suspended()).into()),
+        ("hdr", (s.engine().document().composition().color.depth.is_float() && !s.rendering_suspended()).into()),
         ("idle", s.require_document_snapshot_idle().is_ok().into()),
         ("display_hdr", a.hdr_capable().into()),
         ("hdr_output", a.hdr_output().into()),

@@ -2,7 +2,7 @@ use super::*;
 use crate::test_support::{complete, packet};
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-use layer_core::{Document, LayerMask, Point};
+use layer_core::{Document, CoverageSnapshot, Point, authored::{PortableId,SourceTarget}};
 use layer_render::{
     ColorSampleArea, ColorSampleRequest, ColorSampleSource, RegionRequest, RegionSource,
 };
@@ -12,9 +12,11 @@ fn codes(x: u32) -> [u16; 4] {
     [10000 + (x / 256) as u16 * 16000, 32123, 51007, 40000]
 }
 fn document(color: DocumentColor) -> Document {
-    let mut doc = Document::new("exact query", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.color = color;
-    doc.layers[1].visible = false;
+    let mut doc = Document::new(PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let root = doc.artwork.root;
+    doc.artwork.compositions.get_mut(root).unwrap().color = color;
+    let paper = doc.scene().order()[1];
+    doc.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     let mut data = RasterData::default();
     for y in 0..2 {
         for x in 0..3 {
@@ -38,11 +40,12 @@ fn document(color: DocumentColor) -> Document {
             );
         }
     }
-    doc.layers[0].raster = RasterRevision::backed(data);
+    let SourceTarget::Paint(target) = doc.scene().source_target(doc.scene().order()[0]).unwrap() else { unreachable!() };
+    doc.artwork.paint.get_mut(target).unwrap().raster = RasterRevision::backed(data);
     doc
 }
 fn frame<'a>(doc: &'a Document) -> FramePacket<'a> {
-    FramePacket { view: crate::test_support::view([640, 480]), ..packet(&doc.layers, EXTENT) }
+    FramePacket { view: crate::test_support::view([640, 480]), inspect_mask: doc.working.inspect_mask, ..packet(doc.scene(), EXTENT) }
 }
 fn sample(r: &mut WgpuRasterizer, position: [u32; 2], area: ColorSampleArea) -> [f32; 4] {
     assert!(
@@ -76,11 +79,12 @@ fn composite_queries_ignore_inspection_and_need_no_display_texture() {
         },
     ] {
         let mut doc = document(color);
-        let mut mask = LayerMask::reveal_all(LayerId(99), Point::default());
-        mask.default_coverage = 0.5;
-        mask.show_area = true;
-        doc.layers[0].mask = Some(mask);
-        doc.layers[0].opacity = 0.7;
+        let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), EXTENT, Point::default());
+        mask.source.default_coverage = 0.5;
+        let owner = doc.scene().order()[0];
+        crate::tests::image_windows::set_mask(&mut doc, owner, mask);
+        doc.working.inspect_mask = Some(owner);
+        doc.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.7;
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
         r.native_edit.as_mut().unwrap().color_cache_bytes = 0;
         r.submit(frame(&doc)).unwrap();
@@ -157,11 +161,8 @@ fn filtered_query_crops_match_full_resolution_and_reject_excessive_dependencies(
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     });
-    doc.layers
-        .insert(0, crate::tests::image_windows::effect(20, false, false));
-    doc.layers
-        .insert(0, crate::tests::image_windows::effect(21, false, false));
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    for _ in 0..2 { crate::tests::image_windows::insert_effect(&mut doc, crate::tests::image_windows::program(false, false)); }
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.submit(frame(&doc)).unwrap();
     let visible = crate::test_support::document_texture(&r).clone();
     let full = crate::layer_tests::page_bytes(&r, &visible);

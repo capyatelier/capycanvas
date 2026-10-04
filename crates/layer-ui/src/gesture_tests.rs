@@ -33,15 +33,15 @@ fn two_and_three_finger_taps_undo_and_redo() {
     let painted = s.engine.document().clone();
     let camera = s.state.camera.clone();
     tap(&mut s, 2, 0, 150);
-    assert_ne!(s.engine.document().layers, painted.layers);
+    assert_ne!(s.engine.document().artwork.paint, painted.artwork.paint);
     let undone = s.engine.document().clone();
     assert_eq!(s.state.camera.view(), camera.view(), "tap jitter never moves the view");
     assert!(s.state.camera.revision > camera.revision);
     tap(&mut s, 3, 1000, 150);
-    assert_eq!(s.engine.document().layers, painted.layers);
+    assert_live_artwork_eq(s.engine.document(), &painted);
     tap(&mut s, 2, 2000, 150);
     tap(&mut s, 4, 3000, 150);
-    assert_eq!(s.engine.document().layers, undone.layers, "four fingers are unbound by default");
+    assert_live_artwork_eq(s.engine.document(), &undone);
 }
 
 #[test]
@@ -87,20 +87,20 @@ fn taps_yield_to_pens_strokes_and_the_picker() {
     .unwrap();
     finger(&mut s, 10, ContactPhase::Up, [300., 400.], 50);
     finger(&mut s, 11, ContactPhase::Up, [400., 400.], 60);
-    assert_eq!(s.engine.document().layers, painted.layers, "a pen contact ends the tap");
+    assert_live_artwork_eq(s.engine.document(), &painted);
     s.pen(event(&s, 10, PenPhase::Down, 1.)).unwrap();
     tap(&mut s, 2, 1000, 100);
     s.pen(event(&s, 11, PenPhase::Up, 1.)).unwrap();
     s.frame(12, 12).unwrap();
     let stroked = s.engine.document().clone();
-    assert_ne!(stroked.layers, painted.layers, "a stroke owns the canvas");
+    assert_ne!(stroked.artwork.paint, painted.artwork.paint, "a stroke owns the canvas");
     finger(&mut s, 10, ContactPhase::Down, [300., 400.], 3000);
     s.input(UiInput::ColorPickerHold { id: 10, position: [300., 400.], offset: 40. }).unwrap();
     finger(&mut s, 11, ContactPhase::Down, [400., 400.], 3010);
     finger(&mut s, 11, ContactPhase::Up, [400., 400.], 3050);
     finger(&mut s, 10, ContactPhase::Up, [300., 400.], 3060);
     s.frame(13, 13).unwrap();
-    assert_eq!(s.engine.document().layers, stroked.layers);
+    assert_live_artwork_eq(s.engine.document(), &stroked);
 }
 
 fn bind(s: &mut UiSession<Recorder>, trigger: &str, id: &str) {
@@ -213,7 +213,7 @@ fn a_new_drawing_keeps_the_hosts_tap_timing() {
     next.inherit_window_state(&s).unwrap();
     let painted = next.engine.document().clone();
     tap(&mut next, 2, 0, 700);
-    assert_ne!(next.engine.document().layers, painted.layers, "the host's long-press time still applies");
+    assert_ne!(next.engine.document().artwork.paint, painted.artwork.paint, "the host's long-press time still applies");
 }
 
 #[test]
@@ -445,13 +445,13 @@ fn retouch_strokes_refuse_masks_and_offer_a_reference_for_an_empty_layer() {
     assert_eq!(notice.text, "This layer is empty, and no reference layer below it is marked");
     assert_eq!(notice.action.as_ref().unwrap().label, "Use Current ink as Reference");
     s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
-    assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
+    assert_eq!(s.engine.document().scene().references(), [OccurrenceHandle::from_index(0)].into());
     let revision = s.engine.document().revision;
     stroke(&mut s, 30);
     assert_eq!(s.state.notice, None, "the reference below is the source");
     assert_ne!(s.engine.document().revision, revision);
 
-    let top = s.engine.document().active_layer.0;
+    let top = occurrence_token(s.engine.document().working.occurrence.unwrap());
     layer(&mut s, LayerAction::AddMask { id: top, replace: false });
     layer(&mut s, LayerAction::Select { id: top, mask: true });
     let revision = s.engine.document().revision;
@@ -557,19 +557,19 @@ fn notices_reject_stale_answers_and_clear_at_the_next_contact() {
 fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
     let mut s = session(Platform::Android);
     layer(&mut s, LayerAction::New { group: false, clipped: false });
-    let target = s.engine.document().active_layer;
+    let target = s.engine.document().working.occurrence.unwrap();
     let selected = s.layer_interaction.selected.clone();
     assert!(s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
     layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
-    assert!(s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
-    assert_eq!(s.engine.document().active_layer, target);
+    assert!(s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
+    assert_eq!(s.engine.document().working.occurrence.unwrap(), target);
     assert_eq!(s.layer_interaction.selected, selected);
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-    assert!(!s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    assert!(!s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
-    assert!(s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    assert!(s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
-    assert!(!s.engine.document().layer(LayerId(1)).unwrap().properties.alpha_locked);
+    assert!(!s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     layer(&mut s, LayerAction::Lock { id: 1, value: true });
     for id in [1, 2, u64::MAX] {
         let before = s.engine.document().clone();
@@ -578,7 +578,7 @@ fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
     }
     assert!(!s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
     layer(&mut s, LayerAction::New { group: true, clipped: false });
-    let id = s.engine.document().active_layer.0;
+    let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     assert!(!s.state.layers.iter().find(|l| l.id == id).unwrap().can_alpha_lock);
     assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
 }

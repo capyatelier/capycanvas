@@ -103,8 +103,9 @@ pub(super) struct RefineDraft {
     view: SelectionRefineView,
     target: SelectionTarget,
     original: Arc<Selection>,
-    active: LayerId,
+    active: Option<layer_core::authored::OccurrenceHandle>,
     revision: u64,
+    owner: u64,
     committed: bool,
     applying: bool,
     /// The radius of the job in progress, and whether it is exact.
@@ -145,7 +146,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn refine_layer(&self) -> Option<u64> {
         match self.selection_masks.target()? {
             SelectionTarget::Current => Some(0),
-            SelectionTarget::Saved(id) => Some(id.0),
+            SelectionTarget::Saved(id) => Some(super::session::occurrence_token(id)),
         }
     }
     pub(super) fn refine_refusal(&self) -> Option<std::sync::Arc<str>> {
@@ -154,7 +155,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         match self.selection_masks.target() {
             Some(SelectionTarget::Saved(id)) if doc.is_locked(id) => Some(l.text(MessageId::COMMANDS_THIS_SELECTION_LAYER_IS_LOCKED)),
             Some(_) => None,
-            None => doc.selection.is_none().then_some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
+            None => doc.working.selection.is_none().then_some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
         }
     }
     pub(super) fn begin_refine(&mut self, kind: RefineKind, layer: Option<u64>) -> Result<(), String> {
@@ -164,7 +165,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let target = match layer {
             Some(0) if self.selection_masks.quick() => SelectionTarget::Current,
-            Some(id) => SelectionTarget::Saved(LayerId(id)),
+            Some(id) => SelectionTarget::Saved(super::session::occurrence_handle(id)?),
             None => SelectionTarget::Current,
         };
         if target == SelectionTarget::Current && self.current_selection().is_none() {
@@ -188,8 +189,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             },
             target,
             original: Arc::new(coverage),
-            active: doc.active_layer,
+            active: doc.working.occurrence,
             revision: doc.revision,
+            owner:doc.owner,
             committed: false,
             applying: false,
             job: None,
@@ -341,7 +343,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(draft) = self.selection_masks.refine.as_mut() else {
             return Ok(());
         };
-        if draft.revision != doc.revision || draft.active != doc.active_layer {
+        if draft.owner != doc.owner || draft.revision != doc.revision || draft.active != doc.working.occurrence {
             let (job, shown) = (draft.job.is_some(), draft.shown.is_some());
             self.selection_masks.refine = None;
             self.selection_masks.refine_changed = true;

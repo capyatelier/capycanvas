@@ -78,21 +78,25 @@ fn native_layer_blend_menu() {
 }
 
 /// A photo under an isolated group that holds a Black & White adjustment.
-fn grouped_adjustment() -> layer_core::Project {
-    let mut project = super::native_navigation::photo([1024, 768]);
-    let document = &mut project.document;
-    document.layers.retain(|l| l.source.is_some() || l.id == layer_core::LayerId(2));
-    let mut group = layer_core::Layer::paint(document.allocate_layer_id(), "Adjustments");
-    group.kind = layer_core::LayerKind::Group;
-    let mut adjustment = layer_core::Layer::paint(document.allocate_layer_id(), "Black & White");
-    adjustment.kind = layer_core::LayerKind::Effect;
-    adjustment.properties.parent = Some(group.id);
-    adjustment.effect = Some(std::sync::Arc::new(layer_core::EffectInstance::new(
-        layer_core::bundled_effect_catalog().get("black_white").unwrap().program(),
-    )));
-    document.active_layer = group.id;
-    document.layers.splice(0..0, [group, adjustment]);
-    project
+fn grouped_adjustment() -> layer_core::Document {
+    use layer_core::authored::*;
+    let mut document = super::native_navigation::photo([1024, 768]);
+    let remove: Vec<_> = document.scene().order().iter().copied().filter(|h| document.scene().paint_source(*h).is_none() && !document.scene().constant_backdrop().contains(h)).collect();
+    if !remove.is_empty() { document.apply(document.delete_layers_edit(&remove).unwrap()).unwrap(); }
+    let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("black_white").unwrap().program());
+    let definition = RecordChange::insert(&document.artwork.definitions, Definition { program: draft.program, dimensions: Default::default() });
+    let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: document.composition().size });
+    let adjustment = RecordChange::insert(&document.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(effect.handle), "Black & White"));
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Definition(definition), layer_core::Edit::Effect(effect), layer_core::Edit::Occurrence(adjustment.clone())])).unwrap();
+    let children = RecordChange::insert(&document.artwork.stacks, Stack { entries: vec![adjustment.handle] });
+    let group = RecordChange::insert(&document.artwork.occurrences, Occurrence::new(OccurrenceContent::Stack(children.handle), "Adjustments"));
+    let root = document.composition().result;
+    let mut stack = document.artwork.stacks.get(root).unwrap().clone();
+    stack.entries.insert(0, group.handle);
+    let stack = RecordChange::replace(&document.artwork.stacks, root, Some(stack)).unwrap();
+    let mut working = document.working.clone(); working.occurrence = Some(group.handle); working.target = None;
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Stack(children), layer_core::Edit::Occurrence(group), layer_core::Edit::Stack(stack), layer_core::Edit::Working(working)])).unwrap();
+    document
 }
 
 #[test]
@@ -104,8 +108,11 @@ fn native_pass_through_group_and_new_group_preference() {
     w.window.present();
     pump(1600);
     until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.brush_ready), "canvas startup");
-    let group = document(&w).active_layer;
-    let photo = document(&w).layers.iter().find(|l| l.source.is_some()).unwrap().id;
+    apply_fixture_theme(&w);
+    new_photo::ready(&w);
+    let group = document(&w).working.occurrence.unwrap();
+    let doc = document(&w);
+    let photo = doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap();
     let context = glib::MainContext::default();
     let mut readback = 9800;
     let mut saturation = |w: &Rc<Workspace>| {
@@ -149,7 +156,7 @@ fn native_pass_through_group_and_new_group_preference() {
     w.dispatch(UiAction::Invoke { command: CommandId::Redo });
     until(|| blend(&w) == "Pass Through", "Redo passes through again");
 
-    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: photo.0, mask: false } });
+    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(photo), mask: false } });
     until(|| blend(&w) == "Normal", "the photo is active");
     open(&mut input, Device::Mouse);
     assert!(mapped_label(popover.upcast_ref(), "Pass Through").is_none(), "only groups offer Pass Through");
@@ -177,7 +184,7 @@ fn native_pass_through_group_and_new_group_preference() {
     until(|| !w.preferences.dialog.is_mapped(), "Preferences close");
     w.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } });
     until(
-        || document(&w).layer(document(&w).active_layer).is_some_and(|l| l.kind == layer_core::LayerKind::Group && l.id != group),
+        || { let doc = document(&w); doc.working.occurrence.is_some_and(|h| h != group && doc.scene().occurrence(h).is_some_and(|o| o.kind() == layer_core::LayerKind::Group)) },
         "New Group adds a group",
     );
     until(|| blend(&w) == "Pass Through" && shown() == "Pass Through", "the new group passes through");

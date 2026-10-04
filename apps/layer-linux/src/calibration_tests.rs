@@ -5,7 +5,7 @@ use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
 use layer_ui::{CanvasBarKind, EffectAction};
 use serde_json::json;
 
-fn fixture() -> layer_core::Project {
+fn fixture() -> layer_core::Document {
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let mut source = SourceBuilder::new([256, 256], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::U8,
@@ -13,7 +13,7 @@ fn fixture() -> layer_core::Project {
     }, 1024 * 1024).unwrap();
     let row = [150, 175, 200, 255].repeat(256);
     for _ in 0..256 { source.push_row(&row).unwrap(); }
-    project.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
     project
 }
 
@@ -86,13 +86,8 @@ fn native_white_balance_picker_contacts_and_atomic_history() {
                 until(|| state(&w).canvas_bar.as_ref().is_none_or(|bar| bar.context.kind != CanvasBarKind::Picker), "released sample completes correction");
                 ready(&w);
                 let after = document(&w);
-                assert_ne!(after.layers, before.layers, "{width} {theme:?} {kind}: correction changes the effect");
-                for old in &before.layers {
-                    let new = after.layer(old.id).unwrap();
-                    assert_eq!(new.source, old.source);
-                    assert_eq!(new.raster.identity(), old.raster.identity());
-                    if old.id != before.active_layer { assert_eq!(new, old); }
-                }
+                assert_ne!(artwork_manifest(&after), artwork_manifest(&before), "{width} {theme:?} {kind}: correction changes the effect");
+                super::tonal::assert_source_unchanged(&w, &before);
                 assert_eq!(state(&w).colors, foreground);
                 assert_eq!(state(&w).layer_tools.tool, tool);
                 pump(250);
@@ -101,10 +96,10 @@ fn native_white_balance_picker_contacts_and_atomic_history() {
                 crate::snapshot(&w).save_to_png(output.join(format!("corrected-{width}-{theme:?}-{kind}.png"))).unwrap();
                 w.dispatch(UiAction::Invoke { command: CommandId::Undo });
                 ready(&w);
-                assert_eq!(document(&w).layers, before.layers, "one undo restores both parameters");
+                assert_eq!(artwork_manifest(&document(&w)), artwork_manifest(&before), "one undo restores both parameters");
                 input.click(screen_point(&picker_button(&w), &w.window, [0.5, 0.5]));
                 input.key(0xff1b);
-                assert_eq!(document(&w).layers, before.layers);
+                assert_eq!(artwork_manifest(&document(&w)), artwork_manifest(&before));
                 assert_eq!(state(&w).colors, foreground);
                 assert_eq!(state(&w).layer_tools.tool, tool);
                 reports.push(json!({"width":width,"theme":format!("{theme:?}"),"input":kind,"before":pixel,"after":corrected}));

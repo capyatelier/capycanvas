@@ -4,7 +4,8 @@ use crate::{
     document_io::{atomic_write, check_cancelled, io_error},
     documents::recovery_environment,
 };
-use layer_core::Project;
+use layer_core::authored::ArtworkCapture;
+use layer_core::package::codec::PreparedPackage;
 use layer_host::Renderer;
 use layer_ui::{
     UiSession,
@@ -127,7 +128,7 @@ enum Job {
     Initialize,
     Work {
         work: RecoveryWork,
-        project: Option<Box<Project>>,
+        project: Option<Box<ArtworkCapture>>,
         environment: Option<Box<layer_host::open::OpenEnvironment>>,
     },
     Release(Vec<String>),
@@ -139,7 +140,7 @@ enum Job {
 enum Finished {
     Storage(Result<(), String>),
     Claimed(Result<Option<String>, String>),
-    Work(u64, Result<Option<Box<UiSession<Renderer>>>, String>),
+    Work(u64, Result<Option<crate::documents::RecoveryPrepared>, String>),
 }
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
@@ -155,7 +156,14 @@ pub(crate) struct Restored {
     pub identity: (u64,u64),
     pub candidate: Box<UiSession<Renderer>>,
 }
+pub(crate) struct RecoveredPackage {
+    pub token:u64,
+    pub identity:(u64,u64),
+    pub view:layer_ui::PackageView,
+    pub path:PathBuf,
+}
 pub(crate) struct Service {
+    package:Option<RecoveredPackage>,
     restored: Option<Restored>,
     changed: bool,
     state: RecoveryState,
@@ -239,7 +247,7 @@ impl Service {
                                             atomic_write(
                                                 &storage.path(&storage.key)?,
                                                 &stopping,
-                                                |file| project.write(file),
+                                                |mut file| PreparedPackage::prepare(&project, None, &stopping)?.write(&mut file, &stopping),
                                             )?;
                                             Ok(None)
                                         }
@@ -271,6 +279,7 @@ impl Service {
             })
             .map_err(|_| "Could not start recovery worker")?;
         Ok(Self {
+            package:None,
             restored: None,
             changed: true,
             state: Default::default(),
@@ -375,7 +384,7 @@ impl Service {
             // Startup filter validation may still own document replacement. Keep
             // the prepared candidate and its origin until the shared idle check
             // permits adoption; do not turn this transient state into a failure.
-            if matches!(&completed, Finished::Work(_, Ok(Some(_))))
+            if matches!(&completed, Finished::Work(_, Ok(Some(crate::documents::RecoveryPrepared::Editable(_)))))
                 && session.require_document_idle().is_err()
             {
                 self.completed = Some(completed);
@@ -416,9 +425,18 @@ impl Service {
                     }
                 }
                 Finished::Work(token, result) => {
-                    if let Ok(Some(candidate)) = result {
-                        self.restored = Some(Restored { token, identity: self.restore_identity.ok_or("Recovery identity missing")?, candidate });
-                        self.changed = true;
+                    if let Ok(Some(prepared)) = result {
+                        let identity=self.restore_identity.ok_or("Recovery identity missing")?;
+                        if self.cancel.load(Ordering::Acquire) {
+                            if let crate::documents::RecoveryPrepared::Editable(candidate)=prepared {self.queue(Job::RetiredSession(candidate));}
+                            self.complete_package(session,token,Err("Document operation cancelled".into()))?;
+                        } else {
+                            match prepared {
+                                crate::documents::RecoveryPrepared::Editable(candidate)=>self.restored=Some(Restored {token,identity,candidate}),
+                                crate::documents::RecoveryPrepared::Package {view,path}=>self.package=Some(RecoveredPackage {token,identity,view,path}),
+                            }
+                            self.changed=true;
+                        }
                         continue;
                     }
                     if result.is_err() {
@@ -473,6 +491,7 @@ impl Service {
             && self.update.offer.is_none()
             && !self.update.busy
             && self.restored.is_none()
+            && self.package.is_none()
             && self.completed.is_none()
         {
             self.claiming = true;
@@ -529,6 +548,13 @@ impl Service {
         }
     }
     pub fn take_restored(&mut self) -> Option<Restored> { self.restored.take() }
+    pub fn take_package(&mut self)->Option<RecoveredPackage> {self.package.take()}
+    pub fn complete_package(&mut self,session:&mut UiSession<Renderer>,token:u64,result:Result<(),String>)->Result<(),String> {
+        self.restore_identity=None;
+        self.error=result.err();
+        self.event(session,RecoveryEvent::Complete {token,success:false})?;
+        self.next_observation=Instant::now();Ok(())
+    }
     pub fn complete_restore(&mut self, session: &mut UiSession<Renderer>, token: u64, result: Result<(),String>) -> Result<(),String> {
         self.restore_identity = None;
         if result.is_ok() { self.event(session, RecoveryEvent::Observe { document: session.recovery_document(), owned: true })?; }
@@ -552,8 +578,9 @@ impl Service {
     }
     pub fn stop(&mut self) -> Result<(), String> {
         self.cancel.store(true, Ordering::Release);
+        self.package=None;
         if let Some(restored) = self.restored.take() { self.queue(Job::RetiredSession(restored.candidate)); }
-        if let Some(Finished::Work(_, Ok(Some(candidate)))) = self.completed.take() {
+        if let Some(Finished::Work(_, Ok(Some(crate::documents::RecoveryPrepared::Editable(candidate))))) = self.completed.take() {
             self.queue(Job::RetiredSession(candidate));
         }
         while let Some(job) = self.deferred.pop_front() {
@@ -592,6 +619,34 @@ mod tests {
             .set_modified(SystemTime::now() - Duration::from_secs(age))
             .unwrap();
         storage.key.clone()
+    }
+    #[test]
+    fn read_only_recovery_completion_keeps_origin_and_never_acknowledges_restore() {
+        use layer_core::package::{ImmutableBacking,codec::OpenOutcome,preview::Preview};
+        for disposition in 0..3 {
+            for cancelled in [false,true] {
+                let dir=TempDir::new();let key=checkpoint(&dir,0);let (storage,offer)=open(&dir);assert_eq!(offer.as_deref(),Some(key.as_str()));
+                let path=storage.path(&key).unwrap();let bytes=fs::read(&path).unwrap();let source=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes.clone()))).unwrap();
+                let preview=Preview::from_rgba([1,1],Arc::from([16,32,48,255])).unwrap();
+                let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported renderer".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into()},_=>OpenOutcome::Failure{source,reason:"invalid package".into()}};
+                let view=layer_ui::PackageView::new(outcome).unwrap();let mut host=layer_host::NativeHost::new(layer_ui::Platform::Windows).unwrap();
+                let document=host.session.engine().document().clone();let identity=(host.session.state().document_file.epoch,document.revision);
+                let mut state=RecoveryState::default();state.event(RecoveryEvent::Ownership{owned:true}).unwrap();state.event(RecoveryEvent::Offer{key:key.clone(),owned:true}).unwrap();
+                let mut update=state.event(RecoveryEvent::Restore).unwrap();let token=update.work.take().unwrap().token;
+                let (send,_jobs)=mpsc::sync_channel(4);let (_reply,receive)=mpsc::channel();
+                let mut service=Service{package:None,restored:None,changed:false,state,update,send,receive,completed:Some(Finished::Work(token,Ok(Some(crate::documents::RecoveryPrepared::Package{view,path:path.clone()})))),thread:None,cancel:Arc::new(AtomicBool::new(cancelled)),ready:true,closing:false,error:None,next_observation:Instant::now()+Duration::from_secs(15),restore_identity:Some(identity),deferred:VecDeque::new(),seeking:false,claiming:false};
+                service.poll(&mut host.session,false).unwrap();assert!(service.take_restored().is_none());
+                if cancelled {
+                    assert!(service.take_package().is_none());assert!(service.status()["error"].is_string());
+                } else {
+                    let package=service.take_package().unwrap();assert_eq!(package.identity,identity);assert_eq!(package.path,path);
+                    assert_eq!(package.view.preview().is_some(),disposition!=2);let mut copied=Vec::new();package.view.copy_original(&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,bytes);
+                    service.complete_package(&mut host.session,token,Ok(())).unwrap();assert!(service.status()["error"].is_null());
+                }
+                assert_eq!(service.status()["offer"],key);assert_eq!(service.status()["busy"],false);assert_eq!(service.status()["restoring"],false);assert_eq!(host.session.engine().document(),&document);
+                assert_eq!(fs::read(&path).unwrap(),bytes);assert_eq!(service.state.event(RecoveryEvent::Restore).unwrap().work.unwrap().kind,RecoveryWorkKind::Restore{key});
+            }
+        }
     }
     #[test]
     fn live_windows_cannot_claim_each_others_checkpoint() {

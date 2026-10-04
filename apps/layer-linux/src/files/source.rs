@@ -21,14 +21,15 @@ impl SourceProfileHint {
 pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let localization = w.localization().clone();
-    let (workflow, time) = {
+    let (mut workflow, context) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        (SourceWorkflow::begin(session, id)?, session.engine().animation_time())
+        (SourceWorkflow::begin(session, id)?, session.engine().backend().capture_context()?)
     };
+    workflow.context = context.resolve().await?;
     let original = workflow.original.clone();
     let project = workflow.project.clone();
-    let working = project.document.color.space;
+    let working = project.composition().color.space;
     let baked = workflow.adds_layer();
     let workflow = Rc::new(RefCell::new(workflow));
     let original_gpu = w.snapshot_gpu()?;
@@ -60,7 +61,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     hint.set_widget_name("source-profile-hint");
     let hint_state = Rc::new(RefCell::new(None::<SourceProfileHint>));
     content.append(&hint);
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, workflow.borrow().context.clone(), w.view_color(), &w.localization());
     comparison.bind_localization(w);
     content.append(&comparison.widget);
     let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
@@ -146,7 +147,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 Ok(project) => {
                     hint_state.borrow_mut().take();
                     hint.set_visible(false);
-                    comparison.request(project, time);
+                    comparison.request(project);
                 }
                 Err(reason) => {
                     hint.set_label(&reason.message(&w.localization()));

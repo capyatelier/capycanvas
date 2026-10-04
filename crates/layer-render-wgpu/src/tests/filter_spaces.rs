@@ -4,14 +4,13 @@
 use super::*;
 use layer_core::color::RgbSpace;
 use layer_core::{BlendSpace, EffectInstance, EffectSpace, EffectValue};
+use super::native_effects::{effect_document,insert_source};
 
 const EXTENT: [u32; 2] = [96, 64];
 type Image = Vec<[f64; 4]>;
 
-fn photo(pixel: impl Fn(u32, u32) -> [u8; 4]) -> Layer {
-    let mut layer = Layer::paint(LayerId(1), "Photo");
-    layer.source = Some(layer_core::color::source::rgba8_source(EXTENT, pixel));
-    layer
+fn photo(pixel: impl Fn(u32,u32)->[u8;4]) -> Arc<layer_core::color::source::SourceImage> {
+    layer_core::color::source::rgba8_source(EXTENT,pixel)
 }
 
 fn edge(x: u32, _: u32) -> [u8; 4] {
@@ -23,24 +22,24 @@ fn texture(x: u32, y: u32) -> [u8; 4] {
     [if x < 48 { 40 } else { 215 }, (128. + 100. * wave) as u8, ((x * 7 + y * 13) % 256) as u8, 255]
 }
 
-fn filter(id: &str, values: &[(&str, f32)], space: EffectSpace) -> Layer {
+fn filter(id: &str, values: &[(&str, f32)], space: EffectSpace) -> EffectInstance {
     let mut program = (*fixture(id).program()).clone();
     program.space = space;
     let mut effect = EffectInstance::new(Arc::new(program));
     for (key, value) in values {
         effect.set(key, EffectValue::Number(*value)).unwrap();
     }
-    let mut layer = Layer::paint(LayerId(2), id);
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(effect));
-    layer
+    effect
 }
 
 /// The composite, as the document's blend space holds it.
-fn composite(space: BlendSpace, layers: &[Layer]) -> Image {
+fn composite(space: BlendSpace, effects: &[EffectInstance], source: Arc<layer_core::color::source::SourceImage>) -> Image {
+    let mut document=effect_document(effects,EXTENT,Default::default());
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend=space;
+    insert_source(&mut document,"Photo",source);
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let view = crate::test_support::view(EXTENT) ;
-    let packet = FramePacket { view, reset_layers: true, blend_space: space, ..packet(layers, EXTENT) };
+    let view = crate::test_support::view(EXTENT);
+    let packet = FramePacket { view, reset_layers: true, blend_space: space, ..packet(document.scene(), EXTENT) };
     r.submit(packet).unwrap();
     while layer_render::CanvasRenderer::has_pending_work(&r) {
         r.submit(FramePacket { reset_layers: false, composite_all: false, ..packet }).unwrap();
@@ -101,14 +100,14 @@ fn assert_matches(label: &str, actual: &Image, expected: &Image, margin: i64, to
 fn gaussian_blur_gives_the_photoshop_midpoint_in_perceptual_documents() {
     let encode = |v: f64| RgbSpace::Srgb.encode(v);
     for (space, expected) in [(BlendSpace::Perceptual, 127.5), (BlendSpace::Linear, 188.)] {
-        let layers = [filter("gaussian_blur", &[("sigma", 3.)], EffectSpace::Blending), photo(edge)];
-        let blurred = composite(space, &layers);
+        let layers = [filter("gaussian_blur", &[("sigma", 3.)], EffectSpace::Blending)];
+        let blurred = composite(space, &layers, photo(edge));
         let row = i64::from(EXTENT[1] / 2);
         let middle = i64::from(EXTENT[0] / 2);
         let [left, right] = [at(&blurred, middle - 1, row)[1], at(&blurred, middle, row)[1]];
         let code = 255. * if space == BlendSpace::Perceptual { (left + right) / 2. } else { encode((left + right) / 2.) };
         assert!((code - expected).abs() <= 1., "{space:?}: the edge's midpoint is {code}, not {expected}");
-        let original = composite(space, &layers[1..]);
+        let original = composite(space, &[], photo(edge));
         assert_matches(&format!("{space:?} blur"), &blurred, &gaussian(&original, 3.), 12, 1e-4);
     }
 }
@@ -135,7 +134,7 @@ const UNSHARP: [(&str, f32); 3] = [("sigma", 1.5), ("amount", 100.), ("threshold
 #[test]
 fn declared_filters_match_encoded_references() {
     let space = BlendSpace::Perceptual;
-    let original = composite(space, &[photo(texture)]);
+    let original = composite(space, &[], photo(texture));
     let blur = |sigma| gaussian(&original, sigma);
     let unsharp = unsharp(&original);
     let high_pass = {
@@ -178,7 +177,7 @@ fn declared_filters_match_encoded_references() {
         ("denoise", &[("radius", 2.), ("strength", 25.)], denoise, 4),
     ] {
         assert_eq!(fixture(id).program().space, EffectSpace::Blending, "{id} follows the document's Blending");
-        let actual = composite(space, &[filter(id, values, EffectSpace::Blending), photo(texture)]);
+        let actual = composite(space, &[filter(id, values, EffectSpace::Blending)], photo(texture));
         assert_matches(id, &actual, &expected, margin, 1e-4);
     }
 }
@@ -186,11 +185,10 @@ fn declared_filters_match_encoded_references() {
 #[test]
 fn adjacent_filters_that_follow_the_documents_blending_share_their_image() {
     let space = BlendSpace::Perceptual;
-    let original = composite(space, &[photo(texture)]);
-    let mut blur = filter("gaussian_blur", &[("sigma", 2.)], EffectSpace::Blending);
-    blur.id = LayerId(3);
-    let layers = [blur, filter("unsharp_mask", &UNSHARP, EffectSpace::Blending), photo(texture)];
-    assert_matches("blur over unsharp mask", &composite(space, &layers), &gaussian(&unsharp(&original), 2.), 16, 1e-4);
+    let original = composite(space, &[], photo(texture));
+    let blur = filter("gaussian_blur", &[("sigma", 2.)], EffectSpace::Blending);
+    let layers = [blur, filter("unsharp_mask", &UNSHARP, EffectSpace::Blending)];
+    assert_matches("blur over unsharp mask", &composite(space, &layers, photo(texture)), &gaussian(&unsharp(&original), 2.), 16, 1e-4);
 }
 
 #[test]
@@ -208,22 +206,19 @@ fn light_filters_and_undeclared_filters_read_linear_values() {
         program.entry = "halve".into();
         program.wgsl = "fn halve(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let s=fx_sample(p);return vec4<f32>(s.rgb*.5,s.a);}".into();
         program.passes = vec![layer_core::EffectPass { entry: "halve".into(), sampling: layer_core::EffectSampling::Neighborhood { radius: 0 } }].into();
-        let mut layer = Layer::paint(LayerId(2), "Halve");
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-        layer
+        EffectInstance::new(Arc::new(program))
     };
     let decode = |image: &Image| map(image, |_, p| {
         if p[3] <= 0. { return p; }
         std::array::from_fn(|c| if c == 3 { p[3] } else { RgbSpace::Srgb.decode(p[c] / p[3]) * p[3] })
     });
-    let linear = composite(BlendSpace::Linear, &[halve(EffectSpace::Linear), photo(texture)]);
-    let perceptual = composite(BlendSpace::Perceptual, &[halve(EffectSpace::Linear), photo(texture)]);
+    let linear = composite(BlendSpace::Linear, &[halve(EffectSpace::Linear)], photo(texture));
+    let perceptual = composite(BlendSpace::Perceptual, &[halve(EffectSpace::Linear)], photo(texture));
     assert_matches("undeclared", &decode(&perceptual), &linear, 0, 2e-6);
-    let original = composite(BlendSpace::Perceptual, &[photo(texture)]);
-    let encoded = composite(BlendSpace::Perceptual, &[halve(EffectSpace::Blending), photo(texture)]);
+    let original = composite(BlendSpace::Perceptual, &[], photo(texture));
+    let encoded = composite(BlendSpace::Perceptual, &[halve(EffectSpace::Blending)], photo(texture));
     assert_matches("declared", &encoded, &map(&original, |_, p| [p[0] / 2., p[1] / 2., p[2] / 2., p[3]]), 0, 1e-6);
-    let blurred = composite(BlendSpace::Perceptual, &[filter("gaussian_blur", &[("sigma", 3.)], EffectSpace::Linear), photo(edge)]);
+    let blurred = composite(BlendSpace::Perceptual, &[filter("gaussian_blur", &[("sigma", 3.)], EffectSpace::Linear)], photo(edge));
     let row = i64::from(EXTENT[1] / 2);
     let middle = i64::from(EXTENT[0] / 2);
     let code = 255. * RgbSpace::Srgb.encode((RgbSpace::Srgb.decode(at(&blurred, middle - 1, row)[1]) + RgbSpace::Srgb.decode(at(&blurred, middle, row)[1])) / 2.);

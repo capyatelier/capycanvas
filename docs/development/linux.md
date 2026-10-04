@@ -46,6 +46,22 @@ the shared session and schedules frames against Wayland presentation timing,
 subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),
 and `files.rs` supplies native dialogs and project/photo transport.
 
+Queued frames retain immutable typed scene snapshots and shared source roots.
+Save, recovery, export, clipboard and color/source comparisons enqueue a capture
+barrier beside those roots. File workers wait for the preceding successful GPU
+submission and use its integrated effect phases; the GTK input thread keeps
+processing events. Native saves write source-only packages without a preview.
+
+Imported packages retain their original backing through tab admission, embedded
+effect validation and asynchronous GPU startup. A failed preparation restores the
+current drawing and presents the shared `PackageView`; cancellation stays a
+cancelled open. Unsupported and recovered packages also retain their original
+backing in that view. GTK presents the bounded preview and shared reason in a read-only
+dialog. Copy Original File writes the retained package bytes atomically on a
+worker. Export Preview Image writes the verified PNG to a separate destination
+and rejects the original path and filesystem aliases before publication. Closing
+the dialog leaves the editable drawing and recovery source intact.
+
 ## Native text input
 
 Editable submission paths use `input::guard_entry_activation` for entries and

@@ -31,10 +31,10 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
                 app.state()["requests"],unsafe { &*app.0 }.host.session.require_document_idle(),unsafe { &*app.0 }.host.session.engine().can_park());
             app.draw_until_idle();
             let document = unsafe { &*app.0 }.host.session.engine().document();
-            assert_eq!(document.color, options.color);
-            assert_eq!([document.width, document.height], options.extent);
-            assert_eq!(document.layers[1].visible, options.background == DocumentBackground::White);
-            assert!(document.layers.iter().all(|layer| raster_samples(&layer.raster).0.is_empty()));
+            assert_eq!(document.composition().color, options.color);
+            assert_eq!([document.composition().size[0], document.composition().size[1]], options.extent);
+            assert_eq!(occurrence_at(document, 1).visible, options.background == DocumentBackground::White);
+            assert!(document.artwork.paint.iter().all(|(_, _, source)| raster_samples(&source.raster).0.is_empty()));
             assert!(!app.state()["document_file"]["modified"].as_bool().unwrap());
             assert!(!app.pixels().is_empty());
         };
@@ -98,7 +98,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             .project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
             .unwrap();
             let mut file = fixtures::tempfile();
-            project.write(&mut file).unwrap();
+            write_document(&project, &mut file);
             file.rewind().unwrap();
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
@@ -118,7 +118,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             );
             app.draw_until_idle();
             assert_eq!(
-                unsafe { &*app.0 }.host.session.engine().document().color,
+                unsafe { &*app.0 }.host.session.engine().document().composition().color,
                 color
             );
             let blank = app.pixels();
@@ -134,11 +134,9 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 painted != blank,
                 "{platform}/{space:?}: actual stroke required"
             );
-            let mut document = unsafe { &*app.0 }.host.session.engine().document().clone();
-            let samples: Vec<_> = document
-                .layers
-                .iter()
-                .flat_map(|layer| raster_samples(&layer.raster).0.into_values())
+            let document = unsafe { &*app.0 }.host.session.engine().document().clone();
+            let samples: Vec<_> = document.artwork.paint.iter()
+                .flat_map(|(_, _, source)| raster_samples(&source.raster).0.into_values())
                 .collect();
             assert!(!samples.is_empty());
             assert!(
@@ -160,9 +158,6 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             assert!(app.pixels() == blank);
             app.invoke("redo");
             app.draw_until_idle();
-            // History advances the document revision while restoring every
-            // retained sample and all other document metadata exactly.
-            document.revision = unsafe { &*app.0 }.host.session.engine().document().revision;
             assert_project_document(
                 unsafe { &*app.0 }.host.session.engine().document(),
                 &document,
@@ -185,8 +180,8 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                     save.error()
                 );
                 file.rewind().unwrap();
-                let saved = layer_core::Project::read(&mut file, Default::default()).unwrap();
-                assert_project_document(&saved.document, &document);
+                let saved = read_document(&mut file);
+                assert_saved_document(&saved, &document);
                 let restored = App::new(platform);
                 unsafe { &mut *restored.0 }.host.session.renderer_mut().0 = Some(native_renderer());
                 restored.draw_until_idle();
@@ -212,7 +207,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 };
                 assert_eq!(result, 0);
                 restored.draw_until_idle();
-                assert_project_document(
+                assert_saved_document(
                     unsafe { &*restored.0 }.host.session.engine().document(),
                     &document,
                 );
@@ -223,7 +218,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                 let owner = unsafe { &mut *restored.0 };
                 owner.metal.install_renderer(&mut owner.host, gpu.into()).unwrap();
                 restored.draw_until_idle();
-                assert_project_document(
+                assert_saved_document(
                     unsafe { &*restored.0 }.host.session.engine().document(),
                     &document,
                 );

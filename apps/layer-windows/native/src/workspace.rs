@@ -74,6 +74,7 @@ pub fn query(host: &mut NativeHost, json: &str) -> Result<CapyPreview, String> {
 
 #[cfg(test)]
 mod tests {
+    use crate::test_support::*;
     use super::*;
     fn metadata(packet: CapyPreview) -> Value {
         let owned = Box::into_raw(Box::new(packet));
@@ -99,9 +100,9 @@ mod tests {
             },
         })
         .unwrap();
-        let group = host.session.engine().document().active_layer.0;
+        let group = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         let epoch = host.session.state().document_file.epoch;
-        let before = host.session.engine().document().layers.clone();
+        let before = host.session.engine().document().clone();
         for requested_epoch in [epoch, epoch + 1] {
             let reply = metadata(query(&mut host, &json!({
                 "type":"layer_drop", "epoch":requested_epoch, "id":1, "target":group, "fraction":0.5
@@ -116,7 +117,7 @@ mod tests {
                     Value::Null
                 }
             );
-            assert_eq!(host.session.engine().document().layers, before);
+            assert_authored_eq(host.session.engine().document(),&before);
         }
         host.dispatch(UiAction::Invoke {
             command: layer_ui::CommandId::Undo,
@@ -126,7 +127,7 @@ mod tests {
             host.session
                 .engine()
                 .document()
-                .layer(layer_core::LayerId(group))
+                .scene().occurrence(layer_ui::occurrence_handle(group).unwrap())
                 .is_none()
         );
     }

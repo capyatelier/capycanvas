@@ -25,8 +25,8 @@ impl WgpuRasterizer {
         let layer_index = self
             .paint_layers
             .iter()
-            .position(|layer| layer.id == batch.layer_id)
-            .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
+            .position(|layer| layer.id == batch.target)
+            .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
         if !preview
             && batch.stroke_start
             && plan.reservoir
@@ -150,9 +150,9 @@ impl WgpuRasterizer {
                     .pages
                     .iter()
                     .any(|p| p.coordinate == job.coordinate)
-                && (self.tiled_sources.contains_key(&batch.layer_id)
+                && (self.tiled_sources.contains_key(&batch.target)
                     || self
-                        .native_color_tile(batch.layer_id, job.coordinate)?
+                        .native_color_tile(batch.target, job.coordinate)?
                         .is_some());
             if borrowed {
                 self.encode_dry_material_jobs(encoder, batch_index, batch, &compute_jobs);
@@ -307,7 +307,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(
                 1,
                 self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, job.coordinate)],
+                &[self.layer_target_offset(batch.target, job.coordinate)],
             );
             pass.set_bind_group(2, &source_bind_group, &[record_offset]);
             pass.set_bind_group(
@@ -345,10 +345,10 @@ impl WgpuRasterizer {
                     let center = batch.style.brush_to_layer.map(last.center);
                     let coordinate = [
                         (center.x.max(0.0) as u32 / PAGE_SIZE).min(
-                            self.target_extent(batch.layer_id)[0].saturating_sub(1) / PAGE_SIZE,
+                            self.target_extent(batch.target)[0].saturating_sub(1) / PAGE_SIZE,
                         ),
                         (center.y.max(0.0) as u32 / PAGE_SIZE).min(
-                            self.target_extent(batch.layer_id)[1].saturating_sub(1) / PAGE_SIZE,
+                            self.target_extent(batch.target)[1].saturating_sub(1) / PAGE_SIZE,
                         ),
                     ];
                     self.material_bind_group(batch, coordinate, false, MaterialInputs::Neighborhood, encoder)

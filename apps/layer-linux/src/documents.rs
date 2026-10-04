@@ -6,7 +6,7 @@ use crate::{
 };
 use adw::prelude::*;
 use gtk::{gdk, gio, glib};
-use layer_core::{Project, raster_storage::RetainedTiles};
+use layer_core::{Document, raster_storage::RetainedTiles};
 use layer_ui::{DocumentLocation, DocumentTabs, DocumentSessions, DocumentTabLabel as Label};
 use std::{
     cell::{Cell, RefCell},
@@ -16,12 +16,13 @@ use std::{
 };
 
 type Prepared = (
-    Project,
+    Document,
     Option<DocumentLocation>,
     Option<std::path::PathBuf>,
 );
 struct Queued {
     prepared: Prepared,
+    imported: Option<layer_ui::ImportedDocument>,
     // Claim synchronously while the recovery offer still holds its lease.
     _recovery_lease: Option<Rc<Recovery>>,
 }
@@ -722,6 +723,12 @@ impl Documents {
         true
     }
     pub fn enqueue(&self, w: &Rc<Workspace>, prepared: Prepared) {
+        self.enqueue_prepared(w, prepared, None);
+    }
+    pub fn enqueue_imported(&self, w: &Rc<Workspace>, imported: layer_ui::ImportedDocument, location: Option<DocumentLocation>, origin: Option<std::path::PathBuf>) {
+        self.enqueue_prepared(w, (imported.project.clone(), location, origin), Some(imported));
+    }
+    fn enqueue_prepared(&self, w: &Rc<Workspace>, prepared: Prepared, imported: Option<layer_ui::ImportedDocument>) {
         // File-launch producer awaits each admission; native file requests can
         // have at most one prepared successor. Never accumulate decoded images.
         if !self.pending.borrow().is_empty() || self.closing_window.get() {
@@ -742,6 +749,7 @@ impl Documents {
         };
         self.pending.borrow_mut().push_back(Queued {
             prepared,
+            imported,
             _recovery_lease: lease,
         });
         self.drain(w);
@@ -762,7 +770,7 @@ impl Documents {
                 let prepared = w.documents.pending.borrow_mut().pop_front();
                 if let Some(queued) = prepared {
                     let _lease = queued._recovery_lease;
-                    if let Err(error) = w.documents.open(&w, queued.prepared).await {
+                    if let Err(error) = w.documents.open_prepared(&w, queued.prepared, queued.imported, false).await {
                         w.changed(Err(error));
                     }
                 }
@@ -930,11 +938,24 @@ impl Documents {
         self.finish_switch(w, error);
         Ok(())
     }
-    pub async fn open(
-        &self,
-        w: &Rc<Workspace>,
-        (project, location, origin): Prepared,
-    ) -> Result<(), String> {
+    pub async fn open_imported(&self, w: &Rc<Workspace>, imported: layer_ui::ImportedDocument, location: Option<DocumentLocation>, origin: Option<std::path::PathBuf>) -> Result<(), String> {
+        self.open_prepared(w, (imported.project.clone(), location, origin), Some(imported), false).await
+    }
+    pub async fn open_initial_imported(&self, w: &Rc<Workspace>, imported: layer_ui::ImportedDocument, location: Option<DocumentLocation>) -> Result<(), String> {
+        self.open_prepared(w, (imported.project.clone(), location, None), Some(imported), true).await
+    }
+    async fn open_prepared(&self, w: &Rc<Workspace>, (project, location, origin): Prepared, imported: Option<layer_ui::ImportedDocument>, replace_initial: bool) -> Result<(), String> {
+        let original = origin.clone().or_else(|| location.as_ref().and_then(|location| gio::File::for_uri(&location.uri).path()));
+        if imported.is_some() {
+            let deadline = Instant::now() + Duration::from_secs(120);
+            while w.gpu.borrow().is_none() {
+                if !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get() { return Err("Opening cancelled".into()); }
+                if Instant::now() >= deadline {
+                    return self.show_unsupported(w, imported.as_ref(), original, "Project canvas preparation timed out".into()).await;
+                }
+                glib::timeout_future(Duration::from_millis(20)).await;
+            }
+        }
         if !w.window.is_visible() || self.closing_window.get() {
             return Err(layer_ui::bootstrap_view(&w.localization()).editor_closed.to_string());
         }
@@ -943,7 +964,10 @@ impl Documents {
             self.trim().await;
         }
         let active = w.gpu.borrow().as_ref().map(|g| g.session.retained_document_tiles()).unwrap_or_default();
-        self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization()))?;
+        let admission = self.model.borrow().admit(&active, &project).map_err(|reason| reason.message(&w.localization()));
+        if let Err(reason) = admission {
+            return self.show_unsupported(w, imported.as_ref(), original, reason).await;
+        }
         self.prepare_switch(w).await?;
         let mut previous = self.park(w).ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?;
         if self.closing_window.get() || self.cancel_open.get() {
@@ -953,13 +977,19 @@ impl Documents {
             return Err("Opening was cancelled because the window is closing".into());
         }
         let candidate = GpuCanvas::with_project_localized(&w.area, Some((project, location)), w.localization(), Some(previous.session.state().settings.clone()));
+        let candidate = match candidate {
+            Ok(mut next) if imported.is_some() => match next.prepare_import(|| !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get()).await {
+                Ok(()) => Ok(next), Err(error) => Err(error),
+            },
+            candidate => candidate,
+        };
         let mut next = match candidate {
             Ok(next) => next,
             Err(error) => {
                 let restart_error = previous.reattach(&w.area).err();
                 *w.gpu.borrow_mut() = Some(previous);
                 self.finish_switch(w, restart_error);
-                return Err(error);
+                return self.show_unsupported(w, imported.as_ref(), original, error).await;
             }
         };
         let error = next.session.inherit_window_state(&previous.session).err()
@@ -972,13 +1002,23 @@ impl Documents {
         if let Err(e) = recovery.set_origin(origin) {
             eprintln!("Recovery ownership: {e}");
         }
-        let tiles = previous.session.retained_document_tiles();
-        self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization());
+        if replace_initial {
+            w.recovery().discard();
+            drop(previous);
+        } else {
+            let tiles = previous.session.retained_document_tiles();
+            self.model.borrow_mut().append(Parked { canvas: previous, recovery: w.recovery() }, tiles, &w.localization());
+        }
         *w.gpu.borrow_mut() = Some(next);
         *w.recovery.borrow_mut() = recovery;
         self.trim().await;
         self.finish_switch(w, error);
         Ok(())
+    }
+    async fn show_unsupported(&self, w: &Rc<Workspace>, imported: Option<&layer_ui::ImportedDocument>, original: Option<std::path::PathBuf>, reason: String) -> Result<(), String> {
+        if !w.window.is_visible() || self.closing_window.get() || self.cancel_open.get() { return Err(reason); }
+        let Some(outcome) = imported.and_then(|imported| imported.preserve_unsupported(reason.clone())) else { return Err(reason); };
+        crate::files::open::show_package(&w.window, layer_ui::PackageView::new(outcome)?, original, &w.localization()).await
     }
     async fn trim(&self) {
         #[cfg(test)]
@@ -1084,6 +1124,17 @@ impl Documents {
             p.resident_bytes(),
             p.parked().all(|(_, p)| p.owner.canvas.session.engine().backend().worker_is_joined()),
         )
+    }
+}
+
+#[cfg(test)]
+impl Documents {
+    pub async fn open(
+        &self,
+        w: &Rc<Workspace>,
+        prepared: Prepared,
+    ) -> Result<(), String> {
+        self.open_prepared(w, prepared, None, false).await
     }
 }
 

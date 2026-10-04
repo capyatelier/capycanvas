@@ -13,7 +13,7 @@ fn fullscreen_prediction_with_wide_brushes_and_independent_clocks() {
                 surface.document_to_surface = [zoom, 0., 0., zoom, 0., 0.];
                 let (mut input, mut engine) = engine_with(
                     RecordingRenderer::default(),
-                    Document::new("full-screen prediction", 3840, 2160, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+                    Document::new(layer_core::authored::PortableId::random(), 3840, 2160, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
                     surface,
                     transform,
                 );

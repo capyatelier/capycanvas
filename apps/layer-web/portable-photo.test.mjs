@@ -11,7 +11,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>60000)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1600)));else setTimeout(poll,30)}catch(e){reject(e)}}poll()})`);
   const invoke=async command=>{await wait(`layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const click=label=>evaluate(`(()=>{const b=[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===${JSON.stringify(label)});if(!b||b.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});b.click()})()`);
-  const set=(label,value)=>evaluate(`(()=>{const n=document.querySelector('dialog[open] [aria-label="'+${JSON.stringify(label)}+'"]');if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
+  const set=(label,value)=>evaluate(`(()=>{const d=document.querySelector('dialog[open]'),selector='[aria-label="'+${JSON.stringify(label)}+'"]',n=d.querySelector('select'+selector+',input:not([type="range"])'+selector);if(!n||n.disabled)throw Error('Missing enabled '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('input',{bubbles:true}));n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const idle=()=>wait('!layerApp.state().document_file.busy&&layerApp.app.brush_ready()');
   const open=async name=>{
     const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
@@ -66,7 +66,7 @@ export async function checkPortablePhoto({call,evaluate,settle}) {
         await set('Transparency','White');
       }
       await set('Quality',90);
-      await set('Pixel size','Fit');await set('Maximum width',32);await set('Maximum height',24);
+      await set('Pixel size','Fit');await set('Maximum width (px)',32);await set('Maximum height (px)',24);
       await set('Resolution metadata','Ppi');await set('Pixels per inch',144);
       await preview();
       const hdr=await outputPixels();await set('Preview rendition','sdr');const sdr=await outputPixels();

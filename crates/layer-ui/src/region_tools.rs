@@ -2,7 +2,7 @@
 //! source choice, cancellation, stale-result handling and edits stay here.
 use crate::localization::{Localizer, MessageId};
 use super::*;
-use layer_core::{Edit, Point, Selection};
+use layer_core::{Point, Selection, authored::{OccurrenceHandle,SceneScope,SourceTarget}};
 use layer_render::RegionRequest;
 
 pub(super) struct RegionTools {
@@ -18,12 +18,14 @@ pub(super) struct RegionTools {
 struct Target {
     generation: u64,
     revision: u64,
-    layer: LayerId,
+    layer: Option<OccurrenceHandle>,
+    source: Option<SourceTarget>,
+    owner: u64,
     purpose: Purpose,
 }
 enum Purpose {
     Region {
-        operation: Option<layer_core::LayerOperationKind>,
+        operation: Option<layer_core::RasterOperationKind>,
         color: Option<layer_core::color::RgbColor>,
         basis: layer_core::Affine,
     },
@@ -165,10 +167,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let doc = self.engine.document();
                 let mask_target = self.selection_masks.target().filter(|_| fill);
-                let source_layer = if mask_target.is_some() { self.selection_masks.artwork().unwrap_or(doc.active_layer) }
-                    else { doc.drawing_target().unwrap_or(doc.active_target()) };
+                let source_target=if mask_target.is_some() {
+                    self.selection_masks.artwork().and_then(|h|doc.scene().source_target(h))
+                } else {doc.drawing_target().or(doc.active_target())};
                 let basis = layer_core::Affine::IDENTITY;
-                let extent = [doc.width, doc.height];
+                let extent = doc.composition().size;
                 if !point.x.is_finite()
                     || !point.y.is_finite()
                     || point.x < 0.
@@ -187,16 +190,28 @@ impl<R: CanvasRenderer> UiSession<R> {
                     contiguous,
                     selection: if fill { None } else { self.selection_refinement(basis) },
                     source: match source {
-                        RegionSource::Visible => layer_render::RegionSource::Composite,
+                        RegionSource::Visible => layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::All},
                         RegionSource::Editing => {
-                            layer_render::RegionSource::Layer(source_layer)
+                            if let Some(target) = source_target {
+                                layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:SceneScope::Raw(target)}
+                            } else {
+                                let Some(handle) = doc.working.occurrence.filter(|handle| doc.scene().effect(*handle).is_some_and(|effect| effect.constant_color().is_some())) else { return; };
+                                let mut snapshot = doc.snapshot();
+                                let occurrence = std::sync::Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(handle).unwrap();
+                                occurrence.visible = true;
+                                occurrence.opacity = 1.;
+                                occurrence.blend = layer_core::LayerBlend::Normal;
+                                occurrence.clipped = false;
+                                occurrence.mask = None;
+                                layer_render::RegionSource::Scene {snapshot,scope:SceneScope::Members(vec![handle].into())}
+                            }
                         }
                         RegionSource::Reference => {
-                            if doc.reference_layers.is_empty() {
+                            if doc.scene().references().is_empty() {
                                 self.notify_missing_reference();
                                 return;
                             }
-                            layer_render::RegionSource::Layers(doc.reference_snapshot())
+                            layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:doc.reference_scope()}
                         }
                     },
                     position: [point.x as u32, point.y as u32],
@@ -207,7 +222,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         ..self.region_tools.refinement
                     },
                     limit: if fill && mask_target.is_none() {
-                        doc.selection.clone().map(std::sync::Arc::new)
+                        doc.working.selection.clone().map(std::sync::Arc::new)
                     } else {
                         None
                     },
@@ -237,7 +252,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.region_tools.target = Some(Target {
             generation: request.request_id,
             revision: doc.revision,
-            layer: doc.active_layer,
+            layer: doc.working.occurrence,
+            source:doc.working.target,
+            owner:doc.owner,
             purpose,
         });
         self.region_tools.queued = Some(request);
@@ -277,7 +294,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             });
             let result = result.map_err(error)?;
             let doc = self.engine.document();
-            if let Some(target) = target.filter(|t| doc.revision == t.revision && doc.active_layer == t.layer) {
+            if let Some(target) = target.filter(|t| doc.owner == t.owner && doc.revision == t.revision && doc.working.occurrence == t.layer && doc.working.target == t.source) {
                 match target.purpose {
                     Purpose::Tonal => {
                         self.tonal_result(result)?;
@@ -302,7 +319,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         if let Some(operation) = operation {
                             self.paint_operation(Some(selection), operation, color.as_slice())?;
                         } else {
-                            self.layer_edit(Edit::SetSelection(Some(selection)))?;
+                            self.set_mask_coverage(layer_core::SelectionTarget::Current,selection)?;
                         }
                     }
                 }

@@ -123,6 +123,7 @@ fn replace_when_available(
 }
 #[cfg(test)]
 mod tests {
+    use crate::test_support::*;
     use super::*;
     use crate::test_support::TempDir;
     use std::fs::File;
@@ -132,7 +133,7 @@ mod tests {
         let path = directory.path.join("drawing.capy");
         let cancel = AtomicBool::new(false);
         let project = layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        atomic_write(&path, &cancel, |f| project.write(f)).unwrap();
+        atomic_write(&path, &cancel, |f| write_document(&project,f)).unwrap();
         let before = fs::read(&path).unwrap();
         let error = atomic_write(&path, &cancel, |f| {
             f.write_all(b"incomplete").unwrap();
@@ -154,11 +155,8 @@ mod tests {
         assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         cancel.store(false, Ordering::Release);
         let next = layer_ui::new_drawing(40, 30, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        atomic_write(&path, &cancel, |f| next.write(f)).unwrap();
-        assert_eq!(
-            layer_core::Project::read(File::open(&path).unwrap(), Default::default()).unwrap(),
-            next
-        );
+        atomic_write(&path, &cancel, |f| write_document(&next,f)).unwrap();
+        assert_authored_eq(&read_document(File::open(&path).unwrap(), Default::default()).unwrap(),&next);
     }
     #[test]
     fn failed_replacement_and_unwind_remove_only_the_reserved_temporary() {
@@ -210,7 +208,7 @@ mod tests {
             let expected = project.clone();
             let worker = std::thread::spawn(move || {
                 let result = atomic_write(&output, &state, |file| {
-                    project.write(file)?;
+                    write_document(&project,file)?;
                     ready.send(()).unwrap();
                     Ok(())
                 });
@@ -235,11 +233,7 @@ mod tests {
                 assert_eq!(fs::read(&path).unwrap(), b"previous destination");
             } else {
                 result.unwrap();
-                assert_eq!(
-                    layer_core::Project::read(File::open(&path).unwrap(), Default::default())
-                        .unwrap(),
-                    expected
-                );
+                assert_authored_eq(&read_document(File::open(&path).unwrap(), Default::default()).unwrap(),&expected);
             }
             assert_eq!(fs::read_dir(&directory.path).unwrap().count(), 1);
         }

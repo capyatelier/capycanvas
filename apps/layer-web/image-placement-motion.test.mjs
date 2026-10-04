@@ -8,17 +8,18 @@ const summary=values=>{
   const v=values.slice().sort((a,b)=>a-b),p=q=>v[Math.round((v.length-1)*q)];
   return {count:v.length,p50:p(.5),p95:p(.95),max:v.at(-1)};
 };
-export const sourceIdentity=m=>m.tiled_sources.images.map(image=>({...image,tiles:image.tiles.map(t=>{const {offset,...blob}=m.blobs[t.blob];return {...t,blob};})}));
-export const placementSave=({evaluate,invoke,idle})=>async()=>{await invoke('save_document_as');await idle();return evaluate(`(()=>{const b=placementTest.saved;return JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));})()`);};
+import {readPackage,packageOccurrences,packageObject,packageResources,rasterIdentity,sourceIdentity} from './package-fixture.test.mjs';
+export {sourceIdentity} from './package-fixture.test.mjs';
+export const placementSave=({evaluate,invoke,idle})=>async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'placementTest.saved');};
 
 // Hardware WebGPU execution and host frame timings. CDP supplies real browser
 // pointer input; these numbers do not claim physical pen-to-photon latency.
 export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,baseline,loadingMs,hardware,readMemory}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/image-placement/web-motion';await mkdir(directory,{recursive:true});
   const report={...hardware??{cpu:cpus()[0]?.model,gpu:(await call('SystemInfo.getInfo',{},null)).gpu.devices},loading_ms:loadingMs,runs:[]};
-  const sources=sourceIdentity(baseline),layers=baseline.document.layers.slice(0,sources.length);
+  const sources=sourceIdentity(baseline),layers=(await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers,(_,v)=>typeof v==="bigint"?Number(v):v))')).slice(0,sources.length);
+  const originals=packageOccurrences(baseline).filter(o=>o.data.content.paint).map(o=>packageObject(baseline,o.data.content.paint).data.original).filter(Boolean);
   let profileIndex=0;
-  const rasterIdentity=m=>m.rasters.map(r=>({...r,tiles:r.tiles.map(t=>({...t,blob:m.blobs[t.blob].digest}))}));
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const screen=async(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
   const pointer=async(type,p,device='pen')=>{
@@ -74,7 +75,7 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
       for(let i=0;i<layers.length;i++)await send({type:'set_layer_visibility',id:layers[i].id,visible:i===index});
       await send({type:'layer',action:{op:'select',id:layers[index].id,mask:false}});
       await invoke('scale_rotate');
-      const [w,h]=sources[index].extent,scale=Math.min(1,2000/w,1500/h)*factor;
+      const [w,h]=originals[index].extent,scale=Math.min(1,2000/w,1500/h)*factor;
       await send({type:'set_tool_setting',id:'transform_width',value:scale});
       const entry={extent:[w,h],factor,translation:[],drawing:null};
       for(const device of ['mouse','touch','pen'])entry.translation.push(await motion(device,device==='pen'?'measure':'input'));
@@ -84,7 +85,7 @@ export async function measurePlacedPhotos({call,evaluate,settle,invoke,save,base
       await send({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[1,0,.7,.5]}}});
       entry.drawing=await motion('pen','measure');
       const painted=await save();assert.deepEqual(sourceIdentity(painted),sources,'Drawing never changes original source samples');
-      assert.ok(painted.blobs.length>baseline.blobs.length,'Drawing records layer-local paint');
+      assert.ok(packageResources(painted,'capy.raster-tile/1').length>packageResources(baseline,'capy.raster-tile/1').length,'Drawing records layer-local paint');
       await invoke('undo');const undone=await save();await invoke('redo');const redone=await save();
       assert.notDeepEqual(rasterIdentity(undone),rasterIdentity(redone),'Undo removes the drawing');assert.deepEqual(rasterIdentity(painted),rasterIdentity(redone));
       report.runs.push(entry);await writeFile(join(directory,'motion.json'),JSON.stringify(report,null,2));

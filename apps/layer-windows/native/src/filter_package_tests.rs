@@ -1,3 +1,4 @@
+use crate::test_support::*;
 use super::*;
 use crate::test_support::TempDir;
 use std::{
@@ -76,10 +77,7 @@ fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
     assert_eq!(effect.choice("domain"), Some("Log HDR"));
     let mut project = layer_ui::new_drawing(64, 48,
         &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    let mut layer = layer_core::Layer::paint(layer_core::LayerId(3), "Literal filter name");
-    layer.effect = Some(effect.into());
-    project.document.layers.insert(0, layer);
-    project.document.active_layer = layer_core::LayerId(3);
+    insert_effect(&mut project,"Literal filter name",effect);
     let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
     native.session = layer_ui::UiSession::from_project(layer_host::Renderer(None), project,
         None, [64, 48], layer_ui::Platform::Windows).unwrap();
@@ -341,7 +339,7 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
             },
         })
         .unwrap();
-    let active = native.session.engine().document().active_layer.0;
+    let active = native.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
     native
         .dispatch(UiAction::Effect {
             action: EffectAction::Set {
@@ -454,21 +452,7 @@ fn image(native: &mut NativeHost) -> Vec<u8> {
 }
 #[cfg(target_os = "windows")]
 fn radius(native: &NativeHost) -> layer_core::EffectValue {
-    let layer = native.session.engine().document().active_layer;
-    native
-        .session
-        .engine()
-        .document()
-        .layers
-        .iter()
-        .find(|l| l.id == layer)
-        .unwrap()
-        .effect
-        .as_ref()
-        .unwrap()
-        .value("radius")
-        .unwrap()
-        .clone()
+    let doc=native.session.engine().document();let owner=doc.working.occurrence.unwrap();doc.scene().effect(owner).unwrap().value("radius").unwrap().clone()
 }
 
 #[cfg(target_os = "windows")]

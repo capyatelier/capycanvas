@@ -3,7 +3,7 @@
 use crate::{DEFAULT_DOCUMENT_EXTENT, MAX_NEW_DOCUMENT_DIMENSION, Localizer, MessageId, FluentArgs};
 use std::sync::Arc;
 use layer_core::{
-    BlendSpace, Document, Project,
+    BlendSpace, Document,
     color::{DocumentColor, SampleDepth, RgbSpace},
 };
 use serde::{Deserialize, Serialize};
@@ -76,16 +76,18 @@ impl NewDocumentOptions {
         }
         Ok(())
     }
-    pub fn project(self, localization: &Localizer) -> Result<Project, String> {
+    pub fn project(self, localization: &Localizer) -> Result<Document, String> {
         self.validate().map_err(|error| error.message(localization))?;
-        let mut document = Document::new("untitled", self.extent[0], self.extent[1], layer_core::DocumentNames {
+        let mut document = Document::new(layer_core::authored::PortableId::random(), self.extent[0], self.extent[1], layer_core::DocumentNames {
             paint: localization.text(MessageId::DOCUMENTS_CURRENT_INK),
             paper: localization.text(MessageId::DOCUMENTS_PAPER),
         });
-        document.color = self.color;
-        document.blend_space = self.blend_space.for_depth(self.color.depth);
-        document.layers[1].visible = self.background == DocumentBackground::White;
-        Ok(Project { document })
+        let composition = document.artwork.compositions.get_mut(document.artwork.root).unwrap();
+        composition.color = self.color;
+        composition.blend = self.blend_space.for_depth(self.color.depth);
+        let paper = document.scene().order().iter().copied().find(|handle| document.scene().effect(*handle).is_some_and(|effect| effect.constant_color().is_some())).unwrap();
+        document.artwork.occurrences.get_mut(paper).unwrap().visible = self.background == DocumentBackground::White;
+        Ok(document)
     }
     pub fn description(self, localization: &Localizer) -> String {
         let mut args = FluentArgs::new();
@@ -365,54 +367,58 @@ impl NewDocumentSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session::test_support::reopen_capture as reopen;
     fn english() -> Arc<Localizer> { Localizer::shared(crate::UiLanguage::English) }
     #[test]
     fn saved_creation_names_keep_their_language_and_literal_source_names() {
         use crate::{UiSession, UiLanguage, Platform, LayerAction, UiAction, SelectionAction, CommandId};
         use crate::session::test_support::{Recorder, layer, invoke};
-        use layer_core::LayerId;
+        use crate::session::occurrence_token;
+        use layer_core::authored::{OccurrenceHandle, OccurrenceContent};
         let japanese = Localizer::shared(UiLanguage::Japanese);
         let mut session = UiSession::blank_localized(Recorder { tiled_sources: true, ..Default::default() }, [256, 256], Platform::Gtk, japanese).unwrap();
-        assert_eq!(session.engine().document().layers[0].name.as_ref(), "現在のインク");
-        assert_eq!(session.engine().document().layers[1].name.as_ref(), "用紙");
+        assert_eq!(session.engine().document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().name.as_ref(), "現在のインク");
+        assert_eq!(session.engine().document().scene().occurrence(OccurrenceHandle::from_index(1)).unwrap().name.as_ref(), "用紙");
         layer(&mut session, LayerAction::New { group: false, clipped: false });
-        let paint = session.engine().document().active_layer;
-        assert_eq!(session.engine().document().layer(paint).unwrap().name.as_ref(), "レイヤー 3");
+        let paint = session.engine().document().working.occurrence.unwrap();
+        assert_eq!(session.engine().document().scene().occurrence(paint).unwrap().name.as_ref(), "レイヤー 3");
         let literal = "  Layer 3 { $name }「漢字」🖌️\u{2066}literal\u{2069}  ";
-        layer(&mut session, LayerAction::Rename { id: paint.0, name: literal.into() });
-        let original = session.engine().document().layer(paint).unwrap().clone();
-        layer(&mut session, LayerAction::Duplicate { id: paint.0 });
-        let copy = session.engine().document().active_layer;
-        assert_eq!(session.engine().document().layer(copy).unwrap().name.as_ref(), format!("{literal}のコピー"));
-        assert_eq!(session.engine().document().layer(paint).unwrap(), &original);
+        layer(&mut session, LayerAction::Rename { id: occurrence_token(paint), name: literal.into() });
+        let original = session.engine().document().scene().occurrence(paint).unwrap().clone();
+        layer(&mut session, LayerAction::Duplicate { id: occurrence_token(paint) });
+        let copy = session.engine().document().working.occurrence.unwrap();
+        assert_eq!(session.engine().document().scene().occurrence(copy).unwrap().name.as_ref(), format!("{literal}のコピー"));
+        assert_eq!(session.engine().document().scene().occurrence(paint).unwrap(), &original);
         layer(&mut session, LayerAction::GroupSelected);
-        let group = session.engine().document().layer(LayerId(5)).unwrap().clone();
+        let group_handle = session.engine().document().working.occurrence.unwrap();
+        let group = session.engine().document().scene().occurrence(group_handle).unwrap().clone();
         assert_eq!(group.name.as_ref(), "グループ 5");
         invoke(&mut session, CommandId::Undo);
-        assert!(session.engine().document().layer(group.id).is_none());
-        assert_eq!(session.engine().document().layer(copy).unwrap().properties.parent, None);
+        assert!(session.engine().document().scene().occurrence(group_handle).is_none());
+        assert_eq!(session.engine().document().scene().parent(copy), None);
         invoke(&mut session, CommandId::Redo);
-        assert_eq!(session.engine().document().layer(group.id).unwrap(), &group);
-        session.dispatch(UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(group.id.0), save_current: false } }).unwrap();
-        let selection = session.engine().document().layers.iter().find(|layer| layer.id == LayerId(6)).unwrap();
+        assert_eq!(session.engine().document().scene().occurrence(group_handle).unwrap(), &group);
+        session.dispatch(UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(occurrence_token(group_handle)), save_current: false } }).unwrap();
+        let selection_handle = session.engine().document().scene().order().iter().copied().find(|handle| matches!(session.engine().document().scene().occurrence(*handle).unwrap().content, OccurrenceContent::Selection(_))).unwrap();
+        let selection = session.engine().document().scene().occurrence(selection_handle).unwrap();
         assert_eq!(selection.name.as_ref(), "選択範囲 6");
         layer(&mut session, LayerAction::New { group: true, clipped: false });
-        assert_eq!(session.engine().document().layer(LayerId(7)).unwrap().name.as_ref(), "グループ 7");
+        assert_eq!(session.engine().document().scene().occurrence(session.engine().document().working.occurrence.unwrap()).unwrap().name.as_ref(), "グループ 7");
         let imported_name = "  Current ink { $name }「写真」🖼️\u{2068}literal\u{2069}  ";
         let source = layer_core::color::source::rgba8_source([2, 2], |_, _| [200; 4]);
         session.import_layer_source(imported_name, Arc::unwrap_or_clone(source)).unwrap();
-        let imported = session.engine().document().active_layer;
-        assert_eq!(session.engine().document().layer(imported).unwrap().name.as_ref(), imported_name);
+        let imported = session.engine().document().working.occurrence.unwrap();
+        assert_eq!(session.engine().document().scene().occurrence(imported).unwrap().name.as_ref(), imported_name);
+        let paint_id = session.engine().document().artwork.occurrences.id(paint).unwrap();
+        let imported_id = session.engine().document().artwork.occurrences.id(imported).unwrap();
         let captured = session.capture_project_recovery().unwrap();
-        let mut bytes = Vec::new();
-        captured.write(&mut bytes).unwrap();
-        let read = Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
-        assert_eq!(read, captured);
+        let read = reopen(&captured);
+        let paint = read.artwork.occurrences.resolve(paint_id).unwrap();
+        let imported = read.artwork.occurrences.resolve(imported_id).unwrap();
         let reopened = UiSession::from_project_localized(Recorder { tiled_sources: true, ..Default::default() }, read, None, [256, 256], Platform::Gtk, english()).unwrap();
-        assert_eq!(reopened.engine().document(), &captured.document);
-        assert_eq!(reopened.engine().document().id.as_ref(), "untitled");
-        assert_eq!(reopened.engine().document().layer(paint).unwrap().name.as_ref(), literal);
-        assert_eq!(reopened.engine().document().layer(imported).unwrap().name.as_ref(), imported_name);
+        assert_eq!(reopened.engine().document().artwork.id, captured.artwork.id);
+        assert_eq!(reopened.engine().document().scene().occurrence(paint).unwrap().name.as_ref(), literal);
+        assert_eq!(reopened.engine().document().scene().occurrence(imported).unwrap().name.as_ref(), imported_name);
     }
 
     #[test]
@@ -465,11 +471,11 @@ mod tests {
     #[test]
     fn new_documents_blend_perceptually_except_at_float_and_presets_keep_the_choice() {
         let project = NewDocumentOptions::default().project(&english()).unwrap();
-        assert_eq!(project.document.blend_space, BlendSpace::Perceptual);
+        assert_eq!(project.composition().blend, BlendSpace::Perceptual);
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             for blend_space in BlendSpace::ALL {
                 let options = NewDocumentOptions { color: DocumentColor { depth, ..Default::default() }, blend_space, ..Default::default() };
-                assert_eq!(options.project(&english()).unwrap().document.blend_space, if depth.is_float() { BlendSpace::Linear } else { blend_space });
+                assert_eq!(options.project(&english()).unwrap().composition().blend, if depth.is_float() { BlendSpace::Linear } else { blend_space });
             }
         }
         let options = NewDocumentOptions { blend_space: BlendSpace::Linear, ..Default::default() };
@@ -499,17 +505,16 @@ mod tests {
                         blend_space: BlendSpace::Perceptual,
                     };
                     let project = options.project(&english()).unwrap();
-                    assert_eq!(project.document.color, options.color);
+                    assert_eq!(project.composition().color, options.color);
                     assert_eq!(
-                        project.document.layers[1].visible,
+                        project.scene().order().iter().find_map(|handle| project.scene().effect(*handle)?.constant_color().map(|_| project.scene().occurrence(*handle).unwrap().visible)).unwrap(),
                         background == DocumentBackground::White
                     );
-                    let mut bytes = Vec::new();
-                    project.write(&mut bytes).unwrap();
-                    assert_eq!(
-                        Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap(),
-                        project
-                    );
+                    let captured = layer_core::Editor::new(project.clone()).capture(0, project.output().context.clone()).unwrap();
+                    let restored = reopen(&captured);
+                    assert_eq!(restored.artwork.id, project.artwork.id);
+                    assert_eq!(restored.composition(), project.composition());
+                    assert_eq!(restored.output(), project.output());
                 }
             }
         }

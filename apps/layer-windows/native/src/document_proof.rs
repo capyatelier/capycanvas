@@ -25,6 +25,7 @@ impl Task {
         form["document_profile"] = session
             .engine()
             .document()
+            .output()
             .proof
             .as_ref()
             .map(PrintProofSettings::from_recipe)
@@ -231,22 +232,22 @@ mod tests {
         invalid.profile.as_mut().unwrap().profile = ColorProfile::Icc(vec![0; 128].into());
         assert!(task.work(invalid, None, &control).is_err());
         assert!(task.adopt(&mut host, &control).is_err());
-        assert!(host.session.engine().document().proof.is_none());
+        assert!(host.session.engine().document().output().proof.is_none());
         // A failed preparation leaves the same request available for correction.
         task.work(settings, None, &control).unwrap();
         task.validate(&host, &control).unwrap();
         task.preserve(&control).unwrap();
         task.adopt(&mut host, &control).unwrap();
-        assert_eq!(host.session.engine().document().proof, Some(recipe.clone()));
+        assert_eq!(host.session.engine().document().output().proof, Some(recipe.clone()));
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
         .unwrap();
-        assert!(host.session.engine().document().proof.is_none());
+        assert!(host.session.engine().document().output().proof.is_none());
         host.dispatch(UiAction::Invoke {
             command: CommandId::Redo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().proof, Some(recipe));
+        assert_eq!(host.session.engine().document().output().proof, Some(recipe));
     }
 }

@@ -4,19 +4,19 @@
 use super::*;
 
 impl WgpuRasterizer {
-    pub(crate) fn native_backing(&self, id: LayerId) -> Option<&Arc<RasterData>> {
+    pub(crate) fn native_backing(&self, id: SourceTarget) -> Option<&Arc<RasterData>> {
         self.native_edit.as_ref()?.backing.get(&id)
     }
 
     pub(crate) fn native_color_tile(
         &self,
-        id: LayerId,
+        id: SourceTarget,
         coordinate: [u32; 2],
     ) -> Result<Option<Arc<TileBlob>>, GpuRasterError> {
         self.native_plane_tile(id, RasterPlane::Color, coordinate)
     }
 
-    pub(crate) fn native_plane_tile(&self, id: LayerId, plane: RasterPlane, coordinate: [u32; 2])
+    pub(crate) fn native_plane_tile(&self, id: SourceTarget, plane: RasterPlane, coordinate: [u32; 2])
         -> Result<Option<Arc<TileBlob>>, GpuRasterError> {
         let Some(tile) = self.native_backing(id).and_then(|data| {
             data.tiles.get(&TileKey { plane, coordinate })
@@ -31,7 +31,7 @@ impl WgpuRasterizer {
 
     pub(crate) fn native_color_coordinates(
         &self,
-        id: LayerId,
+        id: SourceTarget,
     ) -> impl Iterator<Item = [u32; 2]> + '_ {
         self.native_backing(id)
             .into_iter()
@@ -43,7 +43,7 @@ impl WgpuRasterizer {
     /// Forget `target`'s pages, in every plane, where `keep` is false. A
     /// transform that moved every pixel of the target left them empty, so
     /// neither the GPU nor the next publication holds them.
-    pub(crate) fn drop_vacated_pages(&mut self, target: LayerId, keep: impl Fn([u32; 2]) -> bool) {
+    pub(crate) fn drop_vacated_pages(&mut self, target: SourceTarget, keep: impl Fn([u32; 2]) -> bool) {
         if let Some(layer) = self.paint_layers.iter_mut().find(|l| l.id == target) {
             layer.pages.retain(|p| keep(p.coordinate));
             layer.material_pages.retain(|p| keep(p.coordinate));
@@ -64,15 +64,13 @@ impl WgpuRasterizer {
         }
     }
 
-    pub(crate) fn retain_native_backing(&mut self, layers: &[Layer], reset: bool) {
+    pub(crate) fn retain_native_backing(&mut self, scene: SceneView<'_>, reset: bool) {
         if let Some(native) = &mut self.native_edit {
             if reset {
                 native.backing.clear();
             }
             native.backing.retain(|id, _| {
-                layers
-                    .iter()
-                    .any(|l| l.id == *id || l.masks().any(|m| m.id == *id))
+                source_access::placed_targets(scene).any(|target| target == *id)
             });
         }
     }
@@ -81,7 +79,7 @@ impl WgpuRasterizer {
     /// Standalone snapshot callers still restore their explicitly selected pages.
     pub(crate) fn restore_live_raster(
         &mut self,
-        target: LayerId,
+        target: SourceTarget,
         previous: &RasterData,
         data: &Arc<RasterData>,
     ) -> Result<(), GpuRasterError> {

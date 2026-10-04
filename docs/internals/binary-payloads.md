@@ -9,15 +9,16 @@ small, inspectable indices, settings, effect definitions and UI commands.
 
 - Editable projects, recovery files, raster history, original image samples,
   project ICC profiles and packed brush assets already use binary backing.
-- Web whole-project worker transfers now detach current, saved and initial
-  selection masks through the shared project selection index. Shared masks
-  travel once as zero-padded 64 KiB little-endian word blocks. The editor yields
-  after 4 MiB of copies; compression and archive integrity hashing stay in the
-  file worker. This closes the remaining path that expanded a 61 MP mask into
-  JSON during browser save, recovery, opening and document conversion.
-- Original-source and proof ICC profiles in those transfers use a shared
-  `ProfileReference` and deduplicated binary buffers. The private worker protocol
-  changes with the application; the persisted project format stays at version 8.
+- Web artwork worker transfers use the shared `package::transfer` descriptor,
+  final manifest records and bounded transferable buffers. Shared current, saved
+  and initial selections travel once as little-endian word payloads. The editor
+  yields after 4 MiB of copies; compression and archive integrity hashing stay in
+  the file worker. Decoded masks never expand into JSON during save, recovery,
+  opening or document conversion.
+- Original-source and proof ICC profiles share immutable resource IDs and
+  deduplicated binary buffers. The private transfer protocol retains runtime
+  identity and verification receipts separately from the final persisted
+  [package grammar](../reference/capy-package.md).
 - Export preset libraries retain each ICC payload as binary, independently of
   profile-library files. All hosts use `ExportPresets::encode/decode`; old JSON
   libraries remain readable and migrate on the next successful atomic write.
@@ -53,8 +54,10 @@ from 7,488,092 JSON bytes to 2,097,821 binary bytes (72% smaller).
 ```sh
 cargo test --locked -p layer-core -p layer-ui -p layer-workspace \
   --features layer-workspace/native --lib
+cargo run --locked --release -p layer-color --example proof_profiles -- \
+  artifacts/binary-transfer/profiles
 cargo run --locked --release -p layer-core --example binary_transfer -- \
-  apps/layer-web/pkg/binary-transfer-fixture.capy
+  apps/layer-web/pkg/binary-transfer-fixture.capy artifacts/binary-transfer/profiles/srgb.icc
 bash apps/layer-web/build.sh
 LAYER_DEVICE_CDP=http://127.0.0.1:9239 LAYER_WEB_URL=http://127.0.0.1:4215/ \
   LAYER_BINARY_FIXTURE_URL=/pkg/binary-transfer-fixture.capy \
@@ -62,9 +65,14 @@ LAYER_DEVICE_CDP=http://127.0.0.1:9239 LAYER_WEB_URL=http://127.0.0.1:4215/ \
 ```
 
 Serve `apps/layer-web` and forward the test port and Chrome debugging socket to
-the device. The fixture contains generated 9504 × 6336 coverage shared by three
-selection targets and opaque synthetic ICC bytes; it tests transport, not CMM
-acceptance or rendering. The test leaves the editor's open document untouched.
+the device. The fixture contains generated 9504 × 6336 coverage shared by a
+saved selection and a layer mask, plus a valid 2 MiB RGB ICC profile shared by
+proof and retained original samples. Its private data tag keeps the payload large
+while shared color validation still accepts the profile. The generator writes
+`binary-transfer-fixture.capy.icc` beside the package; serve both files. The
+journey compares every ICC byte with that companion and checks exact archive
+bytes and shared resource identities. It leaves the editor's open drawing
+untouched.
 Use the workspace store contract test for IndexedDB parity. Native Android
 `profileLibraryKeepsExactCopiesAndPresetOwnership` and
 `exportPresetsPersistAndRestoreEveryDeliveryChoice` cover real CMM-validated

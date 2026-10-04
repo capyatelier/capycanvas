@@ -168,3 +168,10 @@ documents-refusal-switch-gpu-changed = Çizimler arasında geçiş yapılırken 
 documents-refusal-painting-unavailable = Boyama kullanılamıyor. Bu çizim yine de kaydedilebilir veya kapatılabilir.
 documents-refusal-recovery-service-unavailable = Kurtarma hizmeti kullanılamıyor.
 documents-refusal-recovery-in-progress = Kurtarmanın bitmesini bekleyin.
+documents-package-preserved = This drawing can be viewed, but cannot be edited.
+documents-package-recovered = Only a preview of this drawing could be recovered.
+documents-package-failed = This drawing could not be opened.
+documents-package-copy-original = Copy Original File…
+
+documents-package-export-preview = Export Preview Image…
+documents-package-choose-different = Choose a different file.

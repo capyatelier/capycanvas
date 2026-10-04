@@ -102,8 +102,8 @@ impl ProofView {
             key: Key {
                 epoch: session.state().document_file.epoch,
                 owner: session.engine().backend().proof_owner,
-                space: document.color.space,
-                recipe: document.proof.clone(),
+                space: document.composition().color.space,
+                recipe: document.output().proof.clone(),
             },
             enabled: session.state().soft_proof,
             gamut: session.state().gamut_warning,

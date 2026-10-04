@@ -1,6 +1,5 @@
 use crate::{NumericControl, NumericKind};
 use serde::{Deserialize, Serialize};
-use std::sync::Arc;
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag="kind",rename_all="snake_case")]
@@ -113,7 +112,7 @@ pub(super) fn numeric_point(points:&[[f32;2]],index:usize,axis:CurveAxis,domain:
 struct CurveCapture { key:String,index:usize,extent:[f32;2],press:[f32;2],graph:[f32;2] }
 #[derive(Default)]
 pub(crate) struct PropertyEditorState {
-    document:Option<Arc<str>>,
+    document:Option<u64>,
     layer:Option<u64>,
     revision:u64,
     pages:Vec<String>,
@@ -124,7 +123,7 @@ pub(crate) struct PropertyEditorState {
     pressed_key:Option<String>,
 }
 impl PropertyEditorState {
-    pub fn sync(&mut self,document:Arc<str>,layer:Option<u64>,revision:u64,pages:Vec<String>,gesture_active:bool) {
+    pub fn sync(&mut self,document:u64,layer:Option<u64>,revision:u64,pages:Vec<String>,gesture_active:bool) {
         if self.document.as_ref()!=Some(&document) || self.layer!=layer || self.pages!=pages {
             self.document=Some(document);
             self.layer=layer;self.pages=pages;self.page=self.pages.first().cloned();self.selected=None;
@@ -171,27 +170,27 @@ impl PropertyEditorState {
 #[cfg(test)] mod state_tests {
     use super::*;
     #[test] fn page_selection_and_stale_contact_are_transient() {
-        let mut state=PropertyEditorState::default();state.sync("doc".into(),Some(3),1,vec!["rgb".into(),"red".into()],false);
+        let mut state=PropertyEditorState::default();state.sync(1,Some(3),1,vec!["rgb".into(),"red".into()],false);
         let old=state.epoch;assert!(state.select(3,old,"curve_0",Some(1),&[[0.,0.],[1.,1.]]));
         assert!(state.select_page(3,"red"));assert!(!state.accepts(3,old));assert_eq!(state.page(),Some("red"));
-        state.sync("doc".into(),Some(3),2,vec!["rgb".into(),"red".into()],false);assert!(!state.accepts(3,old));
-        state.sync("doc".into(),Some(4),2,vec!["rgb".into(),"red".into()],false);assert_eq!(state.page(),Some("rgb"));
+        state.sync(1,Some(3),2,vec!["rgb".into(),"red".into()],false);assert!(!state.accepts(3,old));
+        state.sync(1,Some(4),2,vec!["rgb".into(),"red".into()],false);assert_eq!(state.page(),Some("rgb"));
     }
     #[test] fn replacing_document_invalidates_same_layer_revision_and_pages() {
-        let mut state=PropertyEditorState::default();state.sync("first".into(),Some(3),1,vec!["rgb".into()],false);let epoch=state.epoch;
-        state.sync("second".into(),Some(3),1,vec!["rgb".into()],false);assert!(!state.accepts(3,epoch));
+        let mut state=PropertyEditorState::default();state.sync(1,Some(3),1,vec!["rgb".into()],false);let epoch=state.epoch;
+        state.sync(2,Some(3),1,vec!["rgb".into()],false);assert!(!state.accepts(3,epoch));
     }
     #[test] fn native_key_release_matches_current_repeat_gesture() {
         let mut state=PropertyEditorState::default();state.press_key("ArrowUp");assert!(!state.release_key("ArrowDown"));assert!(state.release_key("ArrowUp"));assert_eq!(state.key(),None);
     }
     #[test] fn revision_replacement_rejects_stale_point_and_closes_key_capture() {
         let mut state=PropertyEditorState::default();
-        state.sync("doc".into(),Some(3),1,vec!["rgb".into()],false);
+        state.sync(1,Some(3),1,vec!["rgb".into()],false);
         let epoch=state.epoch;
         state.select(3,epoch,"curve",Some(1),&[[0.,0.],[0.5,0.5],[1.,1.]]);
         state.begin_contact("curve",1,[50.,50.],[100.,100.],[0.5,0.5]);
         state.press_key("ArrowUp");
-        state.sync("doc".into(),Some(3),2,vec!["rgb".into()],false);
+        state.sync(1,Some(3),2,vec!["rgb".into()],false);
         assert!(!state.accepts(3,epoch));
         assert_eq!(state.contact_index("curve"),None);
         assert_eq!(state.key(),None);
@@ -199,14 +198,14 @@ impl PropertyEditorState {
     }
     #[test] fn own_live_preview_keeps_epoch_until_external_edit() {
         let mut state=PropertyEditorState::default();
-        state.sync("doc".into(),Some(3),1,vec!["rgb".into()],false);
+        state.sync(1,Some(3),1,vec!["rgb".into()],false);
         let epoch=state.epoch;
         state.press_key("ArrowRight");
-        state.sync("doc".into(),Some(3),2,vec!["rgb".into()],true);
+        state.sync(1,Some(3),2,vec!["rgb".into()],true);
         assert!(state.accepts(3,epoch));
         assert_eq!(state.key(),Some("ArrowRight"));
         assert!(state.release_key("ArrowRight"));
-        state.sync("doc".into(),Some(3),3,vec!["rgb".into()],false);
+        state.sync(1,Some(3),3,vec!["rgb".into()],false);
         assert!(!state.accepts(3,epoch));
     }
 

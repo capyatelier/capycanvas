@@ -143,11 +143,11 @@ mod tests {
             let saved = serde_json::to_string(&settings).unwrap();
             assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap(), settings);
             settings.validate().unwrap();
-            assert_eq!(existing.document.color, Default::default());
+            assert_eq!(existing.composition().color, Default::default());
             let new = settings.new_document.defaults.project(&Localizer::shared(UiLanguage::English)).unwrap();
-            assert_eq!(new.document.color.space, RgbSpace::ProPhoto);
-            assert_eq!(new.document.color.depth, SampleDepth::U16);
-            assert!(!new.document.layers[1].visible);
+            assert_eq!(new.composition().color.space, RgbSpace::ProPhoto);
+            assert_eq!(new.composition().color.depth, SampleDepth::U16);
+            assert!(!new.scene().occurrence(layer_core::OccurrenceHandle::from_index(1)).unwrap().visible);
             assert_eq!(
                 settings.photo_open.editing_depth(SampleDepth::U8),
                 SampleDepth::U16

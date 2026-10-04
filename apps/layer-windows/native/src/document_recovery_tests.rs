@@ -1,4 +1,5 @@
 //! Actual process-owned device removal at document worker/adoption boundaries.
+use crate::test_support::*;
 use super::gpu_tests::{image, invoke, request};
 use super::*;
 use crate::device::D3d12Watch;
@@ -118,12 +119,7 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
     invoke(&mut f.host, CommandId::AddLayer);
     let expected = image(&mut f.host).bytes;
     let mut expected_project = Vec::new();
-    f.host
-        .session
-        .capture_project_recovery()
-        .unwrap()
-        .write(&mut expected_project)
-        .unwrap();
+    write_capture(&f.host.session.capture_project_recovery().unwrap(),&mut expected_project).unwrap();
     let path = f.path("drawing.capy");
     invoke(&mut f.host, CommandId::SaveDocument);
     let (id, _, _) = request(&f.host);
@@ -174,7 +170,7 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
             assert_eq!(f.host.session.state().document_file.epoch, epoch + 1);
             let document = f.host.session.engine().document();
             assert_eq!(
-                [document.width, document.height],
+                [document.composition().size[0], document.composition().size[1]],
                 if open.is_some() { [64, 48] } else { [96, 72] }
             );
             assert_eq!(

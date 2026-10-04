@@ -5,7 +5,8 @@
 //! undo step.
 use super::*;
 use layer_core::{RetouchLayerRefusal, SeparationFilters};
-use layer_engine::LayerPreview;
+use layer_engine::ScenePreview;
+use layer_core::authored::*;
 use std::collections::BTreeSet;
 
 /// The radius Frequency Separation opens with.
@@ -29,9 +30,8 @@ pub struct FrequencySeparationView {
 }
 
 pub(super) struct SeparationDraft {
-    target: LayerId,
+    target: OccurrenceHandle,
     revision: u64,
-    preview: LayerId,
     filters: SeparationFilters,
     view: FrequencySeparationView,
     /// A value not yet published, and when it last changed; None until the
@@ -77,8 +77,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn new_dodge_burn_layer(&mut self) -> Result<(), String> {
         self.require_document_idle()?;
         refused(self.dodge_burn_refusal())?;
-        let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
-        let plan = self.engine.document().dodge_burn_plan(ids, self.localization().text(MessageId::RESOURCES_LAYER_DODGE_BURN)).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
+        let plan = self.engine.document().dodge_burn_plan( self.localization().text(MessageId::RESOURCES_LAYER_DODGE_BURN)).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
         self.insert_retouch_layers(plan)
     }
 
@@ -93,20 +92,39 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn separation_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
         let doc = self.engine.document();
-        self.retouch_layer_refusal().or_else(|| doc.separation_refusal(doc.active_layer).map(|refusal| refusal_text(refusal, l)))
+        self.retouch_layer_refusal().or_else(|| doc.working.occurrence.and_then(|h| doc.separation_refusal(h)).or_else(|| doc.working.occurrence.is_none().then_some(RetouchLayerRefusal::NoLayer)).map(|refusal| refusal_text(refusal, l)))
     }
 
     pub fn frequency_separation_view(&self) -> Option<FrequencySeparationView> {
         self.frequency_separation.as_ref().map(|draft| draft.view.clone())
     }
 
-    fn show_separation(&mut self) {
+    fn show_separation(&mut self) -> Result<(), String> {
         if let Some(draft) = &self.frequency_separation {
+            let doc = self.engine.document();
+            let mut artwork = doc.artwork.clone();
+            let definition = artwork.definitions.insert(PortableId::random(), Definition {
+                program: draft.filters.blur.program.clone(), dimensions: Default::default(),
+            })?;
+            let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
+                definition, values: draft.filters.blur.values.clone(), domain: doc.composition().size,
+            })?;
             let name = effects::resource_label(&draft.filters.blur.program.label, self.localization());
-            let layer = SeparationFilters::clipped(draft.preview, &draft.filters.blur, name);
-            self.engine.set_layer_preview(Some(LayerPreview { above: draft.target, layer }));
+            let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect), name);
+            occurrence.clipped = true;
+            let handle = artwork.occurrences.insert(PortableId::random(), occurrence)?;
+            let containing = doc.scene().stack(draft.target).ok_or("The preview layer was removed")?;
+            let stack = artwork.stacks.get_mut(containing).ok_or("The preview group was removed")?;
+            let index = stack.entries.iter().position(|h| *h == draft.target).ok_or("The preview layer was removed")?;
+            stack.entries.insert(index, handle);
+            let mut preview = Document::from_artwork(artwork).map_err(error)?;
+            preview.owner = doc.owner;
+            preview.revision = doc.revision;
+            let context = self.engine.scene_snapshot().context.clone();
+            self.engine.set_scene_preview(Some(ScenePreview { above: draft.target, scene: preview.snapshot_with_context(context) }));
         }
         self.state.layer_tools.frequency_separation = self.frequency_separation_view();
+        Ok(())
     }
 
     pub(super) fn open_frequency_separation(&mut self) -> Result<(), String> {
@@ -117,16 +135,15 @@ impl<R: CanvasRenderer> UiSession<R> {
         let radius = DEFAULT_RADIUS.clamp(numeric.min as f32, numeric.max as f32);
         let filters = SeparationFilters::new(&self.effect_catalog, radius)?;
         let doc = self.engine.document();
-        let (target, revision) = (doc.active_layer, doc.revision);
+        let (target, revision) = (doc.working.occurrence.ok_or("Select a paint layer first")?, doc.revision);
         self.frequency_separation = Some(SeparationDraft {
             target,
             revision,
-            preview: self.engine.allocate_layer_id(),
             filters,
             view: FrequencySeparationView { title: "Frequency Separation", label: "Radius", radius, numeric },
             unpublished: None,
         });
-        self.show_separation();
+        self.show_separation()?;
         Ok(())
     }
 
@@ -139,7 +156,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     draft.filters = SeparationFilters::new(&self.effect_catalog, radius)?;
                     draft.view.radius = radius;
                     draft.unpublished = Some(None);
-                    self.show_separation();
+                    self.show_separation()?;
                 }
                 Ok(())
             }
@@ -147,8 +164,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.require_document_idle()?;
                 refused(self.retouch_layer_refusal())?;
                 let draft = self.close_frequency_separation().ok_or("Frequency Separation is not open")?;
-                let ids = std::array::from_fn(|_| self.engine.allocate_layer_id());
-                let plan = self.engine.document().separation_plan(draft.target, &draft.filters, ids,
+                let plan = self.engine.document().separation_plan(draft.target, &draft.filters,
                     [MessageId::RESOURCES_LAYER_FREQUENCY_SEPARATION, MessageId::RESOURCES_LAYER_LOW, MessageId::RESOURCES_LAYER_HIGH]
                         .map(|id| self.localization().text(id))).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
                 self.insert_retouch_layers(plan)
@@ -184,7 +200,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn close_frequency_separation(&mut self) -> Option<SeparationDraft> {
         let draft = self.frequency_separation.take()?;
-        self.engine.set_layer_preview(None);
+        self.engine.set_scene_preview(None);
         self.state.layer_tools.frequency_separation = None;
         Some(draft)
     }

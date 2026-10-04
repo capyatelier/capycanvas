@@ -142,9 +142,7 @@ fn native_application_file_launch() {
     .unwrap();
     let master = directory.join("Master drawing.capy");
     let project = new_drawing(321, 217, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project
-        .write(std::fs::File::create(&master).unwrap())
-        .unwrap();
+    write_document(&project, &mut std::fs::File::create(&master).unwrap()).unwrap();
     let photo_before = std::fs::read(&photo).unwrap();
     let master_before = std::fs::read(&master).unwrap();
 
@@ -165,10 +163,7 @@ fn native_application_file_launch() {
     assert_eq!(windows.borrow().len(), 1);
     assert!(activated.get());
     let second = w.documents.selected();
-    assert_eq!(
-        ui_session(&w).engine().document(),
-        &project.document
-    );
+    assert_live_artwork_eq(ui_session(&w).engine().document(), &project);
     assert_eq!(
         state(&w).document_file.location.unwrap().uri,
         gio::File::for_path(&master).uri()
@@ -181,13 +176,13 @@ fn native_application_file_launch() {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
         let doc = session.engine().document();
-        assert_eq!([doc.width, doc.height], expected.extent);
-        assert_eq!(doc.color.depth, SampleDepth::U16);
-        assert_eq!(doc.layers[0].source.as_deref(), Some(&expected));
+        assert_eq!([doc.composition().size[0], doc.composition().size[1]], expected.extent);
+        assert_eq!(doc.composition().color.depth, SampleDepth::U16);
+        assert_source_samples(paint_at(doc, 0).original.as_deref().unwrap(), &expected);
         assert!(session.state().document_file.location.is_none());
     }
     new_photo::invoke(&w, CommandId::AddLayer);
-    let edited = place_source::snapshot(&w);
+    let edited = place_source::authored_snapshot(&w);
     let mut sender = Sender::new(&id, &[&photo]);
     until(
         || w.documents.len() == 3 && !w.documents.changing.get() && !w.documents.loading.get(),
@@ -199,7 +194,7 @@ fn native_application_file_launch() {
         .block_on(w.documents.activate(&w, 1))
         .unwrap();
     new_photo::ready(&w);
-    assert_eq!(place_source::snapshot(&w), edited);
+    assert_eq!(place_source::authored_snapshot(&w), edited);
     // Error acknowledgement continues a batch in the receiving window.
     let bad = directory.join("Broken picture.jpg");
     std::fs::write(&bad, b"not an image").unwrap();

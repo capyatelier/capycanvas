@@ -1,0 +1,297 @@
+use super::*;
+use crate::{Document, DocumentError, Edit, Point};
+use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+
+fn insert<T: Clone>(store: &mut Store<T>, value: T) -> Result<RecordChange<T>, DocumentError> {
+    let change = RecordChange::insert(store, value);
+    store.change(change.handle, change.id, change.value.clone())?;
+    Ok(change)
+}
+fn invalid(message: &'static str) -> DocumentError { DocumentError::InvalidLayerOperation(message) }
+
+impl Document {
+    pub fn reparent_occurrence_edit(&self, id: OccurrenceHandle, parent: Option<OccurrenceHandle>, index: usize) -> Result<Edit, DocumentError> {
+        let scene = self.scene();
+        let original = scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
+        let old_stack = scene.stack(id).ok_or(DocumentError::MissingOccurrence(id))?;
+        let new_stack = match parent {
+            Some(parent) => {
+                if self.is_locked(parent) { return Err(DocumentError::ProtectedOccurrence(parent)); }
+                let group = scene.occurrence(parent).ok_or(DocumentError::MissingOccurrence(parent))?;
+                let OccurrenceContent::Stack(stack) = group.content else { return Err(invalid("Choose a group")); };
+                if self.layer_subtrees(&[id]).contains(&parent) { return Err(invalid("A group cannot contain itself")); }
+                stack
+            }
+            None => self.composition().result,
+        };
+        if self.is_locked(id) { return Err(DocumentError::ProtectedOccurrence(id)); }
+        let mut old = self.artwork.stacks.get(old_stack).ok_or(invalid("Unknown stack"))?.clone();
+        let from = old.entries.iter().position(|h| *h == id).ok_or(DocumentError::MissingOccurrence(id))?;
+        let mut destination = if old_stack == new_stack { old.clone() } else { self.artwork.stacks.get(new_stack).ok_or(invalid("Unknown stack"))?.clone() };
+        if old_stack == new_stack { destination.entries.remove(from); }
+        if index > destination.entries.len() { return Err(invalid("Invalid layer position")); }
+        if old_stack == new_stack && index == from { return Ok(Edit::Batch(Vec::new())); }
+        if scene.order().iter().any(|h| *h != id && scene.occurrence(*h).is_some_and(|o| o.clipped) && self.clipping_base(*h) == Some(id)) {
+            return Err(invalid("Release the clipped layers above this base first"));
+        }
+        destination.entries.insert(index, id);
+        let old_origin = scene.parent(id).map_or(Point::default(), |h| self.layer_offset(h));
+        let new_origin = parent.map_or(Point::default(), |h| self.layer_offset(h));
+        let delta = Point { x: old_origin.x - new_origin.x, y: old_origin.y - new_origin.y };
+        let mut occurrence = original.clone();
+        occurrence.translation.x += delta.x; occurrence.translation.y += delta.y;
+        if let Some(mask) = &mut occurrence.mask { mask.translation.x += delta.x; mask.translation.y += delta.y; }
+        let mut edits = Vec::with_capacity(3);
+        if occurrence != *original { edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, id, Some(occurrence))?)); }
+        if old_stack != new_stack {
+            old.entries.remove(from);
+            edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, old_stack, Some(old))?));
+        }
+        edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, new_stack, Some(destination))?));
+        let edit = Edit::Batch(edits);
+        let mut candidate = self.clone(); candidate.apply(edit.clone())?;
+        for h in candidate.scene().order().iter().copied().filter(|h| candidate.scene().occurrence(*h).is_some_and(|o| o.clipped)) {
+            let base = candidate.clipping_base(h).ok_or(invalid("Keep clipped layers above a paint layer in the same group"))?;
+            if h != id && Some(base) != self.clipping_base(h) { return Err(invalid("Keep clipped layers with their current base")); }
+        }
+        Ok(edit)
+    }
+
+    pub fn duplicate_layers_edit(&self, roots: &[OccurrenceHandle]) -> Result<(Edit, Vec<OccurrenceHandle>), DocumentError> {
+        if roots.is_empty() { return Err(invalid("Select layers first")); }
+        let scene = self.scene();
+        for h in roots {
+            scene.occurrence(*h).ok_or(DocumentError::MissingOccurrence(*h))?;
+            if scene.stack(*h).is_none() { return Err(DocumentError::MissingOccurrence(*h)); }
+            if scene.parent(*h).is_some_and(|parent| self.is_locked(parent)) { return Err(invalid("The destination group is locked")); }
+        }
+        let roots = self.layer_roots(&roots.iter().copied().collect());
+        let mut artwork = self.artwork.clone();
+        let mut edits = Vec::new();
+        let mut copies = BTreeMap::new();
+        let mut effects = BTreeMap::new();
+        fn copy(source: &Artwork, target: &mut Artwork, id: OccurrenceHandle, edits: &mut Vec<Edit>, copies: &mut BTreeMap<OccurrenceHandle, OccurrenceHandle>, effects: &mut BTreeMap<EffectHandle, EffectHandle>) -> Result<OccurrenceHandle, DocumentError> {
+            let mut occurrence = source.occurrences.get(id).ok_or(DocumentError::MissingOccurrence(id))?.clone();
+            occurrence.content = match occurrence.content {
+                OccurrenceContent::Paint(h) => {
+                    let change = insert(&mut target.paint, source.paint.get(h).ok_or(invalid("Unknown paint source"))?.clone())?;
+                    let content = OccurrenceContent::Paint(change.handle); edits.push(Edit::Paint(change)); content
+                }
+                OccurrenceContent::Stack(h) => {
+                    let original = source.stacks.get(h).ok_or(invalid("Unknown stack"))?;
+                    let entries = original.entries.iter().map(|h| copy(source, target, *h, edits, copies, effects)).collect::<Result<_, _>>()?;
+                    let change = insert(&mut target.stacks, Stack { entries })?;
+                    let content = OccurrenceContent::Stack(change.handle); edits.push(Edit::Stack(change)); content
+                }
+                OccurrenceContent::Effect(h) => {
+                    let change = insert(&mut target.effects, source.effects.get(h).ok_or(invalid("Unknown effect"))?.clone())?;
+                    effects.insert(h, change.handle);
+                    let content = OccurrenceContent::Effect(change.handle); edits.push(Edit::Effect(change)); content
+                }
+                OccurrenceContent::Selection(h) => {
+                    let change = insert(&mut target.selections, source.selections.get(h).ok_or(invalid("Unknown selection"))?.clone())?;
+                    let content = OccurrenceContent::Selection(change.handle); edits.push(Edit::SavedSelection(change)); content
+                }
+            };
+            if let Some(mask) = &mut occurrence.mask {
+                let change = insert(&mut target.coverage, source.coverage.get(mask.source).ok_or(invalid("Unknown coverage source"))?.clone())?;
+                mask.source = change.handle; edits.push(Edit::Coverage(change));
+            }
+            let change = insert(&mut target.occurrences, occurrence)?;
+            let handle = change.handle; copies.insert(id, handle); edits.push(Edit::Occurrence(change)); Ok(handle)
+        }
+        let duplicated = roots.iter().map(|id| copy(&self.artwork, &mut artwork, *id, &mut edits, &mut copies, &mut effects)).collect::<Result<Vec<_>, _>>()?;
+        let stacks: BTreeSet<_> = roots.iter().map(|h| scene.stack(*h).unwrap()).collect();
+        for h in stacks {
+            let mut stack = self.artwork.stacks.get(h).unwrap().clone();
+            let members: Vec<_> = roots.iter().copied().filter(|id| scene.stack(*id) == Some(h)).collect();
+            let first = members[0];
+            let anchor = if scene.occurrence(first).unwrap().clipped { first } else { self.clipping_stack_top(first).unwrap_or(first) };
+            let at = stack.entries.iter().position(|id| *id == anchor).unwrap();
+            stack.entries.splice(at..at, members.iter().map(|id| copies[id]));
+            edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, h, Some(stack))?));
+        }
+        for (h, _, output) in self.artwork.outputs.iter() {
+            let additions: Vec<_> = output.context.phases.iter().filter_map(|(h, phase)| effects.get(h).map(|copy| (*copy, *phase))).collect();
+            if !additions.is_empty() {
+                let mut output = output.clone(); Arc::make_mut(&mut output.context.phases).extend(additions);
+                edits.push(Edit::Output(RecordChange::replace(&self.artwork.outputs, h, Some(output))?));
+            }
+        }
+        let edit = Edit::Batch(edits);
+        let mut candidate = self.clone(); candidate.apply(edit.clone())?;
+        for h in scene.order().iter().copied().filter(|h| scene.occurrence(*h).is_some_and(|o| o.clipped)) {
+            if candidate.clipping_base(h) != self.clipping_base(h) { return Err(invalid("Include the complete clipping stack")); }
+            if let Some(copy) = copies.get(&h) {
+                let expected = self.clipping_base(h).map(|base| copies.get(&base).copied().unwrap_or(base));
+                if expected.is_none() || candidate.clipping_base(*copy) != expected { return Err(invalid("Include the complete clipping stack")); }
+            }
+        }
+        Ok((edit, duplicated))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{CoverageSnapshot, DocumentNames};
+    use std::sync::Arc;
+
+    fn document() -> Document {
+        Document::new(PortableId::random(), 16, 16, DocumentNames { paint: "Ink".into(), paper: "Paper".into() })
+    }
+    fn group(doc: &mut Document, name: &str, translation: Point) -> OccurrenceHandle {
+        let stack = RecordChange::insert(&doc.artwork.stacks, Stack::default());
+        let mut occurrence = Occurrence::new(OccurrenceContent::Stack(stack.handle), name);
+        occurrence.translation = translation;
+        let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
+        let h = occurrence.handle;
+        let root = doc.composition().result;
+        let mut entries = doc.artwork.stacks.get(root).unwrap().clone(); entries.entries.insert(0, h);
+        doc.apply(Edit::Batch(vec![Edit::Stack(stack), Edit::Occurrence(occurrence), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, root, Some(entries)).unwrap())])).unwrap();
+        h
+    }
+    fn mask(doc: &mut Document, id: OccurrenceHandle, translation: Point) -> CoverageHandle {
+        let snapshot = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), [16, 16], translation);
+        let source = RecordChange::insert(&doc.artwork.coverage, snapshot.source);
+        let mut occurrence = doc.scene().occurrence(id).unwrap().clone(); occurrence.mask = Some(snapshot.use_);
+        let h = source.handle;
+        doc.apply(Edit::Batch(vec![Edit::Coverage(source), Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, id, Some(occurrence)).unwrap())])).unwrap();
+        h
+    }
+
+    #[test]
+    fn duplicates_share_immutable_resources_but_own_edits_and_restore_exact_handles() {
+        let mut doc = document();
+        let id = doc.scene().order()[0];
+        let original = crate::color::source::rgba8_source([16, 16], |_, _| [40, 80, 120, 255]);
+        let OccurrenceContent::Paint(paint) = doc.scene().occurrence(id).unwrap().content else { unreachable!() };
+        doc.artwork.paint.get_mut(paint).unwrap().original = Some(original.clone());
+        doc.artwork.occurrences.get_mut(id).unwrap().reference = true;
+        let coverage = mask(&mut doc, id, Point { x: 3., y: 4. });
+        let unplaced = doc.artwork.paint.insert(PortableId::random(), doc.artwork.paint.get(paint).unwrap().clone()).unwrap();
+        let note_id = PortableId::random();
+        Arc::make_mut(&mut doc.artwork.extensions).records.insert(note_id, serde_json::json!({"id":note_id,"type":"test.note/1","ancillary":true,"copy_safe":true,"data":{"owner":{"ref":doc.artwork.occurrences.id(id).unwrap()}}}));
+        let retained = doc.artwork.extensions.clone();
+        let (edit, copies) = doc.duplicate_layers_edit(&[id]).unwrap();
+        let copied = copies[0];
+        let inverse = doc.apply(edit).unwrap();
+        let copied_id = doc.artwork.occurrences.id(copied).unwrap();
+        let OccurrenceContent::Paint(copied_paint) = doc.scene().occurrence(copied).unwrap().content else { unreachable!() };
+        let copied_mask = doc.scene().mask(copied).unwrap().0.source;
+        assert_ne!(paint, copied_paint);
+        assert_ne!(doc.artwork.paint.id(paint), doc.artwork.paint.id(copied_paint));
+        assert_ne!(coverage, copied_mask);
+        assert_ne!(doc.artwork.coverage.id(coverage), doc.artwork.coverage.id(copied_mask));
+        assert!(doc.scene().occurrence(copied).unwrap().reference);
+        assert!(Arc::ptr_eq(doc.artwork.paint.get(copied_paint).unwrap().original.as_ref().unwrap(), &original));
+        let tile = original.tiles.values().next().unwrap();
+        assert_eq!(doc.artwork.paint.get(copied_paint).unwrap().original.as_ref().unwrap().tiles.values().next().unwrap().resource_id(), tile.resource_id());
+        assert!(doc.artwork.paint.get(unplaced).is_some());
+        assert_eq!(doc.artwork.extensions, retained);
+        let mut copy = doc.artwork.paint.get(copied_paint).unwrap().clone(); copy.original = None;
+        let edit = Edit::Paint(RecordChange::replace(&doc.artwork.paint, copied_paint, Some(copy)).unwrap());
+        let restore_copy = doc.apply(edit).unwrap();
+        assert!(Arc::ptr_eq(doc.artwork.paint.get(paint).unwrap().original.as_ref().unwrap(), &original));
+        doc.apply(restore_copy).unwrap();
+        let redo = doc.apply(inverse).unwrap();
+        assert!(doc.artwork.occurrences.get(copied).is_none());
+        assert!(doc.artwork.paint.get(copied_paint).is_none());
+        let (_, future) = doc.duplicate_layers_edit(&[id]).unwrap();
+        assert!(future[0].index() > copied.index());
+        doc.apply(redo).unwrap();
+        assert_eq!(doc.artwork.occurrences.id(copied), Some(copied_id));
+        assert_eq!(doc.scene().mask(copied).unwrap().0.source, copied_mask);
+    }
+
+    #[test]
+    fn duplicated_groups_copy_applications_selections_and_membership_with_shared_definitions() {
+        let mut doc = document();
+        let paint = doc.scene().order()[0];
+        let group_handle = group(&mut doc, "Group", Point { x: 7., y: 11. });
+        doc.apply(doc.reparent_occurrence_edit(paint, Some(group_handle), 0).unwrap()).unwrap();
+        let program = crate::bundled_effect_catalog().get("unsharp_mask").unwrap().program();
+        let draft = crate::EffectInstance::new(program.clone());
+        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program, dimensions: Default::default() });
+        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: [16, 16] });
+        let effect = RecordChange::insert(&doc.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(application.handle), "Effect"));
+        let effect_handle = effect.handle; let app_handle = application.handle;
+        let selection = RecordChange::insert(&doc.artwork.selections, SavedSelection { selection: crate::Selection::empty(), display: Default::default() });
+        let selected = RecordChange { handle: OccurrenceHandle::from_index(effect.handle.index() + 1), id: PortableId::random(), value: Some(Occurrence::new(OccurrenceContent::Selection(selection.handle), "Selection")) };
+        let selected_handle = selected.handle;
+        let OccurrenceContent::Stack(stack) = doc.scene().occurrence(group_handle).unwrap().content else { unreachable!() };
+        let output_handle = doc.artwork.default_output;
+        let mut output = doc.output().clone(); Arc::make_mut(&mut output.context.phases).push((application.handle, 1.25));
+        let entries = Stack { entries: vec![effect.handle, paint, selected.handle] };
+        doc.apply(Edit::Batch(vec![Edit::Definition(definition), Edit::Effect(application), Edit::Occurrence(effect), Edit::SavedSelection(selection), Edit::Occurrence(selected), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, stack, Some(entries)).unwrap()), Edit::Output(RecordChange::replace(&doc.artwork.outputs, output_handle, Some(output)).unwrap())])).unwrap();
+        let definitions = doc.artwork.definitions.len();
+        let (edit, copies) = doc.duplicate_layers_edit(&[group_handle, paint]).unwrap();
+        assert_eq!(copies.len(), 1);
+        doc.apply(edit).unwrap();
+        let children = doc.scene().children(Some(copies[0]));
+        assert_eq!(children.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["Effect", "Ink", "Selection"]);
+        assert!(children.iter().all(|h| ![effect_handle, paint, selected_handle].contains(h)));
+        assert_eq!(doc.layer_offset(children[1]), doc.layer_offset(paint));
+        let copied_effect = doc.scene().effect_handle(children[0]).unwrap();
+        assert_ne!(copied_effect, app_handle);
+        assert_eq!(doc.scene().effect_application(children[0]).unwrap().definition, doc.scene().effect_application(effect_handle).unwrap().definition);
+        assert!(doc.output().context.phases.contains(&(copied_effect, 1.25)));
+        assert_ne!(doc.scene().source_target(children[2]), doc.scene().source_target(selected_handle));
+        assert_eq!(doc.artwork.definitions.len(), definitions);
+    }
+
+    #[test]
+    fn reparent_preserves_content_and_unlinked_mask_world_placements_and_undo() {
+        let mut doc = document();
+        let paint = doc.scene().order()[0];
+        let coverage = mask(&mut doc, paint, Point { x: 19., y: 23. });
+        let occurrence = doc.artwork.occurrences.get_mut(paint).unwrap();
+        occurrence.translation = Point { x: 5., y: 9. }; occurrence.mask.as_mut().unwrap().linked = false;
+        let group_handle = group(&mut doc, "Group", Point { x: 40., y: 60. });
+        let paint_target = doc.scene().source_target(paint).unwrap();
+        let mask_target = SourceTarget::Coverage(coverage);
+        let geometry = [doc.target_geometry(paint_target), doc.target_geometry(mask_target)];
+        let order = doc.scene().order().to_vec();
+        let edit = doc.reparent_occurrence_edit(paint, Some(group_handle), 0).unwrap();
+        let inverse = doc.apply(edit).unwrap();
+        assert_eq!([doc.target_geometry(paint_target), doc.target_geometry(mask_target)], geometry);
+        assert_eq!(doc.scene().children(Some(group_handle)), [paint]);
+        doc.apply(inverse).unwrap();
+        assert_eq!(doc.scene().order(), order);
+        assert_eq!([doc.target_geometry(paint_target), doc.target_geometry(mask_target)], geometry);
+        let child = group(&mut doc, "Child", Point::default());
+        doc.apply(doc.reparent_occurrence_edit(child, Some(group_handle), 0).unwrap()).unwrap();
+        assert!(doc.reparent_occurrence_edit(group_handle, Some(child), 0).is_err());
+        doc.artwork.occurrences.get_mut(group_handle).unwrap().locked = true;
+        assert!(doc.reparent_occurrence_edit(paint, Some(child), 0).is_err());
+        assert!(doc.reparent_occurrence_edit(child, None, 0).is_err());
+    }
+
+    #[test]
+    fn duplicate_and_move_preserve_existing_clipping_bases_with_ordinary_fills() {
+        let mut doc = document();
+        let base = doc.scene().order()[0]; let paper = doc.scene().order()[1];
+        let (edit, copies) = doc.duplicate_layers_edit(&[base]).unwrap(); doc.apply(edit).unwrap(); let clipped = copies[0];
+        doc.artwork.occurrences.get_mut(clipped).unwrap().clipped = true;
+        let destination = group(&mut doc, "Group", Point::default());
+        assert!(doc.reparent_occurrence_edit(base, Some(destination), 0).is_err());
+        assert!(doc.reparent_occurrence_edit(clipped, Some(destination), 0).is_err());
+        let before = doc.artwork.clone();
+        let undo = doc.apply(doc.reparent_occurrence_edit(paper, None, 0).unwrap()).unwrap();
+        assert_eq!(doc.scene().children(None)[0], paper);
+        assert_eq!(doc.clipping_base(clipped), Some(base));
+        doc.apply(undo).unwrap();
+        assert_eq!(doc.artwork, before);
+        let (edit, copies) = doc.duplicate_layers_edit(&[clipped, base]).unwrap(); doc.apply(edit).unwrap();
+        assert_eq!(doc.clipping_base(clipped), Some(base));
+        assert_eq!(doc.clipping_base(copies[0]), Some(copies[1]));
+        let (edit, copied_base) = doc.duplicate_layers_edit(&[base]).unwrap(); doc.apply(edit).unwrap();
+        assert_eq!(doc.clipping_base(clipped), Some(base));
+        let before = doc.artwork.clone();
+        let undo = doc.apply(doc.reparent_occurrence_edit(copied_base[0], None, doc.scene().children(None).len() - 1).unwrap()).unwrap();
+        assert_eq!(doc.scene().children(None).last(), Some(&copied_base[0]));
+        assert_eq!(doc.clipping_base(clipped), Some(base));
+        doc.apply(undo).unwrap();
+        assert_eq!(doc.artwork, before);
+    }
+}

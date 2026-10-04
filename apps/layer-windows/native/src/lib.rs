@@ -59,6 +59,38 @@ mod gpu_recovery_tests;
 mod test_support {
     use std::path::PathBuf;
 
+    use layer_core::{Document, ProjectLimits, authored::{ArtworkCapture,CaptureCheckpoint,SourceTarget,PaintSource,OccurrenceHandle}};
+    use std::{io::{Read,Write},sync::{Arc,atomic::AtomicBool}};
+    pub(crate) fn capture(document:&Document)->ArtworkCapture {
+        document.artwork.capture(CaptureCheckpoint{owner:document.owner,document:document.artwork.id,session_generation:0,artwork_generation:document.revision,working_generation:document.working.generation,edit_checkpoint:0}).unwrap()
+    }
+    pub(crate) fn write_capture(capture:&ArtworkCapture,mut output:impl Write)->Result<(),String> {
+        let cancelled=AtomicBool::new(false);layer_core::package::codec::PreparedPackage::prepare(capture,None,&cancelled)?.write(&mut output,&cancelled)
+    }
+    pub(crate) fn write_document(document:&Document,output:impl Write)->Result<(),String>{write_capture(&capture(document),output)}
+    pub(crate) fn read_document(mut input:impl Read,limits:ProjectLimits)->Result<Document,String> {
+        let mut bytes=Vec::new();input.read_to_end(&mut bytes).map_err(|e|e.to_string())?;
+        let source=layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes)))?;
+        let outcome=layer_core::package::codec::open(source,Default::default(),&AtomicBool::new(false))?;
+        let layer_core::package::codec::OpenOutcome::Candidate{artwork,..}=outcome else{return Err("Expected editable authored package".into())};
+        let document=Document::from_artwork(artwork).map_err(|e|e.to_string())?;document.validate(limits)?;Ok(document)
+    }
+    pub(crate) fn assert_authored_eq(actual:&Document,expected:&Document) {
+        let mut a=Vec::new();let mut b=Vec::new();write_document(actual,&mut a).unwrap();write_document(expected,&mut b).unwrap();assert_eq!(a,b);
+    }
+    #[cfg(target_os="windows")]
+    pub(crate) fn assert_capture_eq(actual:&Document,expected:&ArtworkCapture) {
+        let mut a=Vec::new();let mut b=Vec::new();write_document(actual,&mut a).unwrap();write_capture(expected,&mut b).unwrap();assert_eq!(a,b);
+    }
+    #[cfg(target_os="windows")]
+    pub(crate) fn occurrence_at(document:&Document,index:usize)->&layer_core::authored::Occurrence {document.scene().occurrence(document.scene().order()[index]).unwrap()}
+    pub(crate) fn paint_at(document:&Document,index:usize)->&PaintSource {document.scene().paint_source(document.scene().order()[index]).unwrap()}
+    pub(crate) fn paint_mut(document:&mut Document,index:usize)->&mut PaintSource {let SourceTarget::Paint(h)=document.scene().source_target(document.scene().order()[index]).unwrap() else{panic!("paint")};document.artwork.paint.get_mut(h).unwrap()}
+    pub(crate) fn insert_effect(document:&mut Document,name:&str,effect:layer_core::EffectInstance)->OccurrenceHandle {
+        use layer_core::authored::*;let definition=document.artwork.definitions.insert(PortableId::random(),Definition{program:effect.program,dimensions:Default::default()}).unwrap();let application=document.artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values,domain:document.composition().size}).unwrap();let h=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();let stack=document.composition().result;document.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,h);document.apply(layer_core::Edit::Stack(RecordChange::replace(&document.artwork.stacks,stack,document.artwork.stacks.get(stack).cloned()).unwrap())).unwrap();document.working.occurrence=Some(h);document.working.target=None;h
+    }
+    pub(crate) fn editable(outcome:layer_ui::ImportOutcome)->layer_ui::ImportedDocument {let layer_ui::ImportOutcome::Editable(document)=outcome else{panic!("Expected editable photo")};document}
+
     pub(crate) struct TempDir {
         pub(crate) path: PathBuf,
     }

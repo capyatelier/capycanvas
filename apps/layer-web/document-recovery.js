@@ -73,7 +73,7 @@ export function createDocumentRecovery({app,call,dialog,element,button,message,r
           if(decision==='discard')await transport('delete',key);
           else if(decision==='recover'){
             const bytes=await transport('get',key);
-            await restore(bytes);
+            if(await restore(bytes)===false)continue;
             const owner=await ensure();
             // Shared policy retains the origin until this drawing's new owned
             // recovery checkpoint has become durable.

@@ -26,7 +26,7 @@ struct Entry {
 }
 #[derive(Default)]
 struct State {
-    entries: HashMap<usize, Entry>,
+    entries: HashMap<u64, Entry>,
     clock: u64,
     stats: DecodedTileCacheStats,
 }
@@ -55,9 +55,7 @@ impl DecodedTileCache {
     }
 
     pub fn decode(&self, tile: &Arc<TileBlob>) -> Result<Arc<Vec<u8>>, String> {
-        // The weak key keeps this allocation's identity unique until eviction,
-        // while permitting the tile's compressed payload to be dropped.
-        let key = Arc::as_ptr(tile) as usize;
+        let key = tile.owner_identity();
         {
             let mut state = self
                 .state
@@ -166,7 +164,7 @@ mod tests {
             .collect();
         let good = Arc::new(TileBlob::encode(color.paint_descriptor(), &bytes).unwrap());
         let mut bad = TileBlob::encode(color.paint_descriptor(), &bytes).unwrap();
-        bad.digest[0] ^= 1;
+        bad.compressed = Arc::new(Arc::<[u8]>::from([0u8]).into());
         let cache = DecodedTileCache::new(bytes.len());
         assert_eq!(cache.decode(&good).unwrap().as_slice(), bytes);
         assert!(cache.decode(&Arc::new(bad)).is_err());
@@ -174,6 +172,24 @@ mod tests {
         let disabled = DecodedTileCache::new(0);
         assert_eq!(disabled.decode(&good).unwrap().as_slice(), bytes);
         assert_eq!(disabled.stats().resident_bytes, 0);
+    }
+
+    #[test]
+    fn distinct_owners_with_the_same_resource_id_have_independent_cache_entries() {
+        let first = tile(23);
+        let restored = Arc::new(TileBlob::from_package(first.resource_id(), first.descriptor, first.compressed().unwrap()).unwrap());
+        assert_ne!(first.owner_identity(), restored.owner_identity());
+        assert_eq!(first.owner_identity(), first.clone().owner_identity());
+        let cache = DecodedTileCache::new(2 * 65536);
+        let a = cache.decode(&first).unwrap();
+        let b = cache.decode(&restored).unwrap();
+        assert_eq!(a, b);
+        assert!(!Arc::ptr_eq(&a, &b));
+        assert_eq!(cache.stats().misses, 2);
+        assert!(Arc::ptr_eq(&a, &cache.decode(&first).unwrap()));
+        let owner = Arc::downgrade(&first);
+        drop(first);
+        assert!(owner.upgrade().is_none());
     }
 
     #[test]

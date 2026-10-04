@@ -1,6 +1,6 @@
 //! Windows scheduling around shared candidate policies. No WinUI callback owns
 //! artwork, converts profiles, or decides how an edit enters history.
-use layer_core::{Project, color::RgbSpace};
+use layer_core::{authored::ArtworkCapture, color::RgbSpace};
 use layer_host::{
     NativeHost,
     clipboard::ClipTask,
@@ -118,9 +118,8 @@ enum Payload {
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
     Histogram {
-        project: Option<Box<Project>>,
+        project: Option<Box<ArtworkCapture>>,
         gpu: SnapshotGpu,
-        time: f32,
     },
 }
 pub(crate) struct Task {
@@ -205,7 +204,7 @@ impl Task {
                     Payload::Import(Import {
                         images: layer_ui::ImageImportBatch::new(
                             session.state().settings.photo_open,
-                            session.engine().document().color.space,
+                            session.engine().document().composition().color.space,
                             Default::default(),
                         ),
                         context: session.image_placement_context(None, None)?,
@@ -299,7 +298,6 @@ impl Task {
                     Payload::Histogram {
                         project: Some(Box::new(session.capture_project_recovery()?)),
                         gpu: gpu.snapshot_gpu(),
-                        time: session.engine().animation_time(),
                     },
                 )
             }
@@ -405,14 +403,12 @@ impl Task {
             Payload::Histogram {
                 project,
                 gpu,
-                time,
             } => {
                 let project = project.take().ok_or("Histogram was already captured")?;
-                let sampled_time = project.document.has_animated_effects().then_some(*time);
+                let sampled_time = project.artwork.effects.iter().any(|(_,_,e)| project.artwork.definitions.get(e.definition).is_some_and(|d| layer_core::EffectView::new(&d.program, &e.values).animated())).then_some(project.output().context.elapsed);
                 let mut renderer = gpu
                     .capture(
                         *project,
-                        *time,
                         self.control.clone(),
                     )
                     .map_err(|e| e.to_string())?;
@@ -683,7 +679,7 @@ impl Task {
                     .image_layer_drop_hint(target, fraction)
                     .ok_or("Images cannot be placed at this layer position")?;
                 Ok::<_, String>(layer_ui::ImageLayerDestination {
-                    target: layer_core::LayerId(target),
+                    target: layer_ui::occurrence_handle(target)?,
                     position,
                 })
             })
@@ -810,7 +806,7 @@ impl Task {
                 if !self.preset_view.is_null() {
                     let names = serde_json::from_value(self.preset_view["names"].clone()).map_err(|error| error.to_string())?;
                     let mut view = layer_ui::ExportPresetView { names, index:None, recipe:None, changed:false };
-                    view.localize_names(task.document().color, &self.localization);
+                    view.localize_names(task.document().composition().color, &self.localization);
                     self.preset_view["names"] = json!(view.names);
                     self.details["presets"]["names"] = self.preset_view["names"].clone();
                 }
@@ -849,6 +845,7 @@ impl Task {
 }
 #[cfg(test)]
 mod tests {
+    use crate::test_support::*;
     use super::*;
     use layer_core::color::{ColorProfile, SampleDepth};
     use layer_host::Renderer;
@@ -999,15 +996,14 @@ mod tests {
         assert_ne!(gpu.adapter().get_info().device_type, wgpu::DeviceType::Cpu);
         let project = layer_ui::new_drawing(24, 18, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         let master = directory.join("native-master.capy");
-        project
-            .write(std::fs::File::create(&master).unwrap())
+        write_document(&project,std::fs::File::create(&master).unwrap())
             .unwrap();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session =
             UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36], Platform::Windows).unwrap();
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        host.session =
-            *crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap();
+        let crate::documents::RecoveryPrepared::Editable(candidate)=crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap() else{panic!("Native master must admit an editable session")};
+        host.session = *candidate;
         host.session.set_document_replacement(true);
         host.document_adopted();
         settle(&mut host);
@@ -1016,7 +1012,7 @@ mod tests {
         assert!(info.details.is_array());
         info.complete(&mut host, false).unwrap();
         drop(info);
-        let initial = host.session.engine().document().color;
+        let initial = host.session.engine().document().composition().color;
         for (command, choice) in [
             (CommandId::AssignProfile, json!({"Assign":"DisplayP3"})),
             (
@@ -1044,11 +1040,11 @@ mod tests {
             settle(&mut host);
         }
         assert_eq!(
-            host.session.engine().document().color.space,
+            host.session.engine().document().composition().color.space,
             RgbSpace::ProPhoto
         );
         assert_eq!(
-            host.session.engine().document().color.depth,
+            host.session.engine().document().composition().color.depth,
             SampleDepth::U16
         );
         for _ in 0..3 {
@@ -1058,7 +1054,7 @@ mod tests {
             drop(undo);
             settle(&mut host);
         }
-        assert_eq!(host.session.engine().document().color, initial);
+        assert_eq!(host.session.engine().document().composition().color, initial);
         let mut redo = begin(&mut host, CommandId::Redo);
         ready(&mut redo, Action::Describe);
         redo.commit(&mut host).unwrap();
@@ -1143,7 +1139,7 @@ mod tests {
             }
             host.session.set_host_error(None);
             host.set_localization(layer_ui::Localizer::shared(layer_ui::UiLanguage::English));
-            let imported = layer_ui::read_import(
+            let imported = editable(layer_ui::read_import(
                 std::fs::File::open(&path).unwrap(),
                 layer_ui::ImportIntent::Open,
                 Default::default(),
@@ -1152,22 +1148,15 @@ mod tests {
                 Default::default(),
                 &Default::default(),
             )
-            .unwrap();
+            .unwrap());
             assert_eq!(
                 [
-                    imported.project.document.width,
-                    imported.project.document.height
+                    imported.project.composition().size[0],
+                    imported.project.composition().size[1]
                 ],
                 [12, 9]
             );
-            assert!(
-                imported
-                    .project
-                    .document
-                    .layers
-                    .iter()
-                    .any(|l| l.source.is_some())
-            );
+            assert!(imported.project.artwork.paint.iter().any(|(_,_,p)|p.original.is_some()));
             assert!(
                 imported
                     .source
@@ -1182,7 +1171,7 @@ mod tests {
             }
         }
         assert_eq!(host.session.engine().document().revision, revision);
-        let before = host.session.engine().document().layers.len();
+        let before = host.session.engine().document().scene().order().len();
         let mut import = begin(&mut host, CommandId::ImportImage);
         let path = photo.unwrap().to_str().unwrap().to_string();
         ready(
@@ -1194,7 +1183,7 @@ mod tests {
         assert_eq!(import.stage, "commit");
         import.commit(&mut host).unwrap();
         drop(import);
-        let target = host.session.engine().document().active_layer.0;
+        let target = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         assert!(host.layer_thumbnails([(90, target)]).unwrap().0.is_empty(), "unrendered imports cannot publish a thumbnail");
         settle(&mut host);
         // Simulate unrelated shader warmup after the document frame settled.
@@ -1211,7 +1200,7 @@ mod tests {
         }
         assert_eq!((thumbnails[0].request_id, thumbnails[0].bytes.len()), (91, 4096));
         host.startup.complete = true;
-        assert_eq!(host.session.engine().document().layers.len(), before + 2);
+        assert_eq!(host.session.engine().document().scene().order().len(), before + 2);
         host.dispatch(UiAction::Invoke {
             command: CommandId::ApplyTransform,
         })
@@ -1285,7 +1274,7 @@ mod tests {
         let mut view = layer_ui::proof_workflow::ProofView::default();
         setup.retain_proof(&mut view).unwrap();
         assert!(!view.observe(&host.session).needed);
-        assert_eq!(host.session.engine().document().proof, Some(embedded.clone()));
+        assert_eq!(host.session.engine().document().output().proof, Some(embedded.clone()));
         let proof_checkpoint = host.session.engine().checkpoint();
         let gpu = host.session.renderer_mut().0.as_mut().unwrap();
         let mut presenter = layer_render_wgpu::ViewportPresenter::for_surface(gpu, wgpu::TextureFormat::Rgba8Unorm, layer_render_wgpu::SdrSurfaceColor::Srgb).unwrap();
@@ -1299,10 +1288,10 @@ mod tests {
             assert_eq!(host.session.engine().checkpoint(), proof_checkpoint);
         }
         let portable = directory.join("proof-portable.capy");
-        host.session.capture_project_recovery().unwrap().write(std::fs::File::create(&portable).unwrap()).unwrap();
+        write_capture(&host.session.capture_project_recovery().unwrap(),std::fs::File::create(&portable).unwrap()).unwrap();
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        let restored = crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap();
-        assert_eq!(restored.engine().document().proof, Some(embedded.clone()));
+        let crate::documents::RecoveryPrepared::Editable(restored)=crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap() else{panic!("Proof package must admit an editable session")};
+        assert_eq!(restored.engine().document().output().proof, Some(embedded.clone()));
         assert!(!restored.state().soft_proof && !restored.state().gamut_warning);
         let mut replacement = begin(&mut host, CommandId::SoftProofSetup);
         let replacement_recipe = layer_core::color::ProofRecipe::new("sRGB".into(), ColorProfile::Builtin(RgbSpace::Srgb));
@@ -1315,15 +1304,15 @@ mod tests {
         assert!(crate::color_storage::list(&cancel).unwrap().iter().any(|p| p.id == id));
         replacement.commit(&mut host).unwrap();
         replacement.retain_proof(&mut view).unwrap();
-        assert_eq!(host.session.engine().document().proof, Some(replacement_recipe.clone()));
+        assert_eq!(host.session.engine().document().output().proof, Some(replacement_recipe.clone()));
         host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-        assert_eq!(host.session.engine().document().proof, Some(embedded));
+        assert_eq!(host.session.engine().document().output().proof, Some(embedded));
         host.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-        assert!(host.session.engine().document().proof.is_none());
+        assert!(host.session.engine().document().output().proof.is_none());
         assert_eq!(host.session.engine().checkpoint(), before_proof);
         host.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
         host.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
-        assert_eq!(host.session.engine().document().proof, Some(replacement_recipe));
+        assert_eq!(host.session.engine().document().output().proof, Some(replacement_recipe));
         assert_eq!(pixels(host.session.renderer_mut().0.as_mut().unwrap()), source_pixels);
     }
     #[cfg(target_os = "windows")]

@@ -83,7 +83,7 @@ impl SelectionStroke {
         }
         let stroke = layer_core::Stroke::new(
             StrokeId(self.id),
-            layer_core::LayerId(0),
+            layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(0)),
             layer_core::StrokeTool::Brush,
             self.brush.clone(),
             std::mem::take(&mut self.replay_points),

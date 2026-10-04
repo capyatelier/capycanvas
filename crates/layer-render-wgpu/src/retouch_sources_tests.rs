@@ -2,7 +2,9 @@ use crate::test_support::floats;
 use super::*;
 use crate::test_support::pen;
 use layer_core::{
-    BrushSnapshot, Document, LayerMask, LayerOperation, LayerOperationKind, Point, Retouch,
+    BrushSnapshot, Document, CoverageSnapshot, RasterOperation, RasterOperationKind, Point, Retouch,
+    Edit, authored::{CoverageHandle, Occurrence, OccurrenceContent, OccurrenceHandle,
+        PaintHandle, PaintSource, PortableId, RecordChange, SourceTarget},
     RetouchSource, color::source::rgba8_source,
 };
 use layer_engine::{
@@ -16,8 +18,11 @@ mod clone;
 mod heal;
 
 const SIZE: [u32; 2] = [768, 512];
-const TARGET: LayerId = LayerId(1);
-const PHOTO: LayerId = LayerId(3);
+const TARGET: SourceTarget = SourceTarget::Paint(PaintHandle::from_index(0));
+const PHOTO: SourceTarget = SourceTarget::Paint(PaintHandle::from_index(1));
+const TARGET_USE: OccurrenceHandle = OccurrenceHandle::from_index(0);
+const PAPER_USE: OccurrenceHandle = OccurrenceHandle::from_index(1);
+const PHOTO_USE: OccurrenceHandle = OccurrenceHandle::from_index(2);
 const FILL: [f32; 4] = [1., 0., 0., 0.5];
 
 fn view(extent: [u32; 2]) -> ViewState {
@@ -58,16 +63,43 @@ fn over_in(space: layer_core::BlendSpace, top: [f32; 4], below: [f32; 4]) -> [f3
     convert(over(convert(top, layer_core::color::RgbSpace::encode), convert(below, layer_core::color::RgbSpace::encode)), layer_core::color::RgbSpace::decode)
 }
 
-/// The target (layer 1) above a patterned photo marked as a reference, above
-/// the paper.
-fn document(extent: [u32; 2]) -> Document {
-    let mut doc = Document::new("retouch sources", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    assert_eq!(doc.allocate_layer_id(), PHOTO);
-    let mut photo = Layer::paint(PHOTO, "Photo");
-    photo.source = Some(rgba8_source(extent, pattern));
-    doc.layers.insert(1, photo);
-    doc.reference_layers = [PHOTO].into();
+fn photo_document(extent: [u32; 2], pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1],
+        layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let paint = RecordChange::insert(&doc.artwork.paint, PaintSource {
+        domain: extent, original: Some(rgba8_source(extent, pixel)),
+        raster: Default::default(), operations: Default::default(),
+    });
+    assert_eq!(SourceTarget::Paint(paint.handle), PHOTO);
+    let mut photo = Occurrence::new(OccurrenceContent::Paint(paint.handle), "Photo");
+    photo.reference = true;
+    let photo = RecordChange::insert(&doc.artwork.occurrences, photo);
+    assert_eq!(photo.handle, PHOTO_USE);
+    let stack_handle = doc.composition().result;
+    let mut stack = doc.artwork.stacks.get(stack_handle).unwrap().clone();
+    stack.entries.insert(1, photo.handle);
+    let stack = RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack)).unwrap();
+    doc.apply(Edit::Batch(vec![Edit::Paint(paint), Edit::Occurrence(photo), Edit::Stack(stack)])).unwrap();
     doc
+}
+
+fn document(extent: [u32; 2]) -> Document { photo_document(extent, pattern) }
+
+fn set_blend(doc: &mut Document, blend: layer_core::BlendSpace) {
+    let mut composition = doc.composition().clone();
+    composition.blend = blend;
+    let change = RecordChange::replace(&doc.artwork.compositions, doc.artwork.root, Some(composition)).unwrap();
+    doc.apply(Edit::Composition(change)).unwrap();
+}
+
+fn occurrence_edit(doc: &Document, handle: OccurrenceHandle, update: impl FnOnce(&mut Occurrence)) -> Edit {
+    let mut occurrence = doc.artwork.occurrences.get(handle).unwrap().clone();
+    update(&mut occurrence);
+    Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, handle, Some(occurrence)).unwrap())
+}
+
+fn reveal_all(extent: [u32; 2]) -> CoverageSnapshot {
+    CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, Point::default())
 }
 
 fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
@@ -83,10 +115,10 @@ fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {
 }
 
 fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.source_tiles.get_mut().admit(0);
     let (input, consumer) = input_queue(256);
-    let extent = [doc.width, doc.height];
+    let extent = doc.composition().size;
     let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
     engine
         .set_brush(BrushSnapshot {
@@ -102,10 +134,10 @@ fn engine(doc: Document, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngi
         .set_instant_feedback(InstantFeedbackConfig { enabled: feedback, ..Default::default() })
         .unwrap();
     engine
-        .append_layer_operation(TARGET, LayerOperation {
+        .append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
-            coverage: LayerMask::reveal_all(LayerId(20), Point::default()),
-            kind: LayerOperationKind::Fill { color: FILL, alpha_locked: false },
+            coverage: reveal_all(extent),
+            kind: RasterOperationKind::Fill { color: FILL, alpha_locked: false },
         })
         .unwrap();
     flush(&mut engine);
@@ -245,15 +277,16 @@ fn clone_reads_over_the_strokes_own_dabs_see_the_pixels_it_started_on() {
 fn retouch_source_preserves_unmixed_perceptual_pixels() {
     for opacity in [0., 1.] {
         let mut doc = document(SIZE);
-        doc.blend_space = layer_core::BlendSpace::Perceptual;
-        doc.reference_layers = [PHOTO, LayerId(2)].into();
+        set_blend(&mut doc, layer_core::BlendSpace::Perceptual);
+        let edit = occurrence_edit(&doc, PAPER_USE, |o| o.reference = true);
+        doc.apply(edit).unwrap();
         let (mut input, mut engine) = engine(doc, false);
-        engine.append_layer_operation(TARGET, LayerOperation {
+        engine.append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
-            coverage: LayerMask::reveal_all(LayerId(21), Point::default()),
-            kind: LayerOperationKind::Fill { color: [0.1433, 0.27534, 0.423, 1.], alpha_locked: false },
+            coverage: reveal_all(SIZE),
+            kind: RasterOperationKind::Fill { color: [0.1433, 0.27534, 0.423, 1.], alpha_locked: false },
         }).unwrap();
-        engine.set_layer_opacity(TARGET, opacity).unwrap();
+        engine.set_layer_opacity(TARGET_USE, opacity).unwrap();
         engine.set_retouch(Some(RetouchSource::References));
         engine.set_retouch_points(&[Point { x: 40., y: 40. }]);
         flush(&mut engine);
@@ -279,9 +312,9 @@ fn current_and_below_lays_the_target_at_its_opacity_over_the_references() {
 }
 fn current_and_below_in(space: layer_core::BlendSpace) {
     let mut doc = document(SIZE);
-    doc.blend_space = space;
+    set_blend(&mut doc, space);
     let (mut input, mut engine) = engine(doc, false);
-    engine.set_layer_opacity(TARGET, 0.5).unwrap();
+    engine.set_layer_opacity(TARGET_USE, 0.5).unwrap();
     engine.set_retouch(Some(RetouchSource::References));
     engine.set_retouch_points(&[Point { x: 40., y: 40. }]);
     flush(&mut engine);
@@ -303,7 +336,8 @@ fn current_and_below_in(space: layer_core::BlendSpace) {
     draw(&mut engine, &mut input, pen(2, PenPhase::Up, [600., 400.], SampleFlags::PRIMARY));
     flush(&mut engine);
 
-    engine.apply_edit(layer_core::Edit::SetReferences(Default::default())).unwrap();
+    let edit = occurrence_edit(engine.document(), PHOTO_USE, |o| o.reference = false);
+    engine.apply_edit(edit).unwrap();
     flush(&mut engine);
     draw(&mut engine, &mut input, pen(3, PenPhase::Down, [600., 400.], SampleFlags::PRIMARY));
     let (alone, _) = sample(engine.backend_mut(), [0, 0], [0.; 2]);
@@ -312,8 +346,8 @@ fn current_and_below_in(space: layer_core::BlendSpace) {
     flush(&mut engine);
 }
 
-fn settle(r: &mut WgpuRasterizer, layers: &[Layer]) {
-    let mut frame = crate::test_support::packet(layers, [2560, 2560]);
+fn settle(r: &mut WgpuRasterizer, doc: &Document) {
+    let mut frame = crate::test_support::packet(doc.scene(), [2560, 2560]);
     frame.composite_all = false;
     for _ in 0..200 {
         r.submit(frame).unwrap();
@@ -326,15 +360,14 @@ fn settle(r: &mut WgpuRasterizer, layers: &[Layer]) {
 
 #[test]
 fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
-    let doc = document([2560, 2560]);
-    let mut layers = doc.layers.clone();
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut doc = document([2560, 2560]);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.prepare_retouch(Some(&RetouchPreparation {
         target: TARGET,
-        retouch: Retouch { source: RetouchSource::References, references: Arc::new([PHOTO].into()), ..Retouch::default() },
+        retouch: Retouch { source: RetouchSource::References, references: Arc::new([PHOTO_USE].into()), ..Retouch::default() },
         points: vec![Point { x: 10., y: 10. }],
     }));
-    settle(&mut r, &layers);
+    settle(&mut r, &doc);
     let retouch = |r: &WgpuRasterizer| r.retouch.as_ref().unwrap().counts;
     let cached = |r: &WgpuRasterizer| r.retouch.as_ref().unwrap().cached_pages();
     assert_eq!(retouch(&r).captures, 9, "the ring around the focus point, clipped to the canvas");
@@ -344,18 +377,24 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     assert!(close(source[5 * 256 + 7], reference(263, 261)));
     assert_eq!(retouch(&r).captures, 9, "cached pages are reused");
 
-    layers[0].opacity = 0.25;
-    settle(&mut r, &layers);
+    let edit = occurrence_edit(&doc, TARGET_USE, |o| o.opacity = 0.25);
+    doc.apply(edit).unwrap();
+    settle(&mut r, &doc);
     assert_eq!(retouch(&r).captures, 9, "changing the target keeps the cache");
 
-    layers[1].opacity = 0.5;
-    settle(&mut r, &layers);
+    let edit = occurrence_edit(&doc, PHOTO_USE, |o| o.opacity = 0.5);
+    doc.apply(edit).unwrap();
+    settle(&mut r, &doc);
     assert_eq!(retouch(&r).captures, 18, "changing a reference captures again");
     let (dimmed, _) = sample(&mut r, [1, 1], [0.; 2]);
     assert!(close(dimmed[5 * 256 + 7], reference(263, 261).map(|v| v * 0.5)));
 
-    layers[1].source = Some(rgba8_source([2560, 2560], |x, y| pattern(y, x)));
-    settle(&mut r, &layers);
+    let SourceTarget::Paint(photo) = PHOTO else { unreachable!() };
+    let mut source = doc.artwork.paint.get(photo).unwrap().clone();
+    source.original = Some(rgba8_source([2560, 2560], |x, y| pattern(y, x)));
+    let change = RecordChange::replace(&doc.artwork.paint, photo, Some(source)).unwrap();
+    doc.apply(Edit::Paint(change)).unwrap();
+    settle(&mut r, &doc);
     let (swapped, _) = sample(&mut r, [1, 1], [0.; 2]);
     assert!(close(swapped[5 * 256 + 7], reference(261, 263).map(|v| v * 0.5)), "a replaced photo is a new frame");
 
@@ -369,7 +408,7 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     let (first, _) = sample(&mut r, [0, 0], [0.; 2]);
     assert!(retouch(&r).captures > captures, "the least recently used page was evicted");
     assert!(close(first[3 * 256 + 3], reference(3, 3).map(|v| v * 0.5)), "an evicted page is captured again");
-    settle(&mut r, &layers);
+    settle(&mut r, &doc);
     let bytes = r.retouch.as_ref().unwrap().storage_bytes();
     let page = u64::from(PAGE_SIZE * PAGE_SIZE) * 16;
     assert_eq!(bytes, (16 + REFERENCE_PAGES as u64) * page + PARAMETER_BYTES, "idle sources keep only their pages");
@@ -377,7 +416,7 @@ fn the_reference_cache_follows_its_frame_and_evicts_the_least_recent_page() {
     r.set_telemetry_enabled(true);
     assert!(r.telemetry().resident_bytes >= bytes);
     r.prepare_retouch(None);
-    r.submit(crate::test_support::packet(&layers, [2560, 2560])).unwrap();
+    r.submit(crate::test_support::packet(doc.scene(), [2560, 2560])).unwrap();
     assert_eq!(r.metrics().retouch_storage_bytes, 0);
 }
 
@@ -401,7 +440,8 @@ fn contacts_neither_upload_nor_wait_and_a_miss_replays_after_pen_up() {
     let mut live_copies = 0;
     for miss in [false, true] {
         let mut doc = document([4608, 1024]);
-        doc.reference_layers.insert(LayerId(2));
+        let edit = occurrence_edit(&doc, PAPER_USE, |o| o.reference = true);
+        doc.apply(edit).unwrap();
         let (mut input, mut engine) = engine(doc, false);
         engine.set_retouch(Some(RetouchSource::References));
         engine.set_retouch_points(&[Point { x: 100., y: 100. }]);

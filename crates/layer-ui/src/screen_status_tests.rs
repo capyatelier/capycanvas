@@ -20,10 +20,10 @@ fn gnome(mode: &str) -> layer_color::screen::ScreenColor {
 }
 
 fn screen_session(space: layer_core::color::RgbSpace, depth: layer_core::color::SampleDepth) -> UiSession<Recorder> {
-    let mut document = Document::new("Screen", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.space = space;
-    document.color.depth = depth;
-    UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [32, 32], Platform::Gtk).unwrap()
+    let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.space = space;
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = depth;
+    UiSession::new(Recorder { color: document.composition().color, ..Default::default() }, document, [32, 32], Platform::Gtk).unwrap()
 }
 
 fn chip(s: &UiSession<Recorder>) -> Option<(String, bool)> {

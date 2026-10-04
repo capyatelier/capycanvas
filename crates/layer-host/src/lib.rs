@@ -87,7 +87,7 @@ pub struct NativeHost {
 
 impl NativeHost {
     fn prepare_ui_previews(&mut self) -> Result<(), String> {
-        let rendition = self.session.engine().document().color.depth.is_float()
+        let rendition = self.session.engine().document().composition().color.depth.is_float()
             .then(|| self.session.effective_sdr_rendition());
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
             gpu.set_ui_rendition(rendition).map_err(|e| e.to_string())?;
@@ -297,21 +297,21 @@ impl NativeHost {
             && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
         {
             for (request, target) in requests.into_iter().take(1) {
+                let target = if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
+                    layer_render::ThumbnailTarget::Occurrence(layer_core::OccurrenceHandle::from_index(u32::try_from(target - 1).map_err(|_| "Invalid thumbnail identity")?))
+                };
                 // Match GTK's bounded cold-photo work. The UI retries requests
                 // that are not yet accepted, leaving input/frame opportunities
                 // between batches instead of scanning an entire photo here.
-                if !self.session.renderer_mut().0.as_mut().unwrap()
-                    .prepare_thumbnail_batch(layer_core::LayerId(target))
-                    .map_err(|e| e.to_string())? {
-                    continue;
+                match self.session.renderer_mut().0.as_mut().unwrap().prepare_thumbnail_batch(target) {
+                    Ok(true) => (),
+                    Ok(false) | Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => continue,
+                    Err(error) => return Err(error.to_string()),
                 }
-                if self
-                    .session
-                    .renderer_mut()
-                    .request_thumbnail(request, layer_core::LayerId(target))
-                    .is_ok()
-                {
-                    accepted.push(request);
+                match self.session.renderer_mut().request_thumbnail(request, target) {
+                    Ok(()) => accepted.push(request),
+                    Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => (),
+                    Err(error) => return Err(error.to_string()),
                 }
             }
         }
@@ -662,7 +662,7 @@ impl NativeHost {
     fn export_validation(&self, recipe: &layer_ui::ExportRecipe) -> Result<(), layer_ui::ColorFeatureError> {
         recipe.validate()?;
         let document = self.session.engine().document();
-        recipe.output_extent([document.width, document.height])?;
+        recipe.output_extent(document.composition().size)?;
         Ok(())
     }
     pub fn query(&mut self, query: Value) -> Result<Value, String> {
@@ -830,7 +830,7 @@ impl NativeHost {
             }}),
             Query::ExportPresetCopy { names } => {
                 let mut view = layer_ui::ExportPresetView { names, index: None, recipe: None, changed: false };
-                view.localize_names(self.session.engine().document().color, self.session.localization());
+                view.localize_names(self.session.engine().document().composition().color, self.session.localization());
                 json!(view.names)
             },
             Query::ExportProfileCaptionsCopy { captions } => json!(captions.iter().map(|caption| caption.message(self.session.localization())).collect::<Vec<_>>()),
@@ -849,7 +849,7 @@ impl NativeHost {
                 }
                 layer_ui::color_management::proof_view(&self.session)
             },
-            Query::DocumentColor => json!(self.session.engine().document().color),
+            Query::DocumentColor => json!(self.session.engine().document().composition().color),
             Query::Requests => json!(self.session.state().requests),
             Query::ExportForm => json!(layer_ui::ExportForm::new_localized(self.session.engine().document(), self.session.localization())),
             Query::ExportDraft { recipe, action } => json!(recipe.draft_localized(action, self.session.localization())),
@@ -1032,7 +1032,7 @@ impl NativeHost {
                 let doc = self.session.engine().document();
                 json!(layer_ui::NavigatorGeometry::new(
                     &state.camera,
-                    [doc.width, doc.height],
+                    [doc.composition().size[0], doc.composition().size[1]],
                     viewport
                 ))
             }
@@ -1221,14 +1221,15 @@ mod tests {
         let clock = std::cell::Cell::new(0);
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
         while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        let fill = layer_ui::occurrence_token(*host.session.engine().document().scene().constant_backdrop().first().unwrap());
         for action in [
-            json!({"type":"select_layer","id":2}),
-            json!({"type":"effect","action":{"op":"set","layer":2,"key":"color","value":{"kind":"color","value":{"space":"Srgb","rgba":[1.,0.,0.,1.]}}}}),
+            json!({"type":"select_layer","id":fill}),
+            json!({"type":"effect","action":{"op":"set","layer":fill,"key":"color","value":{"kind":"color","value":{"space":"Srgb","rgba":[1.,0.,0.,1.]}}}}),
         ] { host.dispatch(serde_json::from_value(action).unwrap()).unwrap(); }
         frame_step(&mut host, &clock, deadline);
         assert!(host.session.background_readback_idle());
         loop {
-            let (_, images) = host.layer_thumbnails([(1, 2)]).unwrap();
+            let (_, images) = host.layer_thumbnails([(1, fill)]).unwrap();
             if let Some(image) = images.first() {
                 assert!(image.bytes.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
                 break;
@@ -2096,7 +2097,7 @@ mod tests {
         }
         assert!(host.last_pen.is_none());
         let checkpoint = host.session.engine().checkpoint();
-        let before = host.session.engine().document().layers[0].raster.clone();
+        let before = crate::test_support::active_source(host.session.engine().document()).raster.clone();
         let before_pixels = host.session
             .renderer_mut()
             .0
@@ -2122,7 +2123,7 @@ mod tests {
         .unwrap();
         assert_eq!(host.paint_start_sequence(), paint_start, "corrected down samples do not start another contact");
         host.session.frame(30_000_000, 30_000_000).unwrap();
-        let after = &host.session.engine().document().layers[0].raster;
+        let after = &crate::test_support::active_source(host.session.engine().document()).raster;
         assert_ne!(
             after, &before,
             "late correction publishes a replacement raster root"
@@ -2146,7 +2147,7 @@ mod tests {
         host.session.require_document_idle().unwrap();
         host.dispatch(UiAction::Invoke { command: layer_ui::CommandId::Undo }).unwrap();
         host.session.frame(40_000_000, 40_000_000).unwrap();
-        assert!(host.session.engine().document().layers[0].raster.is_empty());
+        assert!(crate::test_support::active_source(host.session.engine().document()).raster.is_empty());
         assert!(!host.session.engine().can_undo(), "correction adds no undo entry");
     }
 
@@ -2164,5 +2165,25 @@ mod tests {
         assert_eq!(app.sequence, 0);
         assert!(app.resize(0, 100, 1.0).is_err());
         assert!(app.resize(100, 100, 0.0).is_err());
+    }
+}
+
+#[cfg(test)]
+mod test_support {
+    use layer_core::{Document, SourceTarget, authored::{PaintSource, Composition}};
+    pub fn active_source(document: &Document) -> &PaintSource {
+        let SourceTarget::Paint(handle) = document.working.target.unwrap() else { panic!("paint target"); };
+        document.artwork.paint.get(handle).unwrap()
+    }
+    pub fn active_source_mut(document: &mut Document) -> &mut PaintSource {
+        let SourceTarget::Paint(handle) = document.working.target.unwrap() else { panic!("paint target"); };
+        document.artwork.paint.get_mut(handle).unwrap()
+    }
+    pub fn composition_mut(document: &mut Document) -> &mut Composition {
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap()
+    }
+    pub fn hide_paper(document: &mut Document) {
+        let handles = document.scene().constant_backdrop().to_vec();
+        for handle in handles { document.artwork.occurrences.get_mut(handle).unwrap().visible = false; }
     }
 }

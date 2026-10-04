@@ -41,45 +41,48 @@ fn photo_drop_captures_document_point_and_reuses_shared_row_validation() {
         app.invoke("zoom_in"); app.invoke("rotate_right"); app.invoke("flip_horizontal");
         let point = layer_core::Point { x: 615., y: 430. };
         let expected = unsafe { &*app.0 }.host.session.state().camera.input_transform().map(point);
-        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
         let job = place_at(&app, Some(json!({"screen": point})));
         // Provider delivery is asynchronous; later navigation must not move
         // the captured document target or cause insertion at the canvas center.
         app.invoke("zoom_out"); app.invoke("rotate_left");
         read_bytes(&job, "Drop.tiff", &bytes); adopt(&app, &job, false);
         let doc = unsafe { &*app.0 }.host.session.engine().document();
-        let placed = doc.layers.iter().find(|l| l.source.is_some()).unwrap();
-        let center = doc.layer_geometry(placed.id).map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
+        let placed = imported_occurrences(doc).next().unwrap();
+        let layer_core::authored::OccurrenceContent::Paint(paint) = doc.scene().occurrence(placed).unwrap().content else { unreachable!() };
+        let center = doc.target_geometry(layer_core::authored::SourceTarget::Paint(paint)).map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
         assert!((center.x - expected.x).abs() < 0.0001 && (center.y - expected.y).abs() < 0.0001);
-        assert_eq!(source_samples(placed.source.as_ref().unwrap()), source_samples(&original));
+        assert_eq!(source_samples(doc.scene().paint_source(placed).unwrap().original.as_ref().unwrap()), source_samples(&original));
         app.invoke("apply_transform"); app.draw_until_idle();
         let pixels = app.pixels();
         app.invoke("undo"); app.draw_until_idle();
-        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
         assert!(!unsafe { &*app.0 }.host.session.engine().can_undo());
         app.invoke("redo"); app.draw_until_idle(); assert_eq!(app.pixels(), pixels);
         app.invoke("undo"); app.draw_until_idle();
 
         app.layer_action(json!({"op":"group_selected"})); app.draw_until_idle();
-        let group = unsafe { &*app.0 }.host.session.engine().document().layers.iter()
-            .find(|l| l.kind == layer_core::LayerKind::Group).unwrap().id;
-        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let document = unsafe { &*app.0 }.host.session.engine().document();
+        let group = *document.scene().order().iter().find(|h| matches!(document.scene().occurrence(**h).unwrap().content, layer_core::authored::OccurrenceContent::Stack(_))).unwrap();
+        let group_token = layer_ui::occurrence_token(group);
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
         for (fraction, position, index) in [(0.1, "above", 0), (0.5, "into", 1), (0.9, "below", 2)] {
-            assert_eq!(app.request(2, json!({"type":"image_layer_drop","target":group.0,"fraction":fraction})).unwrap()["position"], position);
-            let job = place_at(&app, Some(json!({"layer":{"target":group.0,"fraction":fraction}})));
+            assert_eq!(app.request(2, json!({"type":"image_layer_drop","target":group_token,"fraction":fraction})).unwrap()["position"], position);
+            let job = place_at(&app, Some(json!({"layer":{"target":group_token,"fraction":fraction}})));
             read_bytes(&job, "Row drop.tiff", &bytes); adopt(&app, &job, false);
             let doc = unsafe { &*app.0 }.host.session.engine().document();
-            assert!(doc.layers[index].source.is_some(), "{position} insertion order");
-            assert_eq!(doc.layers[index].properties.parent, (position == "into").then_some(group));
+            let inserted = doc.scene().order()[index];
+            assert!(doc.scene().paint_source(inserted).is_some_and(|paint| paint.original.is_some()), "{position} insertion order");
+            assert_eq!(doc.scene().parent(inserted), (position == "into").then_some(group));
             app.invoke("cancel_transform"); app.draw_until_idle();
-            assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+            assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
         }
-        app.layer_action(json!({"op":"lock","id":group.0,"value":true})); app.draw_until_idle();
-        assert!(app.request(2, json!({"type":"image_layer_drop","target":group.0,"fraction":0.5})).unwrap()["position"].is_null());
+        app.layer_action(json!({"op":"lock","id":group_token,"value":true})); app.draw_until_idle();
+        assert!(app.request(2, json!({"type":"image_layer_drop","target":group_token,"fraction":0.5})).unwrap()["position"].is_null());
         let before = unsafe { &*app.0 }.host.session.engine().document().clone();
-        for placement in [json!({"layer":{"target":group.0,"fraction":0.5}}),
+        for placement in [json!({"layer":{"target":group_token,"fraction":0.5}}),
             json!({"layer":{"target":99999,"fraction":0.1}}),
-            json!({"screen":point,"layer":{"target":group.0,"fraction":0.1}})] {
+            json!({"screen":point,"layer":{"target":group_token,"fraction":0.1}})] {
             app.invoke("import_image");
             let text = CString::new(placement.to_string()).unwrap();
             assert!(unsafe { capy_apple_project_task(app.0, 3, text.as_ptr()) }.is_null());
@@ -119,9 +122,6 @@ fn source(space: RgbSpace, depth: SampleDepth) -> SourceImage {
     }
     builder.finish().unwrap()
 }
-fn source_samples(source: &SourceImage) -> Vec<Vec<u8>> {
-    source.tiles.values().map(|t| t.decode().unwrap()).collect()
-}
 
 /// Run separately with CAPY_APPLE_PHOTO_JPEG pointing to a disposable
 /// 9504×6336 JPEG. Both policies run on this machine's Metal backend; this
@@ -137,9 +137,8 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         unsafe { &*app.0 }.host.session.engine().document().clone()
     }
     fn check(app: &App, expected: &layer_core::Document) {
-        let mut actual = document(app);
-        actual.revision = expected.revision;
-        assert_project_document(&actual, expected);
+        let actual = document(app);
+        assert_saved_document(&actual, expected);
     }
 
     let path = std::env::var("CAPY_APPLE_PHOTO_JPEG").expect("Supply the 61 MP JPEG fixture");
@@ -164,9 +163,9 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         app.action(json!({"type":"set_brush_size","value":32}));
         app.draw_until_idle();
         let mut original = document(&app);
-        assert_eq!(original.color.space, RgbSpace::Srgb);
-        assert_eq!(original.color.depth, SampleDepth::U8);
-        assert_eq!(original.layers.iter().find_map(|l| l.source.as_deref()), Some(&decoded));
+        assert_eq!(original.composition().color.space, RgbSpace::Srgb);
+        assert_eq!(original.composition().color.depth, SampleDepth::U8);
+        assert_source_samples(first_original(&original), &decoded);
         let before = app.pixels();
         app.stroke(); app.draw_until_idle();
         let painted = document(&app);
@@ -175,8 +174,8 @@ fn large_jpeg_gpen_preserves_photo_through_save_and_gpu_recovery() {
         assert_eq!(original.next_stroke_id(), painted.next_stroke_id());
         let ink = app.pixels();
         assert_ne!(ink, before, "G-Pen must visibly paint the imported photograph");
-        let layer = painted.layers.iter().find(|l| l.source.is_some()).unwrap();
-        let (tiles, _) = raster_samples(&layer.raster);
+        let paint = painted.scene().paint_source(imported_occurrences(&painted).next().unwrap()).unwrap();
+        let (tiles, _) = raster_samples(&paint.raster);
         assert!(!tiles.is_empty(), "Painting must publish native backing");
         for (key, (descriptor, pixels)) in &tiles {
             assert_eq!(key.plane, RasterPlane::Color);
@@ -242,36 +241,35 @@ fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
             read_bytes(&job, "Photo.tiff", &bytes);
             adopt(&app, &job, true);
             let document = unsafe { &*app.0 }.host.session.engine().document();
-            assert_eq!(document.color.space, space);
-            assert_eq!(document.color.depth, depth);
-            assert_eq!([document.width, document.height], original.extent);
+            assert_eq!(document.composition().color.space, space);
+            assert_eq!(document.composition().color.depth, depth);
+            assert_eq!([document.composition().size[0], document.composition().size[1]], original.extent);
             assert!(app.state()["document_file"]["location"].is_null(), "Save must never overwrite an opened photograph");
-            let retained = document.layers.iter().find_map(|l| l.source.as_ref()).unwrap();
-            assert_eq!(**retained, decoded);
+            let retained = first_original(document);
+            assert_source_samples(retained, &decoded);
             assert_eq!(source_samples(retained), source_samples(&original));
             let before = app.pixels();
             app.stroke(); app.draw_until_idle();
-            let mut painted = unsafe { &*app.0 }.host.session.engine().document().clone();
+            let painted = unsafe { &*app.0 }.host.session.engine().document().clone();
             let painted_pixels = app.pixels(); assert_ne!(painted_pixels, before);
-            assert_eq!(painted.layers.iter().find_map(|l| l.source.as_ref()).unwrap().as_ref(), &decoded);
+            assert_source_samples(first_original(&painted), &decoded);
             app.invoke("undo"); app.draw_until_idle(); assert_eq!(app.pixels(), before);
             app.invoke("redo"); app.draw_until_idle();
             assert_eq!(app.pixels(), painted_pixels);
-            painted.revision = unsafe { &*app.0 }.host.session.engine().document().revision;
             let saved = unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap();
-            let mut archive = Vec::new(); saved.write(&mut archive).unwrap();
-            let reopened = layer_core::Project::read(archive.as_slice(), Default::default()).unwrap();
-            assert_project_document(&reopened.document, &painted);
+            let mut archive = Vec::new(); write_capture(&saved, &mut archive);
+            let reopened = read_document(std::io::Cursor::new(archive));
+            assert_saved_document(&reopened, &painted);
 
             let job = ProjectJob::new(&app, true);
             assert_eq!(job.create([67, 43]), 0); adopt(&app, &job, false);
-            let target_color = unsafe { &*app.0 }.host.session.engine().document().color;
+            let target_color = unsafe { &*app.0 }.host.session.engine().document().composition().color;
             let blank = app.pixels();
             let job = place_job(&app); read_bytes(&job, "Retained.tiff", &bytes); adopt(&app, &job, false);
             app.invoke("apply_transform"); app.draw_until_idle();
             let document = unsafe { &*app.0 }.host.session.engine().document();
-            assert_eq!(document.color, target_color, "Place must preserve the receiving document's space/depth");
-            assert_eq!(source_samples(document.layers.iter().find_map(|l| l.source.as_ref()).unwrap()), source_samples(&original));
+            assert_eq!(document.composition().color, target_color, "Place must preserve the receiving document's space/depth");
+            assert_eq!(source_samples(first_original(document)), source_samples(&original));
             let imported = app.pixels(); assert_ne!(blank, imported);
             app.invoke("undo"); app.draw_until_idle(); assert_eq!(app.pixels(), blank);
             app.invoke("redo"); app.draw_until_idle(); assert_eq!(app.pixels(), imported);
@@ -303,9 +301,9 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
         assert_eq!(unsafe { capy_project_assume_profile(job.0, c"{\"Builtin\":\"DisplayP3\"}".as_ptr()) }, 0, "{:?}", job.error());
         adopt(&app, &job, true);
         let document = unsafe { &*app.0 }.host.session.engine().document();
-        assert_eq!(document.color.space, RgbSpace::DisplayP3);
-        assert_eq!(document.color.depth, SampleDepth::U16);
-        let source = document.layers.iter().find_map(|l| l.source.as_ref()).unwrap();
+        assert_eq!(document.composition().color.space, RgbSpace::DisplayP3);
+        assert_eq!(document.composition().color.depth, SampleDepth::U16);
+        let source = first_original(document);
         assert_eq!(source.interpretation.depth, SampleDepth::U8, "Promotion affects future edits, not the retained original");
         assert!(!source.interpretation.profile_assumed);
         app.action(json!({"type":"preferences","action":{"type":"edit","id":"missing_profile","value":0}}));
@@ -331,7 +329,7 @@ fn photo_policy_prompt_retry_cancel_and_stale_publication_preserve_the_drawing()
                         ..Default::default()
                     })).unwrap();
                     session.renderer_mut().0 = Some(layer_render_wgpu::WgpuRasterizer::from_wgpu_native_staged(
-                        adapter, device, queue, session.engine().document().color,
+                        adapter, device, queue, session.engine().document().composition().color,
                     ).unwrap().into());
                 },
                 _ => (),
@@ -362,58 +360,61 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
         app.draw_until_idle();
         let new = ProjectJob::new(&app, true);
         assert_eq!(new.create([7, 5]), 0); adopt(&app, &new, false);
-        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
         for apply in [false, true] {
             let job = place_job(&app);
             for (index, (bytes, _)) in images.iter().enumerate() {
                 read_bytes(&job, &format!("Photo-{}.tiff", index + 1), bytes);
-                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before,
-                    "Nothing enters the live drawing during batch preparation");
+                assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
             }
             adopt(&app, &job, false);
             let session = &unsafe { &*app.0 }.host.session;
             assert!(!session.engine().can_undo(), "Provisional placement has no artwork history");
             assert!(session.capture_project_recovery().is_err(), "Pending placement cannot enter recovery");
-            let placed: Vec<_> = session.engine().document().layers.iter().filter(|l| l.source.is_some()).collect();
+            let document = session.engine().document();
+            let placed: Vec<_> = imported_occurrences(document).collect();
             assert_eq!(placed.len(), 2);
-            for (index, layer) in placed.iter().enumerate() {
-                assert_eq!(layer.name.as_ref(), format!("Photo-{}", index + 1));
-                assert_eq!(layer.source.as_deref(), Some(&images[index].1));
-                assert!((layer.properties.placement.as_affine().unwrap().0[0] - 7. / 13.).abs() < 0.00001);
-                let center = layer.properties.placement.map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
+            for (index, handle) in placed.iter().enumerate() {
+                let occurrence = document.scene().occurrence(*handle).unwrap();
+                let paint = document.scene().paint_source(*handle).unwrap();
+                assert_eq!(occurrence.name.as_ref(), format!("Photo-{}", index + 1));
+                assert_source_samples(paint.original.as_deref().unwrap(), &images[index].1);
+                assert!((occurrence.placement.as_affine().unwrap().0[0] - 7. / 13.).abs() < 0.00001);
+                let center = occurrence.placement.map(layer_core::Point { x: 6.5, y: 4.5 }).unwrap();
                 assert!((center.x - 3.5).abs() < 0.00001 && (center.y - 2.5).abs() < 0.00001);
             }
             app.invoke("placement_original_size"); app.draw_until_prepared(true);
-            for layer in unsafe { &*app.0 }.host.session.engine().document().layers.iter().filter(|l| l.source.is_some()) {
-                assert_eq!(&layer.properties.placement.as_affine().unwrap().0[..4], &layer_core::Affine::IDENTITY.0[..4]);
+            let document = unsafe { &*app.0 }.host.session.engine().document();
+            for handle in imported_occurrences(document) {
+                assert_eq!(&document.scene().occurrence(handle).unwrap().placement.as_affine().unwrap().0[..4], &layer_core::Affine::IDENTITY.0[..4]);
             }
             if !apply {
                 app.invoke("cancel_transform"); app.draw_until_idle();
-                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+                assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
                 assert!(!unsafe { &*app.0 }.host.session.engine().can_undo());
             } else {
                 app.invoke("apply_transform"); app.draw_until_idle();
-                let committed = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+                let committed = unsafe { &*app.0 }.host.session.engine().document().clone();
                 let pixels = app.pixels();
                 app.invoke("undo"); app.draw_until_idle();
-                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+                assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
                 assert!(!unsafe { &*app.0 }.host.session.engine().can_undo(), "The entire batch is one Undo");
                 app.invoke("redo"); app.draw_until_idle();
-                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, committed);
+                assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &committed);
                 assert_eq!(app.pixels(), pixels);
                 let mut archive = Vec::new();
-                unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap().write(&mut archive).unwrap();
+                write_capture(&unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap(), &mut archive);
                 let opened = ProjectJob::new(&app, true); read_bytes(&opened, "Batch.capy", &archive); adopt(&app, &opened, false);
                 assert_eq!(app.pixels(), pixels);
-                assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, committed);
+                assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &committed);
             }
         }
-        let before = unsafe { &*app.0 }.host.session.engine().document().layers.clone();
+        let before = unsafe { &*app.0 }.host.session.engine().document().clone();
         let job = place_job(&app); read_bytes(&job, "First.tiff", &images[0].0);
         assert_eq!(unsafe { capy_project_read_bytes(job.0, b"broken".as_ptr(), 6, c"Second.png".as_ptr()) }, -1);
         assert_eq!(unsafe { capy_project_read_bytes(job.0, images[1].0.as_ptr(), images[1].0.len(), c"Retry.tiff".as_ptr()) }, -1,
             "A failed batch cannot resume as a partial insertion");
         assert_eq!(unsafe { capy_apple_project_adopt(app.0, job.0, c"".as_ptr(), c"".as_ptr()) }, -1);
-        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().layers, before);
+        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &before);
     }
 }

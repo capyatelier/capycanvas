@@ -37,21 +37,47 @@ fn photo(depth: SampleDepth) -> Arc<SourceImage> {
     Arc::new(builder.finish().unwrap())
 }
 
-/// A photo layer inside an offset group over the paper.
 fn document(depth: SampleDepth, space: BlendSpace) -> Document {
-    let mut doc = Document::new("retouch", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.color = DocumentColor { space: RgbSpace::Srgb, depth };
-    doc.blend_space = space;
-    let group = doc.allocate_layer_id();
-    let mut folder = Layer::paint(group, "Folder");
-    folder.kind = LayerKind::Group;
-    folder.properties.offset = Point { x: 20., y: -12. };
-    doc.layers[0].properties.parent = Some(group);
-    doc.layers[0].properties.offset = Point { x: -20., y: 12. };
-    doc.layers[0].source = Some(photo(depth));
-    doc.layers.insert(0, folder);
-    doc.active_layer = doc.layers[1].id;
+    let mut doc = named_document(&["Folder", "Photo"], SIZE, space);
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
+    let folder = named_occurrence(&doc, "Folder");
+    let photo_use = named_occurrence(&doc, "Photo");
+    paint_mut(&mut doc, photo_use).original = Some(photo(depth));
+    let group = convert_group(&doc, folder, &[photo_use]);
+    doc.apply(group).unwrap();
+    doc.artwork.occurrences.get_mut(folder).unwrap().translation = Point { x: 20., y: -12. };
+    doc.artwork.occurrences.get_mut(photo_use).unwrap().translation = Point { x: -20., y: 12. };
+    let select = doc.select_occurrence_edit(photo_use).unwrap();
+    doc.apply(select).unwrap();
     doc
+}
+
+fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstance, name: &str) -> (Edit, OccurrenceHandle) {
+    let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
+        program: effect.program.clone(), dimensions: Default::default(),
+    });
+    let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
+        definition: definition.handle, values: effect.values.clone(), domain: doc.composition().size,
+    });
+    let mut occurrence = Occurrence::new(OccurrenceContent::Effect(application.handle), name);
+    occurrence.clipped = true;
+    let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
+    let handle = occurrence.handle;
+    let containing = doc.scene().stack(above).unwrap();
+    let mut stack = doc.artwork.stacks.get(containing).unwrap().clone();
+    let index = stack.entries.iter().position(|h| *h == above).unwrap();
+    stack.entries.insert(index, handle);
+    let stack = RecordChange::replace(&doc.artwork.stacks, containing, Some(stack)).unwrap();
+    (Edit::Batch(vec![Edit::Definition(definition), Edit::Effect(application), Edit::Occurrence(occurrence), Edit::Stack(stack)]), handle)
+}
+
+fn separation_preview(engine: &Engine, above: OccurrenceHandle, effect: &EffectInstance) -> layer_engine::ScenePreview {
+    let doc = engine.document();
+    let (edit, _) = insert_effect(doc, above, effect, "Blur preview");
+    let mut preview = doc.clone();
+    preview.apply(edit).unwrap();
+    preview.revision = doc.revision;
+    layer_engine::ScenePreview { above, scene: preview.snapshot_with_context(engine.scene_snapshot().context.clone()) }
 }
 
 /// The exported composite as encoded codes at the document's depth.
@@ -60,7 +86,7 @@ fn codes(engine: &mut Engine, maximum: f64) -> Vec<f64> {
     let mut capture = engine
         .backend()
         .snapshot_gpu()
-        .capture(Project { document: engine.document().clone() }, 0., Default::default())
+        .capture(engine.capture_artwork(0).unwrap(), Default::default())
         .unwrap();
     capture
         .read_region([0, 0, SIZE[0], SIZE[1]])
@@ -97,13 +123,12 @@ fn a_dodge_and_burn_layer_stores_the_middle_code_and_leaves_the_image_unchanged(
             let (mut engine, _input) = engine(document(depth, space));
             let original = codes(&mut engine, maximum);
             let before = image(&mut engine, 0);
-            let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
+            let plan = engine.document().dodge_burn_plan("Dodge & Burn").unwrap();
             let id = plan.active;
             insert(&mut engine, plan);
             let what = format!("{depth:?} {space:?}");
             assert_within(&codes(&mut engine, maximum), &original, 1., &what);
-            let data = engine.document().layer(id).unwrap().raster.wait_data().unwrap();
+            let data = paint(engine.document(), id).raster.wait_data().unwrap();
             assert_eq!(data.tiles.len(), 2, "{what}: the canvas's pages");
             let middle = match space {
                 BlendSpace::Perceptual => (maximum + 1.) / 2.,
@@ -134,8 +159,7 @@ fn painting_white_on_a_dodge_and_burn_layer_dodges_and_black_burns() {
     for space in BlendSpace::ALL {
         let (mut engine, mut input) = engine(document(SampleDepth::U8, space));
         let before = image(&mut engine, 0);
-        let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-        let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
+        let plan = engine.document().dodge_burn_plan("Dodge & Burn").unwrap();
         insert(&mut engine, plan);
         draw(&mut engine, &mut input, [1., 1., 1., 0.3], Point { x: 20., y: 70. }, Point { x: 360., y: 70. }, 1_000_000_000);
         draw(&mut engine, &mut input, [0., 0., 0., 0.3], Point { x: 20., y: 190. }, Point { x: 360., y: 190. }, 2_000_000_000);
@@ -152,24 +176,24 @@ fn painting_white_on_a_dodge_and_burn_layer_dodges_and_black_burns() {
 #[test]
 fn a_large_separation_yields_without_publishing_partial_rasters() {
     let extent = [1280, 768];
-    let mut document = Document::new("bounded separation", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.blend_space = BlendSpace::Perceptual;
-    document.layers[0].source = Some(color::source::rgba8_source(extent, |x, y| {
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend = BlendSpace::Perceptual;
+    let photo = document.working.occurrence.unwrap();
+    paint_mut(&mut document, photo).original = Some(color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
     let (mut engine, _input) = engine(document);
     let before = image(&mut engine, 0);
-    let photo = engine.document().active_layer;
+    let photo = engine.document().working.occurrence.unwrap();
     let filters = SeparationFilters::new(bundled_effect_catalog(), 21.).unwrap();
-    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-    let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
+    let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
     let targets: Vec<_> = plan.operations.iter().map(|(id, _)| *id).collect();
     insert(&mut engine, plan);
     engine.render_frame_at(1).unwrap();
     assert!(engine.has_pending_document_edits(), "a bake must yield between bounded regions");
     assert!(!engine.can_undo(), "an incomplete bake cannot enter undo");
     for id in targets {
-        assert!(engine.document().layer(id).unwrap().raster.try_data().is_none(),
+        assert!(engine.document().target_raster(id).unwrap().try_data().is_none(),
             "partial pixels must not become saveable");
     }
     image(&mut engine, 2).assert_near(&before, 2, "bounded separation reconstructs the photo");
@@ -186,29 +210,29 @@ fn frequency_separation_recombines_into_the_original_layer() {
             let (mut engine, _input) = engine(document(depth, BlendSpace::Perceptual));
             let original = codes(&mut engine, maximum);
             let before = image(&mut engine, 0);
-            let photo = engine.document().active_layer;
+            let photo = engine.document().working.occurrence.unwrap();
             let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
-            let preview = engine.allocate_layer_id();
-            engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur, filters.blur.program.id.clone()) }));
+            let preview = separation_preview(&engine, photo, &filters.blur);
+            engine.set_scene_preview(Some(preview));
             let previewed = image(&mut engine, 0);
-            engine.set_layer_preview(None);
+            engine.set_scene_preview(None);
             image(&mut engine, 0).assert_eq(&before, "the preview leaves nothing behind");
-            let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
+            let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
             let (high, low) = (plan.active, plan.operations[0].0);
             insert(&mut engine, plan);
             let what = format!("{depth:?} radius {radius}");
             assert_within(&codes(&mut engine, maximum), &original, 2., &what);
             image(&mut engine, 1).assert_near(&before, 2, &format!("{what}: live composite"));
-            let visible = |engine: &mut Engine, id: LayerId, visible: bool| {
-                engine.apply_edit(Edit::SetLayerVisibility { id, visible }).unwrap();
+            let visible = |engine: &mut Engine, id: OccurrenceHandle, visible: bool| {
+                let edit = occurrence_edit(engine.document(), id, |o| o.visible = visible);
+                engine.apply_edit(edit).unwrap();
             };
             visible(&mut engine, high, false);
             let blurred = codes(&mut engine, maximum);
             image(&mut engine, 2).assert_near(&previewed, 1, &format!("{what}: the preview shows Low"));
             let detail = |codes: &[f64]| codes.windows(5).map(|w| (w[0] - w[4]).powi(2)).sum::<f64>();
             assert!(detail(&blurred) < 0.8 * detail(&original), "{what}: Low holds less detail");
-            assert!(engine.document().layer(low).unwrap().visible);
+            assert!(engine.document().scene().occurrence(engine.document().target_owner(low).unwrap()).unwrap().visible);
             for _ in 0..2 {
                 assert!(engine.undo().unwrap());
             }
@@ -225,13 +249,14 @@ fn frequency_separation_recombines_into_the_original_layer() {
 fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() {
     use layer_engine::{CanvasEngine, ViewTransform, input_queue};
     let extent = [6000, 4000];
-    let mut doc = Document::new("24 MP retouch", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.blend_space = BlendSpace::Perceptual;
-    doc.layers[0].source = Some(color::source::rgba8_source(extent, |x, y| {
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend = BlendSpace::Perceptual;
+    let photo = doc.working.occurrence.unwrap();
+    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(extent, |x, y| {
         [(x % 256) as u8, (y % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
-    let photo = doc.layers[0].id;
-    let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(doc.color).expect("physical GPU required");
+
+    let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(doc.composition().color).expect("physical GPU required");
     let (_producer, consumer) = input_queue(64);
     let view = layer_render::ViewState { width_px: 1600, height_px: 1000, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.], };
     let mut engine = CanvasEngine::new(gpu, doc, consumer, view, ViewTransform::IDENTITY).unwrap();
@@ -254,23 +279,22 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let loaded = held(&engine);
     println!("Photo settled: {:.1} ms, {:.1} MiB allocated", ms(initial), loaded as f64 / 1048576.);
     std::thread::sleep(std::time::Duration::from_secs(1));
-    let preview = engine.allocate_layer_id();
     for radius in [4., 4.5, 21.] {
         let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
-        engine.set_layer_preview(Some(layer_engine::LayerPreview { above: photo, layer: SeparationFilters::clipped(preview, &filters.blur, filters.blur.program.id.clone()) }));
+        let preview = separation_preview(&engine, photo, &filters.blur);
+        engine.set_scene_preview(Some(preview));
         let elapsed = settle(&mut engine);
         let allocated = held(&engine);
         println!("Preview radius {radius}: frame to settled GPU {:.1} ms, {:.1} MiB above the photo", ms(elapsed), (allocated as i64 - loaded as i64) as f64 / 1048576.);
         assert!(allocated <= loaded + (200 << 20), "preview retains excessive working images");
     }
-    engine.set_layer_preview(None);
+    engine.set_scene_preview(None);
     settle(&mut engine);
     for radius in [4., 21.] {
         let filters = SeparationFilters::new(bundled_effect_catalog(), radius).unwrap();
         let begin = now();
         let start = std::time::Instant::now();
-        let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-        let plan = engine.document().separation_plan(photo, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
+        let plan = engine.document().separation_plan(photo, &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
         let low = plan.operations[0].0;
         insert(&mut engine, plan);
         let apply = start.elapsed();
@@ -289,8 +313,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
         println!("Frequency Separation radius {radius}: {:.1} MiB above the photo", (allocated as i64 - loaded as i64) as f64 / 1048576.);
         assert!(allocated <= loaded + (2 * 384 + 300) * (1 << 20), "separation retains more than its pages and scratch");
         if radius == 4. {
-            let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-            let plan = engine.document().separation_plan(low, &filters, ids, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
+            let plan = engine.document().separation_plan(engine.document().target_owner(low).unwrap(), &filters, ["Frequency Separation", "Low", "High"].map(std::sync::Arc::from)).unwrap();
             insert(&mut engine, plan);
             let elapsed = settle(&mut engine);
             let second = held(&engine);
@@ -303,21 +326,19 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
         settle(&mut engine);
         std::thread::sleep(std::time::Duration::from_secs(1));
     }
-    let blur = engine.allocate_layer_id();
     let mut effect = EffectInstance::new(bundled_effect_catalog().get(SeparationFilters::BLUR).unwrap().program());
     effect.set("sigma", EffectValue::Number(8.)).unwrap();
-    let mut filter = Layer::paint(blur, "Blur");
-    filter.kind = LayerKind::Effect;
-    filter.effect = Some(Arc::new(effect));
-    filter.properties.clipped = true;
-    engine.apply_edit(Edit::Batch(vec![Edit::InsertLayer { index: 0, layer: Box::new(filter) }, Edit::SetActiveLayer { id: blur }])).unwrap();
+    let (edit, blur) = insert_effect(engine.document(), photo, &effect, "Blur");
+    let mut candidate = engine.document().clone();
+    candidate.apply(edit.clone()).unwrap();
+    let select = candidate.select_occurrence_edit(blur).unwrap();
+    engine.apply_edit(Edit::Batch(vec![edit, select])).unwrap();
     settle(&mut engine);
     std::thread::sleep(std::time::Duration::from_secs(1));
     let begin = now();
-    let (result, coverage) = (engine.allocate_layer_id(), engine.allocate_layer_id());
-    let plan = engine.document().merge_plan(MergeKind::Down, result, coverage).unwrap();
+    let plan = engine.document().merge_plan(MergeKind::Down).unwrap();
     let windows = engine.backend().metrics().image_window_submissions;
-    engine.insert_with_operations(plan.edits, vec![(result, plan.operation)], None).unwrap();
+    engine.insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None).unwrap();
     let frame = settle(&mut engine);
     println!(
         "STEP {begin} {} Merge Down of a clipped Gaussian Blur: bake to GPU idle {:.1} ms, {} filter windows",
@@ -328,14 +349,13 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     engine.undo().unwrap();
     engine.undo().unwrap();
     settle(&mut engine);
-    let ids = std::array::from_fn(|_| engine.allocate_layer_id());
-    let plan = engine.document().dodge_burn_plan(ids, "Dodge & Burn").unwrap();
+    let plan = engine.document().dodge_burn_plan("Dodge & Burn").unwrap();
     let id = plan.active;
     insert(&mut engine, plan);
     let frame = settle(&mut engine);
-    let data = engine.document().layer(id).unwrap().raster.wait_data().unwrap();
+    let data = paint(engine.document(), id).raster.wait_data().unwrap();
     let blobs: Vec<_> = data.tiles.values().map(|t| t.wait_backing().unwrap()).collect();
-    let unique: std::collections::BTreeSet<_> = blobs.iter().map(|b| b.digest).collect();
+    let unique: std::collections::BTreeSet<_> = blobs.iter().map(|b| b.content_digest().unwrap()).collect();
     let resident: usize = blobs.iter().map(|b| b.resident_bytes()).sum();
     println!(
         "Dodge & Burn: fill to GPU idle {:.1} ms, {} pages ({} MiB of Rgba32Float working pages), {} distinct tiles, {:.1} KiB resident compressed",

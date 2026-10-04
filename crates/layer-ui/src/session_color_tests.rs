@@ -3,8 +3,8 @@
 fn tone_preview_survives_edits_but_not_document_replacement() {
     use crate::proof_workflow::ToneKey;
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
-    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); document.color.depth=SampleDepth::F32;
-    let make = || UiSession::new(Recorder {color:document.color,..Default::default()},document.clone(),[32,32], Platform::Gtk).unwrap();
+    let mut document=Document::new(layer_core::PortableId::random(),32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=SampleDepth::F32;
+    let make = || UiSession::new(Recorder {color:document.composition().color,..Default::default()},document.clone(),[32,32], Platform::Gtk).unwrap();
     let mut s=make();
     let original=ToneKey::current(&s).unwrap();
     s.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).unwrap();
@@ -35,7 +35,7 @@ fn print_panel_first_use_has_no_target_and_off_rejects_late_publication() {
     s.select_proof_mode(ProofMode::Off).unwrap();
     assert!(job.apply(&mut s,true).is_err());
     assert_eq!(s.engine.checkpoint(),before);
-    assert!(s.engine.document().proof.is_none());
+    assert!(s.engine.document().output().proof.is_none());
 }
 
 #[test]
@@ -57,7 +57,7 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
         let checkpoint = s.engine.checkpoint();
         assert!(job.apply(&mut s, false).is_err());
         assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.engine.document().proof, Some(original.clone()));
+        assert_eq!(s.engine.document().output().proof, Some(original.clone()));
         let form = crate::proof_workflow::proof_form(&s);
         assert_eq!(form["document_profile"]["name"], "Embedded P3");
         // Cancel rejects a late result and has not mutated the original.
@@ -68,7 +68,7 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
         let id = s.state.requests.last().unwrap().id;
         let job = ProofPreparation::begin(&s, Some(id), Some(replacement.clone())).unwrap();
         job.apply(&mut s, true).unwrap();
-        assert_eq!(s.engine.document().proof, Some(replacement));
+        assert_eq!(s.engine.document().output().proof, Some(replacement));
         assert!(s.state.soft_proof && s.state.document_file.modified);
         assert!(job.validate(&s).is_err());
         let mut view = ProofView::default();
@@ -80,12 +80,12 @@ fn portable_proof_workflow_preserves_original_before_history_and_rejects_stale_j
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
         assert_eq!(view.observe(&s).text, "");
         s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-        assert_eq!(s.engine.document().proof, Some(original));
+        assert_eq!(s.engine.document().output().proof, Some(original));
         assert!(!s.state.document_file.modified);
         assert!(prepare.validate(&s).is_err());
         // First use is enabled on these ports and leaves toggles off until Apply.
         s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-        assert!(s.engine.document().proof.is_none());
+        assert!(s.engine.document().output().proof.is_none());
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
         assert!(!s.state.soft_proof);
         if platform == Platform::Windows {
@@ -141,7 +141,8 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
     s.set_proof_recipe(Some(recipe.clone())).unwrap();
     assert!(s.state.soft_proof);
     assert!(s.state.document_file.modified);
-    assert_eq!(s.engine.document().layers, original.layers);
+    let mut expected = original.clone(); expected.artwork.outputs = s.engine.document().artwork.outputs.clone();
+    assert_live_artwork_eq(s.engine.document(), &expected);
     s.files.saved_checkpoint = s.engine.checkpoint();
     s.refresh_file_state();
     let saved = s.engine.document().clone();
@@ -151,11 +152,12 @@ fn proof_recipe_history_is_separate_from_comparison_and_delivery() {
         assert!(!s.state.document_file.modified);
     }
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-    assert!(s.engine.document().proof.is_none());
+    assert!(s.engine.document().output().proof.is_none());
     assert!(!s.state.soft_proof && !s.state.gamut_warning);
-    assert_eq!(s.engine.document().layers, original.layers);
+    let mut expected = original.clone(); expected.artwork.outputs = s.engine.document().artwork.outputs.clone();
+    assert_live_artwork_eq(s.engine.document(), &expected);
     s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
-    assert_eq!(s.engine.document().proof, Some(recipe.clone()));
+    assert_eq!(s.engine.document().output().proof, Some(recipe.clone()));
     assert!(!s.state.document_file.modified);
     assert!(!s.state.soft_proof, "restoring a recipe does not enable a temporary view");
     s.set_platform(Platform::Windows);
@@ -172,13 +174,17 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
     s.frame(1, 1).unwrap();
     let before = s.engine.document().clone();
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-    let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
-        color, layers: s.engine.document().layers.clone(),
-    }).unwrap().0;
+    let prepare = |s: &UiSession<Recorder>| {
+        let document = s.engine.document();
+        let paint = document.artwork.paint.iter().map(|(handle, _, source)| layer_core::RecordChange::replace(&document.artwork.paint, handle, Some(source.clone())).unwrap()).collect();
+        let coverage = document.artwork.coverage.iter().map(|(handle, _, source)| layer_core::RecordChange::replace(&document.artwork.coverage, handle, Some(source.clone())).unwrap()).collect();
+        let edit = document.color_edit(color, paint, coverage).unwrap();
+        s.prepare_document_color_transition(ColorTransition::Apply { edit: Box::new(edit) }).unwrap().0
+    };
     let prepared = prepare(&s);
     assert!(s.commit_document_color_transition(prepared).unwrap_err().contains("not ready"));
     assert_eq!(s.engine.document(), &before);
-    assert_eq!(s.state.colors.rgb_space(), before.color.space);
+    assert_eq!(s.state.colors.rgb_space(), before.composition().color.space);
     s.renderer_mut().prepared_color = Some(color);
     s.commit_document_color_transition(prepare(&s)).unwrap();
     assert_eq!(s.state.colors.rgb_space(), color.space);
@@ -193,13 +199,13 @@ fn color_transitions_update_picker_coordinates_and_route_exact_history_through_t
         let id = request.id;
         assert!(matches!(request.kind, HostRequestKind::Document { request: DocumentRequest::ColorHistory { redo: value } } if value == redo));
         let (prepared, project) = s.prepare_document_color_transition(if redo { ColorTransition::Redo } else { ColorTransition::Undo }).unwrap();
-        assert_eq!(project.document.color, expected.color);
-        s.renderer_mut().prepared_color = Some(expected.color);
+        assert_eq!(project.composition().color, expected.composition().color);
+        s.renderer_mut().prepared_color = Some(expected.composition().color);
         s.commit_document_color_transition(prepared).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
-        assert_eq!(s.engine.document().layers, expected.layers);
-        assert_eq!(s.engine.document().color, expected.color);
-        assert_eq!(s.state.colors.rgb_space(), expected.color.space);
+        assert_live_artwork_eq(s.engine.document(), expected);
+        assert_eq!(s.engine.document().composition().color, expected.composition().color);
+        assert_eq!(s.state.colors.rgb_space(), expected.composition().color.space);
         assert_eq!(s.state.colors.definition(), definition);
         assert!(!s.state.document_file.busy);
     }
@@ -215,8 +221,8 @@ fn portable_colors_follow_documents_workspaces_brushes_and_samples() {
             space,
             depth: SampleDepth::U16,
         };
-        let mut document = Document::new("wide", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color = color;
+        let mut document = Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
         UiSession::new(
             Recorder {
                 color,
@@ -317,8 +323,8 @@ fn figures_and_gradients_convert_both_portable_paints() {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let mut document = Document::new("wide", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = color;
+    let mut document = Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
     let mut s = UiSession::new(
         Recorder {
             color,
@@ -360,7 +366,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
     let actual = operations
         .iter()
         .find_map(|(_, operation)| {
-            if let layer_core::LayerOperationKind::Gradient { colors, .. } = &operation.kind {
+            if let layer_core::RasterOperationKind::Gradient { colors, .. } = &operation.kind {
                 Some(*colors)
             } else {
                 None
@@ -383,7 +389,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
     assert!(workflow.select(Some(C::Depth { depth: SampleDepth::U16, dither: layer_core::color::OutputDither::None }), false).is_err());
     assert!(workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), true).is_err());
     let ColorPreparation::Edit(change) = workflow.select(Some(C::Assign(RgbSpace::DisplayP3)), false).unwrap() else { panic!() };
-    workflow.candidate = Some(layer_color::prepare_document_color(&workflow.original, change, 1024 * 1024, || false).unwrap().project);
+    workflow.candidate = Some(layer_color::prepare_document_color(&workflow.original, change, 1024 * 1024, || false).unwrap().document);
     assert!(workflow.prepare_commit(&s, false, true).err().unwrap().contains("Preview"));
     workflow.comparison_completed().unwrap();
     assert!(workflow.prepare_commit(&s, true, true).is_err());
@@ -397,7 +403,7 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
     assert_eq!(s.engine.document(), &before);
     assert_eq!(s.engine.document().revision, revision);
     let prepared = workflow.prepare_commit(&s, false, true).unwrap();
-    s.renderer_mut().prepared_color = Some(workflow.candidate.as_ref().unwrap().document.color);
+    s.renderer_mut().prepared_color = Some(workflow.candidate.as_ref().unwrap().composition().color);
     s.commit_document_color_candidate(prepared, |_| {}).unwrap();
     assert!(workflow.identity.validate(&s, false, true).is_err(), "revision advanced");
     s.complete_document_request(id, Ok(true)).unwrap();
@@ -410,13 +416,13 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
         assert!(history.select(Some(C::Assign(RgbSpace::Srgb)), false).is_err());
         assert!(history.select(None, true).is_err());
         history.select(None, false).unwrap();
-        s.renderer_mut().prepared_color = Some(expected.color);
+        s.renderer_mut().prepared_color = Some(expected.composition().color);
         let prepared = history.prepare_commit(&s, false, true).unwrap();
         assert!(history.prepare_commit(&s, false, true).is_err(), "a consumed Undo/Redo candidate cannot become a new edit");
         s.commit_document_color_candidate(prepared, |_| {}).unwrap();
         s.complete_document_request(id, Ok(true)).unwrap();
-        assert_eq!(s.engine.document().layers, expected.layers);
-        assert_eq!(s.engine.document().color, expected.color);
+        assert_live_artwork_eq(s.engine.document(), expected);
+        assert_eq!(s.engine.document().composition().color, expected.composition().color);
     }
     invoke(&mut s, CommandId::ConvertColorSpace);
     let id = s.state.requests.first().unwrap().id;
@@ -435,9 +441,9 @@ fn color_workflow_validates_choices_comparison_identity_and_rolls_back_renderer(
 #[test]
 fn sdr_preview_follows_display_capability_and_rendition_edits_undo() {
     use layer_core::color::{SampleDepth, hdr::SdrRendition};
-    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F16;
-    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F16;
+    let renderer = Recorder { color: document.composition().color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     let original = s.engine.document().clone();
     assert!(!s.command(CommandId::PreviewSdr).enabled);
@@ -448,9 +454,9 @@ fn sdr_preview_follows_display_capability_and_rendition_edits_undo() {
     let recipe = SdrRendition { exposure: -2., ..Default::default() };
     s.set_sdr_rendition(recipe).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-    assert_eq!(s.engine.document().sdr_rendition, original.sdr_rendition);
+    assert_eq!(s.engine.document().output().sdr, original.output().sdr);
     s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
-    assert_eq!(s.engine.document().sdr_rendition, recipe);
+    assert_eq!(s.engine.document().output().sdr, recipe);
     s.state.soft_proof = true; s.refresh_commands();
     assert!(!s.command(CommandId::PreviewSdr).enabled);
     s.state.soft_proof = false; s.set_hdr_display_available(false);
@@ -460,43 +466,43 @@ fn sdr_preview_follows_display_capability_and_rendition_edits_undo() {
 #[test]
 fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
     use layer_core::color::{SampleDepth,hdr::SdrRendition};
-    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=SampleDepth::F16;
-    let renderer=Recorder{color:document.color,..Default::default()};
+    let mut document=Document::new(layer_core::PortableId::random(),32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=SampleDepth::F16;
+    let renderer=Recorder{color:document.composition().color,..Default::default()};
     let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
-    let original=s.engine.document().sdr_rendition;
+    let original=s.engine.document().output().sdr;
     let changed=SdrRendition{exposure:1.5,highlight_color:0.65,..original};
     s.set_proof_mode(ProofMode::Sdr).unwrap();
     let checkpoint=s.engine.checkpoint();
     s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
     for exposure in [0.2,0.8,1.5]{s.edit_sdr_rendition(ContactPhase::Move,SdrRendition{exposure,..changed}).unwrap();}
-    assert_eq!(s.engine.document().sdr_rendition,changed);
+    assert_eq!(s.engine.document().output().sdr,changed);
     assert_eq!(s.engine.checkpoint(),checkpoint);
     assert!(s.capture_project_recovery().is_err(),"Recovery must not capture an unfinished contact");
     assert!(!s.command(CommandId::ExportDocument).enabled);
     s.edit_sdr_rendition(ContactPhase::Up,changed).unwrap();
     assert!(s.state.document_file.modified);
-    assert_eq!(s.capture_project_recovery().unwrap().document.sdr_rendition,changed);
+    assert_eq!(s.capture_project_recovery().unwrap().output().sdr,changed);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
-    assert_eq!(s.engine.document().sdr_rendition,original);
+    assert_eq!(s.engine.document().output().sdr,original);
     s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
     s.edit_sdr_rendition(ContactPhase::Move,changed).unwrap();
     s.edit_sdr_rendition(ContactPhase::Cancel,changed).unwrap();
-    assert_eq!(s.engine.document().sdr_rendition,original);
+    assert_eq!(s.engine.document().output().sdr,original);
     assert_eq!(s.engine.checkpoint(),checkpoint);
     s.dispatch(UiAction::Invoke{command:CommandId::Redo}).unwrap();
-    assert_eq!(s.engine.document().sdr_rendition,changed);
+    assert_eq!(s.engine.document().output().sdr,changed);
     let checkpoint=s.engine.checkpoint();
     s.set_proof_mode(ProofMode::Off).unwrap();
     assert_eq!(s.engine.checkpoint(),checkpoint);
-    assert_eq!(s.engine.document().sdr_rendition,changed);
+    assert_eq!(s.engine.document().output().sdr,changed);
     assert!(!s.state.preview_sdr && !s.state.soft_proof);
 }
 
 #[test]
 fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
     use layer_core::color::{SampleDepth,ProofRecipe,ColorProfile,RgbSpace};
-    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=SampleDepth::F16;
-    let renderer=Recorder{color:document.color,..Default::default()};
+    let mut document=Document::new(layer_core::PortableId::random(),32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=SampleDepth::F16;
+    let renderer=Recorder{color:document.composition().color,..Default::default()};
     let mut s=UiSession::new(renderer,document,[32,32], Platform::Gtk).unwrap();
     assert!(s.set_proof_mode(ProofMode::Print).is_err());
     s.set_proof_recipe(Some(ProofRecipe::new("Printer".into(),ColorProfile::Builtin(RgbSpace::Srgb)))).unwrap();
@@ -515,9 +521,9 @@ fn proof_modes_share_view_state_and_preserve_both_saved_recipes() {
 #[test]
 fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering() {
     use layer_core::color::{SampleDepth, ProofRecipe, ColorProfile};
-    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F16;
-    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F16;
+    let renderer = Recorder { color: document.composition().color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     let toggle = |s: &mut UiSession<Recorder>| {
         s.dispatch(UiAction::Invoke { command: CommandId::SoftProof }).unwrap();
@@ -571,33 +577,30 @@ fn proof_toggle_remembers_mode_and_keeps_pending_setup_separate_from_rendering()
 
 #[test]
 fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
-    use layer_core::{EffectInstance, EffectValue, Layer, LayerKind};
-    use std::sync::Arc;
+    use layer_core::{EffectInstance, EffectValue};
     use layer_core::color::SampleDepth;
     for (name, key, value) in [("exposure", "exposure", 30.), ("curves", "hdr_stops", 40.)] {
         // An older embedded program keeps its original range when promoted.
-        let mut document = Document::new("Float32", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color.depth = SampleDepth::F32;
-        let id = document.allocate_layer_id();
-        let mut layer = Layer::paint(id, name);
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(EffectInstance::new(layer_core::bundled_effect_catalog().get(name).unwrap().program())));
-        document.layers.insert(0, layer);
-        document.active_layer = id;
-        let renderer = Recorder { color: document.color, ..Default::default() };
+        let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+        let (id, edit) = effect_insertion(&document, EffectInstance::new(layer_core::bundled_effect_catalog().get(name).unwrap().program()), name);
+        document.apply(edit).unwrap();
+        let mut working = document.working.clone(); working.occurrence = Some(id); working.target = None;
+        document.apply(layer_core::Edit::Working(working)).unwrap();
+        let renderer = Recorder { color: document.composition().color, ..Default::default() };
         let mut s = UiSession::new(renderer, document, [32,32], Platform::Gtk).unwrap();
         let before = s.engine.document().clone();
-        let set = |value| UiAction::Effect { action: EffectAction::Set { layer: id.0, key: key.into(), value: EffectValue::Number(value) } };
+        let set = |value| UiAction::Effect { action: EffectAction::Set { layer: occurrence_token(id), key: key.into(), value: EffectValue::Number(value) } };
         s.dispatch(set(value)).unwrap();
-        assert_eq!(s.engine.document().layer(id).unwrap().effect.as_ref().unwrap().value(key), Some(&EffectValue::Number(value)));
+        assert_eq!(s.engine.document().scene().effect(id).unwrap().value(key), Some(&EffectValue::Number(value)));
         let edited = s.engine.document().clone();
         assert!(s.dispatch(set(200.)).is_err());
-        assert_eq!(s.engine.document().layers, edited.layers);
+        assert_live_artwork_eq(s.engine.document(), &edited);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().layers, before.layers);
+        assert_live_artwork_eq(s.engine.document(), &before);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().layers, edited.layers);
-        s.capture_project_recovery().unwrap().validate(Default::default()).unwrap();
+        assert_live_artwork_eq(s.engine.document(), &edited);
+        Document::from_artwork((*s.capture_project_recovery().unwrap().artwork).clone()).unwrap().validate(Default::default()).unwrap();
     }
 }
 
@@ -630,42 +633,42 @@ fn proof_reveal_preserves_placement_and_opens_a_collapsed_drawer_idempotently() 
 #[test]
 fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history() {
     use crate::proof_panel::{apply, ProofAction};
-    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=layer_core::color::SampleDepth::F32;
-    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Windows).unwrap();
-    let original=s.engine.document().sdr_rendition;
+    let mut document=Document::new(layer_core::PortableId::random(),32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
+    let mut s=UiSession::new(Recorder{color:document.composition().color,..Default::default()},document,[32,32], Platform::Windows).unwrap();
+    let original=s.engine.document().output().sdr;
     let checkpoint=s.engine.checkpoint();
     // No full-recipe snapshots: queued fields resolve against the current recipe.
     apply(&mut s,ProofAction::Number{key:"exposure".into(),value:-0.4,phase:None}).unwrap();
     apply(&mut s,ProofAction::Number{key:"highlight_color".into(),value:0.73,phase:None}).unwrap();
-    let numbers=s.engine.document().sdr_rendition;
+    let numbers=s.engine.document().output().sdr;
     assert!((numbers.exposure+0.4).abs()<1e-6 && (numbers.highlight_color-0.73).abs()<1e-6);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
-    assert!((s.engine.document().sdr_rendition.exposure+0.4).abs()<1e-6);
+    assert!((s.engine.document().output().sdr.exposure+0.4).abs()<1e-6);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);
     let g=crate::parameter_pad::ParameterDialGeometry::new(256.).unwrap();let origin=g.arcs[0].point(0.5);let point=g.arcs[0].point(0.25);
     let action=|phase,point|ProofAction::Dial{phase,size:256.,origin,point};
     apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();
     assert!(s.capture_project_recovery().is_err());
-    apply(&mut s,action(ContactPhase::Cancel,point)).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().sdr_rendition,original);
+    apply(&mut s,action(ContactPhase::Cancel,point)).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().output().sdr,original);
     apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();apply(&mut s,action(ContactPhase::Up,point)).unwrap();
-    let dial=s.engine.document().sdr_rendition;assert!((dial.exposure+1.).abs()<1e-6);assert_eq!(dial.headroom,original.headroom);
+    let dial=s.engine.document().output().sdr;assert!((dial.exposure+1.).abs()<1e-6);assert_eq!(dial.headroom,original.headroom);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);
-    s.dispatch(UiAction::Invoke{command:CommandId::Redo}).unwrap();assert_eq!(s.engine.document().sdr_rendition,dial);
+    s.dispatch(UiAction::Invoke{command:CommandId::Redo}).unwrap();assert_eq!(s.engine.document().output().sdr,dial);
     s.dispatch(UiAction::Invoke{command:CommandId::SoftProof}).unwrap();assert_eq!(s.proof_panel_mode(),ProofMode::Sdr);assert!(s.state.requests.is_empty());
-    s.dispatch(UiAction::Invoke{command:CommandId::SdrRendition}).unwrap();assert!(s.state.requests.is_empty());assert_eq!(s.engine.document().sdr_rendition,dial);
+    s.dispatch(UiAction::Invoke{command:CommandId::SdrRendition}).unwrap();assert!(s.state.requests.is_empty());assert_eq!(s.engine.document().output().sdr,dial);
 }
 
 #[test]
 fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     use layer_core::EffectValue;
     use layer_core::color::SampleDepth;
-    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F16;
-    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F16;
+    let renderer = Recorder { color: document.composition().color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
     let id = s.state.layer_properties.layer.unwrap();
-    let effect = s.engine.document().layer(layer_core::LayerId(id)).unwrap().effect.clone().unwrap();
+    let effect = s.engine.document().scene().effect(occurrence_handle(id).unwrap()).unwrap();
     assert_eq!(effect.choice("domain"), Some("Log HDR"));
     assert_eq!(s.state.layer_properties.curve_max, Some(16.));
     assert_eq!(s.state.layer_properties.curve_white, Some(8. / 12.));
@@ -679,19 +682,19 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
 #[test]
 fn phased_proof_controls_commit_once() {
     use crate::proof_panel::{apply, ProofAction, SdrControlEdit};
-    let mut document=Document::new("HDR",32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.color.depth=layer_core::color::SampleDepth::F32;
-    let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[32,32], Platform::Gtk).unwrap();
+    let mut document=Document::new(layer_core::PortableId::random(),32,32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth=layer_core::color::SampleDepth::F32;
+    let mut s=UiSession::new(Recorder{color:document.composition().color,..Default::default()},document,[32,32], Platform::Gtk).unwrap();
     let checkpoint=s.engine.checkpoint();
     for (phase,steps) in [(ContactPhase::Down,1.),(ContactPhase::Move,1.),(ContactPhase::Up,0.)] {
         apply(&mut s,ProofAction::Control{part:1,edit:SdrControlEdit::Step{axis:0,steps},phase:Some(phase)}).unwrap();
     }
-    assert!((s.engine.document().sdr_rendition.exposure-0.08).abs()<1e-6);
+    assert!((s.engine.document().output().sdr.exposure-0.08).abs()<1e-6);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
     assert_eq!(s.engine.checkpoint(),checkpoint);
     apply(&mut s,ProofAction::Number{key:"exposure".into(),value:1.,phase:Some(ContactPhase::Down)}).unwrap();
     apply(&mut s,ProofAction::Number{key:"exposure".into(),value:1.,phase:Some(ContactPhase::Cancel)}).unwrap();
     assert_eq!(s.engine.checkpoint(),checkpoint);
-    assert_eq!(s.engine.document().sdr_rendition.exposure,0.);
+    assert_eq!(s.engine.document().output().sdr.exposure,0.);
 }
 
 #[test]
@@ -704,7 +707,7 @@ fn bristle_streaks_carry_the_color_that_is_not_painting() {
     for (slot,color) in [(ColorSlot::Foreground,olive),(ColorSlot::Background,red)] {
         s.dispatch(UiAction::Color {action:ColorAction::SetSlot {slot,color}}).unwrap();
     }
-    let space=s.engine.document().color.space;
+    let space=s.engine.document().composition().color.space;
     let paints=|s:&UiSession<Recorder>| {
         let brush=s.engine.configured_brush();
         (brush.color_rgba_linear,brush.contact.unwrap().bristles.unwrap().streak_rgba_linear)

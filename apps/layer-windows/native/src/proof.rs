@@ -149,7 +149,7 @@ mod tests {
         .unwrap();
         wait(&mut service, &mut host);
         assert_eq!(host.proof.observe(&host.session).text, "Proof: sRGB");
-        assert_eq!(host.session.engine().document().proof, Some(original));
+        assert_eq!(host.session.engine().document().output().proof, Some(original));
         host.dispatch(UiAction::Invoke {
             command: CommandId::Redo,
         })

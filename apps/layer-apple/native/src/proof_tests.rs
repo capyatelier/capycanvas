@@ -89,7 +89,7 @@ fn apple_proof_workers_preserve_profiles_reject_cancellation_and_leave_artwork_e
         app.draw_until_idle();
         assert_eq!(app.pixels(), pixels);
         let result = unsafe { &*app.0 }.host.session.engine().document().clone();
-        assert_eq!(result.proof, Some(replacement.clone()));
+        assert_eq!(result.output().proof, Some(replacement.clone()));
         for command in ["soft_proof", "gamut_warning", "soft_proof", "gamut_warning"] {
             app.invoke(command);
             app.draw_until_idle();
@@ -103,13 +103,13 @@ fn apple_proof_workers_preserve_profiles_reject_cancellation_and_leave_artwork_e
         app.invoke("undo");
         app.draw_until_idle();
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().proof,
+            unsafe { &*app.0 }.host.session.engine().document().output().proof,
             Some(original)
         );
         app.invoke("redo");
         app.draw_until_idle();
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().proof,
+            unsafe { &*app.0 }.host.session.engine().document().output().proof,
             Some(replacement.clone())
         );
 
@@ -146,7 +146,7 @@ fn apple_proof_workers_preserve_profiles_reject_cancellation_and_leave_artwork_e
             .unwrap();
         assert_eq!(unsafe { capy_apple_proof_apply(app.0, stale.0, false) }, -1);
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().proof,
+            unsafe { &*app.0 }.host.session.engine().document().output().proof,
             Some(changed)
         );
         let failed = prepare(&app, None, false);
@@ -163,8 +163,10 @@ fn apple_proof_workers_preserve_profiles_reject_cancellation_and_leave_artwork_e
         app.draw_until_idle();
         assert_eq!(app.pixels(), pixels);
         let final_document = unsafe { &*app.0 }.host.session.engine().document();
-        for (a, b) in final_document.layers.iter().zip(&before.layers) {
-            assert_eq!(raster_samples(&a.raster), raster_samples(&b.raster));
+        assert_eq!(final_document.artwork.paint.len(), before.artwork.paint.len());
+        for (_, id, source) in before.artwork.paint.iter() {
+            let current = final_document.artwork.paint.get(final_document.artwork.paint.resolve(id).unwrap()).unwrap();
+            assert_eq!(raster_samples(&current.raster), raster_samples(&source.raster));
         }
     }
 }

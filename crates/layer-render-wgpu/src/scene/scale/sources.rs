@@ -18,7 +18,7 @@ pub(super) struct Source {
     pub levels: BTreeMap<u32, Level>,
     source: Option<Arc<layer_core::color::source::SourceImage>>,
     backing: Option<Arc<RasterData>>,
-    mask: Option<layer_core::LayerMask>,
+    mask: Option<metadata::MaskMetadata>,
     preview: BTreeSet<[u32; 2]>,
     pub(super) damage: PixelRect,
 }
@@ -60,16 +60,16 @@ impl Source {
 
 #[derive(Default)]
 pub(crate) struct Sources {
-    pub(super) entries: HashMap<LayerId, Source>,
+    pub(super) entries: HashMap<SourceTarget, Source>,
     pub(super) reset: bool,
 }
 impl Sources {
     #[cfg(test)]
-    pub fn cache_info(&self, id: LayerId) -> Option<(wgpu::Texture, u64, u32)> {
+    pub fn cache_info(&self, id: SourceTarget) -> Option<(wgpu::Texture, u64, u32)> {
         self.cache_info_at(id, *self.entries.get(&id)?.levels.first_key_value()?.0)
     }
     #[cfg(test)]
-    pub fn cache_info_at(&self, id: LayerId, level: u32) -> Option<(wgpu::Texture, u64, u32)> {
+    pub fn cache_info_at(&self, id: SourceTarget, level: u32) -> Option<(wgpu::Texture, u64, u32)> {
         let source = self.entries.get(&id)?;
         let image = source.levels.get(&level)?;
         Some((image.image.texture.clone(), source.updates, level))
@@ -80,33 +80,31 @@ impl Sources {
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
         let mut wanted = BTreeSet::new();
         self.reset = false;
-        for layer in packet.layers {
-            let visible = images::visible(packet.layers, layer);
-            if visible && layer.kind == LayerKind::Paint && layer.is_artwork() && stack::has_content(r, layer) {
-                wanted.insert(layer.id);
-                self.update(r, packet, layer, false, batch_tiles);
-                let source = self.entries.get_mut(&layer.id).unwrap();
-                source.raster = layer.raster.identity();
-                let watercolor = r.watercolor_style(layer.id, packet.dab_batches);
+        for &handle in packet.scene.order() {
+            let occurrence = packet.scene.occurrence(handle).unwrap();
+            let visible = packet.scene.visible(handle);
+            if visible && occurrence.kind() == LayerKind::Paint && occurrence.is_artwork() && stack::has_content(r, packet.scene, handle) {
+                let id = packet.scene.source_target(handle).unwrap();
+                if wanted.insert(id) { self.update(r, packet, handle, false, batch_tiles); }
+                let source = self.entries.get_mut(&id).unwrap();
+                source.raster = packet.scene.paint_source(handle).unwrap().raster.identity();
+                let watercolor = r.watercolor_style(id, packet.dab_batches);
                 if source.watercolor != watercolor {
-                    source.watercolor = watercolor;
-                    self.reset = true;
-                    source.damage = PixelRect::full(source.extent);
+                    source.watercolor = watercolor; self.reset = true; source.damage = PixelRect::full(source.extent);
                 }
             }
-            if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled && (visible || m.show_area)) {
-                wanted.insert(mask.id);
-                self.update(r, packet, layer, true, batch_tiles);
-            }
+            if let Some((mask, _)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled && (visible || packet.inspect_mask == Some(handle)))
+                && wanted.insert(SourceTarget::Coverage(mask.source)) { self.update(r, packet, handle, true, batch_tiles); }
         }
         self.entries.retain(|id, _| wanted.contains(id));
     }
-    fn update(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, layer: &Layer, is_mask: bool, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
-        let extent = if is_mask { layer.mask.as_ref().unwrap().local_extent(layer.local_extent(packet.document_extent)) } else { layer.local_extent(packet.document_extent) };
+    fn update(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, handle: OccurrenceHandle, is_mask: bool, batch_tiles: &[Vec<brush_tiles::BrushTile>]) {
+        let scene = packet.scene;
         let (id, plane, image, mask) = if is_mask {
-            (layer.mask.as_ref().unwrap().id, RasterPlane::Mask, None, metadata::mask_metadata(&layer.mask))
-        } else { (layer.id, RasterPlane::Color, layer.source.clone(), None) };
-        let blend_space = if is_mask || r.moving_layer == Some(id) || !layer_core::target_geometry(packet.layers, id).is_identity() {
+            (SourceTarget::Coverage(scene.mask(handle).unwrap().0.source), RasterPlane::Mask, None, metadata::mask_metadata(scene, handle))
+        } else { (scene.source_target(handle).unwrap(), RasterPlane::Color, scene.paint_source(handle).unwrap().original.clone(), None) };
+        let extent = scene.target_extent(id);
+        let blend_space = if is_mask || r.moving_layer == Some(handle) || !scene.target_geometry(id).is_identity() {
             layer_core::BlendSpace::Linear
         } else { packet.blend_space };
         let raw_material = !is_mask && mapped_material(r, packet, id);
@@ -142,7 +140,7 @@ impl Sources {
             }
         }
         source.backing = backing;
-        for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles).filter(|(b, _)| b.layer_id == id) {
+        for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles).filter(|(b, _)| b.target == id) {
             let coordinates = tiles.iter().map(|t| t.coordinate);
             damage.extend(coordinates.clone());
             damage.extend(r.stroke_finish_pages(batch));
@@ -159,22 +157,24 @@ impl Sources {
         source.damage = if changed { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
         for level in source.levels.values_mut() { level.valid.retain(|c| !damage.contains(c)); }
     }
-    pub fn sample(&self, id: LayerId, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
+    pub fn sample(&self, id: SourceTarget, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
         let source = self.entries.get(&id)?;
         if source.blend_space != layer_core::BlendSpace::Linear { return None; }
         let (_, image) = source.levels.range(..=requested).rev().find(|(_, level)| source.accepts(level))?;
         Some((image.image.plan, &image.image.view))
     }
-    pub fn complete_texture(&self, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
-        let source = self.entries.get(&layer.id)?;
-        let current = source.blend_space == layer_core::BlendSpace::Linear && source.extent == extent && source.raster == layer.raster.identity() && source.preview.is_empty()
-            && match (&source.source, &layer.source) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
+    pub fn complete_texture(&self, scene: SceneView<'_>, target: SourceTarget, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
+        let SourceTarget::Paint(paint) = target else { return None; };
+        let paint = scene.paint(paint)?;
+        let source = self.entries.get(&target)?;
+        let current = source.blend_space == layer_core::BlendSpace::Linear && source.extent == extent && source.raster == paint.raster.identity() && source.preview.is_empty()
+            && match (&source.source, &paint.original) { (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false };
         let image = source.levels.get(&level)?;
         (current && source.accepts(image) && image.watercolor.is_none() && image.image.plan.bounds == PixelRect::full(extent)
             && page_coordinates(PixelRect::full(extent)).all(|c| image.valid.contains(&c))).then_some(&image.image.texture)
     }
-    pub(super) fn image(&self, id: LayerId, level: u32) -> &Level { &self.entries[&id].levels[&level] }
-    pub(super) fn resident_plan(&self, id: LayerId, requested: display_mips::Plan) -> display_mips::Plan {
+    pub(super) fn image(&self, id: SourceTarget, level: u32) -> &Level { &self.entries[&id].levels[&level] }
+    pub(super) fn resident_plan(&self, id: SourceTarget, requested: display_mips::Plan) -> display_mips::Plan {
         self.entries.get(&id).and_then(|s| s.levels.get(&requested.level)).map(|l| l.image.plan)
             .filter(|p| p.extent == requested.extent && !requested.bounds.is_empty())
             .map(|p| display_mips::Plan::window(p.extent, p.level, p.bounds.union(requested.bounds)))
@@ -182,7 +182,7 @@ impl Sources {
             .unwrap_or(requested)
     }
     pub(super) fn ensure_level(&mut self, commands: &mut Commands, r: &mut WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder, id: LayerId, plan: display_mips::Plan,
+        encoder: &mut crate::submission::CommandEncoder, id: SourceTarget, plan: display_mips::Plan,
     ) -> Result<(), GpuRasterError> {
         let source = self.entries.get_mut(&id).unwrap();
         let level = plan.level;
@@ -215,7 +215,7 @@ impl Sources {
         source.levels.insert(level, target);
         Ok(())
     }
-    pub fn retain_levels(&mut self, requested: &BTreeMap<LayerId, BTreeMap<u32, display_mips::Plan>>, budget: u64) -> u64 {
+    pub fn retain_levels(&mut self, requested: &BTreeMap<SourceTarget, BTreeMap<u32, display_mips::Plan>>, budget: u64) -> u64 {
         let mut reserve = 0;
         let empty = BTreeMap::new();
         for (id, source) in &mut self.entries {
@@ -247,13 +247,13 @@ impl Scene {
         let budget = cache.source_budget(r, packet, commands, Some(self));
         let reserved = self.scale_sources.retain_levels(&requested, budget);
         let mut remaining = budget.saturating_sub(reserved);
-        for (layer, id) in targets(r, packet).collect::<Vec<_>>() {
-            if cache.streamed_sources && layer_core::target_geometry(packet.layers, id).is_identity() { continue; }
+        for (handle, id) in targets(r, packet).collect::<Vec<_>>() {
+            if cache.streamed_sources && packet.scene.target_geometry(id).is_identity() { continue; }
             let Some((_, required)) = requested.get(&id).and_then(|levels| levels.first_key_value()) else { continue; };
             let source = &self.scale_sources.entries[&id];
             let existing = source.levels.range(..required.level).rev().find(|(_, level)| source.accepts(level));
             let cold = source.levels.range(..=required.level).next().is_none()
-                && !packet.dab_batches.iter().any(|batch| batch.layer_id == id);
+                && !packet.dab_batches.iter().any(|batch| batch.target == id);
             let Some(level) = existing.map(|(&level, _)| level)
                 .or_else(|| (cold && required.level > 1).then(|| required.level - 1)) else { continue; };
             if r.preview_layer_id == Some(id) && r.preview_level > level { continue; }
@@ -264,10 +264,11 @@ impl Scene {
             if bytes > previous + remaining || plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) { continue; }
             remaining = remaining + previous - bytes;
             let request = SourceRequest { plan, required: plan.bounds, covered: PixelRect::EMPTY };
-            if id == layer.id {
-                self.prepare_scale_color(commands, r, packet, encoder, layer, request)?;
+            if matches!(id, SourceTarget::Paint(_)) {
+                self.prepare_scale_color(commands, r, packet, encoder, handle, request)?;
             } else {
-                self.prepare_scale_mask(commands, r, encoder, layer.mask.as_ref().unwrap(), request)?;
+                let (mask, source) = packet.scene.mask(handle).unwrap();
+                self.prepare_scale_mask(commands, r, encoder, mask, source, request)?;
             }
         }
         Ok(())
@@ -275,39 +276,41 @@ impl Scene {
 
     pub(super) fn prepare_scale_color(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, layer: &Layer, request: SourceRequest,
+        encoder: &mut crate::submission::CommandEncoder, handle: OccurrenceHandle, request: SourceRequest,
     ) -> Result<PixelRect, GpuRasterError> {
         let SourceRequest { plan, required, covered } = request;
+        let id = packet.scene.source_target(handle).unwrap();
         if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
         let level = plan.level;
-        self.scale_sources.ensure_level(commands, r, encoder, layer.id, plan)?;
-        let cached = self.scale_sources.image(layer.id, level);
+        self.scale_sources.ensure_level(commands, r, encoder, id, plan)?;
+        let cached = self.scale_sources.image(id, level);
         let output = cached.image.view.clone();
         let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds))
             .filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty())
             .collect();
-        let changed = self.reduce_color_pages(commands, r, packet, encoder, layer, plan, &output, &missing, None)?;
-        self.scale_sources.entries.get_mut(&layer.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
+        let changed = self.reduce_color_pages(commands, r, packet, encoder, handle, plan, &output, &missing, None)?;
+        self.scale_sources.entries.get_mut(&id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
     }
     #[expect(clippy::too_many_arguments, reason = "Color reduction keeps source placement, missing pages, and GPU output bindings explicit")]
     pub(super) fn reduce_color_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
-        encoder: &mut crate::submission::CommandEncoder, layer: &Layer, plan: display_mips::Plan,
+        encoder: &mut crate::submission::CommandEncoder, handle: OccurrenceHandle, plan: display_mips::Plan,
         output: &wgpu::TextureView, missing: &[[u32; 2]], placement: Option<layer_core::ImageTransform>,
     ) -> Result<PixelRect, GpuRasterError> {
         let level = plan.level;
-        let extent = if placement.is_some() { packet.document_extent } else { layer.local_extent(packet.document_extent) };
-        let blend_space = if placement.is_some() { packet.blend_space } else { self.scale_sources.entries[&layer.id].blend_space };
+        let id = packet.scene.source_target(handle).unwrap();
+        let extent = if placement.is_some() { packet.document_extent } else { packet.scene.local_extent(handle) };
+        let blend_space = if placement.is_some() { packet.blend_space } else { self.scale_sources.entries[&id].blend_space };
         let mut changed = PixelRect::EMPTY;
         for chunk in missing.chunks(32) {
             for &tile in chunk {
-                let entry = &self.scale_sources.entries[&layer.id];
+                let entry = &self.scale_sources.entries[&id];
                 let mut scratch = None;
                 let (source, base, reduced_preview, over, empty) = if placement.is_some() || (entry.watercolor.is_some() && !entry.raw_material) {
                     let (tile, pigment) = match &placement {
-                        Some(placement) => self.placed_material_inputs(r, packet, layer, placement.clone(), tile)?,
-                        None => (self.local_color_tile(r, packet, layer, tile)?, r.empty_view.clone()),
+                        Some(placement) => self.placed_material_inputs(r, packet, handle, placement.clone(), tile)?,
+                        None => (self.local_color_tile(r, packet, handle, tile)?, r.empty_view.clone()),
                     };
                     scratch = Some(tile);
                     (self.pool[tile].view.clone(), pigment, false, false, false)
@@ -315,10 +318,10 @@ impl Scene {
                     let persistent = r
                         .paint_layers
                         .iter()
-                        .find(|l| l.id == layer.id)
+                        .find(|l| l.id == id)
                         .and_then(|l| l.pages.iter().find(|p| p.coordinate == tile))
                         .map(|p| p.active().view.clone());
-                    let predicted = (r.preview_layer_id == Some(layer.id))
+                    let predicted = (r.preview_layer_id == Some(id))
                         .then(|| r.preview_page(tile))
                         .flatten()
                         .map(|p| p.active().view.clone());
@@ -328,7 +331,7 @@ impl Scene {
                     } else if persistent.is_some() {
                         persistent
                     } else {
-                        self.source_tile(r, layer, tile)?
+                        self.source_tile(r, packet.scene, id, tile)?
                     };
                     let over = predicted.is_some() && !r.preview_requires_base;
                     let empty = predicted.is_none() && base.is_none();
@@ -362,36 +365,36 @@ impl Scene {
             }
             commands.flush(r, encoder)?;
             self.encode_jobs(r, encoder)?;
-            self.scale_sources.entries.get_mut(&layer.id).unwrap().updates += chunk.len() as u64;
+            self.scale_sources.entries.get_mut(&id).unwrap().updates += chunk.len() as u64;
         }
         Ok(changed)
     }
     pub(super) fn prepare_scale_mask(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer, encoder: &mut crate::submission::CommandEncoder,
-        mask: &layer_core::LayerMask, request: SourceRequest,
+        mask: &MaskUse, coverage: &CoverageSource, request: SourceRequest,
     ) -> Result<PixelRect, GpuRasterError> {
         let SourceRequest { plan, required, covered } = request;
         if plan.bounds.is_empty() { return Ok(PixelRect::EMPTY); }
         let level = plan.level;
-        self.scale_sources.ensure_level(commands, r, encoder, mask.id, plan)?;
-        let cached = self.scale_sources.image(mask.id, level);
+        self.scale_sources.ensure_level(commands, r, encoder, SourceTarget::Coverage(mask.source), plan)?;
+        let cached = self.scale_sources.image(SourceTarget::Coverage(mask.source), level);
         let output = cached.image.view.clone();
         let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds)).filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty()).collect();
-        let changed = self.reduce_mask_pages(commands, r, encoder, mask, plan, &output, &missing)?;
-        self.scale_sources.entries.get_mut(&mask.id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
+        let changed = self.reduce_mask_pages(commands, r, encoder, mask, coverage, plan, &output, &missing)?;
+        self.scale_sources.entries.get_mut(&SourceTarget::Coverage(mask.source)).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
     }
     #[expect(clippy::too_many_arguments, reason = "Mask reduction keeps missing pages and GPU output bindings explicit")]
     pub(super) fn reduce_mask_pages(
         &mut self, commands: &mut Commands, r: &mut WgpuRasterizer,
-        encoder: &mut crate::submission::CommandEncoder, mask: &layer_core::LayerMask,
+        encoder: &mut crate::submission::CommandEncoder, mask: &MaskUse, coverage: &CoverageSource,
         plan: display_mips::Plan, output: &wgpu::TextureView, missing: &[[u32; 2]],
     ) -> Result<PixelRect, GpuRasterError> {
         let level = plan.level;
-        let extent = self.scale_sources.entries[&mask.id].extent;
+        let extent = self.scale_sources.entries[&SourceTarget::Coverage(mask.source)].extent;
         let mut changed = PixelRect::EMPTY;
         for &tile in missing {
-            let source = r.layer_masks.pages.get(&(mask.id, tile)).map(|p| p.view.clone());
+            let source = r.layer_masks.pages.get(&(SourceTarget::Coverage(mask.source), tile)).map(|p| p.view.clone());
             let valid = page_rect(tile).intersect(PixelRect::full(extent));
             changed = changed.union(valid);
             let size = [valid.width(), valid.height()].map(|n| n.div_ceil(1 << level));
@@ -401,7 +404,7 @@ impl Scene {
                 origin[0], origin[1], size[0], size[1], valid.width(), valid.height(), 1 << level,
                 if source.is_none() { 4 } else { 32 | if mask.inverted { 64 } else { 0 } },
             ]);
-            let default = if mask.inverted { 1. - mask.default_coverage } else { mask.default_coverage };
+            let default = if mask.inverted { 1. - coverage.default_coverage } else { coverage.default_coverage };
             values[8..12].fill(default.to_bits());
             let binding = Commands::binding(r, source.as_ref().unwrap_or(&r.empty_view), &r.empty_view, output);
             commands.reduce(r, encoder, values, &binding, "reduce changed mask pages")?;
@@ -411,8 +414,8 @@ impl Scene {
 }
 
 impl Scene {
-    pub fn reduced_layer(&self, _r: &WgpuRasterizer, layer: &Layer, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
-        self.scale_sources.complete_texture(layer, extent, level)
+    pub fn reduced_layer(&self, _r: &WgpuRasterizer, scene: SceneView<'_>, target: SourceTarget, extent: [u32; 2], level: u32) -> Option<&wgpu::Texture> {
+        self.scale_sources.complete_texture(scene, target, extent, level)
     }
 
 }

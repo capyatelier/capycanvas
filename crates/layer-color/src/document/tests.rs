@@ -1,13 +1,26 @@
 use super::*;
-use layer_core::{ColorTransition, Document, Editor, Layer, LayerKind, LayerMask, Point};
+use layer_core::{ColorTransition, Document, Editor, Edit, Point, authored::*};
 
 const LIMIT: usize = 16 * 1024 * 1024;
 
-fn edit(prepared: &PreparedDocumentColor) -> Edit {
-    Edit::SetColor {
-        color: prepared.project.document.color,
-        layers: prepared.project.document.layers.clone(),
-    }
+fn changes(document: &Document) -> (Vec<RecordChange<PaintSource>>, Vec<RecordChange<CoverageSource>>) {
+    let art = &document.artwork;
+    (art.paint.iter().map(|(handle,id,value)| RecordChange {handle,id,value:Some(value.clone())}).collect(),
+     art.coverage.iter().map(|(handle,id,value)| RecordChange {handle,id,value:Some(value.clone())}).collect())
+}
+fn edit(before: &Document, prepared: &PreparedDocumentColor) -> Edit {
+    let (paint, coverage) = changes(&prepared.document);
+    before.color_edit(prepared.document.composition().color, paint, coverage).unwrap()
+}
+fn paint(document: &Document, index: usize) -> &PaintSource {
+    document.scene().paint_source(document.scene().order()[index]).unwrap()
+}
+fn paint_mut(document: &mut Document, index: usize) -> &mut PaintSource {
+    let SourceTarget::Paint(handle) = document.scene().source_target(document.scene().order()[index]).unwrap() else {panic!("paint source required")};
+    document.artwork.paint.get_mut(handle).unwrap()
+}
+fn coverage(document: &Document, index: usize) -> &CoverageSource {
+    document.scene().mask(document.scene().order()[index]).unwrap().1
 }
 
 fn key(plane: RasterPlane) -> TileKey {
@@ -29,9 +42,15 @@ fn samples(depth: SampleDepth, channels: usize) -> Vec<u8> {
         .collect()
 }
 
-fn fixture(color: DocumentColor) -> Project {
-    let mut document = Document::new("document-color", TILE_SIZE, TILE_SIZE, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = color;
+fn fixture(color: DocumentColor) -> Document {
+    let document = Document::new(PortableId::random(), TILE_SIZE, TILE_SIZE, layer_core::DocumentNames {paint:"Current ink".into(),paper:"Paper".into()});
+    let mut artwork = document.artwork.clone();
+    let ink = document.working.occurrence.unwrap();
+    let SourceTarget::Paint(ink_source) = document.working.target.unwrap() else {unreachable!()};
+    let paper = document.scene().order()[1];
+    let composition = artwork.compositions.get_mut(artwork.root).unwrap();
+    composition.color = color; composition.blend = composition.blend.for_depth(color.depth);
+    let stack = composition.result;
     let rgba = Arc::new(
         TileBlob::encode(color.paint_descriptor(), &samples(color.depth, 4)).unwrap(),
     );
@@ -60,12 +79,11 @@ fn fixture(color: DocumentColor) -> Project {
             edge_width: 3.,
         }),
     });
-    let mut mask = LayerMask::reveal_all(document.allocate_layer_id(), Point { x: 2.5, y: -1. });
-    mask.inverted = true;
-    mask.raster = RasterRevision::backed(RasterData {
-        tiles: [(key(RasterPlane::Mask), RasterTile::backed_shared(scalar))].into(),
-        watercolor: None,
-    });
+    let coverage = artwork.coverage.insert(PortableId::random(), CoverageSource {
+        domain:[TILE_SIZE;2], initial:None, default_coverage:1., operations:Default::default(),
+        raster:RasterRevision::backed(RasterData {tiles:[(key(RasterPlane::Mask),RasterTile::backed_shared(scalar))].into(),watercolor:None}),
+    }).unwrap();
+    let mask = MaskUse {source:coverage, enabled:true, linked:true, inverted:true, translation:Point{x:2.5,y:-1.}, placement:layer_core::Projective::IDENTITY};
     let rasterized = Arc::new(SourceImage {
         resolution: None,
         kind: SourceKind::Rasterized,
@@ -79,12 +97,10 @@ fn fixture(color: DocumentColor) -> Project {
         },
         tiles: [([0, 0], rgba.clone()), ([1, 0], rgba)].into(),
     });
-    document.layers[0].raster = root;
-    document.layers[0].mask = Some(mask);
-    document.layers[0].opacity = 0.75;
-    let mut base = Layer::paint(document.allocate_layer_id(), "Rasterized full image");
-    base.source = Some(rasterized.clone());
-    document.layers.insert(1, base);
+    artwork.paint.get_mut(ink_source).unwrap().raster = root;
+    let occurrence = artwork.occurrences.get_mut(ink).unwrap(); occurrence.mask=Some(mask); occurrence.opacity=0.75;
+    let base_source = artwork.paint.insert(PortableId::random(), PaintSource {domain:[512,256],raster:Default::default(),original:Some(rasterized.clone()),operations:Default::default()}).unwrap();
+    let base = artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(base_source),"Rasterized full image")).unwrap();
     let mut original = rasterized.as_ref().clone();
     original.kind = SourceKind::Original;
     original.interpretation.profile = ColorProfile::Icc(
@@ -92,11 +108,9 @@ fn fixture(color: DocumentColor) -> Project {
             .unwrap()
             .into(),
     );
-    let mut source = Layer::paint(document.allocate_layer_id(), "Independent original");
-    source.source = Some(Arc::new(original));
-    document.layers.insert(2, source);
-    // Live color definitions are independent of document assignment/conversion.
-    // All existing sample, metadata and history checks also cover these layers.
+    let original_source=artwork.paint.insert(PortableId::random(),PaintSource {domain:[512,256],raster:Default::default(),original:Some(Arc::new(original)),operations:Default::default()}).unwrap();
+    let original=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(original_source),"Independent original")).unwrap();
+    let mut entries=vec![ink,base,original];
     use layer_core::{EffectInstance, EffectValue, GradientStop, color::RgbColor};
     let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0.234567, 123. / 65535.]).unwrap();
     for (id, key, value) in [
@@ -108,14 +122,13 @@ fn fixture(color: DocumentColor) -> Project {
     ] {
         let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
         effect.set(key, value).unwrap();
-        let mut layer = Layer::paint(document.allocate_layer_id(), id);
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(effect));
-        document.layers.insert(document.layers.len() - 1, layer);
+        let definition=artwork.definitions.insert(PortableId::random(),Definition {program:effect.program,dimensions:Default::default()}).unwrap();
+        let application=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:[TILE_SIZE;2]}).unwrap();
+        entries.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),id)).unwrap());
     }
-    let project = Project { document };
-    project.validate(Default::default()).unwrap();
-    project
+    entries.push(paper); artwork.stacks.get_mut(stack).unwrap().entries=entries;
+    let mut result=Document::from_artwork(artwork).unwrap(); result.working=document.working;
+    result.validate(Default::default()).unwrap(); result
 }
 
 fn backing(root: &RasterRevision, plane: RasterPlane) -> Arc<TileBlob> {
@@ -124,29 +137,21 @@ fn backing(root: &RasterRevision, plane: RasterPlane) -> Arc<TileBlob> {
         .unwrap()
 }
 
-fn assert_original_and_properties(old: &Project, new: &Project) {
-    let a = &old.document;
-    let b = &new.document;
-    assert_eq!(
-        (a.width, a.height, a.active_layer, a.active_mask),
-        (b.width, b.height, b.active_layer, b.active_mask)
-    );
-    assert!(Arc::ptr_eq(
-        a.layers[2].source.as_ref().unwrap(),
-        b.layers[2].source.as_ref().unwrap()
-    ));
-    assert_eq!(
-        a.layers[1].source.as_ref().unwrap().extent,
-        b.layers[1].source.as_ref().unwrap().extent
-    );
-    for (a, b) in a.layers.iter().zip(&b.layers) {
-        let mut metadata = b.clone();
-        metadata.raster = a.raster.clone();
-        metadata.source = a.source.clone();
-        if let (Some(a), Some(b)) = (&a.mask, &mut metadata.mask) {
-            b.raster = a.raster.clone();
-        }
-        assert_eq!(*a, metadata);
+fn assert_original_and_properties(a: &Document, b: &Document) {
+    assert_eq!((a.composition().size,&a.working),(b.composition().size,&b.working));
+    assert_eq!(a.artwork.occurrences,b.artwork.occurrences);
+    assert_eq!(a.artwork.stacks,b.artwork.stacks);
+    assert_eq!(a.artwork.effects,b.artwork.effects);
+    assert_eq!(a.artwork.definitions,b.artwork.definitions);
+    assert!(Arc::ptr_eq(paint(a,2).original.as_ref().unwrap(),paint(b,2).original.as_ref().unwrap()));
+    assert_eq!(paint(a,1).original.as_ref().unwrap().extent,paint(b,1).original.as_ref().unwrap().extent);
+    for (handle,id,old) in a.artwork.paint.iter() {
+        assert_eq!(b.artwork.paint.id(handle),Some(id));
+        let mut metadata=b.artwork.paint.get(handle).unwrap().clone(); metadata.raster=old.raster.clone();metadata.original=old.original.clone();assert_eq!(*old,metadata);
+    }
+    for (handle,id,old) in a.artwork.coverage.iter() {
+        assert_eq!(b.artwork.coverage.id(handle),Some(id));
+        let mut metadata=b.artwork.coverage.get(handle).unwrap().clone(); metadata.raster=old.raster.clone();assert_eq!(*old,metadata);
     }
 }
 
@@ -164,24 +169,24 @@ fn assignment_preserves_every_code_and_shared_backing_in_all_eight_modes() {
                 )
                 .unwrap();
                 assert_eq!(
-                    prepared.project.document.color,
+                    prepared.document.composition().color,
                     DocumentColor {
                         space: target,
                         depth
                     }
                 );
                 assert_eq!(prepared.statistics.clipped_channels, 0);
-                assert_original_and_properties(&project, &prepared.project);
-                let a = &project.document.layers;
-                let b = &prepared.project.document.layers;
-                assert_eq!(a[0].raster.identity(), b[0].raster.identity());
+                assert_original_and_properties(&project, &prepared.document);
+                let a = &project;
+                let b = &prepared.document;
+                assert_eq!(paint(a,0).raster.identity(), paint(b,0).raster.identity());
                 assert_eq!(
-                    a[0].mask.as_ref().unwrap().raster.identity(),
-                    b[0].mask.as_ref().unwrap().raster.identity()
+                    coverage(a,0).raster.identity(),
+                    coverage(b,0).raster.identity()
                 );
-                let source = b[1].source.as_ref().unwrap();
+                let source = paint(b,1).original.as_ref().unwrap();
                 assert_eq!(source.interpretation.profile, ColorProfile::Builtin(target));
-                for (coordinate, blob) in &a[1].source.as_ref().unwrap().tiles {
+                for (coordinate, blob) in &paint(a,1).original.as_ref().unwrap().tiles {
                     assert!(Arc::ptr_eq(blob, &source.tiles[coordinate]));
                 }
             }
@@ -209,9 +214,9 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                 || false,
             )
             .unwrap();
-            assert_original_and_properties(&project, &prepared.project);
+            assert_original_and_properties(&project, &prepared.document);
             assert_eq!(prepared.statistics.clipped_channels, 0);
-            let layers = &prepared.project.document.layers;
+            let document = &prepared.document;
             for plane in [
                 RasterPlane::Color,
                 RasterPlane::Mask,
@@ -219,9 +224,9 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                 RasterPlane::WatercolorWetness,
             ] {
                 let root = if plane == RasterPlane::Mask {
-                    &layers[0].mask.as_ref().unwrap().raster
+                    &coverage(document,0).raster
                 } else {
-                    &layers[0].raster
+                    &paint(document,0).raster
                 };
                 let blob = backing(root, plane);
                 let bytes = blob.decode().unwrap();
@@ -246,18 +251,18 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
                     }
                 }
             }
-            let rgba = backing(&layers[0].raster, RasterPlane::Color);
-            let source = layers[1].source.as_ref().unwrap();
+            let rgba = backing(&paint(document,0).raster, RasterPlane::Color);
+            let source = paint(document,1).original.as_ref().unwrap();
             assert_eq!(source.interpretation.depth, target);
             assert!(source.tiles.values().all(|blob| Arc::ptr_eq(blob, &rgba)));
-            let wetness = backing(&layers[0].raster, RasterPlane::Wetness);
+            let wetness = backing(&paint(document,0).raster, RasterPlane::Wetness);
             assert!(Arc::ptr_eq(
                 &wetness,
-                &backing(&layers[0].raster, RasterPlane::WatercolorWetness)
+                &backing(&paint(document,0).raster, RasterPlane::WatercolorWetness)
             ));
             assert!(Arc::ptr_eq(
                 &wetness,
-                &backing(&layers[0].mask.as_ref().unwrap().raster, RasterPlane::Mask)
+                &backing(&coverage(document,0).raster, RasterPlane::Mask)
             ));
         }
     }
@@ -281,9 +286,9 @@ fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
                     || false,
                 )
                 .unwrap();
-                assert_original_and_properties(&project, &prepared.project);
+                assert_original_and_properties(&project, &prepared.document);
                 let bytes = backing(
-                    &prepared.project.document.layers[0].raster,
+                    &paint(&prepared.document,0).raster,
                     RasterPlane::Color,
                 )
                 .decode()
@@ -315,17 +320,9 @@ fn conversion_matches_f64_coordinates_within_one_code_and_keeps_exact_alpha() {
                 }
                 assert_eq!(prepared.statistics.clipped_channels, expected_clipped);
                 assert_eq!(
-                    project.document.layers[0]
-                        .mask
-                        .as_ref()
-                        .unwrap()
-                        .raster
+                    coverage(&project,0).raster
                         .identity(),
-                    prepared.project.document.layers[0]
-                        .mask
-                        .as_ref()
-                        .unwrap()
-                        .raster
+                    coverage(&prepared.document,0).raster
                         .identity()
                 );
             }
@@ -345,16 +342,26 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
     };
     let a = prepare_document_color(&project, change, LIMIT, || false).unwrap();
     let b = prepare_document_color(&project, change, LIMIT, || false).unwrap();
-    let source_a = a.project.document.layers[1].source.as_ref().unwrap();
-    let source_b = b.project.document.layers[1].source.as_ref().unwrap();
-    assert_eq!(source_a, source_b);
+    let source_a = paint(&a.document,1).original.as_ref().unwrap();
+    let source_b = paint(&b.document,1).original.as_ref().unwrap();
+    assert_eq!(source_a.extent,source_b.extent);
+    assert_eq!(source_a.resolution,source_b.resolution);
+    assert_eq!(source_a.kind,source_b.kind);
+    assert_eq!(source_a.interpretation,source_b.interpretation);
+    assert_eq!(source_a.tiles.keys().collect::<Vec<_>>(),source_b.tiles.keys().collect::<Vec<_>>());
+    for (coordinate,a) in &source_a.tiles {
+        let b=&source_b.tiles[coordinate];
+        assert_ne!(a.resource_id(),b.resource_id());
+        assert_eq!(a.descriptor,b.descriptor);
+        assert_eq!(a.decode().unwrap(),b.decode().unwrap());
+    }
     assert_ne!(
-        source_a.tiles[&[0, 0]].digest,
-        source_a.tiles[&[1, 0]].digest
+        source_a.tiles[&[0, 0]].content_digest().unwrap(),
+        source_a.tiles[&[1, 0]].content_digest().unwrap()
     );
     assert!(Arc::ptr_eq(
         &source_a.tiles[&[0, 0]],
-        &backing(&a.project.document.layers[0].raster, RasterPlane::Color)
+        &backing(&paint(&a.document,0).raster, RasterPlane::Color)
     ));
     let plain = prepare_document_color(
         &project,
@@ -368,11 +375,11 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
     .unwrap();
     for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
         assert_eq!(
-            backing(&a.project.document.layers[0].raster, plane).digest,
-            backing(&plain.project.document.layers[0].raster, plane).digest
+            backing(&paint(&a.document,0).raster, plane).content_digest().unwrap(),
+            backing(&paint(&plain.document,0).raster, plane).content_digest().unwrap()
         );
     }
-    let bytes = backing(&plain.project.document.layers[0].raster, RasterPlane::Color)
+    let bytes = backing(&paint(&plain.document,0).raster, RasterPlane::Color)
         .decode()
         .unwrap();
     for tile in source_a.tiles.values() {
@@ -408,13 +415,13 @@ fn absolute_intent_keeps_the_white_point_difference_and_preserves_alpha() {
     let relative = convert(RenderingIntent::RelativeColorimetric);
     let absolute = convert(RenderingIntent::AbsoluteColorimetric);
     let relative = backing(
-        &relative.project.document.layers[0].raster,
+        &paint(&relative.document,0).raster,
         RasterPlane::Color,
     )
     .decode()
     .unwrap();
     let absolute = backing(
-        &absolute.project.document.layers[0].raster,
+        &paint(&absolute.document,0).raster,
         RasterPlane::Color,
     )
     .decode()
@@ -443,24 +450,23 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
         },
     ] {
         let prepared = prepare_document_color(&project, change, LIMIT, || false).unwrap();
-        let mut editor = Editor::new(project.document.clone());
-        editor.validate_edit(&edit(&prepared)).unwrap();
-        assert_eq!(editor.document(), &project.document);
+        let mut editor = Editor::new(project.clone());
+        editor.validate_edit(&edit(&project, &prepared)).unwrap();
+        assert_eq!(editor.document(), &project);
         assert!(!editor.can_undo());
         let transition = editor
             .prepare_color_transition(ColorTransition::Apply {
-                color: prepared.project.document.color,
-                layers: prepared.project.document.layers.clone(),
+                edit: Box::new(edit(&project, &prepared)),
             })
             .unwrap();
-        assert_eq!(transition.document(), &prepared.project.document);
+        assert_eq!(transition.document(), &prepared.document);
         editor
             .commit_color_transition::<layer_core::DocumentError>(transition, |candidate| {
-                assert_eq!(candidate, &prepared.project.document);
+                assert_eq!(candidate, &prepared.document);
                 Ok(())
             })
             .unwrap();
-        assert_eq!(editor.document(), &prepared.project.document);
+        assert_eq!(editor.document(), &prepared.document);
         let checkpoint = editor.checkpoint();
         for _ in 0..3 {
             let transition = editor
@@ -472,8 +478,8 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
             assert!(!editor.can_undo());
             assert_eq!(editor.checkpoint(), 0);
             let mut restored = editor.document().clone();
-            restored.revision = project.document.revision;
-            assert_eq!(restored, project.document);
+            restored.revision = project.revision;
+            assert_eq!(restored, project);
             let transition = editor
                 .prepare_color_transition(ColorTransition::Redo)
                 .unwrap();
@@ -483,8 +489,8 @@ fn apply_and_history_restore_exact_roots_sources_properties_and_checkpoints() {
             assert!(!editor.can_redo());
             assert_eq!(editor.checkpoint(), checkpoint);
             let mut restored = editor.document().clone();
-            restored.revision = prepared.project.document.revision;
-            assert_eq!(restored, prepared.project.document);
+            restored.revision = prepared.document.revision;
+            assert_eq!(restored, prepared.document);
         }
     }
 }
@@ -495,7 +501,7 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     });
-    let snapshot = project.document.clone();
+    let snapshot = project.clone();
     let change = DocumentColorChange::Depth {
         depth: SampleDepth::U8,
         dither: OutputDither::None,
@@ -515,36 +521,37 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
         .err()
         .unwrap();
     assert!(error.contains("memory limit"), "{error}");
-    assert_eq!(project.document, snapshot);
+    assert_eq!(project, snapshot);
     let prepared = prepare_document_color(&project, change, LIMIT, || false).unwrap();
-    let mut editor = Editor::new(project.document.clone());
+    let editor = Editor::new(project.clone());
     for bad in 0..7 {
-        let mut layers = prepared.project.document.layers.clone();
-        match bad {
-            0 => layers[0].opacity = 0.25,
-            1 => {
-                layers.remove(1);
+        let (mut paint_changes, coverage_changes) = changes(&prepared.document);
+        let result = if bad == 0 {
+            let handle = project.scene().order()[0];
+            let mut occurrence = project.scene().occurrence(handle).unwrap().clone();
+            occurrence.opacity = 0.25;
+            let supplied = Edit::Batch(vec![edit(&project, &prepared), Edit::Occurrence(
+                RecordChange::replace(&project.artwork.occurrences, handle, Some(occurrence)).unwrap()
+            )]);
+            editor.prepare_color_transition(ColorTransition::Apply {edit:Box::new(supplied)}).map(|_| ())
+        } else {
+            match bad {
+                1 => {paint_changes.remove(1);}
+                2 => paint_changes[0].value.as_mut().unwrap().raster = paint(&project,0).raster.clone(),
+                3 => paint_changes[0].value.as_mut().unwrap().raster = RasterRevision::pending(),
+                4 => paint_changes[0].value.as_mut().unwrap().raster = RasterRevision::default(),
+                5 => {
+                    let value = paint_changes[0].value.as_mut().unwrap();
+                    let mut data = (*value.raster.wait_data().unwrap()).clone();
+                    data.watercolor = None;
+                    value.raster = RasterRevision::backed(data);
+                }
+                6 => paint_changes[2].value.as_mut().unwrap().original = paint_changes[1].value.as_ref().unwrap().original.clone(),
+                _ => unreachable!(),
             }
-            2 => layers[0].raster = project.document.layers[0].raster.clone(),
-            3 => layers[0].raster = RasterRevision::pending(),
-            4 => layers[0].raster = RasterRevision::default(),
-            5 => {
-                let mut data = (*layers[0].raster.wait_data().unwrap()).clone();
-                data.watercolor = None;
-                layers[0].raster = RasterRevision::backed(data);
-            }
-            6 => layers[2].source = layers[1].source.clone(),
-            _ => unreachable!(),
-        }
-        assert!(
-            editor
-                .perform(Edit::SetColor {
-                    color: prepared.project.document.color,
-                    layers
-                })
-                .is_err(),
-            "case {bad}"
-        );
+            project.color_edit(prepared.document.composition().color,paint_changes,coverage_changes).map(|_| ())
+        };
+        assert!(result.is_err(), "case {bad}");
         assert_eq!(editor.document(), &snapshot);
         assert_eq!(editor.checkpoint(), 0);
         assert!(!editor.can_undo());
@@ -552,7 +559,7 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
     }
     // Cancellation must interrupt a not-yet-published raster, too.
     let mut pending = project.clone();
-    pending.document.layers[0].raster = RasterRevision::pending();
+    paint_mut(&mut pending,0).raster = RasterRevision::pending();
     let mut checks = 0;
     let error = prepare_document_color(&pending, change, LIMIT, || {
         checks += 1;
@@ -561,13 +568,13 @@ fn cancellation_limits_and_invalid_candidates_leave_document_and_history_intact(
     .err()
     .unwrap();
     assert!(error.contains("cancelled"), "{error}");
-    assert!(pending.document.layers[0].raster.try_data().is_none());
+    assert!(paint(&pending,0).raster.try_data().is_none());
 }
 
 #[test]
 fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F16 };
-    let mut document = Document::new("precision", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); document.color = color;
+    let mut document = Document::new(PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }); let composition=document.artwork.compositions.get_mut(document.artwork.root).unwrap(); composition.color=color; composition.blend=composition.blend.for_depth(color.depth);
     let half: Vec<_> = (0..65536u32).flat_map(|i| {
         let v = layer_core::color::f16::from_bits(i as u16).to_f32();
         let v = if v.is_finite() { v } else { 0. };
@@ -575,27 +582,28 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     }).flat_map(u16::to_le_bytes).collect();
     let rgba = Arc::new(TileBlob::encode(color.paint_descriptor(), &half).unwrap());
     let mask = Arc::new(TileBlob::encode(color.coverage_descriptor(), &vec![123; 65536*2]).unwrap());
-    document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::Wetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: None });
-    let project = Project { document };
+    paint_mut(&mut document,0).raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::Wetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: None });
+    let project = document;
     let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
     let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
-    let root = result.project.document.layers[0].raster.wait_data().unwrap();
+    let root = paint(&result.document,0).raster.wait_data().unwrap();
     let output = root.tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap();
     for (input, output) in half.chunks_exact(2).zip(output.chunks_exact(4)) {
         assert_eq!(layer_core::color::f16::from_bits(u16::from_le_bytes(input.try_into().unwrap())).to_f32().to_bits(), u32::from_le_bytes(output.try_into().unwrap()));
     }
     assert!(Arc::ptr_eq(&root.tiles[&key(RasterPlane::Wetness)].wait_backing().unwrap(), &mask));
-    let mut editor = Editor::new(project.document.clone());
-    editor.perform(edit(&result)).unwrap(); editor.undo().unwrap();
-    assert_eq!(editor.document().color, color); editor.redo().unwrap();
-    assert_eq!(editor.document().color.depth, SampleDepth::F32);
+    let mut editor = Editor::new(project.clone());
+    editor.perform(edit(&project, &result)).unwrap(); editor.undo().unwrap();
+    assert_eq!(editor.document().composition().color, color); editor.redo().unwrap();
+    assert_eq!(editor.document().composition().color.depth, SampleDepth::F32);
     let demote = DocumentColorChange::Depth { depth: SampleDepth::F16, dither: OutputDither::None };
-    let narrowed = prepare_document_color(&result.project, demote, LIMIT, || false).unwrap();
-    assert_eq!(narrowed.project.document.layers[0].raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap(), half);
+    let narrowed = prepare_document_color(&result.document, demote, LIMIT, || false).unwrap();
+    assert_eq!(paint(&narrowed.document,0).raster.wait_data().unwrap().tiles[&key(RasterPlane::Color)].wait_backing().unwrap().decode().unwrap(), half);
     assert!(prepare_document_color(&project, promote, LIMIT, || true).is_err());
-    let mut wide = result.project.clone();
+    let mut wide = result.document.clone();
     let bytes: Vec<_> = (0..65536).flat_map(|_| [100000.,-100000.,1.,1.]).flat_map(f32::to_le_bytes).collect();
-    wide.document.layers[0].raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed(TileBlob::encode(wide.document.color.paint_descriptor(), &bytes).unwrap()))].into(), watercolor: None });
+    let descriptor=wide.composition().color.paint_descriptor();
+    paint_mut(&mut wide,0).raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()))].into(), watercolor: None });
     assert!(prepare_document_color(&wide, demote, LIMIT, || false).err().unwrap().contains("range"));
 }
 
@@ -603,18 +611,54 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
 fn converting_to_float_blends_in_linear_light_in_the_same_step() {
     let color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
     let mut project = fixture(color);
-    project.document.blend_space = layer_core::BlendSpace::Perceptual;
+    project.artwork.compositions.get_mut(project.artwork.root).unwrap().blend = layer_core::BlendSpace::Perceptual;
     let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
     let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
-    assert_eq!(result.project.document.blend_space, layer_core::BlendSpace::Linear);
-    let mut editor = Editor::new(project.document.clone());
-    editor.perform(edit(&result)).unwrap();
-    assert_eq!(editor.document().color.depth, SampleDepth::F32);
-    assert_eq!(editor.document().blend_space, layer_core::BlendSpace::Linear);
+    assert_eq!(result.document.composition().blend, layer_core::BlendSpace::Linear);
+    let mut editor = Editor::new(project.clone());
+    editor.perform(edit(&project, &result)).unwrap();
+    assert_eq!(editor.document().composition().color.depth, SampleDepth::F32);
+    assert_eq!(editor.document().composition().blend, layer_core::BlendSpace::Linear);
     assert!(editor.undo().unwrap());
-    assert_eq!((editor.document().color, editor.document().blend_space), (color, layer_core::BlendSpace::Perceptual));
+    assert_eq!((editor.document().composition().color, editor.document().composition().blend), (color, layer_core::BlendSpace::Perceptual));
     assert!(!editor.can_undo());
     assert!(editor.redo().unwrap());
-    assert_eq!(editor.document().blend_space, layer_core::BlendSpace::Linear);
-    assert!(editor.perform(Edit::SetBlendSpace(layer_core::BlendSpace::Perceptual)).unwrap_err().to_string().contains("linear light"));
+    assert_eq!(editor.document().composition().blend, layer_core::BlendSpace::Linear);
+    let mut composition=editor.document().composition().clone(); composition.blend=layer_core::BlendSpace::Perceptual;
+    let change=RecordChange::replace(&editor.document().artwork.compositions,editor.document().artwork.root,Some(composition)).unwrap();
+    assert!(editor.perform(Edit::Composition(change)).unwrap_err().to_string().contains("linear light"));
+}
+
+#[test]
+fn editable_color_admission_rejects_invalid_original_profiles_without_mutation() {
+    let mut document=fixture(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8});
+    let source=paint_mut(&mut document,2).original.as_mut().unwrap();
+    Arc::make_mut(source).interpretation.profile=ColorProfile::Icc(vec![0;128].into());
+    let before=document.clone();
+    assert!(validate_document_color(&document).is_err());
+    assert!(prepare_document_color(&document,DocumentColorChange::Assign(RgbSpace::DisplayP3),LIMIT,||false).is_err());
+    assert_eq!(document,before);
+    assert!(Arc::ptr_eq(paint(&document,2).original.as_ref().unwrap(),paint(&before,2).original.as_ref().unwrap()));
+}
+
+#[test]
+fn conversion_uses_unplaced_source_domain_outside_the_composition() {
+    let mut document=fixture(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U8});
+    let color=document.composition().color;
+    let coordinate=[2,0];
+    let blob=Arc::new(TileBlob::encode(color.paint_descriptor(),&samples(SampleDepth::U8,4)).unwrap());
+    let handle=document.artwork.paint.insert(PortableId::random(),PaintSource {
+        domain:[768,256], original:None, operations:Default::default(),
+        raster:RasterRevision::backed(RasterData {watercolor:None,tiles:[(TileKey {plane:RasterPlane::Color,coordinate},RasterTile::backed_shared(blob))].into()}),
+    }).unwrap();
+    let result=prepare_document_color(&document,DocumentColorChange::Depth {depth:SampleDepth::U16,dither:OutputDither::None},LIMIT,||false).unwrap();
+    let converted=result.document.artwork.paint.get(handle).unwrap();
+    assert_eq!(converted.domain,[768,256]);
+    let data=converted.raster.wait_data().unwrap();
+    let tile=data.tiles[&TileKey {plane:RasterPlane::Color,coordinate}].wait_backing().unwrap();
+    assert_eq!(tile.descriptor,result.document.composition().color.paint_descriptor());
+    let output=tile.decode().unwrap();
+    for (input,output) in samples(SampleDepth::U8,4).iter().zip(output.chunks_exact(2)) {
+        assert_eq!(u16::from_le_bytes(output.try_into().unwrap()),u16::from(*input)*257);
+    }
 }

@@ -185,7 +185,7 @@ fn document_color_survives_generator_reset_clone_and_stroke_correction() {
         assert_eq!(a, b);
         let stroke = Stroke::new(
             StrokeId(91),
-            layer_core::LayerId(1),
+            layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1)),
             layer_core::StrokeTool::Brush,
             brush.clone(),
             vec![point(8.), point(24.)],

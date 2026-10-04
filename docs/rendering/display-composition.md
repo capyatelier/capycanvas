@@ -91,8 +91,8 @@ a source level finer than its own sampling grid.
 
 The shared layer traversal builds an expression tree. Normal premultiplied
 source-over runs use associativity, with each layer's opacity applied before
-regrouping into balanced branches across the whole run. Transparent paper adds
-no operand. Power-of-two grouping boundaries and empty layer positions
+regrouping into balanced branches across the whole run. Transparent constant fills
+add no operand. Power-of-two grouping boundaries and empty layer positions
 preserve lower branches when painting starts; transparent operands require no
 image or blend pass. Group opacity, masks, clipping and non-normal blends
 remain expression boundaries. Exact and reduced composition share blend formulas
@@ -102,7 +102,7 @@ blend formulas. Pointwise effects decode and encode at their fused boundary;
 image-boundary effects receive their declared linear or document-blending inputs.
 Linear effects encode their final output for a perceptual composite; effects
 already operating on encoded values retain that representation.
-Paper and mask-inspection colors use the composite representation, while scalar
+Constant fill and mask-inspection colors use the composite representation, while scalar
 coverage stays unencoded. Presentation decodes the completed composite before
 applying the output color transform.
 Pass Through children continue the enclosing composite. Group opacity and masks
@@ -271,9 +271,9 @@ then updates the adjacent presentation mip. When a native hierarchy is resident,
 composition writes directly into it, batching pages that share a prepared source
 window into one command sequence. Neighborhood filters prepare the batch's
 combined halo once; the image allowance can reduce the batch below four pages.
-Only one refinement batch may remain in flight. Idle comparisons separate the
-requested paper color from its visibility-adjusted composition color, so hidden
-or translucent paper cannot enqueue empty work behind that batch.
+Only one refinement batch may remain in flight. Idle comparisons include fill
+visibility and opacity, so unchanged constant-fill contributions do not enqueue
+empty work behind that batch.
 Fresh artwork can prepare and submit behind that batch without waiting
 for its completion. Required raster work keeps submission backpressure, and
 each held batch owns its completion token. Dependent painting still waits for

@@ -69,7 +69,7 @@ mod selection_refine_checks {
         for kind in RefineKind::ALL {
             let mut s = session(Platform::Gtk);
             select(&mut s, rectangle());
-            let original = s.engine.document().selection.clone().unwrap();
+            let original = s.engine.document().working.selection.clone().unwrap();
             invoke(&mut s, kind.command());
             let view = s.state.layer_tools.selection_resize.clone().expect("the dialog opens");
             assert_eq!((view.kind, view.radius), (kind, 5.));
@@ -82,41 +82,41 @@ mod selection_refine_checks {
             let request = answer(&mut s, 0xff);
             check_steps(kind, 5, &request, &original);
             assert!(modify(&request).preview.is_some());
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&original), "{kind:?}: a preview leaves the document");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&original), "{kind:?}: a preview leaves the document");
             assert_eq!(s.engine.display_selection().as_deref(), Some(&preview(0xff)), "and shows on the canvas");
             let now = settle(&mut s, 2);
             let exact = answer_at(&mut s, 0xff00, now, false);
             assert!(modify(&exact).preview.is_none(), "{kind:?}: a resting value runs exactly");
             check_steps(kind, 5, &exact, &original);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0xff00)), "{kind:?}: and becomes a step");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0xff00)), "{kind:?}: and becomes a step");
             assert_eq!(s.engine.display_selection().as_deref(), Some(&mask(0xff00)));
 
             selection_action(&mut s, SelectionAction::ResizeRadius { radius: 7. });
             let request = answer_at(&mut s, 0x10, now + 2, false);
             check_steps(kind, 7, &request, &original);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0xff00)), "{kind:?}: previews amend nothing");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0xff00)), "{kind:?}: previews amend nothing");
             let now = settle(&mut s, now + 3);
             answer_at(&mut s, 0x1000, now, false);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0x1000)), "{kind:?}: a new value amends it");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0x1000)), "{kind:?}: a new value amends it");
             selection_action(&mut s, SelectionAction::ApplyResize);
             assert!(s.state.layer_tools.selection_resize.is_none());
             assert!(s.selection_masks.refine.is_none(), "{kind:?}: Apply closes a settled value at once");
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&original), "{kind:?}: one undo step");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&original), "{kind:?}: one undo step");
             invoke(&mut s, CommandId::Redo);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0x1000)));
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0x1000)));
 
             invoke(&mut s, kind.command());
             let now = settle(&mut s, now + 2);
             answer_at(&mut s, 0x20, now, false);
             let now = settle(&mut s, now + 2);
             answer_at(&mut s, 0x2000, now, false);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0x2000)));
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0x2000)));
             selection_action(&mut s, SelectionAction::CancelResize);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&mask(0x1000)), "{kind:?}: Cancel restores");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&mask(0x1000)), "{kind:?}: Cancel restores");
             assert!(!s.engine.can_redo(), "Cancel leaves nothing to redo");
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&original), "and no undo step");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&original), "and no undo step");
         }
     }
 
@@ -124,7 +124,7 @@ mod selection_refine_checks {
     fn a_dragged_value_previews_without_publishing_and_apply_waits_for_the_exact_last_value() {
         let mut s = session(Platform::Gtk);
         select(&mut s, rectangle());
-        let original = s.engine.document().selection.clone();
+        let original = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::GrowSelection);
         s.frame(1, 1).unwrap();
         let revision = s.state.revision;
@@ -139,7 +139,7 @@ mod selection_refine_checks {
         assert_ne!(latest.request_id, running.request_id);
         assert_eq!(modify(&latest).steps[0].resize, 9, "then only the latest value runs");
         assert_eq!(s.engine.display_selection().as_deref(), Some(&preview(0xff00)));
-        assert_eq!(s.engine.document().selection, original, "previews never enter the document");
+        assert_eq!(s.engine.document().working.selection, original, "previews never enter the document");
         assert_eq!(s.selection_masks.refine_previews, 2);
         assert_eq!(s.renderer_stats().selection_previews, 2);
         let requests = s.renderer_mut().region_requests.len();
@@ -166,16 +166,16 @@ mod selection_refine_checks {
         selection_action(&mut s, SelectionAction::ApplyResize);
         assert!(s.state.layer_tools.selection_resize.is_none(), "Apply closes the dialog at once");
         assert!(s.dispatch(UiAction::Selection { action: SelectionAction::ResizeRadius { radius: 3. } }).is_err());
-        assert_eq!(s.engine.document().selection, original);
+        assert_eq!(s.engine.document().working.selection, original);
         assert_eq!(modify(&answer_at(&mut s, 0xf0f0, now + 3, false)).steps[0].resize, 12);
         assert!(s.selection_masks.refine.is_some(), "Apply waits for the last value");
         let exact = answer_at(&mut s, 0xff00_0000, now + 5, false);
         assert!(modify(&exact).preview.is_none() && modify(&exact).steps[0].resize == 12, "and runs it exactly at once");
-        assert_eq!(s.engine.document().selection, Some(mask(0xff00_0000)), "and keeps it");
+        assert_eq!(s.engine.document().working.selection, Some(mask(0xff00_0000)), "and keeps it");
         assert!(s.selection_masks.refine.is_none());
         assert_eq!(s.engine.display_selection().as_deref(), Some(&mask(0xff00_0000)));
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, original);
+        assert_eq!(s.engine.document().working.selection, original);
         assert!(s.dispatch(UiAction::Selection { action: SelectionAction::ResizeRadius { radius: 3. } }).is_err());
         assert!(s.dispatch(UiAction::Selection { action: SelectionAction::ApplyResize }).is_err());
     }
@@ -184,24 +184,24 @@ mod selection_refine_checks {
     fn an_exact_preview_settles_without_another_job_and_cancel_hides_a_preview() {
         let mut s = session(Platform::Gtk);
         select(&mut s, rectangle());
-        let original = s.engine.document().selection.clone();
+        let original = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::FeatherSelection);
         answer_at(&mut s, 0xff, 1, true);
-        assert_eq!(s.engine.document().selection, original, "an exact preview waits for the value to rest");
+        assert_eq!(s.engine.document().working.selection, original, "an exact preview waits for the value to rest");
         assert_eq!(s.engine.display_selection().as_deref(), Some(&mask(0xff)));
         let requests = s.renderer_mut().region_requests.len();
         settle(&mut s, 2);
         assert_eq!(s.renderer_mut().region_requests.len(), requests, "then becomes the step as it is");
-        assert_eq!(s.engine.document().selection, Some(mask(0xff)));
+        assert_eq!(s.engine.document().working.selection, Some(mask(0xff)));
         selection_action(&mut s, SelectionAction::CancelResize);
-        assert_eq!(s.engine.document().selection, original);
+        assert_eq!(s.engine.document().working.selection, original);
 
         invoke(&mut s, CommandId::FeatherSelection);
         answer_at(&mut s, 0xff, 1, false);
         assert_eq!(s.engine.display_selection().as_deref(), Some(&preview(0xff)));
         selection_action(&mut s, SelectionAction::CancelResize);
         assert_eq!(s.engine.display_selection().as_deref(), original.as_ref(), "Cancel takes the preview away");
-        assert_eq!(s.engine.document().selection, original);
+        assert_eq!(s.engine.document().working.selection, original);
         assert!(!s.wants_continuous_frames());
     }
 
@@ -220,13 +220,13 @@ mod selection_refine_checks {
         assert_eq!(modify(&answer_at(&mut s, 0xf1, 3, false)).steps[0].feather, 2.5);
         let now = settle(&mut s, 4);
         answer_at(&mut s, 0xff, now, false);
-        s.layer_edit(layer_core::Edit::SetSelection(Some(rectangle()))).unwrap();
+        s.layer_edit(s.engine.document().selection_edit(SelectionTarget::Current, rectangle()).unwrap()).unwrap();
         s.frame(now + 3, now + 3).unwrap();
         assert!(s.selection_masks.refine.is_none(), "another edit ends the draft");
         assert!(s.state.layer_tools.selection_resize.is_none());
         assert!(s.state.notice.is_some(), "and says so");
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, Some(mask(0xff)), "without withdrawing its step");
+        assert_eq!(s.engine.document().working.selection, Some(mask(0xff)), "without withdrawing its step");
     }
 
     #[test]
@@ -256,9 +256,9 @@ mod selection_refine_checks {
         selection_action(&mut s, SelectionAction::ApplyResize);
         answer_at(&mut s, 0xff, 3, false);
         assert!(s.selection_masks.quick(), "Quick Mask stays open");
-        assert_eq!(s.engine.document().selection, Some(mask(0xff)));
+        assert_eq!(s.engine.document().working.selection, Some(mask(0xff)));
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, Some(rectangle()));
+        assert_eq!(s.engine.document().working.selection, Some(rectangle()));
 
         invoke(&mut s, CommandId::ReturnToArtwork);
         invoke(&mut s, CommandId::SaveSelectionLayer);
@@ -274,7 +274,7 @@ mod selection_refine_checks {
         selection_action(&mut s, SelectionAction::ApplyResize);
         answer_at(&mut s, 0xff00, 3, false);
         assert_eq!(saved(&s), mask(0xff00));
-        assert_eq!(s.engine.document().selection, Some(rectangle()), "the current selection is untouched");
+        assert_eq!(s.engine.document().working.selection, Some(rectangle()), "the current selection is untouched");
         invoke(&mut s, CommandId::Undo);
         assert_eq!(saved(&s), before);
 
@@ -284,18 +284,18 @@ mod selection_refine_checks {
             RefineKind::ALL
                 .map(|kind| (
                     canvas_bar::short_label(kind.command(), s.localization()).to_string(),
-                    Some(UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(id.0) } }),
+                    Some(UiAction::Selection { action: SelectionAction::BeginRefine { kind, layer: Some(crate::session::occurrence_token(id)) } }),
                     true,
                 ))
                 .to_vec()
         );
-        s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: id.0, value: true } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: crate::session::occurrence_token(id), value: true } }).unwrap();
         assert!(modify_menu(&s.selection_layer_menu(id).unwrap()).iter().all(|(_, _, enabled)| !enabled));
         assert_eq!(
             s.command_disabled_reason(CommandId::BorderSelection).as_deref(),
             Some("This selection layer is locked")
         );
-        assert!(s.dispatch(UiAction::Selection { action: SelectionAction::BeginRefine { kind: RefineKind::Border, layer: Some(id.0) } }).is_err());
+        assert!(s.dispatch(UiAction::Selection { action: SelectionAction::BeginRefine { kind: RefineKind::Border, layer: Some(crate::session::occurrence_token(id)) } }).is_err());
     }
 
     #[test]
@@ -345,7 +345,7 @@ mod selection_refine_checks {
             (inverted, Point { x: -300., y: 100. }),
         ] {
             let mut s = filled(selection.clone());
-            let layers = s.engine.document().layers.clone();
+            let layers = s.engine.document().artwork.clone();
             let bar = s.state.canvas_bar.clone().unwrap();
             let refine = s.canvas_bar_choice_menu(bar.context, "refine").unwrap();
             s.dispatch(refine.sections[1][0].action.clone().unwrap()).unwrap();
@@ -379,10 +379,10 @@ mod selection_refine_checks {
             let preview = s.engine.display_selection().unwrap().into_owned();
             let near = |a: Point, b: Point| assert!((a.x - b.x).abs() < 1e-3 && (a.y - b.y).abs() < 1e-3, "{a:?} != {b:?}");
             near(preview.affine.map(corner), moved);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&selection), "Apply is the only edit");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&selection), "Apply is the only edit");
             invoke(&mut s, CommandId::ApplyTransform);
             assert!(!s.operation.active());
-            let applied = s.engine.document().selection.clone().unwrap();
+            let applied = s.engine.document().working.selection.clone().unwrap();
             assert_eq!(applied, preview);
             assert_eq!(applied.inverted, selection.inverted);
             assert_eq!(applied.shape, selection.shape);
@@ -392,17 +392,17 @@ mod selection_refine_checks {
                 _ => unreachable!(),
             }
             s.frame(3, 3).unwrap();
-            assert_eq!(s.engine.document().layers, layers, "the pixels stay where they are");
+            assert_eq!(s.engine.document().artwork, layers, "the pixels stay where they are");
             assert!(s.renderer_mut().pending_operations.is_empty());
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&selection), "one undo step");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&selection), "one undo step");
             invoke(&mut s, CommandId::Redo);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&applied));
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&applied));
 
             invoke(&mut s, CommandId::TransformSelectionOutline);
             invoke(&mut s, CommandId::TransformFlipVertical);
             invoke(&mut s, CommandId::CancelTransform);
-            assert_eq!(s.engine.document().selection.as_ref(), Some(&applied), "Cancel keeps the outline");
+            assert_eq!(s.engine.document().working.selection.as_ref(), Some(&applied), "Cancel keeps the outline");
             assert_eq!(s.engine.display_selection().as_deref(), Some(&applied));
             assert!(!s.engine.can_redo());
         }

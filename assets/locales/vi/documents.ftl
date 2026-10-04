@@ -168,3 +168,10 @@ documents-refusal-switch-gpu-changed = GPU thay đổi trong khi chuyển bản 
 documents-refusal-painting-unavailable = Không thể vẽ. Vẫn có thể lưu hoặc đóng bản vẽ này.
 documents-refusal-recovery-service-unavailable = Dịch vụ khôi phục không khả dụng.
 documents-refusal-recovery-in-progress = Chờ khôi phục hoàn tất.
+documents-package-preserved = This drawing can be viewed, but cannot be edited.
+documents-package-recovered = Only a preview of this drawing could be recovered.
+documents-package-failed = This drawing could not be opened.
+documents-package-copy-original = Copy Original File…
+
+documents-package-export-preview = Export Preview Image…
+documents-package-choose-different = Choose a different file.

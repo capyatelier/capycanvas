@@ -1,11 +1,11 @@
 use super::{archive::{self, Directory, StoredMember}, manifest::{Manifest, ManifestLimits, ManifestRead},
     resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES}, transport::BackingReader, ImmutableBacking};
-use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, PortableId, Support};
+use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, EvaluationContext, PortableId, Support};
 use serde_json::{Value, json};
 use std::{io::{Cursor, Read, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Clone, Debug)]
-pub struct CapturedPreview { pub checkpoint: CaptureCheckpoint, pub preview: Preview }
+pub struct CapturedPreview { pub checkpoint: CaptureCheckpoint, pub context: EvaluationContext, pub preview: Preview }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PreviewStatus { Included, Unavailable, Stale }
 #[derive(Debug)]
@@ -39,6 +39,7 @@ impl PreparedPackage {
         active(cancelled)?;
         if capture.checkpoint.document!=capture.artwork.id {return Err("Capture belongs to a different drawing".into());}
         let artwork=&capture.artwork;
+        if artwork.paint.iter().any(|(_,_,s)|!s.operations.is_empty())||artwork.coverage.iter().any(|(_,_,s)|!s.operations.is_empty()){return Err("Wait for the current edit before saving".into());}
         let shape=artwork.topology()?;
         let (mut objects,mut inventory)=super::artwork_records::encode(artwork,cancelled)?;
         let metadata=metadata(artwork,&mut inventory)?;
@@ -46,7 +47,8 @@ impl PreparedPackage {
         let default=artwork.outputs.id(artwork.default_output).ok_or("Missing default output")?;
         let outputs:Vec<_>=artwork.outputs.iter().map(|(_,id,_)|resources::reference(id)).collect();
         let (preview,preview_status)=match preview {
-            Some(preview) if preview.checkpoint==capture.checkpoint=>(Some(preview.preview),PreviewStatus::Included),
+            Some(preview) if preview.checkpoint==capture.checkpoint
+                && artwork.outputs.get(artwork.default_output).is_some_and(|output|output.context==preview.context)=>(Some(preview.preview),PreviewStatus::Included),
             Some(_)=>(None,PreviewStatus::Stale),None=>(None,PreviewStatus::Unavailable),
         };
         if let Some(preview)=&preview {
@@ -122,7 +124,7 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     match decoded {
         Ok(mut artwork)=>{
             if let Support::Preserved(reasons)=&manifest.support {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:reasons.iter().copied().collect::<Vec<_>>().join("; ")});}
-            artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>extensions,Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
+            artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview)})
         }
         Err(super::values::DecodeError::Unsupported(reason))=>Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason}),

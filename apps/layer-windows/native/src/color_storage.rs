@@ -207,8 +207,8 @@ pub(crate) fn presets(
         } else {
             Default::default()
         };
-        let mut view = library.operate(action, document.color)?;
-        view.localize_names(document.color, localization);
+        let mut view = library.operate(action, document.composition().color)?;
+        view.localize_names(document.composition().color, localization);
         if view.changed {
             let bytes = library.encode()?;
             atomic_write(&path, cancel, |file| {

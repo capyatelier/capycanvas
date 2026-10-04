@@ -147,7 +147,7 @@ fn menu_scenarios(platform: Platform) -> Vec<Value> {
     })
     .unwrap();
     scenarios.push(capture(&host, "pixel-selection"));
-    let id = host.session.engine().document().active_layer.0;
+    let id = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap_or(0);
     host.dispatch(
         serde_json::from_value(json!({"type":"layer","action":{"op":"lock","id":id,"value":true}}))
             .unwrap(),

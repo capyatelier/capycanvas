@@ -2,13 +2,71 @@ use super::*;
 use layer_core::color::source::{SourceBuilder, SourceInterpretation};
 
 #[test]
+fn raster_cache_keys_share_generated_contents_and_keep_loaded_owner_identity() {
+    let source = scan_source(1, 0);
+    let blob = source.tiles[&[0, 0]].clone();
+    let independent = scan_source(1, 0);
+    let replacement = independent.tiles[&[0, 0]].clone();
+    assert_ne!(blob.owner_identity(), replacement.owner_identity());
+    let key = Key::raster(&blob, RgbSpace::Srgb, RgbSpace::Srgb);
+    assert!(key.matches(&Key::raster(&replacement, RgbSpace::Srgb, RgbSpace::Srgb)));
+    let reinterpreted = TileBlob::encode(PixelDescriptor {
+        alpha: AlphaAssociation::PremultipliedLinear, ..blob.descriptor
+    }, &blob.decode().unwrap()).unwrap();
+    assert_eq!(reinterpreted.compressed().unwrap(), blob.compressed().unwrap());
+    assert!(!key.matches(&Key::raster(&reinterpreted, RgbSpace::Srgb, RgbSpace::Srgb)));
+    assert!(!key.matches(&Key::raster(&blob, RgbSpace::DisplayP3, RgbSpace::Srgb)));
+    assert!(!key.matches(&Key::raster(&blob, RgbSpace::Srgb, RgbSpace::DisplayP3)));
+    let loaded = |id| Arc::new(TileBlob::from_verified_resource(
+        id, blob.descriptor, blob.compressed().unwrap(), None,
+    ).unwrap());
+    let first = loaded(blob.resource_id());
+    let second = loaded(blob.resource_id());
+    let loaded_key = Key::raster(&first, RgbSpace::Srgb, RgbSpace::Srgb);
+    assert!(loaded_key.matches(&Key::raster(&first.clone(), RgbSpace::Srgb, RgbSpace::Srgb)));
+    assert!(!loaded_key.matches(&Key::raster(&second, RgbSpace::Srgb, RgbSpace::Srgb)));
+    assert!(!loaded_key.matches(&key));
+    let weak = Arc::downgrade(&blob);
+    drop((source, blob));
+    assert_eq!(weak.strong_count(), 0);
+}
+
+#[test]
+fn equal_generated_rasters_reuse_gpu_pixels_without_another_sample_decode() {
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut scene = Scene::new(&r);
+    let descriptor = r.document_color().paint_descriptor();
+    let bytes = [64, 128, 192, 255].repeat((PAGE_SIZE * PAGE_SIZE) as usize);
+    let first = Arc::new(TileBlob::encode(descriptor, &bytes).unwrap());
+    let second = Arc::new(TileBlob::encode(descriptor, &bytes).unwrap());
+    assert_ne!(first.owner_identity(), second.owner_identity());
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let original = scene.raster_tile_for_query(&mut r, &first, RgbSpace::Srgb, &mut encoder).unwrap();
+    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
+    let reused = scene.raster_tile_for_query(&mut r, &second, RgbSpace::Srgb, &mut encoder).unwrap();
+    r.uploads.finish(&encoder); encoder.submit(&r.queue);
+    assert_eq!(original.view, reused.view);
+    assert_eq!(r.source_cache_work(), [1, 1]);
+    let samples = r.device.source_samples.stats();
+    assert_eq!((samples.entries, samples.misses), (1, 1));
+    assert_eq!(samples.resident_bytes, bytes.len());
+    let expected = [64, 128, 192].map(|code| RgbSpace::Srgb.decode(f64::from(code) / 255.) as f32);
+    for pixel in crate::test_support::float_pixels(&r, &reused.texture) {
+        assert_eq!(pixel[3], 1.);
+        for c in 0..3 { assert!((pixel[c] - expected[c]).abs() < 2e-6); }
+    }
+}
+
+#[test]
 fn borrowed_source_tiles_survive_eviction_and_release_their_capacity() {
     let r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut cache = DecodedTiles {
         limits: SourceLimits { slots: 2, ..Default::default() },
         ..Default::default()
     };
-    let key = |id| Key::Raster([id; 32], RgbSpace::Srgb, RgbSpace::Srgb);
+    let source = scan_source(4, 0);
+    let key = |id: u32| Key::raster(&source.tiles[&[id - 1, 0]], RgbSpace::Srgb, RgbSpace::Srgb);
     let (first, first_write) = cache.plan_key(&r, key(1)).unwrap();
     let first_lease = cache.lease(&first.view).unwrap();
     let (second, second_write) = cache.plan_key(&r, key(2)).unwrap();
@@ -51,22 +109,28 @@ fn assert_threshold_pixels(r: &WgpuRasterizer, threshold: f32, offset: u8) {
 #[test]
 fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
     use layer_core::{Document, DocumentNames, EffectInstance, EffectValue};
+    use layer_core::authored::*;
     for capacity in [8, 16] {
         for tiles in [capacity + 1, capacity * 13 / 10 + 1] {
             let extent = [tiles as u32 * PAGE_SIZE, PAGE_SIZE];
-            let mut doc = Document::new("native scan oracle", extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-            doc.layers[0].source = Some(scan_source(tiles, 0));
-            let mut effect = Layer::paint(LayerId(99), "Threshold");
-            effect.kind = LayerKind::Effect;
-            effect.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture("threshold").program())));
-            doc.layers.insert(0, effect);
-            let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            let mut doc = Document::new(PortableId::random(), extent[0], extent[1], DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+            let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { unreachable!() };
+            doc.artwork.paint.get_mut(paint).unwrap().original = Some(scan_source(tiles, 0));
+            let program = crate::tests::fixture("threshold").program();
+            let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
+            let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: program.clone(), dimensions: Default::default() }).unwrap();
+            let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: EffectInstance::new(program).values, domain: extent }).unwrap();
+            let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
+            let stack = doc.composition().result;
+            doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, handle);
+            let mut doc = Document::from_artwork(doc.artwork).unwrap();
+            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             r.source_tiles.get_mut().limits.slots = capacity;
             r.native_edit.as_mut().unwrap().display_complete_bytes = u64::MAX;
             let mut allocated = None;
             for (round, threshold) in [0.2, 0.35, 0.5, 0.65, 0.8, 0.45].into_iter().enumerate() {
-                Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("threshold", EffectValue::Number(threshold)).unwrap();
-                let mut frame = crate::test_support::packet(&doc.layers, extent);
+                doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(threshold);
+                let mut frame = crate::test_support::packet(doc.scene(), extent);
                 frame.view.width_px = extent[0] / 4; frame.view.height_px = extent[1] / 4;
                 frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
                 let before = r.source_cache_work();
@@ -87,13 +151,15 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
                 assert_threshold_pixels(&r, threshold, 0);
             }
             let replacement = scan_source(capacity, 64);
-            doc.layers[1].source = Some(replacement);
-            doc.width = capacity as u32 * PAGE_SIZE;
-            let frame = crate::test_support::packet(&doc.layers, [doc.width, doc.height]);
+            doc.artwork.paint.get_mut(paint).unwrap().original = Some(replacement);
+            doc.artwork.paint.get_mut(paint).unwrap().domain[0] = capacity as u32 * PAGE_SIZE;
+            let composition = doc.artwork.root;
+            doc.artwork.compositions.get_mut(composition).unwrap().size[0] = capacity as u32 * PAGE_SIZE;
+            let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
             r.submit(frame).unwrap();
             assert_threshold_pixels(&r, 0.45, 64);
-            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("threshold", EffectValue::Number(0.6)).unwrap();
-            let frame = crate::test_support::packet(&doc.layers, [doc.width, doc.height]);
+            doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = EffectValue::Number(0.6);
+            let frame = crate::test_support::packet(doc.scene(), doc.composition().size);
             let before = r.source_cache_work();
             r.submit(frame).unwrap();
             let after = r.source_cache_work();

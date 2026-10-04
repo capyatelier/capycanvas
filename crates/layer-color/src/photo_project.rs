@@ -1,7 +1,7 @@
 //! Shared photo-to-master policy. Original samples and metadata are retained;
 //! source file locations remain the host's separate, read-only import reference.
 use layer_core::{
-    BlendSpace, Document, DocumentNames, PhotoMetadata, Project, ProjectLimits,
+    BlendSpace, Document, DocumentNames, PhotoMetadata, ProjectLimits, authored::{PortableId, SourceTarget},
     color::{DocumentColor, SampleDepth, RgbSpace, source::SourceImage},
 };
 use std::sync::Arc;
@@ -23,19 +23,22 @@ pub fn photo_project(
     metadata: PhotoMetadata,
     names: DocumentNames,
     depth: SampleDepth,
-) -> Result<Project, String> {
+) -> Result<Document, String> {
     source.validate()?;
     if source.interpretation.depth.is_float() && !depth.is_float() { return Err("HDR placement requires an HDR document; export an SDR rendition for SDR placement".into()); }
     let space = crate::suggested_working_space(&source.interpretation.profile)?
         .unwrap_or(RgbSpace::ProPhoto);
-    let mut document = Document::new("untitled", source.extent[0], source.extent[1], names);
-    document.resolution = source.resolution;
-    document.metadata = metadata;
-    document.color = DocumentColor { space, depth };
-    document.blend_space = BlendSpace::Perceptual.for_depth(depth);
-    document.layers[0].source = Some(Arc::new(source));
-    document.layers[1].visible = false;
-    let project = Project { document };
-    project.validate(ProjectLimits::default())?;
-    Ok(project)
+    let mut document = Document::new(PortableId::random(), source.extent[0], source.extent[1], names);
+    let composition = document.artwork.compositions.get_mut(document.artwork.root).unwrap();
+    composition.resolution = source.resolution;
+    composition.color = DocumentColor { space, depth };
+    composition.blend = BlendSpace::Perceptual.for_depth(depth);
+    document.artwork.metadata = Arc::new(metadata);
+    let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
+    document.artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(source));
+    let paper = document.scene().order()[1];
+    document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
+    document.validate(ProjectLimits::default())?;
+    crate::validate_document_color(&document)?;
+    Ok(document)
 }

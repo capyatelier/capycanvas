@@ -1,4 +1,7 @@
 import assert from 'node:assert/strict';
+import {packageObject,packageComposition,packageOccurrences,rasterIdentity,sourceContent} from './package-fixture.test.mjs';
+const outer=p=>{const [x,y]=p?.translation??[0,0],m=p?.projective??[1,0,0,0,1,0,0,0,1];return[m[0]+x*m[6],m[1]+x*m[7],m[2]+x*m[8],m[3]+y*m[6],m[4]+y*m[7],m[5]+y*m[8],...m.slice(6)];};
+
 import {png} from './clone-journey.test.mjs';
 import {mkdtemp,mkdir,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
@@ -29,6 +32,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
   };
   const state=()=>evaluate('JSON.parse(JSON.stringify(layerApp.state(),(_,v)=>typeof v==="bigint"?Number(v):v))');
   const idle=()=>wait('!layerApp.state().document_file.busy');
+  const activeOccurrence=async m=>packageOccurrences(m)[(await state()).layers.findIndex(l=>l.editing)];
+  const runtimeId=async(m,portable)=>(await state()).layers[packageOccurrences(m).findIndex(o=>o.id===portable)].id;
   const placed=()=>wait('layerApp.state().commands.find(c=>c.id==="placement_original_size").enabled');
   const transforming=()=>wait("['transform','placement'].includes(layerApp.state().canvas_bar?.context.kind)&&layerApp.state().commands.find(c=>c.id==='apply_transform').enabled");
   const click=async selector=>{
@@ -50,7 +55,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     for(const type of ['dragEnter','dragOver','drop'])await call('Input.dispatchDragEvent',{type,...p,data:{items:[],files,dragOperationsMask:1}});
   };
   const save=placementSave({evaluate,invoke,idle});
-  const affine=p=>{assert.equal(p.mesh,null);const m=p.outer;assert.deepEqual(m.slice(6),[0,0,1]);return[m[0],m[3],m[1],m[4],m[2],m[5]];};
+  const affine=p=>{assert.equal(p?.mesh??null,null);const m=outer(p);assert.deepEqual(m.slice(6),[0,0,1]);return[m[0],m[3],m[1],m[4],m[2],m[5]];};
   let files;
   try {
     await evaluate(`window.placementTestBounds=[];window.placementTestOriginalWorker=Worker;const OriginalWorker=Worker;window.Worker=class extends OriginalWorker{constructor(...args){super(...args);this.boundsIds=new Set();this.addEventListener('message',({data})=>{if(this.boundsIds.has(data.id))placementTestBounds.push(data);});}postMessage(message,...args){if(message.request?.operation==='snapshot'&&JSON.parse(message.request.metadata)[1].Bounds)this.boundsIds.add(message.id);return super.postMessage(message,...args);}};`);
@@ -94,10 +99,10 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await importFiles(files);
     const labels=(await state()).layers.slice(0,files.length).map(l=>l.label);
     await click('.canvas-action-bar [data-command=apply_transform]');
-    const fitted=await save(),sources=sourceIdentity(fitted);
+    const fitted=await save(),sources=sourceIdentity(fitted),originals=packageOccurrences(fitted).filter(o=>o.data.content.paint&&packageObject(fitted,o.data.content.paint).data.original).map(o=>packageObject(fitted,o.data.content.paint).data.original),originalContents=sourceContent(fitted);
     assert.equal(sources.length,files.length);
     for(let i=0;i<files.length;i++){
-      const [w,h]=sources[i].extent,scale=Math.min(1,2000/w,1500/h),pose=affine(fitted.document.layers[i].properties.placement);
+      const [w,h]=originals[i].extent,scale=Math.min(1,2000/w,1500/h),pose=affine(packageOccurrences(fitted)[i].data.placement);
       assert.ok(Math.abs(pose[0]-scale)<1e-6);assert.ok(Math.abs(pose[3]-scale)<1e-6);
       assert.ok(Math.abs(pose[4]-(2000-w*scale)/2)<.01);assert.ok(Math.abs(pose[5]-(1500-h*scale)/2)<.01);
     }
@@ -130,9 +135,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     console.log('Retained-photo cached Transform:',JSON.stringify(await timedTransform()));
     await click('.canvas-action-bar [data-command=placement_original_size]');
     await click('.canvas-action-bar [data-command=apply_transform]');
-    const native=await save();assert.equal(affine(native.document.layers[0].properties.placement)[0],1);assert.deepEqual(sourceIdentity(native),sources);
+    const native=await save();assert.equal(affine(packageOccurrences(native)[0].data.placement)[0],1);assert.deepEqual(sourceIdentity(native),sources);
     await evaluate('placementTest.retainedMaster=placementTest.saved.slice()');
-    const rasterIdentity=m=>m.rasters.map(r=>({...r,tiles:r.tiles.map(t=>({...t,blob:m.blobs[t.blob].digest}))}));
     const stroke=async()=>{
       await wait('layerApp.app.brush_ready()');
       const p=await evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(1000*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(750*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
@@ -152,28 +156,28 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await invoke('brush');
       await evaluate(`layerApp.dispatch({type:'select_brush',id:21});layerApp.dispatch({type:'set_brush_size',value:80});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[.15,.25,.9,1]}}});`);await settle();
       await stroke();
-      const rawBefore=await save(),retainedId=rawBefore.document.active_layer;
-      const ownerRaster=m=>rasterIdentity(m).filter(r=>r.target===retainedId);
+      const rawBefore=await save(),retainedOccurrence=await activeOccurrence(rawBefore),retainedPortable=retainedOccurrence.id,paintId=retainedOccurrence.data.content.paint.ref;let retainedId=await runtimeId(rawBefore,retainedPortable);
+      const ownerRaster=m=>rasterIdentity(m).filter(r=>r.id===paintId);
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${retainedId},replace:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${retainedId},mask:false}})`);await settle();
       await invoke('scale_rotate');await transforming();
       await evaluate(`layerApp.dispatch({type:'set_tool_setting',id:'transform_width',value:.5})`);await settle();await invoke('apply_transform');
       const repeatBefore=await save();
       await invoke('transform_again');const repeated=await save();
-      const repeatPlacement=m=>m.document.layers.find(l=>l.id===retainedId).properties.placement;
+      const repeatPlacement=m=>packageObject(m,retainedPortable).data.placement;
       assert.notDeepEqual(repeatPlacement(repeated),repeatPlacement(repeatBefore),'Again applies the accepted retained outer delta');
       assert.deepEqual(sourceIdentity(repeated),sourceIdentity(repeatBefore),'Again preserves immutable retained sources');
       assert.deepEqual(ownerRaster(repeated),ownerRaster(repeatBefore),'Again preserves native material planes');
       await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(repeatBefore),'Again makes one undo step');
       await invoke('redo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(repeated),'Redo reapplies Again once');
       await invoke('undo');
-      const pivotBase=await save(),pivotOuter=repeatPlacement(pivotBase).outer;
-      const centerLocal=sources[0].extent.map(v=>v/2),centerDocument=map(pivotOuter,...centerLocal);
+      const pivotBase=await save(),pivotOuter=outer(repeatPlacement(pivotBase));
+      const centerLocal=packageObject(rawBefore,retainedOccurrence.data.content.paint).data.original.extent.map(v=>v/2),centerDocument=map(pivotOuter,...centerLocal);
       await invoke('scale_rotate');await transforming();
       await drag(await screen(...centerDocument),21,13);
       const customPivot=[centerDocument[0]+21/(await state()).camera.zoom,centerDocument[1]+13/(await state()).camera.zoom];
       const customLocal=map(inverse(pivotOuter),...customPivot);
       await invoke('transform_rotate_right');await invoke('apply_transform');
-      const pivotApplied=await save(),fixed=map(repeatPlacement(pivotApplied).outer,...customLocal);
+      const pivotApplied=await save(),fixed=map(outer(repeatPlacement(pivotApplied)),...customLocal);
       assert.ok(Math.hypot(fixed[0]-customPivot[0],fixed[1]-customPivot[1])<.05,'Native custom pivot remains fixed under quarter-turn');
       await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(pivotBase),'Custom-pivot transform is one undo step');
       await invoke('scale_rotate');await transforming();await invoke('transform_snapping');
@@ -183,44 +187,44 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       assert.ok(Math.abs(snapCenter[0]-canvasCenter)>100,'The snap fixture starts away from its target');
       await drag(await screen(snapCenter[0]+90,snapCenter[1]+80),(canvasCenter-snapCenter[0])*snapZoom-3,0);
       await invoke('apply_transform');
-      const snapped=map(repeatPlacement(await save()).outer,...centerLocal);
+      const snapped=map(outer(repeatPlacement(await save())),...centerLocal);
       assert.ok(Math.abs(snapped[0]-canvasCenter)<.05,'A native body drag within three logical pixels snaps the layer center exactly to the canvas right edge');
       await invoke('undo');assert.deepEqual(repeatPlacement(await save()),repeatPlacement(pivotBase),'Snapped drag creates one undo step');
       await invoke('scale_rotate');await transforming();await invoke('transform_snapping');
       await invoke('transform_distort');
       const anchor=(await state()).canvas_bar.anchor;
       await drag(await screen(anchor[0],anchor[1]),-25,12);await invoke('apply_transform');
-      const distorted=await save(),outer=distorted.document.layers.find(l=>l.id===retainedId).properties.placement.outer;
+      const distorted=await save(),outer=outer(repeatPlacement(distorted));
       assert.ok(outer[6]!==0||outer[7]!==0,'A real corner drag retains projective geometry');
-      const [sourceWidth,sourceHeight]=sources[0].extent;
+      const [sourceWidth,sourceHeight]=packageObject(rawBefore,retainedOccurrence.data.content.paint).data.original.extent;
       const node=async(u,v)=>screen(...map(outer,u*sourceWidth,v*sourceHeight));
       await invoke('scale_rotate');await transforming();await invoke('transform_warp');await invoke('warp_split_cross');
       await tap(await node(.37,.61));await invoke('warp_select_points');
       await tap(await node(.37,.61));await tap(await node(2/3,.61));await invoke('warp_select_points');
       await drag(await node(.37,.61),18,12);await capture(`${theme}-retained-warp`);await invoke('apply_transform');
-      const warped=await save(),mesh=warped.document.layers.find(l=>l.id===retainedId).properties.placement.mesh;
+      const warped=await save(),mesh=repeatPlacement(warped).mesh;
       assert.ok(mesh&&mesh.breakpoints.every(points=>points.length===5),'Cross Split persists both exact mesh axes');
       for(const [u,v] of [[.37,.61],[2/3,.61]]) {
         const i=mesh.breakpoints[0].findIndex(p=>Math.abs(p-u)<1e-4),j=mesh.breakpoints[1].findIndex(p=>Math.abs(p-v)<1e-4);
         assert.ok(i>=0&&j>=0,'The selected split nodes remain in the nonuniform grid');
         const point=mesh.net[j*3*(3*(mesh.breakpoints[0].length-1)+1)+i*3];
         const [a,b,c,d,e,f]=mesh.frame,x=a*u+c*v+e,y=b*u+d*v+f;
-        assert.ok(Math.hypot(point.x-x,point.y-y)>1,'Each selected Warp node actually moves');
+        assert.ok(Math.hypot(point[0]-x,point[1]-y)>1,'Each selected Warp node actually moves');
       }
       assert.deepEqual(ownerRaster(warped),ownerRaster(rawBefore),'Retained Distort/Warp leaves all original raw planes unchanged');
       assert.deepEqual(sourceIdentity(warped),sources,'Retained Distort/Warp keeps the immutable photograph');
       await evaluate(`placementTest.warpedMaster=placementTest.saved.slice();window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.warpedMaster],'warped.capy')}}]`);
       await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');await evaluate('window.showOpenFilePicker=undefined');
-      const reopened=await save();assert.deepEqual(reopened.document.layers.find(l=>l.id===retainedId).properties.placement,warped.document.layers.find(l=>l.id===retainedId).properties.placement);
-      assert.deepEqual(ownerRaster(reopened),ownerRaster(rawBefore));
+      const reopened=await save();assert.deepEqual(repeatPlacement(reopened),repeatPlacement(warped));
+      assert.deepEqual(ownerRaster(reopened),ownerRaster(rawBefore));retainedId=await runtimeId(reopened,retainedPortable);
       await wait(`(()=>{const l=layerApp.state().layers.find(l=>String(l.id)===${JSON.stringify(String(retainedId))}),c=document.querySelector('.layer-row[data-layer="${retainedId}"] .layer-thumbnail canvas');return l&&c?.dataset.previewRevision?.endsWith(':'+String(l.paint_revision))})()`);
       const retainedColors=await evaluate(`(()=>{const c=document.querySelector('.layer-row[data-layer="${retainedId}"] .layer-thumbnail canvas'),p=c.getContext('2d').getImageData(0,0,c.width,c.height).data;let n=0;for(let i=0;i<p.length;i+=4)if(p[i+3]&&Math.max(p[i],p[i+1],p[i+2])-Math.min(p[i],p[i+1],p[i+2])>20)n++;return n})()`);
       assert.ok(retainedColors>0,'Completed retained outer-mesh photo thumbnail contains original photo colors');
-      const seeded=await save(),seededId=seeded.document.active_layer;
-      const rawMaterial=m=>m.rasters.find(r=>r.target===seededId);
-      const materialPlanes=m=>[...new Set(rawMaterial(m).tiles.map(t=>t.key.plane))].sort();
-      assert.deepEqual(materialPlanes(seeded),['Color','WatercolorWetness'],'Wet watercolor owns its dedicated scalar plane without generic wetness');
-      assert.ok(rawMaterial(seeded).watercolor,'The real wet stroke publishes its material style');
+      const seeded=await save(),seededOccurrence=await activeOccurrence(seeded),seededId=await runtimeId(seeded,seededOccurrence.id);
+      const rawMaterial=m=>packageObject(m,seededOccurrence.data.content.paint).data;
+      const materialPlanes=m=>[...new Set(rawMaterial(m).tiles.map(t=>t.plane))].sort();
+      assert.deepEqual(materialPlanes(seeded),['color','watercolor_wetness'],'Wet watercolor owns its dedicated scalar plane without generic wetness');
+      assert.ok(rawMaterial(seeded).material?.watercolor,'The real wet stroke publishes its material style');
       const cancelledBake=await call('Runtime.evaluate',{expression:`layerApp.dispatch({type:'invoke',command:'apply_transform_pixels'});if(!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled)throw Error('Pending bake must offer Cancel');layerApp.dispatch({type:'invoke',command:'cancel_transform'});`,userGesture:true});
       assert.equal(cancelledBake.exceptionDetails,undefined);await settle();
       assert.deepEqual(sourceIdentity(await save()),sources,'Cancelled bake retains original source samples');
@@ -231,12 +235,12 @@ export async function checkImagePlacement({call,evaluate,settle}) {
         await capture(`${theme}-applying`);await settle();
       }else await invoke('apply_transform_pixels');
       await wait(`!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled&&layerApp.app.brush_ready()`);
-      const baked=await save(),id=baked.document.active_layer;
-      assert.ok(!baked.tiled_sources.layers.some(l=>l.target===id),'Bake removes the retained source association');
-      assert.deepEqual(affine(baked.document.layers.find(l=>l.id===id).properties.placement),[1,0,0,1,0,0]);
-      assert.ok(baked.rasters.some(r=>r.tiles.length),'Bake publishes editable native tiles');
+      const baked=await save(),bakedOccurrence=await activeOccurrence(baked);
+      assert.ok(!packageObject(baked,bakedOccurrence.data.content.paint).data.original,'Bake removes the retained source association');
+      assert.deepEqual(affine(bakedOccurrence.data.placement),[1,0,0,1,0,0]);
+      assert.ok(rasterIdentity(baked).some(r=>r.tiles.length),'Bake publishes editable native tiles');
       assert.deepEqual(materialPlanes(baked),materialPlanes(seeded),'Bake preserves the real watercolor pigment and scalar planes');
-      assert.deepEqual(rawMaterial(baked).watercolor,rawMaterial(seeded).watercolor,'Bake preserves the wet stroke material style');
+      assert.deepEqual(rawMaterial(baked).material?.watercolor,rawMaterial(seeded).material?.watercolor,'Bake preserves the wet stroke material style');
       await invoke('pen');await evaluate(`layerApp.dispatch({type:'select_brush',id:1});layerApp.dispatch({type:'set_brush_size',value:24});layerApp.dispatch({type:'color',action:{op:'set_slot',slot:'foreground',color:{space:'Srgb',rgba:[1,0,.7,1]}}});`);await settle();
       await stroke();const painted=await save();assert.notDeepEqual(rasterIdentity(painted),rasterIdentity(baked),'Painting edits the baked layer');
       if(captures){
@@ -255,7 +259,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await evaluate(`placementTest.bakedMaster=placementTest.saved.slice();window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.bakedMaster],'baked.capy')}}]`);
       await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');
       assert.deepEqual(rasterIdentity(await save()),rasterIdentity(baked),'Baked native tiles survive reopen');
-      assert.deepEqual(rawMaterial(await save()).watercolor,rawMaterial(seeded).watercolor,'The baked watercolor style survives reopen');
+      assert.deepEqual(rawMaterial(await save()).material?.watercolor,rawMaterial(seeded).material?.watercolor,'The baked watercolor style survives reopen');
       await evaluate(`window.showOpenFilePicker=async()=>[{async getFile(){return new File([placementTest.retainedMaster],'retained.capy')}}]`);
       await invoke('open_document');await idle();await wait('layerApp.app.brush_ready()');
       await evaluate('window.showOpenFilePicker=undefined');
@@ -264,11 +268,11 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     }
     for(const theme of ['light','dark']) {
       await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();
-      const baseline=await save(),ownerId=baseline.document.active_layer;
+      const baseline=await save(),ownerOccurrence=await activeOccurrence(baseline),ownerPortable=ownerOccurrence.id,ownerPaint=ownerOccurrence.data.content.paint.ref,ownerId=await runtimeId(baseline,ownerPortable);
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'add_mask',id:${ownerId},replace:false}});layerApp.dispatch({type:'layer',action:{op:'link_mask',id:${ownerId},value:false}});layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:true}})`);await settle();
       await invoke('eraser');await evaluate(`layerApp.dispatch({type:'select_brush',id:3});layerApp.dispatch({type:'set_brush_size',value:120});`);await settle();
       await stroke();
-      assert.ok(rasterIdentity(await save()).some(r=>r.target!==ownerId&&r.tiles.some(t=>t.key.plane==='Mask')),'Mask eraser stroke creates real scalar native pixels');
+      assert.ok(rasterIdentity(await save()).some(r=>r.type==='capy.coverage-source/1'&&r.tiles.some(t=>t.plane==='mask')),'Mask eraser stroke creates real scalar native pixels');
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:false}});layerApp.dispatch({type:'layer',action:{op:'new',group:true,clipped:false}})`);await settle();
       const groupId=Number((await state()).layer_tools.editing_layer.id);
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'reparent',id:${ownerId},parent:${groupId},index:0}});layerApp.dispatch({type:'layer',action:{op:'select',id:${groupId},mask:false}})`);await settle();
@@ -282,15 +286,15 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       assert.ok(corner,`A group Distort corner is reachable through the visible native canvas: ${JSON.stringify({anchor,corners})}`);
       await drag(corner,20,12);await invoke('apply_transform');
       await evaluate(`layerApp.dispatch({type:'layer',action:{op:'select',id:${ownerId},mask:true}})`);await settle();
-      const beforeMaskBake=await save(),owner=m=>m.document.layers.find(l=>l.id===ownerId);
+      const beforeMaskBake=await save(),owner=m=>packageObject(m,ownerPortable).data;
       const withoutMask=m=>{const {mask,...layer}=owner(m);return layer;};
-      assert.ok(owner(beforeMaskBake).mask.placement[6]!==0||owner(beforeMaskBake).mask.placement[7]!==0,'Independent mask retains projective geometry');
+      assert.ok(outer(owner(beforeMaskBake).mask.placement)[6]!==0||outer(owner(beforeMaskBake).mask.placement)[7]!==0,'Independent mask retains projective geometry');
       await invoke('apply_transform_pixels');await wait(`!layerApp.state().commands.find(c=>c.id==='cancel_transform').enabled&&layerApp.app.brush_ready()`);
       const bakedMask=await save();
       assert.deepEqual(withoutMask(bakedMask),withoutMask(beforeMaskBake),'Scalar-only worker bake preserves the complete owner');
-      assert.deepEqual(rasterIdentity(bakedMask).filter(r=>r.target===ownerId),rasterIdentity(beforeMaskBake).filter(r=>r.target===ownerId),'Scalar-only worker bake preserves owner raw Color/material');
+      assert.deepEqual(rasterIdentity(bakedMask).filter(r=>r.id===ownerPaint),rasterIdentity(beforeMaskBake).filter(r=>r.id===ownerPaint),'Scalar-only worker bake preserves owner raw Color/material');
       assert.deepEqual(sourceIdentity(bakedMask),sources,'Scalar-only worker bake preserves immutable owner photo');
-      assert.deepEqual(owner(bakedMask).mask.placement,[1,0,0,0,1,0,0,0,1]);
+      assert.deepEqual(outer(owner(bakedMask).mask.placement),[1,0,0,0,1,0,0,0,1]);
       assert.equal(owner(bakedMask).mask.linked,false);
       await capture(`${theme}-independent-mask-baked`);
       await invoke('undo');assert.deepEqual(owner(await save()).mask,owner(beforeMaskBake).mask);
@@ -329,8 +333,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     await invoke('paste_image');await idle();await placed();
     assert.equal((await state()).layers.length,before.layers.length+1);
     await click('.canvas-action-bar [data-command=apply_transform]');
-    const pasted=sourceIdentity(await save());
-    assert.ok(pasted.some(image=>JSON.stringify(image)===JSON.stringify(sources[0])),'Clipboard retains original source samples');
+    const pasted=sourceContent(await save());
+    assert.ok(pasted.some(image=>originalContents.some(original=>JSON.stringify(image)===JSON.stringify(original))),'Clipboard retains original source samples');
     await invoke('undo');assert.equal((await state()).layers.length,before.layers.length);
     // Cancel while an asynchronous file read is pending; release it afterwards
     // to prove that a late decoder completion cannot publish a partial batch.
@@ -349,7 +353,7 @@ export async function checkImagePlacement({call,evaluate,settle}) {
     const rowPoint=await evaluate(`(()=>{const r=document.querySelector('.layer-row[data-layer="${group.id}"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
     await drop(rowPoint,[files[0]]);
     await idle();await placed();await click('.canvas-action-bar [data-command=apply_transform]');
-    const grouped=await save();assert.ok(grouped.document.layers.some(l=>l.properties.parent===group.id&&l.name!==group.label));
+    const grouped=await save(),groupOccurrence=packageOccurrences(grouped)[(await state()).layers.findIndex(l=>l.id===group.id)];assert.ok(packageObject(grouped,groupOccurrence.data.content.stack).data.entries.some(ref=>packageObject(grouped,ref).data.name!==group.label));
     await invoke('undo');assert.equal((await state()).layers.length,groupCount);
     await evaluate(`layerApp.dispatch({type:'layer',action:{op:'lock',id:${group.id},value:true}})`);await settle();
     await drop(rowPoint,[files[0]]);
@@ -358,8 +362,8 @@ export async function checkImagePlacement({call,evaluate,settle}) {
       await invoke('open_document');await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent===layerApp.app.editor_models(innerWidth,innerHeight).document_options.discard_label)?.click()`);
       await choose([files[i]]);await idle();await wait('layerApp.app.brush_ready()');
       const opened=await save();
-      assert.deepEqual([opened.document.width,opened.document.height],sources[i].extent,'Open uses oriented source dimensions');
-      assert.deepEqual(sourceIdentity(opened),[sources[i]],'Open and placement decode the same exact source samples');
+      assert.deepEqual(packageComposition(opened).data.frame.size,originals[i].extent,'Open uses oriented source dimensions');
+      assert.ok(originalContents.some(original=>JSON.stringify(sourceContent(opened)[0])===JSON.stringify(original)),'Open and placement decode the same exact source samples');
     }
     if(process.env.LAYER_IMAGE_MOTION==='1') {
       await invoke('new_document');await wait('document.querySelector("dialog[open] [data-document-field=width]")');

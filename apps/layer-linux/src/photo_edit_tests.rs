@@ -1,7 +1,8 @@
 //! Photo-editing journeys with actual Mutter delivery: a fill layer from
 //! Layer › New, a Liquify Pinch stroke, and Revert to Original Photo.
 use super::*;
-use layer_core::{Document, LayerId, LayerKind};
+use layer_core::{Document, LayerKind};
+use layer_core::authored::OccurrenceHandle;
 use serde_json::json;
 
 pub(super) fn start(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput) {
@@ -72,33 +73,33 @@ fn native_layer_new_solid_color_fill_masks_to_the_selection() {
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     let (width, height) = {
         let doc = document(&w);
-        (doc.width as f32, doc.height as f32)
+        (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
     };
     let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.55, height * 0.6];
     native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
-    until(|| document(&w).selection.is_some(), "the lasso makes a selection");
-    let base = document(&w).active_layer;
+    until(|| document(&w).working.selection.is_some(), "the lasso makes a selection");
+    let base = document(&w).working.occurrence.unwrap();
     choose(&w, &mut input, "Layer", &["New", "Solid Color Fill"]);
     until(
         || {
             let doc = document(&w);
-            doc.layer(doc.active_layer).is_some_and(|l| l.kind == LayerKind::Effect && l.mask.is_some())
+            doc.scene().occurrence(doc.working.occurrence.unwrap()).is_some_and(|l| l.kind() == LayerKind::Effect && l.mask.is_some())
         },
         "Layer › New › Solid Color Fill inserts a fill layer",
     );
     let doc = document(&w);
-    let fill = doc.layer(doc.active_layer).unwrap();
-    assert_eq!(fill.effect.as_ref().unwrap().program.id.as_ref(), "solid_color");
-    assert!(fill.mask.as_ref().unwrap().initial.is_some(), "the selection becomes its mask");
-    assert!(doc.selection.is_none());
-    assert_eq!(doc.layers.iter().position(|l| l.id == fill.id).unwrap() + 1, doc.layers.iter().position(|l| l.id == base).unwrap());
+    let fill = doc.working.occurrence.unwrap();
+    assert_eq!(doc.scene().effect(fill).unwrap().program.id.as_ref(), "solid_color");
+    assert!(doc.scene().mask(fill).unwrap().1.initial.is_some(), "the selection becomes its mask");
+    assert!(doc.working.selection.is_none());
+    assert_eq!(doc.scene().position(fill).unwrap() + 1, doc.scene().position(base).unwrap());
     pump(300);
     let inside = shown(&w, [(x0 + x1) * 0.5, (y0 + y1) * 0.5]);
     let outside = shown(&w, [width * 0.8, height * 0.8]);
     assert!(inside[0] > 180 && inside[1] < 80 && inside[2] < 80, "the current colour fills the selection: {inside:?}");
     assert!(outside.iter().take(3).all(|v| *v > 200), "the paper shows outside it: {outside:?}");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layers.len() + 1 == doc.layers.len(), "one undo step removes the fill");
+    until(|| document(&w).scene().order().len() + 1 == doc.scene().order().len(), "one undo step removes the fill");
     input.finish();
     w.window.close();
     pump(50);
@@ -110,7 +111,7 @@ fn native_liquify_pinch_stroke_on_a_pattern() {
     let (_app, w, mut input) = start("art.capycanvas.LiquifyPinch");
     let (width, height) = {
         let doc = document(&w);
-        (doc.width as f32, doc.height as f32)
+        (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
     };
     w.dispatch(UiAction::SetBrushSize { value: 60. });
     w.dispatch(UiAction::SetColor { rgba: [0.05, 0.1, 0.6, 1.] });
@@ -118,8 +119,8 @@ fn native_liquify_pinch_stroke_on_a_pattern() {
         let y = height * (0.2 + 0.1 * row as f32);
         native_pen_path(&w, &(0..=16).map(|i| [width * (0.1 + 0.05 * i as f32), y]).collect::<Vec<_>>());
     }
-    let paint = document(&w).active_layer;
-    let pattern = document(&w).layer(paint).unwrap().raster.identity();
+    let paint = document(&w).working.occurrence.unwrap();
+    let pattern = document(&w).scene().paint_source(paint).unwrap().raster.identity();
     w.dispatch(UiAction::Invoke { command: CommandId::Liquify });
     w.dispatch(UiAction::SelectBrush { id: layer_core::DefaultBrushPreset::LiquifyPinch as u32 });
     w.dispatch(UiAction::SetBrushSize { value: 400. });
@@ -139,12 +140,12 @@ fn native_liquify_pinch_stroke_on_a_pattern() {
     }
     events.extend([json!({"pen": "up"}), json!({"pen": "leave"})]);
     input.perform(json!(events));
-    until(|| document(&w).layer(paint).unwrap().raster.identity() != pattern, "the Pinch stroke edits the pattern");
+    until(|| document(&w).scene().paint_source(paint).unwrap().raster.identity() != pattern, "the Pinch stroke edits the pattern");
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
     pump(300);
     assert_eq!(shown(&w, far), untouched, "pixels away from the stroke stay");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layer(paint).unwrap().raster.identity() == pattern, "one undo step restores the pattern");
+    until(|| document(&w).scene().paint_source(paint).unwrap().raster.identity() == pattern, "one undo step restores the pattern");
     input.finish();
     w.window.close();
     pump(50);
@@ -156,7 +157,7 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     let (_app, w, mut input) = start("art.capycanvas.RevertPhoto");
     let (width, height) = {
         let doc = document(&w);
-        (doc.width, doc.height)
+        (doc.composition().size[0], doc.composition().size[1])
     };
     let photo = layer_core::color::source::rgba8_source([width, height], |x, y| {
         if (x / 64 + y / 64) % 2 == 0 { [40, 170, 90, 255] } else { [230, 220, 60, 255] }
@@ -167,9 +168,9 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     w.refresh(regions::DOCUMENT | regions::COMMANDS);
     w.wake();
     pump(300);
-    let id: LayerId = document(&w).active_layer;
-    let original = document(&w).layer(id).unwrap().clone();
-    assert!(original.source.as_ref().is_some_and(|s| s.is_original()));
+    let id: OccurrenceHandle = document(&w).working.occurrence.unwrap();
+    let original = document(&w).scene().paint_source(id).unwrap().clone();
+    assert!(original.original.as_ref().is_some_and(|s| s.is_original()));
     let revert = |w: &Workspace| state(w).commands.into_iter().find(|c| c.id == CommandId::RevertToOriginal).unwrap();
     assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Pen });
@@ -177,25 +178,25 @@ fn native_revert_to_original_after_painting_on_a_placed_photo() {
     w.dispatch(UiAction::SetBrushSize { value: 80. });
     let [w_, h_] = [width as f32, height as f32];
     native_pen_path(&w, &(0..=20).map(|i| [w_ * (0.2 + 0.03 * i as f32), h_ * 0.5]).collect::<Vec<_>>());
-    until(|| !document(&w).layer(id).unwrap().raster.is_empty(), "painting over the photo creates edits");
-    let painted = document(&w).layer(id).unwrap().clone();
+    until(|| !document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "painting over the photo creates edits");
+    let painted_doc = document(&w);
+    let painted = painted_doc.scene().paint_source(id).unwrap().clone();
     until(|| revert(&w).enabled, "Revert to Original Photo is enabled once the photo has edits");
     let stroke = [w_ * 0.5, h_ * 0.5];
     pump(300);
     let before = shown(&w, stroke);
     choose(&w, &mut input, "Edit", &["Revert to Original Photo"]);
-    until(|| document(&w).layer(id).unwrap().raster.is_empty(), "Revert discards the edits");
-    let reverted = document(&w).layer(id).unwrap().clone();
-    assert!(std::sync::Arc::ptr_eq(reverted.source.as_ref().unwrap(), painted.source.as_ref().unwrap()));
-    assert_eq!(reverted.properties, painted.properties);
-    assert_eq!((reverted.opacity, &reverted.mask), (painted.opacity, &painted.mask));
+    until(|| document(&w).scene().paint_source(id).unwrap().raster.is_empty(), "Revert discards the edits");
+    let reverted = document(&w).scene().paint_source(id).unwrap().clone();
+    assert!(std::sync::Arc::ptr_eq(reverted.original.as_ref().unwrap(), painted.original.as_ref().unwrap()));
+    assert_eq!(document(&w).scene().occurrence(id), painted_doc.scene().occurrence(id));
     pump(300);
     let after = shown(&w, stroke);
     assert_ne!(before, after, "the stroke disappears: {before:?} {after:?}");
     assert!(after[2] < 120, "the photo shows again: {after:?}");
     assert_eq!(revert(&w).disabled_reason.as_deref(), Some("This photo has no edits"));
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layer(id).unwrap().raster == painted.raster, "one undo step brings the edits back");
+    until(|| document(&w).scene().paint_source(id).unwrap().raster == painted.raster, "one undo step brings the edits back");
     input.finish();
     w.window.close();
     pump(50);
@@ -229,7 +230,7 @@ pub(super) fn canvas_size_number(w: &Workspace, axis: &str) -> crate::number_con
 fn native_canvas_size_from_the_top_left_anchor_then_undo() {
     let (_app, w, mut input) = start("art.capycanvas.CanvasSize");
     let before = document(&w);
-    let paint = before.active_layer;
+    let paint = before.working.occurrence.unwrap();
     choose(&w, &mut input, "Edit", &["Image", "Canvas Size…"]);
     until(|| state(&w).layer_tools.canvas_size.is_some(), "Edit › Image › Canvas Size… opens the dialog");
     let width = canvas_size_number(&w, "width");
@@ -248,14 +249,14 @@ fn native_canvas_size_from_the_top_left_anchor_then_undo() {
     }
     apply_canvas_size(&w, &mut input);
     let grown = document(&w);
-    assert_eq!([grown.width, grown.height], [2600, before.height]);
-    assert_eq!(grown.layer(paint).unwrap().properties.offset, before.layer(paint).unwrap().properties.offset);
+    assert_eq!(grown.composition().size, [2600, before.composition().size[1]]);
+    assert_eq!(grown.scene().occurrence(paint).unwrap().translation, before.scene().occurrence(paint).unwrap().translation);
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
     input.perform(json!([
         {"key": 0xffe3, "down": true}, {"key": 0x7a, "down": true},
         {"key": 0x7a, "down": false}, {"key": 0xffe3, "down": false}
     ]));
-    until(|| document(&w).width == before.width, "Ctrl+Z on the canvas undoes the canvas size in one step");
+    until(|| document(&w).composition().size[0] == before.composition().size[0], "Ctrl+Z on the canvas undoes the canvas size in one step");
     input.finish();
     w.window.close();
     pump(50);

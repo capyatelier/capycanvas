@@ -37,6 +37,7 @@ CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t kind, const ch
 int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
+int32_t capy_project_export_preview(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
 int32_t capy_project_export_options(const CapyProjectTask *task, const char *recipe_json); /* worker */
 char *capy_project_clip_progress(const CapyProjectTask *task); /* NULL unless large */
@@ -73,6 +74,9 @@ char *capy_project_details(const CapyProjectTask *task); /* owned JSON; worker o
 typedef struct { uint32_t width, height; const uint8_t *pixels; size_t count; } CapyProjectPreview;
 /* Worker only; borrowed straight Display P3 RGBA8 until the next mutation/free. */
 int32_t capy_project_preview_at(const CapyProjectTask *task, uint32_t index, CapyProjectPreview *output);
+char *capy_project_package_summary(const CapyProjectTask *task);
+/* Worker only; bounded straight sRGB RGBA8, retained by task until free. */
+int32_t capy_project_package_preview(const CapyProjectTask *task, CapyProjectPreview *output);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
 int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */

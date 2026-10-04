@@ -1,8 +1,10 @@
 use super::*;
 use crate::test_support::complete;
+use layer_core::{Document, SceneScope, authored::{Artwork, OccurrenceHandle, PaintSource, SourceTarget}};
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, rgb, source::*};
+use layer_render::ThumbnailTarget;
 
-fn source(space: RgbSpace, codes: [u16; 4]) -> Layer {
+fn source(space: RgbSpace, codes: [u16; 4]) -> Document {
     let mut builder = SourceBuilder::new(
         [256; 2],
         SourceInterpretation {
@@ -22,8 +24,8 @@ fn source(space: RgbSpace, codes: [u16; 4]) -> Layer {
     for _ in 0..256 {
         builder.push_row(&row).unwrap();
     }
-    let mut layer = Layer::paint(LayerId(1), "profiled photo");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut layer = document("profiled photo");
+    paint_mut(&mut layer).original = Some(Arc::new(builder.finish().unwrap()));
     layer
 }
 fn view() -> ViewState {
@@ -33,8 +35,20 @@ fn view() -> ViewState {
         ..test_view()
     }
 }
-fn frame(r: &mut WgpuRasterizer, layer: &Layer) {
-    r.submit(FramePacket { reset_layers: true, ..packet(std::slice::from_ref(layer), [256; 2]) })
+fn document(name: &str) -> Document {
+    let mut artwork = Artwork::new([256; 2]).unwrap();
+    crate::test_support::add_paint(&mut artwork, name, [256; 2]);
+    Document::from_artwork(artwork).unwrap()
+}
+fn owner(document: &Document) -> OccurrenceHandle { document.scene().order()[0] }
+fn paint_mut(document: &mut Document) -> &mut PaintSource {
+    let SourceTarget::Paint(target) = document.scene().source_target(owner(document)).unwrap() else { unreachable!() };
+    document.artwork.paint.get_mut(target).unwrap()
+}
+fn frame(r: &mut WgpuRasterizer, layer: &mut Document) {
+    let root = layer.artwork.root;
+    layer.artwork.compositions.get_mut(root).unwrap().color = r.document_color;
+    r.submit(FramePacket { reset_layers: true, ..packet(layer.scene(), [256; 2]) })
     .unwrap();
 }
 fn linear(space: RgbSpace, codes: [u16; 4], target: RgbSpace) -> [f64; 3] {
@@ -93,7 +107,7 @@ fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
 #[test]
 fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
-    frame(&mut r, &source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
+    frame(&mut r, &mut source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
     let target = texture(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
     let target = target.create_view(&Default::default());
     let mut p = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
@@ -142,7 +156,7 @@ fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     draw(&mut p, &r, v);
     p.set_target_retention(false);
     draw(&mut p, &r, v);
-    frame(&mut r, &source(RgbSpace::Srgb, [5000, 17000, 45000, 33000]));
+    frame(&mut r, &mut source(RgbSpace::Srgb, [5000, 17000, 45000, 33000]));
     draw(&mut p, &r, v);
 }
 
@@ -151,7 +165,7 @@ fn native_surface_rotation_preserves_artwork_cursor_and_clipped_overview() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::Srgb, depth: SampleDepth::U16,
     }).unwrap();
-    frame(&mut r, &source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
+    frame(&mut r, &mut source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));
     let view = ViewState { width_px: 192, height_px: 128,
         document_to_surface: [0.45, 0., 0., 0.35, 19., 13.], ..view() };
     let mut presenter = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
@@ -235,8 +249,8 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                 ] {
                     // Retain ProPhoto numbers, including values outside the working
                     // gamut. No view path may clip in document coordinates first.
-                    let layer = source(RgbSpace::ProPhoto, codes);
-                    frame(&mut r, &layer);
+                    let mut layer = source(RgbSpace::ProPhoto, codes);
+                    frame(&mut r, &mut layer);
                     let before =
                         crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
                     let expected = linear(RgbSpace::ProPhoto, codes, RgbSpace::Srgb);
@@ -244,7 +258,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                     let alpha = f64::from(codes[3]) / 65535.;
                     let export = r.readback_srgb_rgba8().unwrap();
                     close(&export[0..4], bytes(expected, alpha), "sRGB export");
-                    r.request_thumbnail(7, layer.id).unwrap();
+                    r.request_thumbnail(7, ThumbnailTarget::Occurrence(owner(&layer))).unwrap();
                     complete(&r);
                     let thumbnail = r.take_thumbnail().unwrap().unwrap();
                     let i = (16 * 32 + 16) * 4;
@@ -256,12 +270,11 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                     if codes[3] == 65535 {
                         r.request_filter_previews(layer_render::FilterPreviewRequest {
                             request_id: 9,
-                            source: layer_render::FilterPreviewSource::LayerStack(layer.id),
+                            source: layer_render::FilterPreviewSource::LayerStack(owner(&layer)),
                             size: [200, 40],
-                            extent: [256; 2],
                             view: view(),
-                            blend_space: Default::default(),
-                            layers: vec![layer.composite_snapshot()],
+                            snapshot: layer.snapshot_with_context(r.evaluation_context()),
+                            scope: SceneScope::All,
                             filters: vec![Arc::new(layer_core::EffectInstance::new(
                                 fixture("exposure").program(),
                             ))],
@@ -326,8 +339,8 @@ fn explicit_sdr_surfaces_transform_artwork_and_ui_without_changing_document_pixe
         })
         .unwrap();
         let codes = [17000, 65000, 5000, 17000];
-        let layer = source(RgbSpace::ProPhoto, codes);
-        frame(&mut r, &layer);
+        let mut layer = source(RgbSpace::ProPhoto, codes);
+        frame(&mut r, &mut layer);
         let before = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for color in [
             SdrSurfaceColor::Srgb,
@@ -406,7 +419,7 @@ fn screen_check_counts_and_marks_only_colors_the_screen_cannot_show() {
     let check = crate::ScreenCheck { from_view: Some(srgb_screen), surface_clips: true, bounded: true, mark: false };
     let mark = bytes(rgb::apply(RgbSpace::Srgb.linear_transform(RgbSpace::DisplayP3), [0., 0.17, 1.]), 1.);
     for (codes, outside) in [([0, 65535, 0, 65535], true), ([30000, 30000, 30000, 65535], false)] {
-        frame(&mut r, &source(RgbSpace::DisplayP3, codes));
+        frame(&mut r, &mut source(RgbSpace::DisplayP3, codes));
         let mut presenter = ViewportPresenter::for_surface(&r, format, SdrSurfaceColor::DisplayP3).unwrap();
         assert!(!presenter.check_screen(&r), "nothing to count before a check is configured");
         presenter.set_screen_check(&r, Some(check));
@@ -452,8 +465,8 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
             .flat_map(u16::to_le_bytes)
             .collect::<Vec<_>>()
             .repeat(65536);
-        let mut layer = Layer::paint(LayerId(1), "native paint");
-        layer.raster = RasterRevision::backed(RasterData {
+        let mut layer = document("native paint");
+        paint_mut(&mut layer).raster = RasterRevision::backed(RasterData {
             tiles: [(
                 TileKey {
                     plane: RasterPlane::Color,
@@ -465,8 +478,8 @@ fn native_paint_thumbnail_converts_the_same_color_as_export() {
             watercolor: None,
         });
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-        frame(&mut r, &layer);
-        r.request_thumbnail(7, layer.id).unwrap();
+        frame(&mut r, &mut layer);
+        r.request_thumbnail(7, ThumbnailTarget::Occurrence(owner(&layer))).unwrap();
         complete(&r);
         let thumbnail = r.take_thumbnail().unwrap().unwrap();
         close(
@@ -485,27 +498,27 @@ fn hdr_paint_and_photo_thumbnails_follow_the_sdr_rendition_without_clipping() {
     let sample: Vec<_> = pixel.into_iter().flat_map(|v| layer_core::color::f16::from_f32(v).to_bits().to_le_bytes()).collect();
     let raw = sample.repeat(256 * 256);
     for retained in [false, true] {
-        let mut layer = Layer::paint(LayerId(1), "HDR thumbnail");
+        let mut layer = document("HDR thumbnail");
         if retained {
             let mut builder = SourceBuilder::new([256; 2], SourceInterpretation {
                 channels: SourceChannels::Rgba, depth: SampleDepth::F16,
                 profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
             }, 4 * 1024 * 1024).unwrap();
             for row in raw.chunks_exact(256 * 8) { builder.push_row(row).unwrap(); }
-            layer.source = Some(Arc::new(builder.finish().unwrap()));
+            paint_mut(&mut layer).original = Some(Arc::new(builder.finish().unwrap()));
         } else {
-            layer.raster = RasterRevision::backed(RasterData {
+            paint_mut(&mut layer).raster = RasterRevision::backed(RasterData {
                 tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
                     RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &raw).unwrap()))].into(),
                 watercolor: None,
             });
         }
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-        frame(&mut r, &layer);
+        frame(&mut r, &mut layer);
         let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         for recipe in [SdrRendition::default(), SdrRendition { exposure: -2., ..Default::default() }, SdrRendition::default()] {
             r.set_ui_rendition(Some(recipe)).unwrap();
-            r.request_thumbnail(7, layer.id).unwrap(); complete(&r);
+            r.request_thumbnail(7, ThumbnailTarget::Occurrence(owner(&layer))).unwrap(); complete(&r);
             let thumbnail = r.take_thumbnail().unwrap().unwrap();
             let expected = recipe.mapper(RgbSpace::Srgb, RgbSpace::Srgb).map_rgb(pixel[..3].try_into().unwrap());
             close(&thumbnail.bytes[(16 * 32 + 16) * 4..][..4], bytes(expected.map(f64::from), 1.), "HDR thumbnail");
@@ -521,7 +534,7 @@ fn zero_coverage_export_and_navigator_return_black_without_mutating_the_artwork(
         depth: SampleDepth::U16,
     })
     .unwrap();
-    frame(&mut r, &source(RgbSpace::Srgb, [65535; 4]));
+    frame(&mut r, &mut source(RgbSpace::Srgb, [65535; 4]));
     let artwork = r.readback_srgb_rgba8().unwrap();
     // Unassociated export is undefined at zero coverage. Even if a custom
     // effect leaves hidden RGB, the output boundary must emit canonical zero.
@@ -629,7 +642,7 @@ fn check_proof_renderer(recipe: &layer_core::color::ProofRecipe, renderer: impl 
                     [54321, 1234, 23456, 65535], [54321, 23456, 1234, 65535],
                     [1234, 1234, 54321, 65535], [1234, 54321, 1234, 65535],
                     [54321, 1234, 1234, 65535], [0, 0, 0, 65535], [65535; 4]] {
-                    frame(&mut r, &source(space, codes));
+                    frame(&mut r, &mut source(space, codes));
                     let raw = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
                     let exported = r.readback_srgb_rgba8().unwrap();
                     let alpha = codes[3] as f32 / 65535.;
@@ -672,8 +685,8 @@ fn check_hdr_renderer(mut make: impl FnMut(DocumentColor) -> WgpuRasterizer) {
             let mut builder=SourceBuilder::new([256;2],SourceInterpretation{channels:SourceChannels::Rgba,depth,profile:ColorProfile::Builtin(space),profile_assumed:false},8*1024*1024).unwrap();
             let row=if depth == SampleDepth::F16 { bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>() } else { p.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>() }.repeat(256);
             for _ in 0..256 {builder.push_row(&row).unwrap();}
-            let mut layer=Layer::paint(LayerId(1),"HDR reference");layer.source=Some(Arc::new(builder.finish().unwrap()));
-            frame(&mut r,&layer);
+            let mut layer=document("HDR reference");paint_mut(&mut layer).original=Some(Arc::new(builder.finish().unwrap()));
+            frame(&mut r,&mut layer);
             let original=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for surface in [SdrSurfaceColor::ExtendedLinearSrgb, SdrSurfaceColor::ExtendedSrgb, SdrSurfaceColor::WindowsScrgb, SdrSurfaceColor::Bt2100Pq] {
             let mut presenter=ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,surface).unwrap();
@@ -783,9 +796,9 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
             pixels.extend(values);
         }
         let guide = Arc::new(analysis.finish(|| false).unwrap());
-        let mut layer = Layer::paint(LayerId(1), "Local tone reference");
-        layer.source = Some(Arc::new(source.finish().unwrap()));
-        frame(&mut r, &layer);
+        let mut layer = document("Local tone reference");
+        paint_mut(&mut layer).original = Some(Arc::new(source.finish().unwrap()));
+        frame(&mut r, &mut layer);
         let original = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
         let lut = Arc::new(
             layer_color::ProofLut::build(

@@ -18,3 +18,5 @@ pub mod resources;
 pub mod preview;
 pub mod artwork_records;
 pub mod codec;
+
+pub mod transfer;

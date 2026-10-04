@@ -7,7 +7,8 @@ fn target(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
 #[test]
 fn the_crop_shield_dims_outside_the_crop_and_shows_added_canvas_as_transparency() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "artwork")], &[dab([0.8, 0.1, 0.2, 1.])], &[batch(1)], true);
+    let document = paint_document([128; 2], "artwork");
+    submit(&mut r, document.scene(), &[dab([0.8, 0.1, 0.2, 1.])], &[batch(placement::target(&document))], true);
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let surround = [0.2, 0.3, 0.4, 1.];
     let texture = target(&r, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -41,7 +42,8 @@ fn the_crop_shield_dims_outside_the_crop_and_shows_added_canvas_as_transparency(
 #[test]
 fn the_crop_shield_darkens_encoding_and_linear_surfaces_alike() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    submit(&mut r, &[Layer::paint(LayerId(1), "artwork")], &[dab([0.8, 0.6, 0.2, 1.])], &[batch(1)], true);
+    let document = paint_document([128; 2], "artwork");
+    submit(&mut r, document.scene(), &[dab([0.8, 0.6, 0.2, 1.])], &[batch(placement::target(&document))], true);
     let camera = ViewState { document_to_surface: [0.5, 0., 0., 0.5, 32., 32.], ..view() };
     let crop = Rect { min: Point { x: -32., y: -32. }, max: Point { x: 64., y: 64. } };
     let unit = layer_core::Affine([crop.max.x - crop.min.x, 0., 0., crop.max.y - crop.min.y, crop.min.x, crop.min.y]);

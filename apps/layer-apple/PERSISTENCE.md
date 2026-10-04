@@ -4,7 +4,7 @@
 
 Settings use the versioned Rust model and atomic JSON files; workspaces use the
 shared SQLite library. Both apps expose New, Open, Save and Save As with the
-shared [`Project` format](../../docs/reference/project-format.md), profiled image
+shared [Capy package](../../docs/reference/capy-package.md), profiled image
 export, and private recovery copies of unsaved artwork. Window close uses the
 shared unsaved-change decision; macOS also protects app termination.
 
@@ -72,19 +72,25 @@ iPad without multiple-window support reports that limitation.
   `UIDocumentPickerViewController`; Save As prepares the archive in a private
   temporary directory before presenting the export picker. A save is
   acknowledged only after the destination write or picker export succeeds.
-- One owner captures immutable document and source metadata. Pruning,
-  compression, file coordination and GPU preparation run on a worker that holds
-  no live editor pointer. Open prepares a candidate GPU session before adoption,
-  keeps the window's settings and workspace, and starts fresh history.
+- The serial owner captures `ArtworkCapture` with shared typed artwork roots,
+  source metadata, the committed output context and its exact checkpoint.
+  `PreparedPackage` enumerates resources, compresses and streams the final codec
+  on the file worker, which holds no live editor pointer. Saves are source-only
+  and do not require a rendered preview. Open uses the shared package reader and
+  prepares a candidate GPU session before adoption, retaining the window's
+  settings and workspace while starting fresh history.
+- Unsupported packages and recovered previews use the shared read-only
+  `PackageView`. The bridge exposes its summary and bounded preview without
+  replacing editable artwork. Copy original streams the retained package bytes.
 - Security-scoped access and `NSFileCoordinator` surround file operations. The
   owner keeps the picker URL for later saves; the shared URI is an identity, not
   an access grant. Writes stream into a system replacement directory on the
   destination volume, sync, then publish with `FileManager` replacement.
-- Image export captures an immutable project and GPU reference and encodes
+- Image export captures immutable artwork and a GPU reference and encodes
   through the shared Float32 snapshot worker, never through the display cache.
   It never renames the drawing or marks unsaved edits as saved. Export presets
   and ICC library copies are saved atomically in the private persistence root.
-- Image imports use the same coordinated reader through ImageIO decoding, and
+- Image imports use the same coordinated file worker and shared Rust decoder;
   the bridge rejects a result that arrives after the document was replaced.
 - Not handled: restoring a provider URL across launches, provider conflicts and
   file presenters. Recovery restores a private copy, not access to the original
@@ -95,7 +101,8 @@ iPad without multiple-window support reports that limitation.
 - Unsaved changes schedule a recovery capture. Each editor keeps one capture in
   flight plus the latest wanted revision. Capture keeps the last committed raster
   during a stroke and prepares queued pen-up work without a drawable. The full
-  project format is reused; Undo history is not stored.
+  shared package codec is reused; working selection, navigation and Undo history
+  are not stored.
 - Copies live in `recovery/<runtime UUID>`, separate from the scene ID, so a new
   process's blank canvas cannot overwrite an earlier drawing. Each archive is a
   generation; its contents and directory are synced before an atomic

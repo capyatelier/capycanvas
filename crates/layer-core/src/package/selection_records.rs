@@ -5,17 +5,41 @@ use serde_json::{Map, Value, json};
 use std::sync::Arc;
 
 pub trait SelectionResourceWriter {
+    fn validate_selection(&self, selection: &Selection) -> Result<(), String> { selection.validate().map_err(|e| e.to_string()) }
     fn chunk(&mut self, bytes: &Resource<[u8]>, descriptor: Value) -> Result<Value, String>;
+    fn pixels(&mut self, pixels: &SelectionPixels) -> Result<Value, String> {
+        let chunks = pixels.package_chunks()?.iter().enumerate().map(|(index, bytes)|
+            self.chunk(bytes, descriptor(pixels, index))).collect::<Result<Vec<_>, _>>()?;
+        Ok(json!({"extent":pixels.extent(), "bounds":pixels.bounds(),
+            "depth":if pixels.coverage_format() == 2 {"u8"} else {"u4"}, "chunks":chunks}))
+    }
 }
 pub trait SelectionResourceReader {
+    fn validate_selection(&self, selection: &Selection) -> DecodeResult<()> { selection.validate().map_err(|e| e.to_string().into()) }
     fn chunk(&mut self, reference: &Value, expected_descriptor: &Value) -> DecodeResult<Resource<[u8]>>;
     fn limits(&self) -> ProjectLimits { ProjectLimits::default() }
+    fn pixels(&mut self, extent: [u32; 2], bounds: [u32; 4], bytes: bool, chunks: Vec<Resource<[u8]>>) -> DecodeResult<Arc<SelectionPixels>> {
+        Ok(Arc::new(SelectionPixels::from_package_chunks(extent, bounds, bytes, chunks)?))
+    }
+}
+
+pub(crate) fn validate_selection_metadata(selection: &Selection) -> Result<(), String> {
+    if selection.affine.inverse().is_none() { return Err("Invalid selection transform".into()); }
+    if let SelectionShape::Pixels(pixels) = &selection.shape {
+        let extent = pixels.extent(); let [x0, y0, x1, y1] = pixels.bounds();
+        if extent.contains(&0) || extent.iter().any(|v| *v > crate::MAX_EXTENT)
+            || x0 > x1 || y0 > y1 || x1 > extent[0] || y1 > extent[1]
+            || u64::from(extent[0].div_ceil(pixels.pixels_per_word())) * u64::from(extent[1]) != pixels.words().len() as u64 {
+            return Err("Invalid selection descriptor".into());
+        }
+        Ok(())
+    } else { selection.validate().map_err(|e| e.to_string()) }
 }
 
 fn descriptor(pixels: &SelectionPixels, index: usize) -> Value {
     chunk_descriptor(pixels.extent(), pixels.bounds(), pixels.coverage_format() == 2, index)
 }
-fn chunk_descriptor(extent: [u32; 2], bounds: [u32; 4], bytes: bool, index: usize) -> Value {
+pub(crate) fn chunk_descriptor(extent: [u32; 2], bounds: [u32; 4], bytes: bool, index: usize) -> Value {
     json!({"depth":if bytes {"u8"} else {"u4"}, "extent":extent, "bounds":bounds, "chunk":index})
 }
 fn integer_array<const N: usize>(value: &Value) -> DecodeResult<[u32; N]> {
@@ -30,19 +54,14 @@ fn reference(value: &Value) -> DecodeResult<()> {
 }
 
 pub fn encode_selection(selection: &Selection, resources: &mut impl SelectionResourceWriter) -> Result<Value, String> {
-    selection.validate().map_err(|e| e.to_string())?;
+    resources.validate_selection(selection)?;
     let shape = match &selection.shape {
         SelectionShape::Contours(paths) => {
             let paths = paths.iter().map(|path| path.iter().copied().map(values::encode_point)
                 .collect::<Result<Vec<_>, _>>().map(Value::Array)).collect::<Result<Vec<_>, _>>()?;
             json!({"contours":paths})
         },
-        SelectionShape::Pixels(pixels) => {
-            let chunks = pixels.package_chunks()?.iter().enumerate().map(|(index, bytes)|
-                resources.chunk(bytes, descriptor(pixels, index))).collect::<Result<Vec<_>, _>>()?;
-            json!({"pixels":{"extent":pixels.extent(), "bounds":pixels.bounds(),
-                "depth":if pixels.coverage_format() == 2 {"u8"} else {"u4"}, "chunks":chunks}})
-        },
+        SelectionShape::Pixels(pixels) => json!({"pixels":resources.pixels(pixels)?}),
     };
     let mut result = Map::new();
     result.insert("shape".into(), shape);
@@ -100,12 +119,12 @@ pub fn decode_selection(value: &Value, resources: &mut impl SelectionResourceRea
                 reference(value)?;
                 loaded.push(resources.chunk(value, &chunk_descriptor(extent, bounds, byte_coverage, index))?);
             }
-            SelectionShape::Pixels(Arc::new(SelectionPixels::from_package_chunks(extent, bounds, byte_coverage, loaded)?))
+            SelectionShape::Pixels(resources.pixels(extent, bounds, byte_coverage, loaded)?)
         },
         _ => return Err("Selection shape requires exactly one alternative".into()),
     };
     let selection = Selection { shape, affine, inverted };
-    selection.validate().map_err(|e| e.to_string())?;
+    resources.validate_selection(&selection)?;
     Ok(selection)
 }
 

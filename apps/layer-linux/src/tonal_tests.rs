@@ -6,7 +6,7 @@ use layer_core::{EffectValue, color::{ColorProfile, RgbSpace, SampleDepth, sourc
 use layer_ui::{CanvasBarKind, EffectAction};
 use serde_json::json;
 
-fn fixture() -> layer_core::Project {
+fn fixture() -> layer_core::Document {
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let mut source = SourceBuilder::new([256, 256], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::U8,
@@ -17,7 +17,7 @@ fn fixture() -> layer_core::Project {
         [value as u8, (value + 15) as u8, (value + 30) as u8, 255]
     }).collect();
     for _ in 0..256 {source.push_row(&row).unwrap();}
-    project.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));project
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));project
 }
 
 fn start(app: &NativeTestApp, effect: &str) -> (Rc<Workspace>, std::path::PathBuf) {
@@ -58,20 +58,38 @@ fn sample(input: &mut RemoteInput, kind: &str, point: [f32;2]) {
     }
 }
 
-fn assert_source_unchanged(w: &Workspace, before: &layer_core::Document) {
+pub(super) fn assert_source_unchanged(w: &Workspace, before: &layer_core::Document) {
     let after = document(w);
-    for old in &before.layers {
-        let new = after.layer(old.id).unwrap();assert_eq!(new.source,old.source);assert_eq!(new.raster.identity(),old.raster.identity());
-        if old.id!=before.active_layer {assert_eq!(new,old);}
+    for (h, id, old) in before.artwork.paint.iter() {
+        assert_eq!(after.artwork.paint.id(h), Some(id));
+        let new = after.artwork.paint.get(h).unwrap();
+        assert_eq!(new.original, old.original);
+        assert_eq!(new.raster.identity(), old.raster.identity());
+        assert_eq!(new, old);
+    }
+    assert_eq!(after.artwork.occurrences.iter().collect::<Vec<_>>(), before.artwork.occurrences.iter().collect::<Vec<_>>());
+    assert_eq!(after.artwork.coverage.iter().collect::<Vec<_>>(), before.artwork.coverage.iter().collect::<Vec<_>>());
+    assert_eq!(after.artwork.definitions.iter().collect::<Vec<_>>(), before.artwork.definitions.iter().collect::<Vec<_>>());
+    let effect = before.scene().effect_handle(before.working.occurrence.unwrap());
+    for (h, id, old) in before.artwork.effects.iter() {
+        if Some(h) != effect { assert_eq!(after.artwork.effects.id(h), Some(id)); assert_eq!(after.artwork.effects.get(h), Some(old)); }
     }
 }
 
 fn assert_persisted(w: &Rc<Workspace>, path: &std::path::Path) {
-    std::fs::write(path, super::place_source::snapshot(w)).unwrap();
-    let reopened = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+    std::fs::write(path, super::place_source::authored_snapshot(w)).unwrap();
+    let reopened = open_native_document(std::fs::File::open(path).unwrap());
     let current = document(w);
-    assert_eq!(reopened.document.layer(current.active_layer).unwrap().effect, current.layer(current.active_layer).unwrap().effect, "saved adjustment values reopen exactly");
-    for layer in &current.layers {assert_eq!(reopened.document.layer(layer.id).unwrap().source, layer.source);}
+    assert_live_artwork_eq(&reopened, &current);
+    let active_id = current.artwork.occurrences.id(current.working.occurrence.unwrap()).unwrap();
+    let active = reopened.artwork.occurrences.resolve(active_id).unwrap();
+    let saved_effect = reopened.scene().effect(active).unwrap();
+    let current_effect = active_effect(&current);
+    assert_eq!((saved_effect.program, saved_effect.values), (current_effect.program, current_effect.values), "saved adjustment values reopen exactly");
+    for (h, id, source) in current.artwork.paint.iter() {
+        let reopened = reopened.artwork.paint.get(reopened.artwork.paint.resolve(id).unwrap()).unwrap();
+        assert_eq!(reopened.original, source.original, "source {h:?}");
+    }
 }
 
 fn tonal_calibration(effect: &str) {
@@ -87,11 +105,11 @@ fn tonal_calibration(effect: &str) {
                 let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::AutoLevels {..}));
                 crate::snapshot(&w).save_to_png(output.join(format!("levels-actions-{width}-{theme:?}.png"))).unwrap();
                 input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
-                until(||document(&w).layers!=before.layers,"native Auto Levels publishes correction");ready(&w);
+                until(||artwork_manifest(&document(&w))!=artwork_manifest(&before),"native Auto Levels publishes correction");ready(&w);
                 assert_source_unchanged(&w,&before);assert_eq!(state(&w).colors,foreground);pump(200);assert_ne!(shown(&w,[128.,128.]),pixel);
                 crate::snapshot(&w).save_to_png(output.join(format!("levels-auto-{width}-{theme:?}.png"))).unwrap();
                 assert_persisted(&w,&output.join(format!("levels-auto-{width}-{theme:?}.capy")));
-                w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores Auto Levels");
+                w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before),"one Undo restores Auto Levels");
             }
             for role in [CalibrationRole::Black,CalibrationRole::Gray,CalibrationRole::White] {
                 if std::env::var("LAYER_TONAL_ROLE").is_ok_and(|wanted|wanted!=format!("{role:?}")) {continue;}
@@ -102,18 +120,18 @@ fn tonal_calibration(effect: &str) {
                     let at=[match role {CalibrationRole::Black=>30.,CalibrationRole::White=>220.,_=>128.},128.];
                     let pixel=shown(&w,at);
                     let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
-                    input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));input.key(0xff1b);assert_eq!(document(&w).layers,before.layers);assert_eq!(state(&w).colors,foreground);
+                    input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));input.key(0xff1b);assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before));assert_eq!(state(&w).colors,foreground);
                     let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
                     input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                     until(||state(&w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==CanvasBarKind::Picker),"calibration picker armed");
                     sample(&mut input,kind,canvas_point(&w,at));
                     until(||state(&w).canvas_bar.as_ref().is_none_or(|bar|bar.context.kind!=CanvasBarKind::Picker),"calibration accepted");ready(&w);
-                    assert_ne!(document(&w).layers,before.layers,"{effect} {role:?} {kind} changes adjustment");
+                    assert_ne!(artwork_manifest(&document(&w)),artwork_manifest(&before),"{effect} {role:?} {kind} changes adjustment");
                     assert_source_unchanged(&w,&before);assert_eq!(state(&w).colors,foreground);assert_eq!(state(&w).layer_tools.tool,tool);
                     pump(200);assert_ne!(shown(&w,at),pixel,"{effect} {role:?} {kind} changes presented photo");
                     crate::snapshot(&w).save_to_png(output.join(format!("{effect}-{role:?}-{kind}-{width}-{theme:?}.png"))).unwrap();
                     if kind=="mouse" {assert_persisted(&w,&output.join(format!("{effect}-{role:?}-{width}-{theme:?}.capy")));}
-                    w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores complete correction");
+                    w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before),"one Undo restores complete correction");
 
                 }
             }
@@ -147,19 +165,19 @@ fn targeted_curves(page: u32) {
                     "pen"=>input.perform(json!([{"pen":"down","point":point},{"pen":"move","point":end},{"pen":"up"},{"pen":"leave"}])),
                     _=>input.perform(json!([{"touch":"down","point":point},{"wait_ms":700},{"touch":"move","point":end},{"touch":"up"}])),
                 }
-                until(||document(&w).layers!=before.layers,"native targeted drag publishes curve");ready(&w);pump(200);
+                until(||artwork_manifest(&document(&w))!=artwork_manifest(&before),"native targeted drag publishes curve");ready(&w);pump(200);
                 assert_source_unchanged(&w,&before);assert_eq!(state(&w).colors,foreground);assert_ne!(shown(&w,[128.,128.]),pixel);
                 let after=document(&w);let key=format!("curve_{page}");
-                assert!(matches!(after.layer(after.active_layer).unwrap().effect.as_ref().unwrap().value(&key),Some(EffectValue::Curve(points)) if points.len()==3));
+                assert!(matches!(active_effect(&after).value(&key),Some(EffectValue::Curve(points)) if points.len()==3));
                 crate::snapshot(&w).save_to_png(output.join(format!("targeted-{page}-{kind}-{width}-{theme:?}.png"))).unwrap();
                 if kind=="mouse" {assert_persisted(&w,&output.join(format!("targeted-{page}-{width}-{theme:?}.capy")));}
-                input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores targeted drag");
+                input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before),"one Undo restores targeted drag");
                 let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
                 input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                 let point=canvas_point(&w,[128.,128.]);input.perform(json!([{"point":point,"down":true},{"point":[point[0],point[1]+25.]},{"wait_ms":500}]));
-                until(||document(&w).layers!=before.layers,"targeted preview before Escape");
+                until(||artwork_manifest(&document(&w))!=artwork_manifest(&before),"targeted preview before Escape");
                 input.key(0xff1b);input.perform(json!([{"down":false}]));ready(&w);
-                assert_eq!(document(&w).layers,before.layers,"Escape restores an active targeted preview");assert_eq!(state(&w).colors,foreground);
+                assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before),"Escape restores an active targeted preview");assert_eq!(state(&w).colors,foreground);
             }
     }
     input.finish();w.window.destroy();pump(100);
@@ -188,7 +206,7 @@ fn native_targeted_curves_motion_and_latency() {
         input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
         let point=canvas_point(&w,[128.,128.]);
         input.perform(json!([{"point":point,"down":true},{"point":[point[0],point[1]-20.]},{"wait_ms":400},{"down":false}]));
-        until(||document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().value("curve_0").is_some_and(|value|matches!(value,EffectValue::Curve(points) if points.len()==3)),"priming targeted gesture applies");
+        until(||active_effect(&document(&w)).value("curve_0").is_some_and(|value|matches!(value,EffectValue::Curve(points) if points.len()==3)),"priming targeted gesture applies");
         input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);
         for gesture in 0..3 {
             let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
@@ -196,12 +214,12 @@ fn native_targeted_curves_motion_and_latency() {
             until(||ui_session(&w).engine().backend().frames_idle() && w.frame_timer.borrow().is_none(),"preceding targeted frames settle");pump(100);
             let baseline=stats.lock().unwrap().camera_views.last().map(|entry|entry.2);
             *stats.lock().unwrap()=Default::default();
-            let original=ui_session(&w).engine().document().layer(ui_session(&w).engine().document().active_layer).unwrap().effect.as_ref().unwrap().value("curve_0").unwrap().clone();
+            let original=active_effect(ui_session(&w).engine().document()).value("curve_0").unwrap().clone();
             let applications=Rc::new(RefCell::new(Vec::new()));
             let observations=applications.clone();let observed=w.clone();let mut previous=original;
             let observer=glib::timeout_add_local(Duration::from_millis(1),move || {
                 let session=ui_session(&observed);let doc=session.engine().document();
-                let current=doc.layer(doc.active_layer).unwrap().effect.as_ref().unwrap().value("curve_0").unwrap();
+                let current=active_effect(doc).value("curve_0").unwrap();
                 if *current!=previous {observations.borrow_mut().push(glib::monotonic_time().max(0) as u64*1000);previous=current.clone();}
                 glib::ControlFlow::Continue
             });

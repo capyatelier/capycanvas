@@ -6,16 +6,17 @@ use std::cell::RefCell;
 pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let localization = w.localization().clone();
-    let (workflow, time) = {
+    let (mut workflow, context) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?.session;
-        (SourceWorkflow::begin(session, id)?, session.engine().animation_time())
+        (SourceWorkflow::begin(session, id)?, session.engine().backend().capture_context()?)
     };
-    let color = workflow.project.document.color;
+    workflow.context = context.resolve().await?;
+    let color = workflow.project.composition().color;
     let project = workflow.project.clone();
     let original_gpu = w.snapshot_gpu()?;
     let workflow = Rc::new(RefCell::new(workflow));
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, w.view_color(), &w.localization());
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project, workflow.borrow().context.clone(), w.view_color(), &w.localization());
     comparison.bind_localization(w);
     comparison.invalidate(copy.rasterizing.as_ref());
     let explanation = gtk::Label::builder()
@@ -83,7 +84,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 explanation.set_label(if clipped > 0 {
                     copy.source_clipped.as_ref()
                 } else { copy.rasterize_compare.as_ref() });
-                comparison.request(preview, time);
+                comparison.request(preview);
                 Ok(())
             });
             if let Err(error) = result {

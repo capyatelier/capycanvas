@@ -47,7 +47,7 @@ fn renderer() -> WgpuRasterizer {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     submit(
         &mut r,
-        &[Layer::paint(LayerId(1), "artwork")],
+        paint_document([128; 2], "artwork").scene(),
         &[],
         &[],
         true,
@@ -127,3 +127,38 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
     assert_eq!(r.readback_srgb_rgba8().unwrap(), artwork);
 }
 
+
+#[test]
+fn saved_selection_overlay_uses_working_visibility_without_changing_authored_artwork() {
+    use layer_core::{Edit, SavedSelection};
+    let mut document = paint_document([128; 2], "artwork");
+    let saved = RecordChange::insert(&document.artwork.selections, SavedSelection {
+        selection: Selection::full(), display: Default::default(),
+    });
+    let mut value = Occurrence::new(OccurrenceContent::Selection(saved.handle), "Saved coverage");
+    value.visible = false;
+    let occurrence = RecordChange::insert(&document.artwork.occurrences, value);
+    let handle = occurrence.handle;
+    let stack = document.composition().result;
+    let mut membership = document.artwork.stacks.get(stack).unwrap().clone();
+    membership.entries.insert(0, handle);
+    let membership = RecordChange::replace(&document.artwork.stacks, stack, Some(membership)).unwrap();
+    document.apply(Edit::Batch(vec![Edit::SavedSelection(saved), Edit::Occurrence(occurrence), Edit::Stack(membership)])).unwrap();
+    let authored = document.artwork.clone();
+    let mut r = renderer();
+    r.set_selection_overlay(Some(layer_render::SelectionOverlay {
+        active: false, editing: None, color: [1., 0., 0., 0.5], protected: false, saved_protected: false,
+    }));
+    let base = packet(document.scene(), [128; 2]);
+    r.prepare_selection_previews(base).unwrap();
+    assert!(r.selection_previews.texture.is_none());
+    let mut visibility = std::collections::BTreeMap::from([(handle, true)]);
+    r.prepare_selection_previews(FramePacket { selection_visibility: Some(&visibility), ..base }).unwrap();
+    assert!(r.selection_previews.texture.is_some());
+    visibility.insert(handle, false);
+    r.prepare_selection_previews(FramePacket { selection_visibility: Some(&visibility), ..base }).unwrap();
+    assert!(r.selection_previews.texture.is_none());
+    r.prepare_selection_previews(base).unwrap();
+    assert!(r.selection_previews.texture.is_none());
+    assert_eq!(document.artwork, authored);
+}

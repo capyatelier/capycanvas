@@ -17,7 +17,7 @@ pub mod prediction_bench;
 pub mod recording;
 
 pub use brush::DabGenerator;
-pub use canvas::{CanvasEngine, EngineError, EngineMetrics, LayerPreview, StrokeRefusal};
+pub use canvas::{CanvasEngine, EngineError, EngineMetrics, ScenePreview, StrokeRefusal};
 pub use feedback::{FeedbackConfigError, InstantFeedbackConfig};
 pub use input::{
     InputConsumer, InputProducer, PenEvent, PenPhase, PressureCurve, SampleFlags, ToolKind,

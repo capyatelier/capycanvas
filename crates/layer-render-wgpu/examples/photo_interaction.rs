@@ -7,7 +7,7 @@ use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase, Samp
     ToolKind, ViewTransform, input_queue};
 use layer_render::{CanvasRenderer, ViewState};
 use layer_render_wgpu::{SdrSurfaceColor, ViewportPresenter, WgpuRasterizer};
-use std::{collections::BTreeMap, io::{BufReader, BufWriter, Write}, time::{Duration, Instant}};
+use std::{collections::BTreeMap, io::{BufReader, BufWriter, Write}, time::{Duration, Instant}, sync::atomic::AtomicBool};
 
 const SIZE: [u32; 2] = [2752, 2064];
 const DRAW_SCALE: f32 = 0.2;
@@ -28,14 +28,15 @@ fn camera(extent: [u32; 2], scale: f32, angle: f32) -> (ViewState, ViewTransform
             a/(scale*scale), (-a*tx-b*ty)/(scale*scale), (b*tx-a*ty)/(scale*scale)] })
 }
 
-fn roots(engine: &Engine) -> Result<BTreeMap<LayerId, Vec<u8>>> {
-    engine.document().layers.iter().map(|l| {
+fn roots(engine: &Engine) -> Result<BTreeMap<SourceTarget, Vec<u8>>> {
+    let scene = engine.document().scene();
+    scene.targets().filter(|t| matches!(t, SourceTarget::Paint(_))).map(|target| {
         let mut bytes = Vec::new();
-        for (key, tile) in &l.raster.wait_data()?.tiles {
+        for (key, tile) in &scene.raster(target).unwrap().wait_data()?.tiles {
             bytes.extend(format!("{key:?}").as_bytes());
-            bytes.extend(tile.wait_backing()?.digest);
+            bytes.extend(tile.wait_backing()?.content_digest()?);
         }
-        Ok((l.id, bytes))
+        Ok((target, bytes))
     }).collect()
 }
 
@@ -58,9 +59,19 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
     assert!((1..=256).contains(&samples) && frames > 0);
     assert!(diameter.is_finite() && diameter > 0.);
     assert!(matches!(path.as_str(), "circles" | "zigzag"));
-    let project = Project::read(BufReader::new(std::fs::File::open(input)?), Default::default())?;
-    let extent = [project.document.width, project.document.height];
-    let mut gpu = WgpuRasterizer::new_native_headless(project.document.color)?;
+    let cancel = AtomicBool::new(false);
+    let limits = ProjectLimits::default();
+    let backing = package::transport::spool(&mut BufReader::new(std::fs::File::open(input)?),
+        &std::env::temp_dir(), limits.metadata_bytes + limits.asset_bytes + limits.raster_bytes, &cancel)?;
+    let package::codec::OpenOutcome::Candidate { artwork, .. } = package::codec::open(backing, limits, &cancel)?
+        else { return Err("Package is not editable".into()); };
+    let mut document = Document::from_artwork(artwork)?;
+    let occurrence = document.scene().order().iter().copied()
+        .find(|h| document.scene().paint_source(*h).is_some()).ok_or("No paint target")?;
+    document.working.occurrence = Some(occurrence);
+    document.working.target = document.scene().source_target(occurrence);
+    let extent = document.composition().size;
+    let mut gpu = WgpuRasterizer::new_native_headless(document.composition().color)?;
     println!("Adapter: {:?}", gpu.adapter().get_info());
     // u64::MAX selects the host admission policy instead of a benchmark override.
     if allowance != u64::MAX { gpu.set_complete_display_allowance(allowance * 1024 * 1024); }
@@ -74,7 +85,7 @@ pub fn replay(mut args: impl Iterator<Item = String>) -> Result<()> {
         let visible = (extent[axis] as f32 * DRAW_SCALE).min(SIZE[axis] as f32);
         0.42 * (visible - diameter * DRAW_SCALE).max(0.)
     });
-    let mut engine = CanvasEngine::new(gpu, project.document, consumer, view, inverse)?;
+    let mut engine = CanvasEngine::new(gpu, document, consumer, view, inverse)?;
     engine.set_instant_feedback(InstantFeedbackConfig {
         enabled: true, use_platform_prediction: false, prediction_horizon_micros: 8_000,
         ..Default::default()

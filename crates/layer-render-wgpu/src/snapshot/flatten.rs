@@ -18,7 +18,7 @@ impl SnapshotRenderer {
             profile: layer_core::color::ColorProfile::Builtin(color.space),
             profile_assumed: false,
         };
-        let mut project = None;
+        let mut document = None;
         let statistics = self.write_rows(
             &target,
             layer_core::color::OutputEncoding {
@@ -27,16 +27,16 @@ impl SnapshotRenderer {
             },
             None,
             |extent, actual, read| {
-                project = Some(layer_color::flattened_document(
+                document = Some(layer_color::flattened_document(
                     extent, color, resolution, actual, limit, read,
                 )?);
                 Ok(())
             },
         )?;
-        let mut project = project.ok_or("The converted copy is incomplete")?;
-        project.document.metadata = metadata;
+        let mut document = document.ok_or("The converted copy is incomplete")?;
+        document.artwork.metadata = Arc::new(metadata);
         Ok(layer_color::PreparedDocumentColor {
-            project,
+            document,
             statistics,
         })
     }

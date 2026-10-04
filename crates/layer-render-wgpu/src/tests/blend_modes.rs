@@ -4,7 +4,8 @@
 use super::*;
 use layer_core::color::source::SourceImage;
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
-use layer_core::{BlendRange, BlendSpace, Document, EffectInstance, LayerBlend, Project};
+use layer_core::authored::*;
+use layer_core::{BlendRange, BlendSpace, Document, EffectInstance, LayerBlend, SceneView, SceneScope};
 
 const EXTENT: [u32; 2] = [64, 32];
 const DIVISOR: f64 = 1. / 16384.;
@@ -229,49 +230,50 @@ struct Case {
     blended: usize,
 }
 fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
-    let mut document = Document::new("Blend oracle", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = DocumentColor { space: RgbSpace::Srgb, depth };
-    document.blend_space = space;
-    let paper = document.layers.pop().unwrap();
-    document.layers.clear();
+    let mut document = Document::new(PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let root = document.artwork.root;
+    let composition = document.artwork.compositions.get_mut(root).unwrap();
+    composition.color = DocumentColor { space: RgbSpace::Srgb, depth };
+    composition.blend = space;
+    let paper = *document.scene().order().last().unwrap();
     let paint = |document: &mut Document, name: &str, image| {
-        let mut layer = Layer::paint(document.allocate_layer_id(), name);
-        layer.source = Some(image);
-        layer
+        let source = document.artwork.paint.insert(PortableId::random(), PaintSource { domain: EXTENT, original: Some(image), raster: Default::default(), operations: Arc::default() }).unwrap();
+        document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source), name)).unwrap()
     };
     let effect = |document: &mut Document, image: bool| {
-        let mut layer = Layer::paint(document.allocate_layer_id(), "Probe");
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(probe_effect(depth, image));
-        layer
+        let instance = Arc::unwrap_or_clone(probe_effect(depth, image));
+        let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program, dimensions: Default::default() }).unwrap();
+        let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values, domain: EXTENT }).unwrap();
+        document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "Probe")).unwrap()
     };
-    let mut top_layer = paint(&mut document, "Top", top(depth));
-    let mut bottom_layer = paint(&mut document, "Bottom", bottom(depth));
-    let (layers, background) = match path {
+    let top_layer = paint(&mut document, "Top", top(depth));
+    let bottom_layer = paint(&mut document, "Bottom", bottom(depth));
+    let (mut entries, background) = match path {
         Path::Layer => {
-            top_layer.opacity = OPACITY;
+            document.artwork.occurrences.get_mut(top_layer).unwrap().opacity = OPACITY;
             (vec![top_layer, bottom_layer], [0.; 4])
         }
         Path::Clip => {
-            top_layer.opacity = OPACITY;
-            top_layer.properties.clipped = true;
+            let owner = document.artwork.occurrences.get_mut(top_layer).unwrap();
+            owner.opacity = OPACITY;
+            owner.clipped = true;
             (vec![top_layer, bottom_layer], [0.; 4])
         }
         Path::Effect => {
-            let mut adjustment = effect(&mut document, false);
-            adjustment.opacity = OPACITY;
+            let adjustment = effect(&mut document, false);
+            document.artwork.occurrences.get_mut(adjustment).unwrap().opacity = OPACITY;
             (vec![adjustment, bottom_layer], [0.; 4])
         }
         Path::Folded => {
-            let mut adjustment = effect(&mut document, false);
-            adjustment.properties.clipped = true;
-            bottom_layer.opacity = OPACITY;
+            let adjustment = effect(&mut document, false);
+            document.artwork.occurrences.get_mut(adjustment).unwrap().clipped = true;
+            document.artwork.occurrences.get_mut(bottom_layer).unwrap().opacity = OPACITY;
             (vec![adjustment, bottom_layer], BACKDROP)
         }
         Path::ImageComposition => {
-            let mut filter = effect(&mut document, true);
-            filter.properties.clipped = true;
-            bottom_layer.opacity = OPACITY;
+            let filter = effect(&mut document, true);
+            document.artwork.occurrences.get_mut(filter).unwrap().clipped = true;
+            document.artwork.occurrences.get_mut(bottom_layer).unwrap().opacity = OPACITY;
             (vec![filter, bottom_layer, top_layer], [0.; 4])
         }
     };
@@ -279,29 +281,31 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
         Path::Layer | Path::Clip | Path::Effect => 0,
         Path::Folded | Path::ImageComposition => 1,
     };
-    document.layers = layers;
-    let mut paper = Layer::solid_color(paper.id, paper.name, layer_core::color::RgbColor::from_linear(document.color.space, background).unwrap());
-    paper.visible = background[3] > 0.;
-    document.layers.push(paper);
-    document.active_layer = document.layers[0].id;
+    super::native_effects::set_effect(&mut document, paper, "color", layer_core::EffectValue::Color(
+        layer_core::color::RgbColor::from_linear(RgbSpace::Srgb, background).unwrap()));
+    document.artwork.occurrences.get_mut(paper).unwrap().visible = background[3] > 0.;
+    entries.push(paper);
+    let root = document.composition().result;
+    let stack = RecordChange::replace(&document.artwork.stacks, root, Some(Stack { entries })).unwrap();
+    document.apply(layer_core::Edit::Stack(stack)).unwrap();
     Case { document, blended }
 }
 
-fn live(r: &mut WgpuRasterizer, layers: &[Layer], blend_space: BlendSpace) -> Vec<Rgba> {
-    live_at(r, layers, 0, blend_space, true)
+fn live(r: &mut WgpuRasterizer, scene: SceneView<'_>, blend_space: BlendSpace) -> Vec<Rgba> {
+    live_at(r, scene, 0, blend_space, true)
 }
-fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
+fn live_at(r: &mut WgpuRasterizer, scene: SceneView<'_>, level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
     let scale = 1. / (1 << level) as f32;
     let view = ViewState {
         document_to_surface: [scale, 0., 0., scale, 0., 0.],
         ..crate::test_support::view(EXTENT)
     };
-    r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(layers, EXTENT) }).unwrap();
+    r.submit(FramePacket { view, reset_layers: true, blend_space, ..packet(scene, EXTENT) }).unwrap();
     for _ in 0..16 {
         if !settled || !layer_render::CanvasRenderer::has_pending_work(r) {
             break;
         }
-        r.submit(FramePacket { view, blend_space, composite_all: false, ..packet(layers, EXTENT) }).unwrap();
+        r.submit(FramePacket { view, blend_space, composite_all: false, ..packet(scene, EXTENT) }).unwrap();
     }
     assert!(!settled || !layer_render::CanvasRenderer::has_pending_work(r), "the composite settles");
     let texture = if level == 0 {
@@ -319,7 +323,7 @@ fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], level: u32, blend_space: Bl
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<Rgba> {
     let mut capture = r
         .snapshot_gpu()
-        .capture(Project { document: document.clone() }, 0., Default::default())
+        .capture_scene(document.snapshot_with_context(r.evaluation_context()), SceneScope::All, Default::default())
         .unwrap();
     capture
         .read_region([0, 0, EXTENT[0], EXTENT[1]])
@@ -331,14 +335,16 @@ fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<Rgba> {
 
 /// The premultiplied pixels of `layers[index]` drawn alone over nothing.
 fn alone(r: &mut WgpuRasterizer, document: &Document, index: usize) -> Vec<Rgba> {
-    let mut layers = document.layers.clone();
-    for (i, layer) in layers.iter_mut().enumerate() {
-        layer.visible = i == index;
-        layer.opacity = 1.;
-        layer.properties.blend = LayerBlend::Normal;
-        layer.properties.clipped = false;
+    let mut isolated = document.clone();
+    let handles = isolated.scene().order().to_vec();
+    for (i, handle) in handles.into_iter().enumerate() {
+        let occurrence = isolated.artwork.occurrences.get_mut(handle).unwrap();
+        occurrence.visible = i == index;
+        occurrence.opacity = 1.;
+        occurrence.blend = LayerBlend::Normal;
+        occurrence.clipped = false;
     }
-    live(r, &layers, document.blend_space)
+    live(r, isolated.scene(), document.composition().blend)
 }
 
 #[test]
@@ -357,15 +363,16 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
         let float = depth.is_float();
         for path in [Path::Layer, Path::Clip, Path::Effect, Path::Folded, Path::ImageComposition] {
             let Case { mut document, blended } = case(depth, path, space);
-            let inputs: Vec<_> = (0..document.layers.len() - 1).map(|i| alone(&mut r, &document, i)).collect();
+            let inputs: Vec<_> = (0..document.scene().order().len() - 1).map(|i| alone(&mut r, &document, i)).collect();
             let a = f64::from(BACKDROP[3]);
             let backdrop = held([BACKDROP[0], BACKDROP[1], BACKDROP[2]].map(f64::from), space);
             let backdrop = [backdrop[0] * a, backdrop[1] * a, backdrop[2] * a, a];
             let opacity = f64::from(OPACITY);
             let probe = |xy| held(probe(depth, xy), space);
             for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
-                document.layers[blended].properties.blend = mode;
-                let composite = live(&mut r, &document.layers, space);
+                let owner = document.scene().order()[blended];
+                document.artwork.occurrences.get_mut(owner).unwrap().blend = mode;
+                let composite = live(&mut r, document.scene(), space);
                 let export = exported(&r, &document);
                 for (i, (actual, export)) in composite.iter().zip(&export).enumerate() {
                     let xy = [i as u32 % EXTENT[0], i as u32 / EXTENT[0]];
@@ -434,14 +441,15 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                     sum
                 };
                 for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
-                    document.layers[blended].properties.blend = mode;
+                    let owner = document.scene().order()[blended];
+                document.artwork.occurrences.get_mut(owner).unwrap().blend = mode;
                     let form = if matches!(path, Path::Clip) { Form::Clip } else { Form::Composite };
                     let native: Vec<_> = inputs[0].iter().zip(&inputs[1]).map(|(top, bottom)|
                         expected(form, straight(*top), top[3] * f64::from(OPACITY), *bottom, mode, depth.is_float(), weights, space)).collect();
                     let native_low: Vec<_> = native.iter().map(|range| range[0]).collect();
                     let native_high: Vec<_> = native.iter().map(|range| range[1]).collect();
                     for settled in [false, true] {
-                        let actual = live_at(&mut r, &document.layers, level, document.blend_space, settled);
+                        let actual = live_at(&mut r, document.scene(), level, document.composition().blend, settled);
                         assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
                         for (i, actual) in actual.iter().enumerate() {
                             let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);
@@ -473,8 +481,11 @@ fn brush_blend_modes_use_the_layer_formulas() {
     ] {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth })
             .expect("physical GPU required");
-        let layer = Layer::paint(LayerId(1), "Paint");
         let extent = [128, 128];
+        let mut artwork = Artwork::new(extent).unwrap();
+        artwork.compositions.get_mut(artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
+        let (_, target) = crate::test_support::add_paint(&mut artwork, "Paint", extent);
+        let document = Document::from_artwork(artwork).unwrap();
         let center = 64 * 128 + 64;
         let read = |r: &mut WgpuRasterizer| -> Rgba {
             let p = crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r));
@@ -491,11 +502,10 @@ fn brush_blend_modes_use_the_layer_formulas() {
             layer_core::BrushBlendMode::Overlay,
         ] {
             let frame = |r: &mut WgpuRasterizer, color: [f32; 4], blend, reset| {
-                let mut batch = crate::layer_tests::batch(1);
+                let mut batch = crate::layer_tests::batch(target);
                 batch.style.rendering.blend_mode = blend;
                 let dabs = [crate::layer_tests::dab(color)];
-                let layers = [layer.clone()];
-                r.submit(FramePacket { dabs: &dabs, dab_batches: &[batch], reset_layers: reset, ..packet(&layers, extent) })
+                r.submit(FramePacket { dabs: &dabs, dab_batches: &[batch], reset_layers: reset, ..packet(document.scene(), extent) })
                     .unwrap();
             };
             frame(&mut r, backdrop, layer_core::BrushBlendMode::Normal, true);

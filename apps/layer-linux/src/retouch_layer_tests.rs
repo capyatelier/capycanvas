@@ -24,9 +24,9 @@ fn composite(w: &Workspace, [x, y]: [f32; 2]) -> [u8; 4] {
     image.bytes[y * image.stride as usize + x * 4..][..4].try_into().unwrap()
 }
 
-fn active(w: &Workspace) -> layer_core::Layer {
+fn active(w: &Workspace) -> layer_core::Occurrence {
     let doc = document(w);
-    doc.layer(doc.active_layer).unwrap().clone()
+    doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().clone()
 }
 
 /// Run `command` from the menu `path` with the mouse, or dispatch it where
@@ -71,12 +71,12 @@ fn snapshots(w: &Rc<Workspace>, name: &str) {
 fn retouch_layers_journey(id: &str, device: &str) {
     let (_app, w, mut input) = start(id);
     run(&w, &mut input, device, CommandId::BlendPerceptual, &["Edit", "Blending", "Perceptual Blending"]);
-    until(|| document(&w).blend_space == layer_core::BlendSpace::Perceptual, "the drawing blends perceptually");
+    until(|| document(&w).composition().blend == layer_core::BlendSpace::Perceptual, "the drawing blends perceptually");
     fill(&w, [0.25, 0.35, 0.3, 1.], [0.15, 0.15, 0.85, 0.85]);
     fill(&w, [0.8, 0.7, 0.3, 1.], [0.35, 0.4, 0.5, 0.6]);
-    let photo = document(&w).active_layer;
+    let photo = document(&w).working.occurrence.unwrap();
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     let points = [[0.3, 0.3], [0.6, 0.45], [0.7, 0.7], [0.502, 0.5], [0.498, 0.5]].map(|[x, y]| [width * x, height * y]);
     pump(300);
     let original = points.map(|p| shown(&w, p));
@@ -85,7 +85,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
     until(|| &*active(&w).name == "Dodge & Burn", "a Dodge & Burn layer is added and active");
     until(|| !ui_session(&w).engine().has_pending_document_edits(), "the gray fill is captured");
     pump(300);
-    assert_eq!(active(&w).properties.blend, layer_core::LayerBlend::SoftLight);
+    assert_eq!(active(&w).blend, layer_core::LayerBlend::SoftLight);
     for (p, before) in points.iter().zip(original) {
         assert!(near(shown(&w, *p), before, 1), "the neutral layer leaves {p:?} unchanged");
     }
@@ -100,7 +100,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
     assert!(brightness(shown(&w, burn)) + 6 < brightness(dark), "black burns: {:?} -> {:?}", dark, shown(&w, burn));
     snapshots(&w, &format!("dodge-burn-{device}"));
 
-    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: photo.0, mask: false } });
+    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(photo), mask: false } });
     let painted = points.map(|p| shown(&w, p));
     let composed = points.map(|p| composite(&w, p));
     run(&w, &mut input, device, CommandId::FrequencySeparation, &["Filter", "Frequency Separation…"]);
@@ -120,7 +120,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
     until(|| state(&w).layer_tools.frequency_separation.as_ref().is_some_and(|v| v.radius == 12.), "the typed radius");
     let edge = points[3];
     until(|| !near(shown(&w, edge), painted[3], 2), "the canvas previews the blur at the photo's edge");
-    assert_eq!(document(&w).layers.len(), 3, "the preview adds no layer");
+    assert_eq!(document(&w).scene().order().len(), 3, "the preview adds no layer");
     snapshots(&w, &format!("frequency-separation-{device}"));
     if device == "pen" {
         w.dispatch(UiAction::FrequencySeparation { action: FrequencySeparationAction::Apply });
@@ -133,8 +133,8 @@ fn retouch_layers_journey(id: &str, device: &str) {
     until(|| !ui_session(&w).engine().has_pending_document_edits(), "Low and High are baked");
     pump(300);
     let doc = document(&w);
-    assert_eq!(doc.layers.iter().map(|l| l.name.to_string()).collect::<Vec<_>>()[1..4], ["Frequency Separation", "High", "Low"]);
-    assert!(!doc.layer(photo).unwrap().visible, "the photo stays below, hidden");
+    assert_eq!(doc.scene().order().iter().map(|h| doc.scene().occurrence(*h).unwrap().name.to_string()).collect::<Vec<_>>()[1..4], ["Frequency Separation", "High", "Low"]);
+    assert!(!doc.scene().occurrence(photo).unwrap().visible, "the photo stays below, hidden");
     for (p, before) in points.iter().zip(composed) {
         assert!(near(composite(&w, *p), before, 2), "Low and High recombine at {p:?}: {:?} {before:?}", composite(&w, *p));
     }
@@ -147,7 +147,7 @@ fn retouch_layers_journey(id: &str, device: &str) {
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
     until(|| near(composite(&w, mark), composed[1], 2), "one undo removes the stroke");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layers.len() == 3 && document(&w).layer(photo).unwrap().visible, "one undo removes Frequency Separation");
+    until(|| document(&w).scene().order().len() == 3 && document(&w).scene().occurrence(photo).unwrap().visible, "one undo removes Frequency Separation");
     finish(&w, &input);
 }
 
@@ -170,22 +170,22 @@ fn native_dodge_burn_and_frequency_separation_with_the_pen() {
 fn native_retouch_layers_timing() {
     let app = native_test_app("art.capycanvas.RetouchLayersTiming");
     let mut project = native_navigation::photo([6000, 4000]);
-    project.document.blend_space = layer_core::BlendSpace::Perceptual;
+    composition_mut(&mut project).blend = layer_core::BlendSpace::Perceptual;
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
     pump(1500);
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
-    let photo = document(&w).layers.iter().find(|l| l.source.is_some()).unwrap().id;
-    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: photo.0, mask: false } });
+    let photo = { let doc = document(&w); doc.scene().order().iter().copied().find(|h| doc.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap() };
+    w.dispatch(UiAction::Layer { action: LayerAction::Select { id: layer_ui::occurrence_token(photo), mask: false } });
     let idle = |w: &Workspace| {
         let gpu = w.gpu.borrow();
         let engine = gpu.as_ref().unwrap().session.engine();
         !engine.has_pending_document_edits()
-            && engine.document().layers.iter().all(|l| l.raster.try_data().is_some_and(|d| d.is_ok_and(|d| d.host_backed())))
+            && engine.document().scene().targets().filter_map(|t| engine.document().target_raster(t)).all(|r| r.try_data().is_some_and(|d| d.is_ok_and(|d| d.host_backed())))
     };
     until(|| idle(&w), "the photo is ready");
-    let count = document(&w).layers.len();
+    let count = document(&w).scene().order().len();
     let separate = |action| w.dispatch(UiAction::FrequencySeparation { action });
     let steps: [(&str, usize, &dyn Fn(), UiAction); 2] = [
         ("New Dodge & Burn Layer", 1, &|| {}, UiAction::Invoke { command: CommandId::NewDodgeBurnLayer }),
@@ -212,7 +212,7 @@ fn native_retouch_layers_timing() {
         let start = Instant::now();
         w.dispatch(action);
         let dispatch = start.elapsed();
-        assert_eq!(document(&w).layers.len(), count + added, "{name} adds its layers");
+        assert_eq!(document(&w).scene().order().len(), count + added, "{name} adds its layers");
         until(|| idle(&w), "the new layers are captured");
         let captured = start.elapsed();
         tick.remove();
@@ -223,7 +223,7 @@ fn native_retouch_layers_timing() {
             stall.get().as_secs_f64() * 1e3,
         );
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-        until(|| document(&w).layers.len() == count, "undo removes the layers");
+        until(|| document(&w).scene().order().len() == count, "undo removes the layers");
         until(|| idle(&w), "the photo is ready again");
     }
     w.window.close();

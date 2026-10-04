@@ -1,14 +1,13 @@
 //! Actual camera files through native DND, transform handles, painting and save.
 //! Frame timings measure the GTK native renderer on an isolated compositor.
 use super::*;
-use layer_core::{Affine, Layer, Project};
+use layer_core::{Affine, Document};
 use std::sync::{Arc, Mutex};
 
-fn layer(w: &Workspace) -> Layer {
-    let gpu = w.gpu.borrow();
-    let doc = gpu.as_ref().unwrap().session.engine().document();
-    doc.layer(doc.active_layer).unwrap().clone()
+fn layer(w: &Workspace) -> Document {
+    ui_session(w).engine().document().clone()
 }
+
 fn window_point(w: &Workspace, document: Point) -> [f32; 2] {
     let p = Affine(state(w).camera.document_to_surface()).map(document);
     let area = w.area.compute_bounds(&w.window).unwrap();
@@ -171,13 +170,13 @@ fn native_large_photo_placement_workflow() {
         finish(&w);
         ready(&w);
         let photo = layer(&w);
-        let source = photo.source.as_ref().expect("retained background photo");
+        let source = active_paint(&photo).original.as_ref().expect("retained background photo");
         assert!(u64::from(source.extent[0]) * u64::from(source.extent[1]) >= 24_000_000);
         invoke(&w, CommandId::ApplyTransform);
         ready(&w);
         photo
     });
-    let initial_layers = ui_session(&w).engine().document().layers.clone();
+    let initial_layers = ui_session(&w).engine().document().clone();
     let stats = ui_session(&w)
         .engine()
         .backend()
@@ -188,9 +187,9 @@ fn native_large_photo_placement_workflow() {
     if let Some(background) = &background {
         report["background_photo"] = json!({
             "file": std::env::var_os("LAYER_PLACEMENT_BACKGROUND_PHOTO"),
-            "extent": background.source.as_ref().unwrap().extent,
-            "source_resident_bytes": background.source.as_ref().unwrap().resident_bytes(),
-            "placement": background.properties.placement.as_affine().unwrap().0,
+            "extent": active_paint(&background).original.as_ref().unwrap().extent,
+            "source_resident_bytes": active_paint(&background).original.as_ref().unwrap().resident_bytes(),
+            "placement": active_occurrence(&background).placement.as_affine().unwrap().0,
         });
     }
     let mut driver = FileDrag::start(&w);
@@ -214,11 +213,11 @@ fn native_large_photo_placement_workflow() {
     finish(&w);
     ready(&w);
     let photo = layer(&w);
-    let source = photo.source.clone().expect("retained camera photo");
+    let source = active_paint(&photo).original.clone().expect("retained camera photo");
     assert!(source.extent[0] as u64 * source.extent[1] as u64 >= 24_000_000);
-    assert!(photo.raster.is_empty());
+    assert!(active_paint(&photo).raster.is_empty());
     let fit = (2000. / source.extent[0] as f32).min(1500. / source.extent[1] as f32);
-    assert!((photo.properties.placement.as_affine().unwrap().0[0] - fit).abs() < 1e-5);
+    assert!((active_occurrence(&photo).placement.as_affine().unwrap().0[0] - fit).abs() < 1e-5);
     until(
         || {
             let s = stats.lock().unwrap();
@@ -264,7 +263,7 @@ fn native_large_photo_placement_workflow() {
     );
     driver.stop_source();
     let thumbnail_started = Instant::now();
-    super::super::place_source::wait_layer_thumbnail(&w, photo.id.0);
+    super::super::place_source::wait_layer_thumbnail(&w, layer_ui::occurrence_token(photo.working.occurrence.unwrap()));
     report["visible_thumbnail_wait_ms"] = json!(thumbnail_started.elapsed().as_secs_f64() * 1000.);
     report["drop_to_visible_thumbnail_ms"] = json!((glib::monotonic_time() as u64 * 1000)
         .saturating_sub(drop_started_ns) as f64 / 1e6);
@@ -279,7 +278,7 @@ fn native_large_photo_placement_workflow() {
             id: "transform_width".into(), value: fit * factor,
         });
         ready(&w);
-        let before = layer(&w).properties.placement;
+        let before = active_occurrence(&layer(&w)).placement.clone();
         assert!((before.as_affine().unwrap().0[0] - fit * factor).abs() < 1e-5);
         report["oversized_factor"] = json!(factor);
         report["measured_transform_kind"] = json!("translation");
@@ -301,7 +300,7 @@ fn native_large_photo_placement_workflow() {
             .map(|f| {
                 window_point(
                     &w,
-                    photo.properties.placement.map(Point {
+                    active_occurrence(&photo).placement.map(Point {
                         x: f[0] * source.extent[0] as f32,
                         y: f[1] * source.extent[1] as f32,
                     }).unwrap(),
@@ -311,7 +310,7 @@ fn native_large_photo_placement_workflow() {
             .expect("uncovered scale handle");
         let center = window_point(
             &w,
-            photo.properties.placement.map(Point {
+            active_occurrence(&photo).placement.map(Point {
                 x: source.extent[0] as f32 * 0.5,
                 y: source.extent[1] as f32 * 0.5,
             }).unwrap(),
@@ -331,35 +330,29 @@ fn native_large_photo_placement_workflow() {
     report["scale_motion"] = measured_events(&mut driver, &w, &stats, json!(events));
     let posed = layer(&w);
     assert_ne!(
-        posed.properties.placement, photo.properties.placement,
+        active_occurrence(&posed).placement, active_occurrence(&photo).placement,
         "native handle must change geometry"
     );
-    assert_eq!(posed.source.as_deref(), Some(source.as_ref()));
-    assert!(posed.raster.is_empty());
+    assert_source_samples(active_paint(&posed).original.as_deref().unwrap(), source.as_ref());
+    assert!(active_paint(&posed).raster.is_empty());
     if oversized.is_some() {
-        assert_eq!(posed.properties.placement.as_affine().unwrap().0[..4],
+        assert_eq!(active_occurrence(&posed).placement.as_affine().unwrap().0[..4],
             serde_json::from_value::<[f32; 6]>(report["oversized_placement"].clone()).unwrap()[..4]);
-        assert_ne!(posed.properties.placement.as_affine().unwrap().0[4..],
+        assert_ne!(active_occurrence(&posed).placement.as_affine().unwrap().0[4..],
             serde_json::from_value::<[f32; 6]>(report["oversized_placement"].clone()).unwrap()[4..],
             "native drag must translate the clipped photo");
     }
     super::super::new_photo::capture_ui(&w, &output, "active-placement.png");
     driver.click_placement(&w, "canvas-bar-ApplyTransform");
     ready(&w);
-    assert_eq!(layer(&w).properties.placement, posed.properties.placement);
-    assert!(layer(&w).raster.is_empty());
+    assert_eq!(active_occurrence(&layer(&w)).placement, active_occurrence(&posed).placement);
+    assert!(active_paint(&layer(&w)).raster.is_empty());
     invoke(&w, CommandId::Undo);
     ready(&w);
-    assert_eq!(
-        ui_session(&w)
-            .engine()
-            .document()
-            .layers,
-        initial_layers
-    );
+    assert_live_artwork_eq(ui_session(&w).engine().document(), &initial_layers);
     invoke(&w, CommandId::Redo);
     ready(&w);
-    assert_eq!(layer(&w).source.as_deref(), Some(source.as_ref()));
+    assert_source_samples(active_paint(&layer(&w)).original.as_deref().unwrap(), source.as_ref());
 
     // Ordinary painting on the fitted layer must allocate only edited local
     // backing; the immutable source and pose survive the stroke and its undo.
@@ -383,17 +376,17 @@ fn native_large_photo_placement_workflow() {
     report["paint_motion"] = measured_events(&mut driver, &w, &stats, json!(events));
     let painted = layer(&w);
     assert!(
-        !painted.raster.is_empty(),
+        !active_paint(&painted).raster.is_empty(),
         "native stroke must create paint backing"
     );
-    assert_eq!(painted.source.as_deref(), Some(source.as_ref()));
-    assert_eq!(painted.properties.placement, posed.properties.placement);
+    assert_source_samples(active_paint(&painted).original.as_deref().unwrap(), source.as_ref());
+    assert_eq!(active_occurrence(&painted).placement, active_occurrence(&posed).placement);
     invoke(&w, CommandId::Undo);
     ready(&w);
-    assert!(layer(&w).raster.is_empty());
+    assert!(active_paint(&layer(&w)).raster.is_empty());
     invoke(&w, CommandId::Redo);
     ready(&w);
-    assert!(!layer(&w).raster.is_empty());
+    assert!(!active_paint(&layer(&w)).raster.is_empty());
 
     // Optional large-brush stress uses real native pointer strokes. Recording
     // gather counters proves whether it exercised the distant-source path.
@@ -441,7 +434,7 @@ fn native_large_photo_placement_workflow() {
             result["source_sample_passes"] = json!(now[2].saturating_sub(counters[2]));
             result["source_sample_field_bytes"] = json!(now[3]);
             result["brush_diameter"] = json!(diameter);
-            result["placement"] = json!(before.properties.placement.as_affine().unwrap().0);
+            result["placement"] = json!(active_occurrence(&before).placement.as_affine().unwrap().0);
             result["native_size_comparison"] = json!(native_size);
             result["status"] = json!(w.status.text().as_str());
             result["host_error"] = json!(state(&w).host_error);
@@ -453,14 +446,14 @@ fn native_large_photo_placement_workflow() {
                 assert!(now[1] > counters[1], "{label} must exercise distant source gathering: {}", w.status.text());
             }
             let after = layer(&w);
-            assert_ne!(after.raster, before.raster, "{label} must create an edit");
-            assert_eq!(after.source, before.source);
-            assert_eq!(after.properties.placement, before.properties.placement);
+            assert_ne!(active_paint(&after).raster, active_paint(&before).raster, "{label} must create an edit");
+            assert_eq!(active_paint(&after).original, active_paint(&before).original);
+            assert_eq!(active_occurrence(&after).placement, active_occurrence(&before).placement);
             super::super::new_photo::capture_ui(&w, &output, &format!("{label}.png"));
             invoke(&w, CommandId::Undo); ready(&w);
-            assert_eq!(layer(&w).raster, before.raster);
+            assert_eq!(active_paint(&layer(&w)).raster, active_paint(&before).raster);
             invoke(&w, CommandId::Redo); ready(&w);
-            assert_eq!(layer(&w).raster, after.raster);
+            assert_eq!(active_paint(&layer(&w)).raster, active_paint(&after).raster);
             invoke(&w, CommandId::Undo); ready(&w);
             assert_eq!(layer(&w), before);
             report[format!("{label}_motion")] = result;
@@ -468,7 +461,7 @@ fn native_large_photo_placement_workflow() {
         if native_size {
             invoke(&w, CommandId::Undo);
             ready(&w);
-            assert_eq!(layer(&w), painted, "restore fitted artwork after the native-size comparison");
+            assert_live_artwork_eq(&layer(&w), &painted);
         }
     }
 
@@ -483,7 +476,7 @@ fn native_large_photo_placement_workflow() {
     events.push(json!({"button": 274, "down": false}));
     report["navigation_motion"] = measured_events(&mut driver, &w, &stats, json!(events));
     assert_ne!(state(&w).camera.translation, camera_before.translation);
-    assert_eq!(layer(&w).properties.placement, posed.properties.placement);
+    assert_eq!(active_occurrence(&layer(&w)).placement, active_occurrence(&posed).placement);
 
     let master = output.join("Photo master.capy");
     // Use the production GTK Save dialog and worker; the original JPEG remains
@@ -500,22 +493,25 @@ fn native_large_photo_placement_workflow() {
     report["save_ms"] = json!(saved_at.elapsed().as_secs_f64() * 1000.);
     assert!(!state(&w).document_file.modified);
     let reopened =
-        Project::read(std::fs::File::open(&master).unwrap(), Default::default()).unwrap();
+        open_native_document(std::fs::File::open(&master).unwrap());
+    let mut saved_artwork = painted.clone();
+    saved_artwork.artwork.outputs.get_mut(saved_artwork.artwork.default_output).unwrap().context = reopened.output().context.clone();
+    assert_eq!(artwork_manifest(&reopened), artwork_manifest(&saved_artwork));
     if let Some(background) = &background {
-        assert_eq!(
-            reopened.document.layer(background.id),
-            Some(background),
-            "the other full-resolution photo and its placement survive editing and save/reopen"
-        );
+        let h = background.working.occurrence.unwrap();
+        let portable = background.artwork.occurrences.id(h).unwrap();
+        let restored = reopened.artwork.occurrences.resolve(portable).unwrap();
+        assert_eq!(reopened.scene().occurrence(restored), background.scene().occurrence(h), "the retained background photo remains unchanged");
+        assert_eq!(reopened.scene().paint_source(restored), background.scene().paint_source(h));
     }
-    let restored_layer = reopened.document.layer(painted.id).unwrap();
-    assert_eq!(restored_layer.source.as_deref(), Some(source.as_ref()));
-    assert_eq!(
-        restored_layer.properties.placement,
-        posed.properties.placement
-    );
-    assert!(!restored_layer.raster.is_empty());
-    let restored_raster = restored_layer.raster.clone();
+    let portable = painted.artwork.occurrences.id(painted.working.occurrence.unwrap()).unwrap();
+    let h = reopened.artwork.occurrences.resolve(portable).unwrap();
+    let restored_layer = reopened.scene().occurrence(h).unwrap();
+    let restored_source = reopened.scene().paint_source(h).unwrap();
+    assert_source_samples(restored_source.original.as_deref().unwrap(), source.as_ref());
+    assert_eq!(restored_layer.placement, active_occurrence(&posed).placement);
+    assert!(!restored_source.raster.is_empty());
+    let restored_raster = restored_source.raster.clone();
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 9861))
         .unwrap();
@@ -538,15 +534,15 @@ fn native_large_photo_placement_workflow() {
     driver.click_placement(&restored, "canvas-bar-PlacementOriginalSize");
     let native = layer(&restored);
     assert!(
-        (native.properties.placement.as_affine().unwrap().0[0].hypot(native.properties.placement.as_affine().unwrap().0[1]) - 1.).abs()
+        (active_occurrence(&native).placement.as_affine().unwrap().0[0].hypot(active_occurrence(&native).placement.as_affine().unwrap().0[1]) - 1.).abs()
             < 1e-5
     );
-    assert_eq!(native.source.as_deref(), Some(source.as_ref()));
-    assert_eq!(native.raster, restored_raster);
+    assert_source_samples(active_paint(&native).original.as_deref().unwrap(), source.as_ref());
+    assert_eq!(active_paint(&native).raster, restored_raster);
     driver.click_placement(&restored, "canvas-bar-ApplyTransform");
     ready(&restored);
     let original_thumbnail_at = Instant::now();
-    super::super::place_source::wait_layer_thumbnail(&restored, native.id.0);
+    super::super::place_source::wait_layer_thumbnail(&restored, layer_ui::occurrence_token(native.working.occurrence.unwrap()));
     report["original_size_thumbnail_wait_ms"] = json!(original_thumbnail_at.elapsed().as_secs_f64() * 1000.);
     super::super::new_photo::capture_ui(&restored, &output, "original-size.png");
 
@@ -563,8 +559,8 @@ fn native_large_photo_placement_workflow() {
     finish(&restored);
     ready(&restored);
     report["menu_import_ready_ms"] = json!(import_at.elapsed().as_secs_f64() * 1000.);
-    assert_eq!(layer(&restored).source.as_deref(), Some(source.as_ref()));
-    assert!(layer(&restored).raster.is_empty());
+    assert_source_samples(active_paint(&layer(&restored)).original.as_deref().unwrap(), source.as_ref());
+    assert!(active_paint(&layer(&restored)).raster.is_empty());
     driver.click_placement(&restored, "canvas-bar-CancelTransform");
     ready(&restored);
     assert_eq!(layer(&restored), before_import);
@@ -588,15 +584,12 @@ fn native_large_photo_placement_workflow() {
         .expect("Open publishes a photo document");
     assert!(location.is_none());
     assert_eq!(
-        [project.document.width, project.document.height],
+        project.composition().size,
         source.extent
     );
+    assert_source_samples(paint_at(&project, 0).original.as_deref().unwrap(), source.as_ref());
     assert_eq!(
-        project.document.layers[0].source.as_deref(),
-        Some(source.as_ref())
-    );
-    assert_eq!(
-        project.document.layers[0].properties.placement,
+        occurrence_at(&project, 0).placement,
         layer_core::LayerPlacement::IDENTITY
     );
     restored.window.destroy();
@@ -608,14 +601,11 @@ fn native_large_photo_placement_workflow() {
     ready(&photo_document);
     report["open_renderer_ready_ms"] = json!(open_render_at.elapsed().as_secs_f64() * 1000.);
     let thumbnail_started = Instant::now();
-    super::super::place_source::wait_layer_thumbnail(&photo_document, layer(&photo_document).id.0);
+    super::super::place_source::wait_layer_thumbnail(&photo_document, layer_ui::occurrence_token(layer(&photo_document).working.occurrence.unwrap()));
     report["open_thumbnail_wait_ms"] = json!(thumbnail_started.elapsed().as_secs_f64() * 1000.);
     super::super::new_photo::capture_ui(&photo_document, &output, "opened-photo.png");
-    assert!(layer(&photo_document).raster.is_empty());
-    assert_eq!(
-        layer(&photo_document).source.as_deref(),
-        Some(source.as_ref())
-    );
+    assert!(active_paint(&layer(&photo_document)).raster.is_empty());
+    assert_source_samples(active_paint(&layer(&photo_document)).original.as_deref().unwrap(), source.as_ref());
     report["final_memory"] = json!(process_memory());
     publish(&output.join("workflow.json"), &report);
     println!(

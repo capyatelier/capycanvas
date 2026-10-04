@@ -354,8 +354,8 @@ impl RetouchSources {
         let pages: Vec<[u32; 2]> = r
             .paint_layers
             .iter()
-            .find(|l| l.id == batch.layer_id)
-            .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?
+            .find(|l| l.id == batch.target)
+            .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?
             .coverage_pages
             .iter()
             .filter(|page| page.owner == Some(batch.stroke_id))
@@ -373,7 +373,7 @@ impl RetouchSources {
         let pyramid = Pyramid::new(&pages, device.limits().max_storage_buffer_binding_size);
         let finest = pyramid.levels[0].cells();
         let mut layout = pyramid.words();
-        let extent = r.target_extent(batch.layer_id);
+        let extent = r.target_extent(batch.target);
         let damage: Vec<PixelRect> = self
             .stroke
             .as_ref()
@@ -593,10 +593,10 @@ struct Job {
 }
 impl Job {
     fn gather(&self, i: usize, scale: [f32; 2], offset: [f32; 2]) -> Gather {
-        Gather { region: self.windows[i], scale, offset, stroke: Some((self.batch.stroke_id, self.batch.layer_id, self.batch.style.retouch.clone().unwrap())) }
+        Gather { region: self.windows[i], scale, offset, stroke: Some((self.batch.stroke_id, self.batch.target, self.batch.style.retouch.clone().unwrap())) }
     }
     fn coverage(&self, r: &WgpuRasterizer, i: usize) -> wgpu::TextureView {
-        r.paint_layers.iter().find(|l| l.id == self.batch.layer_id)
+        r.paint_layers.iter().find(|l| l.id == self.batch.target)
             .and_then(|l| l.coverage_pages.iter().find(|p| p.coordinate == self.pages[i] && p.owner == Some(self.batch.stroke_id)))
             .map_or_else(|| r.empty_scalar_view.clone(), |p| p.active().view.clone())
     }
@@ -691,7 +691,7 @@ impl Job {
                 pass.dispatch_workgroups(groups, 1, 1);
             }
             Work::Apply(pages) => {
-                let layer = r.paint_layers.iter().position(|l| l.id == self.batch.layer_id).ok_or(GpuRasterError::MissingPaintLayer(self.batch.layer_id))?;
+                let layer = r.paint_layers.iter().position(|l| l.id == self.batch.target).ok_or(GpuRasterError::MissingPaintLayer(self.batch.target))?;
                 let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor { label: Some("heal apply"), timestamp_writes: None });
                 pass.set_pipeline(&k.apply);
                 for i in pages.filter(|i| !self.windows[*i].is_empty()) {

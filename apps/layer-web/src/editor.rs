@@ -82,14 +82,14 @@ impl WebApp {
     /// Small cached UI raster only; the painting canvas remains on WebGPU.
     pub fn color_field_pixels(&self, side: u32) -> Result<Vec<u8>, JsValue> {
         color_field(&self.session.state().preview_colors(), side,
-            (self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition()))
+            (self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().composition().color.depth.is_float()).then(|| self.session.effective_sdr_rendition()))
     }
     pub fn color_preview(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.color_preview())
     }
     pub fn color_field_request(&self, side: u32) -> Result<String, JsValue> {
         serde_json::to_string(&json!({"side":side,"colors":self.session.state().preview_colors(),
-            "rendition":(self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().color.depth.is_float()).then(|| self.session.effective_sdr_rendition())})).map_err(js)
+            "rendition":(self.session.state().layer_tools.mask_editing.is_none() && self.session.engine().document().composition().color.depth.is_float()).then(|| self.session.effective_sdr_rendition())})).map_err(js)
     }
 
     pub fn workspace_persistence(&self) -> Result<JsValue, JsValue> {
@@ -105,13 +105,13 @@ impl WebApp {
         let document = self.session.engine().document();
         serialize(&layer_ui::NavigatorGeometry::new(
             &self.session.state().camera,
-            [document.width, document.height],
+            document.composition().size,
             [width, height],
         ))
     }
     pub fn navigator_aspect(&self) -> f32 {
         let document = self.session.engine().document();
-        layer_ui::NavigatorGeometry::overview_aspect([document.width, document.height])
+        layer_ui::NavigatorGeometry::overview_aspect(document.composition().size)
     }
     pub fn navigator_surface(&mut self, id: u32, canvas: web_sys::HtmlCanvasElement) {
         self.overviews.insert(
@@ -248,7 +248,7 @@ impl WebApp {
         let fg = state.palette.text.linear();
         let bg = state.palette.panel.linear();
         let document = self.session.engine().document();
-        let extent = [document.width, document.height];
+        let extent = document.composition().size;
         let (Some(gpu), Some(window)) = (self.session.engine().backend().0.as_deref(), self.surface.as_ref()) else {
             return Ok(false);
         };

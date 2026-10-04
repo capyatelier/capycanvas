@@ -1,22 +1,18 @@
 use super::new_photo::{invoke, ready};
 use super::*;
 use layer_core::{
-    Project,
+    Document,
     color::{source::*, *},
 };
 
-fn fixture() -> Project {
+fn fixture() -> Document {
     let mut p = new_drawing(64, 16, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    p.document.color = DocumentColor {
+    composition_mut(&mut p).color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
-    p.document
-        .layers
-        .iter_mut()
-        .find(|l| l.id == layer_core::LayerId(2))
-        .unwrap()
-        .visible = false;
+    let paper = *p.scene().order().last().unwrap();
+    p.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     let mut source = SourceBuilder::new(
         [64, 16],
         SourceInterpretation {
@@ -40,13 +36,18 @@ fn fixture() -> Project {
     for _ in 0..16 {
         source.push_row(&row).unwrap();
     }
-    p.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
-    p.document.reference_layers.insert(p.document.layers[0].id);
-    let mut mask =
-        layer_core::LayerMask::reveal_all(p.document.allocate_layer_id(), Point { x: 0., y: 0. });
-    mask.default_coverage = 0.5;
-    mask.show_area = true;
-    p.document.layers[0].mask = Some(mask);
+    paint_at_mut(&mut p, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
+    let owner = p.scene().order()[0];
+    let coverage = p.artwork.coverage.next_handle();
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, [64, 16], Point::default());
+    mask.source.default_coverage = 0.5;
+    p.artwork.coverage.insert(layer_core::authored::PortableId::random(), mask.source).unwrap();
+    let occurrence = p.artwork.occurrences.get_mut(owner).unwrap();
+    occurrence.reference = true;
+    occurrence.mask = Some(mask.use_);
+    let working = p.working.clone();
+    p = layer_core::Document::from_artwork(p.artwork).unwrap();
+    p.working = working;
     p
 }
 fn completed(w: &Workspace) -> std::sync::Arc<layer_core::color::histogram::Histogram> {
@@ -151,7 +152,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         let hit = w.window.pick(a[0] as f64, a[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
         assert!(hit == w.area || hit.is_ancestor(&w.area), "selection point hits canvas, got {}", hit.widget_name());
         input.perform(serde_json::json!([{"point":a,"down":true},{"point":b},{"down":false}]));
-        until(|| super::photo_edit::document(&w).selection.is_some(), "native rectangle selection");
+        until(|| super::photo_edit::document(&w).working.selection.is_some(), "native rectangle selection");
         choose(&w, &mut input, "histogram-source", 3);
         let selected = completed(&w);
         assert!(selected.pixels > 0 && selected.pixels < initial.pixels);
@@ -232,7 +233,7 @@ fn tonal_completed(w: &Workspace) -> std::sync::Arc<layer_core::color::histogram
     if let Err(error) = result {
         let current = state(w);
         let document = super::photo_edit::document(w);
-        let effect = document.layer(document.active_layer).and_then(|layer| layer.effect.as_ref());
+        let effect = document.working.occurrence.and_then(|h| document.scene().effect(h));
         eprintln!("embedded statistics timeout: view {:?}, page {:?}, domain {:?}, host_error {:?}, notice {:?}", current.tonal_histogram, current.layer_properties.page, effect.and_then(|effect| effect.value("domain")), current.host_error, current.notice);
         std::panic::resume_unwind(error);
     }
@@ -246,7 +247,7 @@ fn native_curves_histogram_preserves_numeric_focus() {
     use layer_ui::EffectAction;
     use layer_core::color::histogram::HistogramDomain;
     let app = native_test_app("art.capycanvas.CurvesHistogram");
-    let mut project = fixture();project.document.color.depth = SampleDepth::F32;project.document.blend_space = layer_core::BlendSpace::Linear;
+    let mut project = fixture();composition_mut(&mut project).color.depth = SampleDepth::F32;composition_mut(&mut project).blend = layer_core::BlendSpace::Linear;
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();w.window.present();ready(&w);
     let width = w.window.width();assert!(matches!(width, 640 | 1100));
@@ -346,7 +347,7 @@ pub(super) fn photo_workspace(app: &NativeTestApp) -> Rc<Workspace> {
     let photo=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/photo-editing-color/g2-inputs/portrait.png");
     dialog.set_file(&gtk::gio::File::for_path(photo)).unwrap();pump(200);dialog.response(gtk::ResponseType::Accept);
     super::new_photo::finish(&w);ready(&w);
-    assert!(super::photo_edit::document(&w).layers.iter().any(|layer|layer.source.is_some()));w
+    assert!(super::photo_edit::document(&w).artwork.paint.iter().any(|(_,_,paint)|paint.original.is_some()));w
 }
 
 #[test]
@@ -378,8 +379,8 @@ fn native_compact_graphs_photo_review() {
                 assert_eq!(widgets(menu.upcast_ref()).filter(|widget|widget.is_mapped() && widget.widget_name()=="property-picker").count(),3);input.key(0xff1b);
             }
             crate::snapshot(&w).save_to_png(output.join(format!("photo-{effect}-{width}-{theme:?}.png"))).unwrap();
-            let edited=super::photo_edit::document(&w);for layer in &original.layers {assert_eq!(edited.layer(layer.id).unwrap().source,layer.source);assert_eq!(edited.layer(layer.id).unwrap().raster,layer.raster);}
-            w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);assert_eq!(super::photo_edit::document(&w).layers,original.layers);
+            let edited=super::photo_edit::document(&w);for (_,id,paint) in original.artwork.paint.iter() {let current=edited.artwork.paint.get(edited.artwork.paint.resolve(id).unwrap()).unwrap();assert_eq!(current.original,paint.original);assert_eq!(current.raster,paint.raster);}
+            w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);assert_live_artwork_eq(&super::photo_edit::document(&w),&original);
         }
     }
     input.finish();w.window.destroy();pump(100);
@@ -461,9 +462,9 @@ fn native_histogram_live_language() {
     let app = NativeTestApp(application);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
     let mut project = fixture();
-    project.document.color.depth = SampleDepth::F32;
-    project.document.blend_space = layer_core::BlendSpace::Linear;
-    std::sync::Arc::make_mut(project.document.layers[0].source.as_mut().unwrap()).interpretation.profile =
+    composition_mut(&mut project).color.depth = SampleDepth::F32;
+    composition_mut(&mut project).blend = layer_core::BlendSpace::Linear;
+    std::sync::Arc::make_mut(paint_at_mut(&mut project,0).original.as_mut().unwrap()).interpretation.profile =
         ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into());
     crate::open_workspace(&app, &active, Some((project, None)), None);
     until(|| !active.borrow().is_empty(), "prepared histogram language window");
@@ -518,7 +519,7 @@ fn native_histogram_live_language() {
         until(|| w.localization().language()==layer_ui::UiLanguage::Turkish,"histogram native choice publication boundary");
         assert_eq!(channel.model().unwrap(),models[1]);
         invoke(&w, CommandId::SelectAll);ready(&w);
-        assert!(ui_session(&w).engine().document().selection.is_some());
+        assert!(ui_session(&w).engine().document().working.selection.is_some());
         for selected_source in 0..=3 {
             choose(&w, &mut input, "histogram-source", selected_source);
             choose(&w, &mut input, "histogram-channel", 4);
@@ -562,7 +563,7 @@ fn native_histogram_live_language() {
             }
         }
         invoke(&w,CommandId::Undo);ready(&w);
-        assert!(ui_session(&w).engine().document().selection.is_none());
+        assert!(ui_session(&w).engine().document().working.selection.is_none());
     }
     w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});
     w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Properties,visible:true});

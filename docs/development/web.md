@@ -39,8 +39,19 @@ DOM; `gpu.js` writes the help shown when WebGPU cannot start;
 `documents.js` connects project requests to browser file access and downloads;
 `workspace-worker.js` and `workspace-store.js` keep the workspace in IndexedDB.
 Rust owns editor behavior; JavaScript owns browser events, controls and services.
-The session runs on the browser event loop, without a worker thread or shared
-memory.
+The session runs on the browser event loop without shared memory. File decoding,
+encoding and color work run in `raster-worker.js` through the shared
+`package::transfer` descriptor and bounded transferable payloads. The descriptor
+uses the final manifest adapters plus private runtime identity and verification
+receipts; Web has no second artwork schema. Main-thread adoption consumes verified
+owners without image decoding or decoded-content hashing. Package writes stream
+to private OPFS output jobs and return a Blob for picker/download publication;
+completion closes that job. Recovery uses the same writer and separate shared
+publication tokens. Unsupported files keep their original Blob and show shared
+package status, available outputs and an optional preview with Copy Original and
+Export Preview Image. Preview export refuses the original file handle. The
+manual-save worker retains its output job and storage lock until publication
+finishes and the host closes the job.
 
 Language changes use the running session's browser language tags and shared
 `LanguageTransition`. Preparation runs in short event-loop tasks and publication
@@ -125,7 +136,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Color | `--color-panel`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
-| Photo files and export | `--portable-photo`, `--export-metadata`, `--document-errors` |
+| Photo files, packages and export | `--portable-photo`, `--package-view`, `--export-metadata`, `--document-errors` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
 | Docking and drags | `--drag-pickup`, `--layout-drops`, `--column-stacks`, `--column-drops`, `--columns`, `--workspace-rendering`, `--drawer-drag`, `--drawer-style` |
 | Workspaces | `--workspace-manager`, `--workspace-switcher`, `--workspace-options`, `--workspace-options-refresh`, `--workspace-focus`, `--workspace-windows`, `--workspace-store` |
@@ -172,6 +183,13 @@ checks that a removed field cannot publish a deferred color-dialog result.
 `--pointwise-effects-smoke` reuses the journey at 1100 pixels wide in both themes,
 checking Colorize and Threshold compositor pixels, controls, focus and archive
 reopening without slider motion.
+
+`--package-view` exercises preserved packages with and without a verified preview
+in light and dark themes. It checks output names, preview pixels, exact original
+and PNG export bytes, original-file refusal, cancelled pickers, failed writes and
+retry. Cancelled or stale preparation must preserve the incumbent drawing, dirty
+state, tabs and undo history. The journey builds its packages from the current
+shared writer; it needs no external archive fixture.
 
 Setup that some journeys need:
 
@@ -220,6 +238,17 @@ LAYER_TEST_ARTIFACTS=artifacts/web-android \
   cache lifecycle.
 - Use `chrome://inspect/#devices` in desktop Chrome for interactive inspection.
   Desktop headless results do not establish tablet performance.
+
+`--binary-transfer` checks bounded worker buffers and exact archive bytes for a
+9504 × 6336 saved selection shared with a layer mask, plus a 2 MiB ICC profile
+shared by proof and retained original samples. Generate its fixture from a valid
+RGB profile so opening also passes shared color validation; use the
+[binary payload commands](../internals/binary-payloads.md#reproducible-checks).
+The generator adds a private data tag and writes `binary-transfer-fixture.capy.icc`
+beside the package. Serve both files, set
+`LAYER_BINARY_FIXTURE_URL=/pkg/binary-transfer-fixture.capy`, and run the tablet
+runner with `--binary-transfer`. It compares every ICC byte with the companion
+file and checks shared resource identities without replacing the open drawing.
 
 ## Troubleshooting
 

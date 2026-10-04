@@ -232,9 +232,12 @@ impl ExportRecipe {
     }
     /// Validate the complete delivery transform and size on a file worker.
     pub fn validate_for_document(&self, document: &layer_core::Document) -> Result<(), ColorFeatureError> {
-        self.validate_for_color(document.color)?;
-        self.output_extent([document.width, document.height])?;
-        self.output_resolution(document.resolution)?;
+        self.validate_for_composition(document.composition())
+    }
+    pub fn validate_for_composition(&self, composition: &layer_core::authored::Composition) -> Result<(), ColorFeatureError> {
+        self.validate_for_color(composition.color)?;
+        self.output_extent(composition.size)?;
+        self.output_resolution(composition.resolution)?;
         Ok(())
     }
     /// Delivery pixel dimensions, refused when the format's encoder cannot
@@ -363,9 +366,13 @@ impl ExportRecipe {
     }
     /// The resolution and photo metadata this recipe writes for `document`.
     pub fn delivery_metadata(&self, document: &layer_core::Document) -> Result<DeliveryMetadata, ColorFeatureError> {
+        self.delivery_metadata_for_artwork(&document.artwork)
+    }
+    pub fn delivery_metadata_for_artwork(&self, artwork: &layer_core::authored::Artwork) -> Result<DeliveryMetadata, ColorFeatureError> {
+        let composition = artwork.compositions.get(artwork.root).expect("captured composition");
         Ok(DeliveryMetadata {
-            resolution: self.output_resolution(document.resolution)?,
-            photo: document.metadata.clone(),
+            resolution: self.output_resolution(composition.resolution)?,
+            photo: (*artwork.metadata).clone(),
             policy: self.metadata,
         })
     }
@@ -580,8 +587,10 @@ impl ExportForm {
             .map(ExportProfile::builtin)
             .collect();
         let mut profile_captions: Vec<_> = profiles.iter().map(|profile| ExportProfileCaption::Literal { name:profile.name.clone() }).collect();
-        for layer in &document.layers {
-            if let Some(source) = &layer.source {
+        let scene = document.scene();
+        for &handle in scene.order() {
+            let occurrence = scene.occurrence(handle).expect("admitted occurrence");
+            if let Some(source) = scene.paint_source(handle).and_then(|paint| paint.original.as_ref()) {
                 let profile = &source.interpretation.profile;
                 if profiles.iter().any(|p| p.profile == *profile) {
                     continue;
@@ -594,9 +603,9 @@ impl ExportForm {
                 profiles.push(ExportProfile {
                     profile: profile.clone(),
                     channels,
-                    name: layer.name.to_string(),
+                    name: occurrence.name.to_string(),
                 });
-                profile_captions.push(ExportProfileCaption::Original { name:layer.name.to_string() });
+                profile_captions.push(ExportProfileCaption::Original { name:occurrence.name.to_string() });
             }
         }
         let profile_names = profile_captions.iter().map(|caption| caption.message(localizer)).collect();
@@ -606,8 +615,8 @@ impl ExportForm {
             profiles,
             profile_captions,
             profile_names,
-            extent: [document.width, document.height],
-            metadata: !document.metadata.is_empty(),
+            extent: document.composition().size,
+            metadata: !document.artwork.metadata.is_empty(),
         }
     }
 }
@@ -648,9 +657,11 @@ mod tests {
     fn export_original_profile_captions_preserve_raw_layer_names_and_profile_buffers() {
         let literal = "İı ไทย Tie\u{302}\u{301}ng Vie\u{323}\u{302}t { $name } 🎨";
         let bytes: std::sync::Arc<[u8]> = vec![0].into();
-        let mut document = layer_core::Document::new("Photo", 1, 1, layer_core::DocumentNames { paint:literal.into(), paper:"Paper".into() });
-        document.layers[0].name = literal.into();
-        document.layers[0].source = Some(std::sync::Arc::new(layer_core::color::source::SourceImage {
+        let mut document = layer_core::Document::new(layer_core::PortableId::random(), 1, 1, layer_core::DocumentNames { paint:literal.into(), paper:"Paper".into() });
+        let owner = document.working.occurrence.unwrap();
+        let layer_core::SourceTarget::Paint(paint) = document.scene().source_target(owner).unwrap() else { unreachable!() };
+        document.artwork.occurrences.get_mut(owner).unwrap().name = literal.into();
+        document.artwork.paint.get_mut(paint).unwrap().original = Some(std::sync::Arc::new(layer_core::color::source::SourceImage {
             kind:layer_core::color::source::SourceKind::Original, extent:[1,1], resolution:None, tiles:Default::default(),
             interpretation:layer_core::color::source::SourceInterpretation { channels:SourceChannels::Rgba, depth:SampleDepth::U8, profile:ColorProfile::Icc(bytes.clone().into()), profile_assumed:false },
         }));
@@ -766,11 +777,11 @@ mod tests {
         assert_eq!(fitted.output_extent([32768, 16384]).unwrap(), [4096, 2048]);
         let enlarged = ExportRecipe { size: ExportSize::Fit { bounds: [20000, 20000], enlarge: true }, ..webp.clone() };
         assert!(enlarged.output_extent([100, 50]).is_err());
-        let mut document = layer_core::Document::new("Panorama", 16385, 2, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 16385, 2, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert!(webp.validate_for_document(&document).is_err());
         assert!(fitted.validate_for_document(&document).is_ok());
-        document.resolution = Some(layer_core::ImageResolution::ppi(300));
-        document.width = 16384;
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().resolution = Some(layer_core::ImageResolution::ppi(300));
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().size[0] = 16384;
         webp.validate_for_document(&document).unwrap();
     }
 
@@ -967,20 +978,20 @@ mod tests {
             .for_color(DocumentColor::default());
         assert_eq!(sdr.metadata, rights.recipe.metadata, "an SDR fallback keeps the choice");
 
-        let mut document = layer_core::Document::new("Photo", 40, 30, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 40, 30, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert!(!ExportForm::new_canonical(&document).metadata, "a new drawing has no photo metadata");
-        document.metadata.exif = Some(vec![1, 2, 3].into());
-        document.resolution = Some(layer_core::ImageResolution::ppi(300));
+        std::sync::Arc::make_mut(&mut document.artwork.metadata).exif = Some(vec![1, 2, 3].into());
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().resolution = Some(layer_core::ImageResolution::ppi(300));
         assert!(ExportForm::new_canonical(&document).metadata);
         let delivery = ExportRecipe { resolution: ExportResolution::Ppi(72), ..rights.recipe }.delivery_metadata(&document).unwrap();
         assert_eq!(delivery.resolution, Some(layer_core::ImageResolution::ppi(72)));
-        assert_eq!(delivery.photo, document.metadata);
+        assert_eq!(delivery.photo, *document.artwork.metadata);
         assert_eq!(delivery.policy, rights.recipe.metadata);
     }
     #[test]
     fn exr_validates_for_any_document_primaries() {
-        let mut document=layer_core::Document::new("P3",8,8, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color=DocumentColor{space:RgbSpace::DisplayP3,depth:SampleDepth::F32};
+        let mut document=layer_core::Document::new(layer_core::authored::PortableId::random(),8,8, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=DocumentColor{space:RgbSpace::DisplayP3,depth:SampleDepth::F32};
         let recipe=ExportRecipe::web_share().draft_canonical(ExportDraftAction::Format(ExportFormat::Exr)).recipe;
         assert_eq!(recipe.profile,ExportProfile::builtin(RgbSpace::Srgb));
         recipe.validate_for_document(&document).unwrap();

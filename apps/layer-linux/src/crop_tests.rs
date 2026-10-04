@@ -98,17 +98,17 @@ pub(super) fn setting(w: &Workspace, id: &str) -> f32 {
 
 /// Fill a rectangle given as fractions of the canvas, x0, y0, x1, y1, with
 /// blue on the active layer, and return that layer.
-pub(super) fn fill_rect(w: &Rc<Workspace>, [x0, y0, x1, y1]: [f32; 4]) -> layer_core::LayerId {
+pub(super) fn fill_rect(w: &Rc<Workspace>, [x0, y0, x1, y1]: [f32; 4]) -> layer_core::SourceTarget {
     w.dispatch(UiAction::SetColor { rgba: [0.1, 0.3, 0.8, 1.] });
     let doc = document(w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
-    let paint = doc.active_layer;
-    let before = doc.layer(paint).unwrap().raster.clone();
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
+    let paint = doc.working.target.unwrap();
+    let before = doc.scene().raster(paint).unwrap().clone();
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     let [x0, y0, x1, y1] = [width * x0, height * y0, width * x1, height * y1];
     native_pen_path(w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
-    until(|| document(w).layer(paint).unwrap().raster.try_data().is_some_and(|_| document(w).layer(paint).unwrap().raster != before), "the fill paints the selection");
+    until(|| document(w).scene().raster(paint).unwrap().try_data().is_some_and(|_| document(w).scene().raster(paint).unwrap() != &before), "the fill paints the selection");
     w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
     paint
 }
@@ -126,7 +126,7 @@ pub(super) fn crop_ready(id: &str) -> (NativeTestApp, Rc<Workspace>, RemoteInput
 fn ratio_handle_and_apply(device: Device, id: &str) {
     let (_app, w, mut input) = crop_ready(id);
     let before = document(&w);
-    let [width, height] = [before.width as f32, before.height as f32];
+    let [width, height] = [before.composition().size[0] as f32, before.composition().size[1] as f32];
     let ratio = bar_widget(&w, "canvas-bar-choice-crop-ratio");
     let popover = ratio.downcast_ref::<gtk::MenuButton>().and_then(|b| b.popover()).expect("the Ratio menu");
     tap(&mut input, device, center(&w, &ratio));
@@ -169,12 +169,12 @@ fn ratio_handle_and_apply(device: Device, id: &str) {
     tap(&mut input, device, center(&w, &bar_widget(&w, "canvas-bar-ApplyTransform")));
     until(|| state(&w).layer_tools.tool != LayerCanvasTool::Crop, "Apply finishes the crop");
     let after = document(&w);
-    assert_eq!(after.width, after.height, "a square canvas");
-    assert_eq!(after.width, cropped.round() as u32);
+    assert_eq!(after.composition().size[0], after.composition().size[1], "a square canvas");
+    assert_eq!(after.composition().size[0], cropped.round() as u32);
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).width == before.width, "one undo step restores the canvas");
-    assert_eq!(document(&w).height, before.height);
+    until(|| document(&w).composition().size[0] == before.composition().size[0], "one undo step restores the canvas");
+    assert_eq!(document(&w).composition().size[1], before.composition().size[1]);
     input.finish();
     w.window.close();
     pump(50);
@@ -203,8 +203,8 @@ fn native_crop_ratio_handle_and_apply_with_the_pen() {
 fn native_crop_straighten_by_drawing_a_line() {
     let (_app, w, mut input) = crop_ready("art.capycanvas.CropStraighten");
     let before = document(&w);
-    let paint = before.active_layer;
-    let [width, height] = [before.width as f32, before.height as f32];
+    let paint = before.working.target.unwrap();
+    let [width, height] = [before.composition().size[0] as f32, before.composition().size[1] as f32];
     tap(&mut input, Device::Mouse, center(&w, &bar_widget(&w, "canvas-bar-CropStraighten")));
     until(|| selected(&w, CommandId::CropStraighten), "Straighten arms line drawing");
     let angle = 0.1f32;
@@ -216,16 +216,16 @@ fn native_crop_straighten_by_drawing_a_line() {
     assert!((turned - angle).abs() < 0.01, "the crop follows the line: {turned}");
     tap(&mut input, Device::Mouse, center(&w, &bar_widget(&w, "canvas-bar-ApplyTransform")));
     until(|| state(&w).layer_tools.tool != LayerCanvasTool::Crop, "Apply straightens the image");
-    until(|| document(&w).layer(paint).is_some_and(|l| l.raster.try_data().is_some()), "the resampled pixels are captured");
+    until(|| document(&w).scene().raster(paint).is_some_and(|r| r.try_data().is_some()), "the resampled pixels are captured");
     let after = document(&w);
-    assert!(after.width < before.width && after.height < before.height, "the level crop fits inside the old canvas");
-    assert_ne!(after.layer(paint).unwrap().raster, before.layer(paint).unwrap().raster, "the pixels were resampled");
+    assert!(after.composition().size[0] < before.composition().size[0] && after.composition().size[1] < before.composition().size[1], "the level crop fits inside the old canvas");
+    assert_ne!(after.scene().raster(paint).unwrap(), before.scene().raster(paint).unwrap(), "the pixels were resampled");
     pump(300);
-    let middle = shown(&w, [after.width as f32 * 0.5, after.height as f32 * 0.5]);
+    let middle = shown(&w, [after.composition().size[0] as f32 * 0.5, after.composition().size[1] as f32 * 0.5]);
     assert!(middle[2] > 150 && middle[0] < 100, "the fill stays in the middle: {middle:?}");
     assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).width == before.width, "one undo step restores the drawing");
+    until(|| document(&w).composition().size[0] == before.composition().size[0], "one undo step restores the drawing");
     input.finish();
     w.window.close();
     pump(50);
@@ -236,7 +236,7 @@ fn native_crop_straighten_by_drawing_a_line() {
 fn native_crop_deleting_cropped_pixels_leaves_nothing_to_reveal() {
     let (_app, w, mut input) = crop_ready("art.capycanvas.CropDelete");
     let before = document(&w);
-    let [width, height] = [before.width as f32, before.height as f32];
+    let [width, height] = [before.composition().size[0] as f32, before.composition().size[1] as f32];
     tap(&mut input, Device::Mouse, center(&w, &bar_widget(&w, "canvas-bar-CropDeleteCroppedPixels")));
     until(|| selected(&w, CommandId::CropDeleteCroppedPixels), "Delete Cropped Pixels turns on");
     drag(&mut input, Device::Mouse, window_point(&w, [0., 0.]), window_point(&w, [width * 0.4, height * 0.4]));
@@ -244,17 +244,17 @@ fn native_crop_deleting_cropped_pixels_leaves_nothing_to_reveal() {
     tap(&mut input, Device::Mouse, center(&w, &bar_widget(&w, "canvas-bar-ApplyTransform")));
     until(|| state(&w).layer_tools.tool != LayerCanvasTool::Crop, "Apply crops");
     let cropped = document(&w);
-    let origin = [before.width - cropped.width, before.height - cropped.height];
+    let origin = [before.composition().size[0] - cropped.composition().size[0], before.composition().size[1] - cropped.composition().size[1]];
     w.dispatch(UiAction::Invoke { command: CommandId::CanvasSize });
     for action in [
         layer_ui::CanvasSizeAction::Anchor { anchor: layer_ui::CanvasAnchor::BottomRight },
-        layer_ui::CanvasSizeAction::Width { value: f64::from(before.width) },
-        layer_ui::CanvasSizeAction::Height { value: f64::from(before.height) },
+        layer_ui::CanvasSizeAction::Width { value: f64::from(before.composition().size[0]) },
+        layer_ui::CanvasSizeAction::Height { value: f64::from(before.composition().size[1]) },
         layer_ui::CanvasSizeAction::Apply,
     ] {
         w.dispatch(UiAction::CanvasSize { action });
     }
-    until(|| document(&w).width == before.width, "Canvas Size grows the canvas back");
+    until(|| document(&w).composition().size[0] == before.composition().size[0], "Canvas Size grows the canvas back");
     w.dispatch(UiAction::Invoke { command: CommandId::FitCanvas });
     pump(400);
     let deleted = shown(&w, [origin[0] as f32 * 0.75, height * 0.5]);

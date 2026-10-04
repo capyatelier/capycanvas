@@ -9,10 +9,10 @@ fn histogram_session() -> UiSession<Recorder> {
     s
 }
 fn histogram_value(s: &UiSession<Recorder>, pixels: u64) -> layer_core::color::histogram::Histogram {
-    let mut value = layer_core::color::histogram::Histogram::new(s.engine.document().color);
+    let mut value = layer_core::color::histogram::Histogram::new(s.engine.document().composition().color);
     if let Some(layer_render::SnapshotRequest::ArtworkStatistics(request))=s.engine.backend().snapshot_requests.last()
         && let layer_core::ArtworkSource::EffectInput(id)|layer_core::ArtworkSource::EffectChannels(id)=request.query.source
-        && let Some(effect)=request.query.document.layer(id).and_then(|layer|layer.effect.as_ref())
+        && let Some(effect)=request.query.snapshot.view().effect(id)
         && matches!(effect.program.id.as_ref(),"curves"|"levels") {
         value.domain=if effect.value("domain")==Some(&layer_core::EffectValue::Choice(1)) {
             let stops=match effect.value("hdr_stops") {Some(layer_core::EffectValue::Number(value))=>*value,_=>4.};
@@ -68,7 +68,7 @@ fn histogram_retained_captions_reuse_buffers_during_status_only_publication() {
     for embedded in [false, true] {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "film_grain".into() } }).unwrap();
-        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: s.engine.document().active_layer.0, key: "animate".into(), value: layer_core::EffectValue::Toggle(true) } }).unwrap();
+        s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), key: "animate".into(), value: layer_core::EffectValue::Toggle(true) } }).unwrap();
         if embedded {
             s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
             s.reveal_panel(Panel::Properties).unwrap();
@@ -143,14 +143,14 @@ fn histogram_source_and_selected_coverage_changes_cancel_obsolete_queries() {
     for mutation in 0..3 {
         let mut s = histogram_session();
         histogram_control(&mut s, crate::HistogramAction::Source { index: 3 });
-        s.engine.apply_edit(layer_core::Edit::SetSelection(Some(layer_core::Selection::full()))).unwrap();
+        s.engine.apply_edit(effect_test_selection_edit(s.engine.document(),Some(layer_core::Selection::full()))).unwrap();
         s.frame(200_000_000, 200_000_000).unwrap();
         let before = s.engine.backend().snapshot_cancels;
         s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(histogram_value(&s, 91))));
         match mutation {
             0 => histogram_control(&mut s, crate::HistogramAction::Source { index: 0 }),
-            1 => { s.engine.apply_edit(layer_core::Edit::SetSelection(Some(layer_core::Selection::polygon(vec![Point {x:10.,y:20.}, Point {x:40.,y:20.},Point{x:40.,y:80.},Point{x:10.,y:80.}]).unwrap()))).unwrap(); }
-            _ => { s.engine.apply_edit(layer_core::Edit::SetSelection(None)).unwrap(); }
+            1 => { s.engine.apply_edit(effect_test_selection_edit(s.engine.document(),Some(layer_core::Selection::polygon(vec![Point {x:10.,y:20.}, Point {x:40.,y:20.},Point{x:40.,y:80.},Point{x:10.,y:80.}]).unwrap()))).unwrap(); }
+            _ => { s.engine.apply_edit(effect_test_selection_edit(s.engine.document(),None)).unwrap(); }
         }
         s.frame(300_000_000, 300_000_000).unwrap();
         assert!(s.engine.backend().snapshot_cancels > before);
@@ -169,8 +169,8 @@ fn histogram_document_epoch_and_selected_layer_target_reject_stale_completion() 
         s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(histogram_value(&s, 91))));
         if mutation == 0 { s.state.document_file.epoch += 1; }
         else {
-            let id = s.engine.document().layers[1].id;
-            s.engine.apply_edit(layer_core::Edit::SetActiveLayer { id }).unwrap();
+            let id = s.engine.document().scene().order()[1];
+            s.engine.apply_edit(s.engine.document().select_occurrence_edit(id).unwrap()).unwrap();
         }
         s.frame(300_000_000, 300_000_000).unwrap();
         assert!(s.engine.backend().snapshot_cancels > before);
@@ -206,7 +206,7 @@ fn histogram_hidden_or_suspended_releases_query_and_retained_data() {
 fn histogram_old_preview_during_effect_draft_stays_updating_until_new_exact_result() {
     let mut s = calibration_session();
     histogram_open(&mut s);
-    let layer = s.engine.document().active_layer.0;
+    let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
     let gesture = |phase| UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set {
         layer, key: "temperature".into(), value: layer_core::EffectValue::Number(12.),
     }) } };
@@ -229,16 +229,16 @@ fn histogram_old_preview_during_effect_draft_stays_updating_until_new_exact_resu
 fn histogram_time_only_animation_marks_frozen_results_updating() {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "film_grain".into() } }).unwrap();
-    s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: s.engine.document().active_layer.0, key: "animate".into(), value: layer_core::EffectValue::Toggle(true) } }).unwrap();
+    s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: occurrence_token(s.engine.document().working.occurrence.unwrap()), key: "animate".into(), value: layer_core::EffectValue::Toggle(true) } }).unwrap();
     histogram_open(&mut s);
     let checkpoint = s.engine.checkpoint();
-    let captured = match s.engine.backend().snapshot_requests.last().unwrap() { layer_render::SnapshotRequest::ArtworkStatistics(request) => request.query.time, _ => panic!() };
+    let captured = match s.engine.backend().snapshot_requests.last().unwrap() { layer_render::SnapshotRequest::ArtworkStatistics(request) => request.query.snapshot.context.elapsed, _ => panic!() };
     histogram_reply(&mut s, 7, 1_000_000_000);
     assert!(s.engine.animation_time() > captured);
     assert_eq!(s.engine.checkpoint(), checkpoint);
     assert_eq!(s.state.histogram.status, s.localization().text(MessageId::RESOURCES_HISTOGRAM_UPDATING));
     assert_eq!(s.state.histogram.data.as_ref().unwrap().pixels, 7);
-    assert!(matches!(s.engine.backend().snapshot_requests.last(), Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview && request.query.time > captured));
+    assert!(matches!(s.engine.backend().snapshot_requests.last(), Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview && request.query.snapshot.context.elapsed > captured));
 }
 
 #[test]
@@ -287,28 +287,28 @@ fn tonal_histogram_session() -> UiSession<Recorder> {
     s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"curves".into()}}).unwrap();
     s.reveal_panel(Panel::Properties).unwrap();
     s.frame(100_000_000,100_000_000).unwrap();
-    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.query.source==layer_core::ArtworkSource::EffectChannels(s.engine.document().active_layer)));
+    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.query.source==layer_core::ArtworkSource::EffectChannels(s.engine.document().working.occurrence.unwrap())));
     s
 }
 
 #[test]
 fn histogram_embedded_curve_page_selects_input_or_channel_source_and_cancels_old_result() {
     let mut s = tonal_histogram_session();
-    let layer = s.engine.document().active_layer;
+    let layer = s.engine.document().working.occurrence.unwrap();
     histogram_reply(&mut s,7,150_000_000);
     assert_eq!(s.state.tonal_histogram.data.as_ref().unwrap().pixels,7);
     assert!(s.state.histogram.data.is_none());
     s.frame(350_000_000,350_000_000).unwrap();
     let cancels = s.engine.backend().snapshot_cancels;
     s.engine.backend_mut().snapshot_reply = Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(histogram_value(&s,91))));
-    s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:layer.0,page:"red".into()}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:occurrence_token(layer),page:"red".into()}}).unwrap();
     s.frame(400_000_000,400_000_000).unwrap();
     assert!(s.engine.backend().snapshot_cancels>cancels);
     assert!(s.state.tonal_histogram.data.is_none());
     assert_eq!(s.state.tonal_histogram.channel,1);
     assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.query.source==layer_core::ArtworkSource::EffectInput(layer)));
     histogram_reply(&mut s,11,450_000_000);
-    s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:layer.0,page:"blue".into()}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:occurrence_token(layer),page:"blue".into()}}).unwrap();
     s.frame(500_000_000,500_000_000).unwrap();
     assert!(s.state.tonal_histogram.data.is_none());
     assert_eq!(s.state.tonal_histogram.channel,3);
@@ -352,7 +352,7 @@ fn histogram_embedded_focus_changes_no_history_or_query_identity() {
     let checkpoint = s.engine.checkpoint();
     let requests = s.engine.backend().snapshot_requests.len();
     let cancels = s.engine.backend().snapshot_cancels;
-    let layer = s.engine.document().active_layer.0;
+    let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
     s.dispatch(UiAction::Effect {action:EffectAction::CurveSelectPoint {layer,key:"curve_0".into(),epoch:s.state.layer_properties.epoch,index:Some(0)}}).unwrap();
     s.frame(150_000_000,150_000_000).unwrap();
     assert_eq!(s.engine.document(),&before);
@@ -393,17 +393,17 @@ fn histogram_embedded_domain_change_discards_old_axis_and_pending_result() {
         let mut s = tonal_histogram_session();
         histogram_reply(&mut s,7,150_000_000);
         if preview {
-            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:s.engine.document().active_layer.0,key:"curve_1".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
+            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(s.engine.document().working.occurrence.unwrap()),key:"curve_1".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
         }
         s.frame(350_000_000,350_000_000).unwrap();
         assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview==preview));
         let cancels=s.engine.backend().snapshot_cancels;
         s.engine.backend_mut().snapshot_reply=Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(histogram_value(&s,91))));
-        s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:s.engine.document().active_layer.0,key:"domain".into(),value:layer_core::EffectValue::Choice(1)}}).unwrap();
+        s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(s.engine.document().working.occurrence.unwrap()),key:"domain".into(),value:layer_core::EffectValue::Choice(1)}}).unwrap();
         s.frame(400_000_000,400_000_000).unwrap();
         assert!(s.engine.backend().snapshot_cancels>cancels);
         assert!(s.state.tonal_histogram.data.is_none());
-        assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview && request.query.document.layers[0].effect.as_ref().unwrap().value("domain")==Some(&layer_core::EffectValue::Choice(1))));
+        assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview && request.query.snapshot.view().effect(request.query.snapshot.view().order()[0]).unwrap().value("domain")==Some(&layer_core::EffectValue::Choice(1))));
     }
 }
 
@@ -411,7 +411,7 @@ fn histogram_embedded_domain_change_discards_old_axis_and_pending_result() {
 fn histogram_embedded_ignores_edits_excluded_from_its_source() {
     for input in [false,true] {
         let mut s=tonal_histogram_session();
-        let layer=s.engine.document().active_layer.0;
+        let layer=occurrence_token(s.engine.document().working.occurrence.unwrap());
         if input {
             s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer,page:"red".into()}}).unwrap();
             s.frame(120_000_000,120_000_000).unwrap();
@@ -485,20 +485,20 @@ fn histogram_embedded_own_composition_changes_preserve_completed_data_while_lowe
     for effect in ["curves","levels"] {for page in ["rgb","red"] {for mutation in 0..3 {
         let mut s=session(Platform::Gtk);
         s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}}).unwrap();
-        let layer=s.engine.document().active_layer;
-        s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:layer.0,page:page.into()}}).unwrap();
+        let layer=s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:occurrence_token(layer),page:page.into()}}).unwrap();
         s.reveal_panel(Panel::Properties).unwrap();s.frame(100_000_000,100_000_000).unwrap();
         histogram_reply(&mut s,7,150_000_000);s.frame(350_000_000,350_000_000).unwrap();histogram_reply(&mut s,11,400_000_000);
         assert!(s.tonal_histogram.settled);
         let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;
         for index in [0,1] {
-            let mut changed=s.engine.document().layers[index].clone();
-            match mutation {
-                0=>changed.opacity=0.5,
-                1=>{let mut mask=layer_core::LayerMask::reveal_all(s.engine.allocate_layer_id(),layer_core::Point::default());mask.default_coverage=0.5;changed.mask=Some(mask);},
-                _=>changed.properties.blend=layer_core::LayerBlend::Multiply,
-            }
-            s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(changed))).unwrap();s.refresh_document();
+            let handle=s.engine.document().scene().order()[index];
+            let edit=match mutation {
+                0=>effect_test_occurrence_edit(s.engine.document(),handle,|o|o.opacity=0.5),
+                1=>effect_test_mask_edit(s.engine.document(),handle,0.5),
+                _=>effect_test_occurrence_edit(s.engine.document(),handle,|o|o.blend=layer_core::LayerBlend::Multiply),
+            };
+            s.engine.apply_edit(edit).unwrap();s.refresh_document();
             let now=500_000_000+index as u64*100_000_000;s.frame(now,now).unwrap();
             if index==0 {
                 assert_eq!(s.engine.backend().snapshot_requests.len(),requests,"{effect} {page} {mutation}");
@@ -521,7 +521,7 @@ fn waveform_retained_captions_keep_preferences_and_sample_across_status_and_lang
     let buffers=|v:&crate::HistogramView|[v.description.as_ptr(),v.range.as_ptr(),v.axis[0].as_ptr(),v.axis[1].as_ptr()];
     let mut s=session(Platform::Gtk);
     s.dispatch(UiAction::Effect{action:EffectAction::Insert{effect:"film_grain".into()}}).unwrap();
-    s.dispatch(UiAction::Effect{action:EffectAction::Set{layer:s.engine.document().active_layer.0,key:"animate".into(),value:layer_core::EffectValue::Toggle(true)}}).unwrap();
+    s.dispatch(UiAction::Effect{action:EffectAction::Set{layer:occurrence_token(s.engine.document().working.occurrence.unwrap()),key:"animate".into(),value:layer_core::EffectValue::Toggle(true)}}).unwrap();
     s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();waveform_reply(&mut s,150_000_000);
     s.frame(350_000_000,350_000_000).unwrap();waveform_reply(&mut s,400_000_000);
     histogram_control(&mut s,HistogramAction::WaveformChannel{index:4});histogram_control(&mut s,HistogramAction::WaveformLogarithmic{enabled:true});
@@ -557,7 +557,7 @@ fn waveform_and_histogram_share_one_query_but_keep_independent_channel_preferenc
 fn waveform_source_mutation_and_suspension_retire_shared_data_and_query() {
     let mut s=session(Platform::Gtk);s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();waveform_reply(&mut s,110_000_000);
     assert!(s.state.waveform.data.is_some());histogram_control(&mut s,HistogramAction::Source{index:1});assert!(s.state.waveform.data.is_none());
-    s.frame(200_000_000,200_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform && r.query.source==layer_core::ArtworkSource::LayerContent(s.engine.document().active_layer)));
+    s.frame(200_000_000,200_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform && r.query.source==layer_core::ArtworkSource::Source(s.engine.document().working.target.unwrap())));
     waveform_reply(&mut s,210_000_000);s.suspend_renderer().unwrap();assert!(s.state.waveform.data.is_none());assert!(s.state.histogram.data.is_none());
 }
 
@@ -588,7 +588,7 @@ fn waveform_rgba_maps_hdr_endpoints_and_tiny_counts_to_premultiplied_pixels() {
 fn tonal_histogram_axis_uses_captured_domain_instead_of_document_hdr_depth() {
     use layer_core::color::{SampleDepth,histogram::HistogramDomain};
     for id in ["levels","curves"] {
-        let original=color_adjustment_session(id);let mut document=original.engine.document().clone();document.color.depth=SampleDepth::F32;document.blend_space=layer_core::BlendSpace::Linear;let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[800,800],Platform::Gtk).unwrap();s.reveal_panel(Panel::Properties).unwrap();s.frame(100_000_000,100_000_000).unwrap();
+        let original=color_adjustment_session(id);let mut document=original.engine.document().clone();let composition=document.artwork.compositions.get_mut(document.artwork.root).unwrap();composition.color.depth=SampleDepth::F32;composition.blend=layer_core::BlendSpace::Linear;let color=composition.color;let mut s=UiSession::new(Recorder{color,..Default::default()},document,[800,800],Platform::Gtk).unwrap();s.reveal_panel(Panel::Properties).unwrap();s.frame(100_000_000,100_000_000).unwrap();
         histogram_reply(&mut s,7,110_000_000);let data=s.state.tonal_histogram.data.as_ref().unwrap();assert_eq!(data.domain,HistogramDomain::Encoded);assert_eq!(data.axis().bins,[0,256]);assert!(data.axis().stops.is_none());assert!(data.axis().white.is_none());
         if id=="levels" {continue;}
         color_adjustment_set(&mut s,"domain",layer_core::EffectValue::Choice(1));s.frame(200_000_000,200_000_000).unwrap();histogram_reply(&mut s,7,210_000_000);

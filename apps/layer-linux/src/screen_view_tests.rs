@@ -3,9 +3,9 @@ use super::proof::wait_proof;
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
-fn half_green_drawing() -> layer_core::Project {
+fn half_green_drawing() -> layer_core::Document {
     let mut project = new_drawing(96, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
+    composition_mut(&mut project).color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let mut source = SourceBuilder::new(
         [96, 64],
         SourceInterpretation {
@@ -24,7 +24,7 @@ fn half_green_drawing() -> layer_core::Project {
     for _ in 0..64 {
         source.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
     project
 }
 
@@ -189,7 +189,7 @@ fn native_screen_status_gallery() {
         .unwrap_or_else(|| "../../artifacts/screen-status/gtk-gallery".into());
     std::fs::create_dir_all(&output).unwrap();
     let mut project = new_drawing(96, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
+    composition_mut(&mut project).color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
     let mut source = SourceBuilder::new(
         [96, 64],
         SourceInterpretation {
@@ -208,7 +208,7 @@ fn native_screen_status_gallery() {
     for _ in 0..64 {
         source.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);

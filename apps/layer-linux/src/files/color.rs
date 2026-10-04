@@ -20,9 +20,9 @@ struct Conversion {
     detail_kind: Cell<u8>,
     workspace: std::rc::Weak<Workspace>,
     gpu: layer_render_wgpu::snapshot::SnapshotGpu,
-    original: Project,
+    original: Document,
     workflow: RefCell<ColorWorkflow>,
-    time: f32,
+    context: layer_core::authored::EvaluationContext,
     comparison: Rc<super::preview::Comparison>,
     detail: gtk::Label,
     pending: Cell<Option<Choice>>,
@@ -51,7 +51,7 @@ impl Conversion {
         self.running.set(true);
         glib::MainContext::default().spawn_local(glib::clone!(#[strong(rename_to = state)] self, async move {
             while let Some(choice) = state.pending.take().filter(|_| !state.closed.get()) {
-                if !choice.flattened && choice.change.target(state.original.document.color) == state.original.document.color {
+                if !choice.flattened && choice.change.target(state.original.composition().color) == state.original.composition().color {
                     state.comparison.invalidate(state.copy.borrow().choose_different.as_ref());
                     continue;
                 }
@@ -62,12 +62,12 @@ impl Conversion {
                 let control = CaptureControl::default();
                 *state.active.borrow_mut() = Some(control.clone());
                 let source = state.original.clone();
-                let time = state.time;
+                let context = state.context.clone();
                 let worker_control = control.clone();
                 let gpu = state.gpu.clone();
                 let result = gio::spawn_blocking(move || {
                     match plan {
-                        ColorPreparation::Flatten { color, options } => flatten::prepare(gpu, source, color, options, time, worker_control),
+                        ColorPreparation::Flatten { color, options } => flatten::prepare(gpu, source, color, options, context, worker_control),
                         ColorPreparation::Edit(change) => layer_color::prepare_document_color(&source, change, layer_color::photo::PhotoMemoryBudget::current().encode_bytes, || worker_control.is_cancelled()),
                         ColorPreparation::History => unreachable!(),
                     }
@@ -79,13 +79,13 @@ impl Conversion {
                     let gpu = w.gpu.borrow();
                     let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
                     state.workflow.borrow().identity.validate(session, control.is_cancelled(), state.gpu.same_device(&w.snapshot_gpu()?))?;
-                    let project = prepared.project;
+                    let project = prepared.document;
                     state.detail_kind.set(if prepared.statistics.clipped_channels > 0 { 1 } else if choice.flattened { 2 } else { 3 });
                     state.refresh_detail();
                     let mut brush = session.engine().configured_brush().clone();
-                    layer_render::remap_document_colors(state.original.document.color.space, project.document.color.space, &mut brush);
+                    layer_render::remap_document_colors(state.original.composition().color.space, project.composition().color.space, &mut brush);
                     state.workflow.borrow_mut().candidate = Some(project.clone());
-                    state.comparison.request(project,state.time);
+                    state.comparison.request(project);
                     Ok(())
                 });
                 if let Err(error) = result { state.comparison.invalidate(&error); }
@@ -129,17 +129,19 @@ pub(super) async fn run(
 ) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let export_copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
-    let (workflow, time) = {
+    let (mut workflow, context) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
         (
             ColorWorkflow::begin(session, id)?,
-            session.engine().animation_time(),
+
+            session.engine().backend().capture_context()?,
         )
     };
+    workflow.context = context.resolve().await?;
     let project = workflow.original.clone();
-    let color = project.document.color;
-    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), w.view_color(), &w.localization());
+    let color = project.composition().color;
+    let comparison = super::preview::Comparison::new(w.snapshot_gpu()?, project.clone(), workflow.context.clone(), w.view_color(), &w.localization());
     comparison.bind_localization(w);
     let detail = gtk::Label::builder()
         .wrap(true)
@@ -226,8 +228,8 @@ pub(super) async fn run(
         gpu: w.snapshot_gpu()?,
         workspace: Rc::downgrade(w),
         original: project,
+        context: workflow.context.clone(),
         workflow: RefCell::new(workflow),
-        time,
         comparison,
         detail,
         pending: Cell::new(None),
@@ -343,10 +345,12 @@ pub(super) async fn run(
 }
 
 pub(super) async fn history(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
-    let mut workflow = {
+    let (mut workflow, context) = {
         let gpu = w.gpu.borrow();
-        ColorWorkflow::begin(&gpu.as_ref().ok_or("Canvas unavailable")?.session, id)?
+        let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+        (ColorWorkflow::begin(session, id)?, session.engine().backend().capture_context()?)
     };
+    workflow.context = context.resolve().await?;
     workflow.select(None, false)?;
     adopt(w, &mut workflow, &w.snapshot_gpu()?).await
 }
@@ -364,11 +368,10 @@ async fn adopt(
         let project = workflow.candidate.as_ref().ok_or("Color candidate is missing")?.clone();
         let mut brush = session.engine().configured_brush().clone();
         let view = session.engine().view();
-        layer_render::remap_document_colors(workflow.original.document.color.space, project.document.color.space, &mut brush);
-        let time = session.engine().animation_time();
+        layer_render::remap_document_colors(workflow.original.composition().color.space, project.composition().color.space, &mut brush);
         session
             .renderer_mut()
-            .prepare_color(project, brush, view, time)?;
+            .prepare_color(project, workflow.context.clone(), brush, view)?;
     }
     let dialog = adw::AlertDialog::builder()
         .heading(copy.preparing_title.as_ref())

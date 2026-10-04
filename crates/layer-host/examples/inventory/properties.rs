@@ -133,7 +133,6 @@ fn capture(mut host: NativeHost, name: &str, setup: Vec<Value>) -> Value {
         .collect::<Vec<_>>();
     let layer = host.session.state().layer_properties.layer.unwrap();
     let menu = json!(host.session.layer_menu(layer, false).unwrap());
-    // Paper has no lock action; retain that capability instead of inventing one.
     let lock = lock_action(&menu);
     let lock_error = lock
         .as_ref()
@@ -157,16 +156,8 @@ fn capture(mut host: NativeHost, name: &str, setup: Vec<Value>) -> Value {
 
 pub(super) fn inventory(platform: Platform) -> Vec<Value> {
     let host = apple_host(platform);
-    let paper = host
-        .session
-        .engine()
-        .document()
-        .layers
-        .iter()
-        .find(|l| l.id == layer_core::LayerId(2))
-        .unwrap()
-        .id
-        .0;
+    let scene = host.session.engine().document().scene();
+    let paper = scene.constant_backdrop().first().copied().map(layer_ui::occurrence_token).unwrap();
     let adjustments = host.session.state().adjustments.clone();
     let mut result = vec![capture(host, "paint", vec![])];
     result.push(capture(

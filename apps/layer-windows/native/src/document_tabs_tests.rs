@@ -1,3 +1,4 @@
+use crate::test_support::*;
 use super::*;
 use layer_core::ProjectLimits;
 use layer_ui::{CommandId, Platform, UiAction};
@@ -102,7 +103,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: SampleDepth::U8,
-            profile: ColorProfile::Builtin(project.document.color.space),
+            profile: ColorProfile::Builtin(project.composition().color.space),
             profile_assumed: false,
         },
         1024 * 1024,
@@ -111,7 +112,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     for _ in 0..24 {
         source.push_row(&[230, 45, 20, 180].repeat(32)).unwrap();
     }
-    project.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+    paint_mut(&mut project,0).original = Some(Arc::new(source.finish().unwrap()));
     let mut host = NativeHost::new(Platform::Windows).unwrap();
     host.session = UiSession::from_project(Renderer(Some(gpu.into())), project, None, [96, 72], Platform::Windows).unwrap();
     host.resize(96, 72, 1.).unwrap();
@@ -244,7 +245,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     command(&mut host, CommandId::Undo);
     settle(&mut service, &mut host);
     assert!(!host.session.state().document_file.modified);
-    assert!((host.session.engine().document().layers[0].opacity - 0.25).abs() < 1e-6);
+    assert!((occurrence_at(host.session.engine().document(),0).opacity - 0.25).abs() < 1e-6);
     command(&mut host, CommandId::Redo);
     settle(&mut service, &mut host);
     assert_eq!(host.session.engine().checkpoint(), first);
@@ -269,9 +270,9 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         let mut snapshots = Vec::new();
         for copy in copies {
             if let Ok(file) = std::fs::File::open(copy.path())
-                && let Ok(p) = Project::read(file, ProjectLimits::default())
+                && let Ok(p) = read_document(file, ProjectLimits::default())
             {
-                snapshots.push((p.document.width, p.document.layers[0].opacity));
+                snapshots.push((p.composition().size[0], occurrence_at(&p,0).opacity));
             }
         }
         if snapshots.contains(&(32, 0.75)) && snapshots.contains(&(40, 0.4)) {
@@ -348,7 +349,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
         .unwrap();
     settle(&mut service, &mut host);
     assert_eq!(service.window.documents.order(), [1, 3]);
-    assert!((host.session.engine().document().layers[0].opacity - 0.4).abs() < 1e-6);
+    assert!((occurrence_at(host.session.engine().document(),0).opacity - 0.4).abs() < 1e-6);
     assert!(!host.session.state().document_file.modified);
     // Cancel an accepted background Open and preserve both existing editors.
     command(&mut host, CommandId::OpenDocument);
@@ -385,11 +386,11 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     assert_eq!(host.session.engine().checkpoint(), first);
     let rescue = directory.join("saved without GPU.capy");
     save(&mut service, &mut host, &rescue);
-    let reopened = Project::read(
+    let reopened = read_document(
         std::fs::File::open(rescue).unwrap(),
         ProjectLimits::default(),
     )
     .unwrap();
-    assert_eq!(reopened.document.layers[0].opacity, 0.75);
+    assert_eq!(occurrence_at(&reopened,0).opacity, 0.75);
     service.stop_worker().unwrap();
 }

@@ -170,6 +170,7 @@ pub(super) struct TonalTools {
 }
 pub(super) struct TonalDraft {
     pub revision: u64,
+    owner:u64,
     pub baseline: Option<Selection>,
     pub mode: SelectionMode,
     pub target: SelectionTarget,
@@ -200,7 +201,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .tonal_tools
             .draft
             .as_ref()
-            .is_some_and(|d| d.revision != self.engine.document().revision || d.target != target)
+            .is_some_and(|d| d.owner!=self.engine.document().owner || d.revision != self.engine.document().revision || d.target != target)
         {
             self.cancel_tonal();
         }
@@ -215,6 +216,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .map_err(error)?;
         let draft = self.tonal_tools.draft.get_or_insert(TonalDraft {
             revision: doc.revision,
+            owner:doc.owner,
             baseline,
             mode,
             target,
@@ -226,7 +228,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let request = RegionRequest {
             request_id: 0,
             source: layer_render::RegionSource::Tonal(Box::new(TonalRequest {
-                source: layer_render::RegionSource::Composite,
+                source: layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:layer_core::authored::SceneScope::All},
                 bands: vec![self.selection_tools.options.tonal.band()],
                 invert: false,
                 probe,
@@ -299,7 +301,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err("Choose Tonal range first".into());
         }
         let TonalAction::Preset { index } = action;
-        if !TonalOptions::choices(self.engine.document().color.depth.is_float())
+        if !TonalOptions::choices(self.engine.document().composition().color.depth.is_float())
             .any(|(id, ..)| id == index) {
             return Err("Unknown tone".into());
         }
@@ -328,7 +330,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     return Ok(());
                 };
                 let doc = self.engine.document();
-                let [w, h] = [doc.width, doc.height];
+                let [w, h] = doc.composition().size;
                 let point = (p.x - start.x).hypot(p.y - start.y) * self.state.camera.zoom < 4.;
                 let bounds = if point {
                     if p.x < 0. || p.y < 0. || p.x >= w as f32 || p.y >= h as f32 {
@@ -371,7 +373,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             segmented: true,
             columns: None,
             beside: None,
-            items: TonalOptions::choices(self.engine.document().color.depth.is_float())
+            items: TonalOptions::choices(self.engine.document().composition().color.depth.is_float())
                 .map(|(index, label, icon)| ToolSetItem { enabled: true,
                     label: self.localization().text(label),
                     icon,

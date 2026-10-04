@@ -44,25 +44,25 @@ mod tonal_checks {
             setting(&mut s, "tonal_upper", 2.); reply(&mut s, None, 0xff806020);
             assert!(s.selection_masks.quick());
             assert!(s.renderer_mut().overlay.unwrap().active);
-            assert!(s.engine.document().selection.is_some());
+            assert!(s.engine.document().working.selection.is_some());
         }
     }
     #[test]
     fn tonal_direct_selection_refines_one_history_entry_with_fixed_baseline() {
         let mut s = start();
         invoke(&mut s, CommandId::SelectAll);
-        let baseline = s.engine.document().selection.clone();
+        let baseline = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::TonalSelect);
         assert!(
             s.tonal_tools.draft.is_none(),
             "opening a tool must not change the selection"
         );
-        assert_eq!(s.engine.document().selection, baseline);
+        assert_eq!(s.engine.document().working.selection, baseline);
         invoke(&mut s, CommandId::SelectionIntersect);
         assert!(s.tonal_tools.draft.is_none());
         choose(&mut s, 0);
         reply(&mut s, None, 0xff804020);
-        assert_ne!(s.engine.document().selection, baseline, "no Apply required");
+        assert_ne!(s.engine.document().working.selection, baseline, "no Apply required");
         assert!(!s.renderer_mut().overlay.unwrap().active);
         setting(&mut s, "tonal_softness", 0.5);
         reply(&mut s, None, 0xff806010);
@@ -78,14 +78,14 @@ mod tonal_checks {
             SelectionMode::Intersect
         );
         assert_eq!(request.selection.as_ref().unwrap().feather, 4.);
-        let result = s.engine.document().selection.clone();
+        let result = s.engine.document().working.selection.clone();
         assert_eq!(s.engine.display_selection().as_deref(), result.as_ref());
         invoke(&mut s, CommandId::Brush);
-        assert_eq!(s.engine.document().selection, result);
+        assert_eq!(s.engine.document().working.selection, result);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, baseline);
+        assert_eq!(s.engine.document().working.selection, baseline);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().selection, result);
+        assert_eq!(s.engine.document().working.selection, result);
     }
     #[test]
     fn tonal_new_choice_adds_to_existing_selection_and_has_own_undo() {
@@ -93,7 +93,7 @@ mod tonal_checks {
         invoke(&mut s, CommandId::TonalSelect);
         choose(&mut s, 0);
         reply(&mut s, None, 0xff000000);
-        let first = s.engine.document().selection.clone();
+        let first = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::SelectionAdd);
         choose(&mut s, 4);
         reply(&mut s, None, 0xff0000ff);
@@ -112,9 +112,9 @@ mod tonal_checks {
         setting(&mut s, "tonal_softness", 0.25);
         reply(&mut s, None, 0xff000080);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, first);
+        assert_eq!(s.engine.document().working.selection, first);
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
     fn tonal_quick_mask_preserves_result_and_always_samples_visible_artwork() {
@@ -122,32 +122,35 @@ mod tonal_checks {
         invoke(&mut s, CommandId::TonalSelect);
         choose(&mut s, 4);
         reply(&mut s, None, 0xff804020);
-        let selected = s.engine.document().selection.clone();
+        let selected = s.engine.document().working.selection.clone();
         for quick in [true, false, true] {
             invoke(&mut s, CommandId::QuickMask);
             s.frame(2, 2).unwrap();
             assert!(s.tonal_active());
             assert_eq!(s.selection_masks.quick(), quick);
-            assert_eq!(s.engine.document().selection, selected);
+            assert_eq!(s.engine.document().working.selection, selected);
             assert_eq!(s.renderer_mut().overlay.unwrap().active, quick);
         }
         setting(&mut s, "tonal_softness", 0.2);
         reply(&mut s, None, 0xff806010);
-        let RegionSource::Tonal(t) = &s.renderer_mut().region_requests.last().unwrap().source
+        let RegionSource::Tonal(t) = &s.engine.backend().region_requests.last().unwrap().source
         else {
             panic!("tone")
         };
-        assert_eq!(t.source, RegionSource::Composite);
+        let RegionSource::Scene { snapshot, scope } = &t.source else { panic!("visible artwork snapshot") };
+        assert_eq!(scope, &layer_core::SceneScope::All);
+        assert_eq!(snapshot.owner, s.engine.document().owner);
+        assert_eq!(snapshot.artwork, s.engine.document().artwork);
         assert!(!t.invert);
         assert_eq!(t.bands[0].falloff, [0.1; 2]);
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
     fn tonal_saved_destination_is_immediate_and_preserves_current_selection() {
         let mut s = start();
         invoke(&mut s, CommandId::SelectAll);
-        let current = s.engine.document().selection.clone();
+        let current = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::TonalSelect);
         invoke(&mut s, CommandId::NewSelectionLayer);
         assert!(s.tonal_active());
@@ -164,13 +167,13 @@ mod tonal_checks {
         setting(&mut s, "tonal_softness", 0.);
         reply(&mut s, None, 0xffff0000);
         let mask = s.mask_coverage(target).unwrap();
-        assert_eq!(s.engine.document().selection, current);
+        assert_eq!(s.engine.document().working.selection, current);
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.mask_coverage(target).unwrap(), before);
         invoke(&mut s, CommandId::Redo);
         assert_eq!(s.mask_coverage(target).unwrap(), mask);
         invoke(&mut s, CommandId::ReturnToArtwork);
-        assert_eq!(s.engine.document().selection, current);
+        assert_eq!(s.engine.document().working.selection, current);
         assert!(s.tonal_tools.draft.is_none());
     }
     #[test]
@@ -223,7 +226,7 @@ mod tonal_checks {
                 .iter()
                 .all(|e| s.state.tool_options().contains(e))
         );
-        let before = s.engine.document().selection.clone();
+        let before = s.engine.document().working.selection.clone();
         s.interaction.modifiers.shift = true;
         let mut e = event(&s, 1, PenPhase::Down, 1.);
         e.surface_position = on_surface(&s, Point { x: 80., y: 80. });
@@ -258,7 +261,7 @@ mod tonal_checks {
             "sample modifiers do not become the next operation's mode"
         );
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().selection, before);
+        assert_eq!(s.engine.document().working.selection, before);
         let capture = s.capture_workspace().unwrap();
         PreparedWorkspace::new(
             serde_json::from_str(&serde_json::to_string(&capture).unwrap()).unwrap())
@@ -273,7 +276,7 @@ mod tonal_checks {
         let context = s.state.toolbar_context();
         invoke(&mut s, CommandId::Brush);
         reply(&mut s, None, 0xffffffff);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         assert!(
             s.dispatch(UiAction::ToolbarEdit {
                 context,
@@ -289,21 +292,21 @@ mod tonal_checks {
         setting(&mut s, "tonal_softness", 0.2);
         s.frame(1, 1).unwrap();
         s.engine
-            .apply_edit(layer_core::Edit::SetSelection(Some(Selection::empty())))
+            .apply_edit({ let mut working = s.engine.document().working.clone(); working.selection = Some(Selection::empty()); layer_core::Edit::Working(working) })
             .unwrap();
-        let all = s.engine.document().selection.clone();
+        let all = s.engine.document().working.selection.clone();
         reply(&mut s, None, 0);
-        assert_eq!(s.engine.document().selection, all);
+        assert_eq!(s.engine.document().working.selection, all);
     }
     #[test]
     fn tonal_choices_follow_document_depth_and_keep_custom_last() {
         use layer_core::color::{RgbSpace, SampleDepth};
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             for space in [RgbSpace::Srgb, RgbSpace::ProPhoto] {
-                let mut document = Document::new("tones", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                document.color.depth = depth;
-                document.color.space = space;
-                let mut s = UiSession::new(Recorder { color: document.color, ..Default::default() }, document, [64; 2], Platform::Gtk).unwrap();
+                let mut document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = depth;
+                document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.space = space;
+                let mut s = UiSession::new(Recorder { color: document.composition().color, ..Default::default() }, document, [64; 2], Platform::Gtk).unwrap();
                 invoke(&mut s, CommandId::TonalSelect);
                 let ToolOption::Choice { items, .. } = &s.state.tool_extra[0] else { panic!("tones") };
                 let ids: Vec<_> = items.iter().map(|item| match item.action {

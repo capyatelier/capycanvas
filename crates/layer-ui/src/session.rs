@@ -1,11 +1,18 @@
 use crate::interaction::{Interaction, PointerContact};
 use crate::layout::{ResizeDrag, ResizeDragPhase};
 use crate::*;
-use layer_core::{DefaultBrushPreset, Document, LayerId, LayerKind, StrokeTool};
+use layer_core::{DefaultBrushPreset, Document, LayerKind, StrokeTool};
 #[cfg(test)]
 use layer_core::default_brush;
 use layer_engine::{CanvasEngine, InputProducer, PenEvent, PenPhase, PressureCurve, input_queue};
 use layer_render::CanvasRenderer;
+use layer_core::authored::{OccurrenceHandle, OccurrenceContent, SourceTarget};
+
+pub fn occurrence_token(handle: OccurrenceHandle) -> u64 { u64::from(handle.index()) + 1 }
+pub fn occurrence_handle(token: u64) -> Result<OccurrenceHandle, String> {
+    let index = token.checked_sub(1).and_then(|index| u32::try_from(index).ok()).ok_or("Invalid layer identity")?;
+    Ok(OccurrenceHandle::from_index(index))
+}
 #[path = "art_layers.rs"]
 mod art_layers;
 #[path = "color_picker_session.rs"]
@@ -295,7 +302,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn blank_localized(renderer: R, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
-        Self::new_localized(renderer, NewDocumentOptions::default().project(&localization)?.document, viewport, platform, localization)
+        Self::new_localized(renderer, NewDocumentOptions::default().project(&localization)?, viewport, platform, localization)
     }
 
     pub fn new(renderer: R, document: Document, viewport: [u32; 2], platform: Platform) -> Result<Self, String> {
@@ -352,10 +359,10 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
         effects::validate_document_labels(&document, &localization)?;
-        if document.layers.iter().any(|l| l.source.is_some()) && !renderer.supports_tiled_sources() {
+        if document.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
-        let camera = Camera::new([document.width, document.height], viewport);
+        let camera = Camera::new([document.composition().size[0], document.composition().size[1]], viewport);
         let (pen, input) = input_queue(8192);
         let mut engine = CanvasEngine::new(
             renderer,
@@ -366,9 +373,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
         .map_err(|e| e.to_string())?;
         let mut colors = ColorState::default();
-        colors.set_rgb_space(engine.document().color.space)?;
-        colors.set_document_depth(engine.document().color.depth)?;
-        let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
+        colors.set_rgb_space(engine.document().composition().color.space)?;
+        colors.set_document_depth(engine.document().composition().color.depth)?;
+        let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().composition().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -2274,15 +2281,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             return (false, false);
         }
         let document = self.engine.document();
-        let index = document
-            .layers
-            .iter()
-            .position(|layer| layer.id == document.active_layer)
-            .unwrap_or(0);
-        let editable = document
-            .layers
-            .get(index)
-            .is_some_and(|layer| layer.kind == LayerKind::Paint);
+        let active = document.working.occurrence;
+        let scene = document.scene();
+        let index = active.and_then(|handle| scene.position(handle)).unwrap_or(0);
+        let editable = active.and_then(|handle| scene.occurrence(handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint);
         let idle = self.canvas_idle();
 
         let enabled = match id {
@@ -2307,24 +2309,24 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if self.selection_masks.target().is_some() => false,
             CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask => {
                 self.require_document_idle().is_ok()
-                    && !document.is_locked(document.active_layer)
-                    && document.layer(document.active_layer).is_some_and(|l| {
+                    && !document.is_locked(active.unwrap_or_default())
+                    && scene.occurrence(active.unwrap_or_default()).is_some_and(|l| {
                         l.mask.as_ref().is_some_and(|m| {
-                            id != CommandId::ApplyLayerMask || (m.enabled && art_layers::apply_mask_refusal(l.kind, self.localization()).is_none())
+                            id != CommandId::ApplyLayerMask || (m.enabled && art_layers::apply_mask_refusal(l.kind(), self.localization()).is_none())
                         })
                     })
             }
             CommandId::EditLayerMask => {
-                idle && !document.active_mask
-                    && document.layer(document.active_layer).is_some_and(|l| l.mask.is_some())
+                idle && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
+                    && scene.occurrence(active.unwrap_or_default()).is_some_and(|l| l.mask.is_some())
             }
-            CommandId::EditLayerContent => idle && document.active_mask,
+            CommandId::EditLayerContent => idle && matches!(document.working.target, Some(SourceTarget::Coverage(_))),
             CommandId::DeleteLayer if self.selection_masks.quick() => false,
-            CommandId::SdrRendition => document.color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::PreviewSdr => document.color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::SdrRendition => document.composition().color.depth.is_float() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
+            CommandId::PreviewSdr => document.composition().color.depth.is_float() && self.state.hdr_display_available && !self.state.soft_proof && !self.state.gamut_warning && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProofSetup => self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::SoftProof => self.require_document_idle().is_ok() && !self.state.document_file.busy,
-            CommandId::GamutWarning => document.proof.is_some(),
+            CommandId::GamutWarning => document.output().proof.is_some(),
             CommandId::ResetLayout if self.managed_workspace.is_some() => {
                 self.require_workspace_idle().is_ok()
                     && self
@@ -2334,8 +2336,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::RepairSourceProfile | CommandId::RasterizeSource => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
-                    && !self.engine.document().active_mask
-                    && self.can_edit_original(self.engine.document().active_layer)
+                    && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
+                    && self.can_edit_original(active.unwrap_or_default())
             }
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
@@ -2407,10 +2409,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ShowRulers => idle,
             CommandId::SnapRulers => idle && self.rulers.visible,
             CommandId::DeleteRuler => {
-                idle && self
-                    .rulers
-                    .selected
-                    .is_some_and(|id| document.rulers.iter().any(|r| r.id == id))
+                idle && self.selected_ruler().is_some()
             }
             CommandId::CompleteSelection => self.layer_interaction.tool == (LayerCanvasTool::Selection { kind: SelectionTool::Polygon }) && self.layer_interaction.path.len() >= 3,
             CommandId::CancelSelection => {
@@ -2421,12 +2420,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.layer_interaction.path.is_empty()
             }
             CommandId::MaskSelection => {
-                idle && document.selection.is_some()
+                idle && document.working.selection.is_some()
                     && self.selection_masks.target().is_none()
                     && !self.operation.active()
-                    && !document.is_locked(document.active_layer)
-                    && document.layer(document.active_layer).is_some_and(|l| {
-                        l.kind != LayerKind::Selection
+                    && !document.is_locked(active.unwrap_or_default())
+                    && scene.occurrence(active.unwrap_or_default()).is_some_and(|l| {
+                        l.kind() != LayerKind::Selection
                     })
             }
             CommandId::SelectionVisible => idle && self.layer_interaction.tool.selection_tool().is_some(),
@@ -2495,9 +2494,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::ClearLayer | CommandId::FillSelection => {
                 self.require_document_idle().is_ok()
                     && editable
-                    && !document.active_mask
-                    && !document.is_locked(document.active_layer)
-                    && (id == CommandId::ClearLayer || document.selection.is_some())
+                    && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
+                    && !document.is_locked(active.unwrap_or_default())
+                    && (id == CommandId::ClearLayer || document.working.selection.is_some())
             }
             CommandId::UndoWorkspace => {
                 !self.state.customization.header_editing && self.workspace_history.can_undo()
@@ -2509,14 +2508,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::UseReferenceBelow => {
                 self.require_document_idle().is_ok() && self.use_reference_below_reason().is_none()
             }
-            CommandId::DeleteLayer => idle && document.can_delete_layers(&[document.active_layer]),
+            CommandId::DeleteLayer => idle && document.can_delete_layers(&[active.unwrap_or_default()]),
             CommandId::RaiseLayer => idle && editable && index > 0,
             CommandId::LowerLayer => {
                 idle && editable
-                    && document
-                        .layers
-                        .get(index + 1)
-                        .is_some_and(|layer| layer.kind == LayerKind::Paint)
+                    && scene.order().get(index + 1).and_then(|handle| scene.occurrence(*handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint)
             }
             CommandId::FitCanvas
             | CommandId::ActualPixels
@@ -2561,7 +2557,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let brush = self.engine.configured_brush();
                 tool_settings::mixes_color(brush) && brush.wet_mix.mix_space == space
             })
-            || blending::blend_space(id).is_some_and(|space| document.blend_space == space)
+            || blending::blend_space(id).is_some_and(|space| document.composition().blend == space)
             || matches!((id, self.layer_interaction.tool.region()),
                 (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
                 | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
@@ -2605,7 +2601,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.clone_command_selected(id)
             || self.warp_command_selected(id)
             || (id == CommandId::LayerMaskEnabled
-                && document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
+                && scene.occurrence(active.unwrap_or_default()).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled))
             || (id == CommandId::TransformSnapping && self.operation.snapping)
             || (id == CommandId::TransformPerspective && self.transform_mode().is_some_and(|(_, perspective)| perspective))
             || transform_choice(id).is_some_and(|choice| match choice {
@@ -2869,7 +2865,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let doc = self.engine.document();
                     let camera = &mut self.state.camera;
                     let geometry =
-                        NavigatorGeometry::new(camera, [doc.width, doc.height], viewport)
+                        NavigatorGeometry::new(camera, [doc.composition().size[0], doc.composition().size[1]], viewport)
                             .ok_or("Invalid Navigator size")?;
                     let point = geometry.document_point(position);
                     if phase == ContactPhase::Down {
@@ -3311,11 +3307,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.mask_color_action(action)?;
                     return Ok(self.changed(BRUSH | DOCUMENT, true));
                 }
-                let hdr = self.engine.document().color.depth.is_float();
+                let hdr = self.engine.document().composition().color.depth.is_float();
                 if matches!(action, ColorAction::HdrIntensity { .. } | ColorAction::SetSlotIntensity { .. }) && !hdr {
                     return Err("HDR intensity requires an HDR drawing".into());
                 }
-                self.state.colors.set_document_depth(self.engine.document().color.depth)?;
+                self.state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
                 self.state.colors.apply(action).map_err(|reason|reason.message(ColorInputModel::DocumentRgb, self.localization()))?;
                 self.state.brush.color = self.state.colors.preview(self.state.colors.definition());
                 self.apply_brush()?;
@@ -3361,8 +3357,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some(axis) = id.strip_prefix("crop_") {
                     let canvas = self.engine.document();
                     let value = match axis {
-                        "width" => canvas.width as f32,
-                        "height" => canvas.height as f32,
+                        "width" => canvas.composition().size[0] as f32,
+                        "height" => canvas.composition().size[1] as f32,
                         _ => 0.,
                     };
                     return self.dispatch(UiAction::SetToolSetting { id, value });
@@ -4125,7 +4121,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if fit {
             self.initial_fit = false;
             let doc = self.engine.document();
-            self.state.camera.fit([doc.width, doc.height]);
+            self.state.camera.fit([doc.composition().size[0], doc.composition().size[1]]);
         }
         if resized || fit {
             self.sync_camera();
@@ -4340,6 +4336,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.update_shader_idle();
         let mut changed = self.poll_filter_installation();
         let revision = self.engine.document().revision;
+        let working_generation = self.engine.document().working.generation;
         changed |= self.poll_selection_paint()?;
         let tool_before=self.layer_interaction.tool;
         changed |= self.poll_content_bounds();
@@ -4377,7 +4374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if std::mem::take(&mut self.operation.changed) {
             changed |= regions::BRUSH;
         }
-        let sample_space = self.engine.document().color.space;
+        let sample_space = self.engine.document().composition().color.space;
         changed |= self.poll_calibration();
         changed |= self.poll_auto_levels();
         changed |= self.poll_targeted_curve();
@@ -4433,7 +4430,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         Ok(self.changed(
             changed,
-            analyses_changed != 0 || tonal_changed || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
+            analyses_changed != 0 || tonal_changed || self.engine.document().working.generation != working_generation
+                || self.wants_continuous_frames() || self.engine.has_pending_document_edits(),
         ))
     }
 
@@ -4483,7 +4481,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((regions, change.canvas_wake))
             }
             CommandId::GamutWarning => {
-                if self.engine.document().proof.is_none() { return Err("Choose a proof target first".into()); }
+                if self.engine.document().output().proof.is_none() { return Err("Choose a proof target first".into()); }
                 self.state.gamut_warning = !self.state.gamut_warning;
                 Ok((COMMANDS, true))
             }
@@ -4509,11 +4507,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | HOST, false))
             }
             CommandId::RasterizeSource | CommandId::RepairSourceProfile => {
-                let id = self.engine.document().active_layer;
+                let id = self.engine.document().working.occurrence.ok_or("Select a layer")?;
                 self.request_source_edit(id, if command == CommandId::RasterizeSource {
-                    DocumentRequest::RasterizeSource { layer: id.0 }
+                    DocumentRequest::RasterizeSource { layer: occurrence_token(id) }
                 } else {
-                    DocumentRequest::RepairSourceProfile { layer: id.0 }
+                    DocumentRequest::RepairSourceProfile { layer: occurrence_token(id) }
                 })?;
                 Ok((DOCUMENT | HOST, false))
             }
@@ -4718,7 +4716,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::MaskSelection => {
-                let id = self.engine.document().active_layer.0;
+                let id = occurrence_token(self.engine.document().working.occurrence.ok_or("Select a layer")?);
                 self.layer_action(LayerAction::MaskSelection { id, hide: false })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
@@ -4728,8 +4726,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::EditLayerMask
             | CommandId::EditLayerContent => {
                 let document = self.engine.document();
-                let id = document.active_layer.0;
-                let enabled = document.layer(document.active_layer).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled);
+                let id = occurrence_token(document.working.occurrence.ok_or("Select a layer")?);
+                let enabled = document.working.occurrence.and_then(|handle| document.scene().occurrence(handle)).and_then(|l| l.mask.as_ref()).is_some_and(|m| m.enabled);
                 self.layer_action(match command {
                     CommandId::InvertLayerMask => LayerAction::InvertMask { id },
                     CommandId::LayerMaskEnabled => LayerAction::EnableMask { id, value: !enabled },
@@ -4932,7 +4930,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.finish_transform(false)?;
                     return Ok((BRUSH | DOCUMENT | COMMANDS, true));
                 }
-                if self.engine.history_color(redo) != self.engine.document().color {
+                if self.engine.history_color(redo) != self.engine.document().composition().color {
                     self.request_document(DocumentRequest::ColorHistory { redo })?;
                     return Ok((DOCUMENT | HOST, false));
                 }
@@ -4948,14 +4946,16 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::SelectAll => {
                 if !self.selection_masks.quick() { self.return_to_artwork()?; }
                 let doc = self.engine.document();
-                let [w, h] = [doc.width as f32, doc.height as f32];
+                let [w, h] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
                 let selection = layer_core::Selection::polygon(
                     [[0., 0.], [w, 0.], [w, h], [0., h]]
                         .map(|[x, y]| layer_core::Point { x, y })
                         .to_vec(),
                 )
                 .map_err(error)?;
-                self.layer_edit(layer_core::Edit::SetSelection(Some(selection)))?;
+                let mut working = self.engine.document().working.clone();
+                working.selection = Some(selection);
+                self.layer_edit(layer_core::Edit::Working(working))?;
                 Ok((DOCUMENT, true))
             }
             CommandId::ClearLayer
@@ -4964,7 +4964,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | CommandId::InvertSelection => {
                 self.layer_action(match command {
                     CommandId::ClearLayer => LayerAction::Clear {
-                        id: self.engine.document().active_layer.0,
+                        id: occurrence_token(self.engine.document().working.occurrence.ok_or("Select a layer")?),
                     },
                     CommandId::FillSelection => LayerAction::FillSelection,
                     CommandId::Deselect => LayerAction::Deselect,
@@ -4981,19 +4981,13 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::DeleteLayer => {
                 self.layer_action(LayerAction::Delete {
-                    id: self.engine.document().active_layer.0,
+                    id: occurrence_token(self.engine.document().working.occurrence.ok_or("Select a layer")?),
                 })?;
                 Ok((0, true))
             }
             CommandId::RaiseLayer | CommandId::LowerLayer => {
-                let id = self.engine.document().active_layer;
-                let index = self
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .position(|l| l.id == id)
-                    .ok_or("Unknown layer")?;
+                let id = self.engine.document().working.occurrence.ok_or("Select a layer")?;
+                let index = self.engine.document().scene().position(id).ok_or("Unknown layer")?;
                 self.engine
                     .move_layer(
                         id,
@@ -5009,7 +5003,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::FitCanvas => {
                 self.initial_fit = false;
                 let doc = self.engine.document();
-                self.state.camera.fit([doc.width, doc.height]);
+                self.state.camera.fit([doc.composition().size[0], doc.composition().size[1]]);
                 self.sync_camera();
                 Ok((CAMERA, true))
             }
@@ -5224,7 +5218,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn select_brush(&mut self, id: u32) -> Result<(), String> {
         let preset = preset(id)?;
         self.cancel_layer_gesture()?;
-        let brush = self.tools.brush_in(preset, self.engine.document().color.space);
+        let brush = self.tools.brush_in(preset, self.engine.document().composition().color.space);
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.layer_interaction.tool = LayerCanvasTool::Paint;
         self.state.layer_tools.tool = LayerCanvasTool::Paint;
@@ -5250,7 +5244,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut brush = self.engine.configured_brush().clone();
         brush.diameter = state.diameter;
         brush.opacity = state.opacity;
-        let tool = stroke_paint(state.tool, &self.state.colors, self.engine.document().color.space, &mut brush)?;
+        let tool = stroke_paint(state.tool, &self.state.colors, self.engine.document().composition().color.space, &mut brush)?;
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(tool);
@@ -5287,7 +5281,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn refresh_tools(&mut self) {
-        self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
+        self.selection_tools.options.tonal.adapt_to_document(self.engine.document().composition().color.depth.is_float());
         self.state.tool_actions = if self.content_bounds.baking() {
             vec![ToolSettingAction { command: CommandId::CancelTransform, checkable: false }]
         } else if self.cropping() {
@@ -5652,7 +5646,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_document(&mut self) {
         self.reconcile_selection_mask();
         self.refresh_file_state();
-        if self.engine.document().proof.is_none() {
+        if self.engine.document().output().proof.is_none() {
             self.state.soft_proof = false;
             self.state.gamut_warning = false;
         }
@@ -5661,21 +5655,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self
             .rulers
             .selected
-            .is_some_and(|id| !self.engine.document().rulers.iter().any(|r| r.id == id))
+            .is_some_and(|id| !self.engine.document().rulers().any(|r| r.id == id))
             && self.layer_interaction.path.is_empty()
         {
             self.rulers.selected = None;
             self.refresh_tools();
         }
         let doc = self.engine.document();
-        self.state.filter_picker.selected = doc.layer(doc.active_layer).and_then(|l| l.effect.as_ref())
-            .map(|e| e.program.id.clone());
+        self.state.filter_picker.selected = doc.working.occurrence.and_then(|handle| doc.scene().effect(handle)).map(|effect| effect.program.id.clone());
         let interaction = &mut self.layer_interaction;
-        if interaction.editing != Some(doc.active_layer) {
-            interaction.editing = Some(doc.active_layer);
-            interaction.selected = std::collections::BTreeSet::from([doc.active_layer]);
+        if interaction.editing != doc.working.occurrence {
+            interaction.editing = doc.working.occurrence;
+            interaction.selected = doc.working.occurrence.into_iter().collect();
         }
-        interaction.selected.retain(|id| doc.layer(*id).is_some());
+        interaction.selected.retain(|handle| doc.scene().occurrence(*handle).is_some());
         let drawing_target = doc.drawing_target();
         self.end_dry_mask_session(drawing_target);
         self.refresh_layer_presentation();
@@ -5686,108 +5679,106 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         let drawing_target = doc.drawing_target();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
-        let layer_state = |l: &layer_core::Layer| LayerState {
-            id: l.id.0,
-            selection_layer: l.kind == LayerKind::Selection,
+        let layer_state = |id: layer_core::authored::OccurrenceHandle| {
+            let scene = doc.scene();
+            let l = scene.occurrence(id).expect("placed occurrence");
+            let source = scene.source_target(id);
+            LayerState {
+            id: occurrence_token(id),
+            selection_layer: l.kind() == LayerKind::Selection,
             quick_mask: false,
-            can_rename: !doc.is_locked(l.id),
-            content_icon: l.effect.as_ref().filter(|fx| fx.program.kind != layer_core::EffectKind::Generator).map(|fx| {
+            can_rename: !doc.is_locked(id),
+            content_icon: scene.effect(id).filter(|fx| fx.program.kind != layer_core::EffectKind::Generator).map(|fx| {
                 format!(
                     "layer-{}-symbolic",
                     self.effect_catalog
                         .get(&fx.program.id)
                         .map_or("adjustments", |e| e.icon.as_ref())
                 )
-            }).or_else(|| match l.kind { LayerKind::Selection => Some("layer-selection-brush-symbolic".into()), _ => None }),
+            }).or_else(|| match l.kind() { LayerKind::Selection => Some("layer-selection-brush-symbolic".into()), _ => None }),
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
-                if l.properties.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.properties.blend, &self.state.localization).to_string()); }
+                if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
             },
-            can_delete: doc.can_delete_layers(&[l.id]),
-            can_alpha_lock: art_layers::LayerControls::for_layer(doc, l).alpha_lock,
-            visible: l.visible,
+            can_delete: doc.can_delete_layers(&[id]),
+            can_alpha_lock: art_layers::LayerControls::for_layer(doc, id, l).alpha_lock,
+            visible: doc.effective_visibility(id),
             opacity: l.opacity,
-            selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&l.id),
+            selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&id),
             load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
-            selection_icon: if self.layer_interaction.selected.contains(&l.id)
-                && (self.layer_interaction.selected.len() > 1 || l.id != doc.active_layer)
+            selection_icon: if self.layer_interaction.selected.contains(&id)
+                && (self.layer_interaction.selected.len() > 1 || Some(id) != doc.working.occurrence)
             {
                 "layer-selection-checked-symbolic"
-            } else if doc.reference_layers.contains(&l.id) {
+            } else if l.reference {
                 "layer-reference-symbolic"
-            } else if drawing_owner.is_some_and(|owner| owner.id == l.id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(l.id)) {
+            } else if drawing_owner.is_some_and(|owner| owner == id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id)) {
                 "layer-brush-symbolic"
             } else {
                 "layer-selection-empty-symbolic"
             },
-            editing: l.id == doc.active_layer && !self.selection_masks.quick(),
-            drawing: drawing_owner.is_some_and(|owner| owner.id == l.id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(l.id)),
-            mask_selected: l.id == doc.active_layer && (doc.active_mask
-                || l.mask.as_ref().is_some_and(|m| drawing_target == Some(m.id))),
+            editing: Some(id) == doc.working.occurrence && !self.selection_masks.quick(),
+            drawing: drawing_owner.is_some_and(|owner| owner == id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id)),
+            mask_selected: Some(id) == doc.working.occurrence && l.mask.as_ref().is_some_and(|m| doc.working.target == Some(layer_core::authored::SourceTarget::Coverage(m.source)) || drawing_target == Some(layer_core::authored::SourceTarget::Coverage(m.source))),
             has_mask: l.mask.is_some(),
             mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
             mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
-            alpha_locked: l.properties.alpha_locked,
-            locked: doc.is_locked(l.id),
-            clipped: l.properties.clipped,
-            reference: doc.reference_layers.contains(&l.id),
-            group: l.kind == LayerKind::Group,
+            alpha_locked: l.alpha_locked,
+            locked: doc.is_locked(id),
+            clipped: l.clipped,
+            reference: l.reference,
+            group: l.kind() == LayerKind::Group,
             can_drop_below: true,
-            depth: self.layer_interaction.depth(doc, l),
-            collapsed: self.layer_interaction.collapsed.contains(&l.id),
-            blend: l.properties.blend.code(),
-            blend_label: effects::blend_label(l.properties.blend, &self.state.localization).to_string(),
-            paint_revision: l
-                .raster
-                .identity()
+            depth: self.layer_interaction.depth(doc, id),
+            collapsed: self.layer_interaction.collapsed.contains(&id),
+            blend: l.blend.code(),
+            blend_label: effects::blend_label(l.blend, &self.state.localization).to_string(),
+            paint_revision: source.and_then(|target| scene.raster(target)).map_or(0, |raster| raster.identity())
                 .wrapping_mul(4099)
-                .wrapping_add(if doc.color.depth.is_float() {
+                .wrapping_add(if doc.composition().color.depth.is_float() {
                     ui_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
                 } else { 0 })
-                .wrapping_add(l.pending_operations.len() as u64 * 2)
-                .wrapping_add(self.layer_preview_revisions.id(l.id).wrapping_mul(65537))
-                .wrapping_add(self.selection_masks.preview_revision(l.id).wrapping_mul(65539))
+                .wrapping_add(source.and_then(|target| scene.operations(target)).map_or(0, |operations| operations.len()) as u64 * 2)
+                .wrapping_add(self.layer_preview_revisions.id(id).wrapping_mul(65537))
+                .wrapping_add(self.selection_masks.preview_revision(Some(id)).wrapping_mul(65539))
                 & ((1u64 << 53) - 1),
-            mask_revision: l.mask.as_ref().map_or(0, |m| {
-                m.id.0
+            mask_revision: scene.mask(id).map_or(0, |(m, source)| {
+                layer_core::authored::SourceTarget::Coverage(m.source).wire_id()
                     .wrapping_mul(65537)
-                    .wrapping_add(m.raster.identity().wrapping_mul(2))
-                    .wrapping_add(self.layer_preview_revisions.id(l.id).wrapping_mul(65539))
+                    .wrapping_add(source.raster.identity().wrapping_mul(2))
+                    .wrapping_add(self.layer_preview_revisions.id(id).wrapping_mul(65539))
                     .wrapping_add(u64::from(m.inverted))
             }),
-            mask_id: l.mask.as_ref().map(|m| m.id.0),
-        };
-        self.state.layer_tools.editing_layer = doc.layer(doc.active_layer).map(&layer_state);
+            mask_id: l.mask.as_ref().map(|m| layer_core::authored::SourceTarget::Coverage(m.source).wire_id()),
+        }};
+        self.state.layer_tools.editing_layer = doc.working.occurrence.filter(|id| doc.scene().occurrence(*id).is_some()).map(layer_state);
         self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, self.localization());
-        self.state.layer_tools.controls = doc
-            .layer(doc.active_layer)
-            .map(|l| art_layers::LayerControls::for_layer(doc, l))
-            .unwrap_or_default();
-        self.state.layers = doc
-            .ordered_layers()
-            .into_iter()
-            .filter(|l| !self.layer_interaction.hidden_by_group(doc, l))
-            .map(layer_state)
-            .collect();
+        self.state.layer_tools.controls = doc.working.occurrence.and_then(|id| doc.scene().occurrence(id).map(|l| art_layers::LayerControls::for_layer(doc, id, l))).unwrap_or_default();
+        self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();
         if self.selection_masks.quick() {
-            let mut temporary = layer_core::Layer::selection(LayerId(0), "Quick Mask", self.current_selection().unwrap_or_else(layer_core::Selection::empty));
-            temporary.visible = self.selection_masks.quick_visible;
-            let mut row = layer_state(&temporary);
-            row.load_selection_tooltip = "Finish Quick Mask and use it as the current selection";
-            row.quick_mask = true; row.can_rename = false; row.can_delete = true;
-            row.paint_revision = self.selection_masks.preview_revision(LayerId(0));
-            row.can_drop_below = false; row.editing = true; row.drawing = true; row.selected = true;
-            row.selection_icon = "layer-brush-symbolic";
+            let row = LayerState {
+                id: 0, selection_layer: true, quick_mask: true, can_rename: false,
+                content_icon: Some("layer-selection-brush-symbolic".into()),
+                label: self.localization().text(MessageId::COMMAND_QUICK_MASK).to_string(), description: String::new(),
+                can_delete: true, can_alpha_lock: false, visible: self.selection_masks.quick_visible,
+                opacity: 1., selected: true, mask_selected: false, selection_icon: "layer-brush-symbolic",
+                load_selection_tooltip: "Finish Quick Mask and use it as the current selection",
+                editing: true, drawing: true, has_mask: false, mask_enabled: false, mask_linked: false,
+                alpha_locked: false, locked: false, clipped: false, reference: false, group: false,
+                can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
+                blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
+                paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None,
+            };
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
             self.state.layer_tools.controls = LayerControls::default();
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
         effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
-        if let Some(id) = self.state.layer_properties.layer.and_then(|id| self.effect_analyses.status(LayerId(id))) {
+        if let Some(id) = self.state.layer_properties.layer.and_then(|id| occurrence_handle(id).ok()).and_then(|id| self.effect_analyses.status(id)) {
             let status = self.state.localization.text(id);
             self.state.layer_properties.title = format!("{} · {status}", self.state.layer_properties.title);
             self.state.layer_properties.description = status.to_string();
@@ -5809,18 +5800,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.references_selected = !references.is_empty()
             && references
                 .iter()
-                .any(|id| doc.reference_layers.contains(id));
+                .any(|id| doc.scene().occurrence(*id).is_some_and(|layer| layer.reference));
         self.state.layer_tools.reference_action_label = self.localization().text(if self.reference_action_removes() {
             MessageId::RESOURCES_LAYER_MENU_STOP_USING_AS_REFERENCE
         } else {
             MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES
         });
         self.state.tabs = vec![DocumentTab {
-            id: doc.id.to_string(),
+            id: doc.artwork.id.to_string(),
             title: self.state.document_file.title().into(),
             active: true,
-            width: doc.width,
-            height: doc.height,
+            width: doc.composition().size[0],
+            height: doc.composition().size[1],
         }];
         self.refresh_tools();
     }
@@ -5830,7 +5821,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 fn refused(reason: Option<impl AsRef<str>>) -> Result<(), String> {
     reason.map_or(Ok(()), |reason| Err(reason.as_ref().to_owned()))
 }
-fn error(value: impl std::fmt::Display) -> String {
+pub(crate) fn error(value: impl std::fmt::Display) -> String {
     value.to_string()
 }
 fn measured(value: f32) -> bool {
@@ -5941,8 +5932,10 @@ mod tests {
     fn active_header_projection_retains_tool_copy_and_literal_toolbar_names() {
         let japanese = Localizer::shared(UiLanguage::Japanese);
         let mut s = UiSession::new_localized(Recorder::default(),
-            Document::new("Literal {document}", 1000, 1000, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
+            Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Literal paint".into(), paper: "Literal paper".into() }),
             [1000, 1000], Platform::Gtk, japanese.clone()).unwrap();
+        s.state.document_file.unsaved_name = Some("Literal {document}".into());
+        let document_identity = s.engine.document().artwork.id;
         if !s.state.workspace.layout.header.entries().any(|entry| entry.item == HeaderItem::Settings) {
             s.dispatch(HeaderAction::Add { zone: HeaderZone::Right, before: None, item: HeaderItem::Settings }.action()).unwrap();
         }
@@ -5969,7 +5962,8 @@ mod tests {
         customize(&mut s, CustomizationAction::ToolbarName { name: "Literal {toolbar}".into() });
         customize(&mut s, CustomizationAction::ConfirmToolbar);
         assert_eq!(s.panel_view(Panel::Toolbar).unwrap().title, "Literal {toolbar}");
-        assert_eq!(s.engine().document().id.as_ref(), "Literal {document}");
+        assert_eq!(s.state.document_file.title(), "Literal {document}");
+        assert_eq!(s.engine.document().artwork.id, document_identity);
         let mut settings = s.state.settings.clone();
         settings.shortcuts.insert(CommandId::Eyedropper.shortcut_id(), vec![KeyChord::new("k", Modifiers::default())]);
         s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
@@ -6115,24 +6109,24 @@ mod tests {
         let mut s = session(Platform::Gtk);
         s.frame(0, 0).unwrap();
         customize(&mut s, CustomizationAction::ManageToolbars);
-        let document = serde_json::to_value(s.engine.document()).unwrap();
+        let document = s.engine.document().clone();
         let camera = serde_json::to_value(&s.state.camera).unwrap();
         let checkpoint = s.engine.checkpoint();
         let files = (s.state.document_file.epoch, s.state.document_file.revision, s.state.document_file.modified);
         let rendering = (s.engine.backend().composites, s.engine.backend().dabs, s.engine.backend().snapshot_requests.len());
-        let literal_names: Vec<_> = s.engine.document().layers.iter().map(|layer| layer.name.clone()).collect();
+        let literal_names: Vec<_> = s.engine.document().scene().order().iter().map(|handle| s.engine.document().scene().occurrence(*handle).unwrap().name.clone()).collect();
         for language in UiLanguage::ALL.into_iter().skip(1).chain([UiLanguage::English]) {
             let l = Localizer::shared(language);
             assert!(s.set_localization(l.clone()));
             for (panel, _) in &s.panel_copy { assert_eq!(s.panel_view(*panel).unwrap().title, s.state.workspace.layout.panel(*panel).unwrap().title_localized(&l)); }
             assert_eq!(s.state.commands.iter().find(|command| command.id == CommandId::Settings).unwrap().label, CommandId::Settings.localized_label(&l));
             assert_eq!(s.state.filter_picker.search_label, l.text(MessageId::RESOURCES_SEARCH_FILTERS));
-            assert_eq!(serde_json::to_value(s.engine.document()).unwrap(), document);
+            assert_eq!(s.engine.document(), &document);
             assert_eq!(serde_json::to_value(&s.state.camera).unwrap(), camera);
             assert_eq!(s.engine.checkpoint(), checkpoint);
             assert_eq!((s.state.document_file.epoch, s.state.document_file.revision, s.state.document_file.modified), files);
             assert_eq!((s.engine.backend().composites, s.engine.backend().dabs, s.engine.backend().snapshot_requests.len()), rendering);
-            assert_eq!(s.engine.document().layers.iter().map(|layer| layer.name.clone()).collect::<Vec<_>>(), literal_names);
+            assert_eq!(s.engine.document().scene().order().iter().map(|handle| s.engine.document().scene().occurrence(*handle).unwrap().name.clone()).collect::<Vec<_>>(), literal_names);
             let panel = s.panel_copy[0].1.clone();
             let revision = s.state.revision;
             assert!(!s.set_localization(l));
@@ -6190,9 +6184,10 @@ mod tests {
                     }
                 }
                 if field != 0 {
-                    let mut project = NewDocumentOptions::default().project(&localization).unwrap();
-                    project.document.layers[0].effect = Some(Arc::new(layer_core::EffectInstance::new(definition.program.clone())));
-                    let result = UiSession::from_project_localized(Recorder::default(), project, None, [256, 256], Platform::Gtk, localization.clone());
+                    let mut document = NewDocumentOptions::default().project(&localization).unwrap();
+                    let (_,edit)=effect_insertion(&document,layer_core::EffectInstance::new(definition.program.clone()),"Invalid resource filter");
+                    document.apply(edit).unwrap();
+                    let result = UiSession::new_localized(Recorder::default(), document, [256, 256], Platform::Gtk, localization.clone());
                     assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "embedded field {field}: {key}");
                 }
                 for library in [false, true] {
@@ -6295,7 +6290,7 @@ mod tests {
     #[test]
     fn source_document_adoption_requires_renderer_support() {
         use layer_core::color::{SampleDepth, source::*};
-        let mut document = Document::new("photo", 1, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = Document::new(layer_core::PortableId::random(), 1, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let mut source = SourceBuilder::new([1, 1], SourceInterpretation {
             channels: SourceChannels::Rgba,
             depth: SampleDepth::U16,
@@ -6303,9 +6298,10 @@ mod tests {
             profile_assumed: false,
         }, 1024 * 1024).unwrap();
         source.push_row(&[0; 8]).unwrap();
-        document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
-        let project = layer_core::Project { document };
-        let result = UiSession::from_project(Recorder::default(), project, None, [256, 256], Platform::Gtk);
+        let target = document.working.target.unwrap();
+        let SourceTarget::Paint(paint) = target else { unreachable!() };
+        document.artwork.paint.get_mut(paint).unwrap().original = Some(std::sync::Arc::new(source.finish().unwrap()));
+        let result = UiSession::from_project(Recorder::default(), document, None, [256, 256], Platform::Gtk);
         assert!(matches!(result, Err(message) if message.contains("does not support tiled photo")));
     }
 
@@ -6982,7 +6978,7 @@ mod tests {
         s.require_workspace_idle().unwrap();
         s.set_workspace_read_only(false);
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().layers, before.layers);
+        assert_live_artwork_eq(s.engine.document(), &before);
     }
 
     #[test]
@@ -7368,15 +7364,17 @@ mod tests {
     fn document_save_keeps_sources_and_tracks_the_saved_undo_state() {
         let mut s = UiSession::new(
             Recorder { tiled_sources: true, ..Default::default() },
-            Document::new("test", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [1000, 1000],
             Platform::Gtk,
         )
         .unwrap();
         let source = layer_core::color::source::rgba8_source([1, 1], |_, _| [200, 20, 90, 128]);
         s.import_layer_source("Image", std::sync::Arc::unwrap_or_clone(source)).unwrap();
-        let image = s.engine.document().active_layer;
-        let retained = |d: &Document| d.layer(image).unwrap().source.clone().unwrap();
+        let occurrence = s.engine.document().working.occurrence.unwrap();
+        let image = match s.engine.document().scene().occurrence(occurrence).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
+        let identity = s.engine.document().artwork.paint.id(image).unwrap();
+        let retained = |artwork: &layer_core::Artwork| artwork.paint.get(artwork.paint.resolve(identity).unwrap()).unwrap().original.clone().unwrap();
         assert!(s.state.document_file.modified);
         invoke(&mut s, CommandId::SaveDocument);
         let id = s.files.pending.as_ref().unwrap().0;
@@ -7392,8 +7390,8 @@ mod tests {
         };
         let project = s.capture_project_save(id, first).unwrap();
         assert!(std::sync::Arc::ptr_eq(
-            &retained(&project.document),
-            &retained(s.engine.document())
+            &retained(&project.artwork),
+            &retained(&s.engine.document().artwork)
         ));
         assert!(s.capture_project_save(id, location.clone()).is_err());
         let invalid = DocumentLocation { uri: String::new(), ..location.clone() };
@@ -7410,9 +7408,8 @@ mod tests {
         assert!(!s.state.document_file.modified);
         invoke(&mut s, CommandId::Redo);
         assert!(s.state.document_file.modified);
-        let mut stream = Vec::new();
-        project.write(&mut stream).unwrap();
-        let decoded = layer_core::Project::read(stream.as_slice(), Default::default()).unwrap();
+        let stream = package_bytes(&project);
+        let decoded = reopen_capture(&project);
         let reopened = UiSession::from_project(
             Recorder { tiled_sources: true, ..Default::default() },
             decoded,
@@ -7422,13 +7419,8 @@ mod tests {
         )
         .unwrap();
         assert!(!reopened.state.document_file.modified);
-        assert_eq!(retained(reopened.engine.document()), retained(&project.document));
-        let mut reopened_stream = Vec::new();
-        reopened
-            .capture_project_recovery()
-            .unwrap()
-            .write(&mut reopened_stream)
-            .unwrap();
+        assert_eq!(retained(&reopened.engine.document().artwork), retained(&project.artwork));
+        let reopened_stream = package_bytes(&reopened.capture_project_recovery().unwrap());
         assert_eq!(reopened_stream, stream);
     }
 
@@ -7472,7 +7464,7 @@ mod tests {
         assert_eq!(s.engine.checkpoint(), checkpoint);
         invoke(&mut s, CommandId::Undo);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().layers, document.layers);
+        assert_live_artwork_eq(s.engine.document(), &document);
     }
 
     #[test]
@@ -7480,34 +7472,35 @@ mod tests {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::AddLayer);
         let checkpoint = s.engine.checkpoint();
-        let layer = s.engine.document().active_layer;
-        let root = s.engine.document().layer(layer).unwrap().raster.clone();
+        let layer = s.engine.document().working.occurrence.unwrap();
+        let target = s.engine.document().scene().source_target(layer).unwrap();
+        let root = s.engine.document().target_raster(target).unwrap().clone();
         s.pen(event(&s, 1, PenPhase::Down, 0.5)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         assert!(s.engine.has_active_stroke());
         s.replace_renderer(Recorder::default()).unwrap();
         assert!(s.engine.has_active_stroke());
         assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.engine.document().active_layer, layer);
-        assert_eq!(s.engine.document().layer(layer).unwrap().raster, root);
+        assert_eq!(s.engine.document().working.occurrence, Some(layer));
+        assert_eq!(*s.engine.document().target_raster(target).unwrap(), root);
         assert!(s.state.document_file.modified);
         s.frame(20_000_000, 28_000_000).unwrap();
         assert!(s.renderer_mut().dabs > 0);
         s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
         s.frame(30_000_000, 38_000_000).unwrap();
         assert!(!s.engine.has_active_stroke());
-        let committed = s.engine.document().layer(layer).unwrap().raster.clone();
+        let committed = s.engine.document().target_raster(target).unwrap().clone();
         assert_ne!(committed.identity(), root.identity());
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.engine.checkpoint(), checkpoint);
-        assert_eq!(s.engine.document().layer(layer).unwrap().raster, root);
+        assert_eq!(*s.engine.document().target_raster(target).unwrap(), root);
         invoke(&mut s, CommandId::Undo);
         assert!(!s.state.document_file.modified);
         invoke(&mut s, CommandId::Redo);
         assert!(s.state.document_file.modified);
         assert_eq!(s.engine.checkpoint(), checkpoint);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().layer(layer).unwrap().raster, committed);
+        assert_eq!(*s.engine.document().target_raster(target).unwrap(), committed);
     }
 
     #[test]
@@ -7532,7 +7525,10 @@ mod tests {
     #[test]
     fn save_during_contact_uses_the_committed_boundary_and_keeps_live_ink_dirty() {
         let mut s = session(Platform::Gtk);
-        let initial = s.engine.document().layers[0].raster.identity();
+        let target = s.engine.document().drawing_target().unwrap();
+        let SourceTarget::Paint(paint) = target else { unreachable!() };
+        let identity = s.engine.document().artwork.paint.id(paint).unwrap();
+        let initial = s.engine.document().target_raster(target).unwrap().identity();
         s.pen(event(&s, 1, PenPhase::Down, 0.3)).unwrap();
         s.frame(10_000_000, 18_000_000).unwrap();
         assert!(s.state.document_file.modified);
@@ -7549,12 +7545,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(snapshot.document.layers[0].raster.identity(), initial);
+        assert_eq!(snapshot.artwork.paint.get(paint).unwrap().raster.identity(), initial);
         let recovery = s.capture_project_recovery().unwrap();
         let worker = std::thread::spawn(move || {
-            let mut bytes = Vec::new();
-            recovery.write(&mut bytes).unwrap();
-            layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap()
+            reopen_capture(&recovery)
         });
         s.complete_document_request(id, Ok(true)).unwrap();
         assert!(
@@ -7564,13 +7558,14 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 0.7)).unwrap();
         s.frame(20_000_000, 28_000_000).unwrap();
         assert!(s.state.document_file.modified);
-        assert!(worker.join().unwrap().document.layers[0].raster.is_empty());
-        let committed = s.engine.document().layers[0].raster.identity();
+        let recovered = worker.join().unwrap();
+        assert!(recovered.artwork.paint.get(recovered.artwork.paint.resolve(identity).unwrap()).unwrap().raster.is_empty());
+        let committed = s.engine.document().target_raster(target).unwrap().identity();
         assert_ne!(committed, initial);
         invoke(&mut s, CommandId::Undo);
         assert!(!s.state.document_file.modified);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().layers[0].raster.identity(), committed);
+        assert_eq!(s.engine.document().target_raster(target).unwrap().identity(), committed);
         assert!(s.state.document_file.modified);
     }
 
@@ -7681,7 +7676,12 @@ mod tests {
         invoke(&mut s, CommandId::ExportDocument);
         let id = s.state.requests.last().unwrap().id;
         let export = s.capture_project_export(id).unwrap();
-        assert_eq!(export.project.document, *s.engine.document());
+        let captured = Document::from_artwork((*export.capture.artwork).clone()).unwrap();
+        let mut expected = s.engine.document().clone();
+        expected.artwork.outputs.get_mut(expected.artwork.default_output).unwrap().context = captured.output().context.clone();
+        assert_live_artwork_eq(&captured, &expected);
+        assert_eq!(export.capture.checkpoint.edit_checkpoint, checkpoint);
+        assert_eq!(captured.output().context.elapsed, 1.5);
         assert_eq!(export.time, 1.5);
         s.complete_document_request(id, Ok(true)).unwrap();
         assert!(s.state.document_file.modified);
@@ -7692,7 +7692,8 @@ mod tests {
         s.complete_document_request(id, Ok(false)).unwrap();
         assert!(s.state.document_file.modified);
         assert!(s.state.host_error.is_none());
-        assert_eq!(s.engine.document(), &export.project.document);
+        expected.artwork.outputs.get_mut(expected.artwork.default_output).unwrap().context = s.engine.document().output().context.clone();
+        assert_live_artwork_eq(s.engine.document(), &expected);
     }
 
     #[test]
@@ -7725,7 +7726,7 @@ mod tests {
         assert_eq!(s.engine.document(), &document);
         assert!(new_drawing(0, 10, &Localizer::shared(UiLanguage::English)).is_err());
         assert!(new_drawing(10, 8193, &Localizer::shared(UiLanguage::English)).is_err());
-        assert_eq!(new_drawing(512, 128, &Localizer::shared(UiLanguage::English)).unwrap().document.width, 512);
+        assert_eq!(new_drawing(512, 128, &Localizer::shared(UiLanguage::English)).unwrap().composition().size[0], 512);
     }
 
     #[test]
@@ -7763,7 +7764,7 @@ mod tests {
     fn navigator_drags_without_jump_and_outside_click_recenters() {
         let mut s = UiSession::new(
             Recorder::default(),
-            Document::new("test", 2048, 1536, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 2048, 1536, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [1000, 1000],
             Platform::Gtk,
         )
@@ -7778,7 +7779,7 @@ mod tests {
             s.state.camera.center_on([1000.0, 700.0]);
             let doc = s.engine.document();
             let g =
-                NavigatorGeometry::new(&s.state.camera, [doc.width, doc.height], [264.0, 200.0])
+                NavigatorGeometry::new(&s.state.camera, doc.composition().size, [264.0, 200.0])
                     .unwrap();
             let middle = [
                 g.work_area.iter().map(|p| p[0]).sum::<f32>() * 0.25 + 2.0,
@@ -7838,8 +7839,60 @@ mod tests {
     }
 
     #[test]
+    fn editing_region_reads_constant_fill_without_authored_appearance_or_history_changes() {
+        use layer_core::{Edit, authored::{CoverageSource, MaskUse, RecordChange, SceneScope}};
+        for masked in [false, true] {
+            let mut s = session(Platform::Gtk);
+            let handle = occurrence_handle(2).unwrap();
+            s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+            let document = s.engine.document();
+            let mut occurrence = document.scene().occurrence(handle).unwrap().clone();
+            occurrence.visible = false;
+            occurrence.opacity = 0.25;
+            occurrence.blend = layer_core::LayerBlend::Multiply;
+            occurrence.clipped = true;
+            occurrence.locked = true;
+            let mut edits = Vec::new();
+            if masked {
+                let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource {
+                    domain: document.composition().size, initial: None, default_coverage: 0.,
+                    raster: Default::default(), operations: Default::default(),
+                });
+                occurrence.mask = Some(MaskUse { source: coverage.handle, enabled: true, linked: true,
+                    inverted: false, translation: Point::default(), placement: layer_core::Projective::IDENTITY });
+                edits.push(Edit::Coverage(coverage));
+            }
+            edits.push(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, handle, Some(occurrence)).unwrap()));
+            s.layer_edit(Edit::Batch(edits)).unwrap();
+            s.dispatch(UiAction::Layer { action: LayerAction::Tool {
+                tool: LayerCanvasTool::SelectColor { source: crate::RegionSource::Editing },
+            } }).unwrap();
+            let artwork = s.engine.document().artwork.clone();
+            let working = s.engine.document().working.clone();
+            let checkpoint = s.engine.checkpoint();
+            assert!(s.engine.document().drawing_target().is_none());
+            assert!(s.engine.document().active_target().is_none());
+            pen_at(&mut s, 10, PenPhase::Down, [48., 72.]);
+            pen_at(&mut s, 11, PenPhase::Up, [48., 72.]);
+            s.frame(1, 1).unwrap();
+            assert_eq!(s.renderer_mut().region_requests.len(), 1);
+            let request = s.renderer_mut().region_requests.last().unwrap().clone();
+            let layer_render::RegionSource::Scene { snapshot, scope } = &request.source else { panic!("constant fill scene"); };
+            assert_eq!(scope, &SceneScope::Members(vec![handle].into()));
+            let occurrence = snapshot.view().occurrence(handle).unwrap();
+            assert!(occurrence.visible && occurrence.opacity == 1.);
+            assert_eq!(occurrence.blend, layer_core::LayerBlend::Normal);
+            assert!(!occurrence.clipped && occurrence.mask.is_none());
+            assert_eq!(snapshot.view().effect(handle).unwrap(), s.engine.document().scene().effect(handle).unwrap());
+            assert_eq!(s.engine.document().artwork, artwork);
+            assert_eq!(s.engine.document().working, working);
+            assert_eq!(s.engine.checkpoint(), checkpoint);
+        }
+    }
+
+    #[test]
     fn connected_tools_share_sources_history_and_stale_reply_policy() {
-        use layer_core::{Edit, Selection, SelectionPixels};
+        use layer_core::{Edit, Selection, SelectionPixels, authored::{RecordChange,SceneScope}};
         use layer_render::{RegionResult, RegionSource};
         use std::sync::Arc;
         let coverage =
@@ -7892,7 +7945,9 @@ mod tests {
         let request = s.renderer_mut().region_requests[0].clone();
         assert_eq!(request.position, [48, 72]);
         assert_eq!(request.refinement, refinement);
-        assert_eq!(request.source, RegionSource::Composite);
+        let RegionSource::Scene {snapshot,scope}= &request.source else{panic!("visible scene snapshot")};
+        assert_eq!(scope,&SceneScope::All);
+        assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert!(request.limit.is_none());
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
@@ -7905,19 +7960,21 @@ mod tests {
             "reply schedules the frame that displays the selection"
         );
         assert_eq!(
-            s.engine.document().selection,
+            s.engine.document().working.selection,
             Some(Selection::pixels(coverage.clone()))
         );
         s.frame(3, 3).unwrap();
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         invoke(&mut s, CommandId::Redo);
-        assert!(s.engine.document().selection.is_some());
+        assert!(s.engine.document().working.selection.is_some());
 
-        let id = s.engine.document().active_layer;
-        let mut layer = s.engine.document().layer(id).unwrap().clone();
-        layer.properties.offset = Point { x: 8., y: 12. };
-        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        let id = s.engine.document().working.occurrence.unwrap();
+        let target=s.engine.document().scene().source_target(id).unwrap();
+        let mut occurrence=s.engine.document().scene().occurrence(id).unwrap().clone();
+        occurrence.translation=Point{x:8.,y:12.};
+        let edit=Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(occurrence)).unwrap());
+        s.layer_edit(edit).unwrap();
         s.frame(4, 4).unwrap();
         invoke(&mut s, CommandId::Fill);
         let source = s.state.tool_set.subtools[1].action.clone();
@@ -7932,7 +7989,9 @@ mod tests {
         s.frame(5, 5).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
         assert_eq!(request.position, [48, 72], "placed layer reads use document coordinates");
-        assert_eq!(request.source, RegionSource::Layer(id));
+        let RegionSource::Scene {snapshot,scope}= &request.source else{panic!("raw scene snapshot")};
+        assert_eq!(scope,&SceneScope::Raw(target));
+        assert_eq!(snapshot.artwork,s.engine.document().artwork);
         assert_eq!(request.tolerance, 0.2);
         assert_eq!(
             request.refinement, refinement,
@@ -7949,21 +8008,16 @@ mod tests {
             pixels: coverage.clone(),
         });
         assert!(s.frame(6, 6).unwrap().canvas_wake);
-        let operation = &s.engine.document().layer(id).unwrap().pending_operations[0];
+        let operation = &s.engine.document().target_operations(target).unwrap()[0];
         assert_eq!(
-            operation.coverage.initial,
+            operation.coverage.source.initial,
             Some(Selection::pixels(coverage.clone()).translated(Point { x: -8., y: -12. })),
             "document-space placed pixels convert to target-local coverage once"
         );
         s.frame(7, 7).unwrap();
         invoke(&mut s, CommandId::Undo);
         assert!(
-            s.engine
-                .document()
-                .layer(id)
-                .unwrap()
-                .pending_operations
-                .is_empty()
+            s.engine.document().target_operations(target).unwrap().is_empty()
         );
 
         // Esc cancels the gesture/request; changing tools also rejects an
@@ -7978,7 +8032,7 @@ mod tests {
         send(&mut s, PenPhase::Up);
         s.frame(9, 9).unwrap();
         let request = s.renderer_mut().region_requests.last().unwrap().clone();
-        let before = s.engine.document().selection.clone();
+        let before = s.engine.document().working.selection.clone();
         invoke(&mut s, CommandId::Hand);
         s.renderer_mut().region_reply = Some(RegionResult {
             tonal_sample: None,
@@ -7987,12 +8041,12 @@ mod tests {
             pixels: coverage.clone(),
         });
         s.frame(10, 10).unwrap();
-        assert_eq!(s.engine.document().selection, before);
+        assert_eq!(s.engine.document().working.selection, before);
         assert!(!s.region_tools.busy());
 
         invoke(&mut s, CommandId::AutoSelect);
         invoke(&mut s, CommandId::SelectionReference);
-        s.layer_edit(Edit::SetReferences([id].into())).unwrap();
+        s.set_references([id].into()).unwrap();
         send(&mut s, PenPhase::Down);
         send(&mut s, PenPhase::Up);
         s.frame(12, 12).unwrap();
@@ -8002,15 +8056,11 @@ mod tests {
             [48, 72],
             "reference composition uses document coordinates"
         );
-        let RegionSource::Layers(layers) = request.source else {
+        let RegionSource::Scene {snapshot,scope} = request.source else {
             panic!("reference snapshot")
         };
         assert_eq!(
-            layers
-                .iter()
-                .filter(|l| l.visible)
-                .map(|l| l.id)
-                .collect::<Vec<_>>(),
+            snapshot.view().with_scope(&scope).order().iter().copied().filter(|h| snapshot.view().with_scope(&scope).includes(*h) && snapshot.view().occurrence(*h).unwrap().visible).collect::<Vec<_>>(),
             [id]
         );
         s.renderer_mut().region_reply = Some(RegionResult {
@@ -8021,7 +8071,7 @@ mod tests {
         });
         s.frame(13, 13).unwrap();
         assert_eq!(
-            s.engine.document().selection.as_ref().unwrap().affine,
+            s.engine.document().working.selection.as_ref().unwrap().affine,
             layer_core::Affine::IDENTITY
         );
 
@@ -8048,12 +8098,11 @@ mod tests {
             pixels: coverage.clone(),
         });
         s.frame(15, 15).unwrap();
-        let layer_core::LayerOperationKind::Fill { color, .. } = s
+        let layer_core::RasterOperationKind::Fill { color, .. } = s
             .engine
             .document()
-            .layer(id)
+            .target_operations(target)
             .unwrap()
-            .pending_operations
             .last()
             .unwrap()
             .kind
@@ -8090,7 +8139,7 @@ mod tests {
             send(&mut s, PenPhase::Down, [100., y]);
             send(&mut s, PenPhase::Move, [300., y + 50.]);
             assert_eq!(
-                s.engine.document().rulers.len(),
+                s.engine.document().rulers().count(),
                 index,
                 "preview is not history"
             );
@@ -8106,33 +8155,33 @@ mod tests {
                 key(&mut s, "Shift_L", false, false, false);
             }
             send(&mut s, PenPhase::Up, [300., y + 50.]);
-            assert_eq!(s.engine.document().rulers.len(), index + 1);
-            let geometry = s.engine.document().rulers[index].geometry;
+            assert_eq!(s.engine.document().rulers().count(), index + 1);
+            let geometry = s.engine.document().rulers().nth(index).unwrap().geometry;
             invoke(&mut s, CommandId::Undo);
             s.frame(1, 1).unwrap();
-            assert_eq!(s.engine.document().rulers.len(), index);
+            assert_eq!(s.engine.document().rulers().count(), index);
             invoke(&mut s, CommandId::Redo);
             s.frame(1, 1).unwrap();
-            assert_eq!(s.engine.document().rulers[index].geometry, geometry);
+            assert_eq!(s.engine.document().rulers().nth(index).unwrap().geometry, geometry);
         }
-        let saved = s.engine.document().rulers.clone();
+        let saved = s.engine.document().rulers().collect::<Vec<_>>();
         // Drag the straight guide's body, then edit its start handle.
         send(&mut s, PenPhase::Down, [200., 125.]);
         send(&mut s, PenPhase::Up, [200., 160.]);
-        let (a, b) = s.engine.document().rulers[0].geometry.handles();
+        let (a, b) = s.engine.document().rulers().nth(0).unwrap().geometry.handles();
         assert!((a.y - 135.).abs() < 0.001);
         send(&mut s, PenPhase::Down, [a.x, a.y]);
         send(&mut s, PenPhase::Up, [a.x - 20., a.y + 20.]);
-        let (moved, end) = s.engine.document().rulers[0].geometry.handles();
+        let (moved, end) = s.engine.document().rulers().nth(0).unwrap().geometry.handles();
         assert!((moved.x - 80.).abs() < 0.001);
         assert_eq!(end, b);
-        let before = s.engine.document().rulers.clone();
+        let before = s.engine.document().rulers().collect::<Vec<_>>();
         send(&mut s, PenPhase::Down, [moved.x, moved.y]);
         send(&mut s, PenPhase::Move, [50., 10.]);
         key(&mut s, "Escape", true, false, false);
         s.frame(1, 1).unwrap();
         assert_eq!(
-            s.engine.document().rulers,
+            s.engine.document().rulers().collect::<Vec<_>>(),
             before,
             "cancel never commits a guide"
         );
@@ -8144,10 +8193,10 @@ mod tests {
         assert_eq!(s.renderer_mut().dabs, 0);
         invoke(&mut s, CommandId::DeleteRuler);
         s.frame(1, 1).unwrap();
-        assert_eq!(s.engine.document().rulers.len(), 2);
+        assert_eq!(s.engine.document().rulers().count(), 2);
         invoke(&mut s, CommandId::Undo);
         s.frame(1, 1).unwrap();
-        assert_eq!(s.engine.document().rulers, before);
+        assert_eq!(s.engine.document().rulers().collect::<Vec<_>>(), before);
         invoke(&mut s, CommandId::ShowRulers);
         let mut hidden = Vec::new();
         s.append_layer_overlay(&mut hidden);
@@ -8175,24 +8224,28 @@ mod tests {
         // Operation edits existing guides, but never creates a ruler and
         // never moves the paint layer while a ruler handle owns contact.
         invoke(&mut s, CommandId::Move);
-        let layers = s.engine.document().layers.clone();
-        let end = s.engine.document().rulers[0].geometry.handles().1.unwrap();
+        let artwork=s.engine.document().artwork.clone();
+        let end = s.engine.document().rulers().nth(0).unwrap().geometry.handles().1.unwrap();
         send(&mut s, PenPhase::Down, [end.x, end.y]);
         send(&mut s, PenPhase::Up, [end.x + 25., end.y + 30.]);
         assert_eq!(s.state.layer_tools.tool, LayerCanvasTool::Move);
-        assert_eq!(s.engine.document().layers, layers);
-        assert_ne!(s.engine.document().rulers, before);
+        let after=&s.engine.document().artwork;
+        assert_eq!(after.occurrences.iter().collect::<Vec<_>>(),artwork.occurrences.iter().collect::<Vec<_>>());
+        assert_eq!(after.paint.iter().collect::<Vec<_>>(),artwork.paint.iter().collect::<Vec<_>>());
+        assert_eq!(after.coverage.iter().collect::<Vec<_>>(),artwork.coverage.iter().collect::<Vec<_>>());
+        assert_eq!(after.stacks.iter().collect::<Vec<_>>(),artwork.stacks.iter().collect::<Vec<_>>());
+        assert_ne!(s.engine.document().rulers().collect::<Vec<_>>(), before);
         invoke(&mut s, CommandId::Undo);
         s.frame(1, 1).unwrap();
-        assert_eq!(s.engine.document().rulers, before);
+        assert_eq!(s.engine.document().rulers().collect::<Vec<_>>(), before);
         send(&mut s, PenPhase::Down, [1900., 1300.]);
         send(&mut s, PenPhase::Up, [1900., 1300.]);
-        assert_eq!(s.engine.document().rulers, before);
+        assert_eq!(s.engine.document().rulers().collect::<Vec<_>>(), before);
     }
 
     #[test]
     fn figure_tools_use_shared_controls_constrain_cancel_and_commit_once() {
-        use layer_core::{Edit, LayerOperationKind};
+        use layer_core::{Edit, RasterOperationKind};
         let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "u", true, false, false).handled);
         key(&mut s, "u", false, false, false);
@@ -8206,11 +8259,13 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["Line width", "Opacity"]
         );
-        let id = s.engine.document().active_layer;
-        let mut layer = s.engine.document().layer(id).unwrap().clone();
-        layer.properties.offset = Point { x: 10., y: 20. };
-        layer.properties.alpha_locked = true;
-        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        let id=s.engine.document().working.occurrence.unwrap();
+        let target=s.engine.document().scene().source_target(id).unwrap();
+        let mut layer=s.engine.document().scene().occurrence(id).unwrap().clone();
+        layer.translation = Point { x: 10., y: 20. };
+        layer.alpha_locked = true;
+        let edit=Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(layer)).unwrap());
+        s.layer_edit(edit).unwrap();
         s.dispatch(UiAction::SetColor {
             rgba: [1., 0., 0., 1.],
         })
@@ -8252,9 +8307,7 @@ mod tests {
                 let before = s
                     .engine
                     .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
+                    .target_operations(target).unwrap()
                     .len();
                 let plain = s.current_figure().unwrap();
                 let change = s
@@ -8297,18 +8350,16 @@ mod tests {
                 send(&mut s, PenPhase::Up, [130., 90.]);
                 s.frame(2, 2).unwrap();
                 key(&mut s, "shift", false, false, false);
-                let committed = s.engine.document().layer(id).unwrap().raster.identity();
+                let committed = s.engine.document().target_raster(target).unwrap().identity();
                 assert!(
                     s.engine
                         .document()
-                        .layer(id)
-                        .unwrap()
-                        .pending_operations
+                        .target_operations(target).unwrap()
                         .is_empty()
                 );
                 let ops = &s.engine.backend().pending_operations;
                 assert_eq!(ops.len(), 1);
-                let LayerOperationKind::Figure(f) = &ops.last().unwrap().1.kind else {
+                let RasterOperationKind::Figure(f) = &ops.last().unwrap().1.kind else {
                     panic!("figure");
                 };
                 assert!((f.start.x - 20.).abs() < 0.001 && (f.start.y - 20.).abs() < 0.001);
@@ -8321,7 +8372,7 @@ mod tests {
                         ((f.end.x - f.start.x).abs() - (f.end.y - f.start.y).abs()).abs() < 0.001
                     );
                 }
-                assert_operation_undo_redo(&mut s, id, before, committed, [3, 4]);
+                assert_operation_undo_redo(&mut s, target, before, committed, [3, 4]);
                 assert!(s.engine.backend().pending_operations.is_empty());
                 assert_eq!(s.renderer_mut().dabs, 0, "no brush stamping for figures");
             }
@@ -8329,9 +8380,7 @@ mod tests {
         let before = s
             .engine
             .document()
-            .layer(id)
-            .unwrap()
-            .pending_operations
+            .target_operations(target).unwrap()
             .len();
         for cancel in 0..3 {
             abandon_layer_drag(&mut s, cancel);
@@ -8339,9 +8388,7 @@ mod tests {
             assert_eq!(
                 s.engine
                     .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
+                    .target_operations(target).unwrap()
                     .len(),
                 before
             );
@@ -8352,9 +8399,7 @@ mod tests {
         assert_eq!(
             s.engine
                 .document()
-                .layer(id)
-                .unwrap()
-                .pending_operations
+                .target_operations(target).unwrap()
                 .len(),
             before
         );
@@ -8368,37 +8413,25 @@ mod tests {
         send(&mut s, PenPhase::Move, [90., 100.]);
         assert!(s.current_figure().unwrap().erase);
         send(&mut s, PenPhase::Cancel, [90., 100.]);
-        // Protected content and mask targets cannot acquire figure operations.
-        for mask in [false, true] {
-            let mut layer = s.engine.document().layer(id).unwrap().clone();
+        s.frame(7, 7).unwrap();
+        for mask in [false,true] {
+            let token=occurrence_token(id);
+            s.dispatch(UiAction::Layer{action:LayerAction::Lock{id:token,value:!mask}}).unwrap();
             if mask {
-                layer.mask = Some(layer_core::LayerMask::reveal_all(
-                    layer_core::LayerId(99),
-                    Point::default(),
-                ));
+                s.dispatch(UiAction::Layer{action:LayerAction::AddMask{id:token,replace:false}}).unwrap();
+                s.dispatch(UiAction::Layer{action:LayerAction::Select{id:token,mask:true}}).unwrap();
             }
-            layer.properties.locked = !mask;
-            s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
-            s.layer_edit(Edit::SetMaskTarget(mask)).unwrap();
             send(&mut s, PenPhase::Down, [30., 40.]);
             send(&mut s, PenPhase::Move, [90., 100.]);
             send(&mut s, PenPhase::Up, [90., 100.]);
             s.frame(7, 7).unwrap();
-            assert_eq!(
-                s.engine
-                    .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
-                    .len(),
-                before
-            );
+            assert_eq!(s.engine.document().target_operations(target).unwrap().len(),before);
         }
     }
 
     #[test]
     fn gradient_tools_commit_once_with_local_selection_and_cancel_cleanly() {
-        use layer_core::{Edit, LayerOperationKind, Selection};
+        use layer_core::{Edit, RasterOperationKind, Selection};
         let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "g", true, false, false).handled);
         key(&mut s, "g", false, false, false);
@@ -8427,18 +8460,20 @@ mod tests {
             })
             .is_err()
         );
-        let id = s.engine.document().active_layer;
-        let mut layer = s.engine.document().layer(id).unwrap().clone();
-        layer.properties.offset = Point { x: 10.0, y: 20.0 };
-        layer.properties.alpha_locked = true;
-        s.layer_edit(Edit::ReplaceLayer(Box::new(layer))).unwrap();
+        let id=s.engine.document().working.occurrence.unwrap();
+        let target=s.engine.document().scene().source_target(id).unwrap();
+        let mut layer=s.engine.document().scene().occurrence(id).unwrap().clone();
+        layer.translation = Point { x: 10.0, y: 20.0 };
+        layer.alpha_locked = true;
+        let edit=Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,id,Some(layer)).unwrap());
+        s.layer_edit(edit).unwrap();
         let selection = Selection::polygon(vec![
             Point { x: 10.0, y: 20.0 },
             Point { x: 100.0, y: 20.0 },
             Point { x: 100.0, y: 100.0 },
         ])
         .unwrap();
-        s.layer_edit(Edit::SetSelection(Some(selection))).unwrap();
+        s.layer_edit({let mut working=s.engine.document().working.clone();working.selection=Some(selection);Edit::Working(working)}).unwrap();
         s.state.camera.rotation = 0.4;
         s.state.camera.flipped = [true, false];
         s.frame(1, 1).unwrap();
@@ -8459,14 +8494,12 @@ mod tests {
         assert!(
             s.engine
                 .document()
-                .layer(id)
-                .unwrap()
-                .pending_operations
+                .target_operations(target).unwrap()
                 .is_empty()
         );
         send(&mut s, PenPhase::Up, [130.0, 140.0]);
         s.frame(3, 3).unwrap();
-        let committed = s.engine.document().layer(id).unwrap().raster.identity();
+        let committed = s.engine.document().target_raster(target).unwrap().identity();
         let operations: Vec<_> = s
             .engine
             .backend()
@@ -8475,7 +8508,7 @@ mod tests {
             .map(|(_, op)| op)
             .collect();
         assert_eq!(operations.len(), 1);
-        let LayerOperationKind::Gradient {
+        let RasterOperationKind::Gradient {
             start,
             end,
             colors,
@@ -8489,19 +8522,19 @@ mod tests {
         assert!((end.x - 120.0).abs() < 0.001 && (end.y - 120.0).abs() < 0.001);
         assert!(radial && alpha_locked);
         assert_eq!(colors, [[1.0, 0.0, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0]]);
-        let selection = operations[0].coverage.initial.as_ref().unwrap();
+        let selection = operations[0].coverage.source.initial.as_ref().unwrap();
         let first = selection.contours()[0][0];
         assert_eq!(selection.affine.map(first), Point::default());
         assert!(s.layer_interaction.path.is_empty());
         assert_eq!(s.renderer_mut().dabs, 0);
-        assert_operation_undo_redo(&mut s, id, 0, committed, [4, 5]);
+        assert_operation_undo_redo(&mut s, target, 0, committed, [4, 5]);
         for cancel in [0, 1, 2] {
             let handled = abandon_layer_drag(&mut s, cancel);
             if cancel == 1 { assert!(handled); }
             s.frame(6, 6).unwrap();
             assert!(s.layer_interaction.path.is_empty());
             assert_eq!(
-                s.engine.document().layer(id).unwrap().raster.identity(),
+                s.engine.document().target_raster(target).unwrap().identity(),
                 committed
             );
         }
@@ -8509,7 +8542,7 @@ mod tests {
         send(&mut s, PenPhase::Up, [30.0, 40.0]);
         s.frame(7, 7).unwrap();
         assert_eq!(
-            s.engine.document().layer(id).unwrap().raster.identity(),
+            s.engine.document().target_raster(target).unwrap().identity(),
             committed,
             "tap is not a whole-layer fill"
         );
@@ -8582,68 +8615,42 @@ mod tests {
 
     #[test]
     fn operation_controls_support_active_masks_and_linked_paint_without_host_logic() {
-        use layer_core::LayerOperationKind;
+        use layer_core::RasterOperationKind;
         for linked in [false, true] {
             let mut s = session(Platform::Gtk);
             let area = rectangle([100., 100., 300., 300.]);
             s.fill_selection(area.clone()).unwrap();
-            s.layer_edit(layer_core::Edit::SetSelection(Some(area)))
-                .unwrap();
-            let id = s.engine.document().active_layer;
-            layer(&mut s, LayerAction::AddMask { id: id.0, replace: false, });
-            layer(&mut s, LayerAction::LinkMask { id: id.0, value: linked, });
+            s.layer_edit({ let mut working = s.engine.document().working.clone(); working.selection = Some(area); layer_core::Edit::Working(working) }).unwrap();
+            let occurrence = s.engine.document().working.occurrence.unwrap();
+            let id = occurrence_token(occurrence);
+            let paint = s.engine.document().scene().source_target(occurrence).unwrap();
+            layer(&mut s, LayerAction::AddMask { id, replace: false });
+            layer(&mut s, LayerAction::LinkMask { id, value: linked });
             s.frame(1, 1).unwrap();
-            let before = s.engine.document().layers.clone();
-            assert!(s.engine.document().active_mask);
+            let before = s.engine.document().clone();
+            let mask = before.working.target.unwrap();
+            assert!(mask.is_coverage());
             assert!(s.command(CommandId::ScaleRotate).enabled);
             invoke(&mut s, CommandId::ScaleRotate);
             s.frame(2, 2).unwrap();
-            assert_eq!(
-                s.renderer_mut().transform.as_ref().unwrap().layer,
-                before[0].mask.as_ref().unwrap().id
-            );
-            s.dispatch(UiAction::SetToolSetting {
-                id: "transform_x".into(),
-                value: 24.,
-            })
-            .unwrap();
+            assert_eq!(s.renderer_mut().transform.as_ref().unwrap().target, mask);
+            s.dispatch(UiAction::SetToolSetting { id: "transform_x".into(), value: 24. }).unwrap();
             invoke(&mut s, CommandId::ApplyTransform);
             s.frame(2, 2).unwrap();
-            let after = &s.engine.document().layers[0];
-            assert_eq!(
-                after.raster.identity() != before[0].raster.identity(),
-                linked
-            );
-            let mask = after.mask.as_ref().unwrap();
-            assert_ne!(
-                mask.raster.identity(),
-                before[0].mask.as_ref().unwrap().raster.identity()
-            );
-            assert!(mask.pending_operations.is_empty());
-            assert_eq!(
-                s.engine.backend().pending_operations.len(),
-                1 + usize::from(linked)
-            );
-            assert!(
-                s.engine
-                    .backend()
-                    .pending_operations
-                    .iter()
-                    .all(|(_, op)| matches!(op.kind, LayerOperationKind::Transform(_)))
-            );
+            let after = s.engine.document().scene();
+            assert_eq!(after.raster(paint).unwrap().identity() != before.scene().raster(paint).unwrap().identity(), linked);
+            assert_ne!(after.raster(mask).unwrap().identity(), before.scene().raster(mask).unwrap().identity());
+            assert!(after.operations(mask).unwrap().is_empty());
+            assert_eq!(s.engine.backend().pending_operations.len(), 1 + usize::from(linked));
+            assert!(s.engine.backend().pending_operations.iter().all(|(_, op)| matches!(op.kind, RasterOperationKind::Transform(_))));
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().layers, before);
-            s.layer_edit(layer_core::Edit::SetMaskTarget(false))
-                .unwrap();
+            assert_live_artwork_eq(s.engine.document(), &before);
+            s.layer_edit({ let mut working = s.engine.document().working.clone(); working.target = Some(paint); working.inspect_mask = None; layer_core::Edit::Working(working) }).unwrap();
             assert!(s.command(CommandId::ScaleRotate).enabled);
             invoke(&mut s, CommandId::ScaleRotate);
-            s.dispatch(UiAction::SetToolSetting {
-                id: "transform_width".into(),
-                value: 1.2,
-            })
-            .unwrap();
+            s.dispatch(UiAction::SetToolSetting { id: "transform_width".into(), value: 1.2 }).unwrap();
             invoke(&mut s, CommandId::CancelTransform);
-            assert_eq!(s.engine.document().layers, before);
+            assert_live_artwork_eq(s.engine.document(), &before);
         }
     }
 
@@ -8653,7 +8660,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let selection = rectangle([100., 100., 300., 300.]);
         s.fill_selection(selection.clone()).unwrap();
-        s.layer_edit(layer_core::Edit::SetSelection(Some(selection)))
+        s.layer_edit({ let mut working = s.engine.document().working.clone(); working.selection = Some(selection); layer_core::Edit::Working(working) })
             .unwrap();
         s.frame(1, 1).unwrap();
         invoke(&mut s, CommandId::ScaleRotate);
@@ -8697,7 +8704,7 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let selection = rectangle([100., 100., 300., 300.]);
         s.fill_selection(selection.clone()).unwrap();
-        s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone())))
+        s.layer_edit({ let mut working = s.engine.document().working.clone(); working.selection = Some(selection.clone()); layer_core::Edit::Working(working) })
             .unwrap();
         s.frame(1, 1).unwrap();
         let original = s.engine.document().clone();
@@ -8732,13 +8739,13 @@ mod tests {
         let op = &s.engine.backend().pending_operations.last().unwrap().1;
         assert_eq!(
             op.kind,
-            layer_core::LayerOperationKind::Transform(preview.transform)
+            layer_core::RasterOperationKind::Transform(preview.transform)
         );
-        assert_ne!(s.engine.document().selection.as_ref(), Some(&selection));
+        assert_ne!(s.engine.document().working.selection.as_ref(), Some(&selection));
         invoke(&mut s, CommandId::Undo);
         s.frame(4, 4).unwrap();
-        assert_eq!(s.engine.document().layers, original.layers);
-        assert_eq!(s.engine.document().selection, original.selection);
+        assert_live_artwork_eq(s.engine.document(), &original);
+        assert_eq!(s.engine.document().working.selection, original.working.selection);
         for action in [
             UiAction::Invoke {
                 command: CommandId::CancelTransform,
@@ -8748,7 +8755,7 @@ mod tests {
             },
             UiAction::Layer {
                 action: LayerAction::AlphaLock {
-                    id: original.active_layer.0,
+                    id: occurrence_token(original.working.occurrence.unwrap()),
                     value: true,
                 },
             },
@@ -9262,15 +9269,8 @@ mod tests {
         let mut s = session(Platform::Gtk);
         insert_effect(&mut s, "unsharp_mask");
         s.frame(0, 0).unwrap();
-        let id = s.engine.document().active_layer;
-        let original = s
-            .engine
-            .document()
-            .layer(id)
-            .unwrap()
-            .effect
-            .clone()
-            .unwrap();
+        let id = s.engine.document().working.occurrence.unwrap();
+        let original = effects::effect_draft(s.engine.document(),id).unwrap();
         let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
         Arc::make_mut(&mut definition.program).label = "Runtime sharpness".into();
         let parameters = Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters);
@@ -9287,14 +9287,8 @@ mod tests {
         assert!(change.canvas_wake);
         assert_eq!(s.state.filter_catalog_revision, 0);
         assert_eq!(
-            s.engine
-                .document()
-                .layer(id)
-                .unwrap()
-                .effect
-                .as_ref()
-                .unwrap(),
-            &original
+            effects::effect_draft(s.engine.document(),id).unwrap(),
+            original
         );
         assert!(
             s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Replace)
@@ -9302,7 +9296,7 @@ mod tests {
         );
         s.dispatch(UiAction::Effect {
             action: EffectAction::Set {
-                layer: id.0,
+                layer: occurrence_token(id),
                 key: "amount".into(),
                 value: EffectValue::Number(175.),
             },
@@ -9325,14 +9319,7 @@ mod tests {
         assert!(!s.state.filter_load.pending);
         assert!(s.state.filter_load.error.is_none());
         assert_eq!(s.state.filter_catalog_revision, 1);
-        let current = s
-            .engine
-            .document()
-            .layer(id)
-            .unwrap()
-            .effect
-            .clone()
-            .unwrap();
+        let current = effects::effect_draft(s.engine.document(),id).unwrap();
         assert_eq!(current.program.label, layer_core::ResourceLabel::from("Runtime sharpness"));
         assert_eq!(current.value("amount"), Some(&EffectValue::Number(175.)));
         assert_eq!(s.state.layer_properties.controls[0].label, "Runtime radius");
@@ -9350,14 +9337,8 @@ mod tests {
         assert_eq!(s.state.filter_load.error.as_deref(), Some(s.localization().text(MessageId::RESOURCES_PACKAGE_VALIDATION_FAILED).as_ref()));
         assert_eq!(s.state.filter_catalog_revision, 1);
         assert_eq!(
-            s.engine
-                .document()
-                .layer(id)
-                .unwrap()
-                .effect
-                .as_ref()
-                .unwrap(),
-            &current
+            effects::effect_draft(s.engine.document(),id).unwrap(),
+            current
         );
     }
 
@@ -9406,18 +9387,15 @@ mod tests {
     }
     #[test]
     fn runtime_filter_add_cannot_replace_a_document_only_program() {
-        use layer_core::{Edit, EffectInstallMode, EffectInstance, Layer};
+        use layer_core::{EffectInstallMode, EffectInstance};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
         let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
         Arc::make_mut(&mut definition.program).id = "document:custom".into();
-        let id = s.engine.allocate_layer_id();
-        let mut layer = Layer::paint(id, "Document-only filter");
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(EffectInstance::new(definition.program())));
-        s.layer_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
+        let (id,edit)=effect_insertion(s.engine.document(),EffectInstance::new(definition.program()),"Document-only filter");
+        s.layer_edit(edit).unwrap();
         s.frame(0, 0).unwrap();
-        let original = s.engine.document().layer(id).unwrap().effect.clone();
+        let original = effects::effect_draft(s.engine.document(),id).unwrap();
         Arc::make_mut(&mut definition.program).label = "Different definition".into();
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
         let error = s
@@ -9429,7 +9407,7 @@ mod tests {
             .unwrap_err();
         assert_eq!(error, s.localization().text(MessageId::RESOURCES_DOCUMENT_FILTER_CONFLICT).as_ref());
         assert!(s.renderer_mut().validation.is_none());
-        assert_eq!(s.engine.document().layer(id).unwrap().effect, original);
+        assert_eq!(effects::effect_draft(s.engine.document(),id).unwrap(), original);
         assert!(s.effect_catalog.get("document:custom").is_none());
     }
 
@@ -9538,7 +9516,10 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(project.document, document);
+        let captured = Document::from_artwork((*project.artwork).clone()).unwrap();
+        let mut expected = document.clone();
+        expected.artwork.outputs.get_mut(expected.artwork.default_output).unwrap().context = captured.output().context.clone();
+        assert_live_artwork_eq(&captured, &expected);
         assert!(s.state.filter_load.pending);
         assert!(s.state.document_file.modified);
         assert!(!s.state.document_file.close_ready);
@@ -9557,14 +9538,9 @@ mod tests {
         insert_effect(&mut s, "unsharp_mask");
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
-        let original = document
-            .layer(document.active_layer)
-            .unwrap()
-            .effect
-            .as_ref()
-            .unwrap()
-            .program
-            .clone();
+        let handle=document.working.occurrence.unwrap();
+        let (_,application)=effects::effect_application(&document,handle).unwrap();
+        let original=document.artwork.definitions.get(application.definition).unwrap().program.clone();
         let checkpoint = s.engine.checkpoint();
         let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
         Arc::make_mut(&mut definition.program).label = "New library version".into();
@@ -9649,29 +9625,25 @@ mod tests {
     #[test]
     fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
         let mut s = session(Platform::Gtk);
+        let base=s.engine.document().working.occurrence.unwrap();
+        let paper=s.engine.document().scene().order()[1];
         for _ in 0..2 {
             layer(&mut s, LayerAction::New { group: false, clipped: true, });
         }
-        let clips: Vec<_> = s
-            .engine
-            .document()
-            .layers
-            .iter()
-            .filter(|l| l.properties.clipped)
-            .map(|l| l.id)
-            .collect();
+        let scene=s.engine.document().scene();
+        let clips:Vec<_>=scene.order().iter().copied().filter(|h|scene.occurrence(*h).unwrap().clipped).collect();
         let top = clips[0];
         s.dispatch(UiAction::SetLayerVisibility {
-            id: top.0,
+            id: occurrence_token(top),
             visible: false,
         })
         .unwrap();
-        for selected in [LayerId(1), clips[1], top] {
-            s.dispatch(UiAction::SelectLayer { id: selected.0 })
+        for selected in [base, clips[1], top] {
+            s.dispatch(UiAction::SelectLayer { id: occurrence_token(selected) })
                 .unwrap();
             assert_eq!(
                 s.state.layer_tools.can_delete,
-                selected != LayerId(1),
+                selected != base,
                 "base cannot be deleted without its clips"
             );
             s.dispatch(UiAction::Effect {
@@ -9681,16 +9653,16 @@ mod tests {
             })
             .unwrap();
             let doc = s.engine.document();
-            assert_eq!(doc.layers[0].id, doc.active_layer);
-            assert_eq!(doc.layers[1].id, top);
+            assert_eq!(doc.scene().order()[0], doc.working.occurrence.unwrap());
+            assert_eq!(doc.scene().order()[1], top);
             for clip in &clips {
-                assert_eq!(doc.clipping_base(*clip), Some(LayerId(1)));
+                assert_eq!(doc.clipping_base(*clip), Some(base));
             }
             assert!(s.state.layer_tools.can_delete);
             layer(&mut s, LayerAction::DeleteSelected);
-            assert_eq!(s.engine.document().layers[0].id, top);
+            assert_eq!(s.engine.document().scene().order()[0], top);
         }
-        s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+        s.dispatch(UiAction::SelectLayer { id: occurrence_token(paper) }).unwrap();
         assert!(s.state.layer_tools.can_delete, "unlocked paper can be deleted");
     }
 
@@ -9705,20 +9677,20 @@ mod tests {
                 clipped: false,
             },
         );
-        let second = s.engine.document().active_layer;
+        let second = s.engine.document().working.occurrence.unwrap();
         send(
             &mut s,
             LayerAction::AddMask {
-                id: second.0,
+                id: occurrence_token(second),
                 replace: false,
             },
         );
         send(&mut s, LayerAction::ToggleSelection { id: 1 });
         assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 2);
-        assert_eq!(s.engine.document().active_layer, second);
-        assert!(s.engine.document().active_mask);
+        assert_eq!(s.engine.document().working.occurrence.unwrap(), second);
+        assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
         send(&mut s, LayerAction::ReferenceSelection);
-        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert_eq!(s.engine.document().scene().references().len(), 2);
         assert!(s.state.layer_tools.references_selected);
         assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
         assert_eq!(
@@ -9739,7 +9711,7 @@ mod tests {
                 .all(|l| l.selection_icon == "layer-selection-checked-symbolic")
         );
         // The editing target can be unselected and remains editable.
-        send(&mut s, LayerAction::ToggleSelection { id: second.0 });
+        send(&mut s, LayerAction::ToggleSelection { id: occurrence_token(second) });
         assert!(
             s.state
                 .layers
@@ -9766,10 +9738,10 @@ mod tests {
         );
         // A checked reference is an add operation, never a surprising removal.
         send(&mut s, LayerAction::ReferenceSelection);
-        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert_eq!(s.engine.document().scene().references().len(), 2);
         assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
-        assert_eq!(s.engine.document().active_layer, second);
-        assert!(s.engine.document().active_mask);
+        assert_eq!(s.engine.document().working.occurrence.unwrap(), second);
+        assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
         // Only the sole editing target toggles reference use off.
         assert_eq!(
             s.state.layer_tools.reference_action_label.as_ref(),
@@ -9777,15 +9749,15 @@ mod tests {
         );
         send(&mut s, LayerAction::ReferenceSelection);
         assert_eq!(
-            s.engine.document().reference_layers,
-            std::collections::BTreeSet::from([LayerId(1)])
+            s.engine.document().scene().references(),
+            std::collections::BTreeSet::from([occurrence_handle(1).unwrap()])
         );
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert_eq!(s.engine.document().scene().references().len(), 2);
         send(&mut s, LayerAction::Delete { id: 1 });
-        assert!(!s.engine.document().reference_layers.contains(&LayerId(1)));
+        assert!(!s.engine.document().scene().references().contains(&occurrence_handle(1).unwrap()));
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().reference_layers.len(), 2);
+        assert_eq!(s.engine.document().scene().references().len(), 2);
         send(&mut s, LayerAction::Select { id: 1, mask: false });
         assert_eq!(s.state.layers.iter().filter(|l| l.selected).count(), 1);
         assert!(s.state.layers.iter().any(|l| l.id == 1 && l.editing));
@@ -9811,12 +9783,12 @@ mod tests {
         };
         for kind in ["paint", "group", "inherited"] {
             let mut s = session(Platform::Gtk);
-            let paint = s.engine.document().active_layer.0;
+            let paint = occurrence_token(s.engine.document().working.occurrence.unwrap());
             let mut target = paint;
             let mut lock = paint;
             if kind != "paint" {
                 layer(&mut s, LayerAction::New { group: true, clipped: false, });
-                lock = s.engine.document().active_layer.0;
+                lock = occurrence_token(s.engine.document().working.occurrence.unwrap());
                 target = lock;
                 if kind == "inherited" {
                     layer(&mut s, LayerAction::Drop { id: paint, target: lock, fraction: 0.5, });
@@ -9856,19 +9828,19 @@ mod tests {
                     "Rejected edits must not add history"
                 );
                 assert_eq!(
-                    s.engine.document().layer(LayerId(target)).unwrap().opacity,
+                    s.engine.document().scene().occurrence(occurrence_handle(target).unwrap()).unwrap().opacity,
                     0.35
                 );
             }
             layer(&mut s, LayerAction::Lock { id: lock, value: false, });
             s.dispatch(property(target, 0.55)).unwrap();
             assert_eq!(
-                s.engine.document().layer(LayerId(target)).unwrap().opacity,
+                s.engine.document().scene().occurrence(occurrence_handle(target).unwrap()).unwrap().opacity,
                 0.55
             );
         }
         let mut s = session(Platform::Gtk);
-        let target = s.engine.document().active_layer.0;
+        let target = occurrence_token(s.engine.document().working.occurrence.unwrap());
         let revision = s.engine.document().revision;
         for opacity in [-0.1, 1.1, f32::NAN, f32::INFINITY] {
             assert!(s.dispatch(property(target, opacity)).is_err());
@@ -9882,23 +9854,15 @@ mod tests {
             Platform::Gtk,
         )
         .unwrap();
-        let paper = s
-            .engine
-            .document()
-            .layers
-            .iter()
-            .find(|l| l.id == layer_core::LayerId(2))
-            .unwrap()
-            .id
-            .0;
+        let paper = 2;
         s.dispatch(UiAction::SetLayerOpacity { id: Some(paper), opacity: 0.4 }).unwrap();
         assert_eq!(
-            s.engine.document().layer(LayerId(paper)).unwrap().opacity,
+            s.engine.document().scene().occurrence(occurrence_handle(paper).unwrap()).unwrap().opacity,
             0.4
         );
         invoke(&mut s, CommandId::Undo);
         assert_eq!(
-            s.engine.document().layer(LayerId(paper)).unwrap().opacity,
+            s.engine.document().scene().occurrence(occurrence_handle(paper).unwrap()).unwrap().opacity,
             1.
         );
     }
@@ -9935,37 +9899,38 @@ mod tests {
                 clipped: true,
             },
         );
-        let shade = s.engine.document().active_layer;
+        let shade = s.engine.document().working.occurrence.unwrap();
         send(&mut s, LayerAction::ToggleSelection { id: 1 });
         send(
             &mut s,
             LayerAction::Context {
-                id: shade.0,
+                id: occurrence_token(shade),
                 mask: false,
             },
         );
         assert_eq!(s.layer_interaction.selected.len(), 2);
         send(&mut s, LayerAction::DuplicateSelected);
         let doc = s.engine.document();
-        let copies: Vec<_> = doc.ordered_layers().into_iter().take(2).collect();
-        assert!(copies[0].properties.clipped);
-        assert_eq!(doc.clipping_base(copies[0].id), Some(copies[1].id));
-        assert_eq!(doc.clipping_base(shade), Some(LayerId(1)));
+        let copies: Vec<_> = doc.ordered_layers().iter().copied().take(2).collect();
+        assert!(doc.scene().occurrence(copies[0]).unwrap().clipped);
+        assert_eq!(doc.clipping_base(copies[0]), Some(copies[1]));
+        assert_eq!(doc.clipping_base(shade), Some(occurrence_handle(1).unwrap()));
         assert_eq!(s.layer_interaction.selected.len(), 2);
         send(&mut s, LayerAction::DeleteSelected);
-        assert_eq!(s.engine.document().layers.len(), 3);
+        assert_eq!(s.engine.document().scene().order().len(), 3);
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().layers.len(), 5);
+        assert_eq!(s.engine.document().scene().order().len(), 5);
     }
 
     #[test]
     fn paper_is_a_maskless_fill_that_can_be_reordered_and_accept_a_mask() {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        let paper = s.engine.document().layer(LayerId(2)).unwrap();
-        assert_eq!((paper.kind, paper.name.as_ref()), (LayerKind::Effect, "Paper"));
+        let paper_handle = occurrence_handle(2).unwrap();
+        let paper = s.engine.document().scene().occurrence(paper_handle).unwrap();
+        assert_eq!((paper.kind(), paper.name.as_ref()), (LayerKind::Effect, "Paper"));
         assert!(paper.mask.is_none());
-        assert_eq!(paper.effect.as_ref().unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
+        assert_eq!(s.engine.document().scene().effect(paper_handle).unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
         let controls = s.state.layer_tools.controls;
         assert!(controls.opacity && controls.mask && controls.blend && controls.edit_lock);
         assert!(s.state.layers.iter().find(|l| l.id == 2).unwrap().content_icon.is_none());
@@ -9977,11 +9942,21 @@ mod tests {
         assert_eq!(s.state.layers.last().unwrap().id, 1);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
         layer(&mut s, LayerAction::AddMask { id: 2, replace: false });
-        let mask = s.engine.document().layer(LayerId(2)).unwrap().mask.as_ref().unwrap().id;
+        let mask = layer_core::authored::SourceTarget::Coverage(s.engine.document().scene().occurrence(paper_handle).unwrap().mask.as_ref().unwrap().source);
         assert_eq!(s.engine.document().drawing_target(), Some(mask));
-        s.engine.apply_edit(layer_core::Edit::InsertLayer { index: usize::MAX,
-            layer: Box::new(layer_core::Layer::paint(LayerId(99), "Bottom")) }).unwrap();
-        assert_eq!(s.engine.document().layers.last().unwrap().id, LayerId(99));
+        let document = s.engine.document();
+        let paint = layer_core::authored::RecordChange::insert(&document.artwork.paint, layer_core::authored::PaintSource {
+            domain: document.composition().size, original: None, raster: Default::default(), operations: Default::default(),
+        });
+        let occurrence = layer_core::authored::RecordChange::insert(&document.artwork.occurrences,
+            layer_core::authored::Occurrence::new(layer_core::authored::OccurrenceContent::Paint(paint.handle), "Bottom"));
+        let bottom = occurrence.handle;
+        let root = document.composition().result;
+        let mut stack = document.artwork.stacks.get(root).unwrap().clone();
+        stack.entries.push(bottom);
+        let stack = layer_core::authored::RecordChange::replace(&document.artwork.stacks, root, Some(stack)).unwrap();
+        s.engine.apply_edit(layer_core::Edit::Batch(vec![layer_core::Edit::Paint(paint), layer_core::Edit::Occurrence(occurrence), layer_core::Edit::Stack(stack)])).unwrap();
+        assert_eq!(s.engine.document().scene().order().last(), Some(&bottom));
     }
 
     #[test]
@@ -9999,10 +9974,10 @@ mod tests {
             s.pen(event(&s, seq, phase, 1.)).unwrap();
         }
         s.frame(30_000_000, 38_000_000).unwrap();
-        let mut source = s.engine.document().layer(LayerId(1)).unwrap().clone();
-        source.mask.as_mut().unwrap().offset = Point { x: 11., y: 17. };
+        let mut source = s.engine.document().scene().occurrence(occurrence_handle(1).unwrap()).unwrap().clone();
+        source.mask.as_mut().unwrap().translation = Point { x: 11., y: 17. };
         s.engine
-            .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(source.clone())))
+            .apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, occurrence_handle(1).unwrap(), Some(source.clone())).unwrap()))
             .unwrap();
         send(&mut s, LayerAction::Lock { id: 1, value: true });
         send(&mut s, LayerAction::CopyMask { id: 1 });
@@ -10013,11 +9988,11 @@ mod tests {
                 clipped: false,
             },
         );
-        let parent = s.engine.document().active_layer;
-        let mut group = s.engine.document().layer(parent).unwrap().clone();
-        group.properties.offset = Point { x: 30., y: 50. };
+        let parent = s.engine.document().working.occurrence.unwrap();
+        let mut group = s.engine.document().scene().occurrence(parent).unwrap().clone();
+        group.translation = Point { x: 30., y: 50. };
         s.engine
-            .apply_edit(layer_core::Edit::ReplaceLayer(Box::new(group)))
+            .apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, parent, Some(group)).unwrap()))
             .unwrap();
         send(
             &mut s,
@@ -10026,19 +10001,19 @@ mod tests {
                 clipped: false,
             },
         );
-        let target = s.engine.document().active_layer;
-        send(&mut s, LayerAction::PasteMask { id: target.0 });
+        let target = s.engine.document().working.occurrence.unwrap();
+        send(&mut s, LayerAction::PasteMask { id: occurrence_token(target) });
         let doc = s.engine.document();
-        let original = doc.layer(LayerId(1)).unwrap().mask.as_ref().unwrap();
-        let copy = doc.layer(target).unwrap().mask.as_ref().unwrap();
-        assert_ne!(original.id, copy.id);
-        assert_eq!(doc.layer_offset(original.id), doc.layer_offset(copy.id));
-        assert!(!original.raster.is_empty());
-        assert_eq!(original.raster.identity(), copy.raster.identity());
+        let original = doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().mask.as_ref().unwrap();
+        let copy = doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
+        assert_ne!(original.source, copy.source);
+        assert_eq!(doc.target_offset(layer_core::authored::SourceTarget::Coverage(original.source)), doc.target_offset(layer_core::authored::SourceTarget::Coverage(copy.source)));
+        assert!(!doc.artwork.coverage.get(original.source).unwrap().raster.is_empty());
+        assert_eq!(doc.artwork.coverage.get(original.source).unwrap().raster.identity(), doc.artwork.coverage.get(copy.source).unwrap().raster.identity());
         s.engine.undo().unwrap();
-        assert!(s.engine.document().layer(target).unwrap().mask.is_none());
+        assert!(s.engine.document().scene().occurrence(target).unwrap().mask.is_none());
         assert_eq!(
-            s.engine.document().layer(LayerId(1)).unwrap().mask,
+            s.engine.document().scene().occurrence(occurrence_handle(1).unwrap()).unwrap().mask,
             source.mask
         );
     }
@@ -10046,10 +10021,10 @@ mod tests {
     #[test]
     fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
         let mut s = session(Platform::Gtk);
-        let original = s.engine.document().layers.clone();
+        let original = s.engine.document().clone();
         layer(&mut s, LayerAction::New { group: false, clipped: false, });
-        let id = s.engine.document().active_layer.0;
-        let created = s.engine.document().layers.clone();
+        let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
+        let created = s.engine.document().clone();
         assert_eq!(s.layer_drop_hint(id, 1, 0.0), None);
         assert_eq!(s.layer_drop_hint(id, id, 0.5), None);
         assert_eq!(s.layer_drop_hint(0, id, 0.0), None);
@@ -10061,20 +10036,20 @@ mod tests {
             s.layer_drop_hint(id, 1, 1.0),
             Some(LayerDropPosition::Below)
         );
-        assert_eq!(s.engine.document().layers, created);
+        test_support::assert_live_artwork_eq(s.engine.document(), &created);
         layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0, });
         // The no-op drop must not consume Undo ahead of the preceding New layer.
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().layers, original);
+        test_support::assert_live_artwork_eq(s.engine.document(), &original);
         s.engine.redo().unwrap();
-        assert_eq!(s.engine.document().layers, created);
+        test_support::assert_live_artwork_eq(s.engine.document(), &created);
         layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 1.0, });
-        let moved = s.engine.document().layers.clone();
-        assert_ne!(moved, created);
+        let moved = s.engine.document().clone();
+        assert_ne!(moved.artwork.stacks, created.artwork.stacks);
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().layers, created);
+        test_support::assert_live_artwork_eq(s.engine.document(), &created);
         s.engine.redo().unwrap();
-        assert_eq!(s.engine.document().layers, moved);
+        test_support::assert_live_artwork_eq(s.engine.document(), &moved);
     }
 
     #[test]
@@ -10083,50 +10058,43 @@ mod tests {
         for _ in 0..2 {
             layer(&mut s, LayerAction::New { group: true, clipped: false, });
         }
-        let child = s.engine.document().active_layer;
-        let parent = s
-            .engine
-            .document()
-            .layer(child)
-            .unwrap()
-            .properties
-            .parent
-            .unwrap();
-        assert_eq!(s.layer_drop_hint(parent.0, child.0, 0.5), None);
+        let child = s.engine.document().working.occurrence.unwrap();
+        let parent = s.engine.document().scene().parent(child).unwrap();
+        assert_eq!(s.layer_drop_hint(occurrence_token(parent), occurrence_token(child), 0.5), None);
         assert_eq!(
-            s.layer_drop_hint(1, child.0, 0.5),
+            s.layer_drop_hint(1, occurrence_token(child), 0.5),
             Some(LayerDropPosition::Into)
         );
-        layer(&mut s, LayerAction::Lock { id: parent.0, value: true, });
-        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
-        assert_eq!(s.layer_drop_hint(child.0, 1, 0.0), None);
-        layer(&mut s, LayerAction::Lock { id: parent.0, value: false, });
+        layer(&mut s, LayerAction::Lock { id: occurrence_token(parent), value: true, });
+        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), None);
+        assert_eq!(s.layer_drop_hint(occurrence_token(child), 1, 0.0), None);
+        layer(&mut s, LayerAction::Lock { id: occurrence_token(parent), value: false, });
         layer(&mut s, LayerAction::Select { id: 1, mask: false });
         layer(&mut s, LayerAction::New { group: false, clipped: true, });
-        let clipped = s.engine.document().active_layer.0;
+        let clipped = occurrence_token(s.engine.document().working.occurrence.unwrap());
         // Both moving the base out and orphaning a clipped layer are rejected.
-        assert_eq!(s.layer_drop_hint(1, child.0, 0.5), None);
-        assert_eq!(s.layer_drop_hint(clipped, child.0, 0.5), None);
+        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), None);
+        assert_eq!(s.layer_drop_hint(clipped, occurrence_token(child), 0.5), None);
     }
 
     #[test]
     fn dropping_into_a_closed_group_expands_it_without_changing_edit_target() {
         let mut s = session(Platform::Gtk);
         layer(&mut s, LayerAction::New { group: true, clipped: false, });
-        let group = s.engine.document().active_layer;
+        let group = s.engine.document().working.occurrence.unwrap();
         for action in [
-            LayerAction::Collapse { id: group.0 },
+            LayerAction::Collapse { id: occurrence_token(group) },
             LayerAction::Select { id: 1, mask: false },
             LayerAction::Drop {
                 id: 1,
-                target: group.0,
+                target: occurrence_token(group),
                 fraction: 0.5,
             },
         ] {
             layer(&mut s, action);
         }
         assert!(!s.layer_interaction.collapsed.contains(&group));
-        assert_eq!(s.engine.document().active_layer, LayerId(1));
+        assert_eq!(s.engine.document().working.occurrence.unwrap(), occurrence_handle(1).unwrap());
         assert!(
             s.state
                 .layers
@@ -10137,9 +10105,9 @@ mod tests {
 
     #[test]
     fn layer_mask_creation_deletion_apply_and_targets_round_trip_history() {
-        use layer_core::{LayerOperationKind, Selection};
+        use layer_core::{RasterOperationKind, Selection};
         let mut s = session(Platform::Gtk);
-        let id = s.engine.document().active_layer.0;
+        let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
         let selection = Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 100., y: 0. },
@@ -10147,18 +10115,18 @@ mod tests {
         ])
         .unwrap();
         s.engine
-            .apply_edit(layer_core::Edit::SetSelection(Some(selection.clone())))
+            .apply_edit({ let mut working = s.engine.document().working.clone(); working.selection = Some(selection.clone()); layer_core::Edit::Working(working) })
             .unwrap();
         s.layer_action(LayerAction::AddMask { id, replace: false })
             .unwrap();
-        assert!(s.engine.document().active_mask);
-        assert!(s.engine.document().selection.is_none());
+        assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
+        assert!(s.engine.document().working.selection.is_none());
         s.engine.undo().unwrap();
-        assert!(!s.engine.document().active_mask);
-        assert_eq!(s.engine.document().selection, Some(selection));
+        assert!(!matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
+        assert_eq!(s.engine.document().working.selection, Some(selection));
         s.engine.redo().unwrap();
-        assert!(s.engine.document().active_mask);
-        let mask = s.engine.document().layer(LayerId(id)).unwrap().mask.clone();
+        assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
+        let mask = s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().mask.clone();
         for apply in [false, true] {
             s.layer_action(if apply {
                 LayerAction::ApplyMask { id }
@@ -10166,52 +10134,52 @@ mod tests {
                 LayerAction::DeleteMask { id }
             })
             .unwrap();
-            assert!(!s.engine.document().active_mask);
-            let l = s.engine.document().layer(LayerId(id)).unwrap();
+            assert!(!matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
+            let l = s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap();
             assert!(l.mask.is_none());
             if apply {
                 assert_eq!(
-                    l.pending_operations.last().unwrap().kind,
-                    LayerOperationKind::ApplyMask
+                    s.engine.document().scene().paint_source(occurrence_handle(id).unwrap()).unwrap().operations.last().unwrap().kind,
+                    RasterOperationKind::ApplyMask
                 );
             }
             s.engine.undo().unwrap();
-            assert!(s.engine.document().active_mask);
-            assert_eq!(s.engine.document().layer(LayerId(id)).unwrap().mask, mask);
+            assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
+            assert_eq!(s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().mask, mask);
         }
     }
 
     #[test]
     fn undo_mask_removal_after_navigating_restores_the_owner_target() {
         let mut s = session(Platform::Gtk);
-        let first = s.engine.document().active_layer;
+        let first = s.engine.document().working.occurrence.unwrap();
         s.layer_action(LayerAction::New {
             group: false,
             clipped: false,
         })
         .unwrap();
-        let second = s.engine.document().active_layer;
+        let second = s.engine.document().working.occurrence.unwrap();
         s.layer_action(LayerAction::AddMask {
-            id: second.0,
+            id: occurrence_token(second),
             replace: false,
         })
         .unwrap();
-        s.layer_action(LayerAction::DeleteMask { id: second.0 })
+        s.layer_action(LayerAction::DeleteMask { id: occurrence_token(second) })
             .unwrap();
         s.layer_action(LayerAction::Select {
-            id: first.0,
+            id: occurrence_token(first),
             mask: false,
         })
         .unwrap();
         s.engine.undo().unwrap();
-        assert_eq!(s.engine.document().active_layer, second);
-        assert!(s.engine.document().active_mask);
+        assert_eq!(s.engine.document().working.occurrence.unwrap(), second);
+        assert!(matches!(s.engine.document().working.target, Some(layer_core::authored::SourceTarget::Coverage(_))));
     }
 
     #[test]
     fn reparent_keeps_world_position_and_group_rows_travel_together() {
         let mut s = session(Platform::Gtk);
-        let id = s.engine.document().active_layer.0;
+        let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
         s.layer_action(LayerAction::AddMask { id, replace: false })
             .unwrap();
         s.layer_action(LayerAction::New {
@@ -10219,7 +10187,7 @@ mod tests {
             clipped: false,
         })
         .unwrap();
-        let group = s.engine.document().active_layer;
+        let group = s.engine.document().working.occurrence.unwrap();
         let edit = s
             .engine
             .document()
@@ -10228,30 +10196,30 @@ mod tests {
         s.engine.apply_edit(edit).unwrap();
         s.layer_action(LayerAction::Reparent {
             id,
-            parent: Some(group.0),
+            parent: Some(occurrence_token(group)),
             index: 0,
         })
         .unwrap();
         let doc = s.engine.document();
-        assert_eq!(doc.layer_offset(LayerId(id)), Point::default());
+        assert_eq!(doc.layer_offset(occurrence_handle(id).unwrap()), Point::default());
         assert_eq!(
-            doc.layer_offset(doc.layer(LayerId(id)).unwrap().mask.as_ref().unwrap().id),
+            doc.target_offset(layer_core::authored::SourceTarget::Coverage(doc.scene().occurrence(occurrence_handle(id).unwrap()).unwrap().mask.as_ref().unwrap().source)),
             Point::default()
         );
         let rows = doc.ordered_layers();
-        let g = rows.iter().position(|l| l.id == group).unwrap();
-        assert_eq!(rows[g + 1].id, LayerId(id));
+        let g = rows.iter().position(|id| *id == group).unwrap();
+        assert_eq!(rows[g + 1], occurrence_handle(id).unwrap());
         assert!(
             s.layer_action(LayerAction::Reparent {
-                id: group.0,
+                id: occurrence_token(group),
                 parent: Some(id),
                 index: 0
             })
             .is_err()
         );
-        s.layer_action(LayerAction::Select { id: group.0, mask: false }).unwrap();
+        s.layer_action(LayerAction::Select { id: occurrence_token(group), mask: false }).unwrap();
         s.layer_action(LayerAction::SoloSelected).unwrap();
-        assert!(s.engine.document().layer(LayerId(id)).unwrap().visible);
+        assert!(s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().visible);
     }
     #[test]
     fn workspace_management_is_shared_transactional_and_independent_of_artwork() {
@@ -11639,7 +11607,7 @@ mod tests {
         let doc = app.engine.document();
         assert_eq!(
             serialize(app.application_menu(ApplicationMenu::Layer)),
-            serialize(app.layer_menu(doc.active_layer.0, doc.active_mask).unwrap())
+            serialize(app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), matches!(doc.working.target,Some(SourceTarget::Coverage(_)))).unwrap())
         );
         assert_eq!(
             serialize(app.application_menu(ApplicationMenu::Window)),
@@ -11667,30 +11635,25 @@ mod tests {
             "selection is not saved artwork"
         );
         assert!(app.command(CommandId::FillSelection).enabled);
-        let all = app.engine.document().selection.clone().unwrap();
+        let all = app.engine.document().working.selection.clone().unwrap();
         assert_eq!(all.contours()[0].len(), 4);
         invoke(&mut app, CommandId::InvertSelection);
-        assert!(app.engine.document().selection.as_ref().unwrap().inverted);
+        assert!(app.engine.document().working.selection.as_ref().unwrap().inverted);
         invoke(&mut app, CommandId::Undo);
-        assert_eq!(app.engine.document().selection.as_ref(), Some(&all));
+        assert_eq!(app.engine.document().working.selection.as_ref(), Some(&all));
         invoke(&mut app, CommandId::FillSelection);
         app.frame(1, 1).unwrap();
-        let painted = app.engine.document().layers.clone();
+        let painted = app.engine.document().clone();
         assert!(app.engine.checkpoint() != saved);
         invoke(&mut app, CommandId::ClearLayer);
         assert!(
-            app.engine
-                .document()
-                .layer(app.engine.document().active_layer)
-                .unwrap()
-                .pending_operations
-                .is_empty()
+            app.engine.document().target_operations(app.engine.document().working.target.unwrap()).unwrap().is_empty()
         );
         invoke(&mut app, CommandId::Undo);
-        assert_eq!(app.engine.document().layers, painted);
+        assert_live_artwork_eq(app.engine.document(), &painted);
         invoke(&mut app, CommandId::Deselect);
-        assert!(app.engine.document().selection.is_none());
-        let mask_layer = app.engine.document().active_layer.0;
+        assert!(app.engine.document().working.selection.is_none());
+        let mask_layer = occurrence_token(app.engine.document().working.occurrence.unwrap());
         invoke(&mut app, CommandId::SelectAll);
         app.dispatch(UiAction::Layer {
             action: LayerAction::Lock {
@@ -11737,7 +11700,7 @@ mod tests {
         let doc = app.engine.document();
         assert_eq!(
             serialize(app.application_menu(ApplicationMenu::Layer)),
-            serialize(app.layer_menu(doc.active_layer.0, true).unwrap())
+            serialize(app.layer_menu(occurrence_token(doc.working.occurrence.unwrap()), true).unwrap())
         );
         app.input_pending = true;
         assert!(!app.command(CommandId::SelectAll).enabled);
@@ -14188,15 +14151,7 @@ mod tests {
         ] {
             let mut app = session(Platform::Gtk);
             if effect == "paper" {
-                let id = app
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .find(|layer| layer.id == layer_core::LayerId(2))
-                    .unwrap()
-                    .id
-                    .0;
+                let id = 2;
                 app.dispatch(UiAction::SelectLayer { id }).unwrap();
             } else if effect != "paint" {
                 app.dispatch(UiAction::Effect {
@@ -14220,7 +14175,7 @@ mod tests {
                 })
                 .unwrap();
             let key = controls[index].key.clone();
-            let layer = app.engine.document().active_layer.0;
+            let layer = occurrence_token(app.engine.document().working.occurrence.unwrap());
             let initial = if effect == "curves" {
                 EffectValue::Curve(vec![[0., 0.], [0.5, 0.75], [1., 1.]])
             } else if matches!(effect, "split_tone" | "paper") {
@@ -14383,7 +14338,7 @@ mod tests {
     fn effect_creation_properties_and_navigation_are_shared() {
         use layer_core::EffectValue;
         let mut app = session(Platform::Gtk);
-        let base = app.engine.document().active_layer;
+        let base = app.engine.document().working.occurrence.unwrap();
         let send = |app: &mut UiSession<Recorder>, action| {
             app.dispatch(UiAction::Effect { action }).unwrap()
         };
@@ -14393,9 +14348,9 @@ mod tests {
                 effect: "curves".into(),
             },
         );
-        let id = app.engine.document().active_layer;
-        assert_eq!(app.engine.document().layers[0].id, id);
-        assert_eq!(app.engine.document().layers[1].id, base);
+        let id = app.engine.document().working.occurrence.unwrap();
+        assert_eq!(app.engine.document().scene().order()[0], id);
+        assert_eq!(app.engine.document().scene().order()[1], base);
         assert_eq!(
             app.state.workspace.layout.active_panel(Panel::Properties),
             Some(Panel::Properties)
@@ -14403,7 +14358,7 @@ mod tests {
         send(
             &mut app,
             EffectAction::CurvePoint {
-                layer: id.0,
+                layer: occurrence_token(id),
                 key: "curve_0".into(),
                 index: None,
                 point: [0.4, 0.7],
@@ -14417,7 +14372,7 @@ mod tests {
         send(
             &mut app,
             EffectAction::Reset {
-                layer: id.0,
+                layer: occurrence_token(id),
                 key: "curve_0".into(),
             },
         );
@@ -14426,7 +14381,7 @@ mod tests {
             app.state.layer_properties.controls[0].default
         );
         app.layer_action(LayerAction::Clip {
-            id: id.0,
+            id: occurrence_token(id),
             value: true,
         })
         .unwrap();
@@ -15112,14 +15067,14 @@ mod tests {
     fn opacity_without_id_uses_the_live_selected_layer() {
         let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
-        let second = app.engine.document().active_layer.0;
+        let second = occurrence_token(app.engine.document().working.occurrence.unwrap());
         let action: UiAction =
             serde_json::from_str(r#"{"type":"set_layer_opacity","opacity":0.25}"#).unwrap();
         app.dispatch(action).unwrap();
         assert_eq!(
             app.engine
                 .document()
-                .layer(LayerId(second))
+                .scene().occurrence(occurrence_handle(second).unwrap())
                 .unwrap()
                 .opacity,
             0.25
@@ -15131,13 +15086,13 @@ mod tests {
         })
         .unwrap();
         assert_eq!(
-            app.engine.document().layer(LayerId(1)).unwrap().opacity,
+            app.engine.document().scene().occurrence(occurrence_handle(1).unwrap()).unwrap().opacity,
             0.75
         );
         assert_eq!(
             app.engine
                 .document()
-                .layer(LayerId(second))
+                .scene().occurrence(occurrence_handle(second).unwrap())
                 .unwrap()
                 .opacity,
             0.25
@@ -16413,7 +16368,7 @@ mod tests {
             layer(&mut s, LayerAction::New { group: false, clipped: false, });
             invoke(&mut s, CommandId::Undo);
             layer(&mut s, LayerAction::Tool { tool });
-            let selection = s.engine.document().selection.clone();
+            let selection = s.engine.document().working.selection.clone();
             let checkpoint = s.engine.checkpoint();
             let mut sequence = 0;
             for moves in [0, 1, 20] {
@@ -16433,7 +16388,7 @@ mod tests {
                 );
                 s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
                     .unwrap();
-                assert_eq!(s.engine.document().selection, selection);
+                assert_eq!(s.engine.document().working.selection, selection);
                 assert_eq!(s.engine.checkpoint(), checkpoint);
                 assert!(
                     s.engine.can_redo(),
@@ -16458,13 +16413,13 @@ mod tests {
             s.frame(sequence * 10_000_000, (sequence + 1) * 10_000_000)
                 .unwrap();
             if tool == LayerCanvasTool::Select {
-                assert_ne!(s.engine.document().selection, selection);
+                assert_ne!(s.engine.document().working.selection, selection);
             } else {
                 assert_ne!(s.engine.checkpoint(), checkpoint);
             }
             invoke(&mut s, CommandId::Undo);
             assert_eq!(s.engine.checkpoint(), checkpoint);
-            assert_eq!(s.engine.document().selection, selection);
+            assert_eq!(s.engine.document().working.selection, selection);
             s.require_document_snapshot_idle().unwrap();
         }
     }
@@ -17255,7 +17210,7 @@ mod tests {
     fn layers_commands_and_undo_have_one_source_of_truth() {
         let mut app = session(Platform::Gtk);
         invoke(&mut app, CommandId::AddLayer);
-        let id = app.engine.document().active_layer.0;
+        let id = occurrence_token(app.engine.document().working.occurrence.unwrap());
         assert_eq!(app.state.layers.len(), 3);
         assert!(app.state.layers[0].selected);
         assert!(app.command(CommandId::DeleteLayer).enabled);
@@ -17386,7 +17341,7 @@ mod tests {
         assert!(
             app.engine
                 .document()
-                .target_raster(app.engine.document().active_target())
+                .target_raster(app.engine.document().active_target().unwrap())
                 .unwrap()
                 .is_empty()
         );
@@ -17406,7 +17361,7 @@ mod tests {
         assert!(
             app.engine
                 .document()
-                .target_raster(app.engine.document().active_target())
+                .target_raster(app.engine.document().active_target().unwrap())
                 .unwrap()
                 .is_empty()
         );

@@ -27,25 +27,21 @@ struct SourceInfo {
 }
 impl DocumentInfo {
     pub fn capture(document: &Document) -> Self {
+        let scene = document.scene();
+        let composition = scene.composition();
         Self {
-            extent: [document.width, document.height],
-            color: document.color,
-            blend_space: document.blend_space,
-            resolution: document.resolution,
-            sources: document
-                .layers
-                .iter()
-                .filter_map(|l| {
-                    l.source.as_ref().map(|s| SourceInfo {
-                        name: l.name.to_string(),
-                        extent: s.extent,
-                        kind: s.kind,
-                        interpretation: s.interpretation.clone(),
-                    })
-                })
-                .collect(),
+            extent: composition.size,
+            color: composition.color,
+            blend_space: composition.blend,
+            resolution: composition.resolution,
+            sources: scene.order().iter().filter_map(|handle| {
+                let occurrence = scene.occurrence(*handle)?;
+                let source = scene.paint_source(*handle)?.original.as_ref()?;
+                Some(SourceInfo {name:occurrence.name.to_string(), extent:source.extent, kind:source.kind, interpretation:source.interpretation.clone()})
+            }).collect(),
         }
     }
+
     pub fn inspect(&self) -> Result<InspectedDocumentInfo, String> {
         Ok(InspectedDocumentInfo {
             extent: self.extent,
@@ -92,9 +88,9 @@ mod tests {
     use super::*;
     #[test]
     fn properties_show_how_layers_blend() {
-        let mut document = Document::new("Properties", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert_eq!(DocumentInfo::capture(&document).inspect().unwrap().blend_space, BlendSpace::Linear);
-        document.blend_space = BlendSpace::Perceptual;
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend = BlendSpace::Perceptual;
         assert_eq!(DocumentInfo::capture(&document).inspect().unwrap().blend_space, BlendSpace::Perceptual);
     }
 }

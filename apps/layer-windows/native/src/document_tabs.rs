@@ -206,7 +206,7 @@ impl DocumentService {
             }
             self.window.documents.admit(
                 &host.session.retained_document_tiles(),
-                &candidate.capture_project_recovery()?,
+                candidate.engine().document(),
             ).map_err(|reason| reason.message(host.session.localization()))?;
             candidate.mark_recovered();
             candidate.inherit_window_state(&host.session)?;

@@ -1,6 +1,6 @@
 //! Shared preparation/publication policy for host document color workflows.
 use super::*;
-use layer_core::{ColorTransition, PreparedColorTransition, Project};
+use layer_core::{ColorTransition, PreparedColorTransition, Document, Edit, RecordChange};
 
 /// Viewing mode is transient. Saved SDR and print recipes are document data,
 /// independently of whether either simulation is currently visible.
@@ -9,6 +9,13 @@ use layer_core::{ColorTransition, PreparedColorTransition, Project};
 pub enum ProofMode { #[default] Off, Sdr, Print }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    fn sdr_rendition_edit(&self, recipe: layer_core::color::hdr::SdrRendition) -> Result<Edit, String> {
+        let document = self.engine.document();
+        let mut output = document.output().clone();
+        output.sdr = recipe;
+        Ok(Edit::Output(RecordChange::replace(&document.artwork.outputs, document.artwork.default_output, Some(output)).map_err(error)?))
+    }
+
     pub fn proof_mode(&self) -> ProofMode {
         if self.state.soft_proof { ProofMode::Print }
         else if self.state.preview_sdr { ProofMode::Sdr }
@@ -25,7 +32,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.proof_panel_mode() == ProofMode::Off && !self.state.gamut_warning
     }
     pub fn select_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, crate::ColorFeatureError> {
-        if mode == ProofMode::Print && self.engine.document().proof.is_none() {
+        if mode == ProofMode::Print && self.engine.document().output().proof.is_none() {
             let change = self.set_proof_mode(ProofMode::Off)?;
             self.last_proof_mode = Some(ProofMode::Print);
             self.proof_setup_pending = true;
@@ -40,7 +47,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             match self.last_proof_mode {
                 Some(ProofMode::Print) => ProofMode::Print,
-                _ if self.engine.document().color.depth.is_float() => ProofMode::Sdr,
+                _ if self.engine.document().composition().color.depth.is_float() => ProofMode::Sdr,
                 _ => ProofMode::Print,
             }
         };
@@ -48,10 +55,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn set_proof_mode(&mut self, mode: ProofMode) -> Result<UiChange, crate::ColorFeatureError> {
         self.require_proof_idle()?;
-        if mode == ProofMode::Sdr && !self.engine.document().color.depth.is_float() {
+        if mode == ProofMode::Sdr && !self.engine.document().composition().color.depth.is_float() {
             return Err(crate::ColorFeatureError::ProofAlreadySdr);
         }
-        if mode == ProofMode::Print && self.engine.document().proof.is_none() {
+        if mode == ProofMode::Print && self.engine.document().output().proof.is_none() {
             return Err(crate::ColorFeatureError::ProofChoosePrintProfile);
         }
         self.proof_setup_pending = false;
@@ -64,7 +71,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn cancel_sdr_gesture(&mut self) -> Result<bool, String> {
         let Some(original) = self.sdr_gesture.take() else { return Ok(false) };
-        self.engine.preview_edit(layer_core::Edit::SetSdrRendition(original)).map_err(error)?;
+        self.engine.preview_edit(self.sdr_rendition_edit(original)?).map_err(error)?;
         self.refresh_document();
         self.refresh_commands();
         Ok(true)
@@ -74,10 +81,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn edit_sdr_rendition(&mut self, phase: ContactPhase, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange, crate::ColorFeatureError> {
         if phase == ContactPhase::Down {
             self.require_proof_idle()?;
-            if !self.engine.document().color.depth.is_float() {
+            if !self.engine.document().composition().color.depth.is_float() {
                 return Err(crate::ColorFeatureError::ProofHdrArtwork);
             }
-            self.sdr_gesture = Some(self.engine.document().sdr_rendition);
+            self.sdr_gesture = Some(self.engine.document().output().sdr);
         } else if self.sdr_gesture.is_none() {
             return Ok(self.changed(0, false));
         }
@@ -90,10 +97,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             if phase == ContactPhase::Up {
                 let original = self.sdr_gesture.take().unwrap();
-                self.engine.preview_edit(layer_core::Edit::SetSdrRendition(original)).map_err(error)?;
-                if recipe != original { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
+                self.engine.preview_edit(self.sdr_rendition_edit(original)?).map_err(error)?;
+                if recipe != original { self.engine.apply_edit(self.sdr_rendition_edit(recipe)?).map_err(error)?; }
             } else {
-                self.engine.preview_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?;
+                self.engine.preview_edit(self.sdr_rendition_edit(recipe)?).map_err(error)?;
             }
         }
         self.refresh_document();
@@ -101,7 +108,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
     pub fn effective_sdr_rendition(&self) -> layer_core::color::hdr::SdrRendition {
-        self.engine.document().sdr_rendition
+        self.engine.document().output().sdr
     }
     pub fn set_hdr_display_available(&mut self, available: bool) -> bool {
         if self.state.hdr_display_available == available { return false; }
@@ -113,9 +120,9 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn set_sdr_rendition(&mut self, recipe: layer_core::color::hdr::SdrRendition) -> Result<UiChange,crate::ColorFeatureError> {
         self.require_proof_idle()?;
-        if !self.engine.document().color.depth.is_float() { return Err(crate::ColorFeatureError::ProofHdrArtwork); }
+        if !self.engine.document().composition().color.depth.is_float() { return Err(crate::ColorFeatureError::ProofHdrArtwork); }
         recipe.validate().map_err(|_| crate::ColorFeatureError::ProofInvalidRendition)?;
-        if recipe != self.engine.document().sdr_rendition { self.engine.apply_edit(layer_core::Edit::SetSdrRendition(recipe)).map_err(error)?; }
+        if recipe != self.engine.document().output().sdr { self.engine.apply_edit(self.sdr_rendition_edit(recipe)?).map_err(error)?; }
         self.refresh_document(); self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::BRUSH, true))
     }
@@ -125,10 +132,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn set_proof_recipe(&mut self, recipe: Option<layer_core::color::ProofRecipe>) -> Result<UiChange, crate::ColorFeatureError> {
         self.require_proof_idle()?;
         if let Some(recipe) = &recipe { recipe.validate()?; }
-        if recipe != self.engine.document().proof {
-            self.engine.apply_edit(layer_core::Edit::SetProof(recipe)).map_err(error)?;
+        if recipe != self.engine.document().output().proof {
+            let document = self.engine.document();
+            let mut output = document.output().clone();
+            output.proof = recipe;
+            let edit = Edit::Output(RecordChange::replace(&document.artwork.outputs, document.artwork.default_output, Some(output)).map_err(error)?);
+            self.engine.apply_edit(edit).map_err(error)?;
         }
-        self.state.soft_proof = self.engine.document().proof.is_some();
+        self.state.soft_proof = self.engine.document().output().proof.is_some();
         self.proof_setup_pending = false;
         if self.state.soft_proof {
             self.last_proof_mode = Some(ProofMode::Print);
@@ -143,14 +154,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn prepare_document_color_transition(
         &self,
         transition: ColorTransition,
-    ) -> Result<(PreparedColorTransition, Project), String> {
+    ) -> Result<(PreparedColorTransition, Document), String> {
         self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
         let prepared = self
             .engine
             .prepare_color_transition(transition)
             .map_err(error)?;
-        let project = Project::snapshot(prepared.document())?;
+        let project = prepared.document().clone();
         Ok((prepared, project))
     }
 
@@ -161,8 +172,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_snapshot_idle()?;
         self.require_document_idle()?;
         let mut colors = self.state.colors.clone();
-        colors.set_rgb_space(prepared.document().color.space)?;
-        colors.set_document_depth(prepared.document().color.depth)?;
+        colors.set_rgb_space(prepared.document().composition().color.space)?;
+        colors.set_document_depth(prepared.document().composition().color.depth)?;
         self.engine
             .commit_color_transition(prepared)
             .map_err(error)?;

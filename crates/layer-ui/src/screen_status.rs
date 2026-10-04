@@ -69,7 +69,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn screen_hdr_document(&self) -> bool {
-        self.engine.document().color.depth.is_float()
+        self.engine.document().composition().color.depth.is_float()
     }
 
     fn hdr_view_label(&self) -> MessageId {

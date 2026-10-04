@@ -18,11 +18,13 @@ fn clone_brush() -> BrushSnapshot {
 
 /// A Clone engine painting on `target`, the photo itself or the layer above
 /// it, prepared as the session prepares a selected Clone tool.
-fn cloner(doc: Document, target: LayerId, source: RetouchSource, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
+fn cloner(doc: Document, target: SourceTarget, source: RetouchSource, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
     let mut doc = doc;
-    doc.active_layer = target;
-    let extent = [doc.width, doc.height];
-    let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let owner = doc.target_owner(target).unwrap();
+    let edit = doc.select_occurrence_edit(owner).unwrap();
+    doc.apply(edit).unwrap();
+    let extent = doc.composition().size;
+    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let (input, consumer) = input_queue(256);
     let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
     engine.set_brush(clone_brush()).unwrap();
@@ -40,7 +42,7 @@ fn source_row(r: &mut WgpuRasterizer, rows: std::ops::Range<u32>) -> impl Fn(u32
     move |x, y| pages[(y / PAGE_SIZE - first) as usize][(x / PAGE_SIZE) as usize][((y % PAGE_SIZE) * PAGE_SIZE + x % PAGE_SIZE) as usize]
 }
 
-fn layer_page(r: &WgpuRasterizer, layer: LayerId, page: [u32; 2]) -> Vec<[f32; 4]> {
+fn layer_page(r: &WgpuRasterizer, layer: SourceTarget, page: [u32; 2]) -> Vec<[f32; 4]> {
     r.paint_layers
         .iter()
         .find(|l| l.id == layer)
@@ -48,7 +50,7 @@ fn layer_page(r: &WgpuRasterizer, layer: LayerId, page: [u32; 2]) -> Vec<[f32; 4
         .map_or_else(|| vec![[0.; 4]; (PAGE_SIZE * PAGE_SIZE) as usize], |p| floats(&crate::layer_tests::page_bytes(r, &p.active().texture)))
 }
 
-fn pixel(r: &WgpuRasterizer, layer: LayerId, x: u32, y: u32) -> [f32; 4] {
+fn pixel(r: &WgpuRasterizer, layer: SourceTarget, x: u32, y: u32) -> [f32; 4] {
     layer_page(r, layer, [x / PAGE_SIZE, y / PAGE_SIZE])[((y % PAGE_SIZE) * PAGE_SIZE + x % PAGE_SIZE) as usize]
 }
 
@@ -105,7 +107,8 @@ fn an_integer_offset_clones_the_source_exactly_and_a_second_pass_sees_the_first(
 #[test]
 fn clone_strokes_lay_one_continuous_stamp() {
     let mut doc = document(EXTENT);
-    doc.layers.iter_mut().find(|l| l.id == PHOTO).unwrap().source = Some(rgba8_source(EXTENT, |_, _| [255; 4]));
+    let SourceTarget::Paint(photo) = PHOTO else { unreachable!() };
+    doc.artwork.paint.get_mut(photo).unwrap().original = Some(rgba8_source(EXTENT, |_, _| [255; 4]));
     let radius = 48.;
     let deviation = |brush: BrushSnapshot| {
         let (mut input, mut engine) = cloner(doc.clone(), TARGET, RetouchSource::References, false);
@@ -162,7 +165,9 @@ fn clone_strokes_stay_inside_the_selection_and_keep_alpha_locked_transparency() 
     let rect = |x0: f32, x1: f32| {
         Selection::polygon([[x0, 0.], [x1, 0.], [x1, 512.], [x0, 512.]].map(|[x, y]| Point { x, y }).to_vec()).unwrap()
     };
-    engine.apply_edit(Edit::SetSelection(Some(rect(100., 200.)))).unwrap();
+    let mut working = engine.document().working.clone();
+    working.selection = Some(rect(100., 200.));
+    engine.apply_edit(Edit::Working(working)).unwrap();
     source_at(&mut engine, 191., 121., |_| {});
     stroke(&mut engine, &mut input, 1, [60., 64.], [300., 64.]);
     let offset = offset_of(&engine);
@@ -177,19 +182,18 @@ fn clone_strokes_stay_inside_the_selection_and_keep_alpha_locked_transparency() 
     }
 
     let (mut input, mut engine) = cloner(document(EXTENT), TARGET, RetouchSource::References, false);
-    let mut coverage = LayerMask::reveal_all(LayerId(20), Point::default());
-    coverage.default_coverage = 0.;
-    coverage.initial = Some(rect(0., 150.));
+    let mut coverage = reveal_all(EXTENT);
+    coverage.source.default_coverage = 0.;
+    coverage.source.initial = Some(rect(0., 150.));
     engine
-        .append_layer_operation(TARGET, LayerOperation {
+        .append_raster_operation(TARGET, RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage,
-            kind: LayerOperationKind::Fill { color: FILL, alpha_locked: false },
+            kind: RasterOperationKind::Fill { color: FILL, alpha_locked: false },
         })
         .unwrap();
-    let mut locked = engine.document().layer(TARGET).unwrap().clone();
-    locked.properties.alpha_locked = true;
-    engine.apply_edit(Edit::ReplaceLayer(Box::new(locked))).unwrap();
+    let edit = occurrence_edit(engine.document(), TARGET_USE, |o| o.alpha_locked = true);
+    engine.apply_edit(edit).unwrap();
     flush(&mut engine);
     source_at(&mut engine, 191., 121., |_| {});
     let read = source_row(engine.backend_mut(), 0..1);

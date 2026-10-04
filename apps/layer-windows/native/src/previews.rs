@@ -91,17 +91,12 @@ pub fn layer_menu(host: &mut NativeHost, json: &str) -> Result<CapyPreview, Stri
         .id
         .map(|id| id.parse::<u64>().map_err(|e| e.to_string()))
         .transpose()?
-        .unwrap_or(document.active_layer.0);
-    let mask = query.mask.unwrap_or(document.active_mask);
+        .unwrap_or(document.working.occurrence.map(layer_ui::occurrence_token).unwrap_or(0));
+    let mask = query.mask.unwrap_or(document.working.target.is_some_and(|t| matches!(t,layer_core::authored::SourceTarget::Coverage(_))));
     let epoch_matches = query.epoch.parse::<u64>().map_err(|e| e.to_string())? == epoch;
     let quick_mask = id == 0 && !mask && host.session.state().layer_tools.quick_mask;
-    let exists = quick_mask
-        || host
-            .session
-            .engine()
-            .document()
-            .layer(layer_core::LayerId(id))
-            .is_some_and(|layer| !mask || layer.mask.is_some());
+    let exists = quick_mask || layer_ui::occurrence_handle(id).ok()
+        .and_then(|h| document.scene().occurrence(h)).is_some_and(|o| !mask || o.mask.is_some());
     let menu = if epoch_matches && exists && query.blend {
         serde_json::to_value(host.session.layer_blend_menu(id)?).map_err(|e| e.to_string())?
     } else if epoch_matches && exists {
@@ -224,7 +219,7 @@ mod tests {
     fn layer_menus_match_shared_policy_and_reject_stale_targets() {
         let mut host = NativeHost::new(layer_ui::Platform::Windows).unwrap();
         let epoch = host.session.state().document_file.epoch;
-        let id = host.session.engine().document().active_layer.0;
+        let id = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         let query = |epoch: u64, id: u64, mask| {
             serde_json::json!({
                 "epoch":epoch.to_string(),"id":id.to_string(),"mask":mask
@@ -283,7 +278,7 @@ mod tests {
             },
         })
         .unwrap();
-        let target = host.session.engine().document().active_layer.0;
+        let target = host.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         let packet = layer_menu(&mut host, &current).unwrap();
         let metadata: serde_json::Value =
             serde_json::from_str(packet.metadata.to_str().unwrap()).unwrap();

@@ -307,7 +307,7 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
 fn open_workspace(
     app: &adw::Application,
     active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
-    project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+    project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
     recovered: Option<std::path::PathBuf>,
 ) {
     let hold = app.hold();
@@ -344,7 +344,7 @@ pub(crate) async fn prepare_application_context(
 fn open_workspace_ready(
     app: &adw::Application,
     active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
-    project: Option<(layer_core::Project, Option<layer_ui::DocumentLocation>)>,
+    project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
     recovered: Option<std::path::PathBuf>,
     settings: Option<layer_ui::Settings>,
     localization: std::sync::Arc<layer_ui::Localizer>,

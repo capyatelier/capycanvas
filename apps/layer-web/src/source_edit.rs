@@ -1,7 +1,6 @@
 //! Retained-source operations keep original tiles shared until explicit Apply.
 use super::*;
 use layer_core::{
-    Project,
     color::{
         ColorProfile, DocumentColor,
         source::{SourceImage, SourceInterpretation},
@@ -19,7 +18,6 @@ pub struct WebSourceCandidate {
     gpu: SnapshotGpu,
     control: CaptureControl,
     lost: Arc<std::sync::Mutex<Option<String>>>,
-    time: f32,
     clipped: u64,
     profile: Option<String>,
     previews: Vec<SnapshotPreview>,
@@ -72,18 +70,18 @@ impl WebApp {
             .snapshot_gpu();
         let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let control = control.inner.clone();
-        let time = s.engine().animation_time();
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
             let (converted, clipped, name) = if workflow.rasterize() {
                 // Only the selected source enters the conversion worker, never
                 // the rest of the master or its painted raster backing.
                 let mut document =
-                    layer_core::Document::new("source", original.extent[0], original.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
-                document.color = project.document.color;
-                document.layers[0].source = Some(original.clone());
-                document.layers[1].visible = false;
-                let wire = raster_project::pack(Project { document }).await?;
+                    layer_core::Document::new(layer_core::PortableId::random(), original.extent[0], original.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
+                document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=project.composition().color;
+                let paint=document.artwork.paint.iter().next().unwrap().0;
+                document.artwork.paint.get_mut(paint).unwrap().original=Some(original.clone());
+                let paper=document.scene().order()[1];document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
+                let wire = artwork_transfer::pack(document.artwork).await?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
                     .as_string()
                     .ok_or_else(|| js("Missing source metadata"))?;
@@ -106,16 +104,11 @@ impl WebApp {
                     .unwrap_or(0.) as u64;
                 let name = js_sys::Reflect::get(&result, &js("source_profile"))?
                     .as_string();
-                let converted = raster_project::unpack(&metadata, buffers, true)
-                    .await?
-                    .document
-                    .layers[0]
-                    .source
-                    .clone()
-                    .ok_or_else(|| js("Missing converted source"))?;
+                let artwork=artwork_transfer::unpack(&metadata,buffers).await?;
+                let converted=artwork.paint.iter().find_map(|(_,_,p)|p.original.clone()).ok_or_else(||js("Missing converted source"))?;
                 (converted, clipped, name)
             } else {
-                let metadata=serde_json::to_string(&serde_json::json!({"interpretation":original.interpretation,"color":project.document.color,"profile":profile.unwrap()})).map_err(js)?;
+                let metadata=serde_json::to_string(&serde_json::json!({"interpretation":original.interpretation,"color":project.composition().color,"profile":profile.unwrap()})).map_err(js)?;
                 let result = JsFuture::from(raster_worker::call(
                     "source-profile",
                     &metadata,
@@ -141,7 +134,6 @@ impl WebApp {
                 gpu,
                 control,
                 lost,
-                time,
                 clipped,
                 profile: name,
                 previews: Vec::new(),
@@ -157,7 +149,7 @@ impl WebApp {
         let candidate = c.workflow.preview(&self.session, c.converted.clone(), c.control.is_cancelled(), true).map_err(js)?;
         Ok(future_to_promise(async move {
             for project in [&c.workflow.project, &candidate] {
-                c.previews.push(hdr::preview_document(&c.gpu,project.clone(),c.time,c.control.clone()).await?);
+                c.previews.push(hdr::preview_document(&c.gpu,project.artwork.clone(),c.workflow.context.clone(),c.control.clone()).await?);
             }
             output::cancelled(&c.control)?;
             c.workflow.comparison_completed().map_err(js)?;
@@ -193,17 +185,14 @@ pub async fn raster_worker_source_rasterize(
     metadata: &str,
     buffers: js_sys::Array,
 ) -> Result<JsValue, JsValue> {
-    let mut project = raster_project::unpack(metadata, buffers, false).await?;
-    let source = project.document.layers[0]
-        .source
-        .as_ref()
-        .ok_or_else(|| js("No source"))?;
-    let name = layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
-    let (converted, statistics) =
-        layer_color::rasterize_source(source, project.document.color, raster_project::photo_memory_budget().encode_bytes, || false)
-            .map_err(js)?;
-    project.document.layers[0].source = Some(Arc::new(converted));
-    let wire = raster_project::pack(project).await?;
+    let mut artwork = artwork_transfer::unpack(metadata, buffers).await?;
+    let paint=artwork.paint.iter().find_map(|(h,_,p)|p.original.is_some().then_some(h)).ok_or_else(||js("No source"))?;
+    let source=artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+    let name=layer_color::profile_description_optional(&source.interpretation.profile).map_err(js)?;
+    let color=artwork.compositions.get(artwork.root).unwrap().color;
+    let (converted,statistics)=layer_color::rasterize_source(source,color,artwork_transfer::photo_memory_budget().encode_bytes,||false).map_err(js)?;
+    artwork.paint.get_mut(paint).unwrap().original=Some(Arc::new(converted));
+    let wire=artwork_transfer::pack(artwork).await?;
     js_sys::Reflect::set(
         &wire,
         &js("clipped"),

@@ -1,5 +1,4 @@
 use super::*;
-use effects::Gpu;
 use layer_core::{ArtworkQuery, ArtworkSource, EffectAnalysisKind};
 
 pub(crate) struct Prepared {
@@ -8,12 +7,11 @@ pub(crate) struct Prepared {
     pub resource: Arc<effects::resources::Resource>,
 }
 impl Prepared {
-    pub fn layer(&self) -> LayerId {
+    pub fn layer(&self) -> OccurrenceHandle {
         let ArtworkSource::EffectInput(id) = self.query.source else { unreachable!() }; id
     }
-    pub fn matches(&self, document: &layer_core::Document, time: f32, gpu: &WgpuRasterizer) -> bool {
-        self.query.matches_source(document) && self.query.effect_times.iter().all(|(id, phase)|
-            document.layer(*id).is_some_and(|layer| gpu.effect_time(layer, time) == *phase))
+    pub fn matches(&self, scene: &SceneSnapshot, _gpu: &WgpuRasterizer) -> bool {
+        self.query.matches_snapshot(scene)
     }
 }
 impl WgpuRasterizer {
@@ -26,7 +24,8 @@ impl WgpuRasterizer {
 
 #[derive(Clone)]
 pub(crate) struct BakeInput {
-    pub members: Arc<[Layer]>,
+    pub scene: Arc<SceneSnapshot>,
+    pub scope: SceneScope,
     pub offset: layer_core::Point,
     pub extent: [u32; 2],
     pub color: layer_core::color::DocumentColor,
@@ -35,9 +34,9 @@ pub(crate) struct BakeInput {
 }
 impl BakeInput {
     fn matches(&self, other: &Self) -> bool {
-        Arc::ptr_eq(&self.members, &other.members) && self.offset == other.offset && self.extent == other.extent
+        Arc::ptr_eq(&self.scene, &other.scene) && self.scope == other.scope && self.offset == other.offset && self.extent == other.extent
             && self.color == other.color && self.blend == other.blend
-            && (self.time == other.time || !self.members.iter().any(|layer| layer.effect.as_ref().is_some_and(|effect| effect.animated())))
+            && (self.time == other.time || !self.scene.view().order().iter().any(|&h| self.scene.view().with_scope(&self.scope).visible(h) && self.scene.view().effect(h).is_some_and(|effect| effect.animated())))
     }
 }
 pub(crate) struct BakeTask {
@@ -45,8 +44,11 @@ pub(crate) struct BakeTask {
     job: Option<Job>,
     result: Option<Result<Candidate, String>>,
 }
-enum Request { Layer(ArtworkQuery), Bake(BakeInput) }
-pub struct Candidate { pub(crate) entries: Vec<Arc<Prepared>> }
+enum Request { Artwork(ArtworkQuery), Bake(BakeInput) }
+pub struct Candidate {
+    pub(crate) entries: Vec<Arc<Prepared>>,
+    pub(crate) masks: Option<Arc<layer_masks::SnapshotMasks>>,
+}
 pub struct Job {
     control: snapshot::CaptureControl,
     receiver: std::sync::mpsc::Receiver<Result<Candidate, String>>,
@@ -54,7 +56,7 @@ pub struct Job {
 impl Drop for Job { fn drop(&mut self) { self.control.cancel(); } }
 impl Job {
     pub fn start(gpu: snapshot::SnapshotGpu, query: ArtworkQuery) -> Result<Self, String> {
-        Self::spawn(gpu, Request::Layer(query))
+        Self::spawn(gpu, Request::Artwork(query))
     }
     pub(crate) fn frame(gpu: snapshot::SnapshotGpu, input: BakeInput) -> Result<Self, String> { Self::spawn(gpu, Request::Bake(input)) }
     fn spawn(gpu: snapshot::SnapshotGpu, request: Request) -> Result<Self, String> {
@@ -71,7 +73,7 @@ impl Job {
     }
     async fn run(gpu: snapshot::SnapshotGpu, request: Request, control: snapshot::CaptureControl) -> Result<Candidate, String> {
         match request {
-            Request::Layer(query) => gpu.effect_analysis(query, control).await,
+            Request::Artwork(query) => gpu.effect_analysis(query, control).await,
             Request::Bake(input) => gpu.bake_analysis(input, control).await,
         }
     }
@@ -84,7 +86,7 @@ impl Job {
     }
 }
 #[cfg(target_arch = "wasm32")]
-pub type BackingWaiter = std::rc::Rc<dyn Fn(Arc<layer_core::Document>, snapshot::CaptureControl)
+pub type BackingWaiter = std::rc::Rc<dyn Fn(Arc<SceneSnapshot>, snapshot::CaptureControl)
     -> std::pin::Pin<Box<dyn std::future::Future<Output = Result<(), String>>>>>;
 
 impl WgpuRasterizer {
@@ -107,16 +109,16 @@ impl WgpuRasterizer {
 impl WgpuRasterizer {
     pub(crate) fn bake_analyses_ready(&mut self, packet: FramePacket<'_>) -> bool {
         let mut inputs = Vec::new();
-        for layer in packet.layers {
-            for operation in &layer.pending_operations {
-                let (members, offset) = match &operation.kind {
-                    layer_core::LayerOperationKind::Bake {members, offset}
-                    | layer_core::LayerOperationKind::FrequencyDetail {members, offset, ..} => (members, *offset),
-                    _ => continue,
+        for target in source_access::placed_targets(packet.scene) {
+            for operation in packet.scene.operations(target).into_iter().flatten() {
+                let (scene, scope, offset) = match &operation.kind {
+                    layer_core::RasterOperationKind::Bake {scene, scope, offset}
+                    | layer_core::RasterOperationKind::FrequencyDetail {scene, scope, offset, ..} => (scene, scope, *offset), _ => continue,
                 };
-                if !members.iter().any(|layer| layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) { continue; }
-                let input = BakeInput {members: members.clone(), offset, extent: layer.local_extent(packet.document_extent),
-                    color: self.document_color, blend: packet.blend_space, time: packet.time_seconds};
+                if !scene.view().order().iter().any(|&h| scene.view().with_scope(scope).visible(h) && scene.view().effect(h).is_some_and(|effect| effect.program.analysis().is_some()))
+                    && !bake_needs_masks(scene, scope) { continue; }
+                let input = BakeInput {scene: scene.clone(), scope: scope.clone(), offset, extent: packet.scene.target_extent(target),
+                    color: self.document_color, blend: scene.view().composition().blend, time: scene.context.elapsed};
                 if !inputs.iter().any(|old: &BakeInput| old.matches(&input)) { inputs.push(input); }
             }
         }
@@ -137,10 +139,22 @@ impl WgpuRasterizer {
         }
         true
     }
-    pub(crate) fn bake_analysis_entries(&self, members: &[Layer], offset: layer_core::Point, extent: [u32;2])
+    pub(crate) fn bake_mask_pages(&self, scene: &Arc<SceneSnapshot>, scope: &SceneScope, offset: layer_core::Point, extent: [u32;2])
+        -> Result<Option<Arc<layer_masks::SnapshotMasks>>, GpuRasterError> {
+        if !bake_needs_masks(scene, scope) { return Ok(None); }
+        let task = self.bake_analyses.iter().find(|task| Arc::ptr_eq(&task.input.scene, scene) && task.input.scope == *scope
+            && task.input.offset == offset && task.input.extent == extent)
+            .ok_or_else(|| GpuRasterError::Effect("Merge mask backing is not ready".into()))?;
+        match &task.result {
+            Some(Ok(candidate)) => Ok(candidate.masks.clone()),
+            Some(Err(error)) => Err(GpuRasterError::Effect(error.clone())),
+            None => Err(GpuRasterError::Effect("Merge mask backing is not ready".into())),
+        }
+    }
+    pub(crate) fn bake_analysis_entries(&self, scene: &Arc<SceneSnapshot>, scope: &SceneScope, offset: layer_core::Point, extent: [u32;2])
         -> Result<Option<Vec<Arc<Prepared>>>, GpuRasterError> {
-        if !members.iter().any(|layer| layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) { return Ok(None); }
-        let task = self.bake_analyses.iter().find(|task| std::ptr::eq(task.input.members.as_ref(), members)
+        if !scene.view().order().iter().any(|&h| scene.view().with_scope(scope).visible(h) && scene.view().effect(h).is_some_and(|effect| effect.program.analysis().is_some())) { return Ok(None); }
+        let task = self.bake_analyses.iter().find(|task| Arc::ptr_eq(&task.input.scene, scene) && task.input.scope == *scope
             && task.input.offset == offset && task.input.extent == extent)
             .ok_or_else(|| GpuRasterError::Effect("Merge analysis is not ready".into()))?;
         match &task.result {
@@ -149,6 +163,13 @@ impl WgpuRasterizer {
             None => Err(GpuRasterError::Effect("Merge analysis is not ready".into())),
         }
     }
+}
+
+fn bake_needs_masks(scene: &Arc<SceneSnapshot>, scope: &SceneScope) -> bool {
+    snapshot::capture_targets(scene.view().with_scope(scope), scope).into_iter().any(|target| match target {
+        SourceTarget::Coverage(handle) => scene.view().coverage(handle).is_some_and(|coverage| coverage.initial.is_some() || !coverage.raster.is_empty()),
+        _ => false,
+    })
 }
 
 #[derive(Debug)]

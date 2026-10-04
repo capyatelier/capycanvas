@@ -277,7 +277,7 @@ impl WgpuRasterizer {
                 batch,
                 dabs,
                 coordinate,
-                self.target_extent(batch.layer_id),
+                self.target_extent(batch.target),
             ))
             .collect::<Vec<_>>()
         });
@@ -316,7 +316,7 @@ impl WgpuRasterizer {
                     ]
                 })
             });
-            self.prepare_raw_neighborhood(batch.layer_id, coordinate, offsets, preview, encoder)?;
+            self.prepare_raw_neighborhood(batch.target, coordinate, offsets, preview, encoder)?;
             self.metrics.material_cpu_ms[1] += elapsed(started);
             let started = timing.then(web_time::Instant::now);
             // Reuse one uniform in command order. Queue::write_buffer would
@@ -329,8 +329,8 @@ impl WgpuRasterizer {
             let layer = self
                 .paint_layers
                 .iter()
-                .find(|l| l.id == batch.layer_id)
-                .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?;
+                .find(|l| l.id == batch.target)
+                .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?;
             let sources = self.source_tiles.borrow();
             let views = self.raw_layer_neighborhood(&sources, layer, coordinate, offsets, preview);
             let gather = self.material_gather.as_ref().unwrap();
@@ -365,7 +365,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(
                 1,
                 self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, coordinate)],
+                &[self.layer_target_offset(batch.target, coordinate)],
             );
             pass.set_bind_group(2, &binding, &[0]);
             pass.set_bind_group(3, &textures.bind_group, &[]);

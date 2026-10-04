@@ -519,10 +519,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let settings = &self.state.settings;
         let platform = self.state.platform;
         let document = self.engine.document();
-        let active = document.active_layer.0;
+        let active = document.working.occurrence.map(super::occurrence_token).unwrap_or(0);
         let idle = self.require_idle().is_ok();
         let managed = self.managed_workspace.is_some();
-        let artwork = !document.active_mask;
+        let artwork = !document.working.target.is_some_and(layer_core::SourceTarget::is_coverage);
         let alias = |action: UiAction| {
             let command = match &action {
                 UiAction::Layer { action: LayerAction::Clear { id } } if *id == active && artwork => CommandId::ClearLayer,
@@ -679,7 +679,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let properties = &self.state.layer_properties;
         if properties.layer == Some(active)
             && !self.selection_masks.quick()
-            && document.layer(document.active_layer).is_some_and(|l| l.kind != LayerKind::Selection)
+            && document.working.occurrence.and_then(|handle| document.scene().occurrence(handle)).is_some_and(|l| l.kind() != LayerKind::Selection)
         {
             let canonical_properties = effects::properties(document, self.state.settings.selection_painting, &english);
             let set = |key: &str, value| UiAction::Effect {
@@ -1052,12 +1052,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             return reason.into();
         }
         let document = self.engine.document();
-        let active = document.layer(document.active_layer);
-        let paint = active.is_some_and(|l| l.kind == LayerKind::Paint);
-        let locked = document.is_locked(document.active_layer);
+        let active = document.working.occurrence.and_then(|handle| document.scene().occurrence(handle));
+        let paint = active.is_some_and(|l| l.kind() == LayerKind::Paint);
+        let locked = document.is_locked(document.working.occurrence.unwrap_or_default());
         let mask_target = self.selection_masks.target();
         let selection = self.has_selection();
-        let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind, self.localization()));
+        let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind(), self.localization()));
         let reason: Arc<str> = match command {
             C::Undo => l.text(MessageId::COMMANDS_NOTHING_TO_UNDO),
             C::Redo if self.cropping() => l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST),
@@ -1122,18 +1122,18 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::DeleteLayer if self.selection_masks.quick() => l.text(MessageId::COMMANDS_LEAVE_QUICK_MASK_FIRST),
             C::DeleteLayer => {
                 return document
-                    .delete_layers_edit(&[document.active_layer])
+                    .delete_layers_edit(&[document.working.occurrence.unwrap_or_default()])
                     .err()
                     .map_or(l.text(MessageId::COMMANDS_THIS_LAYER_CAN_T_BE_DELETED), |e| layer_error(e, l));
             }
-            C::SdrRendition | C::PreviewSdr if !document.color.depth.is_float() => {
+            C::SdrRendition | C::PreviewSdr if !document.composition().color.depth.is_float() => {
                 l.text(MessageId::COMMANDS_REQUIRES_A_HIGH_DYNAMIC_RANGE_DRAWING)
             }
             C::PreviewSdr if !self.state.hdr_display_available => l.text(MessageId::COMMANDS_REQUIRES_A_HIGH_DYNAMIC_RANGE_DISPLAY),
             C::PreviewSdr => l.text(MessageId::COMMANDS_TURN_OFF_SOFT_PROOFING_AND_THE_GAMUT_WARNING_FIRST),
             C::GamutWarning => l.text(MessageId::COMMANDS_SET_UP_SOFT_PROOFING_FIRST),
             C::ResetLayout if self.managed_workspace.is_some() => l.text(MessageId::COMMANDS_THE_LAYOUT_ALREADY_MATCHES_ITS_STARTING_STATE),
-            C::RepairSourceProfile | C::RasterizeSource if document.active_mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
+            C::RepairSourceProfile | C::RasterizeSource if document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
             C::RepairSourceProfile | C::RasterizeSource => l.text(MessageId::COMMANDS_SELECT_AN_UNLOCKED_RETAINED_IMAGE_LAYER),
             C::ApplyTransform if self.region_tools.applying_transform() => l.text(MessageId::COMMANDS_APPLYING_THE_TRANSFORM),
             C::TransformPerspective if self.operation.transforming() => l.text(MessageId::COMMANDS_CHOOSE_DISTORT_FIRST),
@@ -1222,7 +1222,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             C::Copy | C::Cut | C::CopyMerged => self.copy_refusal(command).unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::PasteInto => self.paste_into_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
-            C::MaskSelection if self.engine.document().selection.is_none() => l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST),
+            C::MaskSelection if self.engine.document().working.selection.is_none() => l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST),
             C::ApplyLayerMask if apply_refusal.is_some() => apply_refusal.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)),
             C::ApplyLayerMask if active.and_then(|l| l.mask.as_ref()).is_some_and(|m| !m.enabled) => {
                 l.text(MessageId::COMMANDS_ENABLE_THE_MASK_BEFORE_APPLYING_IT)
@@ -1249,7 +1249,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::TransformSnapping => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::ScaleRotate => l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK),
             C::ClearLayer | C::FillSelection | C::RaiseLayer | C::LowerLayer if !paint => l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER),
-            C::ClearLayer | C::FillSelection if document.active_mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
+            C::ClearLayer | C::FillSelection if document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
             C::RaiseLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_TOP),
             C::LowerLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_BOTTOM),
             _ => l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET),
@@ -1275,20 +1275,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         let document = self.engine.document();
         let roots = document.layer_roots(&self.layer_interaction.selected);
         let apply_mask_refusal = document
-            .layer(document.active_layer)
-            .and_then(|l| art_layers::apply_mask_refusal(l.kind, self.localization()));
+            .scene().occurrence(document.working.occurrence.unwrap_or_default())
+            .and_then(|l| art_layers::apply_mask_refusal(l.kind(), self.localization()));
         let reason = match action {
             UiAction::Layer { action: LayerAction::GroupSelected } => {
-                document.group_layers_edit(&roots, LayerId(0), layer_core::LayerBlend::Normal, "").err().map(|e| layer_error(e, l).to_string())
+                document.group_layers_edit(&roots, layer_core::LayerBlend::Normal, "").err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::Ungroup { .. } } => {
-                document.ungroup_layer_edit(document.active_layer).err().map(|e| layer_error(e, l).to_string())
+                document.ungroup_layer_edit(document.working.occurrence.unwrap_or_default()).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::DeleteSelected } => {
                 document.delete_layers_edit(&roots).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::Delete { .. } } => {
-                document.delete_layers_edit(&[document.active_layer]).err().map(|e| layer_error(e, l).to_string())
+                document.delete_layers_edit(&[document.working.occurrence.unwrap_or_default()]).err().map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer {
                 action:
@@ -1298,7 +1298,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     | LayerAction::Deselect,
             }
             | UiAction::Selection { .. }
-                if document.selection.is_none() && self.current_selection().is_none() =>
+                if document.working.selection.is_none() && self.current_selection().is_none() =>
             {
                 Some(l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST).to_string())
             }
@@ -1308,7 +1308,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Some(l.text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string())
             }
             UiAction::Layer { action: LayerAction::CopyMask { .. } | LayerAction::ApplyMask { .. } }
-                if document.layer(document.active_layer).is_some_and(|l| l.mask.is_none()) =>
+                if document.working.occurrence.and_then(|handle| document.scene().occurrence(handle)).is_some_and(|l| l.mask.is_none()) =>
             {
                 Some(l.text(MessageId::COMMANDS_THE_LAYER_HAS_NO_MASK).to_string())
             }
@@ -1321,11 +1321,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::StepToolSetting { id, .. } if !self.state.tool_settings.iter().any(|c| c.id == *id) => {
                 Some(command_text(l, MessageId::COMMANDS_SETTING_UNAVAILABLE, &[("setting", id.to_string())]))
             }
-            UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.active_mask => {
+            UiAction::Effect { .. } if self.selection_masks.target().is_some() || document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => {
                 Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_BEFORE_APPLYING_A_FILTER).to_string())
             }
             UiAction::Layer { .. } | UiAction::Effect { .. } | UiAction::Selection { .. }
-                if document.is_locked(document.active_layer) =>
+                if document.is_locked(document.working.occurrence.unwrap_or_default()) =>
             {
                 Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string())
             }
@@ -1656,7 +1656,7 @@ fn parameter_entry(
 fn layer_error(error: layer_core::DocumentError, l: &Localizer) -> Arc<str> {
     match error {
         layer_core::DocumentError::InvalidLayerOperation(message) => Arc::from(message),
-        layer_core::DocumentError::ProtectedLayer(_) => l.text(MessageId::COMMANDS_THE_LAYER_IS_LOCKED),
+        layer_core::DocumentError::ProtectedOccurrence(_) => l.text(MessageId::COMMANDS_THE_LAYER_IS_LOCKED),
         _ => l.text(MessageId::COMMANDS_UNAVAILABLE_FOR_THE_SELECTED_LAYERS),
     }
 }

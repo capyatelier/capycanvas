@@ -1,4 +1,4 @@
-use layer_core::{Document, LayerOperationKind, Point, Rect};
+use layer_core::{Document, RasterOperationKind, Point, Rect};
 use layer_render::{DabBatch, DabBatchKind};
 
 #[derive(Clone, Copy, Default)]
@@ -18,10 +18,10 @@ impl BakeSteps {
     }
 
     fn is_bake(document: &Document, batch: &DabBatch) -> bool {
-        let DabBatchKind::LayerOperation(index) = batch.kind else { return false; };
-        document.target_owner(batch.layer_id).and_then(|layer| layer.target_operations(batch.layer_id))
+        let DabBatchKind::RasterOperation(index) = batch.kind else { return false; };
+        document.target_operations(batch.target)
             .and_then(|operations| operations.get(index as usize)).is_some_and(|operation| matches!(operation.kind,
-                LayerOperationKind::Bake { .. } | LayerOperationKind::FrequencyDetail { .. }))
+                RasterOperationKind::Bake { .. } | RasterOperationKind::FrequencyDetail { .. }))
     }
     fn following(self, batches: &[DabBatch]) -> Option<Self> {
         (self.batch + 1 < batches.len()).then_some(Self { batch: self.batch + 1, cursor: None })
@@ -30,7 +30,7 @@ impl BakeSteps {
     pub fn next(self, document: &Document, batches: &[DabBatch]) -> (DabBatch, Option<Self>) {
         let mut batch = batches[self.batch].clone();
         if !Self::is_bake(document, &batch) { return (batch, self.following(batches)); }
-        let extent = document.target_extent(batch.layer_id);
+        let extent = document.target_extent(batch.target);
         let min = [batch.damage.min.x, batch.damage.min.y].map(|v| v.max(0.) as u32 / 256 * 256);
         let max = [batch.damage.max.x.ceil() as u32, batch.damage.max.y.ceil() as u32];
         let max = [max[0].div_ceil(256).saturating_mul(256).min(extent[0]), max[1].div_ceil(256).saturating_mul(256).min(extent[1])];

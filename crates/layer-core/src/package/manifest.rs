@@ -197,14 +197,21 @@ fn overlaps(resources: &BTreeMap<PortableId, ResourceRecord>) -> Result<(), Stri
 impl Manifest {
     pub fn parse(bytes: &[u8], directory: &Directory, limits: ManifestLimits) -> Result<ManifestRead, String> {
         let value = parse_json(bytes, limits.metadata_bytes)?;
+        Self::from_value(value,Some(directory),limits)
+    }
+    pub(crate) fn transfer(value:&Value,limits:ManifestLimits)->Result<ManifestRead,String> {
+        if crate::json_len(value)>limits.metadata_bytes {return Err("Transfer metadata exceeds admission".into());}
+        Self::from_value(value.clone(),None,limits)
+    }
+    fn from_value(value:Value,directory:Option<&Directory>,limits:ManifestLimits)->Result<ManifestRead,String> {
         let fields = object(&value)?;
         let format = string(required(fields, "format")?)?;
         let version = required(fields, "version")?.as_u64().filter(|v| *v <= u32::MAX as u64).ok_or("Invalid envelope version")?;
         if format != "capy.canvas" || version != 1 || extras(fields, &["format", "version", "document", "root", "objects", "resources", "outputs", "default_output", "metadata"]) {
             return Ok(ManifestRead::UnsupportedEnvelope(value));
         }
-        namespace(directory)?;
-        let members = directory.members.iter().enumerate().map(|(i, m)| (m.name.as_str(), (i, m))).collect();
+        if let Some(directory)=directory {namespace(directory)?;}
+        let members = directory.into_iter().flat_map(|d|d.members.iter()).enumerate().map(|(i, m)| (m.name.as_str(), (i, m))).collect();
         let all_refs = references(&value, limits.traversal_nodes)?;
         if all_refs.len() > limits.graph.edges { return Err("Manifest reference limit exceeded".into()); }
         let document = identity(required(fields, "document")?)?;
@@ -235,7 +242,14 @@ impl Manifest {
         for record in records {
             let id = identity(required(object(&record)?, "id")?)?;
             if !identities.insert(id) { return Err("Duplicate package identity".into()); }
-            resources.insert(id, resource(record, id, directory, &members)?);
+            let entry=if let Some(directory)=directory {resource(record,id,directory,&members)?} else {
+                let fields=object(&record)?;kind(&record)?;object(required(fields,"data")?)?;string(required(fields,"encoding")?)?;
+                let bytes=decimal_u64(required(fields,"bytes")?)?;let crc32=checksum(required(fields,"crc32")?)?;
+                let location=object(required(fields,"location")?)?;
+                if location.len()!=1||string(required(location,"member")?)?!=format!("data/{id}"){return Err("Invalid transfer resource location".into());}
+                ResourceRecord {value:record,bytes,crc32,range:None}
+            };
+            resources.insert(id,entry);
         }
         if all_refs.iter().any(|id| *id == document || !identities.contains(id)) { return Err("Dangling package reference".into()); }
         let mut graph = GraphShape { outputs: outputs.clone(), default_output, resources: resources.keys().copied().collect(), ..Default::default() };
@@ -270,11 +284,11 @@ impl Manifest {
         }
         for (id, record) in &resources {
             let location = object(required(object(&record.value)?, "location")?)?;
-            let location_supported = record.range.is_some() && !extras(location, if location.contains_key("member") { &["member"] } else { &["pack", "offset"] });
+            let location_supported = (directory.is_none() || record.range.is_some()) && !extras(location, if location.contains_key("member") { &["member"] } else { &["pack", "offset"] });
             if !location_supported { reasons.insert("Unknown resource location"); }
             if !resource_supported(&record.value)? && (required_resources.contains(id) || !ancillary_resources.contains(id)) { reasons.insert("Unknown required resource"); }
         }
-        for member in &directory.members {
+        for member in directory.into_iter().flat_map(|d|d.members.iter()) {
             if data_name(&member.name) {
                 let id: PortableId = member.name[5..].parse().unwrap();
                 if !resources.contains_key(&id) { return Err("Unindexed standalone resource member".into()); }

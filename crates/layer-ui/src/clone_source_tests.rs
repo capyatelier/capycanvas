@@ -199,9 +199,11 @@ fn the_source_disc_drags_at_once_with_every_device_and_a_tap_shows_its_bar() {
 #[test]
 fn clone_strokes_explain_a_turned_layer() {
     let mut s = clone_session();
-    let mut layer = s.engine.document().layer(s.engine.document().active_layer).unwrap().clone();
-    layer.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0., 1., -1., 0., 0., 0.]));
-    s.engine.apply_edit(layer_core::Edit::ReplaceLayer(Box::new(layer))).unwrap();
+    let handle = s.engine.document().working.occurrence.unwrap();
+    let mut occurrence = s.engine.document().scene().occurrence(handle).unwrap().clone();
+    occurrence.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([0., 1., -1., 0., 0., 0.]));
+    let change = layer_core::RecordChange::replace(&s.engine.document().artwork.occurrences, handle, Some(occurrence)).unwrap();
+    s.engine.apply_edit(layer_core::Edit::Occurrence(change)).unwrap();
     let revision = s.engine.document().revision;
     s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
     s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();

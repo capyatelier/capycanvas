@@ -13,12 +13,12 @@ use std::sync::Arc;
 type Engine = CanvasEngine<WgpuRasterizer>;
 const SIZE: [u32; 2] = [384, 256]; // Crosses raster tile boundaries.
 
-fn engine(project: &Project) -> (Engine, InputProducer<PenEvent>) {
-    engine_at_scale(project, 1.)
+fn engine(document: &Document) -> (Engine, InputProducer<PenEvent>) {
+    engine_at_scale(document, 1.)
 }
 
-fn engine_at_scale(project: &Project, scale: f32) -> (Engine, InputProducer<PenEvent>) {
-    let gpu = WgpuRasterizer::new_native_headless(project.document.color)
+fn engine_at_scale(document: &Document, scale: f32) -> (Engine, InputProducer<PenEvent>) {
+    let gpu = WgpuRasterizer::new_native_headless(document.composition().color)
         .expect("physical GPU required");
     let (producer, consumer) = input_queue(64);
     let view = ViewState {
@@ -28,7 +28,7 @@ fn engine_at_scale(project: &Project, scale: f32) -> (Engine, InputProducer<PenE
         };
     let mut engine = CanvasEngine::new(
         gpu,
-        project.document.clone(),
+        document.clone(),
         consumer,
         view,
         ViewTransform { surface_to_document: [1. / scale, 0., 0., 1. / scale, 0., 0.], ..ViewTransform::IDENTITY },
@@ -53,19 +53,19 @@ fn source_backed_save_reopen_preserves_original_and_edited_tiles() {
         builder.push_row(&row).unwrap();
     }
     let source = Arc::new(builder.finish().unwrap());
-    let mut document = Document::new("retained16 source in sRGB8 working document", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.layers[0].source = Some(source.clone());
-    let project = Project { document };
+    let mut document = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let photo = document.working.occurrence.unwrap();
+    support::paint_mut(&mut document, photo).original = Some(source.clone());
+    let project = document;
     let (mut live, mut input) = engine_at_scale(&project, 0.125);
     let original = image(&mut live, 0);
     draw(&mut live, &mut input, DefaultBrushPreset::GPen, [1., 0., 0., 0.5], 100., 1_000_000);
     let painted = image(&mut live, 100_000_000);
     assert!(painted != original);
-    let mut archive = Vec::new();
-    let snapshot = Project::snapshot(live.document()).unwrap();
-    snapshot.write(&mut archive).unwrap();
-    let loaded = Project::read(archive.as_slice(), Default::default()).unwrap();
-    assert_eq!(loaded.document.layers[0].source.as_ref().unwrap(), &source);
+    let archive = support::package_bytes(live.document());
+    let loaded = support::reopen(&archive);
+    let reopened_photo = support::named_occurrence(&loaded, "Current ink");
+    assert_eq!(support::paint(&loaded, reopened_photo).original.as_ref().unwrap(), &source);
     let (mut reopened, _) = engine(&loaded);
     let actual = image(&mut reopened, 0);
     assert_eq!(actual.iter().zip(&painted).enumerate().find(|(_, (a,b))| a != b), None);
@@ -111,10 +111,12 @@ fn draw(
     }
 }
 
-fn fixture() -> Project {
-    let mut doc = Document::new("editable-project-test", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers[1].visible = false;
-    doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+fn fixture() -> Document {
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let paper = support::named_occurrence(&doc, "Paper");
+    doc.artwork.occurrences.get_mut(paper).unwrap().visible = false;
+    let ink = doc.working.occurrence.unwrap();
+    support::paint_mut(&mut doc, ink).original = Some(color::source::rgba8_source(SIZE, |x, y| {
         [
             (x % 256) as u8,
             (y % 256) as u8,
@@ -122,7 +124,7 @@ fn fixture() -> Project {
             if x < 16 || y < 16 { 0 } else { 140 },
         ]
     }));
-    Project::snapshot(&doc).unwrap()
+    doc
 }
 
 #[test]
@@ -135,14 +137,18 @@ fn every_brush_preset_paints_survives_save_reopen_and_exact_undo_redo() {
 fn preset_history(masked: bool) {
     let mut initial = fixture();
     if masked {
-        let mut mask =
-            LayerMask::reveal_all(initial.document.allocate_layer_id(), Point::default());
-        mask.default_coverage = 0.;
-        initial.document.layers[0].mask = Some(mask);
+        let ink = initial.working.occurrence.unwrap();
+        let mut mask = CoverageSnapshot::reveal_all(initial.artwork.coverage.next_handle(), SIZE, Point::default());
+        mask.source.default_coverage = 0.;
+        let edit = support::mask_edit(&initial, ink, mask);
+        initial.apply(edit).unwrap();
     }
     let (mut live, mut input) = engine(&initial);
     if masked {
-        live.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+        let mut working = live.document().working.clone();
+        let mask = live.document().scene().occurrence(working.occurrence.unwrap()).unwrap().mask.as_ref().unwrap().source;
+        working.target = Some(SourceTarget::Coverage(mask));
+        live.apply_edit(Edit::Working(working)).unwrap();
     }
     let mut before = image(&mut live, 0);
     use DefaultBrushPreset::*;
@@ -163,10 +169,8 @@ fn preset_history(masked: bool) {
         );
         let expected = image(&mut live, time + 80_000_000);
         assert_ne!(before, expected, "{preset:?} must leave a visible mark");
-        let checkpoint = Project::snapshot(live.document()).unwrap();
-        let mut archive = Vec::new();
-        checkpoint.write(&mut archive).unwrap();
-        let decoded = Project::read(archive.as_slice(), ProjectLimits::default()).unwrap();
+        let archive = support::package_bytes(live.document());
+        let decoded = support::reopen(&archive);
         let (mut reopened, _) = engine(&decoded);
         assert_eq!(
             image(&mut reopened, time + 80_000_000),

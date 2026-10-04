@@ -1,7 +1,7 @@
 //! Worker-side project preparation shared by the native hosts: limits, import,
 //! admission, renderer construction, embedded effect validation and staged startup.
 use crate::{GpuContext, Renderer, RendererOptions};
-use layer_core::{Project, ProjectLimits};
+use layer_core::{Document, ProjectLimits};
 use layer_render::{CanvasRenderer, EffectValidationRequest};
 use layer_ui::UiSession;
 use std::io::{Read, Seek};
@@ -65,7 +65,7 @@ impl OpenEnvironment {
         intent: layer_ui::ImportIntent,
         name: &str,
         cancel: &AtomicBool,
-    ) -> Result<layer_ui::ImportedDocument, String> {
+    ) -> Result<layer_ui::ImportOutcome, String> {
         layer_ui::read_import(
             input,
             intent,
@@ -80,7 +80,7 @@ impl OpenEnvironment {
     /// Returns a candidate whose canvas and configured brush are ready to draw.
     pub fn prepare(
         &self,
-        project: Project,
+        project: Document,
         cancelled: impl Fn() -> bool,
     ) -> Result<Box<UiSession<Renderer>>, String> {
         project.validate(self.limits())?;
@@ -93,19 +93,13 @@ impl OpenEnvironment {
             }
         };
         check()?;
+        layer_color::validate_document_color(&project)?;
         let mut gpu = self
             .gpu
-            .rasterizer(project.document.color, &self.options, true)?;
+            .rasterizer(project.composition().color, &self.options, true)?;
         let mut programs = Vec::new();
-        for effect in project
-            .document
-            .layers
-            .iter()
-            .filter_map(|l| l.effect.as_ref())
-        {
-            if !programs.contains(&effect.program) {
-                programs.push(effect.program.clone());
-            }
+        for (_, _, definition) in project.artwork.definitions.iter() {
+            if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
         }
         let mut validating = !programs.is_empty();
         if validating {
@@ -118,7 +112,7 @@ impl OpenEnvironment {
         }
         // Preparing startup starts the native compiler. Waiting for validation
         // before this call leaves all embedded shader jobs permanently queued.
-        gpu.prepare_startup(&project.document, &self.brush, false)
+        gpu.prepare_startup(&project, &self.brush, false)
             .map_err(|e| e.to_string())?;
         let deadline = Instant::now() + PREPARE_DEADLINE;
         loop {
@@ -155,7 +149,7 @@ mod tests {
     #[test]
     fn open_prepares_a_ready_candidate_and_honours_cancellation() {
         let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        let gpu = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
+        let gpu = WgpuRasterizer::new_native_headless(project.composition().color).unwrap();
         let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::Japanese);
         let session = UiSession::from_project_localized(
             Renderer(Some(gpu.into())),

@@ -32,7 +32,6 @@ fn samples(app: &App) -> Vec<[f32; 4]> {
         .snapshot_gpu()
         .capture(
             project,
-            0.,
             Default::default(),
         )
         .unwrap();
@@ -53,10 +52,9 @@ fn check_samples(actual: Vec<[f32; 4]>, expected: &[[f32; 4]], tolerance: f32, c
         }
     }
 }
-fn check_document(app: &App, mut expected: Document) {
+fn check_document(app: &App, expected: Document) {
     let actual = document(app);
-    expected.revision = actual.revision;
-    assert_project_document(&actual, &expected);
+    assert_saved_document(&actual, &expected);
 }
 fn set(app: &App, layer: u64, key: &str, value: Value) {
     app.action(
@@ -122,7 +120,7 @@ fn select_region(app: &App) {
     );
     app.draw_until_idle();
     assert!(
-        document(app).selection.is_some(),
+        document(app).working.selection.is_some(),
         "Native lasso must create a local mask region"
     );
 }
@@ -179,20 +177,18 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                 .unwrap();
             app.draw_until_idle();
             let original = document(&app);
-            let original_layer = original.active_layer;
-            let source = original
-                .layer(original_layer)
-                .unwrap()
-                .source
-                .as_ref()
-                .unwrap();
+            let original_occurrence = original.working.occurrence.unwrap();
+            let original_id = original.artwork.occurrences.id(original_occurrence).unwrap();
+            let source = original.scene().paint_source(original_occurrence).unwrap().original.as_ref().unwrap();
             let mut ids = Vec::new();
             for (index, (effect, key, _, page)) in CORRECTIONS.into_iter().enumerate() {
                 let before = samples(&app);
                 app.action(json!({"type":"effect","action":{"op":"insert","effect":effect}}));
                 app.draw_until_idle();
-                let layer = document(&app).active_layer.0;
-                ids.push(layer);
+                let effect_document = document(&app);
+                let selected = effect_document.working.occurrence.unwrap();
+                let layer = layer_ui::occurrence_token(selected);
+                ids.push(effect_document.artwork.occurrences.id(selected).unwrap());
                 if let Some(page) = page {
                     app.action(json!({"type":"effect","action":{"op":"select_page","layer":layer,"page":page}}));
                 }
@@ -237,7 +233,7 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                 app.layer_action(json!({"op":"mask_selection","id":layer,"hide":true}));
                 app.draw_until_idle();
                 assert!(
-                    document(&app).selection.is_none(),
+                    document(&app).working.selection.is_none(),
                     "Mask from selection consumes the selection"
                 );
                 let masked = samples(&app);
@@ -253,10 +249,8 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
             let edited = document(&app);
             let before = samples(&app);
             assert_eq!(
-                edited
-                    .layers
-                    .iter()
-                    .filter(|l| l.effect.is_some() && l.mask.is_some())
+                edited.scene().order().iter()
+                    .filter(|h| edited.scene().effect(**h).is_some() && edited.scene().mask(**h).is_some())
                     .count(),
                 6
             );
@@ -290,7 +284,8 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
             fresh.draw_until_idle();
             check_document(&fresh, edited);
             check_samples(samples(&fresh), &before, 0., "Reopened correction/history");
-            for (index, layer) in ids.into_iter().enumerate() {
+            for (index, id) in ids.into_iter().enumerate() {
+                let layer = layer_ui::occurrence_token(document(&fresh).artwork.occurrences.resolve(id).unwrap());
                 fresh.layer_action(json!({"op":"select","id":layer,"mask":false}));
                 fresh.draw_until_idle();
                 let key = CORRECTIONS[index].1;
@@ -316,21 +311,11 @@ fn apple_photo_corrections_masks_and_original_samples_remain_revisable_after_wor
                 check_samples(samples(&fresh), &before, 0., "Reopened correction/history");
             }
             let after = document(&fresh);
-            let retained = after
-                .layer(original_layer)
-                .unwrap()
-                .source
-                .as_ref()
-                .unwrap();
-            assert_eq!(retained.extent, source.extent);
-            assert_eq!(retained.interpretation, source.interpretation);
-            for (a, b) in source.tiles.values().zip(retained.tiles.values()) {
-                assert_eq!(a.decode().unwrap(), b.decode().unwrap());
-            }
-            assert!(
-                after.layer(original_layer).unwrap().raster.is_empty(),
-                "Corrections must not bake the retained photo"
-            );
+            let original_occurrence = after.artwork.occurrences.resolve(original_id).unwrap();
+            let paint = after.scene().paint_source(original_occurrence).unwrap();
+            let retained = paint.original.as_ref().unwrap();
+            assert_source_samples(retained, source);
+            assert!(paint.raster.is_empty(), "Corrections must not bake the retained photo");
         }
     }
 }

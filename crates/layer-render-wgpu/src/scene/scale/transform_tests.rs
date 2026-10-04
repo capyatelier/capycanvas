@@ -4,9 +4,9 @@ use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Point, Projecti
 #[test]
 fn navigator_visibility_preserves_direct_transform_presentation() {
     let doc = document();
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, extent);
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap();
     frame.composite_all = false;
@@ -24,7 +24,7 @@ fn navigator_visibility_preserves_direct_transform_presentation() {
             presenter.set_overviews(&r, if visible { std::slice::from_ref(&overview) } else { &[] });
         }
         r.set_transform_preview(Some(&layer_render::TransformPreview {
-            transaction: 1, layer: doc.layers[0].id, moving: true, selection: None,
+            transaction: 1, target: source_at(&doc,0), moving: true, selection: None,
             transform: ImageTransform::affine(Affine::translation(Point { x, y: 0. })),
         })).unwrap();
         r.submit(frame).unwrap();
@@ -60,23 +60,23 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
     for space in layer_core::BlendSpace::ALL {
     for (selected, opacity) in [(false, 1.), (true, 0.71)] {
         let mut doc = document();
-        doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::WHITE));
-        if patterned { doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+        add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+        if patterned { paint_mut(&mut doc,0).original = Some(layer_core::color::source::rgba8_source(extent, |x, y|
             [if (x / 5 + y / 7) % 2 == 0 { 40 } else { 220 },
              if (x / 13 + y / 17) % 2 == 0 { 40 } else { 220 },
              if (x / 2 + y / 3) % 2 == 0 { 40 } else { 220 }, 255])); }
-        doc.layers[0].opacity = opacity;
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        occurrence_mut(&mut doc,0).opacity = opacity;
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.view.width_px = 160; frame.view.height_px = 100;
         frame.view.document_to_surface = [0.19, 0., 0., 0.19, 8.25, 7.5];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         frame.composite_all = false;
         for map in [LayerPlacement::from_affine(Affine([0.8, 0.12, -0.1, 0.9, 40., 0.])), LayerPlacement::from_projective(projective)] {
-            let preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id, moving: true,
+            let preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0), moving: true,
                 selection: selected.then(|| selection.clone()), transform: ImageTransform { placement: map, ..Default::default() } };
             frame.time_seconds += 0.1;
             let work = r.metrics.composited_pixels;
@@ -149,28 +149,22 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
 #[test]
 fn pass_through_children_above_a_transform_keep_shared_display_composition() {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
-    let moving = doc.layers[0].id;
-    let mut child = doc.layers[0].clone();
-    child.id = LayerId(90);
-    child.opacity = 0.35;
-    let mut group = Layer::paint(LayerId(91), "pass through");
-    group.kind = LayerKind::Group;
-    group.properties.blend = layer_core::LayerBlend::PassThrough;
-    child.properties.parent = Some(group.id);
-    doc.layers.splice(0..0, [group, child]);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let moving = source_at(&doc,0);
+    let child=copy_paint(&mut doc,0);doc.artwork.occurrences.get_mut(child).unwrap().opacity=0.35;
+    let group=stack_occurrence(&mut doc,"pass through",vec![child]);doc.artwork.occurrences.get_mut(group).unwrap().blend=layer_core::LayerBlend::PassThrough;insert_occurrence(&mut doc,group,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for blend in [layer_core::LayerBlend::Normal, layer_core::LayerBlend::Multiply] {
-        doc.layers[1].properties.blend = blend;
-        let mut frame = packet(&doc.layers, extent);
+        occurrence_mut(&mut doc,1).blend = blend;
+        let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         frame.composite_all = false;
         let original = display_pixels(&r);
         for step in 1..4 {
-            let transform = layer_render::TransformPreview { transaction: 1, layer: moving, moving: step < 3, selection: None,
+            let transform = layer_render::TransformPreview { transaction: 1, target: moving, moving: step < 3, selection: None,
                 transform: ImageTransform::affine(Affine::translation(Point { x: 8. * step as f32, y: -4. })) };
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(Some(&transform)).unwrap(); renderer.submit(frame).unwrap();
@@ -213,26 +207,26 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
     for placement in [Affine::IDENTITY, Affine([0.45, 0.1, -0.1, 0.45, 200., 10.])] {
         for selection in [None, Some(all.clone()), Some(selected.clone())] {
             let mut doc = document();
-            let id = doc.layers[0].id;
-            doc.layers[0].opacity = 0.8;
-            doc.layers[0].properties.blend = blend;
-            doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(placement);
-            let mut below = doc.layers[0].clone();
-            below.id = LayerId(40); below.opacity = 1.; below.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
-            let mut above = below.clone();
-            above.id = LayerId(41); above.opacity = 0.23; above.properties.blend = layer_core::LayerBlend::Multiply;
-            if stacked { doc.layers.insert(0, above); doc.layers.insert(2, below); }
-            let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-            let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+            let id = source_at(&doc,0);
+            occurrence_mut(&mut doc,0).opacity = 0.8;
+            occurrence_mut(&mut doc,0).blend = blend;
+            occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(placement);
+            if stacked {
+                let below=copy_paint(&mut doc,0);let occurrence=doc.artwork.occurrences.get_mut(below).unwrap();occurrence.opacity=1.;occurrence.placement=LayerPlacement::from_affine(Affine::IDENTITY);
+                let above=copy_paint(&mut doc,0);let mut occurrence=doc.artwork.occurrences.get(below).unwrap().clone();let content=doc.artwork.occurrences.get(above).unwrap().content.clone();occurrence.content=content;occurrence.opacity=0.23;occurrence.blend=layer_core::LayerBlend::Multiply;*doc.artwork.occurrences.get_mut(above).unwrap()=occurrence;
+                insert_occurrence(&mut doc,above,0);insert_occurrence(&mut doc,below,2);
+            }
+            let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
             exact.test.reference = true;
-            let mut frame = packet(&doc.layers, extent);
+            let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
             frame.composite_all = false;
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
             r.submit(frame).unwrap(); exact.submit(frame).unwrap();
             let original = display_pixels(&r);
             for (step, map) in maps.iter().enumerate() {
-                let preview = layer_render::TransformPreview { transaction: 1, layer: id, moving: true,
+                let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true,
                     selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, ..Default::default() } };
                 for renderer in [&mut r, &mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
@@ -244,7 +238,7 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
                 let displayed = display_pixels(&r);
                 let exact_pixels = pixels(&exact, crate::test_support::document_texture(&exact));
                 let error = quality_linear(&displayed, &exact_pixels, r.scale_display.as_ref().unwrap().plan,
-                    |color| linear_color(color, space, doc.color.space));
+                    |color| linear_color(color, space, doc.composition().color.space));
                 eprintln!("{space:?} placement={placement:?} selection={} step={step} error={error:?}", selection.is_some());
                 assert!(error[0] < 0.004 && error[1] < 0.06, "transform reduction quality {error:?}");
                 let a = r.readback_srgb_rgba8().unwrap();
@@ -269,15 +263,15 @@ fn transform_sources_compose_with_the_stack_without_native_preview_during_motion
 #[test]
 fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
     let doc = document_at([2053, 1541]);
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.source_tiles.get_mut().admit(0);
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
     r.submit(frame).unwrap();
     r.set_transform_preview(Some(&layer_render::TransformPreview {
-        transaction: 1, layer: doc.layers[0].id, moving: false, selection: None,
+        transaction: 1, target: source_at(&doc,0), moving: false, selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 13.5, y: -5.25 })),
     })).unwrap();
     r.submit(frame).unwrap();
@@ -304,17 +298,17 @@ fn transform_queries_keep_only_the_native_tiles_the_requested_window_reads() {
 #[test]
 fn transform_zoom_release_and_commit_preserve_native_pixels() {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
+    let extent = doc.composition().size;
     let selection = Selection::polygon([[150.,50.],[350.,50.],[350.,200.],[150.,200.]]
         .map(|[x,y]| Point { x,y }).to_vec()).unwrap();
-    let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
+    let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0),
         moving: true, selection: Some(selection.clone()),
         transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..LayerPlacement::from_affine(
             Affine::around(Point { x: 250., y: 125. }, [3.2,2.1], 0.31, Point { x: 7., y: -3. })) }, ..Default::default() } };
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     for (scale, moving) in [(0.125,true),(0.5,true),(1.,true),(0.25,true),(0.25,false)] {
@@ -332,14 +326,14 @@ fn transform_zoom_release_and_commit_preserve_native_pixels() {
         if !moving { assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact))); }
     }
     let expected = exact.readback_srgb_rgba8().unwrap();
-    let mut coverage = layer_core::LayerMask::reveal_all(LayerId(50), Point::default());
-    coverage.default_coverage = 0.; coverage.initial = Some(selection);
-    let operation = layer_core::LayerOperation { placement: Affine::IDENTITY, coverage,
-        kind: layer_core::LayerOperationKind::Transform(preview.transform) };
-    let batch = layer_render::DabBatch { kind: layer_render::DabBatchKind::LayerOperation(0), dab_count: 0,
-        ..dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), operation.bounds(extent)) };
-    doc.layers[0].pending_operations.push(operation);
-    let mut frame = packet(&doc.layers, extent);
+    let mut coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),extent,Point::default());
+    coverage.source.default_coverage=0.;coverage.source.initial=Some(selection);
+    let operation = layer_core::RasterOperation { placement: Affine::IDENTITY, coverage,
+        kind: layer_core::RasterOperationKind::Transform(preview.transform) };
+    let batch = layer_render::DabBatch { kind: layer_render::DabBatchKind::RasterOperation(0), dab_count: 0,
+        ..dab_batch(source_at(&doc,0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), operation.bounds(extent)) };
+    Arc::make_mut(&mut paint_mut(&mut doc,0).operations).push(operation);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
     frame.dab_batches = std::slice::from_ref(&batch);
     r.set_transform_preview(None).unwrap(); r.submit(frame).unwrap();
@@ -352,30 +346,21 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
     let extent = [257,129];
     for (mask_target, linked) in [(false,false),(false,true),(true,true)] {
         let mut doc = document_at(extent);
-        let mut group = Layer::paint(LayerId(20), "group");
-        group.kind = LayerKind::Group; group.opacity = 0.71;
-        let mut base = doc.layers[0].clone();
-        base.id = LayerId(30); base.properties.parent = Some(group.id); base.opacity = 0.73;
-        doc.layers[0].properties.parent = Some(group.id);
-        doc.layers[0].properties.clipped = true;
-        doc.layers[0].properties.blend = layer_core::LayerBlend::Multiply;
-        let mut mask = layer_core::LayerMask::reveal_all(LayerId(40), Point { x: 13., y: -4. });
-        mask.default_coverage = 0.23;
-        mask.initial = Some(Selection::polygon([[20.,10.],[230.,20.],[190.,120.],[30.,90.]]
-            .map(|[x,y]| Point {x,y}).to_vec()).unwrap());
-        mask.linked = linked;
-        doc.layers[0].mask = Some(mask);
-        let id = if mask_target { LayerId(40) } else { doc.layers[0].id };
-        doc.layers.insert(0,group); doc.layers.insert(2,base);
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let owner=doc.scene().order()[0];let paint=source_at(&doc,0);let base=copy_paint(&mut doc,0);doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.73;
+        occurrence_mut(&mut doc,0).clipped=true;occurrence_mut(&mut doc,0).blend=layer_core::LayerBlend::Multiply;
+        let initial=Selection::polygon([[20.,10.],[230.,20.],[190.,120.],[30.,90.]].map(|[x,y]|Point{x,y}).to_vec()).unwrap();
+        let mask=coverage_mask(&mut doc,owner,Point{x:13.,y:-4.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.23;doc.artwork.occurrences.get_mut(owner).unwrap().mask.as_mut().unwrap().linked=linked;
+        let id=if mask_target{SourceTarget::Coverage(mask)}else{paint};
+        let group=stack_occurrence(&mut doc,"group",vec![owner,base]);doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.71;set_root_entries(&mut doc,vec![group]);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         let original = display_pixels(&r);
         for offset in [9.,-13.] {
-            let preview = layer_render::TransformPreview { transaction: 1, layer: id, moving: true, selection: None,
+            let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true, selection: None,
                 transform: ImageTransform::affine(Affine::translation(Point { x: offset, y: 5. })) };
             for renderer in [&mut r, &mut exact] {
                 renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
@@ -393,16 +378,16 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
 #[test]
 fn retained_transform_detail_still_filters_the_current_output_footprint() {
     let extent = [65,33];
-    let mut doc = Document::new("transform reconstruction", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers[0].source = Some(rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]));
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, extent);
+    let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    paint_mut(&mut doc,0).original = Some(rgba8_source(extent, |x, _| [if (x/3)%2 == 0 {255} else {0}, 0, 0, 255]));
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
     r.submit(frame).unwrap();
     let original = display_pixels(&r);
     let mut work = 0;
     for (step, scale) in [4.,1.,4.,1.].into_iter().enumerate() {
-        r.set_transform_preview(Some(&layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
+        r.set_transform_preview(Some(&layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0),
             moving: true, selection: None, transform: ImageTransform::affine(
                 Affine::around(Point { x: 32., y: 16. }, [scale;2], 0., Point::default())) })).unwrap();
         r.submit(frame).unwrap();
@@ -420,12 +405,12 @@ fn retained_transform_detail_still_filters_the_current_output_footprint() {
 #[test]
 fn whole_image_selections_reserve_one_transform_input_pyramid() {
     let extent = [4248,2832];
-    let doc = Document::new("transform admission", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, extent);
+    let doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false; frame.view.document_to_surface = [0.1597,0.,0.,0.1597,0.,0.];
     let plan = display_mips::Plan::at(extent, 2);
-    let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
+    let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc,0),
         moving: true, selection: None, transform: ImageTransform::affine(Affine([4.,0.,0.,4.,0.,0.])) };
     r.set_transform_preview(Some(&preview)).unwrap();
     let no_selection = allocation(&r, plan, frame, None);
@@ -446,8 +431,8 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
     let extent = [257,129];
     let bounds = Rect { min: Point::default(), max: Point { x: 257., y: 129. } };
     let mut doc = document_at(extent);
-    let id = doc.layers[0].id;
-    doc.layers[0].source = Some(rgba8_source(extent, |x, y| [128, (x/2) as u8, y as u8, (64+x/2) as u8]));
+    let id = source_at(&doc,0);
+    paint_mut(&mut doc,0).original = Some(rgba8_source(extent, |x, y| [128, (x/2) as u8, y as u8, (64+x/2) as u8]));
     let part = Selection::polygon([[20.5,15.25],[210.,22.],[240.,110.5],[38.,117.]]
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
     let projective = Projective::rect_to_quad(bounds,
@@ -455,10 +440,10 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
     let mesh = MeshMap::fit(bounds, [3,3], |p| projective.map(p)).unwrap()
         .move_node(5,Point {x:12.,y:-6.}).unwrap();
     for selection in [None, Some(part)] {
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false; frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         let original = r.readback_srgb_rgba8().unwrap();
@@ -467,7 +452,7 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
             LayerPlacement::from_projective(projective), layer_core::LayerPlacement { mesh: Some(Arc::new(mesh.clone())), ..Default::default() }, LayerPlacement::default()];
         for map in maps {
             for keep_source in [false,true] {
-                let preview = layer_render::TransformPreview { transaction: 1, layer: id, moving: true,
+                let preview = layer_render::TransformPreview { transaction: 1, target: id, moving: true,
                     selection: selection.clone(), transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..map.clone() }, keep_source, source_from_owner:None } };
                 for renderer in [&mut r,&mut exact] {
                     renderer.set_transform_preview(Some(&preview)).unwrap(); renderer.submit(frame).unwrap();
@@ -492,13 +477,13 @@ fn moved_copies_reconstruct_original_coverage_for_every_map() {
 #[test]
 fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     let mut doc = document_at([769,513]);
-    let extent = [doc.width,doc.height]; let id = doc.layers[0].id;
+    let extent = doc.composition().size; let id = source_at(&doc,0);
     let part = Selection::polygon([[64.,64.],[640.,64.],[640.,448.],[64.,448.]]
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers,extent);
+    let mut frame = packet(doc.scene(),extent);
     frame.composite_all=false; frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let original = r.readback_srgb_rgba8().unwrap();
@@ -511,7 +496,7 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     for _ in 0..2 {r.submit(frame).unwrap();}
     assert_eq!(r.test.reduced_pages.get(),reduced);
     for offset in [0.,64.,-32.] {
-        let preview=layer_render::TransformPreview {transaction:7,layer:id,moving:true,selection:Some(part.clone()),
+        let preview=layer_render::TransformPreview {transaction:7,target: id,moving:true,selection:Some(part.clone()),
             transform:ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})) },keep_source:true,source_from_owner:None}};
         for renderer in [&mut r,&mut exact] {renderer.set_transform_preview(Some(&preview)).unwrap();renderer.submit(frame).unwrap();}
         assert_eq!(r.test.source_captures.get(),captures);
@@ -521,12 +506,12 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
     }
     r.prepare_moving_pixels(None);r.set_transform_preview(None).unwrap();r.submit(frame).unwrap();
     assert_eq!(r.readback_srgb_rgba8().unwrap(),original);
-    doc.layers[0].raster=layer_core::raster::RasterRevision::pending();
-    frame=packet(&doc.layers,extent);frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    paint_mut(&mut doc,0).raster =layer_core::raster::RasterRevision::pending();
+    frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     r.prepare_moving_pixels(Some((id,part.clone())));r.submit(frame).unwrap();
     let captures=r.test.source_captures.get();let reduced=r.test.reduced_pages.get();
     assert!(captures>1);
-    let restored=[(id,doc.layers[0].raster.clone())];
+    let restored=[(id,paint_at(&doc,0).raster.clone())];
     r.submit(FramePacket {restore_rasters:&restored,..frame}).unwrap();
     assert_eq!(r.test.source_captures.get(),captures);
     r.submit(frame).unwrap();
@@ -537,21 +522,21 @@ fn move_transactions_adopt_prepared_inputs_and_invalidate_them_on_restore() {
 #[test]
 fn moving_pixels_invalidate_the_cut_only_when_its_coverage_changes() {
     let doc = document_at([769,257]);
-    let extent = [doc.width,doc.height];
+    let extent = doc.composition().size;
     let selection = Selection::polygon([[64.,64.],[192.,64.],[192.,192.],[64.,192.]]
         .map(|[x,y]| Point {x,y}).to_vec()).unwrap();
     let cut = PixelRect::new(64,64,192,192);
     for scale in [1.,0.25] {
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers,extent);
+        let mut frame = packet(doc.scene(),extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [scale,0.,0.,scale,0.,0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         for (step,(offset,keep_source)) in [(384.,false),(416.,false),(416.,true),
             (448.,true),(448.,false),(0.,false)].into_iter().enumerate() {
-            let preview = layer_render::TransformPreview {transaction:1,layer:doc.layers[0].id,
+            let preview = layer_render::TransformPreview {transaction:1,target: source_at(&doc,0),
                 moving:true,selection:Some(selection.clone()),transform:ImageTransform { placement: LayerPlacement::from_affine(Affine::translation(Point {x:offset,y:0.})),
                     keep_source,..Default::default()}};
             for renderer in [&mut r,&mut exact] {

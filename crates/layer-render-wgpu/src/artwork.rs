@@ -6,7 +6,8 @@ use layer_render::ViewState;
 
 #[derive(Clone)]
 pub(super) struct Frame {
-    pub layers: Vec<Layer>,
+    pub scene: Arc<SceneSnapshot>,
+    pub scope: SceneScope,
     pub view: ViewState,
     pub blend_space: layer_core::BlendSpace,
     pub time: f32,
@@ -20,7 +21,8 @@ pub(super) struct PendingFrame {
 }
 impl Drop for PendingFrame {
     fn drop(&mut self) {
-        for root in self.frame.layers.iter().flat_map(|l| std::iter::once(&l.raster).chain(l.masks().map(|m| &m.raster))) {
+        let view = self.frame.scene.view();
+        for root in view.targets().filter_map(|target| view.raster(target)) {
             if root.try_data().is_none() { let _ = root.publish(Err("Healing stopped before raster capture".into())); }
         }
     }
@@ -29,22 +31,15 @@ impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
     pub fn same_artwork(&self, packet: FramePacket<'_>) -> bool {
-        let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
-        let same = self.blend_space == packet.blend_space
-            && (self.time == packet.time_seconds || !packet.layers.iter()
-                .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated())))
-            && self.previews.is_empty()
-            && packet.dab_batches.is_empty()
-            && self.layers.iter().filter(artwork).count()
-                == packet.layers.iter().filter(artwork).count();
-        for (a, b) in self.layers.iter().filter(artwork).zip(packet.layers.iter().filter(artwork)) {
-            if !a.same_artwork(b) {
-                return false;
-            }
-        }
-        same
+        let old = self.scene.view();
+        self.blend_space == packet.blend_space
+            && (self.time == packet.time_seconds || !packet.scene.order().iter().any(|&h|
+                packet.scene.visible(h) && packet.scene.effect(h).is_some_and(|e| e.animated())))
+            && self.previews.is_empty() && packet.dab_batches.is_empty()
+            && old.same_artwork(packet.scene)
     }
-    pub fn new(packet: FramePacket<'_>) -> Self {
+
+    pub fn new(packet: FramePacket<'_>, context: EvaluationContext) -> Self {
         let mut preview_dabs = Vec::new();
         let previews = packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview)
             .map(|batch| {
@@ -54,11 +49,8 @@ impl Frame {
                 retained
             }).collect();
         Self {
-            layers: packet
-                .layers
-                .iter()
-                .map(Layer::composite_snapshot)
-                .collect(),
+            scene: Arc::new(packet.scene.snapshot(context)),
+            scope: packet.scene.scope().cloned().unwrap_or_default(),
             view: packet.view,
             blend_space: packet.blend_space,
             time: packet.time_seconds,
@@ -69,7 +61,9 @@ impl Frame {
     pub fn packet(&self, extent: [u32; 2]) -> FramePacket<'_> {
         FramePacket {
             commit_rasters: true,
-            layers: &self.layers,
+            scene: self.scene.view().with_scope(&self.scope),
+            selection_visibility: None,
+            inspect_mask: None,
             view: self.view,
             document_extent: extent,
             time_seconds: self.time,
@@ -92,12 +86,29 @@ pub(super) struct Capture {
     pub image_limit: Option<u64>,
 }
 impl Capture {
-    pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: LayerId, coordinate: [u32; 2],
+    pub fn layer_tile(&mut self, r: &mut WgpuRasterizer, id: SourceTarget, coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<source_access::RawTile,GpuRasterError> {
         let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
         self.scene.get_or_insert_with(|| scene::Scene::new(r))
-            .layer_tile_for_query(r,&frame.layers,id,coordinate,encoder)
+            .layer_tile_for_query(r,frame.scene.view(),id,coordinate,encoder)
+    }
+    pub fn thumbnail_tile(&mut self, r: &mut WgpuRasterizer, target: layer_render::ThumbnailTarget, coordinate: [u32;2], encoder: &mut submission::CommandEncoder) -> Result<source_access::RawTile, GpuRasterError> {
+        let frame = r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?;
+        if let Some(source) = r.thumbnail_source(target) { return self.layer_tile(r, source, coordinate, encoder); }
+        let layer_render::ThumbnailTarget::Occurrence(handle) = target else { return Err(GpuRasterError::InvalidExtent); };
+        let view = frame.scene.view();
+        let occurrence = view.occurrence(handle).ok_or(GpuRasterError::InvalidExtent)?;
+        let scope = if matches!(occurrence.content, OccurrenceContent::Stack(_)) {
+            SceneScope::Members(view.order().iter().copied().filter(|h| *h == handle || layer_core::descends_from(view, *h, Some(handle))).collect::<Vec<_>>().into())
+        } else {
+            let mut input = layer_core::composite_input_layers(view, handle); input.push(handle); SceneScope::Members(input.into())
+        };
+        let packet = FramePacket {scene:view.with_scope(&scope),..frame.packet(r.document_extent)};
+        let region = page_rect(coordinate).intersect(PixelRect::full(r.document_extent));
+        let (texture, view) = create_color_target(&r.device, [PAGE_SIZE;2], "occurrence thumbnail page");
+        self.scene.get_or_insert_with(|| scene::Scene::new(r)).capture_region(r, packet, &texture, region, scene::Output::Artwork(None), encoder)?;
+        Ok(source_access::RawTile {texture,view})
     }
     pub fn source_tile(
         &mut self,
@@ -178,8 +189,8 @@ impl Capture {
     /// The window capturing `region` reads and the filter images it needs,
     /// refused above the image limit before anything is allocated.
     fn image_bytes(&self, packet: FramePacket<'_>, region: PixelRect) -> Result<(PixelRect, u64), GpuRasterError> {
-        let window = scene::Scene::capture_window(packet.layers, region, packet.document_extent);
-        let bytes = scene::Scene::capture_image_bound(packet.layers, window);
+        let window = scene::Scene::capture_window(packet.scene, region, packet.document_extent);
+        let bytes = scene::Scene::capture_image_bound(packet.scene, window);
         let limit = self.image_limit.unwrap_or(256 * 1024 * 1024);
         if bytes > limit {
             return Err(GpuRasterError::Color(format!(
@@ -194,33 +205,28 @@ impl Capture {
     /// Whether capturing `region` now could wait for the GPU or upload source
     /// pixels: it needs filter images, retires earlier ones, or decodes tiles.
     pub fn would_block(&self, r: &WgpuRasterizer, packet: FramePacket<'_>, region: PixelRect) -> bool {
-        let window = scene::Scene::capture_window(packet.layers, region, packet.document_extent);
-        scene::Scene::capture_image_bound(packet.layers, window) > 0
+        let window = scene::Scene::capture_window(packet.scene, region, packet.document_extent);
+        scene::Scene::capture_image_bound(packet.scene, window) > 0
             || self.retires_window(window)
-            || page_coordinates(region).any(|tile| self.decodes(r, packet.layers, tile))
+            || page_coordinates(region).any(|tile| self.decodes(r, packet.scene, tile))
     }
-    fn decodes(&self, r: &WgpuRasterizer, layers: &[Layer], tile: [u32; 2]) -> bool {
+    fn decodes(&self, r: &WgpuRasterizer, scene: SceneView<'_>, tile: [u32; 2]) -> bool {
         let sources = r.source_tiles.borrow();
         let space = r.document_color().space;
-        let resident = |id: LayerId| {
+        let resident = |id: SourceTarget| {
             r.paint_layers.iter().any(|l| l.id == id && l.pages.iter().any(|p| p.coordinate == tile))
         };
-        sources.uploads_full()
-            || layers.iter().filter(|l| l.visible && l.is_artwork()).any(|l| {
-                let placed = !layer_core::target_geometry(layers, l.id).is_identity();
-                let source = l.source.as_ref().is_some_and(|source| placed
-                    || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
-                        && !resident(l.id) && sources.prepared_view(source, tile).is_none()));
-                let native = r.native_backing(l.id).is_some()
-                    || l.mask.as_ref().is_some_and(|m| r.native_backing(m.id).is_some());
-                source || (native
-                    && (placed
-                        || l.mask.is_some()
-                        || (!resident(l.id)
-                            && r.native_color_tile(l.id, tile).map_or(true, |blob| {
-                                blob.is_some_and(|blob| sources.prepared_raster_view(&blob, space).is_none())
-                            }))))
-            })
+        sources.uploads_full() || scene.order().iter().any(|&h| {
+            if !scene.visible(h) { return false; }
+            let Some(target) = scene.source_target(h) else { return false; };
+            let placed = !scene.target_geometry(target).is_identity();
+            let source = scene.paint_source(h).and_then(|p| p.original.as_ref()).is_some_and(|source| placed
+                || (tile[0] * PAGE_SIZE < source.extent[0] && tile[1] * PAGE_SIZE < source.extent[1]
+                    && !resident(target) && sources.prepared_view(source, tile).is_none()));
+            let native = r.native_backing(target).is_some() || scene.mask(h).is_some_and(|(use_, _)| r.native_backing(SourceTarget::Coverage(use_.source)).is_some());
+            source || native && (placed || scene.mask(h).is_some() || (!resident(target)
+                && r.native_color_tile(target, tile).map_or(true, |blob| blob.is_some_and(|blob| sources.prepared_raster_view(&blob, space).is_none()))))
+        })
     }
 }
 
@@ -231,7 +237,7 @@ impl WgpuRasterizer {
         let packet = frame.packet(self.document_extent);
         let mut tiles = packet.dab_batches.iter().map(|batch| {
             let dabs = &packet.dabs[batch.first_dab as usize..(batch.first_dab + batch.dab_count) as usize];
-            brush_tiles::plan(batch, dabs, self.target_extent(batch.layer_id))
+            brush_tiles::plan(batch, dabs, self.target_extent(batch.target))
         }).collect::<Vec<_>>();
         self.preview_level = 0;
         self.preview_pages.clear();
@@ -240,7 +246,7 @@ impl WgpuRasterizer {
         for (index, batch) in packet.dab_batches.iter().enumerate() {
             self.encode_brush_batch(encoder, index, batch, BrushEncodingContext {
                 batches: packet.dab_batches, dabs: packet.dabs, tiles: &tiles[index],
-                    target_extent: self.target_extent(batch.layer_id),
+                    target_extent: self.target_extent(batch.target),
                 target: BrushEncodingTarget::Preview { from_persistent: true },
             })?;
         }

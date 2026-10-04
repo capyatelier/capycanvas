@@ -2,7 +2,7 @@ use super::new_photo::{capture_ui, combo, finish, invoke, ready, response};
 use super::place_source::{snapshot, source};
 use super::*;
 use layer_color::DocumentColorChange;
-use layer_core::{Document, Project, color::*};
+use layer_core::{Document, color::*};
 
 fn document(w: &Rc<Workspace>) -> Document {
     ui_session(&w)
@@ -15,27 +15,22 @@ fn exact_document(mut actual: Document, expected: &Document) {
     assert_eq!(actual, *expected);
 }
 fn same_backing(actual: &Document, expected: &Document) {
-    assert_eq!(actual.color, expected.color);
-    for (a, b) in actual.layers.iter().zip(&expected.layers) {
-        assert_eq!(a.properties, b.properties);
-        assert_eq!(a.effect, b.effect);
-        assert_eq!(a.source, b.source);
-        for (a, b) in std::iter::once((&a.raster, &b.raster)).chain(
-            a.mask
-                .iter()
-                .zip(&b.mask)
-                .map(|(a, b)| (&a.raster, &b.raster)),
-        ) {
-            let a = a.wait_data().unwrap();
-            let b = b.wait_data().unwrap();
-            assert_eq!(a.watercolor, b.watercolor);
-            assert!(a.tiles.keys().eq(b.tiles.keys()));
-            for (key, a) in &a.tiles {
-                let a = a.wait_backing().unwrap();
-                let b = b.tiles[key].wait_backing().unwrap();
-                assert_eq!(a.descriptor, b.descriptor);
-                assert_eq!(a.digest, b.digest, "{key:?}");
-            }
+    assert_eq!(actual.composition().color, expected.composition().color);
+    assert_eq!(actual.artwork.occurrences, expected.artwork.occurrences);
+    assert_eq!(actual.artwork.effects, expected.artwork.effects);
+    for ((_, _, a), (_, _, b)) in actual.artwork.paint.iter().zip(expected.artwork.paint.iter()) {
+        assert_eq!(a.original, b.original);
+    }
+    for (a, b) in actual.scene().targets().filter_map(|target| actual.target_raster(target)).zip(expected.scene().targets().filter_map(|target| expected.target_raster(target))) {
+        let a = a.wait_data().unwrap();
+        let b = b.wait_data().unwrap();
+        assert_eq!(a.watercolor, b.watercolor);
+        assert!(a.tiles.keys().eq(b.tiles.keys()));
+        for (key, a) in &a.tiles {
+            let a = a.wait_backing().unwrap();
+            let b = b.tiles[key].wait_backing().unwrap();
+            assert_eq!(a.descriptor, b.descriptor);
+            assert_eq!(a.content_digest().unwrap(), b.content_digest().unwrap(), "{key:?}");
         }
     }
 }
@@ -43,7 +38,7 @@ fn assert_mode(w: &Rc<Workspace>, color: DocumentColor) {
     use layer_render::CanvasRenderer;
     let gpu = w.gpu.borrow();
     let engine = gpu.as_ref().unwrap().session.engine();
-    assert_eq!(engine.document().color, color);
+    assert_eq!(engine.document().composition().color, color);
     assert_eq!(engine.backend().document_color(), color);
     assert_eq!(state(w).colors.rgb_space(), color.space);
     assert!(state(w).host_error.is_none(), "{:?}", state(w).host_error);
@@ -81,18 +76,22 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.DocumentColor");
     let mut project = new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
-    let paint = project.document.active_layer;
+    let paint = project.working.occurrence.unwrap();
     let original = std::sync::Arc::new(source());
-    let mask = layer_core::LayerMask::reveal_all(
-        project.document.allocate_layer_id(),
-        Point { x: 0., y: 0. },
-    );
-    project.document.layers[0].source = Some(original.clone());
-    project.document.layers[0].mask = Some(mask);
+    let layer_core::SourceTarget::Paint(handle) = project.working.target.unwrap() else { panic!("Paint source") };
+    let source = project.artwork.paint.get_mut(handle).unwrap();
+    source.domain = original.extent;
+    source.original = Some(original.clone());
+    let mask = project.allocate_coverage_handle();
+    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, original.extent, Point::default());
+    project.artwork.coverage.install(mask, coverage.source).unwrap();
+    let mut occurrence = project.scene().occurrence(paint).unwrap().clone();
+    occurrence.mask = Some(coverage.use_);
+    project.apply(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&project.artwork.occurrences, paint, Some(occurrence)).unwrap())).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
     let created = Rc::new(RefCell::new(None));
     *w.open_document.borrow_mut() = Some({
@@ -115,7 +114,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     ready(&w);
     w.dispatch(UiAction::Layer {
         action: LayerAction::Select {
-            id: paint.0,
+            id: layer_ui::occurrence_token(paint),
             mask: true,
         },
     });
@@ -124,7 +123,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     ready(&w);
     w.dispatch(UiAction::Layer {
         action: LayerAction::Select {
-            id: paint.0,
+            id: layer_ui::occurrence_token(paint),
             mask: false,
         },
     });
@@ -134,10 +133,10 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         },
     });
     ready(&w);
-    let effect = document(&w).active_layer;
+    let effect = document(&w).working.occurrence.unwrap();
     w.dispatch(UiAction::Effect {
         action: EffectAction::Set {
-            layer: effect.0,
+            layer: layer_ui::occurrence_token(effect),
             key: "exposure".into(),
             value: layer_core::EffectValue::Number(-0.25),
         },
@@ -181,7 +180,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         ),
     ] {
         let source = ui_session(&w)
-            .capture_project_recovery()
+            .document_snapshot()
             .unwrap();
         let expected =
             layer_color::prepare_document_color(&source, change, 16 * 1024 * 1024, || false)
@@ -209,18 +208,18 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         response(&w, "apply");
         finish(&w);
         ready(&w);
-        assert_mode(&w, expected.project.document.color);
+        assert_mode(&w, expected.document.composition().color);
         let changed = document(&w);
-        same_backing(&changed, &expected.project.document);
+        same_backing(&changed, &expected.document);
         assert!(std::sync::Arc::ptr_eq(
-            changed.layer(paint).unwrap().source.as_ref().unwrap(),
+            changed.scene().paint_source(paint).unwrap().original.as_ref().unwrap(),
             &original
         ));
         invoke(&w, CommandId::Undo);
         finish(&w);
         ready(&w);
-        exact_document(document(&w), &source.document);
-        assert_mode(&w, source.document.color);
+        exact_document(document(&w), &source);
+        assert_mode(&w, source.composition().color);
         assert_eq!(
             ui_session(&w)
                 .engine()
@@ -231,10 +230,10 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         finish(&w);
         ready(&w);
         exact_document(document(&w), &changed);
-        assert_mode(&w, changed.color);
+        assert_mode(&w, changed.composition().color);
     }
     let changed = document(&w);
-    assert_ne!(changed.color, before.color);
+    assert_ne!(changed.composition().color, before.composition().color);
     let saved = snapshot(&w);
     let pixels = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 9960))
@@ -242,7 +241,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     let reopened = Workspace::with_project(
         &app,
         Some((
-            Project::read(std::io::Cursor::new(saved.clone()), Default::default()).unwrap(),
+            open_native_document(std::io::Cursor::new(saved.clone())),
             None,
         )),
     );
@@ -262,7 +261,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     // Cancel a prepared GPU candidate, including its in-flight command, and
     // wait for destruction before observing the unchanged live document.
     let project = ui_session(&w)
-        .capture_project_recovery()
+        .document_snapshot()
         .unwrap();
     let candidate = layer_color::prepare_document_color(
         &project,
@@ -276,9 +275,10 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         let session = &mut gpu.as_mut().unwrap().session;
         let brush = session.engine().configured_brush().clone();
         let view = session.engine().view();
+        let context = session.engine().scene_snapshot().context.clone();
         session
             .renderer_mut()
-            .prepare_color(candidate.project, brush, view, 0.)
+            .prepare_color(candidate.document, context, brush, view)
             .unwrap();
         session.renderer_mut().discard_prepared_color().unwrap()
     };
@@ -292,7 +292,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         "color preparation acknowledgement",
     );
     assert_eq!(snapshot(&w), saved);
-    assert_mode(&w, changed.color);
+    assert_mode(&w, changed.composition().color);
     // A flattened conversion opens a separate editable document and leaves
     // the layered document, source, adjustments, mask and history unchanged.
     invoke(&w, CommandId::ConvertColorSpace);
@@ -305,9 +305,9 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     finish(&w);
     assert_eq!(snapshot(&w), saved);
     let copy = created.borrow_mut().take().unwrap();
-    assert_eq!(copy.document.layers.len(), 1);
-    assert_eq!(copy.document.color.space, RgbSpace::Srgb);
-    assert_eq!(copy.document.color.depth, changed.color.depth);
+    assert_eq!(copy.scene().order().len(), 1);
+    assert_eq!(copy.composition().color.space, RgbSpace::Srgb);
+    assert_eq!(copy.composition().color.depth, changed.composition().color.depth);
     let copy_window = Workspace::with_project(&app, Some((copy, None)));
     copy_window.window.present();
     ready(&copy_window);
@@ -327,7 +327,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     ready(&w);
     w.dispatch(UiAction::Layer {
         action: LayerAction::Select {
-            id: paint.0,
+            id: layer_ui::occurrence_token(paint),
             mask: false,
         },
     });
@@ -336,10 +336,10 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     native_pen_path(&w, &[[30., 100.], [100., 100.], [200., 100.]]);
     ready(&w);
     assert_ne!(
-        document(&w).layer(paint).unwrap().raster,
-        changed.layer(paint).unwrap().raster
+        document(&w).scene().paint_source(paint).unwrap().raster,
+        changed.scene().paint_source(paint).unwrap().raster
     );
-    assert_mode(&w, changed.color);
+    assert_mode(&w, changed.composition().color);
     // A failed new stroke must leave the converted checkpoint recoverable,
     // including earlier color Undo/Redo after the native restart action.
     let surviving = document(&w);
@@ -382,7 +382,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     assert!(w.restart_canvas.is_visible());
     click(&w.restart_canvas);
     ready(&w);
-    assert_mode(&w, changed.color);
+    assert_mode(&w, changed.composition().color);
     assert_eq!(
         glib::MainContext::default()
             .block_on(read_canvas_pixels(&w, 9964))
@@ -400,7 +400,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         &w,
         DocumentColor {
             depth: SampleDepth::U16,
-            ..changed.color
+            ..changed.composition().color
         },
     );
     for _ in 0..2 {
@@ -409,7 +409,7 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
         ready(&w);
     }
     exact_document(document(&w), &recovered);
-    assert_mode(&w, changed.color);
+    assert_mode(&w, changed.composition().color);
     w.window.destroy();
     pump(100);
 }

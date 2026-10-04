@@ -420,12 +420,12 @@ pub(super) fn plan(batch: &DabBatch, dabs: &[Dab], extent: [u32; 2]) -> Vec<Brus
 /// reduce by at most 256; include one such texel for the bilinear footprint.
 /// Identity placement reads aligned pixels and needs no sampling halo.
 pub(super) fn document_damage(
-    layers: &[Layer],
-    id: LayerId,
+    scene: SceneView<'_>,
+    id: SourceTarget,
     local: PixelRect,
     extent: [u32; 2],
 ) -> PixelRect {
-    let transform = layer_core::target_geometry(layers, id);
+    let transform = scene.target_geometry(id);
     if transform.is_identity() {
         return local.intersect(PixelRect::full(extent));
     }
@@ -465,7 +465,7 @@ mod tests {
         })] {
             let mut style = crate::tests::test_style(BrushExecution::Dry);
             style.contact = contact;
-            let mut batch = crate::test_support::dab_batch(LayerId(1), style, PixelRect::full([1024, 256]).to_rect());
+            let mut batch = crate::test_support::dab_batch(SourceTarget::Paint(layer_core::PaintHandle::from_index(1)), style, PixelRect::full([1024, 256]).to_rect());
             batch.first_dab = 7;
             batch.dab_count = dabs.len() as u32;
             let tiles = plan(&batch, &dabs, [1024, 256]);
@@ -530,7 +530,7 @@ mod tests {
             let batch = DabBatch {
                 material_update: 0,
                 stroke_id: StrokeId(1),
-                layer_id: LayerId(1),
+                target: SourceTarget::Paint(layer_core::PaintHandle::from_index(1)),
                 kind: DabBatchKind::Persistent,
                 stroke_start: false,
                 stroke_end: false,

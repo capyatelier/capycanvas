@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import {packageOccurrences,packageObject} from './package-fixture.test.mjs';
 import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {measurePlacedPhotos,placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
@@ -37,8 +38,9 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
     assert.equal(await evaluate('layerApp.state().layers.length'),base);
     const start=Date.now();await invoke('import_image');await idle();await placed();await press('apply_transform');const loadingMs=Date.now()-start;
     const baseline=await save(),sources=sourceIdentity(baseline);
-    for(let i=0;i<sources.length;i++){
-      const [w,h]=sources[i].extent,pose=baseline.document.layers[i].properties.placement;
+    const originals=packageOccurrences(baseline).filter(o=>o.data.content.paint&&packageObject(baseline,o.data.content.paint).data.original);
+    for(const occurrence of originals){
+      const [w,h]=packageObject(baseline,occurrence.data.content.paint).data.original.extent,pose=occurrence.data.placement?.projective??[1,0,0,0,1,0,0,0,1];
       assert.ok(Math.abs(pose[0]-Math.min(1,2000/w,1500/h))<1e-6);
     }
     await invoke('undo');assert.equal(await evaluate('layerApp.state().layers.length'),base);
@@ -46,7 +48,7 @@ export async function checkDeviceImagePlacement({call,evaluate,settle}) {
     await evaluate(`placementTest.photos=placementTest.files;placementTest.files=[new File([placementTest.saved],'tablet-placement.capy')]`);
     await invoke('open_document');await idle();assert.deepEqual(sourceIdentity(await save()),sources);
     await invoke('scale_rotate');await press('placement_original_size');await press('apply_transform');
-    assert.equal((await save()).document.layers[0].properties.placement[0],1);
+    assert.equal((packageOccurrences(await save())[0].data.placement?.projective??[1,0,0,0,1,0,0,0,1])[0],1);
     await evaluate('placementTest.files=placementTest.photos');
     const hardware=await evaluate(`(async()=>{const a=await navigator.gpu.requestAdapter();return{agent:navigator.userAgent,platform:await navigator.userAgentData?.getHighEntropyValues(['model','architecture','platform']),gpu:{vendor:a.info.vendor,architecture:a.info.architecture,description:a.info.description},viewport:[innerWidth,innerHeight],device_memory_gib:navigator.deviceMemory}})()`);
     const readMemory=async()=>{

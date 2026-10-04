@@ -2,11 +2,12 @@
 /// 1600×1000 view.
 fn crop_session() -> UiSession<Recorder> {
     use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
-    let mut doc = Document::new("crop", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let descriptor = RasterPlane::Color.descriptor(doc.color);
+    let mut doc = Document::new(layer_core::authored::PortableId::random(), 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let descriptor = RasterPlane::Color.descriptor(doc.composition().color);
     let bytes = vec![90; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
     let tile = RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap());
-    doc.layers[0].raster = RasterRevision::backed(RasterData {
+    let layer_core::authored::SourceTarget::Paint(paint) = doc.working.target.unwrap() else { panic!("paint") };
+    doc.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(RasterData {
         tiles: (0..4)
             .flat_map(|y| (0..4).map(move |x| [x, y]))
             .map(|coordinate| (TileKey { plane: RasterPlane::Color, coordinate }, tile.clone()))
@@ -145,8 +146,8 @@ fn a_ratio_from_the_bar_constrains_handle_drags_that_grow_the_canvas() {
     let frame = crop_frame(&s);
     assert!((frame.size[0] - frame.size[1]).abs() < 1e-3, "an edge drag keeps the ratio too");
 
-    let paint = s.engine.document().layers[0].id;
-    let tiles = |s: &UiSession<Recorder>| s.engine.document().layers[0].raster.wait_data().unwrap().tiles.len();
+    let paint = s.engine.document().working.target.unwrap();
+    let tiles = |s: &UiSession<Recorder>| s.engine.document().target_raster(s.engine.document().working.target.unwrap()).unwrap().wait_data().unwrap().tiles.len();
     let before = tiles(&s);
     let [x0, y0] = [frame.corners()[0].x.round(), frame.corners()[0].y.round()];
     invoke(&mut s, CommandId::ApplyTransform);
@@ -154,13 +155,13 @@ fn a_ratio_from_the_bar_constrains_handle_drags_that_grow_the_canvas() {
     assert!(!s.operation.active());
     let doc = s.engine.document();
     let size = frame.size[0].round() as u32;
-    assert_eq!([doc.width, doc.height], [size, size]);
-    assert_eq!(doc.layer(paint).unwrap().properties.offset.x, -x0);
+    assert_eq!(doc.composition().size, [size, size]);
+    assert_eq!(doc.scene().occurrence(doc.target_owner(paint).unwrap()).unwrap().translation.x, -x0);
     assert!(y0 < 0. && size as f32 + y0 > 800., "the new area is transparent canvas");
     assert!(s.renderer_mut().pending_operations.is_empty(), "keeping the pixels changes only metadata");
     assert_eq!(tiles(&s), before);
     invoke(&mut s, CommandId::Undo);
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 800]);
+    assert_eq!(s.engine.document().composition().size, [1000, 800]);
     assert!(!s.engine.can_undo(), "one undo step");
 }
 
@@ -249,14 +250,14 @@ fn delete_cropped_pixels_erases_outside_in_the_same_undo_step() {
     invoke(&mut s, CommandId::ApplyTransform);
     s.frame(30, 30).unwrap();
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [700, 540]);
-    let paint = doc.layers[0].id;
+    assert_eq!(doc.composition().size, [700, 540]);
+    let paint = doc.working.target.unwrap();
     let operations = s.renderer_mut().pending_operations.clone();
     assert_eq!(operations.len(), 4, "four edge strips");
     assert!(operations.iter().all(|(id, op)| *id == paint
-        && matches!(op.kind, layer_core::LayerOperationKind::Erase { alpha_locked: false })));
+        && matches!(op.kind, layer_core::RasterOperationKind::Erase { alpha_locked: false })));
     invoke(&mut s, CommandId::Undo);
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 800]);
+    assert_eq!(s.engine.document().composition().size, [1000, 800]);
     assert!(!s.engine.can_undo(), "one undo step");
     invoke(&mut s, CommandId::Crop);
     assert!(s.command(CommandId::CropDeleteCroppedPixels).selected, "the choice is remembered");
@@ -265,16 +266,17 @@ fn delete_cropped_pixels_erases_outside_in_the_same_undo_step() {
 #[test]
 fn straighten_levels_a_drawn_line_and_applies_one_resampling_step_on_locked_layers() {
     let mut s = crop_session();
-    let paint = s.engine.document().layers[0].id;
-    let mut locked = s.engine.document().layers[0].clone();
-    locked.properties.locked = true;
-    s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(locked))).unwrap();
+    let paint = s.engine.document().working.target.unwrap();
+    let owner = s.engine.document().target_owner(paint).unwrap();
+    let mut locked = s.engine.document().scene().occurrence(owner).unwrap().clone();
+    locked.locked = true;
+    s.layer_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, owner, Some(locked)).unwrap())).unwrap();
     rectangle_selection(&mut s, [100., 100., 300., 250.]);
     let ruler = layer_core::Ruler {
-        id: 9,
+        id: layer_core::authored::PortableId::random(),
         geometry: layer_core::RulerGeometry::Straight { start: Point { x: 10., y: 20. }, end: Point { x: 400., y: 50. } },
     };
-    s.layer_edit(layer_core::Edit::SetRulers(vec![ruler])).unwrap();
+    s.layer_edit(s.engine.document().ruler_edit(vec![ruler]).unwrap()).unwrap();
     s.frame(2, 2).unwrap();
     let history = s.engine.document().clone();
     invoke(&mut s, CommandId::Crop);
@@ -296,12 +298,12 @@ fn straighten_levels_a_drawn_line_and_applies_one_resampling_step_on_locked_laye
     s.frame(40, 40).unwrap();
     let doc = s.engine.document();
     let geometry = frame.geometry(false);
-    assert_eq!([doc.width, doc.height], geometry.rect.size);
+    assert_eq!(doc.composition().size, geometry.rect.size);
     let to_canvas = geometry.to_canvas();
     let operations = s.renderer_mut().pending_operations.clone();
     let [(id, op)] = operations.as_slice() else { panic!("one resample: {operations:?}") };
     assert_eq!(*id, paint, "the locked layer follows");
-    let layer_core::LayerOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
+    let layer_core::RasterOperationKind::Transform(transform) = &op.kind else { panic!("a resample") };
     assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Bicubic);
     let map = transform.as_affine().unwrap();
     let after = s.engine.document().affine_edit_transform(paint).unwrap().inverse().unwrap();
@@ -309,12 +311,12 @@ fn straighten_levels_a_drawn_line_and_applies_one_resampling_step_on_locked_laye
         near_point(map.map(p), after.map(to_canvas.map(before.affine_edit_transform(paint).unwrap().map(p))), 0.01);
     }
     let doc = s.engine.document();
-    assert_eq!(doc.selection, Some(before.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
-    assert_eq!(doc.rulers[0].geometry, before.rulers[0].geometry.transformed(to_canvas));
+    assert_eq!(doc.working.selection, Some(before.working.selection.as_ref().unwrap().transformed(to_canvas).unwrap()));
+    assert_eq!(doc.rulers().next().unwrap().geometry, before.rulers().next().unwrap().geometry.transformed(to_canvas));
     invoke(&mut s, CommandId::Undo);
     s.frame(41, 41).unwrap();
-    assert_eq!(s.engine.document().layers, history.layers);
-    assert_eq!([s.engine.document().width, s.engine.document().height], [1000, 800]);
+    assert_live_artwork_eq(s.engine.document(), &history);
+    assert_eq!(s.engine.document().composition().size, [1000, 800]);
 }
 
 #[test]
@@ -356,12 +358,13 @@ fn straighten_image_to_guide_opens_a_level_crop_from_the_guide_bar() {
     assert!((crop_frame(&s).angle - (40f32 / 600.).atan()).abs() < 1e-3, "{}", crop_frame(&s).angle);
     assert_eq!(s.state.canvas_bar.as_ref().map(|b| b.context.kind), Some(CanvasBarKind::Crop));
     invoke(&mut s, CommandId::CancelTransform);
-    s.layer_edit(layer_core::Edit::SetRulers(vec![layer_core::Ruler {
-        id: 3,
+    let id = layer_core::authored::PortableId::random();
+    s.layer_edit(s.engine.document().ruler_edit(vec![layer_core::Ruler {
+        id,
         geometry: layer_core::RulerGeometry::Radial { center: Point { x: 10., y: 10. } },
-    }]))
+    }]).unwrap())
     .unwrap();
-    s.rulers.selected = Some(3);
+    s.rulers.selected = Some(id);
     assert_eq!(s.command_disabled_reason(CommandId::StraightenToGuide).as_deref(), Some("Select a straight guide first"));
 }
 

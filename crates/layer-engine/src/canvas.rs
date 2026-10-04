@@ -17,7 +17,7 @@ use crate::input::{
 };
 use layer_core::{
     BrushError, BrushExecution, BrushSnapshot, CloneSource, Document, DocumentError, DrawingRefusal,
-    Edit, Editor, LayerId, Rect, Retouch, RetouchSource, Stroke, StrokeId, StrokeTool,
+    Edit, Editor, SourceTarget, Rect, Retouch, RetouchSource, Stroke, StrokeId, StrokeTool,
 };
 use layer_render::{
     CanvasRenderer, Dab, DabBatch, DabBatchKind, DabStyle, FramePacket, RetouchPreparation,
@@ -88,7 +88,7 @@ pub enum StrokeRefusal {
 
 #[derive(Clone, Copy)]
 struct StrokeTarget {
-    layer: LayerId,
+    target: SourceTarget,
     mask: bool,
     alpha_locked: bool,
     inverted: bool,
@@ -99,7 +99,7 @@ struct ActiveStroke {
     paint_color: Option<layer_core::color::RgbColor>,
     before: layer_core::raster::RasterRevision,
     id: StrokeId,
-    layer_id: LayerId,
+    target: SourceTarget,
     tool: StrokeTool,
     brush: BrushSnapshot,
     style: DabStyle,
@@ -143,7 +143,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     /// The live clone stroke's document offset.
     clone_stroke: Option<[f32; 2]>,
     retouch_points: Vec<layer_core::Point>,
-    prepared_retouch: Option<(Arc<str>, layer_core::Revision, RetouchPreparation)>,
+    prepared_retouch: Option<(u64, layer_core::Revision, RetouchPreparation)>,
     builder: StrokeBuilder,
     dab_generator: DabGenerator,
     finalized_real_points: usize,
@@ -152,7 +152,7 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     completed_at: Option<web_time::Instant>,
     completed_before: Option<layer_core::raster::RasterRevision>,
     completed_clone_start: Option<CloneSource>,
-    restore_rasters: Vec<(LayerId, layer_core::raster::RasterRevision)>,
+    restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
     pending_frame: Option<PreparedFrame>,
     rebuild_completed: bool,
     estimates: std::collections::BTreeMap<(u64, u64), corrections::EstimatedPoint>,
@@ -162,12 +162,14 @@ pub struct CanvasEngine<B: CanvasRenderer> {
     transform_preview: Option<layer_render::TransformPreview>,
     transform_selection: std::sync::OnceLock<Option<layer_core::Selection>>,
     selection_display: Option<Option<layer_core::Selection>>,
-    layer_preview: Option<LayerPreview>,
+    scene_preview: Option<ScenePreview>,
     rebuild_all: bool,
     composite_all: bool,
     raster_dirty: bool,
     animation_origin_ns: Option<u64>,
     animation_time: f32,
+    animation_seed: f32,
+    evaluation_context: layer_core::authored::EvaluationContext,
     metrics: EngineMetrics,
 }
 
@@ -178,42 +180,10 @@ fn plain_color(raster: &layer_core::raster::RasterRevision) -> bool {
         && data.tiles.keys().all(|key| key.plane == layer_core::raster::RasterPlane::Color))
 }
 
-/// A layer the canvas shows directly above another, in its group, which the
-/// document does not hold, such as a filter previewed from a dialog.
 #[derive(Clone, Debug)]
-pub struct LayerPreview {
-    pub above: LayerId,
-    pub layer: layer_core::Layer,
-}
-
-/// The layers a frame composites: the document's with the preview in place,
-/// followed by the hidden members of pending bakes that the same edit
-/// removed, so the renderer keeps their pages until the bake has run. None
-/// when they are the document's own.
-fn frame_layers(document: &Document, preview: Option<&LayerPreview>) -> Option<Vec<layer_core::Layer>> {
-    let mut removed = document
-        .layers
-        .iter()
-        .flat_map(|l| &l.pending_operations)
-        .filter_map(|op| match &op.kind {
-            layer_core::LayerOperationKind::Bake { members, .. }
-            | layer_core::LayerOperationKind::FrequencyDetail { members, .. } => Some(members.iter()),
-            _ => None,
-        })
-        .flatten()
-        .filter(|member| document.layer(member.id).is_none())
-        .peekable();
-    let preview = preview.and_then(|p| Some((document.layers.iter().position(|l| l.id == p.above)?, &p.layer)));
-    if preview.is_none() {
-        removed.peek()?;
-    }
-    let mut layers = document.layers.clone();
-    if let Some((index, layer)) = preview {
-        let parent = layers[index].properties.parent;
-        layers.insert(index, layer_core::Layer { properties: layer_core::LayerProperties { parent, ..layer.properties.clone() }, ..layer.clone() });
-    }
-    layers.extend(removed.map(|member| layer_core::Layer { visible: false, ..member.clone() }));
-    Some(layers)
+pub struct ScenePreview {
+    pub above: layer_core::authored::OccurrenceHandle,
+    pub scene: Arc<layer_core::SceneSnapshot>,
 }
 
 impl<B: CanvasRenderer> CanvasEngine<B> {
@@ -224,7 +194,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         view: ViewState,
         input_transform: ViewTransform,
     ) -> Result<Self, EngineError<B::Error>> {
-        if backend.document_color() != document.color {
+        if backend.document_color() != document.composition().color {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
                 "The renderer is not configured for this document's color space and precision",
             )));
@@ -234,7 +204,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             .map_err(EngineError::Backend)?;
         let mut transforms = VecDeque::with_capacity(TRANSFORM_HISTORY);
         transforms.push_back(input_transform);
-        let dab_generator = DabGenerator::new(document.color.space);
+        let dab_generator = DabGenerator::new(document.composition().color.space);
+        let evaluation_context = document.output().context.clone();
+        backend.seed_evaluation_context(evaluation_context.clone());
         Ok(Self {
             settings: ContactSettings {
                 brush: BrushSnapshot::default(), tool: StrokeTool::Brush, retouch: None,
@@ -271,12 +243,14 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             transform_preview: None,
             transform_selection: Default::default(),
             selection_display: None,
-            layer_preview: None,
+            scene_preview: None,
             rebuild_all: true,
             composite_all: true,
             raster_dirty: false,
             animation_origin_ns: None,
-            animation_time: 0.,
+            animation_time: evaluation_context.elapsed,
+            animation_seed: evaluation_context.elapsed,
+            evaluation_context,
             metrics: EngineMetrics::default(),
         })
     }
@@ -289,6 +263,20 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     pub fn document(&self) -> &Document {
         self.editor.document()
+    }
+
+    pub fn capture_artwork(&self, session_generation: u64) -> Result<layer_core::authored::ArtworkCapture, DocumentError> {
+        if self.rebuild_completed || self.batches.iter().any(|batch| matches!(batch.kind, DabBatchKind::RasterOperation(_))
+            || self.pending_frame.is_some() && batch.stroke_end) {
+            return Err(DocumentError::InvalidLayerOperation("Wait for the preceding raster edit"));
+        }
+        self.editor.capture(session_generation, self.evaluation_context.clone())
+    }
+
+    pub fn scene_snapshot(&self) -> Arc<layer_core::SceneSnapshot> {
+        let mut context = self.evaluation_context.clone();
+        context.retain_effects(&self.document().artwork);
+        self.document().snapshot_with_context(context)
     }
 
     pub fn checkpoint(&self) -> u64 {
@@ -333,7 +321,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// The active builder and queued samples survive; completed history restores
     /// immutable rasters without replaying historical strokes.
     pub fn replace_backend(&mut self, mut backend: B) -> Result<B, EngineError<B::Error>> {
-        if backend.document_color() != self.editor.document().color {
+        if backend.document_color() != self.editor.document().composition().color {
             return Err(EngineError::Document(DocumentError::InvalidLayerOperation(
                 "The replacement renderer is not configured for this document's color space and precision",
             )));
@@ -346,6 +334,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         backend
             .resize_surface(self.view.width_px, self.view.height_px)
             .map_err(EngineError::Backend)?;
+        backend.seed_evaluation_context(self.evaluation_context.clone());
         self.restore_rasters.clear();
         self.rebuild_all = true;
         self.composite_all = true;
@@ -407,7 +396,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let ruler = self.active_stroke.as_ref().map_or_else(
             || {
                 self.settings.ruler_snapping.and_then(|reach| {
-                    layer_core::choose_ruler(&self.document().rulers, point.position, reach)
+                    layer_core::choose_ruler(self.document().rulers(), point.position, reach)
                 })
             },
             |active| active.ruler,
@@ -418,8 +407,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target = self
             .active_stroke
             .as_ref()
-            .map_or_else(|| self.document().drawing_target().unwrap_or(self.document().active_target()), |s| s.layer_id);
-        let offset = self.document().layer_offset(target);
+            .map_or_else(|| self.document().drawing_target().or(self.document().working.target), |s| Some(s.target));
+        let offset = target.map_or_default(|target| self.document().target_offset(target));
         // Stroke dynamics run in layer-local coordinates; outlines are returned
         // in document coordinates, including for translated layers.
         point.position.x -= offset.x;
@@ -438,7 +427,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         } else {
             // Hovering pens report zero pressure; show the nominal footprint.
             point.pressure = 1.0;
-            hover.set_space(self.document().color.space);
+            hover.set_space(self.document().composition().color.space);
             hover.set_barrel_twist(event.flags.contains(SampleFlags::BARREL_TWIST));
             hover.cursor_seed(self.document().next_stroke_id(), self.brush());
             hover.cursor_contacts(point, self.brush())
@@ -450,15 +439,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         contacts
     }
 
-    pub fn allocate_layer_id(&mut self) -> LayerId {
-        self.editor.allocate_layer_id()
+    pub fn allocate_coverage_handle(&mut self) -> layer_core::authored::CoverageHandle {
+        self.editor.allocate_coverage_handle()
     }
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
         self.editor.allocate_stroke_id()
     }
     pub fn preview_edit(&mut self, edit: Edit) -> Result<(), DocumentError> {
-        self.require_renderer_color(edit.resulting_color(self.document().color))?;
-        let image = edit.changes_image();
+        self.require_renderer_color(edit.resulting_color(self.document().composition().color))?;
+        let image = edit.changes_image(self.editor.document());
         self.editor.preview(edit)?;
         self.composite_all |= image;
         Ok(())
@@ -466,8 +455,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Show `preview` on the canvas until it is replaced or cleared. History
     /// and the document never hold it.
-    pub fn set_layer_preview(&mut self, preview: Option<LayerPreview>) {
-        self.layer_preview = preview;
+    pub fn set_scene_preview(&mut self, preview: Option<ScenePreview>) {
+        self.scene_preview = preview;
         self.composite_all = true;
     }
 
@@ -483,14 +472,12 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     ) -> Result<(), DocumentError> {
         let companion = preview
             .as_ref()
-            .and_then(|p| p.companion(&self.document().layers));
+            .and_then(|p| p.companion(self.document().scene()));
         for p in preview.iter().chain(companion.iter()) {
             let doc = self.document();
             if self.has_active_stroke()
-                || doc.is_locked(p.layer)
-                || doc
-                    .target_owner(p.layer)
-                    .is_none_or(|l| l.id == p.layer && l.kind != layer_core::LayerKind::Paint)
+                || doc.target_owner(p.target).is_some_and(|owner| doc.is_locked(owner))
+                || doc.target_raster(p.target).is_none()
                 || p.transform.validate().is_err()
                 || p.selection.as_ref().is_some_and(|s| {
                     s.affine.inverse().is_none()
@@ -509,10 +496,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Append a command for the next raster submission. Its resulting immutable
     /// pixels become the edit's undo/save state; the command is then discarded.
-    pub fn append_layer_operation(
+    pub fn append_raster_operation(
         &mut self,
-        id: LayerId,
-        operation: layer_core::LayerOperation,
+        id: SourceTarget,
+        operation: layer_core::RasterOperation,
     ) -> Result<(), DocumentError> {
         self.append_operations(Vec::new(), vec![(id, operation)], None, false)
     }
@@ -524,7 +511,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     pub fn insert_with_operations(
         &mut self,
         prefix: Vec<Edit>,
-        operations: Vec<(LayerId, layer_core::LayerOperation)>,
+        operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
     ) -> Result<(), DocumentError> {
         self.append_operations(prefix, operations, selection_after, false)
@@ -546,10 +533,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.transform_preview = None;
             return Ok(false);
         }
-        let basis = self.document().affine_edit_transform(preview.layer)
+        let basis = self.document().affine_edit_transform(preview.target)
             .ok_or(DocumentError::InvalidLayerOperation("Apply Transform to Pixels before editing this layer"))?;
         let selection = match (resampled, &preview.selection) {
-            (Some(pixels), _) if pixels.extent() != self.document().target_extent(preview.layer) => {
+            (Some(pixels), _) if pixels.extent() != self.document().target_extent(preview.target) => {
                 return Err(DocumentError::InvalidLayerOperation(
                     "The resampled selection belongs to another layer",
                 ));
@@ -566,21 +553,22 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
             (None, _) => self.display_selection().map(|s| s.into_owned()),
         };
-        let companion = preview.companion(&self.document().layers);
+        let companion = preview.companion(self.document().scene());
         let mut operations = Vec::with_capacity(2);
         for target in std::iter::once(preview).chain(companion) {
-            let mut coverage = layer_core::LayerMask::reveal_all(
-                self.allocate_layer_id(),
+            let mut coverage = layer_core::CoverageSnapshot::reveal_all(
+                self.allocate_coverage_handle(),
+                self.document().target_extent(target.target),
                 layer_core::Point::default(),
             );
-            coverage.default_coverage = f32::from(target.selection.is_none());
-            coverage.initial = target.selection;
+            coverage.source.default_coverage = f32::from(target.selection.is_none());
+            coverage.source.initial = target.selection;
             operations.push((
-                target.layer,
-                layer_core::LayerOperation {
+                target.target,
+                layer_core::RasterOperation {
                     placement: layer_core::Affine::IDENTITY,
                     coverage,
-                    kind: layer_core::LayerOperationKind::Transform(target.transform.clone()),
+                    kind: layer_core::RasterOperationKind::Transform(target.transform.clone()),
                 },
             ));
         }
@@ -606,7 +594,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             selection: None,
             request_id,
             source: layer_render::RegionSource::TransformedSelection {
-                layer: preview.layer,
+                target: preview.target,
                 selection: std::sync::Arc::new(selection.clone()),
                 map: preview.transform.placement.clone(),
             },
@@ -631,11 +619,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let mapped = self.transform_selection.get_or_init(|| {
                 preview.selection.as_ref()?.mapped(&preview.transform.placement).ok()
             });
-            let basis = self.document().affine_edit_transform(preview.layer)?;
+            let basis = self.document().affine_edit_transform(preview.target)?;
             return mapped.as_ref()?.transformed(basis).ok().map(std::borrow::Cow::Owned);
         }
         self.document()
-            .selection
+            .working.selection
             .as_ref()
             .map(std::borrow::Cow::Borrowed)
     }
@@ -643,122 +631,91 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn append_operations(
         &mut self,
         prefix: Vec<Edit>,
-        operations: Vec<(LayerId, layer_core::LayerOperation)>,
-        // None preserves the selection; Some(None) explicitly clears it.
+        operations: Vec<(SourceTarget, layer_core::RasterOperation)>,
         selection_after: Option<Option<layer_core::Selection>>,
-        reaches_locked_layers: bool,
+        reaches_locked_sources: bool,
     ) -> Result<(), DocumentError> {
         self.flush_pending_edits()?;
-        self.completed_stroke = None;
-        self.completed_before = None;
-        self.estimates.clear();
+        self.end_corrections();
         if self.has_active_stroke() {
-            return Err(DocumentError::InvalidLayerOperation(
-                "Finish the stroke first",
-            ));
+            return Err(DocumentError::InvalidLayerOperation("Finish the stroke first"));
         }
-        let staged;
-        let document = if prefix.is_empty() {
-            self.document()
-        } else {
-            let mut next = self.document().clone();
-            next.apply(Edit::Batch(prefix.clone()))?;
-            staged = next;
-            &staged
-        };
-        let mut layers = std::collections::BTreeMap::new();
+        let mut staged = self.document().clone();
+        if !prefix.is_empty() { staged.apply(Edit::Batch(prefix.clone()))?; }
+        let document = &staged;
+        let mut sources = std::collections::BTreeMap::new();
         let mut batches = Vec::with_capacity(operations.len());
         let mut restores = Vec::new();
-        let mut reservations = std::collections::BTreeMap::<LayerId, Rect>::new();
-        let mut inserted_empty = std::collections::BTreeSet::new();
-        for (id, operation) in operations {
-            let owner = document
-                .target_owner(id)
-                .ok_or(DocumentError::MissingLayer(id))?;
-            if (owner.id == id && owner.kind != layer_core::LayerKind::Paint)
-                || (document.is_locked(id) && !reaches_locked_layers)
-            {
-                return Err(DocumentError::InvalidLayerOperation(
-                    "Select an unlocked paint layer",
-                ));
+        let mut reservations = std::collections::BTreeMap::<SourceTarget, Rect>::new();
+        for (target, operation) in operations {
+            let pixels = document.target_raster(target)
+                .ok_or(DocumentError::InvalidLayerOperation("Missing paint source"))?.clone();
+            if matches!(target, SourceTarget::Selection(_)) || (document.target_owner(target).is_some_and(|owner| document.is_locked(owner)) && !reaches_locked_sources) {
+                return Err(DocumentError::InvalidLayerOperation("Select an unlocked paint layer"));
             }
-            if document.affine_edit_transform(id).is_none() {
+            if document.affine_edit_transform(target).is_none() {
                 return Err(DocumentError::InvalidLayerOperation("Apply Transform to Pixels before editing this layer"));
             }
-            let pixels = document.target_raster(id).cloned().unwrap_or_default();
-            if self.document().target_owner(id).is_none() && pixels.is_empty() {
-                inserted_empty.insert(id);
-            }
-            let replaced = self.document().target_raster(id).is_none_or(|current| *current != pixels);
-            if replaced && !restores.iter().any(|(target, _)| *target == id) {
-                restores.push((id, pixels.clone()));
-            }
-            let extent = document.target_extent(id);
-            let damage = if matches!(operation.kind, layer_core::LayerOperationKind::Erase { .. })
-                && !plain_color(&pixels)
-            {
+            let replaced = self.document().target_raster(target).is_none_or(|current| *current != pixels);
+            if replaced && !restores.iter().any(|(t, _)| *t == target) { restores.push((target, pixels.clone())); }
+            let extent = document.target_extent(target);
+            let damage = if matches!(operation.kind, layer_core::RasterOperationKind::Erase { .. }) && !plain_color(&pixels) {
                 Rect::from_extent(extent)
-            } else {
-                operation.bounds(extent)
-            };
-            let layer = layers.entry(owner.id).or_insert_with(|| owner.clone());
-            let raster = if id == layer.id {
-                &mut layer.raster
-            } else {
-                &mut layer.mask.as_mut().unwrap().raster
-            };
-            *raster = layer_core::raster::RasterRevision::pending();
-            let history = layer.target_operations_mut(id).unwrap();
+            } else { operation.bounds(extent) };
+            let plane = if matches!(target, SourceTarget::Paint(_)) { layer_core::raster::RasterPlane::Color } else { layer_core::raster::RasterPlane::Mask };
+            let color = document.composition().color;
+            let mut page_bytes = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color)).ok_or(DocumentError::InvalidLayerOperation("Unsupported raster capture representation"))? as u64;
+            if matches!(target, SourceTarget::Paint(_)) && !plain_color(&pixels) {
+                let coverage = layer_core::raster::TileBlob::max_compressed_len(layer_core::raster::RasterPlane::Wetness.descriptor(color)).ok_or(DocumentError::InvalidLayerOperation("Unsupported raster capture representation"))? as u64;
+                page_bytes = page_bytes.checked_add(coverage.checked_mul(2).ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?)
+                    .ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?;
+            }
+            let output_bounds = if pixels.is_empty() { damage } else { Rect::from_extent(extent) };
+            let bytes = layer_core::raster::page_count(output_bounds, extent).checked_mul(page_bytes)
+                .ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?;
+            let (_, history) = sources.entry(target).or_insert_with(|| (
+                layer_core::raster::RasterRevision::pending_within(bytes),
+                document.target_operations(target).unwrap_or_default().to_vec(),
+            ));
             let index = history.len() as u32;
             history.push(operation);
-            reservations
-                .entry(id)
-                .and_modify(|r| *r = r.union(damage))
-                .or_insert(damage);
+            reservations.entry(target).and_modify(|r| *r = r.union(damage)).or_insert(damage);
             batches.push(DabBatch {
-                material_update: 0,
-                stroke_id: StrokeId(0),
-                layer_id: id,
-                kind: DabBatchKind::LayerOperation(index),
-                stroke_start: false,
-                stroke_end: false,
-                first_dab: 0,
-                dab_count: 0,
-                style: DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush),
-                damage,
+                material_update: 0, stroke_id: StrokeId(0), target,
+                kind: DabBatchKind::RasterOperation(index), stroke_start: false, stroke_end: false,
+                first_dab: 0, dab_count: 0,
+                style: DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush), damage,
             });
         }
-        let color = document.color;
-        for (id, damage) in reservations {
-            let owner = document.target_owner(id).unwrap().id;
-            let layer = layers.get_mut(&owner).unwrap();
-            let (raster, plane) = if id == owner {
-                (&mut layer.raster, layer_core::raster::RasterPlane::Color)
-            } else {
-                (&mut layer.mask.as_mut().unwrap().raster, layer_core::raster::RasterPlane::Mask)
-            };
-            let tile = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color))
-                .unwrap_or(0) as u64;
-            let bytes = layer_core::raster::page_count(damage, document.target_extent(id)) * tile;
-            if inserted_empty.contains(&id) {
-                *raster = layer_core::raster::RasterRevision::pending_within(bytes);
-            } else {
-                raster.reserve_pending_bytes(bytes);
-            }
+        for (target, damage) in reservations {
+            let plane = if matches!(target, SourceTarget::Paint(_)) { layer_core::raster::RasterPlane::Color } else { layer_core::raster::RasterPlane::Mask };
+            let tile = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(document.composition().color)).unwrap_or(0) as u64;
+            let bytes = layer_core::raster::page_count(damage, document.target_extent(target)).checked_mul(tile)
+                .ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?;
+            let raster = &mut sources.get_mut(&target).unwrap().0;
+            raster.reserve_pending_bytes(bytes);
         }
         let mut edits = prefix;
-        for edit in &mut edits {
-            if let Edit::InsertLayer { layer, .. } = edit
-                && let Some(operated) = layers.remove(&layer.id)
-            {
-                **layer = operated;
+        for (target, (raster, operations)) in sources {
+            match target {
+                SourceTarget::Paint(handle) => {
+                    let mut source = document.artwork.paint.get(handle).unwrap().clone();
+                    source.raster = raster; source.operations = Arc::new(operations);
+                    edits.push(Edit::Paint(layer_core::RecordChange::replace(&document.artwork.paint, handle, Some(source)).map_err(DocumentError::InvalidLayerOperation)?));
+                }
+                SourceTarget::Coverage(handle) => {
+                    let mut source = document.artwork.coverage.get(handle).unwrap().clone();
+                    source.raster = raster; source.operations = Arc::new(operations);
+                    edits.push(Edit::Coverage(layer_core::RecordChange::replace(&document.artwork.coverage, handle, Some(source)).map_err(DocumentError::InvalidLayerOperation)?));
+                }
+                SourceTarget::Selection(_) => unreachable!(),
             }
         }
-        edits.extend(layers.into_values().map(|l| Edit::ReplaceLayer(Box::new(l))));
         if let Some(selection) = selection_after {
-            edits.push(Edit::SetSelection(selection));
+            let mut working = document.working.clone(); working.selection = selection;
+            edits.push(Edit::Working(working));
         }
-        let removes = edits.iter().any(|e| matches!(e, Edit::RemoveLayer { .. }));
+        let removes = edits.iter().any(|edit| matches!(edit, Edit::Stack(_) | Edit::Occurrence(_)));
         self.editor.perform(Edit::Batch(edits))?;
         self.transform_preview = None;
         self.composite_all |= removes;
@@ -802,7 +759,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.apply_edit(Edit::Batch(plan.edits))?;
         } else {
             for (_, operation) in &mut plan.operations {
-                operation.coverage.id = self.allocate_layer_id();
+                let target = self.allocate_coverage_handle();
+                operation.coverage.target = target;
+                operation.coverage.use_.source = target;
             }
             self.append_operations(plan.edits, plan.operations, None, true)?;
             self.rebuild_all = true;
@@ -814,15 +773,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Where the canvas origin moves if the next undo, or redo, runs.
     pub fn history_canvas_origin(&self, redo: bool) -> Option<[i32; 2]> {
-        self.editor.next_history_edit(redo).and_then(Edit::canvas_origin)
+        self.editor.next_history_edit(redo).and_then(|edit| edit.canvas_origin_from(self.document().composition().origin))
     }
 
-    pub fn move_layer(&mut self, id: LayerId, to: usize) -> Result<(), DocumentError> {
-        self.apply_edit(Edit::MoveLayer { id, to })
+    pub fn move_layer(&mut self, id: layer_core::authored::OccurrenceHandle, to: usize) -> Result<(), DocumentError> {
+        self.apply_edit(self.document().move_occurrence_edit(id, to)?)
     }
 
-    pub fn set_active_layer(&mut self, id: LayerId) -> Result<(), DocumentError> {
-        self.apply_edit(Edit::SetActiveLayer { id })
+    pub fn set_active_layer(&mut self, id: layer_core::authored::OccurrenceHandle) -> Result<(), DocumentError> {
+        self.apply_edit(self.document().select_occurrence_edit(id)?)
     }
 
     /// Readbacks must follow the frame that applies document edits, not capture
@@ -837,7 +796,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             || self
                 .batches
                 .iter()
-                .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+                .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)))
     }
     pub fn wants_continuous_frames(&self) -> bool {
         self.has_pending_input()
@@ -850,8 +809,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         !self.input.is_empty()
     }
 
-    pub fn set_layer_opacity(&mut self, id: LayerId, opacity: f32) -> Result<(), DocumentError> {
-        self.apply_edit(Edit::SetLayerOpacity { id, opacity })
+    pub fn set_layer_opacity(&mut self, id: layer_core::authored::OccurrenceHandle, opacity: f32) -> Result<(), DocumentError> {
+        let mut occurrence = self.document().artwork.occurrences.get(id)
+            .ok_or(DocumentError::InvalidLayerOperation("Missing layer"))?.clone();
+        occurrence.opacity = opacity;
+        self.apply_edit(Edit::Occurrence(layer_core::RecordChange::replace(&self.document().artwork.occurrences, id, Some(occurrence)).map_err(DocumentError::InvalidLayerOperation)?))
     }
 
     pub fn set_brush(&mut self, brush: BrushSnapshot) -> Result<(), BrushError> {
@@ -905,7 +867,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     fn refresh_retouch(&mut self) {
         let document = self.editor.document();
         let fresh = self.prepared_retouch.as_ref().is_some_and(|(id, revision, prepared)| {
-            *id == document.id && *revision == document.revision && prepared.points == self.retouch_points
+            *id == document.owner && *revision == document.revision && prepared.points == self.retouch_points
         });
         if self.settings.retouch.is_some() && fresh {
             return;
@@ -919,7 +881,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return;
         }
         self.backend.prepare_retouch(prepared.as_ref());
-        self.prepared_retouch = prepared.map(|p| (document.id.clone(), document.revision, p));
+        self.prepared_retouch = prepared.map(|p| (document.owner, document.revision, p));
     }
 
     /// Map a stroke that copies from the source point, starting at `first` in
@@ -932,7 +894,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let first = layer_core::Point { x: first.x + offset.x, y: first.y + offset.y };
         self.clone_stroke = self.settings.clone_source.begin_stroke(first);
         if let (Some(offset), Some(retouch)) = (self.clone_stroke, active.style.retouch.take()) {
-            active.style.retouch = Some(clone_mapping(self.editor.document(), active.layer_id, retouch, offset, self.settings.clone_source.flip));
+            active.style.retouch = Some(clone_mapping(self.editor.document(), active.target, retouch, offset, self.settings.clone_source.flip));
         }
     }
 
@@ -942,7 +904,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let Some(start) = active.clone_start {
             self.settings.clone_source = start;
             let first = self.builder.real_points()[0].position;
-            self.begin_clone_stroke(first, self.document().layer_offset(active.layer_id));
+            self.begin_clone_stroke(first, self.document().target_offset(active.target));
         }
     }
 
@@ -976,15 +938,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if let (Some(mut start), Some(stroke)) = (self.completed_clone_start, self.completed_stroke.as_mut())
             && let (Some(retouch), Some(first)) = (stroke.retouch.take(), stroke.points.first())
         {
-            let shift = self.editor.document().layer_offset(stroke.layer_id);
+            let shift = self.editor.document().target_offset(stroke.target);
             let first = layer_core::Point { x: first.position.x + shift.x, y: first.position.y + shift.y };
             let offset = start.begin_stroke(first).unwrap_or(retouch.offset);
-            stroke.retouch = Some(clone_mapping(self.editor.document(), stroke.layer_id, retouch, offset, start.flip));
+            stroke.retouch = Some(clone_mapping(self.editor.document(), stroke.target, retouch, offset, start.flip));
         }
         let Some((stroke, _)) = self.completed_stroke.as_ref().zip(self.completed_before.as_ref()) else {
             return Ok(());
         };
-        let layer = stroke.layer_id;
+        let layer = stroke.target;
         self.editor.amend_raster(layer, layer_core::raster::RasterRevision::pending())?;
         self.rebuild_completed = true;
         self.rebuild_all |= !self.backend.supports_raster_damage();
@@ -992,10 +954,10 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     /// Why a retouching stroke on `target` would copy nothing.
-    fn retouch_refusal(&self, target: LayerId) -> Option<StrokeRefusal> {
+    fn retouch_refusal(&self, target: SourceTarget) -> Option<StrokeRefusal> {
         let source = self.settings.retouch?;
         let document = self.document();
-        let layer = document.layer(target)?;
+        let layer = document.scene().paint(match target { SourceTarget::Paint(handle) => handle, _ => return None })?;
         let layer_core::Affine([a, b, c, d, ..]) = document.affine_edit_transform(target)?;
         if [a, b, c, d] != [1., 0., 0., 1.] {
             return Some(StrokeRefusal::TransformedLayer);
@@ -1003,7 +965,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if self.settings.brush.execution.copies_from_source() && self.settings.clone_source.point.is_none() {
             return Some(StrokeRefusal::NoCloneSource);
         }
-        let empty = layer.source.is_none()
+        let empty = layer.original.is_none()
             && layer.raster.try_data().is_some_and(|data| data.is_ok_and(|data| data.tiles.is_empty()));
         (empty && Retouch::for_target(document, target, source).references.is_empty())
             .then_some(StrokeRefusal::EmptySource(source))
@@ -1019,7 +981,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             {
                 Some(StrokeRefusal::DryMask)
             }
-            Ok(target) => self.retouch_refusal(target.layer),
+            Ok(target) => self.retouch_refusal(target.target),
         }
     }
 
@@ -1041,14 +1003,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         .map_err(StrokeRefusal::Target)?;
         let owner = document
             .target_owner(layer)
+            .and_then(|owner| document.artwork.occurrences.get(owner))
             .ok_or(StrokeRefusal::Target(DrawingRefusal::NoLayer))?;
-        let mask = owner.id != layer;
-        let alpha_locked = !mask && owner.properties.alpha_locked;
+        let mask = matches!(layer, SourceTarget::Coverage(_));
+        let alpha_locked = !mask && owner.alpha_locked;
         if alpha_locked && tool == StrokeTool::Eraser {
             return Err(StrokeRefusal::AlphaLocked);
         }
         Ok(StrokeTarget {
-            layer,
+            target: layer,
             mask,
             alpha_locked,
             inverted: mask && owner.mask.as_ref().is_some_and(|m| m.inverted),
@@ -1123,9 +1086,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.completed_before = None;
         self.estimates.clear();
         let next = self.editor.next_history_edit(redo);
-        let image = next.is_some_and(|edit| edit.changes_image());
+        let image = next.is_some_and(|edit| edit.changes_image(self.editor.document()));
         let raster_only = self.backend.supports_raster_damage() && next.is_some_and(|edit| edit.only_raster_updates());
-        let resized = next.is_some_and(|edit| edit.canvas_origin().is_some());
+        let resized = next.is_some_and(|edit| edit.canvas_origin_from(self.document().composition().origin).is_some());
         let changed = if redo { self.editor.redo()? } else { self.editor.undo()? };
         self.transform_preview = None;
         self.rebuild_all |= changed && resized;
@@ -1149,7 +1112,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     fn require_renderer_color(&self, color: layer_core::color::DocumentColor) -> Result<(), DocumentError> {
-        if color != self.document().color || self.backend.document_color() != color {
+        if color != self.document().composition().color || self.backend.document_color() != color {
             return Err(DocumentError::InvalidLayerOperation(
                 "Prepare the matching renderer before applying document color or its history",
             ));
@@ -1158,94 +1121,57 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn apply_edit(&mut self, mut edit: Edit) -> Result<(), DocumentError> {
-        self.require_renderer_color(edit.resulting_color(self.document().color))?;
-        fn discard_submitted(edit: &mut Edit, document: &Document) {
-            match edit {
+        self.require_renderer_color(edit.resulting_color(self.document().composition().color))?;
+        fn source_operations(edit: &mut Edit, document: &Document, batches: &mut Vec<DabBatch>) {
+            let (target, domain, raster, operations) = match edit {
                 Edit::Batch(edits) => {
-                    for edit in edits {
-                        discard_submitted(edit, document);
-                    }
-                }
-                Edit::ReplaceLayer(layer) => {
-                    if let Some(old) = document.layer(layer.id) {
-                        if layer
-                            .pending_operations
-                            .starts_with(&old.pending_operations)
-                        {
-                            layer
-                                .pending_operations
-                                .drain(..old.pending_operations.len());
-                        }
-                        if let (Some(mask), Some(old)) = (&mut layer.mask, &old.mask)
-                            && mask.id == old.id
-                            && mask.pending_operations.starts_with(&old.pending_operations)
-                        {
-                            std::sync::Arc::make_mut(&mut mask.pending_operations)
-                                .drain(..old.pending_operations.len());
-                        }
-                    }
-                }
-                _ => (),
-            }
-        }
-        discard_submitted(&mut edit, self.document());
-        self.flush_pending_edits()?;
-        self.end_corrections();
-        fn prepare(edit: &mut Edit, document: &Document, batches: &mut Vec<DabBatch>) {
-            let layer = match edit {
-                Edit::Batch(edits) => {
-                    for edit in edits {
-                        prepare(edit, document, batches);
-                    }
+                    for edit in edits { source_operations(edit, document, batches); }
                     return;
                 }
-                Edit::ReplaceLayer(layer) => &mut **layer,
-                Edit::InsertLayer { layer, .. } => &mut **layer,
+                Edit::Paint(change) => {
+                    let Some(source) = change.value.as_mut() else { return; };
+                    (SourceTarget::Paint(change.handle), source.domain, &mut source.raster, &mut source.operations)
+                }
+                Edit::Coverage(change) => {
+                    let Some(source) = change.value.as_mut() else { return; };
+                    (SourceTarget::Coverage(change.handle), source.domain, &mut source.raster, &mut source.operations)
+                }
                 _ => return,
             };
-            if !layer.pending_operations.is_empty() {
-                layer.raster = layer_core::raster::RasterRevision::pending();
-                for (index, operation) in layer.pending_operations.iter().enumerate() {
+            if let Some(old) = document.target_operations(target) && operations.starts_with(old) {
+                Arc::make_mut(operations).drain(..old.len());
+            }
+            if !operations.is_empty() {
+                *raster = layer_core::raster::RasterRevision::pending();
+                for (index, operation) in operations.iter().enumerate() {
                     batches.push(DabBatch {
-                        material_update: 0,
-                        stroke_id: StrokeId(0),
-                        layer_id: layer.id,
-                        kind: DabBatchKind::LayerOperation(index as u32),
-                        stroke_start: false,
-                        stroke_end: false,
-                        first_dab: 0,
-                        dab_count: 0,
+                        material_update: 0, stroke_id: StrokeId(0), target,
+                        kind: DabBatchKind::RasterOperation(index as u32),
+                        stroke_start: false, stroke_end: false, first_dab: 0, dab_count: 0,
                         style: DabStyle::for_brush(&BrushSnapshot::default(), StrokeTool::Brush),
-                        damage: operation.bounds(layer.local_extent([document.width, document.height])),
+                        damage: operation.bounds(domain),
                     });
                 }
             }
         }
         let mut operation_batches = Vec::new();
-        prepare(&mut edit, self.document(), &mut operation_batches);
+        source_operations(&mut edit, self.document(), &mut operation_batches);
+        self.flush_pending_edits()?;
+        self.end_corrections();
         fn rebuild_needed(document: &Document, edit: &Edit) -> bool {
             match edit {
-                Edit::SetColor { .. } | Edit::SetCanvasSize { .. } => true,
-                Edit::InsertLayer { layer, .. } => layer.source.is_some(),
+                Edit::Composition(change) => change.value.as_ref().is_none_or(|next| document.artwork.compositions.get(change.handle)
+                    .is_none_or(|old| old.size != next.size || old.color != next.color)),
+                Edit::Paint(change) => change.value.as_ref().is_some_and(|next| document.artwork.paint.get(change.handle)
+                    .map_or(next.original.is_some(), |old| old.original != next.original || old.domain != next.domain)),
+                Edit::Coverage(change) => change.value.as_ref().is_some_and(|next| document.artwork.coverage.get(change.handle)
+                    .is_some_and(|old| old.initial != next.initial || old.domain != next.domain || old.default_coverage != next.default_coverage)),
                 Edit::Batch(edits) => edits.iter().any(|e| rebuild_needed(document, e)),
-                // A batch may replace a layer inserted earlier in that batch;
-                // it is absent from this pre-edit snapshot, so be conservative.
-                Edit::ReplaceLayer(layer) => {
-                    document.layer(layer.id).is_none_or(|old| {
-                        old.source != layer.source
-                            || old.mask.as_ref().map(|m| {
-                                (&m.initial, m.id, m.default_coverage, &m.pending_operations)
-                            }) != layer.mask.as_ref().map(|m| {
-                                (&m.initial, m.id, m.default_coverage, &m.pending_operations)
-                            })
-                    })
-                }
                 _ => false,
             }
         }
         let rebuild = rebuild_needed(self.document(), &edit);
-        let changes_composite =
-            edit.changes_image() && !matches!(&edit, Edit::SetActiveLayer { .. });
+        let changes_composite = edit.changes_image(self.editor.document());
         self.editor.perform(edit)?;
         self.batches.extend(operation_batches);
         self.transform_preview = None;
@@ -1262,7 +1188,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             || self
                 .batches
                 .iter()
-                .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+                .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)))
         {
             if !self.backend.can_submit() || !self.backend.can_capture_raster() {
                 return Err(DocumentError::InvalidLayerOperation(
@@ -1320,9 +1246,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !self.backend.can_capture_raster()
             && (self.input.peek().is_some_and(|e| {
                 e.phase == PenPhase::Up || e.flags.contains(SampleFlags::CORRECTION)
-            }) || self.document().layers.iter().any(|l| {
-                l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
-            }))
+            }) || self.document().artwork.paint.iter().any(|(_, _, source)| source.raster.try_data().is_none())
+                || self.document().artwork.coverage.iter().any(|(_, _, source)| source.raster.try_data().is_none()))
         {
             return Ok(());
         }
@@ -1352,7 +1277,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         if !self
             .batches
             .iter()
-            .any(|b| matches!(b.kind, DabBatchKind::LayerOperation(_)))
+            .any(|b| matches!(b.kind, DabBatchKind::RasterOperation(_)))
         {
             self.process_input()?;
         }
@@ -1376,7 +1301,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.composite_all |= rebuilt;
 
         let time = timestamp_ns.filter(|now| *now != 0).map_or(self.animation_time, |now| {
-            now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
+            self.animation_seed + now.saturating_sub(*self.animation_origin_ns.get_or_insert(now)) as f32 * 1e-9
         });
         let bake = self.dabs.is_empty().then(|| bake_steps::BakeSteps::new(self.document(), &self.batches)).flatten();
         self.submit_prepared_frame(PreparedFrame { reset: rebuilt, time, bake })
@@ -1388,19 +1313,21 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     ) -> Result<(), EngineError<B::Error>> {
         let step = frame.bake.map(|bake| bake.next(self.document(), &self.batches));
         let commit_rasters = step.as_ref().is_none_or(|(_, next)| next.is_none());
-        let layers = frame_layers(self.editor.document(), self.layer_preview.as_ref());
+        let scene = self.scene_preview.as_ref().map_or_else(|| self.editor.document().scene(), |preview| preview.scene.view());
         let packet = FramePacket {
             time_seconds: frame.time,
             view: self.view(),
-            document_extent: [self.editor.document().width, self.editor.document().height],
-            layers: layers.as_deref().unwrap_or(&self.editor.document().layers),
+            document_extent: [self.editor.document().composition().size[0], self.editor.document().composition().size[1]],
+            scene,
+            inspect_mask: self.editor.document().working.inspect_mask,
+            selection_visibility: Some(&self.editor.document().working.selection_visibility),
             dabs: &self.dabs,
             dab_batches: step.as_ref().map_or(&self.batches, |(batch, _)| std::slice::from_ref(batch)),
             restore_rasters: &self.restore_rasters,
             reset_layers: frame.reset,
             commit_rasters,
             composite_all: self.composite_all,
-            blend_space: self.editor.document().blend_space,
+            blend_space: self.editor.document().composition().blend,
         };
         if !self.backend.raster_dependencies_ready(packet) {
             self.pending_frame = Some(frame);
@@ -1430,6 +1357,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             self.rebuild_all = true;
         } else {
             self.animation_time = frame.time;
+            self.evaluation_context = self.backend.evaluation_context();
             self.composite_all = false;
             self.raster_dirty = false;
             self.editor.finish_raster_submission();
@@ -1532,14 +1460,11 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     /// cannot create a saveable raster edit. The producer must be quiescent.
     pub fn discard_unsubmitted_input(&mut self) {
         if self.pending_frame.take().is_some() {
-            for layer in &self.document().layers {
-                for root in
-                    std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
-                {
-                    if root.try_data().is_none() {
-                        let _ =
-                            root.publish(Err("Renderer stopped before raster submission".into()));
-                    }
+            for root in self.document().artwork.paint.iter().map(|(_, _, source)| &source.raster)
+                .chain(self.document().artwork.coverage.iter().map(|(_, _, source)| &source.raster))
+            {
+                if root.try_data().is_none() {
+                    let _ = root.publish(Err("Renderer stopped before raster submission".into()));
                 }
             }
             self.dabs.clear();
@@ -1649,7 +1574,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let point = transform.map(event.surface_position);
         let mut ruler = if event.phase == PenPhase::Down {
             self.settings.ruler_snapping
-                .and_then(|reach| layer_core::choose_ruler(&self.document().rulers, point, reach))
+                .and_then(|reach| layer_core::choose_ruler(self.document().rulers(), point, reach))
         } else {
             self.active_ruler_constraint()
         };
@@ -1665,8 +1590,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         let target_id = self
             .active_stroke
             .as_ref()
-            .map_or_else(|| self.document().drawing_target().unwrap_or(self.document().active_target()), |s| s.layer_id);
-        let offset = self.document().layer_offset(target_id);
+            .map_or_else(|| self.document().drawing_target().or(self.document().working.target), |s| Some(s.target));
+        let offset = target_id.map_or_default(|target| self.document().target_offset(target));
         transform.surface_to_document[4] -= offset.x;
         transform.surface_to_document[5] -= offset.y;
         match event.phase {
@@ -1679,7 +1604,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 let mut tool = self.stroke_tool(&event);
                 let Ok(StrokeTarget {
-                    layer: layer_id,
+                    target,
                     mask: is_mask,
                     alpha_locked,
                     inverted,
@@ -1687,7 +1612,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 else {
                     return Ok(());
                 };
-                if self.retouch_refusal(layer_id).is_some() {
+                if self.retouch_refusal(target).is_some() {
                     return Ok(());
                 }
                 let id = self.editor.allocate_stroke_id();
@@ -1724,13 +1649,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 }
                 let mut style = DabStyle::for_brush(&brush, tool);
                 style.brush_to_layer = layer_core::Affine::translation(offset)
-                    .then(self.document().affine_edit_transform(layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
+                    .then(self.document().affine_edit_transform(target).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
                 style.alpha_locked = alpha_locked;
-                style.blend_space = if is_mask { layer_core::BlendSpace::Linear } else { self.document().blend_space };
-                style.retouch = self.settings.retouch.map(|source| Retouch::for_target(self.document(), layer_id, source));
-                style.selection = self.document().selection.as_ref().map(|selection| {
+                style.blend_space = if is_mask { layer_core::BlendSpace::Linear } else { self.document().composition().blend };
+                style.retouch = self.settings.retouch.map(|source| Retouch::for_target(self.document(), target, source));
+                style.selection = self.document().working.selection.as_ref().map(|selection| {
                     std::sync::Arc::new(selection.transformed(
-                        self.document().affine_edit_transform(layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry")
+                        self.document().affine_edit_transform(target).expect("admitted paint geometry").inverse().expect("validated layer geometry")
                     ).expect("invertible selection placement"))
                 });
                 let active = ActiveStroke {
@@ -1743,9 +1668,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         && brush.color_rgba_linear[3] > 0.)
                         .then_some(self.settings.paint_color)
                         .flatten(),
-                    before: self.document().target_raster(layer_id).unwrap().clone(),
+                    before: self.document().target_raster(target).unwrap().clone(),
                     id,
-                    layer_id,
+                    target,
                     tool,
                     brush,
                     style,
@@ -1865,7 +1790,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 let alpha_locked = active.style.alpha_locked;
                 let mut stroke = Stroke::new(
                     active.id,
-                    active.layer_id,
+                    active.target,
                     active.tool,
                     active.brush,
                     points,
@@ -1883,7 +1808,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 self.completed_clone_start = active.clone_start;
                 self.editor
                     .perform(Edit::SetRaster {
-                        target: active.layer_id,
+                        target: active.target,
                         revision: layer_core::raster::RasterRevision::pending(),
                     })
                     .map_err(EngineError::Document)?;
@@ -1926,7 +1851,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return;
         }
         let stroke_id = active.id;
-        let layer_id = active.layer_id;
+        let target = active.target;
         let style = active.style.clone();
         let stroke_start = !active.persistent_started;
         let material_update = active
@@ -1951,7 +1876,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 DabBatch {
                     material_update,
                     stroke_id,
-                    layer_id,
+                    target,
                     kind: DabBatchKind::Persistent,
                     stroke_start,
                     stroke_end: false,
@@ -1972,7 +1897,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             return;
         }
         let stroke_id = active.id;
-        let layer_id = active.layer_id;
+        let target = active.target;
         let style = active.style.clone();
 
         let mut consumed = 0;
@@ -2003,7 +1928,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 DabBatch {
                     material_update: 0,
                     stroke_id,
-                    layer_id,
+                    target,
                     kind: DabBatchKind::Persistent,
                     stroke_start,
                     stroke_end: false,
@@ -2040,7 +1965,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.batches.push(DabBatch {
             material_update: 0,
             stroke_id: active.id,
-            layer_id: active.layer_id,
+            target: active.target,
             kind: DabBatchKind::Persistent,
             stroke_start: !active.persistent_started,
             stroke_end: true,
@@ -2188,7 +2113,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             DabBatch {
                 material_update: 0,
                 stroke_id: active.id,
-                layer_id: active.layer_id,
+                target: active.target,
                 kind: DabBatchKind::Preview,
                 stroke_start: !active.persistent_started,
                 stroke_end: false,
@@ -2211,16 +2136,16 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         {
             self.rebuild_completed = false;
             if let Some(before) = &self.completed_before {
-                self.restore_rasters.push((stroke.layer_id, before.clone()));
+                self.restore_rasters.push((stroke.target, before.clone()));
             }
             let mut style = DabStyle::for_brush(&stroke.brush, stroke.tool);
-            style.brush_to_layer = layer_core::Affine::translation(self.document().layer_offset(stroke.layer_id))
-                .then(self.document().affine_edit_transform(stroke.layer_id).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
+            style.brush_to_layer = layer_core::Affine::translation(self.document().target_offset(stroke.target))
+                .then(self.document().affine_edit_transform(stroke.target).expect("admitted paint geometry").inverse().expect("validated layer geometry"));
             style.alpha_locked = stroke.alpha_locked;
             style.blend_space = stroke.blend_space;
             style.selection = stroke.selection.clone();
             style.retouch = stroke.retouch.clone();
-            let mut generator = DabGenerator::new(self.document().color.space);
+            let mut generator = DabGenerator::new(self.document().composition().color.space);
             generator.reset_for_replay(stroke);
             let mut started = false;
             for (point_index, point) in stroke.points.iter().copied().enumerate() {
@@ -2241,7 +2166,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                             .partition_point(|end| *end as usize <= point_index)
                             as u32,
                         stroke_id: stroke.id,
-                        layer_id: stroke.layer_id,
+                        target: stroke.target,
                         kind: DabBatchKind::Persistent,
                         stroke_start: !started,
                         stroke_end: false,
@@ -2264,7 +2189,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             }
         }
         if let Some(active) = self.active_stroke.as_ref() {
-            let mut generator = DabGenerator::new(self.document().color.space);
+            let mut generator = DabGenerator::new(self.document().composition().color.space);
             generator.reset_for_stroke(active.id, &active.brush);
             generator.set_barrel_twist(active.barrel_twist);
             let point_count = if active.feedback.enabled {
@@ -2288,7 +2213,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                         DabBatch {
                             material_update: 0,
                             stroke_id: active.id,
-                            layer_id: active.layer_id,
+                            target: active.target,
                             kind: DabBatchKind::Persistent,
                             stroke_start: true,
                             stroke_end: false,
@@ -2321,7 +2246,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                             .partition_point(|end| *end as usize <= point_index)
                             as u32,
                         stroke_id: active.id,
-                        layer_id: active.layer_id,
+                        target: active.target,
                         kind: DabBatchKind::Persistent,
                         stroke_start: !started,
                         stroke_end: false,
@@ -2366,7 +2291,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 }
 
 /// `retouch` copying through the document offset `offset`, in `layer`'s pixels.
-fn clone_mapping(document: &Document, layer: LayerId, retouch: Retouch, offset: [f32; 2], flip: [bool; 2]) -> Retouch {
+fn clone_mapping(document: &Document, layer: SourceTarget, retouch: Retouch, offset: [f32; 2], flip: [bool; 2]) -> Retouch {
     let layer_core::Affine([.., x, y]) = document.affine_edit_transform(layer).expect("admitted retouch geometry");
     retouch.cloning(offset, flip, layer_core::Point { x, y })
 }
@@ -2445,7 +2370,7 @@ fn push_mergeable_batch(batches: &mut Vec<DabBatch>, dabs: &[Dab], batch: DabBat
                 )))
         && last.stroke_id == batch.stroke_id
         && last.material_update == batch.material_update
-        && last.layer_id == batch.layer_id
+        && last.target == batch.target
         && last.kind == batch.kind
         && !last.stroke_end
         && last.first_dab.saturating_add(last.dab_count) == batch.first_dab
@@ -2527,6 +2452,95 @@ mod tests {
     include!("canvas_fullscreen_tests.rs");
     include!("recording/canvas_tests.rs");
     use super::*;
+    fn assert_authored_eq(left: &layer_core::authored::Artwork, right: &layer_core::authored::Artwork) {
+        assert_eq!(left.id, right.id);
+        assert_eq!(left.root, right.root);
+        assert_eq!(left.default_output, right.default_output);
+        assert_eq!(left.metadata, right.metadata);
+        assert_eq!(left.extensions, right.extensions);
+        macro_rules! records { ($($field:ident),*) => { $(assert_eq!(left.$field.iter().collect::<Vec<_>>(), right.$field.iter().collect::<Vec<_>>()));* }; }
+        records!(compositions, stacks, occurrences, paint, coverage, effects, definitions, selections, guides, outputs);
+    }
+    fn active_paint(document: &Document) -> &layer_core::authored::PaintSource {
+        let SourceTarget::Paint(handle) = document.working.target.unwrap() else { panic!("paint target"); };
+        document.artwork.paint.get(handle).unwrap()
+    }
+    fn active_paint_mut(document: &mut Document) -> &mut layer_core::authored::PaintSource {
+        let SourceTarget::Paint(handle) = document.working.target.unwrap() else { panic!("paint target"); };
+        document.artwork.paint.get_mut(handle).unwrap()
+    }
+    fn composition_mut(document: &mut Document) -> &mut layer_core::authored::Composition {
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap()
+    }
+    fn active_occurrence(document: &Document) -> &layer_core::authored::Occurrence {
+        document.artwork.occurrences.get(document.working.occurrence.unwrap()).unwrap()
+    }
+    fn active_occurrence_mut(document: &mut Document) -> &mut layer_core::authored::Occurrence {
+        document.artwork.occurrences.get_mut(document.working.occurrence.unwrap()).unwrap()
+    }
+    fn paint_insert(document: &Document, source: layer_core::authored::PaintSource, name: &str, position: usize) -> (layer_core::authored::OccurrenceHandle, SourceTarget, Vec<Edit>) {
+        let paint = layer_core::RecordChange::insert(&document.artwork.paint, source);
+        let target = SourceTarget::Paint(paint.handle);
+        let occurrence = layer_core::RecordChange::insert(&document.artwork.occurrences,
+            layer_core::authored::Occurrence::new(layer_core::authored::OccurrenceContent::Paint(paint.handle), name));
+        let handle = occurrence.handle;
+        let stack = document.composition().result;
+        let mut entries = document.artwork.stacks.get(stack).unwrap().clone(); entries.entries.insert(position, handle);
+        (handle, target, vec![Edit::Paint(paint), Edit::Occurrence(occurrence),
+            Edit::Stack(layer_core::RecordChange::replace(&document.artwork.stacks, stack, Some(entries)).unwrap())])
+    }
+    fn empty_paint(document: &Document) -> layer_core::authored::PaintSource {
+        layer_core::authored::PaintSource { domain:document.composition().size, raster:Default::default(), original:None, operations:Arc::default() }
+    }
+    fn mask_edit(engine: &mut CanvasEngine<RecordingRenderer>, translation: Point) -> Edit {
+        let mut candidate = engine.document().clone();
+        let handle = candidate.allocate_coverage_handle();
+        let coverage = layer_core::CoverageSnapshot::reveal_all(handle, candidate.composition().size, translation);
+        let mut occurrence = active_occurrence(&candidate).clone(); occurrence.mask = Some(coverage.use_);
+        Edit::Batch(vec![Edit::Coverage(layer_core::RecordChange::insert(&engine.document().artwork.coverage, coverage.source)),
+            replace_occurrence(engine.document(), occurrence)])
+    }
+    fn photo_handle() -> layer_core::authored::OccurrenceHandle { layer_core::authored::OccurrenceHandle::from_index(2) }
+    fn replace_occurrence(document: &Document, value: layer_core::authored::Occurrence) -> Edit {
+        Edit::Occurrence(layer_core::RecordChange::replace(&document.artwork.occurrences, document.working.occurrence.unwrap(), Some(value)).unwrap())
+    }
+    fn references(document: &Document, members: std::collections::BTreeSet<layer_core::authored::OccurrenceHandle>) -> Edit {
+        Edit::Batch(document.artwork.occurrences.iter().filter_map(|(handle, _, occurrence)| {
+            let reference = members.contains(&handle);
+            (reference != occurrence.reference).then(|| {
+                let mut value = occurrence.clone(); value.reference = reference;
+                Edit::Occurrence(layer_core::RecordChange::replace(&document.artwork.occurrences, handle, Some(value)).unwrap())
+            })
+        }).collect())
+    }
+    fn selection_edit(document: &Document, selection: Option<layer_core::Selection>) -> Edit {
+        let mut working = document.working.clone(); working.selection = selection; Edit::Working(working)
+    }
+    fn mask_target_edit(document: &Document, mask: bool) -> Edit {
+        let mut working = document.working.clone();
+        working.target = if mask { Some(SourceTarget::Coverage(active_occurrence(document).mask.as_ref().unwrap().source)) }
+            else { document.scene().source_target(working.occurrence.unwrap()) };
+        Edit::Working(working)
+    }
+    fn add_mask(document: &mut Document, translation: Point) -> layer_core::authored::CoverageHandle {
+        let coverage = layer_core::CoverageSnapshot::reveal_all(document.allocate_coverage_handle(), document.composition().size, translation);
+        let target = coverage.target;
+        document.artwork.coverage.install(target, coverage.source).unwrap();
+        let mut occurrence = active_occurrence(document).clone(); occurrence.mask = Some(coverage.use_);
+        document.apply(replace_occurrence(document, occurrence)).unwrap();
+        target
+    }
+    fn rulers_edit(document: &Document, rulers: Vec<layer_core::Ruler>) -> Edit {
+        let value = layer_core::authored::Guides { rulers:rulers.into_iter().map(|r| (r.id,r.geometry)).collect() };
+        if let Some((handle, _, _)) = document.artwork.guides.iter().next() {
+            Edit::Guides(layer_core::RecordChange::replace(&document.artwork.guides, handle, Some(value)).unwrap())
+        } else { Edit::Guides(layer_core::RecordChange::insert(&document.artwork.guides, value)) }
+    }
+    fn color_edit(document: &Document, color: layer_core::color::DocumentColor) -> Edit {
+        let mut composition = document.composition().clone(); composition.color = color;
+        Edit::Composition(layer_core::RecordChange::replace(&document.artwork.compositions, document.artwork.root, Some(composition)).unwrap())
+    }
+
     use crate::feedback::surface_distance;
     use crate::input::{InputProducer, SampleFlags, ToolKind, input_queue};
     use crate::test_support::{event, view};
@@ -2539,16 +2553,58 @@ mod tests {
     };
 
     fn engine(
-        name: &str,
+        _name: &str,
         width: u32,
         height: u32,
     ) -> (InputProducer<PenEvent>, CanvasEngine<RecordingRenderer>) {
         engine_with(
             RecordingRenderer::default(),
-            Document::new(name, width, height, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::authored::PortableId::random(), width, height, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             view(width, height),
             TRANSFORM,
         )
+    }
+
+    #[test]
+    fn capture_uses_successful_renderer_phases_and_seeds_replacement() {
+        use layer_core::authored::{Definition, EffectApplication, EvaluationContext, PortableId};
+        let mut document = Document::new(PortableId::random(), 64, 64, layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let program = layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
+        let values = layer_core::EffectInstance::new(program.clone()).values;
+        let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program, dimensions:Default::default()}).unwrap();
+        let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values,domain:[64,64]}).unwrap();
+        let saved = EvaluationContext {elapsed:3.,phases:vec![(effect,7.)].into()};
+        document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().context = saved.clone();
+        let (_, mut canvas) = engine_with(RecordingRenderer::default(), document, view(64,64), TRANSFORM);
+        assert_eq!(canvas.backend().evaluation_context(), saved);
+        canvas.backend_mut().phases = vec![(effect,-2.)];
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        let captured = canvas.capture_artwork(9).unwrap();
+        assert_eq!(captured.output().context.phases.as_slice(), &[(effect,-2.)]);
+        assert_eq!(captured.checkpoint.session_generation,9);
+        assert_eq!(captured.checkpoint.owner,canvas.document().owner);
+        assert_eq!(captured.artwork.paint,canvas.document().artwork.paint);
+        assert_eq!(canvas.document().output().context,saved);
+        canvas.backend_mut().fail_submit = true;
+        assert!(canvas.render_frame_at(2_000_000_000).is_err());
+        assert_eq!(canvas.capture_artwork(9).unwrap().output().context,captured.output().context);
+        canvas.replace_backend(RecordingRenderer::default()).unwrap();
+        assert_eq!(canvas.backend().evaluation_context(),captured.output().context);
+        assert_eq!(canvas.scene_snapshot().context,captured.output().context);
+    }
+
+    #[test]
+    fn contact_preview_and_camera_wait_do_not_replace_the_capture_boundary() {
+        let (mut input, mut canvas) = engine("Capture boundary",64,64);
+        canvas.render_frame_at(1_000_000_000).unwrap();
+        let before = canvas.capture_artwork(3).unwrap();
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        canvas.backend_mut().restore_blocked = true;
+        canvas.render_frame_at(2_000_000_000).unwrap();
+        assert!(canvas.has_active_stroke());
+        let contact = canvas.capture_artwork(3).unwrap();
+        assert_eq!(before.artwork.paint,contact.artwork.paint);
+        assert_eq!(before.output().context,contact.output().context);
     }
 
     #[test]
@@ -2587,18 +2643,21 @@ mod tests {
         capture_blocked: bool,
         restore_blocked: bool,
         time_seconds: f32,
+        phases: Vec<(layer_core::authored::EffectHandle, f32)>,
+        fail_submit: bool,
         fail_resize: bool,
         size: [u32; 2],
         persistent_dabs: usize,
         persistent: Vec<Dab>,
         persistent_batches: Vec<(StrokeId, bool, bool, u32)>,
         material_batches: Vec<(u32, u32)>,
-        operation_batches: Vec<(LayerId, u32, layer_core::Rect, bool)>,
+        operation_batches: Vec<(SourceTarget, u32, layer_core::Rect, bool)>,
         preview: Vec<Dab>,
         styles: Vec<DabStyle>,
         saw_reset: bool,
         transform: Option<layer_render::TransformPreview>,
-        visibility: Vec<(LayerId, bool)>,
+        visibility: Vec<(layer_core::authored::OccurrenceHandle, bool)>,
+        bake_members: Vec<Vec<layer_core::authored::OccurrenceHandle>>,
         retouch: Vec<Option<RetouchPreparation>>,
         retouch_misses: Vec<StrokeId>,
         retired_sources: usize,
@@ -2606,6 +2665,13 @@ mod tests {
 
     impl CanvasRenderer for RecordingRenderer {
         type Error = BackendError;
+        fn evaluation_context(&self) -> layer_core::authored::EvaluationContext {
+            layer_core::authored::EvaluationContext { elapsed:self.time_seconds, phases:self.phases.clone().into() }
+        }
+        fn seed_evaluation_context(&mut self, context: layer_core::authored::EvaluationContext) {
+            self.time_seconds = context.elapsed;
+            self.phases = context.phases.as_ref().clone();
+        }
         fn document_color(&self) -> layer_core::color::DocumentColor {
             self.color
         }
@@ -2659,12 +2725,24 @@ mod tests {
         fn release_asset(&mut self, _asset: &AssetId) {}
 
         fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
+            if self.fail_submit { return Err(BackendError("submission failed")); }
             self.time_seconds = packet.time_seconds;
+            self.bake_members = packet.dab_batches.iter().filter_map(|batch| {
+                let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
+                let operation = packet.scene.operations(batch.target)?.get(index as usize)?;
+                match &operation.kind {
+                    layer_core::RasterOperationKind::Bake { scene, scope:layer_core::SceneScope::Members(members), .. } => {
+                        assert!(members.iter().all(|h| scene.view().occurrence(*h).is_some()));
+                        Some(members.to_vec())
+                    }
+                    _ => None,
+                }
+            }).collect();
             self.operation_batches.extend(packet.dab_batches.iter().filter_map(|batch| {
-                let DabBatchKind::LayerOperation(index) = batch.kind else { return None; };
-                Some((batch.layer_id, index, batch.damage, packet.commit_rasters))
+                let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
+                Some((batch.target, index, batch.damage, packet.commit_rasters))
             }));
-            self.visibility = packet.layers.iter().map(|l| (l.id, l.visible)).collect();
+            self.visibility = packet.scene.order().iter().map(|h| (*h, packet.scene.occurrence(*h).unwrap().visible)).collect();
             if self.size != [packet.view.width_px, packet.view.height_px] {
                 return Err(BackendError("surface size mismatch"));
             }
@@ -2677,29 +2755,17 @@ mod tests {
                 self.persistent.clear();
                 self.material_batches.clear();
             }
-            for layer in packet.layers.iter().filter(|_| packet.commit_rasters) {
-                for revision in
-                    std::iter::once(&layer.raster).chain(layer.mask.iter().map(|m| &m.raster))
-                {
-                    if revision.try_data().is_none() {
-                        // A renderer contract double publishes a distinct committed tile.
-                        use layer_core::raster::*;
-                        let descriptor = RasterPlane::Color.descriptor(self.color);
-                        let blob = TileBlob::encode(
-                            descriptor,
-                            &vec![1; descriptor.byte_len([TILE_SIZE; 2]).unwrap()],
-                        )
-                        .unwrap();
-                        let mut data = RasterData::default();
-                        data.tiles.insert(
-                            TileKey {
-                                plane: RasterPlane::Color,
-                                coordinate: [0, 0],
-                            },
-                            RasterTile::backed(blob),
-                        );
-                        revision.publish(Ok(data)).unwrap();
-                    }
+            for (revision, plane) in packet.scene.artwork().paint.iter().map(|(_, _, source)| (&source.raster, layer_core::raster::RasterPlane::Color))
+                .chain(packet.scene.artwork().coverage.iter().map(|(_, _, source)| (&source.raster, layer_core::raster::RasterPlane::Mask)))
+                .filter(|_| packet.commit_rasters)
+            {
+                if revision.try_data().is_none() {
+                    use layer_core::raster::*;
+                    let descriptor = plane.descriptor(self.color);
+                    let blob = TileBlob::encode(descriptor, &vec![1; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
+                    let mut data = RasterData::default();
+                    data.tiles.insert(TileKey { plane, coordinate: [0, 0] }, RasterTile::backed(blob));
+                    revision.publish(Ok(data)).unwrap();
                 }
             }
             self.preview.clear();
@@ -2710,7 +2776,7 @@ mod tests {
                 let end = start + batch.dab_count as usize;
                 let dabs = &packet.dabs[start..end];
                 match batch.kind {
-                    DabBatchKind::LayerOperation(_) => {}
+                    DabBatchKind::RasterOperation(_) => {}
                     DabBatchKind::Persistent => {
                         if batch.dab_count > 0 {
                             self.material_batches
@@ -2734,9 +2800,9 @@ mod tests {
     }
 
     fn retouch_document() -> Document {
-        let mut document = Document::new("retouch", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let photo = layer_core::Layer::paint(LayerId(40), "Photo");
-        document.layers.push(photo);
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let (_, _, edits) = paint_insert(&document, empty_paint(&document), "Photo", document.scene().order().len());
+        document.apply(Edit::Batch(edits)).unwrap();
         document
     }
 
@@ -2744,15 +2810,15 @@ mod tests {
     fn retouch_strokes_capture_their_source_and_replay_with_it() {
         let (mut input, mut engine) =
             engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
-        let target = engine.document().active_layer;
+        let target = engine.document().working.target.unwrap();
         engine
-            .apply_edit(Edit::SetReferences([LayerId(40)].into()))
+            .apply_edit(references(engine.document(), [photo_handle()].into()))
             .unwrap();
         engine.set_retouch(Some(RetouchSource::References));
         engine.set_retouch_points(&[Point { x: 8., y: 8. }]);
         let prepared = engine.backend().retouch.last().cloned().flatten().unwrap();
         assert_eq!(prepared.target, target);
-        assert_eq!(*prepared.retouch.references, [LayerId(40)].into());
+        assert_eq!(*prepared.retouch.references, [photo_handle()].into());
         assert_eq!(prepared.points, [Point { x: 128., y: 128. }], "a focus point is kept as its tile's center");
         let sent = engine.backend().retouch.len();
         engine.render_frame().unwrap();
@@ -2776,7 +2842,7 @@ mod tests {
         engine.completed_at = Some(web_time::Instant::now() - CORRECTION_WINDOW);
         engine.render_frame().unwrap();
         assert_eq!(engine.backend().retired_sources, retired + 1);
-        engine.apply_edit(Edit::SetReferences(Default::default())).unwrap();
+        engine.apply_edit(references(engine.document(), Default::default())).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.backend().retouch.last().cloned().flatten().unwrap().retouch.references.is_empty());
         engine.set_retouch(None);
@@ -2788,11 +2854,11 @@ mod tests {
         for late in [false, true] {
             let (mut input, mut engine) =
                 engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
-            engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+            engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
             engine.set_retouch(Some(RetouchSource::References));
             engine.render_frame().unwrap();
             engine.backend_mut().saw_reset = false;
-            let target = engine.document().active_layer;
+            let target = engine.document().working.target.unwrap();
             let empty = engine.document().target_raster(target).unwrap().identity();
             input.push(event(1, PenPhase::Down, 8.)).unwrap();
             engine.render_frame().unwrap();
@@ -2833,8 +2899,8 @@ mod tests {
 
     #[test]
     fn dabs_follow_the_documents_blending_and_masks_blend_linearly() {
-        let mut document = Document::new("blending", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.blend_space = layer_core::BlendSpace::Perceptual;
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        composition_mut(&mut document).blend = layer_core::BlendSpace::Perceptual;
         let (mut input, mut engine) = engine_with(RecordingRenderer::default(), document, view(64, 64), TRANSFORM);
         let mut spaces = Vec::new();
         let mut paint = |engine: &mut CanvasEngine<RecordingRenderer>, input: &mut InputProducer<PenEvent>, sequence: u64| {
@@ -2854,10 +2920,9 @@ mod tests {
         engine.render_frame().unwrap();
         let replayed = &engine.backend().styles;
         assert!(!replayed.is_empty() && replayed.iter().all(|s| s.blend_space == layer_core::BlendSpace::Perceptual), "a replay keeps the stroke's space");
-        let mut masked = engine.document().layer(engine.document().active_layer).unwrap().clone();
-        masked.mask = Some(layer_core::LayerMask::reveal_all(LayerId(41), Point::default()));
-        engine.apply_edit(Edit::ReplaceLayer(Box::new(masked))).unwrap();
-        engine.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+        let edit = mask_edit(&mut engine, Point::default());
+        engine.apply_edit(edit).unwrap();
+        engine.apply_edit(mask_target_edit(engine.document(), true)).unwrap();
         let mask = paint(&mut engine, &mut input, 10);
         assert!(mask.iter().all(|s| *s == layer_core::BlendSpace::Linear), "mask coverage blends linearly");
     }
@@ -2872,14 +2937,13 @@ mod tests {
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::References)));
         engine.set_retouch(Some(RetouchSource::Editing));
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::Editing)));
-        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::EmptySource(RetouchSource::Editing)));
         engine.set_retouch(Some(RetouchSource::References));
         assert_eq!(engine.stroke_refusal(&down), None);
-        let mut masked = engine.document().layer(engine.document().active_layer).unwrap().clone();
-        masked.mask = Some(layer_core::LayerMask::reveal_all(LayerId(41), Point::default()));
-        engine.apply_edit(Edit::ReplaceLayer(Box::new(masked))).unwrap();
-        engine.apply_edit(Edit::SetMaskTarget(true)).unwrap();
+        let edit = mask_edit(&mut engine, Point::default());
+        engine.apply_edit(edit).unwrap();
+        engine.apply_edit(mask_target_edit(engine.document(), true)).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::Target(DrawingRefusal::Mask)));
         engine.set_retouch(None);
         assert_eq!(engine.stroke_refusal(&down), None, "ordinary brushes still paint masks");
@@ -2900,7 +2964,7 @@ mod tests {
     fn clone_strokes_copy_through_their_source_and_an_aligned_source_follows_them() {
         let (mut input, mut engine) =
             engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
-        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
         engine.set_brush(default_brush(DefaultBrushPreset::CloneStamp)).unwrap();
         engine.set_retouch(Some(RetouchSource::References));
         let down = event(1, PenPhase::Down, 8.);
@@ -2929,9 +2993,9 @@ mod tests {
         assert_eq!(loose.retouch.as_ref().unwrap().offset, [40. - start.x, 30. - start.y], "each stroke starts at the source");
         assert_eq!(engine.clone_source().point, Some(at(40., 30.)));
 
-        let mut moved = engine.document().layer(engine.document().active_layer).unwrap().clone();
-        moved.properties.offset = at(4., 6.);
-        engine.apply_edit(Edit::ReplaceLayer(Box::new(moved.clone()))).unwrap();
+        let mut moved = active_occurrence(engine.document()).clone();
+        moved.translation = at(4., 6.);
+        engine.apply_edit(replace_occurrence(engine.document(), moved.clone())).unwrap();
         engine.set_clone_source(CloneSource { point: Some(at(40., 30.)), flip: [true, false], ..CloneSource::default() });
         let flipped = clone_stroke(&mut engine, &mut input, 40, 20.);
         let first = flipped.points[0].position;
@@ -2940,15 +3004,15 @@ mod tests {
         assert_eq!(mapping.flip, [true, false]);
         assert_eq!(mapping.offset, [40. + first.x - 8., 30. - first.y], "layer pixels map through the layer's position");
 
-        moved.properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
-        engine.apply_edit(Edit::ReplaceLayer(Box::new(moved))).unwrap();
+        moved.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 2., 0., 0.]));
+        engine.apply_edit(replace_occurrence(engine.document(), moved)).unwrap();
         assert_eq!(engine.stroke_refusal(&down), Some(StrokeRefusal::TransformedLayer));
     }
 
     #[test]
     fn queued_clone_contacts_share_alignment_without_overwriting_a_later_source() {
         let (mut input, mut engine) = engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
-        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
         engine.set_brush(default_brush(DefaultBrushPreset::CloneStamp)).unwrap();
         engine.set_retouch(Some(RetouchSource::References));
         let source = |x| CloneSource { point: Some(Point { x, y: 30. }), ..CloneSource::default() };
@@ -2976,7 +3040,7 @@ mod tests {
     fn healing_maps_through_the_source_and_spot_healing_needs_none() {
         let (mut input, mut engine) =
             engine_with(RecordingRenderer::default(), retouch_document(), view(64, 64), TRANSFORM);
-        engine.apply_edit(Edit::SetReferences([LayerId(40)].into())).unwrap();
+        engine.apply_edit(references(engine.document(), [photo_handle()].into())).unwrap();
         engine.set_retouch(Some(RetouchSource::References));
         let down = event(1, PenPhase::Down, 8.);
         engine.set_brush(default_brush(DefaultBrushPreset::HealingBrush)).unwrap();
@@ -2993,7 +3057,7 @@ mod tests {
         let spot = clone_stroke(&mut engine, &mut input, 20, 30.);
         let retouch = spot.retouch.unwrap();
         assert_eq!(retouch.offset, [0.; 2]);
-        assert_eq!(*retouch.references, [LayerId(40)].into());
+        assert_eq!(*retouch.references, [photo_handle()].into());
         assert_eq!(engine.clone_source(), CloneSource::default(), "spot healing leaves the clone source alone");
     }
 
@@ -3041,13 +3105,13 @@ mod tests {
             assert!(canvas.undo().unwrap());
             canvas.render_frame().unwrap();
             assert_eq!(
-                canvas.document().layers[0].raster,
-                document.layers[0].raster
+                active_paint(canvas.document()).raster,
+                active_paint(&document).raster
             );
             assert_eq!(canvas.checkpoint(), checkpoint);
             assert!(canvas.undo().unwrap());
             canvas.render_frame().unwrap();
-            assert!(canvas.document().layers[0].raster.is_empty());
+            assert!(active_paint(canvas.document()).raster.is_empty());
             canvas
                 .replace_backend(RecordingRenderer::default())
                 .unwrap();
@@ -3061,8 +3125,8 @@ mod tests {
                 "history restoration uses raster roots"
             );
             assert_eq!(
-                canvas.document().layers[0].raster,
-                document.layers[0].raster
+                active_paint(canvas.document()).raster,
+                active_paint(&document).raster
             );
             assert_eq!(canvas.checkpoint(), checkpoint);
         }
@@ -3074,7 +3138,7 @@ mod tests {
         input.push(event(1, PenPhase::Down, 20.)).unwrap();
         input.push(event(2, PenPhase::Up, 80.)).unwrap();
         canvas.render_frame().unwrap();
-        let root = canvas.document().layers[0].raster.clone();
+        let root = active_paint(canvas.document()).raster.clone();
         let checkpoint = canvas.checkpoint();
         for index in 0..=INPUT_BATCH + 1 {
             let phase = if index == 0 {
@@ -3088,13 +3152,13 @@ mod tests {
         }
         canvas.discard_unsubmitted_input();
         assert!(!canvas.has_active_stroke() && !canvas.has_pending_input());
-        assert_eq!(canvas.document().layers[0].raster, root);
+        assert_eq!(active_paint(canvas.document()).raster, root);
         assert_eq!(canvas.checkpoint(), checkpoint);
         assert_eq!(canvas.metrics().committed_strokes, 1);
         assert!(canvas.undo().unwrap());
-        assert!(canvas.document().layers[0].raster.is_empty());
+        assert!(active_paint(canvas.document()).raster.is_empty());
         assert!(canvas.redo().unwrap());
-        assert_eq!(canvas.document().layers[0].raster, root);
+        assert_eq!(active_paint(canvas.document()).raster, root);
         canvas.discard_unsubmitted_input();
         assert_eq!(canvas.checkpoint(), checkpoint, "retirement is idempotent");
     }
@@ -3195,7 +3259,7 @@ mod tests {
 
     #[test]
     fn strokes_capture_layer_local_selection_for_preview_commit_and_replay() {
-        use layer_core::{LayerMask, Selection};
+        use layer_core::Selection;
         use std::sync::Arc;
         for mask_target in [false, true] {
             let selection = Selection::polygon(vec![
@@ -3205,23 +3269,15 @@ mod tests {
                 Point { x: 4., y: 40. },
             ])
             .unwrap();
-            let mut doc = Document::new("selected brush", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            doc.selection = Some(selection.clone());
-            let layer = doc
-                .layers
-                .iter_mut()
-                .find(|l| l.id == doc.active_layer)
-                .unwrap();
-            layer.properties.offset = Point { x: 3., y: 7. };
+            let mut doc = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            doc.working.selection = Some(selection.clone());
+            active_occurrence_mut(&mut doc).translation = Point { x: 3., y: 7. };
             let offset = if mask_target {
-                let mut mask = LayerMask::reveal_all(LayerId(99), Point { x: 11., y: 2. });
-                mask.linked = false;
-                layer.mask = Some(mask);
+                add_mask(&mut doc, Point { x: 11., y: 2. });
+                active_occurrence_mut(&mut doc).mask.as_mut().unwrap().linked = false;
                 Point { x: 11., y: 2. }
-            } else {
-                layer.properties.offset
-            };
-            doc.apply(Edit::SetMaskTarget(mask_target)).unwrap();
+            } else { active_occurrence(&doc).translation };
+            doc.apply(mask_target_edit(&doc, mask_target)).unwrap();
             let expected = Arc::new(selection.translated(Point {
                 x: -offset.x,
                 y: -offset.y,
@@ -3253,19 +3309,19 @@ mod tests {
             let mut inverse = selection;
             inverse.inverted = true;
             engine
-                .apply_edit(Edit::SetSelection(Some(inverse)))
+                .apply_edit(selection_edit(engine.document(), Some(inverse)))
                 .unwrap();
             producer.push(event(2, PenPhase::Up, 48.)).unwrap();
             engine.render_frame().unwrap();
             let stroke = engine.completed_stroke.as_ref().unwrap();
             assert_eq!(stroke.selection.as_ref(), Some(&expected));
-            assert_eq!(stroke.layer_id, engine.document().active_target());
+            assert_eq!(Some(stroke.target), engine.document().active_target());
             let committed = engine
                 .document()
-                .target_raster(stroke.layer_id)
+                .target_raster(stroke.target)
                 .unwrap()
                 .identity();
-            engine.apply_edit(Edit::SetSelection(None)).unwrap();
+            engine.apply_edit(selection_edit(engine.document(), None)).unwrap();
             engine.rebuild_all = true;
             engine.render_frame().unwrap();
             assert!(engine.backend.styles.is_empty());
@@ -3275,7 +3331,7 @@ mod tests {
             assert!(
                 engine
                     .document()
-                    .target_raster(engine.document().active_target())
+                    .target_raster(engine.document().active_target().unwrap())
                     .unwrap()
                     .is_empty()
             );
@@ -3285,7 +3341,7 @@ mod tests {
             assert_eq!(
                 engine
                     .document()
-                    .target_raster(engine.document().active_target())
+                    .target_raster(engine.document().active_target().unwrap())
                     .unwrap()
                     .identity(),
                 committed
@@ -3315,7 +3371,7 @@ mod tests {
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: initial.active_layer,
+            target: initial.working.target.unwrap(),
             selection: None,
             transform: layer_core::ImageTransform::default(),
         };
@@ -3325,7 +3381,7 @@ mod tests {
             engine.render_frame().unwrap();
             assert_eq!(engine.backend.transform.as_ref(), Some(&preview));
             assert_eq!(engine.document().revision, initial.revision);
-            assert_eq!(engine.document().layers, initial.layers);
+            assert_authored_eq(&engine.document().artwork, &initial.artwork);
             assert!(!engine.can_undo());
         }
         engine.set_transform_preview(None).unwrap();
@@ -3343,19 +3399,19 @@ mod tests {
         engine.render_frame().unwrap();
         assert!(engine.backend.transform.is_none());
         engine.set_transform_preview(Some(preview)).unwrap();
-        engine.set_layer_opacity(initial.active_layer, 0.5).unwrap();
+        engine.set_layer_opacity(initial.working.occurrence.unwrap(), 0.5).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.backend.transform.is_none());
     }
 
     #[test]
     fn linked_mask_transform_commits_both_histories_and_selection_as_one_edit() {
-        use layer_core::{Affine, ImageTransform, LayerMask, LayerOperationKind, Selection};
+        use layer_core::{Affine, ImageTransform, RasterOperationKind, Selection};
         for primary_mask in [false, true] {
-            let mut doc = Document::new("linked transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            doc.layers[0].properties.offset = Point { x: 7., y: 3. };
-            doc.layers[0].mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: 15., y: 11. }));
-            doc.selection = Some(
+            let mut doc = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            active_occurrence_mut(&mut doc).translation = Point { x: 7., y: 3. };
+            let mask_handle = add_mask(&mut doc, Point { x: 15., y: 11. });
+            doc.working.selection = Some(
                 Selection::polygon(vec![
                     Point { x: 20., y: 20. },
                     Point { x: 60., y: 20. },
@@ -3365,16 +3421,16 @@ mod tests {
             );
             let before = doc.clone();
             let target = if primary_mask {
-                LayerId(9)
+                SourceTarget::Coverage(mask_handle)
             } else {
-                doc.active_layer
+                doc.working.target.unwrap()
             };
-            let origin = doc.layer_offset(target);
+            let origin = doc.target_offset(target);
             let preview = layer_render::TransformPreview {
                 transaction: 1,
                 moving: false,
-                layer: target,
-                selection: doc.selection.as_ref().map(|s| {
+                target,
+                selection: doc.working.selection.as_ref().map(|s| {
                     s.translated(Point {
                         x: -origin.x,
                         y: -origin.y,
@@ -3387,25 +3443,27 @@ mod tests {
                     Point { x: 5., y: 8. },
                 )),
             };
-            let companion = preview.companion(&doc.layers).unwrap();
+            let companion = preview.companion(doc.scene()).unwrap();
             let (_, mut engine) =
                 engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
             engine.render_frame().unwrap();
             engine.set_transform_preview(Some(preview.clone())).unwrap();
             let moved = engine.display_selection().unwrap().into_owned();
             assert!(engine.commit_transform(None).unwrap());
-            let layer = &engine.document().layers[0];
+            let document = engine.document();
             for p in [&preview, &companion] {
-                let ops = layer.target_operations(p.layer).unwrap();
+                let ops = document.target_operations(p.target).unwrap();
                 assert_eq!(ops.len(), 1);
-                assert_eq!(ops[0].kind, LayerOperationKind::Transform(p.transform.clone()));
-                assert_eq!(ops[0].coverage.initial, p.selection);
+                assert_eq!(ops[0].kind, RasterOperationKind::Transform(p.transform.clone()));
+                assert_eq!(ops[0].coverage.source.initial, p.selection);
             }
             assert_eq!(engine.batches.len(), 2);
-            assert_eq!(engine.document().selection.as_ref(), Some(&moved));
+            assert!(engine.retained_tiles().resident_bytes() < layer_core::raster::MAX_CAPTURE_BYTES as usize,
+                "linked small-source producers reserve their source domains");
+            assert_eq!(engine.document().working.selection.as_ref(), Some(&moved));
             assert!(engine.undo().unwrap());
-            assert_eq!(engine.document().layers, before.layers);
-            assert_eq!(engine.document().selection, before.selection);
+            assert_authored_eq(&engine.document().artwork, &before.artwork);
+            assert_eq!(engine.document().working.selection, before.working.selection);
             assert!(!engine.can_undo());
             assert!(engine.redo().unwrap());
             engine.render_frame().unwrap();
@@ -3413,38 +3471,31 @@ mod tests {
                 engine.batches.is_empty(),
                 "redo must restore pixels without replaying operations"
             );
-            assert_eq!(engine.document().selection.as_ref(), Some(&moved));
-            assert!(!engine.document().layers[0].raster.is_empty());
-            assert!(
-                !engine.document().layers[0]
-                    .mask
-                    .as_ref()
-                    .unwrap()
-                    .raster
-                    .is_empty()
-            );
+            assert_eq!(engine.document().working.selection.as_ref(), Some(&moved));
+            assert!(!active_paint(engine.document()).raster.is_empty());
+            assert!(!engine.document().target_raster(SourceTarget::Coverage(mask_handle)).unwrap().is_empty());
         }
     }
 
     #[test]
     fn applying_transform_moves_selection_atomically_and_cancel_keeps_original() {
         use layer_core::{Affine, ImageTransform, Selection};
-        let mut doc = Document::new("selection transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let layer = doc.active_layer;
-        doc.layers[0].properties.offset = Point { x: 12., y: 7. };
+        let mut doc = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let layer = doc.working.target.unwrap();
+        active_occurrence_mut(&mut doc).translation = Point { x: 12., y: 7. };
         let selection = Selection::polygon(vec![
             Point { x: 20., y: 20. },
             Point { x: 60., y: 20. },
             Point { x: 20., y: 60. },
         ])
         .unwrap();
-        doc.selection = Some(selection.clone());
+        doc.working.selection = Some(selection.clone());
         let (_, mut engine) =
             engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
         let preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer,
+            target: layer,
             selection: Some(selection.translated(Point { x: -12., y: -7. })),
             transform: ImageTransform::affine(Affine::around(
                 Point { x: 28., y: 33. },
@@ -3456,28 +3507,24 @@ mod tests {
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         let placed = engine.display_selection().unwrap().into_owned();
         assert_ne!(placed, selection);
-        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&selection));
         engine.set_transform_preview(None).unwrap();
         assert_eq!(engine.display_selection().as_deref(), Some(&selection));
         assert!(!engine.can_undo());
         engine.set_transform_preview(Some(preview.clone())).unwrap();
         assert!(engine.commit_transform(None).unwrap());
         assert!(engine.transform_preview.is_none());
-        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
-        let operation = &engine.document().layer(layer).unwrap().pending_operations[0];
-        assert_eq!(operation.coverage.initial, preview.selection);
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&placed));
+        let operation = &engine.document().target_operations(layer).unwrap()[0];
+        assert_eq!(operation.coverage.source.initial, preview.selection);
         assert_eq!(
             operation.kind,
-            layer_core::LayerOperationKind::Transform(preview.transform.clone())
+            layer_core::RasterOperationKind::Transform(preview.transform.clone())
         );
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&selection));
         assert!(
-            engine
-                .document()
-                .layer(layer)
-                .unwrap()
-                .pending_operations
+            engine.document().target_operations(layer).unwrap()
                 .is_empty()
         );
         assert!(
@@ -3485,14 +3532,14 @@ mod tests {
             "one undo restores both pixels and selection"
         );
         assert!(engine.redo().unwrap());
-        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&placed));
         let mut inverted = preview.clone();
         inverted.selection.as_mut().unwrap().inverted = true;
         engine.set_transform_preview(Some(inverted)).unwrap();
         assert!(engine.commit_transform(None).unwrap());
-        assert!(engine.document().selection.as_ref().unwrap().inverted);
+        assert!(engine.document().working.selection.as_ref().unwrap().inverted);
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().selection.as_ref(), Some(&placed));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&placed));
         engine
             .set_transform_preview(Some(layer_render::TransformPreview {
                 transform: Default::default(),
@@ -3508,15 +3555,15 @@ mod tests {
     #[test]
     fn perspective_transform_carries_contours_and_waits_for_pixel_coverage() {
         use layer_core::{ImageTransform, Projective, Selection, SelectionPixels, LayerPlacement};
-        let mut doc = Document::new("perspective transform", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let layer = doc.active_layer;
+        let mut doc = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let layer = doc.working.target.unwrap();
         let selection = Selection::polygon(vec![
             Point { x: 20., y: 20. },
             Point { x: 60., y: 20. },
             Point { x: 20., y: 60. },
         ])
         .unwrap();
-        doc.selection = Some(selection.clone());
+        doc.working.selection = Some(selection.clone());
         let (_, mut engine) =
             engine_with(RecordingRenderer::default(), doc, view(128, 128), TRANSFORM);
         let source = layer_core::Rect {
@@ -3533,7 +3580,7 @@ mod tests {
         let preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer,
+            target: layer,
             selection: Some(selection.clone()),
             transform: ImageTransform { placement: map.clone(), ..Default::default() },
         };
@@ -3541,9 +3588,9 @@ mod tests {
         let expected = selection.mapped(&map).unwrap();
         assert_eq!(engine.display_selection().as_deref(), Some(&expected));
         assert!(engine.commit_transform(None).unwrap());
-        assert_eq!(engine.document().selection.as_ref(), Some(&expected));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&expected));
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().selection.as_ref(), Some(&selection));
+        assert_eq!(engine.document().working.selection.as_ref(), Some(&selection));
         let pixels = Selection::pixels(std::sync::Arc::new(
             SelectionPixels::new([128, 128], [0, 0, 8, 8], vec![0; 16 * 128]).unwrap(),
         ));
@@ -3563,7 +3610,7 @@ mod tests {
         let request = engine.transform_selection_request(41).unwrap();
         assert_eq!(request.request_id, 41);
         let layer_render::RegionSource::TransformedSelection {
-            layer: target,
+            target,
             selection: coverage,
             map: requested,
         } = &request.source
@@ -3573,7 +3620,7 @@ mod tests {
         assert_eq!((*target, requested), (layer, &map));
         assert!(matches!(coverage.shape, layer_core::SelectionShape::Pixels(_)));
         let pending = engine.transform_preview().unwrap().clone();
-        let before = engine.document().selection.clone();
+        let before = engine.document().working.selection.clone();
         let moved = std::sync::Arc::new(
             SelectionPixels::bytes([128, 128], [4, 4, 12, 12], vec![0x80ff_ff80; 32 * 128])
                 .unwrap(),
@@ -3588,10 +3635,10 @@ mod tests {
             assert!(engine.commit_transform(Some(moved.clone())).unwrap());
             let mut expected = Selection::pixels(moved.clone());
             expected.inverted = inverted;
-            assert_eq!(engine.document().selection.as_ref(), Some(&expected));
+            assert_eq!(engine.document().working.selection.as_ref(), Some(&expected));
             assert!(engine.transform_preview().is_none());
             assert!(engine.undo().unwrap());
-            assert_eq!(engine.document().selection, before, "pixels and selection are one step");
+            assert_eq!(engine.document().working.selection, before, "pixels and selection are one step");
         }
         let contours = layer_render::TransformPreview {
             selection: Some(selection.clone()),
@@ -3604,15 +3651,15 @@ mod tests {
     fn erase(
         engine: &mut CanvasEngine<RecordingRenderer>,
         selection: &layer_core::Selection,
-    ) -> layer_core::LayerOperation {
+    ) -> layer_core::RasterOperation {
         let mut coverage =
-            layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-        coverage.default_coverage = f32::from(selection.inverted);
-        coverage.initial = Some(selection.clone());
-        layer_core::LayerOperation {
+            layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), engine.document().composition().size, Point::default());
+        coverage.source.default_coverage = f32::from(selection.inverted);
+        coverage.source.initial = Some(selection.clone());
+        layer_core::RasterOperation {
             placement: layer_core::Affine::IDENTITY,
             coverage,
-            kind: layer_core::LayerOperationKind::Erase { alpha_locked: false },
+            kind: layer_core::RasterOperationKind::Erase { alpha_locked: false },
         }
     }
 
@@ -3620,8 +3667,8 @@ mod tests {
     fn inserted_layers_take_operations_from_their_source_pixels_in_one_step() {
         let (_, mut engine) = engine("insert with operations", 1024, 768);
         engine.render_frame().unwrap();
-        let source = engine.document().active_layer;
-        let pixels = engine.document().layer(source).unwrap().raster.clone();
+        let source = engine.document().working.target.unwrap();
+        let pixels = engine.document().target_raster(source).unwrap().clone();
         let selection = layer_core::Selection::polygon(vec![
             Point { x: 300., y: 280. },
             Point { x: 420., y: 280. },
@@ -3630,68 +3677,132 @@ mod tests {
         ])
         .unwrap();
         engine
-            .apply_edit(Edit::SetSelection(Some(selection.clone())))
+            .apply_edit(selection_edit(engine.document(), Some(selection.clone())))
             .unwrap();
         let before = engine.document().clone();
-        let mut copy = before.layer(source).unwrap().clone();
-        copy.id = engine.allocate_layer_id();
+        let (_, id, insertion) = paint_insert(&before, active_paint(&before).clone(), "Copy", 0);
         let mut outside = selection.clone();
         outside.inverted = true;
         let operations = vec![
-            (copy.id, erase(&mut engine, &outside)),
+            (id, erase(&mut engine, &outside)),
             (source, erase(&mut engine, &selection)),
         ];
-        let id = copy.id;
         engine
             .insert_with_operations(
-                vec![Edit::InsertLayer { index: 0, layer: Box::new(copy) }],
+                insertion,
                 operations,
                 Some(None),
             )
             .unwrap();
         assert_eq!(engine.restore_rasters, [(id, pixels)], "the copy starts from its source pixels");
-        assert!(engine.document().selection.is_none());
-        let damage: Vec<_> = engine.batches.iter().map(|b| (b.layer_id, b.damage)).collect();
+        assert!(engine.document().working.selection.is_none());
+        let damage: Vec<_> = engine.batches.iter().map(|b| (b.target, b.damage)).collect();
         assert_eq!(damage[0], (id, Rect::from_extent([1024, 768])), "erasing outside touches every page");
         assert_eq!(damage[1], (source, selection.bounds()), "erasing inside stays within the selection");
         for layer in [id, source] {
-            assert!(engine.document().layer(layer).unwrap().raster.try_data().is_none());
+            assert!(engine.document().target_raster(layer).unwrap().try_data().is_none());
         }
         engine.render_frame().unwrap();
         assert!(engine.restore_rasters.is_empty());
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().layers, before.layers, "one undo step removes the copy and restores the source");
-        assert_eq!(engine.document().selection, before.selection);
+        assert_authored_eq(&engine.document().artwork, &before.artwork);
+        assert_eq!(engine.document().working.selection, before.working.selection);
         assert!(engine.redo().unwrap());
-        assert_eq!(engine.document().layers.len(), before.layers.len() + 1);
+        assert_eq!(engine.document().artwork.occurrences.len(), before.artwork.occurrences.len() + 1);
     }
 
     #[test]
-    fn a_bake_keeps_its_removed_members_hidden_until_it_has_run() {
+    fn inserting_paint_and_effect_masks_preserves_existing_raster_pages() {
+        use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent};
+        use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
+        use layer_core::{CoverageSnapshot, RecordChange, Selection};
+        let (_, mut engine) = engine("source insertion", 64, 64);
+        let target = engine.document().working.target.unwrap();
+        let descriptor = engine.document().composition().color.paint_descriptor();
+        let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![47; descriptor.byte_len([256; 2]).unwrap()]).unwrap());
+        let raster = RasterRevision::backed(RasterData {
+            tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, tile)].into(),
+            ..Default::default()
+        });
+        engine.apply_edit(Edit::SetRaster { target, revision: raster.clone() }).unwrap();
+        engine.render_frame().unwrap();
+        engine.backend_mut().saw_reset = false;
+        for copied in [false, true] {
+            let source = if copied { active_paint(engine.document()).clone() } else { empty_paint(engine.document()) };
+            let (_, _, edits) = paint_insert(engine.document(), source, "Inserted paint", 0);
+            engine.apply_edit(Edit::Batch(edits)).unwrap();
+            engine.render_frame().unwrap();
+            assert!(!engine.backend().saw_reset, "new paint initializes its own pages");
+            assert_eq!(engine.document().target_raster(target), Some(&raster));
+        }
+        for kind in 0..3 {
+            let document = engine.document();
+            let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), [64; 2], Point::default());
+            mask.source.default_coverage = 0.25;
+            if kind == 1 {
+                mask.source.initial = Some(Selection::polygon(Rect::from_extent([32; 2]).corners().to_vec()).unwrap());
+            } else if kind == 2 {
+                let descriptor = document.composition().color.coverage_descriptor();
+                let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![97; descriptor.byte_len([256; 2]).unwrap()]).unwrap());
+                mask.source.raster = RasterRevision::backed(RasterData {
+                    tiles: [(TileKey { plane: RasterPlane::Mask, coordinate: [0, 0] }, tile)].into(),
+                    ..Default::default()
+                });
+            }
+            let coverage = RecordChange::insert(&document.artwork.coverage, mask.source.clone());
+            let handle = coverage.handle;
+            mask.use_.source = handle;
+            let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
+            let definition = RecordChange::insert(&document.artwork.definitions, Definition { program:draft.program, dimensions:Default::default() });
+            let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition:definition.handle, values:draft.values, domain:[64; 2] });
+            let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect.handle), "Masked exposure");
+            occurrence.mask = Some(mask.use_);
+            let occurrence = RecordChange::insert(&document.artwork.occurrences, occurrence);
+            let stack = document.composition().result;
+            let mut entries = document.artwork.stacks.get(stack).unwrap().clone();
+            entries.entries.insert(0, occurrence.handle);
+            engine.apply_edit(Edit::Batch(vec![Edit::Coverage(coverage), Edit::Definition(definition), Edit::Effect(effect), Edit::Occurrence(occurrence),
+                Edit::Stack(RecordChange::replace(&document.artwork.stacks, stack, Some(entries)).unwrap())])).unwrap();
+            engine.render_frame().unwrap();
+            assert!(!engine.backend().saw_reset, "new mask initializes without restoring existing paint");
+            assert_eq!(engine.document().target_raster(target), Some(&raster));
+            assert_eq!(engine.document().artwork.coverage.get(handle), Some(&mask.source));
+        }
+        let handle = engine.document().artwork.coverage.iter().next().unwrap().0;
+        for kind in 0..3 {
+            let mut source = engine.document().artwork.coverage.get(handle).unwrap().clone();
+            match kind {
+                0 => source.domain = [128; 2],
+                1 => source.default_coverage = 0.75,
+                _ => source.initial = Some(Selection::polygon(Rect::from_extent([16; 2]).corners().to_vec()).unwrap()),
+            }
+            engine.backend_mut().saw_reset = false;
+            engine.apply_edit(Edit::Coverage(RecordChange::replace(&engine.document().artwork.coverage, handle, Some(source)).unwrap())).unwrap();
+            engine.render_frame().unwrap();
+            assert!(engine.backend().saw_reset, "changed mask initialization still replaces resident pages");
+        }
+    }
+
+    #[test]
+    fn a_bake_retains_its_removed_occurrences_and_roots_until_it_has_run() {
         let (_, mut engine) = engine("bake", 1024, 768);
-        let lower = engine.document().active_layer;
-        let upper = engine.allocate_layer_id();
-        engine
-            .apply_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer_core::Layer::paint(upper, "Upper")) })
-            .unwrap();
+        let lower = engine.document().working.occurrence.unwrap();
+        let (upper, _, insertion) = paint_insert(engine.document(), empty_paint(engine.document()), "Upper", 0);
+        engine.apply_edit(Edit::Batch(insertion)).unwrap();
         engine.set_active_layer(upper).unwrap();
         engine.render_frame().unwrap();
         let before = engine.document().clone();
-        let result = engine.allocate_layer_id();
-        let coverage = engine.allocate_layer_id();
-        let plan = engine.document().merge_plan(layer_core::MergeKind::Down, result, coverage).unwrap();
-        engine.insert_with_operations(plan.edits, vec![(result, plan.operation)], None).unwrap();
+        let plan = engine.document().merge_plan(layer_core::MergeKind::Down).unwrap();
+        let target = plan.target;
+        engine.insert_with_operations(plan.edits, vec![(target, plan.operation)], None).unwrap();
         assert!(engine.composite_all, "the members' area is recomposited");
-        assert!(engine.document().layer(upper).is_none() && engine.document().layer(lower).is_none());
+        assert!(engine.document().scene().occurrence(upper).is_none() && engine.document().scene().occurrence(lower).is_none());
         engine.render_frame().unwrap();
-        let members = |engine: &CanvasEngine<RecordingRenderer>| {
-            engine.backend().visibility.iter().filter(|(id, _)| [upper, lower].contains(id)).copied().collect::<Vec<_>>()
-        };
-        assert_eq!(members(&engine), [(upper, false), (lower, false)], "hidden in the frame that bakes them");
+        assert_eq!(engine.backend().bake_members, [vec![upper, lower]], "the bake resolves both retired occurrences against its immutable scene");
         engine.render_frame().unwrap();
-        assert!(members(&engine).is_empty(), "released once the bake has run");
+        assert!(engine.backend().bake_members.is_empty(), "released once the bake has run");
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().layers, before.layers, "one undo step restores both layers");
+        assert_authored_eq(&engine.document().artwork, &before.artwork);
     }
 
     #[test]
@@ -3700,7 +3811,7 @@ mod tests {
         let [width, height] = [12288, 8192];
         let (_, mut engine) = engine("large erase", width, height);
         engine.render_frame().unwrap();
-        let layer = engine.document().active_layer;
+        let layer = engine.document().working.target.unwrap();
         let mut everything = layer_core::Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 1., y: 0. },
@@ -3709,9 +3820,9 @@ mod tests {
         .unwrap();
         everything.inverted = true;
         let op = erase(&mut engine, &everything);
-        engine.append_layer_operation(layer, op).unwrap();
+        engine.append_raster_operation(layer, op).unwrap();
         let pages = u64::from(width.div_ceil(TILE_SIZE) * height.div_ceil(TILE_SIZE));
-        let tile = TileBlob::max_compressed_len(RasterPlane::Color.descriptor(engine.document().color)).unwrap() as u64;
+        let tile = TileBlob::max_compressed_len(RasterPlane::Color.descriptor(engine.document().composition().color)).unwrap() as u64;
         assert!(pages * tile > layer_core::raster::MAX_CAPTURE_BYTES);
         assert!(
             engine.retained_tiles().resident_bytes() as u64 >= pages * tile,
@@ -3726,18 +3837,18 @@ mod tests {
         ])
         .unwrap();
         let op = erase(&mut engine, &small);
-        engine.append_layer_operation(layer, op).unwrap();
+        engine.append_raster_operation(layer, op).unwrap();
         assert_eq!(engine.batches[0].damage, small.bounds(), "plain pixels erase only the selected pages");
 
-        let mut document = Document::new("watercolor erase", 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.layers[0].raster = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 512, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        active_paint_mut(&mut document).raster = layer_core::raster::RasterRevision::backed(layer_core::raster::RasterData {
             watercolor: Some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.2, edge_width: 2. }),
             ..Default::default()
         });
         let (_, mut engine) = engine_with(RecordingRenderer::default(), document, view(512, 512), TRANSFORM);
-        let layer = engine.document().active_layer;
+        let layer = engine.document().working.target.unwrap();
         let op = erase(&mut engine, &small);
-        engine.append_layer_operation(layer, op).unwrap();
+        engine.append_raster_operation(layer, op).unwrap();
         assert_eq!(
             engine.batches[0].damage,
             Rect::from_extent([512, 512]),
@@ -3748,8 +3859,8 @@ mod tests {
     #[test]
     fn appended_raster_operations_are_incremental_and_undo_restores_revisions() {
         for kind in [
-            layer_core::LayerOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 10., y: 4. }))),
-            layer_core::LayerOperationKind::Gradient {
+            layer_core::RasterOperationKind::Transform(layer_core::ImageTransform::affine(layer_core::Affine::translation(Point { x: 10., y: 4. }))),
+            layer_core::RasterOperationKind::Gradient {
                 start: Point::default(),
                 end: Point { x: 128.0, y: 0.0 },
                 colors: [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
@@ -3758,7 +3869,7 @@ mod tests {
             },
         ] {
             let (mut producer, mut engine) = engine("gradient", 128, 128);
-            let id = engine.document().active_layer;
+            let id = engine.document().working.target.unwrap();
             engine.render_frame().unwrap();
             engine.backend.saw_reset = false;
             producer.push(event(1, PenPhase::Down, 20.0)).unwrap();
@@ -3766,23 +3877,19 @@ mod tests {
             engine.render_frame().unwrap();
             let count = engine.backend.persistent_dabs;
             let coverage =
-                layer_core::LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-            let op = layer_core::LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
-            engine.append_layer_operation(id, op).unwrap();
+                layer_core::CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), engine.document().composition().size, Point::default());
+            let op = layer_core::RasterOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
+            engine.append_raster_operation(id, op).unwrap();
             assert!(engine.has_pending_document_edits());
-            let operated = engine.document().layer(id).unwrap().raster.identity();
+            let operated = engine.document().target_raster(id).unwrap().identity();
             assert_eq!(
-                engine
-                    .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
+                engine.document().target_operations(id).unwrap()
                     .len(),
                 1
             );
             assert!(matches!(
                 engine.batches[0].kind,
-                DabBatchKind::LayerOperation(0)
+                DabBatchKind::RasterOperation(0)
             ));
             engine.render_frame().unwrap();
             assert!(!engine.backend.saw_reset);
@@ -3793,11 +3900,7 @@ mod tests {
             assert!(!engine.has_pending_document_edits());
             engine.undo().unwrap();
             assert!(
-                engine
-                    .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
+                engine.document().target_operations(id).unwrap()
                     .is_empty()
             );
             engine.render_frame().unwrap();
@@ -3805,15 +3908,11 @@ mod tests {
             engine.redo().unwrap();
             engine.render_frame().unwrap();
             assert_eq!(
-                engine.document().layer(id).unwrap().raster.identity(),
+                engine.document().target_raster(id).unwrap().identity(),
                 operated
             );
             assert!(
-                engine
-                    .document()
-                    .layer(id)
-                    .unwrap()
-                    .pending_operations
+                engine.document().target_operations(id).unwrap()
                     .is_empty()
             );
             assert_eq!(engine.backend.persistent_dabs, count);
@@ -3879,7 +3978,7 @@ mod tests {
                         assert_eq!(point.pressure, row[4], "raw pressure must survive release");
                     }
                     let mut replay = Vec::new();
-                    DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+                    DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
                     assert_eq!(
                         engine.backend.persistent, replay,
                         "capture={capture}, cadence={cadence}, feedback={feedback}"
@@ -3907,12 +4006,12 @@ mod tests {
                     if !feedback {
                         assert_eq!(engine.metrics.engine_prediction_frames, 0);
                     }
-                    let raster = engine.document().layers[0].raster.identity();
+                    let raster = active_paint(engine.document()).raster.identity();
                     assert!(engine.undo().unwrap());
-                    assert!(engine.document().layers[0].raster.is_empty());
+                    assert!(active_paint(engine.document()).raster.is_empty());
                     assert!(!engine.undo().unwrap());
                     assert!(engine.redo().unwrap());
-                    assert_eq!(engine.document().layers[0].raster.identity(), raster);
+                    assert_eq!(active_paint(engine.document()).raster.identity(), raster);
                 }
             }
         }
@@ -3977,8 +4076,8 @@ mod tests {
                 let mut variants = Vec::new();
                 for recover in [false, true] {
                     for correct_after_up in [false, true] {
-                        let mut document = Document::new("color dynamics", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                        document.color = color;
+                        let mut document = Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                        composition_mut(&mut document).color = color;
                         let (mut input, mut engine) = engine_with(
                             RecordingRenderer {
                                 color,
@@ -4096,8 +4195,8 @@ mod tests {
         for space in RgbSpace::ALL {
             for depth in [SampleDepth::U8, SampleDepth::U16] {
                 let color = DocumentColor { space, depth };
-                let mut document = Document::new("native adoption", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                document.color = color;
+                let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                composition_mut(&mut document).color = color;
                 if color != Default::default() {
                     let (_, consumer) = input_queue(8);
                     let result = CanvasEngine::new(
@@ -4144,7 +4243,7 @@ mod tests {
                     }),
                     Err(EngineError::Document(_))
                 ));
-                assert_eq!(engine.document().color, color);
+                assert_eq!(engine.document().composition().color, color);
                 assert_eq!(engine.backend().color, color);
                 assert_eq!(engine.checkpoint(), before);
                 assert_eq!(engine.metrics().input_events, 0);
@@ -4156,7 +4255,7 @@ mod tests {
                         ..Default::default()
                     })
                     .unwrap();
-                assert_eq!(engine.document().color, color);
+                assert_eq!(engine.document().composition().color, color);
             }
         }
     }
@@ -4168,7 +4267,7 @@ mod tests {
         engine.render_frame().unwrap();
         let original = engine.document().clone();
         let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-        let edit = Edit::SetColor { color, layers: original.layers.clone() };
+        let edit = color_edit(&original, color);
         input.push(event(1, PenPhase::Down, 8.)).unwrap();
         input.push(event(2, PenPhase::Up, 24.)).unwrap();
         for edit in [edit.clone(), Edit::Batch(vec![edit.clone()])] {
@@ -4187,7 +4286,7 @@ mod tests {
         assert_eq!(engine.document(), &converted);
         assert_eq!(engine.checkpoint(), checkpoint);
         engine.editor.undo().unwrap();
-        engine.backend.color = original.color;
+        engine.backend.color = original.composition().color;
         let restored = engine.document().clone();
         assert!(engine.redo().unwrap_err().to_string().contains("matching renderer"));
         assert_eq!(engine.document(), &restored);
@@ -4206,7 +4305,7 @@ mod tests {
         let old_brush = engine.brush().clone();
         let target = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
-            color: target, layers: engine.document().layers.clone(),
+            edit: Box::new(color_edit(engine.document(), target)),
         }).unwrap();
         for fail in [false, true] {
             let prepared = prepare(&engine);
@@ -4216,19 +4315,19 @@ mod tests {
             assert_eq!(engine.document(), &original);
             assert_eq!(engine.checkpoint(), 0);
             assert!(!engine.can_undo());
-            assert_eq!(engine.backend.color, original.color);
+            assert_eq!(engine.backend.color, original.composition().color);
             assert_eq!(engine.brush(), &old_brush);
         }
         engine.backend.fail_color_adoption = false;
         let stale = prepare(&engine);
-        engine.set_layer_opacity(original.active_layer, 0.5).unwrap();
+        engine.set_layer_opacity(original.working.occurrence.unwrap(), 0.5).unwrap();
         let changed = engine.document().clone();
         let adoptions = engine.backend.color_adoptions;
         engine.backend.prepared_color = Some(target);
         assert!(engine.commit_color_transition(stale).unwrap_err().to_string().contains("changed during"));
         assert_eq!(engine.document(), &changed);
         assert_eq!(engine.backend.color_adoptions, adoptions);
-        assert_eq!(engine.backend.color, original.color);
+        assert_eq!(engine.backend.color, original.composition().color);
         let before_color_checkpoint = engine.checkpoint();
         let prepared = prepare(&engine);
         let expected = prepared.document().clone();
@@ -4236,23 +4335,23 @@ mod tests {
         assert_eq!(engine.document(), &expected);
         assert_eq!(engine.backend.color, target);
         let after_color_checkpoint = engine.checkpoint();
-        assert_eq!(engine.history_color(false), original.color);
+        assert_eq!(engine.history_color(false), original.composition().color);
         engine.render_frame().unwrap();
         assert!(engine.backend.saw_reset);
         for _ in 0..3 {
             let prepared = engine.prepare_color_transition(ColorTransition::Undo).unwrap();
-            engine.backend.prepared_color = Some(original.color);
+            engine.backend.prepared_color = Some(original.composition().color);
             engine.commit_color_transition(prepared).unwrap();
-            assert_eq!(engine.document().color, original.color);
-            assert_eq!(engine.backend.color, original.color);
-            assert_eq!(engine.document().layers, changed.layers);
+            assert_eq!(engine.document().composition().color, original.composition().color);
+            assert_eq!(engine.backend.color, original.composition().color);
+            assert_authored_eq(&engine.document().artwork, &changed.artwork);
             assert_eq!(engine.checkpoint(), before_color_checkpoint);
             let prepared = engine.prepare_color_transition(ColorTransition::Redo).unwrap();
             engine.backend.prepared_color = Some(target);
             engine.commit_color_transition(prepared).unwrap();
-            assert_eq!(engine.document().color, target);
+            assert_eq!(engine.document().composition().color, target);
             assert_eq!(engine.backend.color, target);
-            assert_eq!(engine.document().layers, expected.layers);
+            assert_authored_eq(&engine.document().artwork, &expected.artwork);
             assert_eq!(engine.checkpoint(), after_color_checkpoint);
         }
     }
@@ -4260,16 +4359,16 @@ mod tests {
     #[test]
     fn prepared_color_does_not_consume_queued_input_or_overflow_tool_coordinates() {
         use layer_core::{ColorTransition, color::{DocumentColor, SampleDepth, RgbSpace}};
-        let mut document = Document::new("color input", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        composition_mut(&mut document).color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
         let (mut input, mut engine) = engine_with(
-            RecordingRenderer { color: document.color, ..Default::default() }, document,
+            RecordingRenderer { color: document.composition().color, ..Default::default() }, document,
             view(64, 64), TRANSFORM,
         );
         engine.render_frame().unwrap();
         let target = DocumentColor::default();
         let prepare = |engine: &CanvasEngine<RecordingRenderer>| engine.prepare_color_transition(ColorTransition::Apply {
-            color: target, layers: engine.document().layers.clone(),
+            edit: Box::new(color_edit(engine.document(), target)),
         }).unwrap();
         let mut brush = engine.configured_brush().clone();
         brush.color_rgba_linear = [f32::MAX, 0., 0., 1.];
@@ -4291,7 +4390,7 @@ mod tests {
         assert_eq!(engine.metrics().input_events, 1);
         assert!(engine.has_active_stroke());
         assert!(engine.prepare_color_transition(ColorTransition::Apply {
-            color: target, layers: engine.document().layers.clone(),
+            edit: Box::new(color_edit(engine.document(), target)),
         }).is_err());
     }
 
@@ -4307,7 +4406,7 @@ mod tests {
         assert_eq!(engine.metrics().input_events, 2);
         assert_eq!(engine.metrics().frames, frames);
         assert!(engine.has_pending_document_edits());
-        assert!(engine.document().layers[0].raster.try_data().is_none());
+        assert!(active_paint(engine.document()).raster.try_data().is_none());
         assert!(!engine.can_undo());
         input.push(event(3, PenPhase::Down, 32.)).unwrap();
         input.push(event(4, PenPhase::Up, 48.)).unwrap();
@@ -4328,7 +4427,7 @@ mod tests {
         engine.render_frame().unwrap();
         assert_eq!(engine.metrics().frames, frames + 1);
         assert_eq!(engine.metrics().input_events, 2);
-        assert!(engine.document().layers[0].raster.host_backed());
+        assert!(active_paint(engine.document()).raster.host_backed());
         assert!(engine.backend().persistent_dabs > 0);
         assert!(engine.can_undo());
         engine.render_frame().unwrap();
@@ -4356,7 +4455,7 @@ mod tests {
         assert!(engine.backend().persistent_dabs > 0);
         assert!(engine.has_active_stroke() && engine.has_pending_input());
         assert_eq!(engine.metrics().committed_strokes, 0);
-        assert!(engine.document().layers[0].raster.is_empty());
+        assert!(active_paint(engine.document()).raster.is_empty());
         let frames = engine.metrics().frames;
         let dabs = engine.backend().persistent_dabs;
         engine.render_frame_for(200_000_000, 208_000_000).unwrap();
@@ -4393,7 +4492,7 @@ mod tests {
         assert_eq!(engine.checkpoint(), checkpoint);
         assert!(!engine.can_undo());
         engine.render_frame().unwrap();
-        assert!(engine.document().layers[0].raster.is_empty());
+        assert!(active_paint(engine.document()).raster.is_empty());
     }
 
     #[test]
@@ -4472,18 +4571,18 @@ mod tests {
             assert_eq!(stroke.points.len(), 482);
             assert_eq!(stroke.points[0].pressure, 0.2);
             let mut replay = Vec::new();
-            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+            DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
-            let raster = engine.document().layers[0].raster.identity();
+            let raster = active_paint(engine.document()).raster.identity();
             assert!(engine.undo().unwrap());
-            assert!(engine.document().layers[0].raster.is_empty());
+            assert!(active_paint(engine.document()).raster.is_empty());
             assert!(
                 !engine.undo().unwrap(),
                 "corrections must not add history steps"
             );
             assert!(engine.redo().unwrap());
-            assert_eq!(engine.document().layers[0].raster.identity(), raster);
+            assert_eq!(active_paint(engine.document()).raster.identity(), raster);
         }
     }
 
@@ -4536,7 +4635,7 @@ mod tests {
         input.push(event(2, PenPhase::Up, 12.)).unwrap();
         engine.render_frame().unwrap();
         assert!(engine.completed_stroke.is_some());
-        let root = engine.document().layers[0].raster.identity();
+        let root = active_paint(engine.document()).raster.identity();
         engine.completed_at = Some(
             web_time::Instant::now() - CORRECTION_WINDOW - std::time::Duration::from_millis(1),
         );
@@ -4547,7 +4646,7 @@ mod tests {
         assert!(engine.completed_stroke.is_none());
         assert!(engine.completed_before.is_none());
         assert!(engine.estimates.is_empty());
-        assert_eq!(engine.document().layers[0].raster.identity(), root);
+        assert_eq!(active_paint(engine.document()).raster.identity(), root);
     }
 
     #[test]
@@ -4592,7 +4691,7 @@ mod tests {
             engine.render_frame().unwrap();
             let original = engine
                 .document()
-                .target_raster(engine.document().active_target())
+                .target_raster(engine.document().active_target().unwrap())
                 .unwrap()
                 .identity();
             let saved = engine.checkpoint();
@@ -4607,7 +4706,7 @@ mod tests {
             assert_eq!(stroke.points[0].twist, 2.1);
             let corrected = engine
                 .document()
-                .target_raster(stroke.layer_id)
+                .target_raster(stroke.target)
                 .unwrap()
                 .identity();
             assert_ne!(corrected, original);
@@ -4619,7 +4718,7 @@ mod tests {
             assert!(
                 engine
                     .document()
-                    .target_raster(engine.document().active_target())
+                    .target_raster(engine.document().active_target().unwrap())
                     .unwrap()
                     .is_empty()
             );
@@ -4631,7 +4730,7 @@ mod tests {
             assert_eq!(
                 engine
                     .document()
-                    .target_raster(engine.document().active_target())
+                    .target_raster(engine.document().active_target().unwrap())
                     .unwrap()
                     .identity(),
                 corrected
@@ -4705,7 +4804,7 @@ mod tests {
         assert!(
             engine
                 .document()
-                .target_raster(engine.document().active_target())
+                .target_raster(engine.document().active_target().unwrap())
                 .unwrap()
                 .is_empty()
         );
@@ -4727,14 +4826,14 @@ mod tests {
             engine.render_frame().unwrap();
             engine.backend.saw_reset = false;
             let guide = Ruler {
-                id: 1,
+                id: layer_core::authored::PortableId::random(),
                 geometry: RulerGeometry::from_drag(
                     kind,
                     Point { x: 0., y: 16. },
                     Point { x: 100., y: 16. },
                 ),
             };
-            engine.apply_edit(Edit::SetRulers(vec![guide])).unwrap();
+            engine.apply_edit(rulers_edit(engine.document(), vec![guide])).unwrap();
             assert!(!engine.has_pending_document_edits());
             engine.render_frame().unwrap();
             assert!(!engine.backend.saw_reset);
@@ -4748,8 +4847,8 @@ mod tests {
             engine.render_frame().unwrap();
             // A subsequent guide change does not redirect an active stroke.
             engine
-                .apply_edit(Edit::SetRulers(vec![Ruler {
-                    id: 1,
+                .apply_edit(rulers_edit(engine.document(), vec![Ruler {
+                    id: layer_core::authored::PortableId::random(),
                     geometry: RulerGeometry::Parallel {
                         start: Point { x: 0., y: 0. },
                         end: Point { x: 0., y: 100. },
@@ -4848,7 +4947,7 @@ mod tests {
         use layer_core::{Ruler, RulerGeometry};
         let (mut producer, mut engine) = engine_with(
             RecordingRenderer::default(),
-            Document::new("ruler-view", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::authored::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             view(256, 256),
             ViewTransform {
                 revision: 1,
@@ -4858,14 +4957,14 @@ mod tests {
         engine
             .set_brush(default_brush(DefaultBrushPreset::GPen))
             .unwrap();
-        let mut layer = engine.document().layers[0].clone();
-        layer.properties.offset = Point { x: 3., y: 5. };
+        let mut layer = active_occurrence(engine.document()).clone();
+        layer.translation = Point { x: 3., y: 5. };
         engine
-            .apply_edit(Edit::ReplaceLayer(Box::new(layer)))
+            .apply_edit(replace_occurrence(engine.document(), layer))
             .unwrap();
         engine
-            .apply_edit(Edit::SetRulers(vec![Ruler {
-                id: 1,
+            .apply_edit(rulers_edit(engine.document(), vec![Ruler {
+                id: layer_core::authored::PortableId::random(),
                 geometry: RulerGeometry::Straight {
                     start: Point { x: 0., y: 32. },
                     end: Point { x: 100., y: 32. },
@@ -4910,8 +5009,8 @@ mod tests {
                 .all(|p| (p.position.y - 27.).abs() < 0.001)
         );
         engine
-            .apply_edit(Edit::SetRulers(vec![Ruler {
-                id: 1,
+            .apply_edit(rulers_edit(engine.document(), vec![Ruler {
+                id: layer_core::authored::PortableId::random(),
                 geometry: RulerGeometry::Radial {
                     center: Point { x: 16., y: 32. },
                 },
@@ -5069,7 +5168,7 @@ mod tests {
                 last.surface_position
             );
             let mut replay = Vec::new();
-            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+            DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
         }
@@ -5271,7 +5370,7 @@ mod tests {
         assert_eq!(stroke.points.len(), 3);
         assert_eq!(stroke.points.last().unwrap().position.x, 28.0);
         let mut replay = Vec::new();
-        DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+        DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
         assert_eq!(engine.backend().persistent, replay);
         assert!(engine.backend().preview.is_empty());
     }
@@ -5333,7 +5432,7 @@ mod tests {
                 assert_eq!(point.pressure, input.pressure.powf(gamma));
             }
             let mut replay = Vec::new();
-            DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+            DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
             assert_eq!(engine.backend().persistent, replay);
             assert!(engine.backend().preview.is_empty());
             for phase in [PenPhase::Up, PenPhase::Cancel] {
@@ -5423,7 +5522,7 @@ mod tests {
                 }
                 let stroke = engine.completed_stroke.as_ref().unwrap();
                 let mut replay = Vec::new();
-                DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+                DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
                 assert_eq!(engine.backend().persistent, replay);
                 assert!(engine.backend().preview.is_empty());
                 let batches: Vec<_> = engine
@@ -5483,7 +5582,7 @@ mod tests {
         engine.render_frame().unwrap();
         let stroke = engine.completed_stroke.as_ref().unwrap();
         let mut replay = Vec::new();
-        DabGenerator::generate(stroke, engine.document().color.space, &mut replay);
+        DabGenerator::generate(stroke, engine.document().composition().color.space, &mut replay);
         assert_eq!(engine.backend().persistent, replay);
         assert!(engine.backend().preview.is_empty());
     }
@@ -5515,7 +5614,7 @@ mod tests {
             DabBatch {
                 material_update: 0,
                 stroke_id: StrokeId(7),
-                layer_id: LayerId(3),
+                target: SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(3)),
                 kind: DabBatchKind::Persistent,
                 stroke_start: first_dab == 0,
                 stroke_end: false,
@@ -5578,19 +5677,22 @@ mod tests {
         use layer_core::{CanvasGeometry, CanvasRect, ImageOrientation, LayerPlacement, MeshMap, Projective, Rect};
         for mesh in [false, true] {
             let (_, mut engine) = engine("nonlinear canvas", 128, 96);
-            let id = engine.document().active_layer;
-            let mut owner = engine.document().layer(id).unwrap().clone();
-            owner.properties.extent = Some([128, 96]);
-            owner.properties.placement = LayerPlacement {
+            let id = engine.document().working.target.unwrap();
+            let mut owner = active_occurrence(engine.document()).clone();
+            owner.placement = LayerPlacement {
                 outer: Projective::rect_to_quad(Rect::from_extent([128, 96]), [[0., 0.], [140., 8.], [119., 109.], [-6., 80.]].map(|[x, y]| Point { x, y })).unwrap(),
                 mesh: mesh.then(|| std::sync::Arc::new(MeshMap::identity(Rect::from_extent([128, 96]), [3, 3]).unwrap().move_node(5, Point { x: 12., y: -7. }).unwrap())),
                 interpolation: layer_core::Interpolation::Bicubic,
             };
-            let mask_id = engine.allocate_layer_id();
-            let mut mask = layer_core::LayerMask::reveal_all(mask_id, Point::default());
-            mask.extent = Some([64, 48]);
-            owner.mask = Some(mask);
-            engine.apply_edit(Edit::ReplaceLayer(Box::new(owner))).unwrap();
+            let mut masked = engine.document().clone();
+            let mask_handle = add_mask(&mut masked, Point::default());
+            masked.artwork.coverage.get_mut(mask_handle).unwrap().domain = [64, 48];
+            owner.mask = active_occurrence(&masked).mask.clone();
+            let mask_id = SourceTarget::Coverage(mask_handle);
+            engine.apply_edit(Edit::Batch(vec![
+                Edit::Coverage(layer_core::RecordChange::insert(&engine.document().artwork.coverage, masked.artwork.coverage.get(mask_handle).unwrap().clone())),
+                replace_occurrence(engine.document(), owner),
+            ])).unwrap();
             let raw_owner = engine.document().target_raster(id).unwrap().clone();
             let raw_mask = engine.document().target_raster(mask_id).unwrap().clone();
             for geometry in [
@@ -5600,20 +5702,20 @@ mod tests {
             ] {
                 let before = engine.document().clone();
                 let point = Point { x: 23., y: 17. };
-                let old = before.layer_geometry(id).map(point).unwrap();
+                let old = before.target_geometry(id).map(point).unwrap();
                 engine.apply_canvas_geometry(&geometry).unwrap();
                 assert!(engine.document().extents_cover_canvas());
                 assert_eq!(engine.document().target_extent(id), [128, 96]);
                 assert_eq!(engine.document().target_extent(mask_id), [64, 48]);
                 assert_eq!(engine.document().target_raster(id).unwrap(), &raw_owner);
                 assert_eq!(engine.document().target_raster(mask_id).unwrap(), &raw_mask);
-                let new = engine.document().layer_geometry(id).map(point).unwrap();
+                let new = engine.document().target_geometry(id).map(point).unwrap();
                 let mapped = geometry.linear.map(old);
                 let expected = Point { x: mapped.x - geometry.rect.origin[0] as f32, y: mapped.y - geometry.rect.origin[1] as f32 };
                 assert!((new.x - expected.x).hypot(new.y - expected.y) < 0.001);
                 engine.render_frame().unwrap();
                 assert!(engine.undo().unwrap());
-                assert_eq!(engine.document().layers, before.layers);
+                assert_authored_eq(&engine.document().artwork, &before.artwork);
                 assert!(engine.redo().unwrap());
             }
         }
@@ -5621,31 +5723,30 @@ mod tests {
 
     #[test]
     fn large_selected_bake_and_cut_erase_stay_bounded_ordered_and_settle_once() {
-        use layer_core::{LayerMask, LayerOperation, LayerOperationKind, Rect, Selection};
+        use layer_core::{CoverageSnapshot, RasterOperation, RasterOperationKind, Rect, Selection};
         use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey, TILE_SIZE};
-        let mut document = Document::new("mixed bake", 3072, 2048, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-        let descriptor = RasterPlane::Color.descriptor(document.color);
+        let mut document = Document::new(layer_core::authored::PortableId::random(), 3072, 2048, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let descriptor = RasterPlane::Color.descriptor(document.composition().color);
         let tile = RasterTile::backed(TileBlob::encode(descriptor, &vec![255; descriptor.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap());
-        document.layers[0].raster = RasterRevision::backed(RasterData {
+        active_paint_mut(&mut document).raster = RasterRevision::backed(RasterData {
             tiles: [[0, 0], [11, 7]].map(|coordinate| (TileKey { plane: RasterPlane::Color, coordinate }, tile.clone())).into(),
             ..Default::default()
         });
         let (_, mut engine) = engine_with(RecordingRenderer::default(), document, view(3072, 2048), TRANSFORM);
         engine.render_frame().unwrap();
         let original = engine.document().clone();
-        let source_id = original.active_layer;
-        let output_id = engine.allocate_layer_id();
-        let output = layer_core::Layer::paint(output_id, "Selected pixels");
+        let source_id = original.working.target.unwrap();
+        let (_, output_id, insertion) = paint_insert(engine.document(), empty_paint(engine.document()), "Selected pixels", 0);
         let selected = Rect { min: Point { x: 300., y: 300. }, max: Point { x: 2700., y: 1700. } };
         let selection = Selection::polygon(selected.corners().to_vec()).unwrap();
-        let mut coverage = LayerMask::reveal_all(engine.allocate_layer_id(), Point::default());
-        coverage.default_coverage = 0.;
-        coverage.initial = Some(selection);
-        let bake = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage: coverage.clone(),
-            kind: LayerOperationKind::Bake { members: vec![original.layer(source_id).unwrap().clone()].into(), offset: Point::default() } };
-        let erase = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage,
-            kind: LayerOperationKind::Erase { alpha_locked: false } };
-        engine.insert_with_operations(vec![Edit::InsertLayer { index: 0, layer: Box::new(output) }], vec![(output_id, bake), (source_id, erase)], None).unwrap();
+        let mut coverage = CoverageSnapshot::reveal_all(engine.allocate_coverage_handle(), engine.document().composition().size, Point::default());
+        coverage.source.default_coverage = 0.;
+        coverage.source.initial = Some(selection);
+        let bake = RasterOperation { placement: layer_core::Affine::IDENTITY, coverage: coverage.clone(),
+            kind: RasterOperationKind::Bake { scene: original.snapshot(), scope: layer_core::SceneScope::Members(vec![original.working.occurrence.unwrap()].into()), offset: Point::default() } };
+        let erase = RasterOperation { placement: layer_core::Affine::IDENTITY, coverage,
+            kind: RasterOperationKind::Erase { alpha_locked: false } };
+        engine.insert_with_operations(insertion, vec![(output_id, bake), (source_id, erase)], None).unwrap();
         let mut frames = 0;
         while engine.wants_continuous_frames() {
             engine.render_frame().unwrap();
@@ -5663,10 +5764,10 @@ mod tests {
         assert_eq!(area, 2560. * 1536., "only the page-aligned selected window is baked");
         let after = engine.document().clone();
         assert!(engine.undo().unwrap());
-        assert_eq!(engine.document().layers, original.layers);
+        assert_authored_eq(&engine.document().artwork, &original.artwork);
         assert!(!engine.can_undo(), "Bake and Cut are one undo step");
         assert!(engine.redo().unwrap());
-        assert_eq!(engine.document().layers, after.layers);
+        assert_authored_eq(&engine.document().artwork, &after.artwork);
     }
 
 }

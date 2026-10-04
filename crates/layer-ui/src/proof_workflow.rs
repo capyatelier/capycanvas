@@ -8,12 +8,18 @@ use std::sync::Arc;
 
 /// Image-analysis identity deliberately excludes camera, proof and rendition
 /// settings. Hosts additionally check their GPU generation before publishing.
-#[derive(Clone, PartialEq)]
+#[derive(Clone)]
 pub struct ToneKey {
     epoch: u64,
     color: layer_core::color::DocumentColor,
     extent: [u32; 2],
-    layers: Vec<layer_core::Layer>,
+    scene: Arc<layer_core::authored::SceneSnapshot>,
+}
+impl PartialEq for ToneKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.epoch == other.epoch && self.color == other.color && self.extent == other.extent
+            && self.scene.view().same_artwork(other.scene.view())
+    }
 }
 impl ToneKey {
     /// Stale illumination is a useful drawing preview only within the same
@@ -28,13 +34,14 @@ impl ToneKey {
     pub fn can_preview_current<R: CanvasRenderer>(&self, s: &UiSession<R>) -> bool {
         let d = s.engine().document();
         !s.rendering_suspended() && self.epoch == s.state().document_file.epoch
-            && self.color == d.color && self.extent == [d.width, d.height]
+            && self.color == d.composition().color && self.extent == d.composition().size
     }
     pub fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Option<Self> {
         let d = s.engine().document();
-        (d.color.depth.is_float() && !s.rendering_suspended()).then(|| Self {
-            epoch: s.state().document_file.epoch, color: d.color,
-            extent: [d.width, d.height], layers: d.layers.iter().map(layer_core::Layer::composite_snapshot).collect(),
+        (d.composition().color.depth.is_float() && !s.rendering_suspended()).then(|| Self {
+            epoch: s.state().document_file.epoch, color: d.composition().color,
+            extent: d.composition().size,
+            scene: d.snapshot(),
         })
     }
 }
@@ -49,8 +56,8 @@ impl ProofKey {
     fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Self {
         Self {
             epoch: s.state().document_file.epoch,
-            space: s.engine().document().color.space,
-            recipe: s.engine().document().proof.clone(),
+            space: s.engine().document().composition().color.space,
+            recipe: s.engine().document().output().proof.clone(),
         }
     }
 }
@@ -200,7 +207,7 @@ impl ProofView {
             self.key = Some(key);
         }
         let visible = (s.state().soft_proof || s.state().gamut_warning)
-            && s.engine().document().proof.is_some();
+            && s.engine().document().output().proof.is_some();
         let needed =
             visible && self.cache.is_none() && self.error.is_none() && !s.rendering_suspended();
         let stage = if !visible {0} else if self.error.is_some() {1} else if self.cache.is_none() {2} else {3};
@@ -213,7 +220,7 @@ impl ProofView {
                 1 => localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_UNAVAILABLE).to_string(),
                 2 => localizer.text(crate::MessageId::COLOR_FEATURES_PROOF_PREPARING).to_string(),
                 _ => {
-                    let name = &s.engine().document().proof.as_ref().unwrap().name;
+                    let name = &s.engine().document().output().proof.as_ref().unwrap().name;
                     let name = crate::profile_library::profile_description_name((!name.is_empty()).then(|| name.clone()), localizer);
                     crate::color_feature_copy::proof_status(localizer, &name, s.state().soft_proof, s.state().gamut_warning)
                 },
@@ -293,19 +300,19 @@ pub struct ProofCopyView {
 pub fn proof_copy<R: CanvasRenderer>(s: &UiSession<R>) -> ProofCopyView {
     let document = s.engine().document();
     let localizer = s.localization();
-    let name = document.proof.as_ref().map(|recipe| &recipe.name);
+    let name = document.output().proof.as_ref().map(|recipe| &recipe.name);
     let document_profile_label = name.map(|name| crate::profile_library::profile_description_name((!name.is_empty()).then(|| name.clone()), localizer));
     let rendition = s.effective_sdr_rendition();
     ProofCopyView {
-        identity: (s.state().document_file.epoch, document.color),
-        mode: s.proof_panel_mode(), hdr: document.color.depth.is_float(), rendition,
+        identity: (s.state().document_file.epoch, document.composition().color),
+        mode: s.proof_panel_mode(), hdr: document.composition().color.depth.is_float(), rendition,
         copy: crate::color_feature_copy::ProofCopy::new(localizer),
         numbers: crate::proof_panel::localized_numbers(localizer),
         pad: crate::proof_panel::localized_pad(localizer),
         pad_values: crate::proof_panel::sdr_pad_values(rendition),
-        recipe_valid: document.proof.as_ref().is_some_and(|recipe| recipe.validate().is_ok()
+        recipe_valid: document.output().proof.as_ref().is_some_and(|recipe| recipe.validate().is_ok()
             && layer_color::profile_declared_channels(&recipe.profile).is_ok()),
-        recipe_profile_label: document_profile_label.clone().unwrap_or_else(|| document.color.space.name().into()),
+        recipe_profile_label: document_profile_label.clone().unwrap_or_else(|| document.composition().color.space.name().into()),
         document_profile_label,
         print_controls: crate::proof_panel::PrintProofControl::ALL.map(|control| serde_json::json!({"id":control,"label":control.localized_label(localizer)})),
         intents: crate::proof_panel::proof_intents(localizer),
@@ -315,11 +322,11 @@ pub fn proof_copy<R: CanvasRenderer>(s: &UiSession<R>) -> ProofCopyView {
 
 pub fn proof_form<R: CanvasRenderer>(s: &UiSession<R>) -> serde_json::Value {
     let document = s.engine().document();
-    let print=document.proof.as_ref().and_then(|p|crate::proof_panel::PrintProofSettings::from_recipe(p).ok()).unwrap_or_default();
+    let print=document.output().proof.as_ref().and_then(|p|crate::proof_panel::PrintProofSettings::from_recipe(p).ok()).unwrap_or_default();
     let mut form = serde_json::json!(proof_copy(s));
     let fields = form.as_object_mut().unwrap();
-    fields.insert("recipe".into(), serde_json::json!(document.proof.clone().unwrap_or_else(|| ProofRecipe::new(document.color.space.name().into(), ColorProfile::Builtin(document.color.space)))));
-    fields.insert("document_profile".into(), serde_json::json!(document.proof));
+    fields.insert("recipe".into(), serde_json::json!(document.output().proof.clone().unwrap_or_else(|| ProofRecipe::new(document.composition().color.space.name().into(), ColorProfile::Builtin(document.composition().color.space)))));
+    fields.insert("document_profile".into(), serde_json::json!(document.output().proof));
     fields.insert("print_settings".into(), serde_json::json!(print));
     fields.insert("profiles".into(), serde_json::json!(RgbSpace::ALL.map(crate::ExportProfile::builtin)));
     form
@@ -353,7 +360,7 @@ mod copy_tests {
             assert!(copy.to_string().len() < 32768);
             for field in ["recipe", "document_profile", "print_settings", "profiles"] { assert!(copy.get(field).is_none()); }
             assert_eq!(session.engine().checkpoint(), checkpoint);
-            let ColorProfile::Icc(retained) = &session.engine().document().proof.as_ref().unwrap().profile else { unreachable!() };
+            let ColorProfile::Icc(retained) = &session.engine().document().output().proof.as_ref().unwrap().profile else { unreachable!() };
             let ColorProfile::Icc(original) = &profile else { unreachable!() };
             assert!(Arc::ptr_eq(retained.storage(), original.storage()));
         }

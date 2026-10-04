@@ -22,11 +22,11 @@ fn marker_centroid(r: &mut WgpuRasterizer) -> [f32; 2] {
 /// Liquify dab with the preset's mode, and returns the marker's displacement.
 fn displacement(preset: DefaultBrushPreset) -> [f32; 2] {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layers = [Layer::paint(LayerId(1), "marker")];
+    let document = paint_document([128; 2], "marker");
     let mut marker = dab([1., 0., 0., 1.]);
     marker.center = Point { x: MARKER[0], y: MARKER[1] };
     marker.radii = [5.; 2];
-    submit(&mut r, &layers, &[marker], &[batch(1)], true);
+    submit(&mut r, document.scene(), &[marker], &[batch(target(&document))], true);
     let before = marker_centroid(&mut r);
     let style = preset_style(preset);
     assert_eq!(style.execution, BrushExecution::Liquify);
@@ -35,9 +35,9 @@ fn displacement(preset: DefaultBrushPreset) -> [f32; 2] {
     deform.material = [0., 0., 0., 0.6];
     let liquify = DabBatch {
         stroke_id: StrokeId(2),
-        ..crate::test_support::dab_batch(LayerId(1), style, batch(1).damage)
+        ..crate::test_support::dab_batch(target(&document), style, batch(target(&document)).damage)
     };
-    submit(&mut r, &layers, &[deform], &[liquify], false);
+    submit(&mut r, document.scene(), &[deform], &[liquify], false);
     let after = marker_centroid(&mut r);
     [after[0] - before[0], after[1] - before[1]]
 }

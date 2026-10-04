@@ -1,6 +1,18 @@
+use layer_core::authored::*;
+
 fn content_session(size: [u32; 2]) -> UiSession<Recorder> {
-    let mut doc = Document::new("content", size[0], size[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|l| l.id != layer_core::LayerId(2));
+    let mut doc = Document::new(PortableId::random(), size[0], size[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let ink = doc.working.occurrence.unwrap();
+    let paper: Vec<_> = doc.scene().order().iter().copied().filter(|h| *h != ink).collect();
+    let root = doc.composition().result;
+    doc.artwork.stacks.get_mut(root).unwrap().entries = vec![ink];
+    for handle in paper {
+        let id = doc.artwork.occurrences.id(handle).unwrap();
+        doc.artwork.occurrences.change(handle, id, None).unwrap();
+    }
+    let working = doc.working.clone();
+    let mut doc = Document::from_artwork(doc.artwork).unwrap();
+    doc.working = working;
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     invoke(&mut s, CommandId::FitCanvas);
@@ -19,13 +31,13 @@ fn reply_bounds(s: &mut UiSession<Recorder>, values: [f32; 4]) {
 }
 
 fn size_of(s: &UiSession<Recorder>) -> [u32; 2] {
-    [s.engine.document().width, s.engine.document().height]
+    s.engine.document().composition().size
 }
 
 #[test]
 fn rotating_a_non_square_image_right_turns_every_pixel_in_one_step() {
     let mut s = crop_session();
-    let paint = s.engine.document().layers[0].id;
+    let paint = s.engine.document().working.target.unwrap();
     rectangle_selection(&mut s, [100., 100., 300., 200.]);
     let before = s.engine.document().clone();
     let center = on_surface(&s, Point { x: 500., y: 400. });
@@ -40,13 +52,13 @@ fn rotating_a_non_square_image_right_turns_every_pixel_in_one_step() {
     assert_eq!(transform.placement.interpolation, layer_core::Interpolation::Nearest, "an exact permutation");
     assert_eq!(s.engine.document().target_extent(paint), [1000, 1000], "a square scratch extent");
     let turn = layer_core::Affine([0., 1., -1., 0., 800., 0.]);
-    assert_eq!(s.engine.document().selection, Some(before.selection.as_ref().unwrap().transformed(turn).unwrap()));
+    assert_eq!(s.engine.document().working.selection, Some(before.working.selection.as_ref().unwrap().transformed(turn).unwrap()));
     near_point(on_surface(&s, turn.map(Point { x: 500., y: 400. })), center, 0.01);
     invoke(&mut s, CommandId::Undo);
     s.frame(21, 21).unwrap();
     assert_eq!(size_of(&s), [1000, 800]);
-    assert_eq!(s.engine.document().layers, before.layers, "one undo step");
-    assert_eq!(s.engine.document().selection, before.selection);
+    assert_live_artwork_eq(s.engine.document(), &before);
+    assert_eq!(s.engine.document().working.selection, before.working.selection);
 }
 
 #[test]
@@ -57,20 +69,19 @@ fn trim_shrinks_to_the_visible_pixels_and_reveal_all_brings_hidden_pixels_back()
     reply_bounds(&mut s, [0., 0., 542., 456.]);
     assert_eq!(size_of(&s), [542, 456], "from the pixel at 0,0 to the right and bottom edges");
     invoke(&mut s, CommandId::Undo);
-    let paint = s.engine.document().layers[0].id;
-    s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer_core::Layer {
-        properties: layer_core::LayerProperties { offset: Point { x: -100., y: 0. }, ..s.engine.document().layers[0].properties.clone() },
-        ..s.engine.document().layers[0].clone()
-    }))).unwrap();
+    let paint = s.engine.document().working.occurrence.unwrap();
+    let mut occurrence = s.engine.document().scene().occurrence(paint).unwrap().clone();
+    occurrence.translation = Point { x: -100., y: 0. };
+    s.layer_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences, paint, Some(occurrence)).unwrap())).unwrap();
     s.frame(11, 11).unwrap();
     invoke(&mut s, CommandId::Trim);
     reply_bounds(&mut s, [166., 256., 442., 456.]);
     assert_eq!(size_of(&s), [276, 200], "only the pixels on the canvas count; the one at 0,0 lies beyond its left edge");
-    assert_eq!(s.engine.document().layer(paint).unwrap().properties.offset, Point { x: -266., y: -256. });
+    assert_eq!(s.engine.document().scene().occurrence(paint).unwrap().translation, Point { x: -266., y: -256. });
     invoke(&mut s, CommandId::RevealAll);
     reply_bounds(&mut s, [-266., -256., 276., 200.]);
     let doc = s.engine.document();
-    assert_eq!([doc.width, doc.height], [542, 456], "every pixel, including the one beyond the edge");
+    assert_eq!(doc.composition().size, [542, 456], "every pixel, including the one beyond the edge");
     invoke(&mut s, CommandId::RevealAll);
     reply_bounds(&mut s, [0., 0., 542., 456.]);
     assert_eq!(notice_text(&s), Some("Every pixel is already on the canvas"));
@@ -136,7 +147,7 @@ fn pending_bounds_keep_frames_running_and_reject_changed_drawings() {
     invoke(&mut s, CommandId::RevealAll);
     assert!(s.content_bounds.busy());
     let selection = layer_core::Selection::polygon(layer_core::Rect { min: Point { x: 1., y: 1. }, max: Point { x: 9., y: 9. } }.corners().to_vec()).unwrap();
-    s.layer_edit(layer_core::Edit::SetSelection(Some(selection))).unwrap();
+    s.layer_edit(canvas_bar_selection_edit(s.engine.document(), Some(selection))).unwrap();
     reply_bounds(&mut s, [-100., -100., 2000., 2000.]);
     assert!(!s.content_bounds.busy());
     assert_eq!(size_of(&s), [1536, 1536]);
@@ -184,14 +195,14 @@ fn transform_waits_for_measured_target_coverage_and_cancel_discards_it() {
     s.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).unwrap();
     assert!(s.content_bounds.busy());
     assert!(!s.operation.active());
-    assert_eq!(s.engine.backend_mut().bounds_requests.last().unwrap().scope, layer_core::ContentScope::Target(before.active_target()));
+    assert_eq!(s.engine.backend_mut().bounds_requests.last().unwrap().scope, layer_core::ContentScope::Target(before.active_target().unwrap()));
     reply_bounds(&mut s, [100., 100., 300., 300.]);
     assert!(!s.content_bounds.busy());
     assert!(s.operation.active());
     invoke(&mut s, CommandId::CancelTransform);
     assert_eq!(s.engine.document(), &before);
 
-    s.layer_edit(layer_core::Edit::SetSelection(Some(rectangle([110., 110., 290., 290.])))).unwrap();
+    s.layer_edit(canvas_bar_selection_edit(s.engine.document(), Some(rectangle([110., 110., 290., 290.])))).unwrap();
     s.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate }).unwrap();
     assert!(s.content_bounds.busy());
     invoke(&mut s, CommandId::CancelTransform);
@@ -214,7 +225,7 @@ mod transform_pixels {
 fn snapping_request_failures_cache_empty_without_history_or_retry_loops() {
     for retry in [false, true] {
         let mut s = content_session([1000, 800]);
-        let id = s.engine.document().active_target();
+        let id = s.engine.document().working.occurrence.unwrap();
         let before = s.engine.document().clone();
         let purpose = super::image_geometry::ContentUse::PrepareSnap(id);
         s.engine.backend_mut().bounds_wait = retry;
@@ -241,7 +252,7 @@ fn snapping_request_failures_cache_empty_without_history_or_retry_loops() {
 #[test]
 fn snapping_failed_completion_is_quiet_and_cached_for_the_current_revision() {
     let mut s = content_session([1000, 800]);
-    let id = s.engine.document().active_target();
+    let id = s.engine.document().working.occurrence.unwrap();
     let before = s.engine.document().clone();
     let purpose = super::image_geometry::ContentUse::PrepareSnap(id);
     s.request_content_bounds(purpose).unwrap();
@@ -255,15 +266,26 @@ fn snapping_failed_completion_is_quiet_and_cached_for_the_current_revision() {
     assert!(!s.engine.can_undo());
 }
 
+fn snapping_document() -> Document {
+    let mut doc = content_session([1000, 800]).engine.document().clone();
+    let ink = doc.working.occurrence.unwrap();
+    let SourceTarget::Paint(paint) = doc.working.target.unwrap() else { panic!("paint") };
+    let source = doc.artwork.paint.get(paint).unwrap().clone();
+    let other_paint = doc.artwork.paint.insert(PortableId::random(), source).unwrap();
+    let mut other = doc.scene().occurrence(ink).unwrap().clone(); other.content = OccurrenceContent::Paint(other_paint);
+    let other = doc.artwork.occurrences.insert(PortableId::random(), other).unwrap();
+    let root = doc.composition().result;
+    doc.artwork.stacks.get_mut(root).unwrap().entries.push(other);
+    doc.artwork.paint.get_mut(paint).unwrap().original = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let working = doc.working.clone();
+    let mut doc = Document::from_artwork(doc.artwork).unwrap(); doc.working = working;
+    doc
+}
+
 #[test]
 fn held_transform_nudge_defers_background_snapping_preparation_until_release() {
-    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
-    let mut other = doc.layers[0].clone();
-    other.id = doc.allocate_layer_id();
-    let target = other.id;
-    doc.layers.push(other);
-    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let doc = snapping_document();
+    let target = doc.scene().order()[1];
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     s.begin_transform().unwrap();
@@ -283,12 +305,7 @@ fn held_transform_nudge_defers_background_snapping_preparation_until_release() {
 
 #[test]
 fn failed_background_query_does_not_refuse_snapping_toggle() {
-    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
-    let mut other = doc.layers[0].clone();
-    other.id = doc.allocate_layer_id();
-    doc.layers.push(other);
-    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let doc = snapping_document();
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     s.begin_transform().unwrap();
@@ -307,12 +324,7 @@ fn failed_background_query_does_not_refuse_snapping_toggle() {
 
 #[test]
 fn blurring_held_transform_nudge_publishes_document_and_command_changes() {
-    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
-    let mut other = doc.layers[0].clone();
-    other.id = doc.allocate_layer_id();
-    doc.layers.push(other);
-    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let doc = snapping_document();
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     s.begin_transform().unwrap();
@@ -329,18 +341,13 @@ fn blurring_held_transform_nudge_publishes_document_and_command_changes() {
 
 #[test]
 fn enabled_snapping_prepares_after_pending_input_drains_without_idle_resubmission() {
-    let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
-    let mut other = doc.layers[0].clone();
-    other.id = doc.allocate_layer_id();
-    doc.layers.push(other);
-    doc.layers[0].source = Some(layer_core::color::source::rgba8_source([100, 80], |_, _| [120, 120, 120, 255]));
+    let doc = snapping_document();
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.frame(1, 1).unwrap();
     s.begin_transform().unwrap();
     if s.content_bounds.busy() { reply_bounds(&mut s, [0., 0., 100., 80.]); }
     assert!(s.operation.transforming());
-    let target = s.engine.document().layers[1].id;
+    let target = s.engine.document().scene().order()[1];
     s.dispatch(UiAction::Invoke { command: CommandId::TransformSnapping }).unwrap();
     s.cancel_content_bounds();
     let calls = s.engine.backend().bounds_attempts;
@@ -365,12 +372,19 @@ fn enabled_snapping_prepares_after_pending_input_drains_without_idle_resubmissio
 
 #[test]
 fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
-    let mut doc=Document::new("snap tree",1000,800,layer_core::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
-    doc.layers.clear();
-    let mut add=|name:&str,parent,group| {
-        let id=doc.allocate_layer_id();let mut layer=layer_core::Layer::paint(id,name);
-        if group {layer.kind=layer_core::LayerKind::Group;}
-        layer.properties.parent=parent;doc.layers.push(layer);id
+    let mut doc=Document::new(PortableId::random(),1000,800,layer_core::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
+    let old: Vec<_> = doc.artwork.occurrences.iter().map(|(h, id, _)| (h, id)).collect();
+    for (h, id) in old { doc.artwork.occurrences.change(h, id, None).unwrap(); }
+    let root = doc.composition().result;
+    doc.artwork.stacks.get_mut(root).unwrap().entries.clear();
+    let extent = doc.composition().size;
+    let mut add=|name:&str,parent:Option<OccurrenceHandle>,group| {
+        let content = if group { OccurrenceContent::Stack(doc.artwork.stacks.insert(PortableId::random(), Stack::default()).unwrap()) }
+            else { OccurrenceContent::Paint(doc.artwork.paint.insert(PortableId::random(), PaintSource { domain: extent, raster: Default::default(), original: None, operations: Default::default() }).unwrap()) };
+        let id = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(content, name)).unwrap();
+        let stack = parent.map(|h| match doc.artwork.occurrences.get(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => panic!("parent stack") }).unwrap_or(root);
+        doc.artwork.stacks.get_mut(stack).unwrap().entries.push(id);
+        id
     };
     let outer=add("Outer",None,true);
     let nested=add("Nested",Some(outer),true);
@@ -381,8 +395,9 @@ fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
     let unrelated=add("Unrelated",None,false);
     let hidden_group=add("Hidden group",None,true);
     let _hidden_child=add("Hidden child",Some(hidden_group),false);
-    doc.layers.iter_mut().find(|layer|layer.id==hidden_group).unwrap().visible=false;
-    doc.active_layer=moved;
+    doc.artwork.occurrences.get_mut(hidden_group).unwrap().visible=false;
+    let mut doc = Document::from_artwork(doc.artwork).unwrap();
+    doc.apply(doc.select_occurrence_edit(moved).unwrap()).unwrap();
     let mut s=UiSession::new(Recorder::default(),doc,[1600,1000],Platform::Gtk).unwrap();
     s.layer_interaction.tool=LayerCanvasTool::Move;
     s.operation.snapping=true;

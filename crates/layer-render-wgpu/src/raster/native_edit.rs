@@ -12,7 +12,7 @@ use layer_core::color::DocumentColor;
 mod validate;
 
 pub(crate) struct NativeEdit {
-    pub(super) backing: BTreeMap<LayerId, Arc<RasterData>>,
+    pub(super) backing: BTreeMap<SourceTarget, Arc<RasterData>>,
     pub(crate) color_cache_bytes: u64,
     /// Optional view/source caches keep the host's existing fast-residency policy.
     pub(crate) display_complete_bytes: u64,
@@ -135,14 +135,14 @@ impl NativeEdit {
 }
 
 struct Publication {
-    id: LayerId,
+    id: SourceTarget,
     revision: RasterRevision,
     data: RasterData,
 }
 pub(crate) struct NativeFrame {
     capture: Option<NativeCapture>,
     publications: Vec<Publication>,
-    pub(crate) canonical_pages: Vec<(LayerId, [u32; 2])>,
+    pub(crate) canonical_pages: Vec<(SourceTarget, [u32; 2])>,
 }
 pub(crate) struct NativeJob {
     pub frame: NativeFrame,
@@ -322,17 +322,15 @@ impl WgpuRasterizer {
         Ok(())
     }
 
-    pub(crate) fn encode_native_rasters(&mut self, layers: &[Layer], encoder: &mut submission::CommandEncoder) -> Result<Option<NativeFrame>, GpuRasterError> {
-        let Some(mut job) = self.prepare_native_rasters(layers)? else { return Ok(None); };
+    pub(crate) fn encode_native_rasters(&mut self, scene: SceneView<'_>, encoder: &mut submission::CommandEncoder) -> Result<Option<NativeFrame>, GpuRasterError> {
+        let Some(mut job) = self.prepare_native_rasters(scene)? else { return Ok(None); };
         while self.step_native_rasters(&mut job, encoder)? {}
         Ok(Some(job.frame))
     }
 
-    pub(crate) fn prepare_native_rasters(&mut self, layers: &[Layer]) -> Result<Option<NativeJob>, GpuRasterError> {
+    pub(crate) fn prepare_native_rasters(&mut self, scene: SceneView<'_>) -> Result<Option<NativeJob>, GpuRasterError> {
         if self.native_edit.is_none()
-            || !layers.iter().any(|l| {
-                l.raster.try_data().is_none() || l.masks().any(|m| m.raster.try_data().is_none())
-            })
+            || !source_access::placed_targets(scene).any(|target| scene.raster(target).is_some_and(|r| r.try_data().is_none()))
         {
             return Ok(None);
         }
@@ -351,9 +349,8 @@ impl WgpuRasterizer {
         runtime.ensure_worker(&self.device, &self.raster_buffers)?;
         let runtime = self.raster.as_ref().unwrap();
         let mut inputs = Vec::new();
-        for layer in layers {
-            for (id, revision) in std::iter::once((layer.id, &layer.raster))
-                .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
+        for target in source_access::placed_targets(scene).filter(|t| scene.raster(*t).is_some()) {
+            for (id, revision) in std::iter::once((target, scene.raster(target).unwrap()))
             {
                 if revision.try_data().is_some() {
                     continue;

@@ -2,12 +2,12 @@
 
 [Technical documentation](../README.md)
 
-This is the target shared semantic contract for the
-[file-format implementation](../development/capy-format.md). It fixes ownership
-and API boundaries for the final codec and editor. The existing application still
-uses `Document.layers` until the M3 cutover; this guide does not claim that cutover
-or its qualification has happened. [Package grammar](capy-package.md) owns wire
-spelling, integrity, preservation and transport rules.
+The shared editor and codec use the typed authored model in
+[`authored/artwork.rs`](../../crates/layer-core/src/authored/artwork.rs).
+[`Document`](../../crates/layer-core/src/lib.rs) owns that artwork and separate
+working state. Renderers consume typed scene views and immutable snapshots.
+[Package grammar](capy-package.md) owns wire spelling, integrity, preservation and
+transport rules; this guide owns runtime state and resource lifetime.
 
 ## Objects and identity
 
@@ -42,97 +42,106 @@ A future linked duplicate has multiple occurrences referring to one source; the
 baseline preserves that shape without enabling edits to it.
 
 The `authored::GraphShape` projection validates relationship types, cardinalities
-and dependency bounds. Its `Editable` result qualifies only topology; native
+and dependency bounds. Its `Editable` result qualifies only topology; editable
 adoption also requires payload, wire-schema, integrity and device admission.
 The projection owns no pixel data and is built at structural boundaries, never
 per frame. `authored::Store` supplies the stable typed slots.
 
-## Complete ownership mapping
+## Records and working state
 
-The inventories below cover the current fields of
-[`Document` and `Layer`](../../crates/layer-core/src/lib.rs),
-[`LayerProperties` and `LayerMask`](../../crates/layer-core/src/layers.rs) and
-[`EffectProgram` and `EffectInstance`](../../crates/layer-core/src/effects.rs).
-“Retained” means owned by immutable authored snapshots, undo records or accepted
-jobs for as long as any owner needs the value. Defaults describe new authored
-values; the package grammar specifies which values may be omitted on wire.
-Required values cannot acquire defaults from current UI preferences.
+[`Artwork`](../../crates/layer-core/src/authored/artwork.rs) holds the ten typed
+stores, root composition, default output, photo metadata and retained ancillary
+extensions. [`Store<T>`](../../crates/layer-core/src/authored/store.rs) shares its
+slot inventory and immutable record owners; a changed record replaces only that
+owner. Its portable ID belongs to the slot rather than a field inside the record.
+Snapshots share unchanged stores and records.
 
-### Document
+The tables list runtime fields and their contracts. The package grammar specifies
+which values may be omitted on wire. Required values cannot acquire defaults from
+current UI preferences.
 
-| Current field | Authoritative owner, default and units | Required assertion |
+### Document and working state
+
+| Field | Owner and default | Required assertion |
 | --- | --- | --- |
-| `id` | Artwork envelope portable identity; new unique ID, retained for the drawing lifetime. | Save/reopen preserves identity; opening the same ID twice does not share mutable stores. |
-| `width`, `height` | Composition frame extent in integer local pixels; explicit, positive dimensions. Composition origin is explicit, initially `[0,0]`. | Crop/grow changes the frame without discarding out-of-frame source pixels. |
-| `color` | Composition working RGB primaries and committed sample depth; new default sRGB/U8. | Preserve U8/U16/F16/F32 codes and independent imported interpretation. |
-| `blend_space` | Composition blend domain, initially Linear. | Perceptual and Linear evaluate according to their frozen rules; admission restrictions remain separate from resource layout. |
-| `resolution` | Composition physical density, absent unless authored; exact positive rational pixels per inch, centimetre or metre on each axis. | Round-trip both rational pairs and unit without normalization or rounding. |
-| `proof` | Output proof intent, initially absent; its profile is an immutable resource. | Preserve name, profile, conversion intent, black-point compensation, paper and black-ink simulation flags; temporary proof toggles are omitted. |
-| `metadata` | Artwork envelope photo metadata, initially no Exif, XMP or IPTC blocks. | Preserve exact opaque blocks, including metadata unrelated to the visible output. Placing another image does not replace these blocks. |
-| `sdr_rendition` | Output delivery intent; exposure in stops, contrast multiplier, headroom in stops above RGB 1, highlight-color fraction and balance. Defaults are `0`, `1`, `2.3004484`, `0.3`, `0`. | All five values survive save/reopen; display capability never changes authored intent. |
-| `layers` | Separate typed stores and composition root stack; no flat editable authority. | Stack order and membership reproduce composition, including empty stacks and retained unplaced objects. |
-| `active_layer`, `active_mask` | Shared working state: optional selected occurrence and explicit target; new drawing chooses its first paint occurrence, empty artwork has no target. | Portable save omits both; delete/undo repairs or restores both atomically. |
-| `selection` | Shared working selection, initially absent, in composition coordinates. | Portable save omits it; shared selection undo, painting restrictions and parked tabs retain it. |
-| `reference_layers` | Authored `reference` designation on occurrences, initially false. | Preserve reference membership independently of visibility and rebuild reference-query scopes after grouping/reorder. |
-| `rulers` | Authored guide inventory; initially empty. Geometry is in composition pixels and has stable authored identity. | Straight, Parallel and Radial geometry survives round-trip and undo; stroke constraints remain transient snapshots. |
-| `revision` | Monotonic runtime mutation generation. | Omit on wire; asynchronous work cannot use a portable ID alone to accept a result. |
-| `next_layer_id`, `next_stroke_id` | Typed-store allocators and transient contact allocator. | Omit on wire; reopening cannot collide with retained objects and allocator exhaustion cannot wrap. |
+| `Document.artwork` | Typed authored stores and identities. | Save/reopen preserves every retained authored record, including hidden and unplaced content. |
+| `Document.owner` | Fresh runtime document owner. | Equal portable IDs from independent opens cannot admit each other's asynchronous results. |
+| `Document.revision` | Monotonic runtime mutation generation. | Omit on wire; use owner and relevant generations when accepting asynchronous work. |
+| `Document.scene_index` | Shared derived order, parent and source-use indexes. | Rebuild at structural publication; source-only painting and parameter edits keep the same topology index. |
+| `Document.next_stroke_id` | Transient contact allocator. | Omit on wire; exhaustion fails before mutation. |
+| `WorkingState.occurrence`, `target` | Optional selected occurrence and explicit `SourceTarget`; a new drawing chooses its first paint occurrence. | Delete/undo repairs or restores both atomically; portable save omits them. |
+| `WorkingState.selection` | Optional current selection in composition coordinates. | Portable save omits it; selection undo, painting restrictions and parked tabs retain it. |
+| `WorkingState.selection_visibility` | Transient per-occurrence overrides for saved-selection display; absent entries inherit authored visibility. | Navigation never edits `Occurrence.visible`; delete repairs overrides, undo restores them, and portable save omits them. |
+| `WorkingState.inspect_mask` | Optional occurrence whose mask is inspected. | Omit from portable artwork and output pixels. |
+| `WorkingState.generation` | Runtime working-state generation. | Reject stale working requests without treating navigation as an authored edit. |
 
 `DocumentNames` supplies localized initial names. Created occurrence names are
-literal authored strings, not live localization keys. Window titles, locations,
+literal authored strings, not live localization keys. A new drawing has a white
+Solid Color effect named Paper at the bottom, without a mask or special layer
+restrictions. Window titles, locations,
 permissions, tab order, camera, tool settings and view toggles remain with their
-existing shared working/session or workspace owners.
+shared session or workspace owners.
 
-### Layer and properties
+### Composition, stacks and output
 
-| Current field | Authoritative owner, default and units | Required assertion |
+| Field | Meaning, default and units | Required assertion |
 | --- | --- | --- |
-| `Layer.id` | Occurrence portable ID plus typed handle. Content has a distinct identity. | Rename/reorder preserves both; independent duplication changes both. |
-| `name` | Occurrence name; literal UTF-8, supplied at creation. | Preserve exactly without pixel invalidation. |
-| `kind` | Typed occurrence content: paint-source use, nested stack, effect or saved selection. | No fake paint source for a group, adjustment, saved selection. |
-| `visible` | Occurrence contribution visibility, initially true. | Hiding contribution cannot disable a source demanded by another explicit input. |
-| `opacity` | Occurrence contribution factor, initially 1, finite `[0,1]`. | Opacity affects this occurrence only and preserves pass-through interpolation. |
-| `raster` | Paint-source immutable sparse revision, initially empty. Color and material planes belong to that source. | Exact tile codes and unchanged compressed bytes survive capture; a missing override reveals the imported base. |
-| `source` | Paint-source optional immutable imported base; absent for new paint. | Preserve Original/Rasterized role, dimensions, physical density, profile, assumed-profile flag and samples separately from overrides. |
-| `properties` | Split according to the next rows. | No aggregate old-layer replacement is necessary to edit one owner. |
-| `mask` | Optional inline occurrence mask use in stable slot `mask`, referencing a coverage source. | Mask source edits differ from enabled/link/placement edits; no mask-layer ID convention remains. |
-| `pending_operations` | Transient accepted commands retained by engine/publication jobs. | Omit commands from portable data; capture their committed revision promises or refuse a boundary that cannot be represented coherently. |
-| `effect` | Reference to an effect application; absent for non-effect content. Application identity differs from definition identity. | Shared definitions remain shared across save and undo. |
-| `selection` | Saved-selection authored record, referenced by a non-compositing occurrence. | Preserve geometry/coverage independently of the current working selection; no contribution to exported color. |
-| `parent` | Derived containing-stack/group index; no authored copy. | Reorder/group uses one membership transaction; encode only stack order. |
-| `offset` | Occurrence translation in enclosing stack pixels, initially zero. | Preserve inherited ordinary-group offsets, including masks and unplaced groups. |
-| `placement` | Occurrence-local retained placement, initially identity projective map, no mesh, Linear interpolation. | Preserve projective matrix, cubic mesh geometry and interpolation; generated tessellation/GPU buffers are omitted. |
-| `alpha_locked` | Occurrence editing lock, initially false. | Retain paint behavior without changing source sample identity. |
-| `locked` | Occurrence editing lock, initially false; inherited group lock is derived. | Prevent current edits while permitting valid undo restoration. |
-| `clipped` | Occurrence clipping membership, initially false. | Clipping base follows stack position; no second saved base-ID edge. |
-| `blend` | Occurrence blend operation, initially Normal. | Preserve blend mode and the clipped pass-through rule. |
-| `selection_mask` | Saved-selection authored display color and opacity; defaults sRGB red `[1,0,0,1]` and `0.5`. | Preserve named selection overlay preferences; overlay stays out of output pixels. |
-| `extent` | Explicit source-local domain for paint and coverage; an effect/generator's local domain belongs to its application; selection geometry retains its own domain. Group frame is inherited from composition, never a new image. | Materialize the current effective local extent before removing the fallback field; shrinking canvas does not shrink sources or masks. |
+| `Artwork.id` | Drawing portable identity; new unique ID. | Preserve for the drawing lifetime; opening the same ID twice does not share mutable stores. |
+| `Artwork.root`, `default_output` | Typed composition and output handles. | Resolve portable references once on decode; handles never become portable identities. |
+| `Composition.size`, `origin` | Positive integer frame extent and explicit origin in local pixels; origin initially zero. | Crop/grow changes the frame without discarding out-of-frame source pixels. |
+| `Composition.color` | Working RGB primaries and committed sample depth; default sRGB/U8. | Preserve U8/U16/F16/F32 codes and independent imported interpretation. |
+| `Composition.blend` | Blend domain, initially Linear. | Perceptual and Linear retain their evaluation rules and admission restrictions. |
+| `Composition.resolution` | Optional exact positive rational physical density on both axes, with inch, centimetre or metre units. | Round-trip rational pairs and units without normalization; changing resolution alone does not invalidate pixels. |
+| `Composition.result`, `Stack.entries` | Typed result stack and front-to-back occurrence order. | Preserve membership, including empty stacks; no parallel flat order or authored parent field. |
+| `Output.composition`, `name` | Output source composition and literal UTF-8 name. | Preserve output identity independently of presentation name. |
+| `Output.context` | Explicit elapsed time and effective effect phases. | Evaluate captured source roots at these phases, never reconstruct phases from elapsed time and the latest rate. |
+| `Output.frame`, `scale` | Optional output frame and positive delivery scale, initially absent and `[1,1]`. | Output framing is independent of composition and source domains. |
+| `Output.proof` | Optional proof intent with immutable profile resource. | Preserve name, profile, intent, black-point compensation, paper and black-ink simulation; temporary proof toggles are omitted. |
+| `Output.sdr` | Exposure, contrast, headroom, highlight-color fraction and balance; defaults `0`, `1`, `2.3004484`, `0.3`, `0`. | All five values survive save/reopen; screen capability never changes authored intent. |
+| `Artwork.metadata` | Exact opaque Exif, XMP and IPTC blocks, initially absent. | Preserve metadata unrelated to output; placing another image does not replace drawing metadata. |
+| `Artwork.extensions` | Retained ancillary records and immutable resource ranges. | Apply copy-safety and reference-closure rules without losing original encoded bytes. |
+| `Guides.rulers` | Stable portable ruler IDs and Straight, Parallel or Radial geometry in composition pixels, initially empty. | Round-trip and undo preserve geometry and identity; stroke constraints remain transient snapshots. |
 
-The composition frame, source-local domain, occurrence placement and output crop
-are independent. Existing paint local extent is the stored extent (or canvas)
-expanded to contain the imported image. A mask's stored extent falls back to its
-owner's effective extent. The cutover resolves these fallbacks into explicit
-source domains. Whole-tile rebasing changes domain coordinates and placement in
-one transaction without losing hidden tiles. Apply Transform to Pixels publishes
-new source roots and the corresponding placement together.
+### Occurrences and paint sources
 
-### Coverage and mask use
-
-| Current `LayerMask` field | Authoritative owner, default and units | Required assertion |
+| Field | Meaning, default and units | Required assertion |
 | --- | --- | --- |
-| `id` | Coverage-source identity and handle; the use is addressed by occurrence plus `mask` slot. | No source/occurrence ID overloading; mask sources retain identity through unlink/relink. |
-| `raster` | Coverage-source sparse immutable scalar revision, initially empty. | Missing tiles retain declared initial/default coverage; no interpretation as image alpha or luminance. |
-| `enabled` | Mask use, initially true. | Disable changes application only, never source data. |
-| `linked` | Mask use, initially true. | Linked source coordinates follow owner placement; toggling preserves displayed coverage. |
-| `placement` | Mask-use independent projective geometry, initially identity. | Preserve mask geometry and the owner's pre-map through projective/mesh placement. |
-| `extent` | Explicit coverage-source domain in local pixels; resolve old fallback at construction/cutover. | Preserve coverage outside the composition frame. |
-| `offset` | Mask-use translation in its defined parent domain. | Preserve independent unlinked placement and inherited group translation. |
-| `initial` | Optional retained coverage-source selection geometry or scalar resource; initially absent. | Preserve contour even/odd rule, affine map, inversion and immutable pixel coverage without rasterizing contours at save. |
-| `default_coverage` | Coverage-source finite scalar `[0,1]`, initially 1 for Reveal All. | Freeze missing-tile and out-of-bounds coverage independently of use inversion. |
-| `inverted` | Mask use, initially false. | Apply inversion at its defined composition stage; initial-selection inversion remains separate. |
-| `pending_operations` | Transient coverage commands and their retained roots. | Omit commands; one accepted publication owns the resulting committed scalar revision. |
-| `show_area` | Shared working mask-inspection state, initially false. | Omit from portable source and previews; retain only in working/session ownership. |
+| `Occurrence.content` | Paint-source use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
+| `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
+| `Occurrence.visible` | Contribution visibility, initially true. | Hiding contribution does not disable a source demanded by an explicit input. |
+| `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
+| `Occurrence.blend`, `clipped` | Blend operation and clipping membership, initially Normal and false. | Clipping bases follow stack position; preserve the clipped pass-through rule. |
+| `Occurrence.translation` | Translation in enclosing-stack pixels, initially zero. | Preserve inherited group offsets, including mask placement. |
+| `Occurrence.placement` | Local retained projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Retain analytic geometry; omit generated tessellation and GPU buffers. |
+| `Occurrence.locked`, `alpha_locked` | Editing locks, initially false. | Derive ancestor locks; valid undo restores records without changing source sample identity. |
+| `Occurrence.reference` | Authored reference designation, initially false. | Preserve independently of visibility and rebuild reference scopes after grouping or reorder. |
+| `Occurrence.mask` | Optional `MaskUse` in the occurrence's mask slot. | Source edits differ from use enablement, linkage, inversion and placement edits. |
+| `PaintSource.domain` | Explicit local pixel domain. | Canvas shrink does not shrink the source; domains and occurrence placement remain independent. |
+| `PaintSource.raster` | Immutable sparse revision, initially empty, with color and material planes. | Preserve tile codes and unchanged compressed bytes; missing overrides reveal the imported base. |
+| `PaintSource.original` | Optional immutable imported base, absent for new paint. | Preserve Original/Rasterized role, extent, density, profile, assumed-profile flag and samples separately from overrides. |
+| `PaintSource.operations` | Accepted transient raster commands and immutable inputs. | Package preparation refuses unfinished commands; represented pending revision promises may be retained. |
+
+Composition frame, source domain, occurrence placement and output frame are
+independent. Source domains are explicit and do not fall back to canvas size.
+Whole-tile rebasing changes local coordinates and placement in one transaction
+without losing hidden tiles. Apply Transform to Pixels publishes new source roots
+and corresponding placement together.
+
+### Coverage, mask use and saved selections
+
+| Field | Meaning, default and units | Required assertion |
+| --- | --- | --- |
+| `CoverageSource.domain` | Explicit local pixel domain. | Preserve coverage outside the composition frame. |
+| `CoverageSource.raster` | Sparse immutable scalar revision, initially empty. | Missing tiles retain declared initial/default coverage; coverage is not image alpha or luminance. |
+| `CoverageSource.initial` | Optional retained selection geometry or scalar resource, initially absent. | Preserve contour even/odd rule, affine map, inversion and pixel coverage without rasterizing contours at save. |
+| `CoverageSource.default_coverage` | Finite scalar `[0,1]`, initially 1 for Reveal All. | Freeze missing-tile and out-of-bounds coverage independently of use inversion. |
+| `CoverageSource.operations` | Accepted transient coverage commands and retained inputs. | Omit commands from portable data; retain the committed scalar revision promise. |
+| `MaskUse.source` | Typed coverage handle; use identity is occurrence plus mask slot. | Unlink/relink preserves coverage-source identity. |
+| `MaskUse.enabled`, `linked` | Application and placement linkage, initially true. | Disable preserves source data; toggling linkage preserves displayed coverage. |
+| `MaskUse.translation`, `placement` | Translation in the defined parent domain and independent projective geometry, initially zero and identity. | Preserve unlinked placement and owner pre-maps through projective/mesh placement. |
+| `MaskUse.inverted` | Use inversion, initially false. | Apply at its declared stage; initial-selection inversion stays separate. |
+| `SavedSelection.selection` | Authored `Selection` geometry or immutable pixel coverage. | Preserve independently of current working selection; do not composite exported color. |
+| `SavedSelection.display` | Overlay color and opacity, default sRGB red `[1,0,0,1]` and `0.5`. | Preserve named selection display properties while omitting overlays from output. |
 
 Saved selections retain `Selection.shape`, `affine` and `inverted`. Contours use
 finite pixel coordinates and the even/odd rule. Pixel selections retain origin,
@@ -146,7 +155,8 @@ working state and remains undoable without marking artwork dirty.
 A paint source retains `SourceImage.kind`, `extent`, `resolution`,
 `interpretation.{channels,depth,profile,profile_assumed}` and `tiles` together.
 Original images keep independent Gray, GrayAlpha, RGB, RGBA or CMYK interpretation.
-Rasterized images retain explicit working RGBA interpretation. ICC bytes are
+Rasterized images retain explicit working RGBA interpretation, matching committed
+depth and profile with `profile_assumed` false. ICC bytes are
 immutable resources; equal profiles may share bytes without merging source IDs.
 Physical resolution is optional and retains exact rational units. Future imported
 per-source descriptive metadata belongs to the source, not the drawing's photo
@@ -161,19 +171,24 @@ Absent material state stays absent. Per-contact reservoirs and coverage are
 transient. Save/reopen must preserve both the present appearance and the next
 stroke's wet behavior.
 
-A resource identity comprises immutable owner and block identity; interpretation
-participates in decoded-cache identity. A portable resource ID, byte offset,
-checksum or `Arc` address alone does not establish identity across independent
-opens. Unchanged resources keep the same runtime identity across captures,
-independent of archive layout. Integrity checks and optional strong deduplication
-remain separate from this ownership rule.
+A resource identity comprises immutable owner and block identity. Loaded tile
+cache keys use that identity; generated tiles may use their pixel descriptor and
+compressed fingerprint prepared on the compression worker. Both include sample
+interpretation and require no decoded hashing on opening or input. A portable
+resource ID, byte offset, checksum or `Arc` address alone does not establish
+identity across independent opens. Unchanged resources keep their runtime identity
+across captures, independent of archive layout. Integrity checks and optional
+strong deduplication remain separate from editable source identity.
 
 ### Effects
 
-| Current field | Authoritative owner and defaults | Required assertion |
+| Field | Authoritative owner and defaults | Required assertion |
 | --- | --- | --- |
-| `EffectInstance.program` | Shared immutable effect-definition reference. | Capture/undo preserves one definition owner; saving does not detach by mutating a cloned program. |
-| `EffectInstance.values` | Effect application values addressed by stable parameter keys. | Decode once to compact ABI slots; rename/reorder of controls never retargets values. |
+| `EffectApplication.definition` | Typed reference to an immutable authored definition. | Capture/undo preserves one definition owner; application and definition identities remain distinct. |
+| `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
+| `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
+| `Definition.program` | Shared immutable `EffectProgram`. | Saving retains its owner rather than detaching or mutating program metadata. |
+| `Definition.dimensions` | Stable-key semantic dimensions: Scalar, Angle, Time, SourcePixels, CompositionPixels or Normalized. | Resize follows declared dimensions rather than labels or control positions. |
 | `EffectProgram.abi`, `id` | Definition's execution ABI and program identity, distinct from its portable authored ID and semantic type version. | Validate ABI/slot layout before admission; unsupported definitions remain preserved. |
 | `label` | Definition presentation metadata. | Preserve literal/localized label representation independently of semantic identity. |
 | `constant_color` | Optional generator contract naming its color parameter. | Static pointwise fills evaluate directly from the tagged color, including its alpha; the definition and parameter survive save and undo. |
@@ -210,6 +225,13 @@ Validation distinguishes malformed data, valid unsupported content and device
 admission failure. Validate every retained object, including disconnected and
 unplaced content, before choosing editable mode. Visibility and output reachability
 do not hide unsupported semantics.
+
+`Document::validate_integrity` checks retained payloads and resource representations;
+`Document::admit` checks execution limits, and `validate` combines both. Native
+`ImportedDocument` candidates retain their original backing, output inventory and
+verified preview through color and renderer preparation. Unsupported execution
+returns Preserved; invalid required data returns Recovered view or Failure.
+Cancellation remains cancellation and cannot publish either an editor or a view.
 
 1. Check unique IDs, reference existence, relation types, finite numbers, domains,
    resource descriptors and required parameter/port keys. Resource references do
@@ -262,15 +284,25 @@ camera, tools, tabs and preferences. One transaction can update artwork and work
 state atomically. Working-only changes do not advance the artwork saved checkpoint;
 selection undo remains in shared history.
 
-A drawing target contains a typed paint/coverage/saved-selection destination and
-its occurrence context. Stroke admission resolves group locks, mask linkage,
-coordinates and source generation once. The source handle selects mutable backing;
+`SourceTarget` selects a typed paint, coverage or saved-selection destination.
+`WorkingState.occurrence` supplies the occurrence context separately. Stroke
+admission resolves group locks, mask linkage, coordinates and source generation
+once. The source handle selects mutable backing;
 the occurrence context selects placement and editing policy. A query for an
 occurrence is not a query for its raw source. Deleted or changed targets are
 revalidated at a contact boundary, never silently rerouted mid-stroke.
 
-Structural edits validate their complete candidate before publication. Inverse
-edits retain typed records, source roots, parameters and affected working state.
+[`Edit`](../../crates/layer-core/src/lib.rs) has one `RecordChange<T>` variant per
+authored store, `Working`, `SetRaster` and an atomic `Batch`. A record change binds
+a typed handle to its portable ID and an optional replacement; absence removes
+the live value. `Document.apply` validates the final candidate and returns its
+inverse. Structural batches rebuild topology only after every record change;
+raster and parameter changes validate payloads without rebuilding topology.
+`Edit.changes_image(&Document)` distinguishes pixel changes from names, locks,
+reference designation and physical resolution.
+
+Inverse edits retain typed records, source roots, parameters and affected working
+state.
 Deletion explicitly chooses whether to remove exclusive content with its use;
 shared or intentionally unplaced content cannot disappear as a side effect.
 Duplicate/paste remaps selected authored identities and visible bindings, while
@@ -279,9 +311,16 @@ license to clone content whose copy contract is unknown.
 
 Undo/redo restores the same handles and immutable roots, with admission in both
 directions. It does not reconstruct a picture or allocate replacement identities.
-History accounting counts actual shared owners across live stores, undo/redo,
-parked tabs, snapshots and accepted jobs. Removing the last rendered use does not
-release a source still held by a bake, contact-start read, history or save.
+[`RootInventory`](../../crates/layer-core/src/lib.rs) traverses immutable rasters,
+originals, selections, LUTs, meshes, profiles, programs and ancillary package
+backing, including retained command inputs. Ancillary descriptors and resident
+package owners are counted once across shared resources and retained inventories.
+The package byte source reports resident ownership without reading ranges; file
+backing without a memory cache reports zero resident payload bytes. Current ownership accounting deduplicates shared backing held by
+live stores and snapshots. History admission reserves both forward and inverse
+ownership after pending producers release temporary inputs; a bake retaining old
+inputs cannot hide the eventual cost of undo. Removing the last rendered use does
+not release a source still held by a bake, contact-start read, history or save.
 
 `RasterRevision` and `RasterTile` remain immutable single-publication promises.
 Capture can retain pending promises; workers await them off UI/input/render
@@ -294,23 +333,35 @@ already captured for save.
 
 A borrowed typed scene view exposes composition, stacks, occurrences, source roots,
 effects and output context to the common evaluator. An owned scene snapshot may
-share that metadata and immutable roots across worker boundaries. Neither form
-builds `Layer` records or owns a second editable document. A warmed source update
+share that metadata and immutable roots across worker boundaries. Both forms
+access the authored stores directly. A warmed source update
 changes source generation and damage, with no authored topology rebuild or new
 lowering pass. Structural publication atomically supplies new topology and indexes.
 A worker that missed its baseline or recreated its device requests a full snapshot.
 
+`Document.scene()` supplies `SceneView` over authored stores and the current
+`SceneIndex`, bound to runtime owner and revision. `Document.snapshot()` uses the
+default output context; `snapshot_with_context` supplies an explicit captured
+context. `SceneSnapshot` retains artwork, index, owner, revision, context, scope
+and evaluation offset, excluding working selection and mask inspection.
+`SceneScope` selects All, Raw source, Members or a Prefix before an occurrence.
+Member scopes preserve original placement ancestry while evaluating the selected
+contributors through their scoped parents; they do not copy or mutate occurrences.
+
 Queries address raw sources, placed occurrences, scalar coverage, stack prefixes,
 effect inputs or outputs against an immutable scene revision and evaluation
-context. Reference queries retain a selected scope, not copied layers with changed
-visibility. Effect comparison retains an effect-application value snapshot, not
-`Box<Layer>`. Bake/merge retains the prior evaluated scope and source roots through
+context. Reference queries retain their scope and original occurrence records.
+Effect comparison retains an `EffectApplication` value snapshot. Bake/merge
+retains the prior evaluated scope and source roots through
 destination publication, even after source occurrences leave the live stack.
 
 `ArtworkQuery` and source-analysis keys identify typed effect input scope,
 contributing source generations, topology, definition/parameter dependencies,
-ancestor placement and captured phases. Name/UI-order changes cannot invalidate
-pixels; a changed upstream source or effective phase must invalidate its analysis.
+ancestor placement and captured phases. Occurrence names and control presentation
+order do not invalidate pixels; authored stack order remains an evaluation
+dependency. A changed upstream source or effective phase invalidates analysis. Captured phases
+take priority over elapsed-time fallback. Raw source queries exclude effect phases
+from their pixel dependencies.
 An effect's own parameter changes retain reusable analysis when its input contract
 is unchanged. Candidate acceptance checks document/store owner, activation,
 request and relevant scene/source generations; cancelled or stale jobs cannot
@@ -327,19 +378,27 @@ handling, native precision and display/exact publication order.
 
 ## Capture, phases and recovery extension
 
-Shared capture returns immutable authored artwork, an output evaluation context,
-and a token containing document/session identity, activation generation, artwork
-checkpoint and working-state generation. The caller need not clone history.
+[`Editor.capture(session_generation, EvaluationContext)`](../../crates/layer-core/src/lib.rs)
+returns [`ArtworkCapture`](../../crates/layer-core/src/authored/artwork.rs) with
+shared immutable artwork and the captured default output context. Its
+[`CaptureCheckpoint`](../../crates/layer-core/src/authored/artwork.rs) binds `owner`, `document`, `session_generation`,
+`artwork_generation`, `working_generation` and `edit_checkpoint`.
+[`CanvasEngine::capture_artwork`](../../crates/layer-engine/src/canvas.rs) and the
+host capture barrier supply the context from the matching successful source
+submission. Capture filters removed effects from the supplied phase inventory;
+it never reconstructs integrated phases. The caller need not clone history.
 Resources are enumerable directly from the capture, independently of ZIP writing.
 A future private session/history codec can capture working state and bounded
 history at this same ordered boundary without extending the portable manifest.
 
 The output context pairs source roots, effect phases and source-analysis inputs
 from one committed boundary. It includes composition/output identity, framing,
-working/blend interpretation and delivery intent. Paper is an ordinary Solid Color effect occurrence; selection
-and mask-inspection overlays are excluded. Preview generation is optional and
-uses this exact context. Preview failure cannot discard successfully captured
-source, acknowledge a newer checkpoint or require converting source to a bitmap.
+working/blend interpretation and delivery intent. Paper is an ordinary Solid Color
+effect occurrence; selection and mask-inspection overlays are excluded. Preview generation is optional and
+uses this exact context. Admission compares both the capture checkpoint and its
+complete evaluation context, including phases when no edit has occurred. Preview
+failure cannot discard successfully captured source, acknowledge a newer
+checkpoint or require converting source to a bitmap.
 
 Each time-dependent effect carries an effective captured phase in seconds,
 addressed by effect identity. Opening seeds its playback clock at the saved phase
@@ -361,24 +420,36 @@ A failed, cancelled or stale completion cannot acknowledge newer work, retire
 another generation's resources or resurrect a closed drawing. Save As and atomic
 replacement retain immutable backing ownership for old snapshots and history.
 
-The portable resource visitor selects all authored roots, including hidden and
-unplaced content. History/session traversal uses the same resource ownership
-boundary but selects its own roots. Current recovery can write captures through
-the package writer; future recovery must not require constructing, reopening or
-unpacking a complete archive to enumerate metadata and unchanged resources.
+[`artwork_records`](../../crates/layer-core/src/package/artwork_records.rs) and
+[`ResourceInventory`](../../crates/layer-core/src/package/resources.rs) select all
+authored roots, including hidden and unplaced content. History/session traversal
+uses the same immutable owners but selects its own roots.
+[`PreparedTransfer`](../../crates/layer-core/src/package/transfer.rs) reuses those
+wire adapters to expose metadata and bounded resource payload chunks without ZIP
+assembly. Its transient typed-store layout preserves handle slots, including
+tombstones, across worker heaps; that layout does not enter a portable package.
+Optional working selection uses the shared selection wire adapter outside the
+artwork manifest. Verified adoption installs immutable tile, lookup and selection
+owners without decoding, hashing or color management on the UI thread. Ancillary
+references can retain original encoded bytes while sharing one resource ID with
+live authored content.
+
+Current recovery writes captures through `PreparedPackage`; enumerating metadata
+and unchanged resources does not require constructing or reopening an archive.
 Private session restoration, persisted inverse edits, incremental storage and
 recovery lifecycle changes belong to the later
 [automatic-recovery work](../development/autorecovery.md).
 
 ## Regression oracles
 
-These existing tests define behavior to preserve; they do not establish that the
-new implementation passes it.
+These tests define the contracts. Their presence does not establish a passing run
+or qualify host behavior and performance.
 
 | Boundary | Existing oracle |
 | --- | --- |
 | Bake lifetime and composition | [`merge_tests.rs`](../../crates/layer-core/src/merge_tests.rs) and [`scene/stack.rs`](../../crates/layer-render-wgpu/src/scene/stack.rs) |
-| Shared roots, selection and history admission | [`history_budget/tests.rs`](../../crates/layer-core/src/history_budget/tests.rs) and [`raster/restore_tests.rs`](../../crates/layer-render-wgpu/src/raster/restore_tests.rs) |
+| Shared roots, selection and history admission | [`history_budget/tests.rs`](../../crates/layer-core/src/history_budget/tests.rs), [`retained_geometry_tests.rs`](../../crates/layer-core/src/retained_geometry_tests.rs) and [`raster/restore_tests.rs`](../../crates/layer-render-wgpu/src/raster/restore_tests.rs) |
+| Portable codec, verified transfer and exact preview context | [`package/codec/tests.rs`](../../crates/layer-core/src/package/codec/tests.rs), [`package/transfer.rs`](../../crates/layer-core/src/package/transfer.rs) and [`authored/tests.rs`](../../crates/layer-core/src/authored/tests.rs) |
 | Groups, masks, native precision and transforms | [`scene/scale/tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/tests.rs), [`effect_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/effect_tests.rs), [`transform_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/transform_tests.rs) and [`placement_material_tests.rs`](../../crates/layer-render-wgpu/src/placement_material_tests.rs) |
 | Captured phases and source-aware analysis | [`artwork_sample_tests.rs`](../../crates/layer-render-wgpu/src/artwork_sample_tests.rs), [`effect_analysis_lease_tests.rs`](../../crates/layer-render-wgpu/src/effect_analysis_lease_tests.rs) and [`snapshot/tests/local_adjustments.rs`](../../crates/layer-render-wgpu/src/snapshot/tests/local_adjustments.rs) |
 | Committed capture and late correction | [`canvas.rs`](../../crates/layer-engine/src/canvas.rs), [`raster/native_tests.rs`](../../crates/layer-render-wgpu/src/raster/native_tests.rs) and [`snapshot/tests.rs`](../../crates/layer-render-wgpu/src/snapshot/tests.rs) |

@@ -3,6 +3,7 @@ use super::*;
 use std::collections::BTreeMap;
 use wgpu::util::DeviceExt;
 
+#[derive(Clone)]
 pub(super) struct MaskPage {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -33,9 +34,21 @@ impl MaskPage {
         Self { texture, view }
     }
 }
+pub(super) type CommandCoverage = (SourceTarget, u32);
+
+#[derive(Clone, Default)]
+pub(super) struct SnapshotMasks {
+    pub definitions: BTreeMap<SourceTarget, layer_core::CoverageSource>,
+    pub pages: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
+    pub(crate) _lease: Option<Arc<effect_analysis::Lease>>,
+}
+
 pub(super) struct MaskRenderer {
-    pub definitions: BTreeMap<LayerId, layer_core::LayerMask>,
-    pub pages: BTreeMap<(LayerId, [u32; 2]), MaskPage>,
+    pub definitions: BTreeMap<SourceTarget, layer_core::authored::CoverageSource>,
+    pub pages: BTreeMap<(SourceTarget, [u32; 2]), MaskPage>,
+    pub command_pages: BTreeMap<(CommandCoverage, [u32; 2]), MaskPage>,
+    command_definitions: BTreeMap<CommandCoverage, layer_core::authored::CoverageSource>,
+    pub snapshots: BTreeMap<CommandCoverage, SnapshotMasks>,
     pub(super) brush: [Deferred<wgpu::RenderPipeline>; 4],
     pub(super) initialize: Deferred<wgpu::RenderPipeline>,
     init_layout: wgpu::BindGroupLayout,
@@ -160,6 +173,9 @@ impl MaskRenderer {
         Self {
             definitions: BTreeMap::new(),
             pages: BTreeMap::new(),
+            command_pages: BTreeMap::new(),
+            command_definitions: BTreeMap::new(),
+            snapshots: BTreeMap::new(),
             brush,
             initialize,
             init_layout,
@@ -171,17 +187,25 @@ impl MaskRenderer {
             }),
         }
     }
-    pub fn is_mask(layers: &[Layer], id: LayerId) -> bool {
-        Self::masks(layers).any(|m| m.id == id)
+    pub fn bind_snapshot(&mut self, command: CommandCoverage) -> Option<SnapshotMasks> {
+        let snapshot = self.snapshots.get_mut(&command)?;
+        Some(SnapshotMasks {
+            definitions: std::mem::replace(&mut self.definitions, std::mem::take(&mut snapshot.definitions)),
+            pages: std::mem::replace(&mut self.pages, std::mem::take(&mut snapshot.pages)),
+            _lease: None,
+        })
     }
-    fn masks(layers: &[Layer]) -> impl Iterator<Item = &layer_core::LayerMask> {
-        layers.iter().flat_map(Layer::masks)
+    pub fn restore_snapshot(&mut self, command: CommandCoverage, live: SnapshotMasks) {
+        let snapshot = self.snapshots.get_mut(&command).expect("prepared bake mask inventory");
+        snapshot.definitions = std::mem::replace(&mut self.definitions, live.definitions);
+        snapshot.pages = std::mem::replace(&mut self.pages, live.pages);
     }
+    pub fn is_mask(_scene: SceneView<'_>, target: SourceTarget) -> bool { matches!(target, SourceTarget::Coverage(_)) }
     pub fn prepare(
         &mut self,
         device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
-        inputs: (&[Layer], &[DabBatch]),
+        inputs: (SceneView<'_>, &[DabBatch]),
         extent: [u32; 2],
         reset: bool,
         selections: &mut selection_clip::SelectionClip,
@@ -195,132 +219,190 @@ impl MaskRenderer {
         &mut self,
         device: &PipelineDevice,
         encoder: &mut crate::submission::CommandEncoder,
-        inputs: (&[Layer], &[DabBatch]),
-        extent: [u32; 2],
+        inputs: (SceneView<'_>, &[DabBatch]),
+        _extent: [u32; 2],
         reset: bool,
         selections: &mut selection_clip::SelectionClip,
-        regions: Option<&std::collections::HashMap<LayerId, PixelRect>>,
+        regions: Option<&std::collections::HashMap<SourceTarget, PixelRect>>,
     ) -> Result<(), GpuRasterError> {
-        let (layers, batches) = inputs;
+        let (scene, batches) = inputs;
         if reset {
             self.pages.clear();
+            self.command_pages.clear();
         }
+        let commands: BTreeMap<_, _> = batches.iter().filter_map(|batch| {
+            let DabBatchKind::RasterOperation(index) = batch.kind else { return None; };
+            let operation = scene.operations(batch.target)?.get(index as usize)?;
+            Some(((batch.target, index), operation))
+        }).collect();
+        self.command_pages.retain(|(key, _), _| commands.get(key)
+            .is_some_and(|coverage| self.command_definitions.get(key) == Some(&coverage.coverage.source)));
+        for (key, operation) in &commands {
+            let coverage = &operation.coverage;
+            let source = &coverage.source;
+            let authored = SourceTarget::Coverage(coverage.use_.source);
+            if self.command_definitions.get(key) != Some(source) && self.definitions.get(&authored) == Some(source) {
+                for ((target, coordinate), page) in &self.pages {
+                    if *target == authored { self.command_pages.insert((*key, *coordinate), page.clone()); }
+                }
+            }
+            let needed = source.initial.as_ref().map_or_else(Default::default,
+                |selection| page_coordinates(pixel_rect(selection.bounds(), source.domain)).collect());
+            initialize_pages(&mut self.command_pages, *key, source, needed, regions.is_some(),
+                device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
+        }
+        self.snapshots.retain(|key, _| commands.get(key).is_some_and(|operation| matches!(operation.kind,
+            layer_core::RasterOperationKind::Bake { .. } | layer_core::RasterOperationKind::FrequencyDetail { .. })));
+        for (key, operation) in &commands {
+            let (snapshot, scope) = match &operation.kind {
+                layer_core::RasterOperationKind::Bake { scene, scope, .. }
+                | layer_core::RasterOperationKind::FrequencyDetail { scene, scope, .. } => (scene, scope),
+                _ => continue,
+            };
+            let retained = snapshot.view().with_scope(scope);
+            let definitions: BTreeMap<_, _> = retained.artwork().coverage.iter().filter(|(handle, _, _)| {
+                retained.source_owner(SourceTarget::Coverage(*handle)).is_some_and(|owner| retained.visible(owner))
+            }).map(|(handle, _, source)| (SourceTarget::Coverage(handle), source.clone())).collect();
+            let stored = self.snapshots.entry(*key).or_default();
+            stored.pages.retain(|(target, _), _| stored.definitions.get(target) == definitions.get(target)
+                && definitions.contains_key(target));
+            for (&target, source) in &definitions {
+                if stored.definitions.get(&target) != Some(source) && self.definitions.get(&target) == Some(source) {
+                    for ((id, coordinate), page) in &self.pages {
+                        if *id == target { stored.pages.insert((target, *coordinate), page.clone()); }
+                    }
+                }
+            }
+            stored.definitions = definitions;
+        }
+        self.command_definitions = commands.into_iter().map(|(key, operation)| (key, operation.coverage.source.clone())).collect();
+        let definitions: BTreeMap<_, _> = scene.artwork().coverage.iter()
+            .filter(|(h, _, _)| scene.source_owner(SourceTarget::Coverage(*h)).is_some())
+            .map(|(h, _, source)| (SourceTarget::Coverage(h), source.clone())).collect();
         self.pages.retain(|(id, coordinate), _| {
-            Self::is_mask(layers, *id)
+            definitions.contains_key(id)
                 && regions.is_none_or(|regions| {
-                    regions
-                        .get(id)
-                        .is_some_and(|region| !page_rect(*coordinate).intersect(*region).is_empty())
+                    regions.get(id).is_some_and(|region| !page_rect(*coordinate).intersect(*region).is_empty())
                 })
         });
-        self.definitions = Self::masks(layers).map(|m| (m.id, m.clone())).collect();
-        for mask in Self::masks(layers) {
-            let extent = layers.iter().find(|layer| layer.masks().any(|m| m.id == mask.id)).map_or(extent, |layer| layer.local_extent(extent));
+        self.definitions = definitions;
+        for (&target, mask) in &self.definitions {
+            let extent = mask.domain;
             let mut needed = std::collections::BTreeSet::new();
             if let Some(selection) = &mask.initial {
                 let bounds = pixel_rect(selection.bounds(), extent);
                 let bounds = regions.map_or(bounds, |regions| {
-                    bounds.intersect(regions.get(&mask.id).copied().unwrap_or(PixelRect::EMPTY))
+                    bounds.intersect(regions.get(&target).copied().unwrap_or(PixelRect::EMPTY))
                 });
                 needed.extend(page_coordinates(bounds));
             }
             let transforms = |batch: &DabBatch| {
-                matches!(batch.kind, DabBatchKind::LayerOperation(index)
-                    if mask.pending_operations.get(index as usize)
-                        .is_some_and(|op| matches!(op.kind, layer_core::LayerOperationKind::Transform(_))))
+                matches!(batch.kind, DabBatchKind::RasterOperation(index)
+                    if mask.operations.get(index as usize)
+                        .is_some_and(|op| matches!(op.kind, layer_core::RasterOperationKind::Transform(_))))
             };
-            for batch in batches.iter().filter(|b| b.layer_id == mask.id && !transforms(b)) {
+            for batch in batches.iter().filter(|b| b.target == target && !transforms(b)) {
                 needed.extend(page_coordinates(batch_pixel_rect(batch, extent)));
             }
-            // Initialize only missing pages. Polygon and connected-region masks
-            // consume the same packed coverage used by brush clipping.
-            let missing: Vec<_> = needed
-                .into_iter()
-                .filter(|c| !self.pages.contains_key(&(mask.id, *c)))
-                .collect();
-            if missing.is_empty() {
-                continue;
-            }
-            if let Some(selection) = &mask.initial {
-                let region = regions.map(|_| {
-                    missing
-                        .iter()
-                        .fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c)))
-                        .intersect(PixelRect::full(extent))
-                });
-                selections.prepare_region(
-                    device,
-                    encoder,
-                    extent,
-                    &std::sync::Arc::new(selection.clone()),
-                    region,
-                )?;
-            }
-            let coverage = if mask.initial.is_some() {
-                selections.buffer.as_ref().unwrap()
-            } else {
-                &self.empty_selection
-            };
-            for coordinate in missing {
-                let MaskPage { texture, view } = MaskPage::new(device);
-                let data = [
-                    coordinate[0] as f32 * PAGE_SIZE as f32,
-                    coordinate[1] as f32 * PAGE_SIZE as f32,
-                    f32::from(mask.initial.is_some()),
-                    mask.default_coverage,
-                ];
-                let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
-                let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: Some("mask page initialization"),
-                    contents: &bytes,
-                    usage: wgpu::BufferUsages::UNIFORM,
-                });
-                let binding = crate::bindings::group(device, "mask initial coverage", &self.init_layout, [
-                    buffer.as_entire_binding(),
-                    coverage.as_entire_binding(),
-                ]);
-                let mut pass = encoder.color_pass(
-                    "mask initialize page",
-                    &view,
-                    wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
-                );
-                pass.set_pipeline(&self.initialize);
-                pass.set_bind_group(0, &binding, &[]);
-                pass.draw(0..3, 0..1);
-                drop(pass);
-                self.pages
-                    .insert((mask.id, coordinate), MaskPage { texture, view });
-            }
+            initialize_pages(&mut self.pages, target, mask, needed, regions.is_some(),
+                device, encoder, selections, &self.initialize, &self.init_layout, &self.empty_selection)?;
         }
         Ok(())
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn initialize_pages<K: Copy + Ord>(
+    pages: &mut BTreeMap<(K, [u32; 2]), MaskPage>, target: K,
+    source: &layer_core::CoverageSource, needed: std::collections::BTreeSet<[u32; 2]>, bounded: bool,
+    device: &PipelineDevice, encoder: &mut crate::submission::CommandEncoder,
+    selections: &mut selection_clip::SelectionClip, initialize: &Deferred<wgpu::RenderPipeline>,
+    init_layout: &wgpu::BindGroupLayout, empty_selection: &wgpu::Buffer,
+) -> Result<(), GpuRasterError> {
+    let extent = source.domain;
+    let missing: Vec<_> = needed
+        .into_iter()
+        .filter(|c| !pages.contains_key(&(target, *c)))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    if let Some(selection) = &source.initial {
+        let region = bounded.then(|| {
+            missing
+                .iter()
+                .fold(PixelRect::EMPTY, |region, c| region.union(page_rect(*c)))
+                .intersect(PixelRect::full(extent))
+        });
+        selections.prepare_region(
+            device,
+            encoder,
+            extent,
+            &std::sync::Arc::new(selection.clone()),
+            region,
+        )?;
+    }
+    let coverage = if source.initial.is_some() {
+        selections.buffer.as_ref().unwrap()
+    } else {
+        empty_selection
+    };
+    for coordinate in missing {
+        let MaskPage { texture, view } = MaskPage::new(device);
+        let data = [
+            coordinate[0] as f32 * PAGE_SIZE as f32,
+            coordinate[1] as f32 * PAGE_SIZE as f32,
+            f32::from(source.initial.is_some()),
+            source.default_coverage,
+        ];
+        let bytes: Vec<u8> = data.iter().flat_map(|v| v.to_ne_bytes()).collect();
+        let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("mask page initialization"),
+            contents: &bytes,
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let binding = crate::bindings::group(device, "mask initial coverage", init_layout, [
+            buffer.as_entire_binding(),
+            coverage.as_entire_binding(),
+        ]);
+        let mut pass = encoder.color_pass(
+            "mask initialize page",
+            &view,
+            wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+        );
+        pass.set_pipeline(initialize);
+        pass.set_bind_group(0, &binding, &[]);
+        pass.draw(0..3, 0..1);
+        drop(pass);
+        pages
+            .insert((target, coordinate), MaskPage { texture, view });
+    }
+    Ok(())
 }
 
 impl WgpuRasterizer {
     pub(super) fn encode_mask_dabs(
         &mut self,
         encoder: &mut crate::submission::CommandEncoder,
-        layers: &[Layer],
+        scene: SceneView<'_>,
         batches: &[DabBatch],
-        committed: &[(LayerId, u32)],
+        committed: &[(SourceTarget, u32)],
     ) -> Result<(), GpuRasterError> {
         for (index, batch) in batches
             .iter()
             .enumerate()
-            .filter(|(_, b)| MaskRenderer::is_mask(layers, b.layer_id))
+            .filter(|(_, b)| MaskRenderer::is_mask(scene, b.target))
         {
-            if let DabBatchKind::LayerOperation(op) = batch.kind {
-                if !committed.contains(&(batch.layer_id, op)) {
-                    let operation = &layers
-                        .iter()
-                        .find_map(|l| l.target_operations(batch.layer_id))
-                        .ok_or(GpuRasterError::MissingPaintLayer(batch.layer_id))?
+            if let DabBatchKind::RasterOperation(op) = batch.kind {
+                if !committed.contains(&(batch.target, op)) {
+                    let operation = &scene.operations(batch.target)
+                        .ok_or(GpuRasterError::MissingPaintLayer(batch.target))?
                         [op as usize];
                     let mut transforms = self.transforms.take().unwrap();
                     let result = transforms.apply(
                         self,
                         encoder,
-                        batch.layer_id,
+                        batch.target,
                         operation,
                     );
                     self.transforms = Some(transforms);
@@ -331,10 +413,10 @@ impl WgpuRasterizer {
             if batch.dab_count == 0 {
                 continue;
             }
-            self.prepare_target_selection(encoder, &batch.style, self.target_extent(batch.layer_id))?;
-            let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
+            self.prepare_target_selection(encoder, &batch.style, self.target_extent(batch.target))?;
+            let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
             for coordinate in page_coordinates(damage) {
-                let Some(page) = self.layer_masks.pages.get(&(batch.layer_id, coordinate)) else {
+                let Some(page) = self.layer_masks.pages.get(&(batch.target, coordinate)) else {
                     continue;
                 };
                 let texture_tip = matches!(batch.style.tip, BrushTip::Mask(_));
@@ -361,7 +443,7 @@ impl WgpuRasterizer {
                 pass.set_bind_group(
                     1,
                     self.paint_target_binding(&batch.style),
-                    &[self.layer_target_offset(batch.layer_id, coordinate)],
+                    &[self.layer_target_offset(batch.target, coordinate)],
                 );
                 if let BrushTip::Mask(id) = &batch.style.tip {
                     pass.set_bind_group(2, &self.mask(id)?.bind_group, &[]);

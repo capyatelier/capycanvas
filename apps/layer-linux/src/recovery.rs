@@ -1,12 +1,11 @@
 //! One immutable autosave in flight per window; publication never clears dirty.
-use crate::{files::atomic_write, workspace::Workspace};
+use crate::workspace::Workspace;
 use adw::prelude::*;
 use gtk::{gio, glib};
-use layer_core::{Project, ProjectLimits};
+use layer_core::{authored::ArtworkCapture, ProjectLimits};
 use layer_ui::recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWorkKind};
 use std::{
     cell::{Cell, RefCell},
-    io::BufReader,
     path::PathBuf,
     rc::Rc,
     sync::{
@@ -23,7 +22,7 @@ pub(crate) struct Recovery {
     origin_lock: RefCell<Option<Arc<std::fs::File>>>,
     policy: RefCell<RecoveryState>,
     discarded: Arc<AtomicBool>,
-    snapshot: RefCell<Option<Project>>,
+    snapshot: RefCell<Option<(ArtworkCapture, crate::render_thread::ContextCapture)>>,
     running: Cell<usize>,
 }
 fn directory() -> PathBuf {
@@ -108,7 +107,8 @@ impl Recovery {
         let (document, snapshot) = {
             let gpu = w.gpu.borrow();
             let Some(gpu) = gpu.as_ref() else { return; };
-            (gpu.session.recovery_document(), gpu.session.capture_project_recovery())
+            (gpu.session.recovery_document(), gpu.session.capture_project_recovery().and_then(|capture|
+                gpu.session.engine().backend().capture_context().map(|context| (capture, context))))
         };
         *self.snapshot.borrow_mut() = snapshot.ok();
         let work = self.policy.borrow_mut().event(RecoveryEvent::Observe { document, owned: true }).unwrap().work;
@@ -133,10 +133,14 @@ impl Recovery {
                         // the window may now display an entirely different tab.
                         let project = recovery.snapshot.borrow().clone().ok_or_else(|| "Recovery snapshot unavailable".to_string());
                         match project {
-                            Ok(project) => {
+                            Ok((project, context)) => {
                                 let path = recovery.path.clone();
                                 let discarded = recovery.discarded.clone();
-                                gio::spawn_blocking(move || publish(&path, project, &discarded)).await.map_err(|e| format!("Recovery writer failed: {e:?}")).and_then(|r| r)
+                                gio::spawn_blocking(move || {
+                                    let mut project = project;
+                                    context.install(&mut project)?;
+                                    publish(&path, project, &discarded)
+                                }).await.map_err(|e| format!("Recovery writer failed: {e:?}")).and_then(|r| r)
                             }
                             Err(error) => Err(error),
                         }
@@ -161,15 +165,20 @@ impl Recovery {
 }
 
 
-fn publish(path: &std::path::Path, project: Project, discarded: &AtomicBool) -> Result<(), String> {
+fn publish(path: &std::path::Path, project: ArtworkCapture, discarded: &AtomicBool) -> Result<(), String> {
     if discarded.load(Ordering::Acquire) {
         return Ok(());
     }
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let result = atomic_write(path, |out| project.write(out));
-    // Close can finish while the worker awaits tile backing or writes a file.
+    let result = layer_core::atomic_write_checked(path, |out| {
+        let package = layer_core::package::codec::PreparedPackage::prepare(&project, None, discarded)?;
+        package.write(out, discarded)
+    }, || {
+        if discarded.load(Ordering::Acquire) { Err("Recovery capture discarded".into()) } else { Ok(()) }
+    });
     if discarded.load(Ordering::Acquire) {
         let _ = std::fs::remove_file(path);
+        return Ok(());
     }
     result
 }
@@ -235,13 +244,23 @@ pub(crate) fn offer_stale(w: &Rc<Workspace>) {
                 "recover" => {
                     let restore = policy.event(RecoveryEvent::Restore).unwrap().work.unwrap();
                     let source = path.clone();
+                    let localization = w.localization();
                     let result = gio::spawn_blocking(move || {
                         let file = std::fs::File::open(source).map_err(|e| e.to_string())?;
-                        Project::read(BufReader::new(file), ProjectLimits::default())
+                        layer_ui::read_import(file, layer_ui::ImportIntent::Recovery, Default::default(),
+                            layer_ui::photo_document_names("Recovered drawing", &localization),
+                            ProjectLimits::default(), Default::default(), &AtomicBool::new(false))
                     }).await;
                     match result {
-                        Ok(Ok(project)) => {
-                            if let Some(open) = w.open_document.borrow().as_ref() { open(project, None, Some(path.clone())); }
+                        Ok(Ok(layer_ui::ImportOutcome::Package(outcome))) => {
+                            let result = match layer_ui::PackageView::new(outcome) {
+                                Ok(package) => crate::files::open::show_package(&w.window,package,Some(path.clone()),&w.localization()).await,
+                                Err(error) => Err(error),
+                            };
+                            policy.event(RecoveryEvent::Complete {token:restore.token,success:result.is_ok()}).unwrap();
+                        }
+                        Ok(Ok(layer_ui::ImportOutcome::Editable(imported))) => {
+                            w.documents.enqueue_imported(&w, imported, None, Some(path.clone()));
                             // Ownership of durable replacement moves to that tab.
                             policy.event(RecoveryEvent::Close).unwrap();
                             policy.event(RecoveryEvent::Complete { token: restore.token, success: true }).unwrap();
@@ -278,16 +297,14 @@ mod tests {
     fn failed_backing_preserves_the_previous_durable_recovery_copy() {
         let path =
             std::env::temp_dir().join(format!("capy-recovery-failure-{}.capy", std::process::id()));
-        let mut project = Project {
-            document: Document::new("recovery", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
-        };
+        let mut project = Document::new(layer_core::authored::PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let discarded = AtomicBool::new(false);
-        publish(&path, project.clone(), &discarded).unwrap();
+        publish(&path, layer_host::tasks::capture_document(&project), &discarded).unwrap();
         let previous = std::fs::read(&path).unwrap();
         let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
         tile.publish(Err("Device lost before host capture".into()))
             .unwrap();
-        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+        *project.target_raster_mut(project.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData {
             tiles: [(
                 TileKey {
                     plane: RasterPlane::Color,
@@ -299,16 +316,13 @@ mod tests {
             ..Default::default()
         });
         assert!(
-            publish(&path, project, &discarded)
+            publish(&path, layer_host::tasks::capture_document(&project), &discarded)
                 .unwrap_err()
                 .contains("Device lost")
         );
         assert_eq!(std::fs::read(&path).unwrap(), previous);
-        Project::read(
-            std::fs::File::open(&path).unwrap(),
-            ProjectLimits::default(),
-        )
-        .unwrap();
+        let outcome = layer_ui::read_import(std::fs::File::open(&path).unwrap(), layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }, ProjectLimits::default(), Default::default(), &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, layer_ui::ImportOutcome::Editable(_)));
         std::fs::remove_file(path).unwrap();
     }
 
@@ -318,10 +332,8 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("drawing.capy");
         let tile = RasterTile::pending(RasterPlane::Color.descriptor(Default::default()));
-        let mut project = Project {
-            document: Document::new("recovery", 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
-        };
-        project.document.layers[0].raster = RasterRevision::backed(RasterData {
+        let mut project = Document::new(layer_core::authored::PortableId::random(), 256, 256, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        *project.target_raster_mut(project.working.target.unwrap()).unwrap() = RasterRevision::backed(RasterData {
             tiles: [(
                 TileKey {
                     plane: RasterPlane::Color,
@@ -335,7 +347,7 @@ mod tests {
         let discarded = Arc::new(AtomicBool::new(false));
         let cancelled = discarded.clone();
         let output = path.clone();
-        let worker = std::thread::spawn(move || publish(&output, project, &cancelled));
+        let worker = std::thread::spawn(move || publish(&output, layer_host::tasks::capture_document(&project), &cancelled));
         // Atomic writer has entered the file operation and is awaiting this tile.
         let deadline = std::time::Instant::now() + Duration::from_secs(5);
         while std::fs::read_dir(&dir).unwrap().next().is_none() {

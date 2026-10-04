@@ -1,7 +1,7 @@
 //! Document lifecycle policy. Hosts provide dialogs and asynchronous transport;
 //! checkpoints, cancellation and close-after-save decisions remain shared.
 use super::*;
-use layer_core::Project;
+use layer_core::{Document, authored::{ArtworkCapture, CaptureCheckpoint, OccurrenceContent, PortableId}};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum FileFailure { InvalidLocation, EditedLocation, Busy, UnknownRequest, SaveNotCaptured, NotExportRequest, InvalidSaveRequest, RespondClose, NoSavedSnapshot, NotCloseRequest, SelectionCapture, CanvasOperation }
@@ -151,7 +151,7 @@ impl DocumentFileState {
 pub enum DocumentColorOperation { Assign, Convert, Depth }
 
 #[derive(Clone, Debug, Serialize)]
-pub struct LookupTarget {pub document: std::sync::Arc<str>, pub activation:u64, pub layer:u64, pub epoch:u64, pub key:String}
+pub struct LookupTarget {pub document: PortableId, pub activation:u64, pub layer:u64, pub epoch:u64, pub key:String}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -274,7 +274,7 @@ pub fn new_document_spec(localization: &Localizer) -> NewDocumentSpec {
 
 /// Shared new-document constraints; creation is a host operation so native
 /// windows and future tabbed/mobile hosts can use different presentation.
-pub fn new_drawing(width: u32, height: u32, localization: &Localizer) -> Result<Project, String> {
+pub fn new_drawing(width: u32, height: u32, localization: &Localizer) -> Result<Document, String> {
     NewDocumentOptions {
         extent: [width, height],
         ..Default::default()
@@ -284,8 +284,13 @@ pub fn new_drawing(width: u32, height: u32, localization: &Localizer) -> Result<
 
 #[derive(Clone)]
 pub struct DocumentExport {
-    pub project: Project,
+    pub capture: ArtworkCapture,
     pub time: f32,
+}
+impl DocumentExport {
+    pub fn composition(&self) -> &layer_core::Composition { self.capture.artwork.compositions.get(self.capture.artwork.root).expect("captured composition") }
+    pub fn output(&self) -> &layer_core::Output { self.capture.artwork.outputs.get(self.capture.artwork.default_output).expect("captured output") }
+    pub fn metadata(&self) -> &layer_core::PhotoMetadata { &self.capture.artwork.metadata }
 }
 
 enum DocumentRequestCopy {
@@ -300,7 +305,7 @@ pub(super) struct DocumentFiles {
     pub(super) pending_modified_change: bool,
     replace_in_place: bool,
     replace_after: Option<bool>,
-    pub(super) pending: Option<(u32, Option<(u64, DocumentLocation)>)>,
+    pub(super) pending: Option<(u32, Option<(CaptureCheckpoint, DocumentLocation)>)>,
     close_after: bool,
     pending_copy: Option<DocumentRequestCopy>,
     pub(super) cut: Option<clipboard::PendingCut>,
@@ -362,17 +367,17 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// replacing a working document or colliding with its live GPU resources.
     pub fn from_project(
         renderer: R,
-        project: Project,
+        document: Document,
         location: Option<DocumentLocation>,
         viewport: [u32; 2],
         platform: Platform,
     ) -> Result<Self, String> {
-        Self::from_project_localized(renderer, project, location, viewport, platform, Localizer::shared(UiLanguage::English))
+        Self::from_project_localized(renderer, document, location, viewport, platform, Localizer::shared(UiLanguage::English))
     }
 
     pub fn from_project_localized(
         renderer: R,
-        project: Project,
+        mut document: Document,
         location: Option<DocumentLocation>,
         viewport: [u32; 2],
         platform: Platform,
@@ -381,18 +386,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         if let Some(location) = &location {
             location.validate().map_err(|error| error.message(&localization))?;
         }
-        let photo_name = location
-            .is_none()
-            .then(|| {
-                project
-                    .document
-                    .layers
-                    .iter()
-                    .find(|l| l.source.is_some())
-                    .map(|l| l.name.to_string())
+        if document.working.occurrence.is_none() && document.working.target.is_none() && document.working.generation == 0 {
+            let scene = document.scene();
+            let occurrence = scene.order().iter().copied().find(|handle| matches!(scene.source_target(*handle), Some(SourceTarget::Paint(_)))).or_else(|| scene.order().first().copied());
+            let target = occurrence.and_then(|handle| scene.source_target(handle));
+            document.working.occurrence = occurrence;
+            document.working.target = target;
+        }
+        let photo_name = location.is_none().then(|| {
+            document.scene().order().iter().find_map(|handle| {
+                let occurrence = document.scene().occurrence(*handle)?;
+                let OccurrenceContent::Paint(paint) = occurrence.content else { return None; };
+                document.artwork.paint.get(paint)?.original.as_ref().map(|_| occurrence.name.to_string())
             })
-            .flatten();
-        let mut session = Self::new_localized(renderer, project.document, viewport, platform, localization)?;
+        }).flatten();
+        let mut session = Self::new_localized(renderer, document, viewport, platform, localization)?;
         session.state.document_file.location = location;
         if let Some(name) = photo_name {
             session.state.document_file.unsaved_name = Some(name);
@@ -550,11 +558,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Capture the last committed raster boundary, including while drawing.
     /// Pending tile backing is awaited by the file worker. Active contact pixels
     /// are excluded; recovery never acknowledges a manual save checkpoint.
-    pub fn capture_project_recovery(&self) -> Result<Project, String> {
+    pub fn capture_project_recovery(&self) -> Result<ArtworkCapture, String> {
         self.require_raster_snapshot()?;
-        Ok(Project {
-            document: self.engine.document().clone(),
-        })
+        self.engine.capture_artwork(self.state.document_file.epoch).map_err(error)
+    }
+
+    pub fn document_snapshot(&self) -> Result<Document, String> {
+        self.require_raster_snapshot()?;
+        Ok(self.engine.document().clone())
     }
 
     /// Freeze the committed master and its rendering coordinates for an output
@@ -564,9 +575,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::NotExportRequest.message(self.localization()));
         }
         self.require_document_idle()?;
+        let capture = self.capture_project_recovery()?;
+        let time = capture.artwork.outputs.get(capture.artwork.default_output).expect("captured output").context.elapsed;
         Ok(DocumentExport {
-            project: self.capture_project_recovery()?,
-            time: self.engine.animation_time(),
+            capture,
+            time,
         })
     }
 
@@ -576,7 +589,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         &mut self,
         id: u32,
         location: DocumentLocation,
-    ) -> Result<Project, String> {
+    ) -> Result<ArtworkCapture, String> {
         self.require_raster_snapshot()?;
         location.validate().map_err(|error| error.message(self.localization()))?;
         if !matches!(self.document_request(id)?, DocumentRequest::Save { .. })
@@ -584,13 +597,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err(FileFailure::InvalidSaveRequest.message(self.localization()));
         }
-        self.files.pending.as_mut().unwrap().1 = Some((self.engine.checkpoint(), location));
-        self.capture_project_recovery()
+        let capture = self.capture_project_recovery()?;
+        self.files.pending.as_mut().unwrap().1 = Some((capture.checkpoint, location));
+        Ok(capture)
     }
 
     pub fn apply_lookup(&mut self, request:u32, resource: std::sync::Arc<layer_core::Lut3d>) -> Result<bool,String> {
         let DocumentRequest::ImportLookup {target} = self.document_request(request)?.clone() else {return Err("Invalid lookup request".into());};
-        if self.engine.document().id != target.document || self.state.document_file.epoch != target.activation || !self.property_editor.accepts(target.layer,target.epoch)
+        if self.engine.document().artwork.id != target.document || self.state.document_file.epoch != target.activation || !self.property_editor.accepts(target.layer,target.epoch)
             || self.state.layer_properties.layer != Some(target.layer) {return Ok(false);}
         self.effect_action(EffectAction::Set {layer:target.layer,key:target.key,value:layer_core::EffectValue::Lut3d(Some(resource))})?;
         Ok(true)
@@ -613,6 +627,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         if save && result == Ok(true) && self.files.pending.as_ref().unwrap().1.is_none() {
             return Err(FileFailure::NoSavedSnapshot.message(self.localization()));
         }
+        if save && result == Ok(true) && self.files.pending.as_ref().and_then(|(_, snapshot)| snapshot.as_ref()).is_some_and(|(checkpoint, _)| {
+            checkpoint.document != self.engine.document().artwork.id || checkpoint.owner != self.engine.document().owner || checkpoint.session_generation != self.state.document_file.epoch
+        }) {
+            return Err(FileFailure::UnknownRequest.message(self.localization()));
+        }
         let (_, snapshot) = self.files.pending.take().unwrap();
         self.files.pending_copy = None;
         self.state.requests.retain(|r| r.id != id);
@@ -628,7 +647,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && success
             && let Some((checkpoint, location)) = snapshot
         {
-            self.files.saved_checkpoint = checkpoint;
+            self.files.saved_checkpoint = checkpoint.edit_checkpoint;
             self.files.unpublished = false;
             self.state.document_file.location = Some(location);
         }
@@ -834,9 +853,9 @@ mod localization_tests {
         }
         session.dispatch(UiAction::CloseSettings).unwrap();
         session.dispatch(UiAction::Invoke { command:CommandId::Undo }).unwrap();
-        assert_eq!(session.engine.document().layers.len() + 1, document.layers.len());
+        assert_eq!(session.engine.document().scene().order().len() + 1, document.scene().order().len());
         session.dispatch(UiAction::Invoke { command:CommandId::Redo }).unwrap();
-        assert_eq!(session.engine.document().layers.iter().map(|layer| layer.id).collect::<Vec<_>>(), document.layers.iter().map(|layer| layer.id).collect::<Vec<_>>());
+        assert_eq!(session.engine.document().scene().order(), document.scene().order());
     }
 
     #[test]
@@ -1018,5 +1037,107 @@ mod localization_tests {
         let snapshot = serde_json::to_value(&session.state().document_file).unwrap();
         assert!(snapshot.get("untitled").is_none());
         assert_eq!(snapshot["location"]["name"], name);
+    }
+}
+
+
+#[cfg(test)]
+mod capture_tests {
+    use super::*;
+    use crate::session::test_support::{session, invoke, Recorder};
+
+    #[test]
+    fn failed_renderer_source_only_save_acknowledges_the_durable_capture() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::AddLayer);
+        session.frame(0, 0).unwrap();
+        session.suspend_renderer().unwrap();
+        invoke(&mut session, CommandId::SaveDocument);
+        let request = session.files.pending.as_ref().unwrap().0;
+        let location = DocumentLocation { uri: "private:source-only".into(), name: "source-only.capy".into() };
+        let capture = session.capture_project_save(request, location.clone()).unwrap();
+        assert_eq!(capture.checkpoint.owner, session.engine.document().owner);
+        assert_eq!(capture.checkpoint.edit_checkpoint, session.engine.checkpoint());
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        let package = layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancelled).unwrap();
+        assert_eq!(package.preview_status, layer_core::package::codec::PreviewStatus::Unavailable);
+        assert!(session.state.document_file.modified);
+        let mut bytes = Vec::new(); package.write(&mut bytes, &cancelled).unwrap();
+        assert!(!bytes.is_empty());
+        session.complete_document_request(request, Ok(true)).unwrap();
+        assert!(!session.state.document_file.modified);
+        assert_eq!(session.state.document_file.location, Some(location));
+    }
+
+    #[test]
+    fn export_and_workflow_capture_actual_phases_without_authoring_them() {
+        let mut session = session(Platform::Gtk);
+        crate::session::test_support::insert_effect(&mut session, "unsharp_mask");
+        session.frame(0, 0).unwrap();
+        let occurrence = session.engine.document().working.occurrence.unwrap();
+        let effect = session.engine.document().scene().effect_handle(occurrence).unwrap();
+        let authored = session.engine.document().output().context.clone();
+        let checkpoint = session.engine.checkpoint();
+        let context = layer_core::EvaluationContext { elapsed: 3.5, phases: vec![(effect, 0.75)].into() };
+        session.renderer_mut().evaluation = context.clone();
+        session.engine.render_frame_at(1_000_000_000).unwrap();
+        session.engine.render_frame_at(4_500_000_000).unwrap();
+        invoke(&mut session, CommandId::ExportDocument);
+        let request = session.files.pending.as_ref().unwrap().0;
+        let export = session.capture_project_export(request).unwrap();
+        assert_eq!(export.output().context, context);
+        assert_eq!(export.time, 3.5);
+        assert_eq!(session.engine.document().output().context, authored);
+        assert_eq!(session.engine.checkpoint(), checkpoint);
+        session.complete_document_request(request, Ok(false)).unwrap();
+        invoke(&mut session, CommandId::AssignProfile);
+        let request = session.files.pending.as_ref().unwrap().0;
+        let workflow = crate::ColorWorkflow::begin(&session, request).unwrap();
+        assert_eq!(workflow.context, context);
+        assert_eq!(workflow.original.output().context, authored);
+        session.renderer_mut().evaluation.elapsed = 9.;
+        assert_eq!(workflow.context.elapsed, 3.5);
+        assert_eq!(session.engine.document().output().context, authored);
+        assert_eq!(session.engine.checkpoint(), checkpoint);
+    }
+
+    #[test]
+    fn fresh_editable_open_initializes_working_target_without_resetting_parked_state() {
+        let initial = layer_core::Document::new(layer_core::PortableId::random(), 32, 24, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let neutral = layer_core::Document::from_artwork(initial.artwork.clone()).unwrap();
+        assert!(neutral.working.occurrence.is_none());
+        let opened = UiSession::from_project(Recorder::default(), neutral.clone(), None, [128, 128], Platform::Gtk).unwrap();
+        assert_eq!(opened.engine.document().working.occurrence, initial.working.occurrence);
+        assert_eq!(opened.engine.document().working.target, initial.working.target);
+        assert_eq!(opened.engine.document().working.generation, 0);
+        assert_eq!(opened.engine.checkpoint(), 0);
+        crate::session::test_support::assert_live_artwork_eq(opened.engine.document(), &neutral);
+        let mut parked = initial;
+        parked.working.generation = 1;
+        parked.working.occurrence = None;
+        parked.working.target = None;
+        parked.working.selection = Some(crate::session::test_support::rectangle([1., 2., 6., 8.]));
+        let working = parked.working.clone();
+        let restored = UiSession::from_project(Recorder::default(), parked.clone(), None, [128, 128], Platform::Gtk).unwrap();
+        assert_eq!(restored.engine.document().working, working);
+        assert_eq!(restored.engine.checkpoint(), 0);
+        crate::session::test_support::assert_live_artwork_eq(restored.engine.document(), &parked);
+    }
+
+    #[test]
+    fn foreign_capture_completion_cannot_acknowledge_a_save() {
+        let mut session = session(Platform::Gtk);
+        invoke(&mut session, CommandId::AddLayer);
+        invoke(&mut session, CommandId::SaveDocument);
+        let request = session.files.pending.as_ref().unwrap().0;
+        session.capture_project_save(request, DocumentLocation { uri: "private:foreign".into(), name: "foreign.capy".into() }).unwrap();
+        let saved = session.files.saved_checkpoint;
+        session.files.pending.as_mut().unwrap().1.as_mut().unwrap().0.owner += 1;
+        assert!(session.complete_document_request(request, Ok(true)).is_err());
+        assert_eq!(session.files.saved_checkpoint, saved);
+        assert!(session.state.document_file.modified);
+        assert!(session.state.document_file.location.is_none());
+        assert_eq!(session.files.pending.as_ref().unwrap().0, request);
+        session.complete_document_request(request, Ok(false)).unwrap();
     }
 }

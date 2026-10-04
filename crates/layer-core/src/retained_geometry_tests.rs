@@ -1,6 +1,7 @@
 use crate::*;
 use std::{sync::Arc,collections::BTreeSet};
-fn document()->Document {Document::new("geometry",128,96,DocumentNames{paint:"Ink".into(),paper:"Paper".into()})}
+use crate::operation_test_support as fixture;
+fn document()->Document {fixture::document([128,96], &["Ink"])}
 fn perspective()->Projective {Projective::rect_to_quad(Rect::from_extent([128,96]),[[8.,4.],[132.,10.],[115.,103.],[-4.,88.]].map(|[x,y]|Point{x,y})).unwrap()}
 fn near(a:Point,b:Point){assert!((a.x-b.x).hypot(a.y-b.y)<0.003,"{a:?} != {b:?}");}
 #[test]
@@ -26,36 +27,39 @@ fn exact_nonuniform_splits_refinement_and_multinode_edits_keep_surface_and_share
     assert!(mesh.move_nodes(&BTreeSet::from([99]),delta).is_none());assert!(mesh.move_nodes(&BTreeSet::from([0]),Point{x:f32::NAN,y:0.}).is_none());
 }
 #[test]
-fn full_target_geometry_links_homographic_masks_and_refuses_only_nonlinear_writes(){
-    let mut doc=document();let id=doc.layers[0].id;doc.layers[0].properties.placement=LayerPlacement::from_projective(perspective());
-    let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point{x:6.,y:9.});mask.placement=Projective::from_affine(Affine::translation(Point{x:2.,y:-3.}));mask.extent=Some([64,32]);let mid=mask.id;doc.layers[0].mask=Some(mask);
-    let p=Point{x:20.,y:10.};near(doc.layer_geometry(mid).map(p).unwrap(),perspective().map(Point{x:28.,y:16.}).unwrap());
-    assert_eq!(doc.target_extent(mid),[64,32]);assert_eq!(doc.try_drawing_target(),Err(DrawingRefusal::NonAffine));assert_eq!(doc.validate_content_write(mid),Err(DrawingRefusal::NonAffine));
-    let before=doc.layers[0].mask.clone();let properties=doc.layers[0].properties.clone();assert!(doc.layers[0].mask.as_mut().unwrap().set_linked(false,&properties).is_err());assert_eq!(doc.layers[0].mask,before);
-    doc.layers[0].mask.as_mut().unwrap().linked=false;assert!(doc.affine_edit_transform(mid).is_some());assert!(doc.validate_content_write(mid).is_ok());assert!(doc.layer_geometry(id).map(p).is_some());
-}
-#[test]
-fn group_delta_preserves_raw_roots_and_linked_premaps_with_atomic_admission(){
-    let mut doc=document();let paint=doc.layers[0].id;let group=doc.allocate_layer_id();let mut g=Layer::paint(group,"Group");g.kind=LayerKind::Group;g.properties.offset=Point{x:10.,y:13.};doc.layers[0].properties.parent=Some(group);
-    let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point{x:7.,y:4.});mask.linked=false;g.mask=Some(mask);doc.layers.push(g);
-    let old=doc.clone();let edit=doc.retained_transform_edit(&[group,paint],perspective()).unwrap();let mut editor=Editor::new(doc);editor.perform(edit).unwrap();
-    for target in [paint,old.layers.last().unwrap().mask.as_ref().unwrap().id] {for p in [Point{x:20.,y:10.},Point{x:50.,y:40.}] {near(editor.document().layer_geometry(target).map(p).unwrap(),perspective().map(old.layer_geometry(target).map(p).unwrap()).unwrap());}}
-    assert_eq!(editor.document().layer(paint).unwrap().raster,old.layer(paint).unwrap().raster);editor.undo().unwrap();let mut restored=editor.document().clone();restored.revision=old.revision;assert_eq!(restored,old);editor.redo().unwrap();
-    let mut locked=old.clone();locked.layers[0].properties.locked=true;let before=locked.clone();assert!(locked.retained_transform_edit(&[group],perspective()).is_err());assert_eq!(locked,before);
+fn full_target_geometry_links_homographic_masks_and_refuses_only_nonlinear_writes() {
+    let mut doc=document();let id=fixture::id(&doc,"Ink");let target=fixture::target(&doc,"Ink");fixture::occurrence_mut(&mut doc,"Ink").placement=LayerPlacement::from_projective(perspective());
+    let mid=fixture::add_mask(&mut doc,id,[64,32],Point{x:6.,y:9.});let mask_target=SourceTarget::Coverage(mid);fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().placement=Projective::from_affine(Affine::translation(Point{x:2.,y:-3.}));
+    let p=Point{x:20.,y:10.};near(doc.target_geometry(mask_target).map(p).unwrap(),perspective().map(Point{x:28.,y:16.}).unwrap());
+    assert_eq!(doc.target_extent(mask_target),[64,32]);assert_eq!(doc.try_drawing_target(),Err(DrawingRefusal::NonAffine));assert_eq!(doc.validate_content_write(mask_target),Err(DrawingRefusal::NonAffine));
+    let before=fixture::occurrence(&doc,"Ink").mask.clone();let owner=fixture::occurrence(&doc,"Ink").clone();assert!(fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().set_linked(false,&owner).is_err());assert_eq!(fixture::occurrence(&doc,"Ink").mask,before);
+    fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().linked=false;assert!(doc.affine_edit_transform(mask_target).is_some());assert!(doc.validate_content_write(mask_target).is_ok());assert!(doc.target_geometry(target).map(p).is_some());
 }
 
 #[test]
-fn scalar_mask_bake_keeps_owner_tree_and_domain_while_linked_fold_bakes_registered_pair(){
-    let mut doc=document();let id=doc.layers[0].id;let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point{x:-11.,y:9.});let mid=mask.id;mask.linked=false;mask.placement=perspective();mask.extent=Some([64,48]);mask.inverted=true;mask.enabled=false;mask.initial=Some(Selection::polygon(Rect::from_extent([20,12]).corners().to_vec()).unwrap());doc.layers[0].mask=Some(mask);
-    let original=doc.layers[0].clone();let plan=doc.transform_pixels_plan(mid,Interpolation::Bicubic,Default::default()).unwrap();assert_eq!(plan.target,mid);assert_eq!(plan.scope,TransformPixelsScope::Mask);let mut expected=original.clone();expected.mask=plan.output.mask.clone();assert_eq!(plan.output,expected);assert_eq!(plan.input.document.target_extent(mid),[64,48]);assert!(plan.output.mask.as_ref().unwrap().inverted);assert!(!plan.output.mask.as_ref().unwrap().enabled);assert!(plan.output.mask.as_ref().unwrap().initial.is_none());
-    assert_eq!(plan.input.document.layers[0].raster,Default::default());assert!(plan.input.document.layers[0].source.is_none());
-    doc.layers[0].mask.as_mut().unwrap().linked=true;doc.layers[0].properties.placement.mesh=Some(Arc::new(MeshMap::identity(Rect::from_extent([128,96]),[3,3]).unwrap().move_node(5,Point{x:30.,y:10.}).unwrap()));
-    let pair=doc.transform_pixels_plan(mid,Interpolation::Bicubic,Default::default()).unwrap();assert_eq!(pair.target,mid);assert_eq!(pair.output.id,id);assert_eq!(pair.scope,TransformPixelsScope::Paint{linked_mask:true});assert_eq!(pair.output.properties.placement,LayerPlacement::IDENTITY);assert_eq!(pair.output.mask.as_ref().unwrap().placement,Projective::IDENTITY);
+fn group_delta_preserves_raw_roots_and_linked_premaps_with_atomic_admission() {
+    let mut doc=fixture::document([128,96],&["Group","Ink"]);let paint=fixture::id(&doc,"Ink");let group=fixture::nest(&mut doc,"Group",&["Ink"]);fixture::occurrence_mut(&mut doc,"Group").translation=Point{x:10.,y:13.};
+    let mask=fixture::add_mask(&mut doc,group,[128,96],Point{x:7.,y:4.});fixture::occurrence_mut(&mut doc,"Group").mask.as_mut().unwrap().linked=false;
+    let old=doc.clone();let edit=doc.retained_transform_edit(&[group,paint],perspective()).unwrap();let mut editor=Editor::new(doc);editor.perform(edit).unwrap();
+    for target in [fixture::target(&old,"Ink"),SourceTarget::Coverage(mask)] {for p in [Point{x:20.,y:10.},Point{x:50.,y:40.}] {near(editor.document().target_geometry(target).map(p).unwrap(),perspective().map(old.target_geometry(target).map(p).unwrap()).unwrap());}}
+    assert_eq!(fixture::paint(editor.document(),"Ink").raster,fixture::paint(&old,"Ink").raster);editor.undo().unwrap();let mut restored=editor.document().clone();restored.revision=old.revision;assert_eq!(restored,old);editor.redo().unwrap();
+    let mut locked=old.clone();fixture::occurrence_mut(&mut locked,"Ink").locked=true;let before=locked.clone();assert!(locked.retained_transform_edit(&[group],perspective()).is_err());assert_eq!(locked,before);
 }
+
 #[test]
-fn current_format_round_trip_keeps_nonuniform_mesh_and_mask_extent_and_rejects_older_headers(){
-    let mut doc=document();let mesh=MeshMap::identity(Rect::from_extent([128,96]),[1,1]).unwrap().split(0,0.375).unwrap();doc.layers[0].properties.placement=LayerPlacement{outer:perspective(),mesh:Some(Arc::new(mesh)),interpolation:Interpolation::Lanczos};let mut mask=LayerMask::reveal_all(doc.allocate_layer_id(),Point::default());mask.extent=Some([64,48]);doc.layers[0].mask=Some(mask);let project=Project{document:doc};let mut bytes=Vec::new();project.write(&mut bytes).unwrap();assert_eq!(&bytes[..12],b"CAPYRASTER\x0f\0");let loaded=Project::read(bytes.as_slice(),Default::default()).unwrap();assert_eq!(loaded,project);
-    for version in 8..15 {let mut old=bytes.clone();old[10]=version;assert!(Project::read(old.as_slice(),Default::default()).is_err());}
+fn scalar_mask_bake_keeps_owner_tree_and_domain_while_linked_fold_bakes_registered_pair() {
+    let mut doc=document();let id=fixture::id(&doc,"Ink");let mid=fixture::add_mask(&mut doc,id,[64,48],Point{x:-11.,y:9.});let target=SourceTarget::Coverage(mid);let mask=fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap();mask.linked=false;mask.placement=perspective();mask.inverted=true;mask.enabled=false;doc.artwork.coverage.get_mut(mid).unwrap().initial=Some(Selection::polygon(Rect::from_extent([20,12]).corners().to_vec()).unwrap());
+    let original=fixture::occurrence(&doc,"Ink").clone();let plan=doc.transform_pixels_plan(target,Interpolation::Bicubic,Default::default()).unwrap();assert_eq!(plan.target,target);assert_eq!(plan.scope,TransformPixelsScope::Mask);assert_eq!(plan.scene.view().target_extent(target),[64,48]);let mut editor=Editor::new(doc.clone());editor.perform(plan.output.clone()).unwrap();let after=fixture::occurrence(editor.document(),"Ink");let mut expected=original.clone();expected.mask=after.mask.clone();assert_eq!(*after,expected);assert!(after.mask.as_ref().unwrap().inverted);assert!(!after.mask.as_ref().unwrap().enabled);assert!(editor.document().artwork.coverage.get(mid).unwrap().initial.is_none());assert_eq!(fixture::paint(editor.document(),"Ink"),fixture::paint(&doc,"Ink"));
+    assert_eq!(plan.scene.view().paint_source(id).unwrap().raster,Default::default());assert!(plan.scene.view().paint_source(id).unwrap().original.is_none());
+    fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().linked=true;fixture::occurrence_mut(&mut doc,"Ink").placement.mesh=Some(Arc::new(MeshMap::identity(Rect::from_extent([128,96]),[3,3]).unwrap().move_node(5,Point{x:30.,y:10.}).unwrap()));
+    let pair=doc.transform_pixels_plan(target,Interpolation::Bicubic,Default::default()).unwrap();assert_eq!(pair.target,target);assert_eq!(pair.scope,TransformPixelsScope::Paint{linked_mask:true});let mut editor=Editor::new(doc);editor.perform(pair.output).unwrap();let owner=fixture::occurrence(editor.document(),"Ink");assert_eq!(fixture::id(editor.document(),"Ink"),id);assert_eq!(owner.placement,LayerPlacement::IDENTITY);assert_eq!(owner.mask.as_ref().unwrap().placement,Projective::IDENTITY);
+}
+
+#[test]
+fn current_format_round_trip_keeps_nonuniform_mesh_and_mask_extent_and_preserves_unsupported_envelopes() {
+    let mut doc=document();let mesh=MeshMap::identity(Rect::from_extent([128,96]),[1,1]).unwrap().split(0,0.375).unwrap();fixture::occurrence_mut(&mut doc,"Ink").placement=LayerPlacement{outer:perspective(),mesh:Some(Arc::new(mesh)),interpolation:Interpolation::Lanczos};let owner=fixture::id(&doc,"Ink");fixture::add_mask(&mut doc,owner,[64,48],Point::default());let bytes=fixture::encoded(&doc);let loaded=fixture::decoded(bytes.clone());assert_eq!(fixture::occurrence(&loaded,"Ink").placement,fixture::occurrence(&doc,"Ink").placement);let mask=fixture::occurrence(&loaded,"Ink").mask.as_ref().unwrap();assert_eq!(loaded.target_extent(SourceTarget::Coverage(mask.source)),[64,48]);
+    let mut input=std::io::Cursor::new(bytes);let directory=package::archive::Directory::read(&mut input,262144,64*1024*1024).unwrap();let member=directory.member("manifest.json").unwrap();let manifest=directory.read_member(&mut input,member,64*1024*1024).unwrap();let mut value:serde_json::Value=serde_json::from_slice(&manifest).unwrap();assert_eq!(value["format"],"capy.canvas");assert_eq!(value["version"],1);
+    for version in 2..9 {value["version"]=version.into();let unsupported=serde_json::to_vec(&value).unwrap();assert!(matches!(package::manifest::Manifest::parse(&unsupported,&directory,Default::default()).unwrap(),package::manifest::ManifestRead::UnsupportedEnvelope(_)));}
 }
 
 #[test]
@@ -95,153 +99,30 @@ fn affine_mesh_controls_admit_only_exact_grid_refinement() {
 
 #[test]
 fn independent_mask_admission_grows_only_its_authoritative_local_domain() {
-    let mut doc = document();
-    let owner = doc.layers[0].id;
-    doc.layers[0].properties.extent = Some([128, 96]);
-    let mask_id = doc.allocate_layer_id();
-    let mut mask = LayerMask::reveal_all(mask_id, Point { x: -300., y: -200. });
-    mask.linked = false;
-    mask.extent = Some([32, 24]);
-    doc.layers[0].mask = Some(mask);
-    let before = doc.layers[0].clone();
-    let edits = doc.paint_extent_plan(&[owner], GeometryLimits { project: Default::default(), device_dimension: 4096 }).unwrap();
-    let mut editor = Editor::new(doc.clone());
-    editor.perform(Edit::Batch(edits)).unwrap();
-    let after = editor.document().layer(owner).unwrap();
-    assert_eq!(after.properties, before.properties);
-    assert_eq!(after.raster, before.raster);
-    assert_eq!(after.source, before.source);
-    assert_eq!(editor.document().target_extent(owner), [128, 96]);
-    let extent = editor.document().target_extent(mask_id);
-    assert!(extent[0] >= 428 && extent[1] >= 296);
-    assert_eq!(doc.target_extent(mask_id), [32, 24]);
-    let mut virtual_canvas = doc.clone();
-    virtual_canvas.width = 1024;
-    virtual_canvas.height = 768;
-    assert_eq!(virtual_canvas.target_extent(owner), [128, 96]);
-    assert_eq!(virtual_canvas.target_extent(mask_id), [32, 24]);
-    assert!(editor.undo().unwrap());
-    assert_eq!(editor.document().layers, doc.layers);
+    let mut doc=document();let owner=fixture::id(&doc,"Ink");let target=fixture::target(&doc,"Ink");let mask_id=fixture::add_mask(&mut doc,owner,[32,24],Point{x:-300.,y:-200.});fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().linked=false;let before=fixture::occurrence(&doc,"Ink").clone();
+    let edits=doc.paint_extent_plan(&[target],GeometryLimits{project:Default::default(),device_dimension:4096}).unwrap();let mut editor=Editor::new(doc.clone());editor.perform(Edit::Batch(edits)).unwrap();let mut after=fixture::occurrence(editor.document(),"Ink").clone();after.mask=before.mask.clone();assert_eq!(after,before);assert_eq!(fixture::paint(editor.document(),"Ink"),fixture::paint(&doc,"Ink"));assert_eq!(editor.document().target_extent(target),[128,96]);let extent=editor.document().target_extent(SourceTarget::Coverage(mask_id));assert!(extent[0]>=428&&extent[1]>=296);assert_eq!(doc.target_extent(SourceTarget::Coverage(mask_id)),[32,24]);
+    let mut virtual_canvas=doc.clone();virtual_canvas.artwork.compositions.get_mut(virtual_canvas.artwork.root).unwrap().size=[1024,768];assert_eq!(virtual_canvas.target_extent(target),[128,96]);assert_eq!(virtual_canvas.target_extent(SourceTarget::Coverage(mask_id)),[32,24]);assert!(editor.undo().unwrap());let mut restored=editor.document().clone();restored.revision=doc.revision;assert_eq!(restored,doc);
 }
 
 #[test]
 fn retained_admission_refuses_adjustment_roots_empty_groups_and_pending_descendants() {
-    let mut doc = document();
-    let paint = doc.layers[0].id;
-    let group_id = doc.allocate_layer_id();
-    let mut group = Layer::paint(group_id, "Group");
-    group.kind = LayerKind::Group;
-    doc.layers.push(group);
-    assert!(doc.retained_transform_targets(&[group_id]).is_err());
-    let adjustment_id = doc.allocate_layer_id();
-    let mut adjustment = Layer::paint(adjustment_id, "Adjustment");
-    adjustment.kind = LayerKind::Effect;
-    adjustment.properties.parent = Some(group_id);
-    doc.layers.push(adjustment);
-    assert!(doc.retained_transform_targets(&[adjustment_id]).is_err());
-    assert!(doc.retained_transform_targets(&[group_id]).is_err());
-    doc.layers[0].properties.parent = Some(group_id);
-    assert_eq!(doc.retained_transform_targets(&[group_id, paint]).unwrap(), vec![paint, group_id, adjustment_id]);
-    doc.layers[0].pending_operations.push(LayerOperation {
-        placement: Affine::IDENTITY,
-        coverage: LayerMask::reveal_all(LayerId(0), Point::default()),
-        kind: LayerOperationKind::Erase { alpha_locked: false },
-    });
-    let before = doc.clone();
-    assert!(doc.retained_transform_edit(&[group_id], perspective()).is_err());
-    assert_eq!(doc, before);
+    let mut doc=fixture::document([128,96],&["Ink","Group"]);let paint=fixture::id(&doc,"Ink");let group=fixture::nest(&mut doc,"Group",&[]);assert!(doc.retained_transform_targets(&[group]).is_err());let adjustment=fixture::insert_paint(&mut doc,"Adjustment",0,Some(group));fixture::effect(&mut doc,"Adjustment","gaussian_blur");assert!(doc.retained_transform_targets(&[adjustment]).is_err());assert!(doc.retained_transform_targets(&[group]).is_err());fixture::nest(&mut doc,"Group",&["Ink","Adjustment"]);assert_eq!(doc.retained_transform_targets(&[group,paint]).unwrap(),vec![group,paint,adjustment]);
+    let coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),[128,96],Point::default());Arc::make_mut(&mut fixture::paint_mut(&mut doc,"Ink").operations).push(RasterOperation{placement:Affine::IDENTITY,coverage,kind:RasterOperationKind::Erase{alpha_locked:false}});let before=doc.clone();assert!(doc.retained_transform_edit(&[group],perspective()).is_err());assert_eq!(doc,before);
 }
 
 #[test]
 fn content_bounds_cache_keeps_all_current_targets_but_only_one_time_per_scope() {
-    let mut doc = document();
-    for index in 0..4 {
-        let id = doc.allocate_layer_id();
-        doc.layers.insert(index, Layer::paint(id, format!("Paint {index}")));
-    }
-    let requests: Vec<_> = doc.layers[..4].iter().map(|layer| ContentBoundsRequest::new(&doc, ContentScope::Target(layer.id))).collect();
-    let mut cache = ContentBoundsCache::default();
-    for request in &requests { cache.insert(request.clone(), Rect::from_extent([24, 16])); }
-    for request in &requests { assert_eq!(cache.get(request), Some(Rect::from_extent([24, 16]))); }
-    let mut timed = requests[0].clone();
-    timed.time = 12.;
-    cache.insert(timed.clone(), Rect::from_extent([30, 20]));
-    assert!(cache.get(&requests[0]).is_none());
-    assert_eq!(cache.get(&timed), Some(Rect::from_extent([30, 20])));
-    for request in &requests[1..] { assert!(cache.get(request).is_some()); }
-    doc.revision += 1;
-    cache.discard_changed(&doc);
-    assert!(cache.get(&timed).is_none());
-    for request in &requests { assert!(cache.get(request).is_none()); }
+    let mut doc=document();let mut targets=Vec::new();for index in 0..4 {let h=fixture::insert_paint(&mut doc,format!("Paint {index}"),index,None);targets.push(doc.scene().source_target(h).unwrap());}let requests:Vec<_>=targets.iter().map(|target|ContentBoundsRequest::new(&doc,ContentScope::Target(*target))).collect();let mut cache=ContentBoundsCache::default();for request in &requests{cache.insert(request.clone(),Rect::from_extent([24,16]));}for request in &requests{assert_eq!(cache.get(request),Some(Rect::from_extent([24,16])));}let mut timed=requests[0].clone();Arc::make_mut(&mut timed.snapshot).context.elapsed=12.;cache.insert(timed.clone(),Rect::from_extent([30,20]));assert!(cache.get(&requests[0]).is_none());assert_eq!(cache.get(&timed),Some(Rect::from_extent([30,20])));for request in &requests[1..]{assert!(cache.get(request).is_some());}doc.revision+=1;cache.discard_changed(&doc);assert!(cache.get(&timed).is_none());for request in &requests{assert!(cache.get(request).is_none());}
 }
 
 #[test]
 fn bake_member_meshes_and_mask_operations_share_one_retained_geometry_charge() {
-    let mesh = Arc::new(MeshMap::identity(Rect::from_extent([128, 96]), [3, 3]).unwrap());
-    let mut member = Layer::paint(LayerId(10), "Member");
-    member.properties.placement.mesh = Some(mesh.clone());
-    let mut output = Layer::paint(LayerId(11), "Baked");
-    output.pending_operations.push(LayerOperation {
-        placement: Affine::IDENTITY,
-        coverage: LayerMask::reveal_all(LayerId(0), Point::default()),
-        kind: LayerOperationKind::Bake { members: vec![member.clone(), member].into(), offset: Point::default() },
-    });
-    let mut mask = LayerMask::reveal_all(LayerId(12), Point::default());
-    mask.pending_operations = vec![LayerOperation {
-        placement: Affine::IDENTITY,
-        coverage: LayerMask::reveal_all(LayerId(0), Point::default()),
-        kind: LayerOperationKind::Transform(ImageTransform { placement: LayerPlacement { mesh: Some(mesh.clone()), ..Default::default() }, ..Default::default() }),
-    }].into();
-    output.mask = Some(mask);
-    let mut roots = Vec::new();
-    output.mesh_roots(&mut roots);
-    assert_eq!(roots.len(), 3);
-    assert!(roots.iter().all(|root| Arc::ptr_eq(root, &mesh)));
-    let mut doc = document();
-    doc.layers.insert(0, output.clone());
-    let mut accounting = crate::history_budget::Accounting::new(&doc);
-    assert_eq!(accounting.charge_mesh(&mesh), 0, "Bake-only ownership is already charged by the current document");
-    let original = output.clone();
-    without_shared_payloads(&mut output);
-    let mut stripped = Vec::new();
-    output.mesh_roots(&mut stripped);
-    assert!(stripped.is_empty());
-    let mut retained = Vec::new();
-    original.mesh_roots(&mut retained);
-    assert_eq!(retained.len(), 3);
-    assert!(retained.iter().all(|root| Arc::ptr_eq(root, &mesh)));
+    let mesh=Arc::new(MeshMap::identity(Rect::from_extent([128,96]),[3,3]).unwrap());let mut members=fixture::document([128,96],&["Member 1","Member 2"]);for name in ["Member 1","Member 2"]{fixture::occurrence_mut(&mut members,name).placement.mesh=Some(mesh.clone());}let scene=members.snapshot();let scope=SceneScope::Members(vec![fixture::id(&members,"Member 1"),fixture::id(&members,"Member 2")].into());let mut doc=document();let owner=fixture::id(&doc,"Ink");let coverage=CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(),[128,96],Point::default());Arc::make_mut(&mut fixture::paint_mut(&mut doc,"Ink").operations).push(RasterOperation{placement:Affine::IDENTITY,coverage:coverage.clone(),kind:RasterOperationKind::Bake{scene,scope,offset:Point::default()}});let mask=fixture::add_mask(&mut doc,owner,[128,96],Point::default());doc.artwork.coverage.get_mut(mask).unwrap().operations=vec![RasterOperation{placement:Affine::IDENTITY,coverage,kind:RasterOperationKind::Transform(ImageTransform{placement:LayerPlacement{mesh:Some(mesh.clone()),..Default::default()},..Default::default()})}].into();
+    let mut roots=RootInventory::default();roots.document(&doc);assert_eq!(roots.meshes.len(),3);assert!(roots.meshes.iter().all(|root|Arc::ptr_eq(root,&mesh)));let mut accounting=crate::history_budget::Accounting::new(&doc);assert_eq!(accounting.charge_mesh(&mesh),0,"Bake-only ownership is already charged by the current document");let original=doc.clone();fixture::paint_mut(&mut doc,"Ink").operations=Arc::default();doc.artwork.coverage.get_mut(mask).unwrap().operations=Arc::default();let mut stripped=RootInventory::default();stripped.document(&doc);assert!(stripped.meshes.is_empty());let mut retained=RootInventory::default();retained.document(&original);assert_eq!(retained.meshes.len(),3);assert!(retained.meshes.iter().all(|root|Arc::ptr_eq(root,&mesh)));
 }
 
 #[test]
 fn identity_group_delta_preserves_non_normalized_maps_mesh_roots_masks_and_redo() {
-    let mut doc = document();
-    let paint = doc.layers[0].id;
-    let group_id = doc.allocate_layer_id();
-    let mut group = Layer::paint(group_id, "Group");
-    group.kind = LayerKind::Group;
-    group.properties.offset = Point { x: 8192.25, y: -4096.125 };
-    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point { x: 123.5, y: -45.25 });
-    mask.linked = false;
-    mask.placement = Projective([2., 0.1, 4., 0., 2., 7., 0., 0., 2.]);
-    group.mask = Some(mask);
-    let mesh = Arc::new(MeshMap::identity(Rect::from_extent([128, 96]), [3, 3]).unwrap());
-    doc.layers[0].properties.parent = Some(group_id);
-    doc.layers[0].properties.placement = LayerPlacement {
-        outer: Projective([2., 0.2, 7., 0., 2., 11., 0.001, -0.0005, 2.]),
-        mesh: Some(mesh.clone()), interpolation: Interpolation::Lanczos,
-    };
-    doc.layers.push(group);
-    let mut editor = Editor::new(doc.clone());
-    let mut changed = doc.layer(paint).unwrap().clone();
-    changed.opacity = 0.5;
-    editor.perform(Edit::ReplaceLayer(Box::new(changed))).unwrap();
-    assert!(editor.undo().unwrap());
-    let before = editor.document().clone();
-    let redo = editor.next_history_edit(true).cloned();
-    let edit = editor.document().retained_transform_edit(&[group_id, paint], Projective::IDENTITY).unwrap();
-    assert_eq!(edit, Edit::Batch(Vec::new()));
-    editor.perform(edit).unwrap();
-    assert_eq!(editor.document(), &before);
-    assert_eq!(editor.next_history_edit(true), redo.as_ref());
-    assert!(Arc::ptr_eq(editor.document().layer(paint).unwrap().properties.placement.mesh.as_ref().unwrap(), &mesh));
+    let mut doc=fixture::document([128,96],&["Group","Ink"]);let paint=fixture::id(&doc,"Ink");let group=fixture::nest(&mut doc,"Group",&["Ink"]);fixture::occurrence_mut(&mut doc,"Group").translation=Point{x:8192.25,y:-4096.125};fixture::add_mask(&mut doc,group,[128,96],Point{x:123.5,y:-45.25});let mask=fixture::occurrence_mut(&mut doc,"Group").mask.as_mut().unwrap();mask.linked=false;mask.placement=Projective([2.,0.1,4.,0.,2.,7.,0.,0.,2.]);let mesh=Arc::new(MeshMap::identity(Rect::from_extent([128,96]),[3,3]).unwrap());fixture::occurrence_mut(&mut doc,"Ink").placement=LayerPlacement{outer:Projective([2.,0.2,7.,0.,2.,11.,0.001,-0.0005,2.]),mesh:Some(mesh.clone()),interpolation:Interpolation::Lanczos};
+    let mut editor=Editor::new(doc.clone());let mut changed=fixture::occurrence(&doc,"Ink").clone();changed.opacity=0.5;editor.perform(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,paint,Some(changed)).unwrap())).unwrap();assert!(editor.undo().unwrap());let before=editor.document().clone();let redo=editor.next_history_edit(true).cloned();let edit=editor.document().retained_transform_edit(&[group,paint],Projective::IDENTITY).unwrap();assert_eq!(edit,Edit::Batch(Vec::new()));editor.perform(edit).unwrap();assert_eq!(editor.document(),&before);assert_eq!(editor.next_history_edit(true),redo.as_ref());assert!(Arc::ptr_eq(fixture::occurrence(editor.document(),"Ink").placement.mesh.as_ref().unwrap(),&mesh));
 }

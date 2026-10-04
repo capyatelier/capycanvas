@@ -1,7 +1,8 @@
 //! Transfer jobs bridge the serial editor owner and a background file worker.
 //! Jobs never retain a session pointer. File descriptors/URLs stay host-owned.
 use super::*;
-use layer_core::Project;
+use layer_core::authored::ArtworkCapture;
+use layer_core::package::codec::PreparedPackage;
 use layer_host::{Renderer, clipboard::ClipTask, export::ExportTask, open::OpenEnvironment, tasks::{ColorTask, SourceTask}, window::OpenAdoption};
 use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, PixelClip, UiSession};
@@ -33,14 +34,15 @@ mod proof;
 pub use proof::*;
 
 enum Payload {
+    Package(layer_ui::PackageView),
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
     Inspection(Box<inspection::Task>),
     Proof(Box<proof::Task>),
     Save {
-        snapshot: Option<Project>,
-        project: Option<Project>,
+        snapshot: Option<ArtworkCapture>,
+        project: Option<ArtworkCapture>,
     },
     Open {
         environment: Option<OpenEnvironment>,
@@ -198,7 +200,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
             let destination = placement.layer.map(|row| {
                 let position = session.image_layer_drop_hint(row.target, row.fraction)
                     .ok_or("Images cannot be placed at that layer position")?;
-                Ok::<_, String>(layer_ui::ImageLayerDestination { target: layer_core::LayerId(row.target), position })
+                Ok::<_, String>(layer_ui::ImageLayerDestination { target: layer_ui::occurrence_handle(row.target)?, position })
             }).transpose()?;
             let context = session.image_placement_context(placement.screen, destination)?;
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
@@ -208,7 +210,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 .ok_or("Wait for the canvas to finish starting")?.device().clone();
             Payload::Placed {
                 images: layer_ui::ImageImportBatch::new(session.state().settings.photo_open,
-                    session.engine().document().color.space, Default::default()),
+                    session.engine().document().composition().color.space, Default::default()),
                 context, request, device,
             }
         } else if opening == 1 {
@@ -347,15 +349,28 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                 if let Some(snapshot) = snapshot.take() {
                     *project = Some(snapshot);
                 }
-                project
-                    .as_ref()
-                    .ok_or("Missing project snapshot")?
-                    .write(stream)
+                let capture = project.as_ref().ok_or("Missing project snapshot")?;
+                let package = PreparedPackage::prepare(capture, None, task.control.cancellation_flag())?;
+                package.write(&mut {stream}, task.control.cancellation_flag())
             }
+            Payload::Package(view) => view.copy_original(&mut {stream}, task.control.cancellation_flag()),
             Payload::Color(color) => color.write_copy(stream, task.control.is_cancelled()),
             Payload::Export(export) => export.write(stream, task.control.clone()).map_err(|reason| reason.message(localization)),
             _ => Err("Not a write task".into()),
         }
+    })
+}
+
+/// # Safety
+/// Worker only. The task and host-owned descriptor remain alive through writing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_export_preview(task: *const CapyProjectTask, fd: i32) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
+    task.perform(|payload| {
+        if fd < 0 { return Err("Missing preview output".into()); }
+        let file = host_file(fd);
+        let Payload::Package(view) = payload else { return Err("No retained drawing preview".into()); };
+        view.export_preview(&mut &*file, task.control.cancellation_flag())
     })
 }
 
@@ -398,6 +413,28 @@ pub unsafe extern "C" fn capy_project_new(task: *const CapyProjectTask, options:
     });
     unsafe { prepare_project(task, options, Ok("Untitled")) }
 }
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_package_summary(task:*const CapyProjectTask)->*mut c_char {
+    let Some(task) = (unsafe {task.as_ref()}) else{return std::ptr::null_mut();};
+    let state = task.state.lock().unwrap_or_else(|e| e.into_inner());
+    let summary = match &state.payload {
+        Payload::Package(view) => serde_json::to_string(&view.summary(&task.localization)),
+        _ => Ok("null".into()),
+    };
+    summary.ok().and_then(|value| CString::new(value).ok()).map_or(std::ptr::null_mut(),CString::into_raw)
+}
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_package_preview(task:*const CapyProjectTask,output:*mut CapyProjectPreview)->i32 {
+    let (Some(task),Some(output)) = (unsafe {task.as_ref()},unsafe {output.as_mut()}) else{return -1;};
+    let state = task.state.lock().unwrap_or_else(|e|e.into_inner());
+    let Payload::Package(view) = &state.payload else{return -1;};
+    if let Some(preview) = view.preview() {
+        let [width,height] = preview.size();
+        *output = CapyProjectPreview {width,height,pixels:preview.pixels().as_ptr(),count:preview.pixels().len()};
+    } else {*output = CapyProjectPreview {width:0,height:0,pixels:std::ptr::null(),count:0};}
+    0
+}
+
 /// # Safety
 /// Task remains alive; returns owned JSON interpretation, or JSON null.
 #[unsafe(no_mangle)]
@@ -451,27 +488,40 @@ unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>,
         };
         let context = environment.as_ref().ok_or("This open task has already run")?;
         match input {
-            Input::New(options) => *imported = Some(layer_ui::ImportedDocument {
-                project: options.unwrap_or(context.new_options).project(&context.localization)?,
-                source: layer_ui::ImportSource::Master,
-            }),
+            Input::New(options) => *imported = Some(layer_ui::ImportedDocument::new(
+                options.unwrap_or(context.new_options).project(&context.localization)?,
+                layer_ui::ImportSource::Master,
+            )),
             Input::File(fd) => {
                 let file = host_file(fd);
-                *imported = Some(context.read(
-                    layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
-                    layer_ui::ImportIntent::Open, name, task.control.cancellation_flag())?)
+                let outcome = context.read(layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() },
+                    layer_ui::ImportIntent::Open, name, task.control.cancellation_flag())?;
+                match outcome {
+                    layer_ui::ImportOutcome::Editable(value) => *imported = Some(value),
+                    layer_ui::ImportOutcome::Package(value) => {*payload = Payload::Package(layer_ui::PackageView::new(value)?);return Ok(());}
+                }
             }
-            Input::Bytes(bytes) => *imported = Some(context.read(Cursor::new(bytes),
-                layer_ui::ImportIntent::Open, name, task.control.cancellation_flag())?),
+            Input::Bytes(bytes) => match context.read(Cursor::new(bytes),
+                layer_ui::ImportIntent::Open,name,task.control.cancellation_flag())? {
+                layer_ui::ImportOutcome::Editable(value) => *imported = Some(value),
+                layer_ui::ImportOutcome::Package(value) => {*payload = Payload::Package(layer_ui::PackageView::new(value)?);return Ok(());}
+            },
             Input::Assume(profile) => imported.as_mut().ok_or("No image interpretation is pending")?.interpret(profile)?,
         }
         task.check_cancelled()?;
         let ready = imported.as_ref().ok_or("Document preparation is incomplete")?;
         if ready.interpretation_required(context.photo_policy).is_some() { return Ok(()); }
         *source = ready.source;
-        let project = imported.take().unwrap().project;
+        let imported = imported.take().unwrap();
         let environment = environment.take().unwrap();
-        *candidate = Some(environment.prepare(project, || task.check_cancelled().is_err())?);
+        match environment.prepare(imported.project.clone(), || task.check_cancelled().is_err()) {
+            Ok(prepared) => *candidate = Some(prepared),
+            Err(reason) => {
+                task.check_cancelled()?;
+                let Some(outcome) = imported.preserve_unsupported(reason.clone()) else { return Err(reason); };
+                *payload = Payload::Package(layer_ui::PackageView::new(outcome)?);
+            }
+        }
         Ok(())
     })
 }

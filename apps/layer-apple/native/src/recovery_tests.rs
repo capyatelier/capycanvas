@@ -28,7 +28,7 @@ fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
         assert!(unsafe { &*app.0 }.host.session.engine().has_active_stroke());
         assert_ne!(app.pixels(), committed_pixels);
         let captured = unsafe { &*app.0 }.host.session.engine().document().clone();
-        assert_eq!(captured.layers, committed.layers);
+        assert_project_document(&captured, &committed);
         assert_eq!(captured.revision, committed.revision);
         assert!(
             unsafe { capy_apple_project_task(app.0, 1, std::ptr::null()) }.is_null(),
@@ -47,8 +47,8 @@ fn apple_save_and_recovery_during_contact_capture_only_committed_rasters() {
                 task.error()
             );
             file.rewind().unwrap();
-            let saved = layer_core::Project::read(&mut file, Default::default()).unwrap();
-            assert_project_document(&saved.document, &captured);
+            let saved = read_document(&mut file);
+            assert_saved_document(&saved, &captured);
         }
         assert_eq!(
             unsafe {
@@ -128,8 +128,8 @@ fn project_recovery_preserves_captured_pixels_and_requires_a_durable_manual_save
         file.rewind().unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
-        let saved = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-        assert_project_document(&saved.document, &original);
+        let saved = read_document(std::io::Cursor::new(bytes));
+        assert_saved_document(&saved, &original);
         assert_eq!(
             unsafe {
                 capy_apple_project_saved(

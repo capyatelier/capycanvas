@@ -4,7 +4,8 @@ mod store;
 mod topology;
 pub use identity::PortableId;
 pub use resource::{EncodedBytes, Resource, ResourceEncoding};
-pub use store::{Handle, Store};
+pub(crate) use resource::{EncodedIntegrity, IntegrityCache};
+pub use store::{Handle, RecordChange, Store};
 pub use topology::{Content, GraphLimits, GraphShape, Shape, Support};
 
 #[cfg(test)]
@@ -14,3 +15,7 @@ mod artwork;
 pub use artwork::*;
 mod extensions;
 pub use extensions::{Extensions, OpaqueResource};
+mod scene;
+pub use scene::{EffectBaseline, SceneIndex, SceneScope, SceneSnapshot, SceneView};
+
+mod occurrence_edits;

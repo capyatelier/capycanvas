@@ -88,7 +88,7 @@ impl ToneService {
             .backend()
             .0
             .as_ref()
-            .filter(|_| d.color.depth.is_float() && !s.rendering_suspended())
+            .filter(|_| d.composition().color.depth.is_float() && !s.rendering_suspended())
         else {
             let changed = self.wanted.is_some() || self.guide.is_some() || self.error.is_some();
             self.clear();
@@ -183,7 +183,7 @@ impl ToneService {
                 .spawn(move || {
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         capture
-                            .capture(project, time, cancel)
+                            .capture(project, cancel)
                             .map_err(|e| e.to_string())
                             .and_then(|mut snapshot| snapshot.gpu_local_tone_guide())
                     }))
@@ -236,9 +236,9 @@ mod tests {
 
     #[test]
     fn tone_service_publishes_only_the_current_key_and_retains_compatible_guides() {
-        let mut document = layer_core::Document::new("HDR", 32, 24, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color.depth = SampleDepth::F32;
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 32, 24, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::composition_mut(&mut document).color.depth = SampleDepth::F32;
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session =
             UiSession::new(Renderer(Some(gpu.into())), document.clone(), [32, 24], layer_ui::Platform::Mac).unwrap();
@@ -257,7 +257,7 @@ mod tests {
         assert!(!Arc::ptr_eq(&tone.current(&host).unwrap(), &guide));
         let context = crate::GpuContext::of(host.session.engine().backend().0.as_ref().unwrap());
         let renderer = context
-            .rasterizer(document.color, &Default::default(), true)
+            .rasterizer(document.composition().color, &Default::default(), true)
             .unwrap();
         let mut replacement =
             UiSession::new(Renderer(Some(renderer.into())), document, [32, 24], layer_ui::Platform::Mac).unwrap();

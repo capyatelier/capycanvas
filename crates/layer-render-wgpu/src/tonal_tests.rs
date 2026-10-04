@@ -2,6 +2,7 @@ use super::*;
 use crate::test_support::receive_request;
 use layer_core::{
     Affine, SelectionMode,
+    authored::{PortableId, SavedSelection},
     color::{
         ColorProfile, DocumentColor, RgbSpace, SampleDepth,
         source::{SourceBuilder, SourceChannels, SourceInterpretation},
@@ -82,24 +83,26 @@ fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() 
                 .collect::<Vec<_>>(),
         )
         .unwrap();
-    let mut layer = Layer::paint(LayerId(1), "HDR source");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut layer = paint_document([3, 1], "HDR source");
+    let root = layer.artwork.root;
+    layer.artwork.compositions.get_mut(root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 };
+    placement::set_source(&mut layer, Arc::new(builder.finish().unwrap()));
     let band = TonalBand {
         name: "HDR".into(),
         lower: Some(0.5),
         upper: None,
         falloff: [0.; 2],
     };
-    let submit = |r: &mut WgpuRasterizer, layer: &Layer, saved: Option<Selection>| {
-        let mut layers = vec![layer.clone()];
-        if let Some(saved) = saved {
-            layers.insert(0, Layer::selection(LayerId(2), "Saved", saved));
+    let submit = |r: &mut WgpuRasterizer, layer: &Document, saved: Option<Selection>| {
+        let mut document = layer.clone();
+        if let Some(selection) = saved {
+            let record = RecordChange::insert(&document.artwork.selections,SavedSelection {selection,display:Default::default()});
+            document.apply(layer_core::Edit::SavedSelection(record)).unwrap();
         }
         r.submit(FramePacket {
             view: ViewState { document_to_surface: [2., 0., 0., 2., 15., 15.], ..view() },
-            ..packet(&layers, [3, 1])
-        })
-        .unwrap();
+            ..packet(document.scene(), [3, 1])
+        }).unwrap();
     };
     submit(&mut r, &layer, None);
     let first = receive(
@@ -142,7 +145,7 @@ fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() 
     );
     assert_eq!(cached.pixels, first.pixels);
     assert!((cached.tonal_sample.unwrap().stops[0] - 1.).abs() < 0.00001);
-    layer.opacity = 0.5;
+    occurrence_mut(&mut layer).opacity = 0.5;
     submit(&mut r, &layer, None);
     assert!(!r.regions.as_ref().unwrap().raw.tonal_cached());
     let changed = receive(
@@ -182,11 +185,11 @@ fn opaque_photo_cache_preserves_odd_rows_and_falls_back_for_opacity() {
             .collect();
         builder.push_row(&row).unwrap();
     }
-    let mut layer = Layer::paint(LayerId(1), "Opaque source");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut layer = paint_document(extent, "Opaque source");
+    placement::set_source(&mut layer, Arc::new(builder.finish().unwrap()));
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let submit = |r: &mut WgpuRasterizer, layer: &Layer| {
-        r.submit(FramePacket { view: view(), ..packet(std::slice::from_ref(layer), extent) })
+    let submit = |r: &mut WgpuRasterizer, layer: &Document| {
+        r.submit(FramePacket { view: view(), ..packet(layer.scene(), extent) })
         .unwrap()
     };
     submit(&mut r, &layer);
@@ -208,7 +211,7 @@ fn opaque_photo_cache_preserves_odd_rows_and_falls_back_for_opacity() {
     let warm = receive(&mut r, RegionSource::Composite, bands, false, None, None).pixels;
     assert_eq!(warm, cold);
     assert_eq!(warm.bounds(), [0, 0, 259, 3]);
-    layer.opacity = 0.5;
+    occurrence_mut(&mut layer).opacity = 0.5;
     submit(&mut r, &layer);
     let all = vec![TonalBand {
         name: "All".into(),
@@ -259,10 +262,10 @@ fn tonal_61mp_performance() {
         }
         builder.push_row(&row).unwrap();
     }
-    let mut layer = Layer::paint(LayerId(1), "Generated 61 MP photograph");
-    layer.source = Some(Arc::new(builder.finish().unwrap()));
+    let mut layer = paint_document(extent, "Generated 61 MP photograph");
+    placement::set_source(&mut layer, Arc::new(builder.finish().unwrap()));
     let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(&[layer.clone()], extent) })
+    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(layer.scene(), extent) })
     .unwrap();
     let before = r.telemetry().resident_bytes;
     let mut held = Vec::new();
@@ -296,14 +299,19 @@ fn tonal_61mp_performance() {
         held.push(result.pixels.clone());
         assert!(r.selection_clip.storage_bytes() <= 128 * 1024 * 1024);
         if i == 6 {
-            let mut doc = layer_core::Document::new("61 MP recovery", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            doc.layers = vec![layer.clone()];
-            doc.active_layer = layer.id;
-            doc.selection = Some(Selection::pixels(result.pixels));
-            let project = layer_core::Project { document: doc };
+            let mut doc = layer.clone();
+            doc.working.selection = Some(Selection::pixels(result.pixels));
+            let saved = RecordChange::insert(&doc.artwork.selections,SavedSelection {
+                selection: doc.working.selection.clone().unwrap(), display:Default::default(),
+            });
+            let saved_id = saved.id;
+            doc.apply(layer_core::Edit::SavedSelection(saved)).unwrap();
+            let capture = layer_core::Editor::new(doc.clone()).capture(0,doc.output().context.clone()).unwrap();
+            let cancelled = std::sync::atomic::AtomicBool::new(false);
             let start = std::time::Instant::now();
             let mut output = Vec::new();
-            let saved = project.write(&mut output);
+            let saved = layer_core::package::codec::PreparedPackage::prepare(&capture,None,&cancelled)
+                .and_then(|prepared|prepared.write(&mut output,&cancelled));
             eprintln!(
                 "TONAL_61MP recovery_ms={:.3} bytes={} result={saved:?}",
                 start.elapsed().as_secs_f64() * 1000.,
@@ -311,9 +319,16 @@ fn tonal_61mp_performance() {
             );
             saved.unwrap();
             {
-                let reopened =
-                    layer_core::Project::read(output.as_slice(), Default::default()).unwrap();
-                assert_eq!(reopened.document.selection, project.document.selection);
+                let backing = layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(output))).unwrap();
+                let layer_core::package::codec::OpenOutcome::Candidate {artwork,..} =
+                    layer_core::package::codec::open(backing,Default::default(),&cancelled).unwrap() else {panic!("recovery package must remain editable")};
+                let reopened = Document::from_artwork(artwork).unwrap();
+                reopened.validate(Default::default()).unwrap();
+                let (_,_,saved) = reopened.artwork.selections.iter().find(|(_,id,_)|*id == saved_id).unwrap();
+                assert_eq!(Some(&saved.selection),doc.working.selection.as_ref());
+                let transfer = layer_core::package::transfer::PreparedTransfer::capture_with_selection(&capture,&doc.working.selection,&cancelled).unwrap();
+                let (_,selection) = transfer.adopt_verified_with_selection(Default::default(),&cancelled).unwrap();
+                assert_eq!(selection,doc.working.selection);
             }
         }
     }
@@ -423,9 +438,11 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
             )
             .unwrap();
     }
-    let mut layer = Layer::paint(LayerId(1), "HDR ramp");
-    layer.source = Some(Arc::new(source.finish().unwrap()));
-    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(&[layer], extent) })
+    let mut layer = paint_document(extent, "HDR ramp");
+    let root = layer.artwork.root;
+    layer.artwork.compositions.get_mut(root).unwrap().color = color;
+    placement::set_source(&mut layer, Arc::new(source.finish().unwrap()));
+    r.submit(FramePacket { view: view(), reset_layers: true, ..packet(layer.scene(), extent) })
     .unwrap();
     let bands = vec![
         TonalBand::defaults()[0].clone(),
@@ -436,7 +453,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
             falloff: [1., 2.],
         },
     ];
-    for source in [RegionSource::Layer(LayerId(1)), RegionSource::Composite] {
+    for source in [RegionSource::Source(target(&layer)), RegionSource::Composite] {
         for invert in [false, true] {
             let p = receive(&mut r, source.clone(), bands.clone(), invert, None, None).pixels;
             let weights = color.space.to_xyz()[1];
@@ -461,7 +478,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     }
     let sample = receive(
         &mut r,
-        RegionSource::Layer(LayerId(1)),
+        RegionSource::Source(target(&layer)),
         bands.clone(),
         false,
         Some(TonalProbe {
@@ -478,7 +495,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     assert_eq!(sample.count, 25);
     let area = receive(
         &mut r,
-        RegionSource::Layer(LayerId(1)),
+        RegionSource::Source(target(&layer)),
         bands.clone(),
         false,
         Some(TonalProbe {
@@ -495,7 +512,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     assert!(
         receive(
             &mut r,
-            RegionSource::Layer(LayerId(1)),
+            RegionSource::Source(target(&layer)),
             bands.clone(),
             false,
             Some(TonalProbe {
@@ -536,7 +553,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     for q in [quad, [quad[3], quad[2], quad[1], quad[0]]] {
         let sample = receive(
             &mut r,
-            RegionSource::Layer(LayerId(1)),
+            RegionSource::Source(target(&layer)),
             bands.clone(),
             false,
             Some(TonalProbe {
@@ -566,7 +583,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
     .unwrap();
     let p = receive(
         &mut r,
-        RegionSource::Layer(LayerId(1)),
+        RegionSource::Source(target(&layer)),
         bands,
         false,
         None,
@@ -580,11 +597,11 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
 #[test]
 fn tonal_sdr_native_painted_source_and_composite() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let white = Layer::solid_color(LayerId(2), "Paper", layer_core::color::RgbColor::WHITE);
+    let layer = Document::new(PortableId::random(),512,512,layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
     let gray = 0.007f32;
     let mut ink = dab([gray, gray, gray, 1.]);
     ink.center = Point { x: 300., y: 300. };
-    let mut stroke = batch(1);
+    let mut stroke = batch(target(&layer));
     stroke.damage = layer_core::Rect {
         min: Point::default(),
         max: Point { x: 512., y: 512. },
@@ -594,7 +611,7 @@ fn tonal_sdr_native_painted_source_and_composite() {
         dabs: &[ink],
         dab_batches: &[stroke],
         reset_layers: true,
-        ..packet(&[Layer::paint(LayerId(1), "Paint"), white], [512, 512])
+        ..packet(layer.scene(), [512, 512])
     })
     .unwrap();
     let _ = receive(
@@ -607,7 +624,7 @@ fn tonal_sdr_native_painted_source_and_composite() {
     );
     let _ = receive(&mut r, RegionSource::Composite, vec![], false, None, None);
     let bands = vec![TonalBand::defaults()[0].clone()];
-    for source in [RegionSource::Layer(LayerId(1)), RegionSource::Composite] {
+    for source in [RegionSource::Source(target(&layer)), RegionSource::Composite] {
         let result = receive(
             &mut r,
             source.clone(),

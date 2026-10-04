@@ -201,10 +201,10 @@ fn captured_integrated_phase_survives_rate_edits_and_a_new_host_time_origin() {
     let mut clock = EffectClock::default();
     for (elapsed, speed, phase) in [(2.,1.,2.), (2.,2.,2.), (3.,2.,4.), (3.,0.,4.), (8.,0.,4.), (8.,2.,4.), (9.,2.,6.)] {
         effect.set("speed", EffectValue::Number(speed)).unwrap();
-        assert_eq!(clock.advance(&effect, elapsed), phase);
-        let mut reopened = EffectClock::at(&effect, 0., phase);
-        assert_eq!(reopened.advance(&effect, 0.), phase);
-        assert_eq!(reopened.advance(&effect, 0.5), phase + speed * 0.5);
+        assert_eq!(clock.advance(effect.view(), elapsed), phase);
+        let mut reopened = EffectClock::at(effect.view(), 0., phase);
+        assert_eq!(reopened.advance(effect.view(), 0.), phase);
+        assert_eq!(reopened.advance(effect.view(), 0.5), phase + speed * 0.5);
     }
-    assert_ne!(clock.advance(&effect, 9.), effect.time_seconds(9.), "elapsed alone does not identify saved output");
+    assert_ne!(clock.advance(effect.view(), 9.), effect.time_seconds(9.), "elapsed alone does not identify saved output");
 }

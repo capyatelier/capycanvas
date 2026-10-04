@@ -6,10 +6,10 @@ pub(super) type Node = Arc<Expression>;
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) enum Expression {
     Color([u32; 4]),
-    Source { id: LayerId, placement: pixel_transform::GeometryKey, extent: [u32; 2], outside: u32 },
+    Source { id: SourceTarget, placement: pixel_transform::GeometryKey, extent: [u32; 2], outside: u32 },
     Opacity { input: Node, opacity: u32 },
     Combine { front: Node, back: Node, blend: u32, flags: u32 },
-    Effect { input: Node, chain: Vec<(LayerId, u64, u32)>, masks: Vec<Option<Node>>, radius: Option<u32> },
+    Effect { input: Node, chain: Vec<(OccurrenceHandle, u64, u32)>, masks: Vec<Option<Node>>, radius: Option<u32> },
 }
 impl Expression {
     fn color(value: [f32; 4]) -> Node { Arc::new(Self::Color(value.map(f32::to_bits))) }
@@ -93,17 +93,17 @@ impl Expression {
             _ => {}
         }
     }
-    pub(super) fn deferred(&self, r: &WgpuRasterizer, batches: &[DabBatch]) -> bool {
+    pub(super) fn deferred(&self, r: &WgpuRasterizer, scene: SceneView<'_>, batches: &[DabBatch]) -> bool {
         match self {
             Self::Source { id, placement, .. } => {
                 if let Some(transforms) = r.transforms.as_ref().filter(|t| t.display_source(*id)) {
                     return transforms.direct_source(*id);
                 }
                 placement.0.as_affine().is_some() && r.watercolor_style(*id, batches).is_none()
-                    && (r.moving_layer == Some(*id) || !placement.0.is_identity())
+                    && (r.moving_layer == scene.source_owner(*id) || !placement.0.is_identity())
             }
-            Self::Opacity { input, .. } => input.deferred(r, batches),
-            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r, batches),
+            Self::Opacity { input, .. } => input.deferred(r, scene, batches),
+            Self::Combine { front, back, blend: 0, flags: 0 } => matches!(back.as_ref(), Self::Color(_)) && front.deferred(r, scene, batches),
             _ => false,
         }
     }
@@ -126,7 +126,7 @@ pub(super) struct Branch {
 pub(super) struct Graph {
     pub root: Option<Node>,
     branches: HashMap<Node, Branch>,
-    effects: HashMap<LayerId, (metadata::Metadata, u64)>,
+    effects: HashMap<OccurrenceHandle, (metadata::Metadata, u64)>,
     revision: u64,
     blend_space: layer_core::BlendSpace,
 }
@@ -137,12 +137,12 @@ impl Graph {
     }
     pub fn prepare(&mut self, r: &WgpuRasterizer, packet: FramePacket<'_>, sources: &Sources, plan: display_mips::Plan, budget: u64) -> Result<(), GpuRasterError> {
         if std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space { self.branches.clear(); }
-        self.effects.retain(|id, _| packet.layers.iter().any(|l| l.id == *id && l.effect.is_some()));
-        for layer in packet.layers.iter().filter(|l| l.effect.is_some()) {
-            let metadata = metadata::Metadata::new(layer);
-            if self.effects.get(&layer.id).is_none_or(|(old, _)| *old != metadata) {
+        self.effects.retain(|id, _| packet.scene.effect(*id).is_some());
+        for &handle in packet.scene.order().iter().filter(|handle| packet.scene.effect(**handle).is_some()) {
+            let metadata = metadata::Metadata::new(packet.scene, handle);
+            if self.effects.get(&handle).is_none_or(|(old, _)| *old != metadata) {
                 self.revision += 1;
-                self.effects.insert(layer.id, (metadata, self.revision));
+                self.effects.insert(handle, (metadata, self.revision));
             }
         }
         let root = compose(packet, Some(sources), Some(&self.effects), plan.level, r.device.working_space())?;
@@ -174,16 +174,15 @@ pub(super) fn scratch_images(packet: FramePacket<'_>, level: u32, space: layer_c
 }
 
 fn compose(
-    packet: FramePacket<'_>, sources: Option<&Sources>, effects: Option<&HashMap<LayerId, (metadata::Metadata, u64)>>,
+    packet: FramePacket<'_>, sources: Option<&Sources>, effects: Option<&HashMap<OccurrenceHandle, (metadata::Metadata, u64)>>,
     level: u32, space: layer_core::color::RgbSpace,
 ) -> Result<Node, GpuRasterError> {
     let mut builder = Builder { packet, sources, effects, level, space };
-    let output = stack::compose(&mut builder, packet.layers, None, None)?;
+    let output = stack::compose(&mut builder, packet.scene, None, packet.scene.stop_before())?;
     let mut root = Expression::over(&output);
-    for layer in packet.layers {
-        if layer.mask.as_ref().is_some_and(|m| m.enabled && m.show_area) {
-            root = Expression::combine(builder.source(layer, true), root, layer_core::LayerBlend::Normal, 64);
-        }
+    if let Some(handle) = packet.inspect_mask
+        && packet.scene.mask(handle).is_some_and(|(mask, _)| mask.enabled) {
+        root = Expression::combine(builder.source(handle, true), root, layer_core::LayerBlend::Normal, 64);
     }
     Ok(root)
 }
@@ -191,85 +190,86 @@ fn compose(
 struct Builder<'a> {
     packet: FramePacket<'a>,
     sources: Option<&'a Sources>,
-    effects: Option<&'a HashMap<LayerId, (metadata::Metadata, u64)>>,
+    effects: Option<&'a HashMap<OccurrenceHandle, (metadata::Metadata, u64)>>,
     level: u32,
     space: layer_core::color::RgbSpace,
 }
 impl Builder<'_> {
-    fn source(&self, layer: &Layer, mask: bool) -> Node {
-        let id = if mask { layer.mask.as_ref().unwrap().id } else { layer.id };
+    fn source(&self, handle: OccurrenceHandle, mask: bool) -> Node {
+        let scene = self.packet.scene;
+        let id = if mask { SourceTarget::Coverage(scene.mask(handle).unwrap().0.source) } else { scene.source_target(handle).unwrap() };
         if self.sources.is_some_and(|sources| !sources.entries.contains_key(&id)) { return Expression::color([0.; 4]); }
-        let outside = layer.mask.as_ref().filter(|_| mask).map_or(0., |m| if m.inverted { 1. - m.default_coverage } else { m.default_coverage });
-        Arc::new(Expression::Source { id, placement: pixel_transform::GeometryKey(layer_core::target_geometry(self.packet.layers, id)),
-            extent: if mask { layer.mask.as_ref().unwrap().local_extent(layer.local_extent(self.packet.document_extent)) } else { layer.local_extent(self.packet.document_extent) }, outside: outside.to_bits() })
+        let outside = scene.mask(handle).filter(|_| mask).map_or(0., |(use_, source)| if use_.inverted { 1. - source.default_coverage } else { source.default_coverage });
+        Arc::new(Expression::Source { id, placement: pixel_transform::GeometryKey(scene.target_geometry(id)),
+            extent: scene.target_extent(id), outside: outside.to_bits() })
     }
+
 }
 impl stack::Compositor for Builder<'_> {
     type Image = Vec<Node>;
     fn clear(&mut self) -> Self::Image { Vec::new() }
     fn discard(&mut self, _: Self::Image) {}
     fn duplicate(&mut self, image: &Self::Image) -> Self::Image { image.clone() }
-    fn fade(&mut self, front: Self::Image, back: Self::Image, index: usize) -> Result<Self::Image, GpuRasterError> {
-        let layer = &self.packet.layers[index];
+    fn fade(&mut self, front: Self::Image, back: Self::Image, index: OccurrenceHandle) -> Result<Self::Image, GpuRasterError> {
+        let layer = self.packet.scene.occurrence(index).unwrap();
         let back = Expression::over(&back);
         let front = Expression::over(&front);
         let (front, back) = if layer.mask.as_ref().is_some_and(|m| m.enabled) {
             let change = Expression::combine(front, Expression::opacity(back.clone(), -1.), layer_core::LayerBlend::Normal, 128);
-            let masked = Expression::combine(change, self.source(layer, true), layer_core::LayerBlend::Normal, 32);
+            let masked = Expression::combine(change, self.source(index, true), layer_core::LayerBlend::Normal, 32);
             (Expression::opacity(masked, layer.opacity), back)
         } else { (Expression::opacity(front, layer.opacity), Expression::opacity(back, 1. - layer.opacity)) };
         Ok(vec![Expression::combine(front, back, layer_core::LayerBlend::Normal, 128)])
     }
-    fn layer(&mut self, index: usize) -> Result<Self::Image, GpuRasterError> {
-        let layer = &self.packet.layers[index];
-        let output = if layer.kind == LayerKind::Group {
-            stack::compose(self, self.packet.layers, Some(layer.id), None)?
-        } else if let Some(color) = layer.effect.as_ref().and_then(|effect| effect.constant_color()) {
+    fn layer(&mut self, index: OccurrenceHandle) -> Result<Self::Image, GpuRasterError> {
+        let layer = self.packet.scene.occurrence(index).unwrap();
+        let output = if layer.kind() == LayerKind::Group {
+            stack::compose(self, self.packet.scene, Some(index), None)?
+        } else if let Some(color) = self.packet.scene.effect(index).and_then(|effect| effect.constant_color()) {
             let [r, g, b, a] = color.linear_in(self.space).map_err(GpuRasterError::Color)?;
             if a == 0. { Vec::new() }
             else { vec![Expression::color(self.packet.blend_space.composite(self.space, [r * a, g * a, b * a, a]))] }
-        } else if layer.kind == LayerKind::Effect {
+        } else if layer.kind() == LayerKind::Effect {
             self.effect(&[index], Vec::new())?
-        } else { vec![self.source(layer, false)] };
+        } else { vec![self.source(index, false)] };
         if layer.mask.as_ref().is_some_and(|m| m.enabled) {
-            Ok(vec![Expression::combine(Expression::over(&output), self.source(layer, true), layer_core::LayerBlend::Normal, 32)])
+            Ok(vec![Expression::combine(Expression::over(&output), self.source(index, true), layer_core::LayerBlend::Normal, 32)])
         } else { Ok(output) }
     }
-    fn blend(&mut self, front: Self::Image, mut back: Self::Image, index: usize, clipped: bool) -> Result<Self::Image, GpuRasterError> {
-        let layer = &self.packet.layers[index];
+    fn blend(&mut self, front: Self::Image, mut back: Self::Image, index: OccurrenceHandle, clipped: bool) -> Result<Self::Image, GpuRasterError> {
+        let layer = self.packet.scene.occurrence(index).unwrap();
         let front = if layer.opacity == 1. { front } else { vec![Expression::opacity(Expression::over(&front), layer.opacity)] };
-        if layer.properties.blend == layer_core::LayerBlend::Normal && !clipped {
+        if layer.blend == layer_core::LayerBlend::Normal && !clipped {
             back.extend(front);
             Ok(back)
         } else {
-            Ok(vec![Expression::combine(Expression::over(&front), Expression::over(&back), layer.properties.blend, if clipped { 16 } else { 0 })])
+            Ok(vec![Expression::combine(Expression::over(&front), Expression::over(&back), layer.blend, if clipped { 16 } else { 0 })])
         }
     }
-    fn effect(&mut self, indices: &[usize], input: Self::Image) -> Result<Self::Image, GpuRasterError> {
+    fn effect(&mut self, indices: &[OccurrenceHandle], input: Self::Image) -> Result<Self::Image, GpuRasterError> {
         let radius = indices.iter().try_fold(0u32, |radius, i| radius.checked_add(
-            crate::effects::damage_radius(self.packet.layers[*i].effect.as_ref().unwrap(), self.level)?));
+            crate::effects::damage_radius(self.packet.scene.effect(*i).unwrap(), self.level)?));
         let chain = indices.iter().map(|i| {
-            let layer = &self.packet.layers[*i];
-            let effect = layer.effect.as_ref().unwrap();
-            (layer.id, self.effects.map_or(0, |effects| effects[&layer.id].1), if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
+            let effect = self.packet.scene.effect(*i).unwrap();
+            (*i, self.effects.map_or(0, |effects| effects[i].1), if effect.animated() { self.packet.time_seconds.to_bits() } else { 0 })
         }).collect();
         let masks = indices.iter().map(|i| {
-            let layer = &self.packet.layers[*i];
-            (layer.effect.as_ref().unwrap().program.kind == layer_core::EffectKind::Adjustment
-                && layer.mask.as_ref().is_some_and(|m| m.enabled)).then(|| self.source(layer, true))
+            let layer = self.packet.scene.occurrence(*i).unwrap();
+            (self.packet.scene.effect(*i).unwrap().program.kind == layer_core::EffectKind::Adjustment
+                && layer.mask.as_ref().is_some_and(|m| m.enabled)).then(|| self.source(*i, true))
         }).collect();
         Ok(vec![Arc::new(Expression::Effect { input: Expression::over(&input), chain, masks, radius })])
     }
-    fn has_content(&self, index: usize) -> bool {
-        let layer = &self.packet.layers[index];
-        matches!(layer.kind, LayerKind::Group | LayerKind::Paint | LayerKind::Effect)
+    fn has_content(&self, index: OccurrenceHandle) -> bool {
+        let layer = self.packet.scene.occurrence(index).unwrap();
+        matches!(layer.kind(), LayerKind::Group | LayerKind::Paint | LayerKind::Effect)
     }
 }
 
 impl Evaluator<'_> {
     pub(super) fn evaluate_root(&mut self, node: &Node, direct: bool) -> Result<Value, GpuRasterError> {
         let deferred = if direct && self.cache.plan.level > 0 && self.cache.plan.bounds == PixelRect::full(self.cache.plan.extent)
-            && node.deferred(self.r, self.packet.dab_batches) { Some(self.evaluate(node)?) } else { None };
+            && node.deferred(self.r, self.packet.scene, self.packet.dab_batches) { Some(self.evaluate(node)?) } else { None };
         if matches!(deferred, Some(Value::Placed(_) | Value::Transform(_))) { return Ok(deferred.unwrap()); }
         self.cache.pixels.ensure_root(self.r, self.cache.plan, "composition level");
         let image = self.cache.pixels.root().unwrap();

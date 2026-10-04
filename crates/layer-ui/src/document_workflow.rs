@@ -4,7 +4,7 @@
 use crate::{DocumentColorOperation, DocumentRequest, HostRequestKind, UiChange, UiSession, Localizer, MessageId};
 use layer_color::DocumentColorChange;
 use layer_core::{
-    ColorTransition, LayerId, PreparedColorTransition, Project,
+    ColorTransition, Document, Edit, EvaluationContext, RecordChange, PreparedColorTransition, authored::{OccurrenceHandle, OccurrenceContent},
     color::{ColorProfile, ConversionOptions, DocumentColor, source::SourceImage},
 };
 use layer_render::CanvasRenderer;
@@ -43,6 +43,7 @@ impl WorkflowFailure {
 pub struct CandidateIdentity {
     epoch: u64,
     revision: u64,
+    owner: u64,
     request: u32,
 }
 impl CandidateIdentity {
@@ -57,6 +58,7 @@ impl CandidateIdentity {
         Ok(Self {
             epoch: session.state().document_file.epoch,
             revision: session.engine().document().revision,
+            owner: session.engine().document().owner,
             request,
         })
     }
@@ -75,6 +77,7 @@ impl CandidateIdentity {
             || !device_current
             || session.state().document_file.epoch != self.epoch
             || session.engine().document().revision != self.revision
+            || session.engine().document().owner != self.owner
             || !session
                 .state()
                 .requests
@@ -103,8 +106,9 @@ pub enum ColorPreparation {
 pub struct ColorWorkflow {
     localization: Arc<Localizer>,
     pub identity: CandidateIdentity,
-    pub original: Project,
-    pub candidate: Option<Project>,
+    pub context: EvaluationContext,
+    pub original: Document,
+    pub candidate: Option<Document>,
     transition: Option<PreparedColorTransition>,
     operation: Option<DocumentColorOperation>,
     plan: Option<ColorPreparation>,
@@ -133,7 +137,8 @@ impl ColorWorkflow {
         Ok(Self {
             localization: s.localization().clone(),
             identity,
-            original: s.capture_project_recovery()?,
+            context: s.engine().scene_snapshot().context.clone(),
+            original: s.document_snapshot()?,
             operation,
             transition,
             candidate,
@@ -159,7 +164,7 @@ impl ColorWorkflow {
                 ColorPreparation::Flatten {
                     color: DocumentColor {
                         space,
-                        ..self.original.document.color
+                        ..self.original.composition().color
                     },
                     options,
                 }
@@ -186,7 +191,7 @@ impl ColorWorkflow {
         self.compared = true;
         Ok(())
     }
-    pub fn copy_project(&self, cancelled: bool) -> Result<&Project, String> {
+    pub fn copy_project(&self, cancelled: bool) -> Result<&Document, String> {
         if cancelled {
             return Err(WorkflowFailure::CopyCancelled.message(&self.localization));
         }
@@ -217,11 +222,11 @@ impl ColorWorkflow {
             .candidate
             .as_ref()
             .ok_or_else(|| WorkflowFailure::MissingColorCandidate.message(&self.localization))?;
-        Ok(s.prepare_document_color_transition(ColorTransition::Apply {
-            color: p.document.color,
-            layers: p.document.layers.clone(),
-        })?
-        .0)
+        let document = s.engine().document();
+        let paint = p.artwork.paint.iter().map(|(handle, _, source)| RecordChange::replace(&document.artwork.paint, handle, Some(source.clone())).map_err(str::to_string)).collect::<Result<Vec<_>, _>>()?;
+        let coverage = p.artwork.coverage.iter().map(|(handle, _, source)| RecordChange::replace(&document.artwork.coverage, handle, Some(source.clone())).map_err(str::to_string)).collect::<Result<Vec<_>, _>>()?;
+        let edit = document.color_edit(p.composition().color, paint, coverage).map_err(crate::session::error)?;
+        Ok(s.prepare_document_color_transition(ColorTransition::Apply { edit: Box::new(edit) })?.0)
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
@@ -248,12 +253,14 @@ impl<R: CanvasRenderer> UiSession<R> {
 pub struct SourceWorkflow {
     localization: Arc<Localizer>,
     pub identity: CandidateIdentity,
-    pub project: Project,
+    pub context: EvaluationContext,
+    pub project: Document,
     pub original: Arc<SourceImage>,
-    layer: LayerId,
+    layer: OccurrenceHandle,
     rasterize: bool,
     adds_layer: bool,
     converted: Option<Arc<SourceImage>>,
+    prepared: Option<Edit>,
     compared: bool,
 }
 impl SourceWorkflow {
@@ -263,28 +270,29 @@ impl SourceWorkflow {
         {
             HostRequestKind::Document {
                 request: DocumentRequest::RepairSourceProfile { layer },
-            } => (LayerId(*layer), false),
+            } => (crate::session::occurrence_handle(*layer)?, false),
             HostRequestKind::Document {
                 request: DocumentRequest::RasterizeSource { layer },
-            } => (LayerId(*layer), true),
+            } => (crate::session::occurrence_handle(*layer)?, true),
             _ => return Err(WorkflowFailure::NotSourceRequest.message(s.localization())),
         };
-        let project = s.capture_project_recovery()?;
-        let l = project
-            .document
-            .layer(layer)
-            .ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
-        let original = l.source.clone().ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
-        let adds_layer = !rasterize && crate::session::source_edit::baked(l);
+        let project = s.document_snapshot()?;
+        let occurrence = project.scene().occurrence(layer).ok_or_else(|| WorkflowFailure::MissingSourceLayer.message(s.localization()))?;
+        let OccurrenceContent::Paint(paint) = occurrence.content else { return Err(WorkflowFailure::MissingSource.message(s.localization())); };
+        let source = project.artwork.paint.get(paint).ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
+        let original = source.original.clone().ok_or_else(|| WorkflowFailure::MissingSource.message(s.localization()))?;
+        let adds_layer = !rasterize && crate::session::source_edit::baked(source);
         Ok(Self {
             localization: s.localization().clone(),
             identity,
+            context: s.engine().scene_snapshot().context.clone(),
             project,
             original,
             layer,
             rasterize,
             adds_layer,
             converted: None,
+            prepared: None,
             compared: false,
         })
     }
@@ -316,7 +324,7 @@ impl SourceWorkflow {
         let (source, clipped) = if self.rasterize {
             let (source, statistics) = layer_color::rasterize_source(
                 &self.original,
-                self.project.document.color,
+                self.project.composition().color,
                 budget,
                 &mut cancelled,
             )?;
@@ -325,7 +333,7 @@ impl SourceWorkflow {
             let mut source = (*self.original).clone();
             source.interpretation = layer_color::repair_source_interpretation(
                 source.interpretation,
-                self.project.document.color.space,
+                self.project.composition().color.space,
                 profile.unwrap(),
             )?;
             source.validate()?;
@@ -342,15 +350,13 @@ impl SourceWorkflow {
         source: Arc<SourceImage>,
         cancelled: bool,
         device_current: bool,
-    ) -> Result<Project, String> {
+    ) -> Result<Document, String> {
         self.identity.validate(s, cancelled, device_current)?;
         self.compared = false;
         self.converted = None;
-        let project = if self.rasterize {
-            s.preview_rasterized_source(self.layer, &self.original, source.clone())?
-        } else {
-            s.preview_layer_source(self.layer, &self.original, (*source).clone())?
-        };
+        self.prepared = None;
+        let (project, edit) = s.prepare_source_edit(self.layer, &self.original, source.clone(), self.rasterize)?;
+        self.prepared = Some(edit);
         self.converted = Some(source);
         Ok(project)
     }
@@ -371,16 +377,10 @@ impl SourceWorkflow {
         if !self.compared {
             return Err(WorkflowFailure::PreviewSource.message(&self.localization));
         }
-        let source = self
-            .converted
-            .as_ref()
-            .ok_or_else(|| WorkflowFailure::MissingSourceCandidate.message(&self.localization))?
-            .clone();
-        if self.rasterize {
-            s.apply_rasterized_source(self.layer, &self.original, source)?;
-        } else {
-            s.repair_layer_source(self.layer, &self.original, (*source).clone())?;
-        }
+        if self.converted.is_none() { return Err(WorkflowFailure::MissingSourceCandidate.message(&self.localization)); }
+        let edit = self.prepared.as_ref().ok_or_else(|| WorkflowFailure::MissingSourceCandidate.message(&self.localization))?.clone();
+        s.commit_prepared_source_edit(edit)?;
+        self.prepared = None;
         self.converted = None;
         self.compared = false;
         Ok(())

@@ -271,7 +271,7 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn crop_to_selection_refusal(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
-        self.canvas_geometry_refusal().or(match &self.engine.document().selection {
+        self.canvas_geometry_refusal().or(match &self.engine.document().working.selection {
             None => Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST)),
             Some(selection) if selection.inverted => Some(l.text(MessageId::COMMANDS_REFUSAL_CANVAS_SIZE_AN_INVERTED_SELECTION_HAS_NO_BOUNDS_TO_CROP_TO)),
             Some(_) => None,
@@ -286,7 +286,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
-        let mut draft = CanvasSizeDraft::new([doc.width, doc.height], self.localization());
+        let mut draft = CanvasSizeDraft::new(doc.composition().size, self.localization());
         draft.update(doc, self.engine.geometry_limits(), self.localization());
         self.canvas_size = Some(draft);
         self.refresh_tools();
@@ -311,7 +311,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 refused(self.canvas_geometry_refusal())?;
                 let draft = self.canvas_size.as_ref().ok_or("Canvas Size is not open")?;
                 let doc = self.engine.document();
-                if draft.current != [doc.width, doc.height] {
+                if draft.current != doc.composition().size {
                     self.canvas_size = None;
                     self.refresh_tools();
                     return Err("The canvas changed; open Canvas Size again".into());
@@ -337,17 +337,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.crop_to_selection_refusal())?;
         let doc = self.engine.document();
-        let bounds = doc.selection.as_ref().unwrap().coverage_bounds();
+        let bounds = doc.working.selection.as_ref().unwrap().coverage_bounds();
         const TOLERANCE: f32 = 1e-3;
         let min = [bounds.min.x, bounds.min.y].map(|v| (v + TOLERANCE).floor().max(0.));
-        let max = [(bounds.max.x, doc.width), (bounds.max.y, doc.height)]
+        let max = [(bounds.max.x, doc.composition().size[0]), (bounds.max.y, doc.composition().size[1])]
             .map(|(v, limit)| (v - TOLERANCE).ceil().min(limit as f32));
         if bounds.is_empty() || (0..2).any(|axis| max[axis] <= min[axis]) {
             return Err("The selection doesn't cover any of the canvas".into());
         }
         let origin = min.map(|v| v as i32);
         let size = std::array::from_fn(|axis| (max[axis] - min[axis]) as u32);
-        if origin == [0; 2] && size == [doc.width, doc.height] {
+        if origin == [0; 2] && size == doc.composition().size {
             return Err("The selection already covers the whole canvas".into());
         }
         self.apply_canvas_geometry(&CanvasGeometry::crop(CanvasRect { origin, size }), Vec::new()).map_err(|e| e.to_string())

@@ -4,13 +4,13 @@ use layer_render_wgpu::snapshot::SnapshotGpu;
 
 pub(super) fn prepare(
     gpu: SnapshotGpu,
-    project: Project,
+    project: Document,
     color: DocumentColor,
     options: ConversionOptions,
-    time: f32,
+    context: layer_core::authored::EvaluationContext,
     control: CaptureControl,
 ) -> Result<layer_color::PreparedDocumentColor, String> {
-    gpu.capture(project, time, control)
+    gpu.capture(layer_host::tasks::capture_document_at(&project, context), control)
         .map_err(|e| e.to_string())?
         .flattened_document(
             color,

@@ -13,17 +13,27 @@ be tested without launching a window.
 
 ## The shared editor
 
-`Document`, in `layer-core`, describes the artwork: layers, strokes, source images,
-masks and other edits. `Editor` applies reversible edits and keeps undo/redo
-history. These types do not depend on a graphics API or a UI toolkit.
+`Document`, in `layer-core`, owns one typed `Artwork` and transient
+`WorkingState`. Artwork stores compositions, stacks, occurrences, paint and
+coverage sources, effect applications and definitions, saved selections, guides
+and outputs. Stacks own order; occurrences own placement and presentation;
+sources own pixels. Compact typed handles identify runtime records, while stable
+portable IDs identify records in files. `Editor` applies atomic reversible record
+changes and retains immutable owners for undo/redo.
 
-The prepared format library in `layer-core::authored` defines typed compositions,
-stacks, occurrences, sources, definitions and outputs with compact handles.
-`layer-core::package` resolves portable IDs, visits immutable resources and reads
-or writes the lossless package. These types are the application cutover boundary;
-the running editor still uses `Document` until the integrated M3 switch described
-in the [format plan](development/capy-format.md). The codec returns an artwork
-candidate; shared color and renderer admission precede editor adoption.
+Working selection, saved-selection visibility overrides and editing targets
+belong to `WorkingState`; they do not
+enter the portable artwork manifest. A captured `ArtworkCapture` retains shared
+immutable artwork roots, an output evaluation context and a checkpoint. Shared
+resource enumeration works independently of ZIP construction, so history, parked
+tabs and accepted jobs can retain the same resources.
+
+`layer-core::package` resolves portable IDs and reads or writes the lossless
+package through bounded backing. The codec returns a candidate for shared color
+and renderer admission. Unsupported artwork remains a preserved package with
+its original bytes and any independently verified preview. See the
+[authored model](reference/authored-model.md) and
+[package contract](reference/capy-package.md).
 
 `CanvasEngine`, in `layer-engine`, connects that model to drawing input. It
 interprets ordered pen samples, evaluates brush dynamics and produces work for a
@@ -67,11 +77,11 @@ Platform surface and presentation
    tool. For a stroke, it converts input into document coordinates and places
    brush contacts along the path. A resolved contact is called a *dab*.
 3. The engine builds a `FramePacket`, defined by `layer-render`. This packet
-   borrows the prepared batch data for submission and includes document changes
-   and the affected regions. It is not a bitmap or a complete document replay
+   borrows the prepared batch data and a `SceneView` over typed artwork records.
+   It includes explicit source targets, document changes and affected regions. It is not a bitmap or a complete document replay
    on every frame.
 4. `WgpuRasterizer`, in `layer-render-wgpu`, records GPU commands to draw new dabs
-   into retained layer textures and update their composition. The shared viewport
+   into retained source textures and update their composition. The shared viewport
    presenter draws the canvas at the current zoom and rotation.
 5. The platform presents the result using its surface and frame scheduling rules.
    Native integration must also handle resize, suspension and surface loss.
@@ -122,7 +132,7 @@ cost and input-to-display latency on the target device.
 ## Files and other host services
 
 Shared code defines file requests, save checkpoints and close decisions. The host
-opens pickers, reads or writes bytes and reports completion. Project decoding and
+opens pickers, reads or writes bytes and reports completion. Package decoding and
 encoding belong off the input path. An incoming document is validated before it
 replaces the live one; a failed or cancelled save must not mark a document clean.
 

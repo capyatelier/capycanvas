@@ -2,7 +2,7 @@ use super::*;
 
 const FAMILIES: [&str; 9] = ["reds", "yellows", "greens", "cyans", "blues", "magentas", "whites", "neutrals", "blacks"];
 
-fn selective(values: [[f64; 4]; 9], relative: bool, image: bool) -> Layer {
+fn selective(values: [[f64; 4]; 9], relative: bool, image: bool) -> EffectInstance {
     let mut layer = effect(2, "selective_color", image);
     for (family, row) in FAMILIES.into_iter().zip(values) {
         for (component, value) in ["cyan", "magenta", "yellow", "black"].into_iter().zip(row) {
@@ -115,11 +115,11 @@ fn selective_masks_opacity_and_clipping_preserve_original_input() {
                     let original = input_reference(rgb, alpha);
                     let mapped = reference(original, space, parameters, false);
                     let expected = std::array::from_fn(|c| original[c] + (mapped[c] - original[c]) * 0.15);
-                    let mut layer = selective(parameters, false, image);
-                    let mut mask = layer_core::LayerMask::reveal_all(LayerId(3), Point::default());
-                    mask.default_coverage = 0.25;
-                    layer.mask = Some(mask); layer.opacity = 0.6; layer.properties.clipped = clipped;
-                    assert_color_bound(frame(&mut renderer, &[layer, source(rgb, alpha)]), expected, alpha, 3e-6,
+                    let layer = selective(parameters, false, image);
+                    let mut document=effect_document(&[layer,source(rgb,alpha)],[256;2],renderer.document_color);
+                    let h=document.scene().order()[0];mask(&mut document,h,0.25);
+                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.clipped=clipped;
+                    assert_color_bound(frame_document(&mut renderer,&document), expected, alpha, 3e-6,
                         &format!("Selective mask/opacity {space:?} image={image} clipped={clipped} alpha={alpha}"));
                 }
             }
@@ -127,7 +127,7 @@ fn selective_masks_opacity_and_clipping_preserve_original_input() {
     }
 }
 
-fn mixer(rows: [[f64; 4]; 4], monochrome: bool, image: bool) -> Layer {
+fn mixer(rows: [[f64; 4]; 4], monochrome: bool, image: bool) -> EffectInstance {
     let mut layer = effect(2, "channel_mixer", image);
     for (output, row) in ["red", "green", "blue", "gray"].into_iter().zip(rows) {
         for (input, value) in ["red", "green", "blue", "constant"].into_iter().zip(row) {
@@ -238,10 +238,11 @@ fn mixer_masks_opacity_and_clipping_preserve_original_input() {
                         let original = input_reference(rgb, alpha);
                         let changed = mixer_reference(original, space, rows, monochrome);
                         let expected = std::array::from_fn(|c| original[c] + (changed[c] - original[c]) * 0.15);
-                        let mut layer = mixer(rows, monochrome, image);
-                        let mut mask = layer_core::LayerMask::reveal_all(LayerId(3), Point::default()); mask.default_coverage = 0.25;
-                        layer.mask = Some(mask); layer.opacity = 0.6; layer.properties.clipped = clipped;
-                        assert_color_bound(frame(&mut renderer, &[layer, source(rgb, alpha)]), expected, alpha, 2e-6,
+                        let layer = mixer(rows, monochrome, image);
+                        let mut document=effect_document(&[layer,source(rgb,alpha)],[256;2],renderer.document_color);
+                    let h=document.scene().order()[0];mask(&mut document,h,0.25);
+                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.clipped=clipped;
+                    assert_color_bound(frame_document(&mut renderer,&document), expected, alpha, 2e-6,
                             &format!("Mixer mask {space:?} image={image} monochrome={monochrome} clipped={clipped}"));
                     }
                 }
@@ -296,13 +297,13 @@ fn selective_preparation_tracks_corrections_and_reuses_method_opacity_and_frozen
         let mapped = reference(input_reference(rgb, alpha), RgbSpace::Srgb, parameters, false);
         assert_color_bound(frame(&mut renderer, &[adjustment.clone(), input.clone()]), mapped, alpha, 2e-6, "method reuses prepared corrections");
         assert_eq!(renderer.scene.as_ref().unwrap().effects.preparation_count(), 2);
-        adjustment.opacity = 0.4;
+        let mut document=effect_document(&[adjustment.clone(),input.clone()],[256;2],renderer.document_color);
+        let h=document.scene().order()[0];document.artwork.occurrences.get_mut(h).unwrap().opacity=0.4;
         let expected = std::array::from_fn(|c| f64::from(original[c]) / f64::from(alpha) * 0.6 + mapped[c] * 0.4);
-        let frozen = frame(&mut renderer, &[adjustment.clone(), input.clone()]);
+        let frozen = frame_document(&mut renderer,&document);
         assert_color_bound(frozen, expected, alpha, 2e-6, "opacity reuses prepared corrections");
         assert_eq!(renderer.scene.as_ref().unwrap().effects.preparation_count(), 2);
-        let layers = [adjustment.clone(), input.clone()];
-        renderer.submit(FramePacket { composite_all: false, ..packet(&layers, [256; 2]) }).unwrap();
+        renderer.submit(FramePacket { composite_all: false, ..packet(document.scene().with_owner(0,0),[256;2]) }).unwrap();
         assert_eq!(renderer.scene.as_ref().unwrap().effects.preparation_count(), 2);
         assert_eq!(crate::layer_tests::page_bytes(&renderer, crate::test_support::document_texture(&renderer)),
             frozen.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(256 * 256));

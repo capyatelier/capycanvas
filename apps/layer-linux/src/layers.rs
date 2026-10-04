@@ -1369,6 +1369,13 @@ impl LayerPanel {
         if g.session.renderer_mut().ready().is_err() {
             return;
         }
+        while let Some(request) = g.session.renderer_mut().take_cancelled_thumbnail() {
+            let pending = self.pending.borrow_mut().remove(&request);
+            if let Some((id, mask, revision)) = pending {
+                let current = self.requested.borrow().get(&(id, mask)) == Some(&revision);
+                if current { self.requested.borrow_mut().remove(&(id, mask)); }
+            }
+        }
         while let Some(result) = g.session.renderer_mut().take_thumbnail() {
             if let Ok(image) = result
                 && let Some((id, mask, revision)) =
@@ -1423,7 +1430,11 @@ impl LayerPanel {
                 self.next_preview.set(request + 1);
                 if g.session
                     .renderer_mut()
-                    .request_thumbnail(request, layer_core::LayerId(target))
+                    .request_thumbnail(request, if mask {
+                        layer_render::ThumbnailTarget::Source(layer_core::authored::SourceTarget::from_wire_id(target).expect("Published mask source"))
+                    } else if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
+                        layer_render::ThumbnailTarget::Occurrence(layer_ui::occurrence_handle(target).expect("Published occurrence"))
+                    })
                     .is_ok()
                 {
                     self.requested.borrow_mut().insert(key, revision);

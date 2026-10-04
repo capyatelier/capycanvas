@@ -2,6 +2,10 @@
 //! override an immutable original; absent pages are not always transparent.
 use super::*;
 
+pub(super) fn placed_targets(scene: SceneView<'_>) -> impl Iterator<Item=SourceTarget> + '_ {
+    scene.targets().filter(move |target|scene.source_owner(*target).is_some())
+}
+
 pub(super) struct RawTile {
     pub texture: wgpu::Texture,
     pub view: wgpu::TextureView,
@@ -27,7 +31,7 @@ impl WgpuRasterizer {
     /// Ordinary paint has no source preparation or resource-handle cloning.
     pub(super) fn prepare_raw_neighborhood<const N: usize>(
         &mut self,
-        layer: LayerId,
+        layer: SourceTarget,
         coordinate: [u32; 2],
         offsets: [Option<[i32; 2]>; N],
         preview: bool,
@@ -97,7 +101,7 @@ impl WgpuRasterizer {
     /// It can be encoded sRGB8 paint or linear Float32 original-source data.
     pub(super) fn raw_layer_tile(
         &mut self,
-        layer: LayerId,
+        layer: SourceTarget,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<Option<RawTile>, GpuRasterError> {

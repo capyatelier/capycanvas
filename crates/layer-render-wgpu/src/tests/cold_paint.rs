@@ -4,15 +4,16 @@ use super::*;
 use crate::test_support::complete;
 use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
 use layer_core::raster::{RasterData, RasterPlane, RasterRevision, RasterTile, TileBlob, TileKey};
-use layer_core::{Document, Project};
-use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource};
-use std::io::Cursor;
+use layer_core::{Document, authored::{PortableId,SourceTarget,PaintHandle,PaintSource}};
+use layer_render::{ColorSampleArea, ColorSampleRequest, ColorSampleSource, ThumbnailTarget};
 
 const EXTENT: [u32; 2] = [4352, 512]; // 33 backed tiles and one transparent hole.
-fn project(color: DocumentColor) -> Project {
-    let mut document = Document::new("cold paint", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = color;
-    document.layers[1].visible = false;
+fn document(color: DocumentColor) -> Document {
+    let mut document = Document::new(PortableId::random(), EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let root = document.artwork.root;
+    document.artwork.compositions.get_mut(root).unwrap().color = color;
+    let paper = document.scene().order()[1];
+    document.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     let mut data = RasterData::default();
     for y in 0..2 {
         for x in 0..17 {
@@ -36,20 +37,25 @@ fn project(color: DocumentColor) -> Project {
             );
         }
     }
-    document.layers[0].raster = RasterRevision::backed(data);
-    Project { document }
+    paint_mut(&mut document).raster = RasterRevision::backed(data);
+    document
 }
-fn packet(project: &Project, all: bool) -> FramePacket<'_> {
+fn paint_handle(document: &Document) -> PaintHandle { document.artwork.paint.iter().next().unwrap().0 }
+fn target(document: &Document) -> SourceTarget { SourceTarget::Paint(paint_handle(document)) }
+fn paint(document: &Document) -> &PaintSource { document.artwork.paint.get(paint_handle(document)).unwrap() }
+fn paint_mut(document: &mut Document) -> &mut PaintSource { let target = paint_handle(document); document.artwork.paint.get_mut(target).unwrap() }
+
+fn packet(document: &Document, all: bool) -> FramePacket<'_> {
     FramePacket {
         view: crate::test_support::view(EXTENT),
         composite_all: all,
-        ..crate::test_support::packet(&project.document.layers, EXTENT)
+        ..crate::test_support::packet(document.scene(), EXTENT)
     }
 }
-fn renderer(project: &Project, limit: u64) -> WgpuRasterizer {
-    let mut r = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
+fn renderer(document: &Document, limit: u64) -> WgpuRasterizer {
+    let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     r.native_edit.as_mut().unwrap().color_cache_bytes = limit;
-    r.submit(packet(project, true)).unwrap();
+    r.submit(packet(document, true)).unwrap();
     r
 }
 fn image(r: &WgpuRasterizer) -> Vec<u8> {
@@ -63,21 +69,21 @@ fn close(a: &[u8], b: &[u8]) {
         assert!((a - b).abs() <= 3e-6, "working sample {i}: {a} != {b}");
     }
 }
-fn thumbnail(r: &mut WgpuRasterizer, id: LayerId) -> Vec<u8> {
-    r.request_thumbnail(7, id).unwrap();
+fn thumbnail(r: &mut WgpuRasterizer, id: SourceTarget) -> Vec<u8> {
+    r.request_thumbnail(7, ThumbnailTarget::Source(id)).unwrap();
     complete(r);
     r.take_thumbnail().unwrap().unwrap().bytes
 }
 fn sample(
     r: &mut WgpuRasterizer,
-    id: LayerId,
+    id: SourceTarget,
     position: [u32; 2],
     area: ColorSampleArea,
 ) -> [f32; 4] {
     assert!(
         r.request_color_sample(ColorSampleRequest {
             request_id: 8,
-            source: ColorSampleSource::Layer(id),
+            source: ColorSampleSource::Source(id),
             position,
             area
         })
@@ -96,12 +102,61 @@ fn backing(root: &RasterRevision) -> std::collections::BTreeMap<TileKey, Vec<u8>
 }
 
 #[test]
+fn stale_thumbnail_batches_cancel_without_publishing_and_leave_live_artwork_available() {
+    use layer_core::authored::*;
+    let original = document(DocumentColor::default());
+    let stale_source = target(&original);
+    let stale_occurrence = original.scene().source_owner(stale_source).unwrap();
+    let mut r = renderer(&original, 0);
+    let stale = ThumbnailTarget::Occurrence(stale_occurrence);
+    assert!(!r.prepare_thumbnail_batch(stale).unwrap());
+    assert!(!r.thumbnails_pending());
+
+    let mut artwork = original.artwork.clone();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries.retain(|handle| *handle != stale_occurrence);
+    artwork.occurrences.remove(stale_occurrence).unwrap();
+    let SourceTarget::Paint(handle) = stale_source else { unreachable!() };
+    artwork.paint.remove(handle).unwrap();
+    let (live_occurrence, live_source) = crate::test_support::add_paint(&mut artwork, "Live ink", EXTENT);
+    let SourceTarget::Paint(live_handle) = live_source else { unreachable!() };
+    let bytes = [0, 0, 255, 255].repeat(256 * 256);
+    let root = RasterRevision::backed(RasterData {tiles: [(TileKey {plane: RasterPlane::Color, coordinate: [0, 0]},
+        RasterTile::backed(TileBlob::encode(original.composition().color.paint_descriptor(), &bytes).unwrap()))].into(), ..Default::default()});
+    artwork.paint.get_mut(live_handle).unwrap().raster = root.clone();
+    let current = Document::from_artwork(artwork).unwrap();
+    r.submit(packet(&current, true)).unwrap();
+    complete(&r);
+    let before = backing(&root);
+    for target in [stale, ThumbnailTarget::Source(stale_source)] {
+        assert_eq!(r.prepare_thumbnail_batch(target), Err(GpuRasterError::ThumbnailUnavailable(target)));
+        assert_eq!(r.request_thumbnail(99, target), Err(GpuRasterError::ThumbnailUnavailable(target)));
+        assert!(r.take_thumbnail().is_none());
+        assert!(!r.thumbnails_pending());
+    }
+    let live = ThumbnailTarget::Occurrence(live_occurrence);
+    for _ in 0..100 {
+        if r.prepare_thumbnail_batch(live).unwrap() { break; }
+    }
+    r.request_thumbnail(77, live).unwrap();
+    complete(&r);
+    let image = r.take_thumbnail().unwrap().unwrap();
+    assert_eq!((image.request_id, image.width, image.height), (77, 32, 32));
+    assert!(image.bytes.chunks_exact(4).all(|pixel| pixel == [0, 0, 255, 255]));
+    assert!(!r.thumbnails_pending());
+    assert_eq!(backing(&root), before);
+    r.submit(packet(&current, true)).unwrap();
+    complete(&r);
+    assert_eq!(backing(&root), before);
+}
+
+#[test]
 fn native_thumbnail_preparation_bounds_both_page_passes() {
-    let p = project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
-    let id = p.document.layers[0].id;
+    let p = document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 });
+    let id = target(&p);
     let mut cold = renderer(&p, 0);
     let mut preparations = 1;
-    while !cold.prepare_thumbnail_batch(id).unwrap() {
+    while !cold.prepare_thumbnail_batch(ThumbnailTarget::Source(id)).unwrap() {
         preparations += 1;
         assert!(preparations < 100);
     }
@@ -114,8 +169,8 @@ fn native_thumbnail_preparation_bounds_both_page_passes() {
 fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let p = project(DocumentColor { space, depth });
-            let id = p.document.layers[0].id;
+            let p = document(DocumentColor { space, depth });
+            let id = target(&p);
             let mut resident = renderer(&p, u64::MAX);
             let mut cold = renderer(&p, 0);
             assert_eq!(resident.paint_layers[0].pages.len(), 33);
@@ -143,7 +198,7 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                         contiguous: true,
                         selection: None,
                         request_id: 9,
-                        source: layer_render::RegionSource::Layer(id),
+                        source: layer_render::RegionSource::Source(id),
                         position: [259, 258],
                         tolerance: 0.,
                         refinement: Default::default(),
@@ -163,23 +218,23 @@ fn cold_native_color_composition_sampling_and_thumbnails_match_resident_tiles() 
                 cold.paint_layers[0].pages.is_empty(),
                 "read-only consumers must not materialize mutable tiles"
             );
-            let unique: std::collections::BTreeSet<_> = p.document.layers[0].raster
+            let unique_samples: std::collections::BTreeSet<_> = paint(&p).raster
                 .wait_data().unwrap().tiles.values()
-                .map(|tile| tile.wait_backing().unwrap().digest).collect();
-            assert_eq!(cold.source_cache_work()[1], unique.len() as u64);
+                .map(|tile| tile.wait_backing().unwrap().content_digest().unwrap()).collect();
+            assert_eq!(cold.source_cache_work()[1], unique_samples.len() as u64);
         }
     }
 }
 
 #[test]
 fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revisions() {
-    let mut p = project(DocumentColor {
+    let mut p = document(DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     });
-    let original = p.document.layers[0].raster.clone();
+    let original = paint(&p).raster.clone();
     let original_bytes = backing(&original);
-    let id = p.document.layers[0].id;
+    let id = target(&p);
     let mut r = renderer(&p, 0);
     let before = image(&r);
     let dabs = [test_dab([275., 275.], [0.13, 0.72, 0.41, 0.37], 0.5)];
@@ -188,14 +243,14 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
         test_style(BrushExecution::Dry),
         Rect { min: Point { x: 257., y: 257. }, max: Point { x: 295., y: 295. } },
     )];
-    p.document.layers[0].raster = RasterRevision::pending();
+    paint_mut(&mut p).raster = RasterRevision::pending();
     r.submit(FramePacket {
         dabs: &dabs,
         dab_batches: &batches,
         ..packet(&p, false)
     })
     .unwrap();
-    let edited = p.document.layers[0].raster.clone();
+    let edited = paint(&p).raster.clone();
     let edited_bytes = backing(&edited);
     assert_eq!(
         edited_bytes.len(),
@@ -226,28 +281,26 @@ fn cold_native_paint_rehydrates_only_damage_and_keeps_other_tiles_in_saved_revis
         "completed color may leave the mutable cache"
     );
     close(&image(&r), &changed);
-    let mut archive = Vec::new();
-    p.write(&mut archive).unwrap();
-    let reopened = Project::read(Cursor::new(archive), Default::default()).unwrap();
-    assert_eq!(backing(&reopened.document.layers[0].raster), edited_bytes);
+    let reopened = super::native_effects::roundtrip(p.clone());
+    assert_eq!(backing(&paint(&reopened).raster), edited_bytes);
     let replacement = renderer(&reopened, 0);
     close(&image(&replacement), &changed);
-    p.document.layers[0].raster = original;
+    paint_mut(&mut p).raster = original;
     r.submit(packet(&p, false)).unwrap();
-    assert_eq!(backing(&p.document.layers[0].raster), original_bytes);
+    assert_eq!(backing(&paint(&p).raster), original_bytes);
     close(&image(&r), &before);
-    p.document.layers[0].raster = edited;
+    paint_mut(&mut p).raster = edited;
     r.submit(packet(&p, false)).unwrap();
     close(&image(&r), &changed);
 }
 
 #[test]
 fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cancel() {
-    let p = project(DocumentColor {
+    let p = document(DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     });
-    let id = p.document.layers[0].id;
+    let id = target(&p);
     let mut resident = renderer(&p, u64::MAX);
     let mut cold = renderer(&p, 0);
     let original = image(&cold);
@@ -255,7 +308,7 @@ fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cance
         let preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: id,
+            target: id,
             selection: None,
             transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(offset)),
         };
@@ -279,7 +332,7 @@ fn cold_native_transform_snapshots_keep_original_tiles_through_preview_and_cance
 #[test]
 fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions() {
     use layer_core::color::{ColorProfile, source::*};
-    let mut p = project(DocumentColor {
+    let mut p = document(DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     });
@@ -299,13 +352,13 @@ fn cold_native_overrides_keep_the_original_photo_and_its_thumbnail_contributions
             .push_row(&[31, 201, 133].repeat(EXTENT[0] as usize))
             .unwrap();
     }
-    p.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
-    let id = p.document.layers[0].id;
+    paint_mut(&mut p).original = Some(Arc::new(source.finish().unwrap()));
+    let id = target(&p);
     let mut resident = renderer(&p, u64::MAX);
     let mut cold = renderer(&p, 0);
     close(&image(&cold), &image(&resident));
     let mut preparations = 1;
-    while !cold.prepare_thumbnail_batch(id).unwrap() {
+    while !cold.prepare_thumbnail_batch(ThumbnailTarget::Source(id)).unwrap() {
         preparations += 1;
         assert!(preparations < 100);
     }
@@ -331,12 +384,12 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
         BrushExecution::Liquify,
         BrushExecution::Watercolor,
     ] {
-        let mut a = project(DocumentColor {
+        let mut a = document(DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
         });
         let mut b = a.clone();
-        let id = a.document.layers[0].id;
+        let id = target(&a);
         let mut resident = renderer(&a, u64::MAX);
         let mut cold = renderer(&b, 0);
         let mut style = test_style(execution);
@@ -372,8 +425,8 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
                 batch.dab_count = 0;
                 batch.stroke_end = true;
                 batch.material_update = 2;
-                a.document.layers[0].raster = RasterRevision::pending();
-                b.document.layers[0].raster = RasterRevision::pending();
+                paint_mut(&mut a).raster = RasterRevision::pending();
+                paint_mut(&mut b).raster = RasterRevision::pending();
             }
             for (r, p) in [(&mut resident, &a), (&mut cold, &b)] {
                 r.submit(FramePacket {
@@ -386,8 +439,8 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
             close(&image(&cold), &image(&resident));
         }
         assert_eq!(
-            backing(&a.document.layers[0].raster),
-            backing(&b.document.layers[0].raster),
+            backing(&paint(&a).raster),
+            backing(&paint(&b).raster),
             "{execution:?}"
         );
         cold.submit(packet(&b, true)).unwrap();
@@ -402,10 +455,10 @@ fn cold_native_neighborhood_brushes_keep_prediction_and_terminal_backing() {
 fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges() {
     for (depth, execution) in [SampleDepth::U8, SampleDepth::U16].into_iter()
         .flat_map(|depth| [BrushExecution::Dry, BrushExecution::Wet].map(|execution| (depth, execution))) {
-        let mut a = project(DocumentColor { space: RgbSpace::ProPhoto, depth });
+        let mut a = document(DocumentColor { space: RgbSpace::ProPhoto, depth });
         let mut b = a.clone();
-        let id = a.document.layers[0].id;
-        let original = a.document.layers[0].raster.clone();
+        let id = target(&a);
+        let original = paint(&a).raster.clone();
         let mut resident = renderer(&a, u64::MAX);
         let mut bounded = renderer(&b, u64::MAX);
         let page_count = bounded.paint_layers[0].pages.len();
@@ -462,8 +515,8 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
         batch.stroke_end = true;
         batch.dab_count = 0;
         batch.material_update += 1;
-        a.document.layers[0].raster = RasterRevision::pending();
-        b.document.layers[0].raster = RasterRevision::pending();
+        paint_mut(&mut a).raster = RasterRevision::pending();
+        paint_mut(&mut b).raster = RasterRevision::pending();
         for (r, p) in [(&mut resident, &a), (&mut bounded, &b)] {
             r.submit(FramePacket {
                 dab_batches: std::slice::from_ref(&batch),
@@ -471,14 +524,14 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
             }).unwrap();
         }
         close(&image(&bounded), &image(&resident));
-        assert_eq!(backing(&a.document.layers[0].raster), backing(&b.document.layers[0].raster));
+        assert_eq!(backing(&paint(&a).raster), backing(&paint(&b).raster));
         bounded.submit(packet(&b, false)).unwrap();
         assert_eq!(bounded.paint_layers[0].pages.len(), page_count);
         assert!(bounded.paint_layers[0].pages.iter().all(|p| p.secondary.is_none()));
-        let edited = b.document.layers[0].raster.clone();
-        b.document.layers[0].raster = original;
+        let edited = paint(&b).raster.clone();
+        paint_mut(&mut b).raster = original;
         bounded.submit(packet(&b, true)).unwrap();
-        b.document.layers[0].raster = edited;
+        paint_mut(&mut b).raster = edited;
         bounded.submit(packet(&b, true)).unwrap();
         close(&image(&bounded), &image(&resident));
     }
@@ -486,18 +539,13 @@ fn native_cache_retires_blend_scratch_before_artwork_and_recreates_stroke_edges(
 
 #[test]
 fn cold_native_color_feeds_bounded_live_filter_windows() {
-    let mut p = project(DocumentColor {
+    let mut p = document(DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     });
-    p.document
-        .layers
-        .insert(0, super::image_windows::effect(3, false, false));
-    p.document
-        .layers
-        .insert(0, super::image_windows::effect(4, false, false));
+    for _ in 0..2 { super::image_windows::insert_effect(&mut p, super::image_windows::program(false,false)); }
     let resident = renderer(&p, u64::MAX);
-    let mut cold = WgpuRasterizer::new_native_headless(p.document.color).unwrap();
+    let mut cold = WgpuRasterizer::new_native_headless(p.composition().color).unwrap();
     cold.native_edit.as_mut().unwrap().color_cache_bytes = 0;
     cold.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 * 1024 * 1024);
     cold.submit(packet(&p, true)).unwrap();
@@ -509,34 +557,34 @@ fn cold_native_color_feeds_bounded_live_filter_windows() {
 
 #[test]
 fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
-    use layer_core::{Affine, ImageTransform, LayerMask, LayerOperation, LayerOperationKind};
+    use layer_core::{Affine, ImageTransform, CoverageSnapshot, RasterOperation, RasterOperationKind};
     for kind in [
-        LayerOperationKind::Fill {
+        RasterOperationKind::Fill {
             color: [0.12, 0.38, 0.73, 0.42],
             alpha_locked: true,
         },
-        LayerOperationKind::ApplyMask,
-        LayerOperationKind::Erase { alpha_locked: false },
-        LayerOperationKind::Transform(ImageTransform::affine(Affine::translation(Point { x: 83.25, y: 127.5 }))),
+        RasterOperationKind::ApplyMask,
+        RasterOperationKind::Erase { alpha_locked: false },
+        RasterOperationKind::Transform(ImageTransform::affine(Affine::translation(Point { x: 83.25, y: 127.5 }))),
     ] {
-        let mut a = project(DocumentColor {
+        let mut a = document(DocumentColor {
             space: RgbSpace::DisplayP3,
             depth: SampleDepth::U16,
         });
         let mut b = a.clone();
-        let id = a.document.layers[0].id;
-        let original = a.document.layers[0].raster.clone();
+        let id = target(&a);
+        let original = paint(&a).raster.clone();
         let mut resident = renderer(&a, u64::MAX);
         let mut cold = renderer(&b, 0);
         let before = image(&cold);
-        let mut coverage = LayerMask::reveal_all(LayerId(99), Point::default());
-        if matches!(kind, LayerOperationKind::ApplyMask | LayerOperationKind::Erase { .. }) {
-            coverage.default_coverage = 0.5;
+        let mut coverage = CoverageSnapshot::reveal_all(a.artwork.coverage.next_handle(), EXTENT, Point::default());
+        if matches!(kind, RasterOperationKind::ApplyMask | RasterOperationKind::Erase { .. }) {
+            coverage.source.default_coverage = 0.5;
         }
-        let operation = LayerOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
+        let operation = RasterOperation { placement: layer_core::Affine::IDENTITY, coverage, kind };
         let batch = DabBatch {
             stroke_id: StrokeId(8),
-            kind: DabBatchKind::LayerOperation(0),
+            kind: DabBatchKind::RasterOperation(0),
             dab_count: 0,
             ..crate::test_support::dab_batch(
                 id,
@@ -545,11 +593,11 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
             )
         };
         for (r, p) in [(&mut resident, &mut a), (&mut cold, &mut b)] {
-            if let LayerOperationKind::Transform(transform) = &operation.kind {
+            if let RasterOperationKind::Transform(transform) = &operation.kind {
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 8,
                     moving: false,
-                    layer: id,
+                    target: id,
                     selection: None,
                     transform: transform.clone(),
                 }))
@@ -557,25 +605,23 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
                 r.submit(packet(p, false)).unwrap();
                 r.set_transform_preview(None).unwrap();
             }
-            p.document.layers[0]
-                .pending_operations
-                .push(operation.clone());
-            p.document.layers[0].raster = RasterRevision::pending();
+            Arc::make_mut(&mut paint_mut(p).operations).push(operation.clone());
+            paint_mut(p).raster = RasterRevision::pending();
             r.submit(FramePacket {
                 dab_batches: std::slice::from_ref(&batch),
                 ..packet(p, false)
             })
             .unwrap();
-            p.document.layers[0].pending_operations.clear();
+            Arc::make_mut(&mut paint_mut(p).operations).clear();
         }
         assert_eq!(
-            backing(&a.document.layers[0].raster),
-            backing(&b.document.layers[0].raster),
+            backing(&paint(&a).raster),
+            backing(&paint(&b).raster),
             "{:?}",
             operation.kind
         );
         close(&image(&cold), &image(&resident));
-        let after = b.document.layers[0].raster.clone();
+        let after = paint(&b).raster.clone();
         let changed = image(&cold);
         assert_ne!(changed, before);
         cold.submit(packet(&b, true)).unwrap();
@@ -583,10 +629,10 @@ fn cold_native_operations_publish_complete_color_and_restore_exact_history() {
         close(&image(&cold), &changed);
         let replacement = renderer(&b, 0);
         close(&image(&replacement), &changed);
-        b.document.layers[0].raster = original;
+        paint_mut(&mut b).raster = original;
         cold.submit(packet(&b, false)).unwrap();
         close(&image(&cold), &before);
-        b.document.layers[0].raster = after;
+        paint_mut(&mut b).raster = after;
         cold.submit(packet(&b, false)).unwrap();
         close(&image(&cold), &changed);
     }

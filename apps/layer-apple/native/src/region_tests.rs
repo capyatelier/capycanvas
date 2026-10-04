@@ -101,7 +101,7 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
                         .session
                         .engine()
                         .document()
-                        .selection
+                        .working.selection
                         .clone();
                     if tool == "auto_select" {
                         let layer_core::SelectionShape::Pixels(mask) = &selection
@@ -165,7 +165,7 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
                                 .session
                                 .engine()
                                 .document()
-                                .selection
+                                .working.selection
                                 .is_none()
                         );
                         app.invoke("redo");
@@ -176,7 +176,7 @@ fn apple_region_refinement_changes_coverage_and_restores_exact_history() {
                                 .session
                                 .engine()
                                 .document()
-                                .selection,
+                                .working.selection,
                             selection
                         );
                         app.invoke("undo");
@@ -238,7 +238,7 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
                 app.draw_until_idle();
                 assert_eq!(app.pixels(), baseline, "{tool}/{cancel} must not paint");
                 let session = &unsafe { &*app.0 }.host.session;
-                assert!(session.engine().document().selection.is_none());
+                assert!(session.engine().document().working.selection.is_none());
                 assert!(
                     session.engine().can_redo(),
                     "{tool}/{cancel} must preserve Redo"
@@ -257,7 +257,7 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
                     session.require_document_snapshot_idle().is_err(),
                     "Region processing must still block a document snapshot"
                 );
-                assert!(session.engine().document().selection.is_none());
+                assert!(session.engine().document().working.selection.is_none());
                 match cancel {
                     "escape" => {
                         for pressed in [true, false] {
@@ -278,7 +278,7 @@ fn apple_region_gap_closing_and_cancelled_requests_preserve_artwork() {
                     "The stale {tool}/{cancel} result must not paint"
                 );
                 let session = &unsafe { &*app.0 }.host.session;
-                assert!(session.engine().document().selection.is_none());
+                assert!(session.engine().document().working.selection.is_none());
                 assert!(session.engine().can_redo());
                 session.require_document_snapshot_idle().unwrap();
             }

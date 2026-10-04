@@ -4,7 +4,7 @@ use super::*;
 mod curves;
 pub use curves::{CurveAxis,CurveAxisView,CurveControls,CurveCoordinateControl,CurveDomain};
 pub(super) use curves::PropertyEditorState;
-use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, Layer, ResourceLabel};
+use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{Definition, EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SavedSelection, SelectionHandle, SourceTarget}};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -72,8 +72,8 @@ pub(super) fn validate_catalog_labels(catalog: &layer_core::EffectCatalog, l: &L
     Ok(())
 }
 pub(super) fn validate_document_labels(document: &Document, l: &Localizer) -> Result<(), String> {
-    for layer in &document.layers {
-        if let Some(effect) = &layer.effect { validate_program_labels(&effect.program, l)?; }
+    for (_, _, definition) in document.artwork.definitions.iter() {
+        validate_program_labels(&definition.program, l)?;
     }
     Ok(())
 }
@@ -88,8 +88,9 @@ impl<B: CanvasRenderer> UiSession<B> {
             d.columns.iter().flatten().any(|p| *p == Panel::FilterTypes))
     }
     pub(crate) fn open_filter_picker(&mut self) {
-        let current = self.engine.document().layer(self.engine.document().active_layer)
-            .and_then(|l| l.effect.as_ref()).and_then(|e| self.effect_catalog.get(&e.program.id));
+        let document = self.engine.document();
+        let current = document.working.occurrence.and_then(|handle| document.scene().effect(handle))
+            .and_then(|effect| self.effect_catalog.get(&effect.program.id));
         self.state.filter_picker.category = current.map(|e| e.category.clone())
             .or_else(|| self.state.filter_picker.category.clone())
             .or_else(|| self.effect_catalog.categories().first().map(|c| c.id.clone()));
@@ -115,7 +116,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         let doc = self.engine.document();
         (
             doc.revision,
-            doc.active_layer.0,
+            doc.working.occurrence.map_or(0, occurrence_token),
             self.state.filter_catalog_revision ^ (u64::from(self.filter_drawer_open()) << 63),
         )
     }
@@ -131,22 +132,23 @@ impl<B: CanvasRenderer> UiSession<B> {
             return Ok(false);
         }
         let doc = self.engine.document();
-        let replacing = self.filter_drawer_open() && doc.layer(doc.active_layer).is_some_and(|l| l.effect.is_some());
-        let Some(current) = doc.layer(doc.active_layer) else { return Ok(false); };
+        let scene = doc.scene();
+        let Some(current) = doc.working.occurrence else { return Ok(false); };
+        let replacing = self.filter_drawer_open() && scene.effect(current).is_some();
         let source = if replacing {
-            layer_render::FilterPreviewSource::EffectInput(current.id)
+            layer_render::FilterPreviewSource::EffectInput(current)
         } else {
-            layer_render::FilterPreviewSource::LayerStack(if self.filter_drawer_open() { current.id }
-                else { doc.clipping_stack_top(current.id).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())? })
+            layer_render::FilterPreviewSource::LayerStack(if self.filter_drawer_open() { current }
+                else { doc.clipping_stack_top(current).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())? })
         };
+        let scope = SceneScope::All;
         let request = layer_render::FilterPreviewRequest {
             request_id,
             source,
             size,
-            extent: [doc.width, doc.height],
             view: self.engine.view(),
-            blend_space: doc.blend_space,
-            layers: doc.layers.iter().map(Layer::composite_snapshot).collect(),
+            snapshot: doc.snapshot(),
+            scope,
             filters: filters
                 .into_iter()
                 .take(8)
@@ -374,8 +376,8 @@ pub(super) fn catalog(
             category_icon: category_icon(&id.category),
             category_label: resource_label(&catalog.categories().iter()
                 .find(|c| c.id == id.category).unwrap().label, l),
-            animated: id.program().time,
-            tooltip: if id.program().time {
+            animated: id.program.time,
+            tooltip: if id.program.time {
                 { let mut args = fluent_bundle::FluentArgs::new();
                 args.set("name", resource_label(id.label(), l).to_string());
                 l.format(MessageId::RESOURCES_ANIMATED_TOOLTIP, &args) }
@@ -530,15 +532,49 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
         ..PropertyControl::new(&p.key, &resource_label(&p.label, l), kind, value, p.default.clone())
     })
 }
+pub(super) fn effect_application(document: &Document, occurrence: OccurrenceHandle) -> Option<(EffectHandle, &EffectApplication)> {
+    let scene = document.scene();
+    Some((scene.effect_handle(occurrence)?, scene.effect_application(occurrence)?))
+}
+pub(super) fn effect_draft(document: &Document, occurrence: OccurrenceHandle) -> Result<EffectInstance, String> {
+    let (_, application) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
+    let definition = document.artwork.definitions.get(application.definition).ok_or("Missing adjustment definition")?;
+    Ok(EffectInstance {program: definition.program.clone(), values: application.values.clone()})
+}
+pub(super) fn effect_edit(document: &Document, occurrence: OccurrenceHandle, draft: EffectInstance) -> Result<Edit, String> {
+    draft.validate().map_err(str::to_string)?;
+    let (handle, application) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
+    let definition = document.artwork.definitions.get(application.definition).ok_or("Missing adjustment definition")?;
+    let mut edits = Vec::new();
+    if definition.program != draft.program {
+        let mut definition = definition.clone();
+        definition.program = draft.program;
+        edits.push(Edit::Definition(RecordChange::replace(&document.artwork.definitions, application.definition, Some(definition)).map_err(str::to_string)?));
+    }
+    if application.values != draft.values {
+        let application = EffectApplication {definition: application.definition, domain: application.domain, values: draft.values};
+        edits.push(Edit::Effect(RecordChange::replace(&document.artwork.effects, handle, Some(application)).map_err(str::to_string)?));
+    }
+    Ok(Edit::Batch(edits))
+}
+fn property_effect(doc: &Document, handle: OccurrenceHandle) -> Option<layer_core::EffectView<'_>> {
+    let scene = doc.scene();
+    let occurrence = scene.occurrence(handle)?;
+    if doc.working.inspect_mask == Some(handle) || occurrence.mask.as_ref().is_some_and(|mask| doc.working.target == Some(SourceTarget::Coverage(mask.source))) {
+        return None;
+    }
+    scene.effect(handle)
+}
 pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBehavior, l: &Localizer) -> LayerPropertiesView {
-    let Some(layer) = doc.layer(doc.active_layer) else {
+    let scene = doc.scene();
+    let Some((handle, layer)) = doc.working.occurrence.and_then(|handle| scene.occurrence(handle).map(|layer| (handle, layer))) else {
         return LayerPropertiesView::default();
     };
-    let layer_type = match layer.kind {
+    let layer_type = match layer.kind() {
         LayerKind::Paint => None,
         LayerKind::Group => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_GROUP)),
         LayerKind::Selection => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION)),
-        LayerKind::Effect => layer.effect.as_ref().map(|effect| resource_label(&effect.program.label, l)),
+        LayerKind::Effect => scene.effect(handle).map(|effect| resource_label(&effect.program.label, l)),
     };
     let title = if let Some(kind) = layer_type.as_deref().filter(|kind| *kind != layer.name.as_ref()) {
         let mut args = FluentArgs::new();
@@ -546,21 +582,27 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         args.set("type", kind);
         l.format(MessageId::RESOURCES_PROPERTIES_LAYER_TITLE, &args)
     } else { layer.name.to_string() };
-    if layer.kind == LayerKind::Selection {
-        return super::selection_properties::properties(layer.id.0, &title, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id), l);
+    let token = occurrence_token(handle);
+    if scene.effect(handle).is_some() && property_effect(doc, handle).is_none() {
+        return LayerPropertiesView {layer: Some(token), title, enabled: !doc.is_locked(handle), ..Default::default()};
+    }
+    if let OccurrenceContent::Selection(selection) = layer.content {
+        let Some(selection) = doc.artwork.selections.get(selection) else { return LayerPropertiesView::default(); };
+        return super::selection_properties::properties(token, &title, &selection.display, painting, !doc.is_locked(handle), l);
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
     let mut curve_white = None;
-    let description = if let Some(effect) = &layer.effect {
-        let program = effect.program.for_depth(doc.color.depth);
+    let description = if let Some(effect) = property_effect(doc, handle) {
+        let application = effect_application(doc, handle).unwrap().1;
+        let program = doc.artwork.definitions.get(application.definition).unwrap().program.for_depth(doc.composition().color.depth);
         controls.extend(
             program
                 .parameters
                 .iter()
-                .zip(&effect.values)
+                .zip(effect.values)
                 .filter(|(p,_)|p.visible_when.as_ref().is_none_or(|condition|effect.value(&condition.key)==Some(&condition.value)))
-                .filter_map(|(p, v)| control(layer.id.0, p, v.clone(), l)),
+                .filter_map(|(p, v)| control(token, p, v.clone(), l)),
         );
         if effect.program.id.as_ref() == "curves" {
             if let (Some(space), Some(EffectValue::Number(stops))) = (effect.choice("domain"), effect.value("hdr_stops")) {
@@ -569,7 +611,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             }
             let hdr = curve_white.is_some();
             controls.retain(|c| match c.key.as_str() {
-                "domain" => doc.color.depth.is_float() || hdr,
+                "domain" => doc.composition().color.depth.is_float() || hdr,
                 "hdr_stops" => hdr,
                 _ => true,
             });
@@ -582,18 +624,18 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             EffectValue::Number(layer.opacity), EffectValue::Number(1.)));
         let options = layer_core::LayerBlend::ALL
             .iter()
-            .filter(|b| **b != layer_core::LayerBlend::PassThrough || layer.kind == LayerKind::Group)
+            .filter(|b| **b != layer_core::LayerBlend::PassThrough || matches!(layer.content, OccurrenceContent::Stack(_)))
             .map(|b| blend_label(*b, l))
             .collect();
         controls.push(PropertyControl::new("blend", &l.text(MessageId::RESOURCES_BLEND_MODE), PropertyKind::Choice { options },
-            EffectValue::Choice(layer.properties.blend.code()), EffectValue::Choice(0)));
+            EffectValue::Choice(layer.blend.code()), EffectValue::Choice(0)));
         String::new()
     };
     LayerPropertiesView {
-        layer: Some(layer.id.0),
+        layer: Some(token),
         title,
         description,
-        enabled: !doc.is_locked(layer.id),
+        enabled: !doc.is_locked(handle),
         controls,
         curve_max,
         curve_white,
@@ -601,10 +643,10 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     }
 }
 pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,state:&mut PropertyEditorState,gesture:Option<&EffectGesture>,l:&Localizer) {
-    let effect=if doc.active_mask {None} else {view.layer.and_then(|id|doc.layer(layer_core::LayerId(id))).and_then(|layer|layer.effect.as_ref())};
+    let effect=view.layer.and_then(|token| occurrence_handle(token).ok()).and_then(|handle| property_effect(doc, handle));
     view.histogram=effect.is_some_and(|effect|effect.program.id.as_ref()=="levels");
     view.pages=effect.map_or_else(Vec::new,|effect|effect.program.pages.iter().filter(|page|view.controls.iter().any(|control|control.page.as_deref()==Some(page.id.as_ref()))).map(|page|PropertyPageView{id:page.id.to_string(),label:resource_label(&page.label,l).to_string()}).collect());
-    state.sync(doc.id.clone(),view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
+    state.sync(doc.owner,view.layer,doc.revision,view.pages.iter().map(|page|page.id.clone()).collect(),gesture.is_some());
     view.epoch=state.epoch;view.page=state.page().map(str::to_string);
     view.actions=effect.map_or_else(Vec::new,|effect| {
         use layer_core::levels::CalibrationRole;
@@ -670,8 +712,45 @@ fn lookup_preset_label(preset:Option<layer_core::lut3d::Look>,l:&Localizer)->Str
     l.text(match preset {None=>MessageId::RESOURCES_LOOKUP_ORIGINAL,Some(Look::Warm)=>MessageId::RESOURCES_LOOKUP_WARM,
         Some(Look::Cool)=>MessageId::RESOURCES_LOOKUP_COOL,Some(Look::Monochrome)=>MessageId::RESOURCES_LOOKUP_MONOCHROME}).to_string()
 }
+pub(super) fn effect_baseline(document: &Document, occurrence: OccurrenceHandle) -> Result<EffectBaseline, String> {
+    let (effect, application) = effect_application(document, occurrence).ok_or("Missing adjustment")?;
+    Ok(EffectBaseline {occurrence, effect, application: application.clone()})
+}
+#[derive(Clone, PartialEq)]
+enum PropertyBaseline {
+    Effect {value: EffectBaseline, definition: Definition},
+    Occurrence {handle: OccurrenceHandle, value: Occurrence},
+    SavedSelection {occurrence: OccurrenceHandle, handle: SelectionHandle, value: SavedSelection},
+}
+impl PropertyBaseline {
+    fn capture(document: &Document, handle: OccurrenceHandle) -> Result<Self, String> {
+        if let Some(SourceTarget::Selection(selection)) = document.scene().source_target(handle) {
+            let value = document.artwork.selections.get(selection).ok_or("Missing saved selection")?.clone();
+            Ok(Self::SavedSelection {occurrence: handle, handle: selection, value})
+        } else if let Ok(value) = effect_baseline(document, handle) {
+            let definition = document.artwork.definitions.get(value.application.definition).ok_or("Missing adjustment definition")?.clone();
+            Ok(Self::Effect {value, definition})
+        } else {
+            Ok(Self::Occurrence {handle, value: document.scene().occurrence(handle).ok_or("Unknown occurrence")?.clone()})
+        }
+    }
+    fn occurrence(&self) -> OccurrenceHandle {
+        match self {Self::Effect {value,..} => value.occurrence, Self::Occurrence {handle,..} => *handle, Self::SavedSelection {occurrence,..} => *occurrence}
+    }
+    fn edit(&self, document: &Document) -> Result<Edit, String> {
+        let art = &document.artwork;
+        match self {
+            Self::Effect {value, definition} => Ok(Edit::Batch(vec![
+                Edit::Definition(RecordChange::replace(&art.definitions, value.application.definition, Some(definition.clone())).map_err(str::to_string)?),
+                Edit::Effect(RecordChange::replace(&art.effects, value.effect, Some(value.application.clone())).map_err(str::to_string)?),
+            ])),
+            Self::Occurrence {handle, value} => Ok(Edit::Occurrence(RecordChange::replace(&art.occurrences, *handle, Some(value.clone())).map_err(str::to_string)?)),
+            Self::SavedSelection {handle, value, ..} => Ok(Edit::SavedSelection(RecordChange::replace(&art.selections, *handle, Some(value.clone())).map_err(str::to_string)?)),
+        }
+    }
+}
 pub(super) struct EffectGesture {
-    original: Layer,
+    original: PropertyBaseline,
     key: String,
     detached_curve_point: bool,
 }
@@ -687,7 +766,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Ok(false);
         };
         self.engine
-            .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
+            .preview_edit(gesture.original.edit(self.engine.document())?)
             .map_err(error)?;
         self.refresh_document();
         Ok(true)
@@ -732,13 +811,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if phase == ContactPhase::Down {
             self.require_idle()?;
-            let original = self
-                .engine
-                .document()
-                .layer(LayerId(layer))
-                .ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string())?
-                .clone();
-            if self.engine.document().is_locked(original.id) {
+            let handle = occurrence_handle(layer)?;
+            let original = PropertyBaseline::capture(self.engine.document(), handle)?;
+            if self.engine.document().is_locked(handle) {
                 return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string());
             }
             self.effect_gesture = Some(EffectGesture {
@@ -749,7 +824,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else if !self
             .effect_gesture
             .as_ref()
-            .is_some_and(|g| g.original.id.0 == layer && g.key == key)
+            .is_some_and(|g| occurrence_token(g.original.occurrence()) == layer && g.key == key)
         {
             // A cancelled native contact may still deliver its terminal event.
             return Ok(());
@@ -769,20 +844,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         if phase == ContactPhase::Up {
             let gesture = self.effect_gesture.take().unwrap();
             if gesture.detached_curve_point {self.property_editor.clear_selection(&gesture.key);}
-            let edited = self
-                .engine
-                .document()
-                .layer(gesture.original.id)
-                .unwrap()
-                .clone();
-            let changed = edited.effect != gesture.original.effect
-                || edited.opacity != gesture.original.opacity
-                || edited.properties != gesture.original.properties;
-            self.engine
-                .preview_edit(Edit::ReplaceLayer(Box::new(gesture.original)))
-                .map_err(error)?;
+            let edited = PropertyBaseline::capture(self.engine.document(), gesture.original.occurrence())?;
+            let changed = edited != gesture.original;
+            let original_edit = gesture.original.edit(self.engine.document())?;
+            self.engine.preview_edit(original_edit).map_err(error)?;
             if changed {
-                self.layer_edit(Edit::ReplaceLayer(Box::new(edited)))?;
+                self.layer_edit(edited.edit(self.engine.document())?)?;
             }
             self.property_editor.commit_revision(self.engine.document().revision);
         }
@@ -790,8 +857,12 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn effect_parameter(&self, layer: u64, key: &str) -> Result<EffectValue, String> {
-        let layer = self.engine.document().layer(LayerId(layer)).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string())?;
-        let effect = layer.effect.as_ref().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_ADJUSTMENT_REQUIRED).to_string())?;
+        let document = self.engine.document();
+        let handle = occurrence_handle(layer)?;
+        if document.scene().occurrence(handle).is_none() {
+            return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string());
+        }
+        let effect = document.scene().effect(handle).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_ADJUSTMENT_REQUIRED).to_string())?;
         effect.value(key).cloned().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_PROPERTY).to_string())
     }
 
@@ -807,25 +878,28 @@ impl<R: CanvasRenderer> UiSession<R> {
             EffectAction::LookupPreset {layer,epoch,preset} => {
                 if !self.property_editor.accepts(layer,epoch) {return Ok(());}
                 self.cancel_effect_gesture()?;
-                let mut target=self.editable_layer(layer)?;
-                let Some(effect)=&mut target.effect else {return Ok(());};
-                let Some(layer_core::EffectAuxiliary::Lut3d {resource,color_space})=effect.program.auxiliary.clone() else {return Ok(());};
-                let effect=Arc::make_mut(effect);
-                effect.set(&resource,EffectValue::Lut3d(None)).map_err(str::to_string)?;
+                self.editable_layer(layer)?;
+                let handle=occurrence_handle(layer)?;
+                let document=self.engine.document();
+                let Some(original)=document.scene().effect(handle) else {return Ok(());};
+                let Some(layer_core::EffectAuxiliary::Lut3d {resource,color_space})=original.program.auxiliary.clone() else {return Ok(());};
+                let mut draft=effect_draft(document,handle)?;
+                draft.set(&resource,EffectValue::Lut3d(None)).map_err(str::to_string)?;
                 if let Some(preset)=preset {
-                    effect.set(&color_space,EffectValue::Choice(0)).map_err(str::to_string)?;
-                    effect.set(&resource,EffectValue::Lut3d(Some(preset.resource()))).map_err(str::to_string)?;
+                    draft.set(&color_space,EffectValue::Choice(0)).map_err(str::to_string)?;
+                    draft.set(&resource,EffectValue::Lut3d(Some(preset.resource()))).map_err(str::to_string)?;
                 }
-                if self.engine.document().layer(target.id)==Some(&target) {return Ok(());}
-                self.layer_edit(Edit::ReplaceLayer(Box::new(target)))?;
+                if draft.view()==original {return Ok(());}
+                let edit=effect_edit(document,handle,draft)?;
+                self.layer_edit(edit)?;
             }
             EffectAction::ImportLookup {layer,epoch} => {
                 if !matches!(self.state.platform,Platform::Gtk|Platform::Web|Platform::Android) { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
                 if !self.property_editor.accepts(layer,epoch) {return Ok(());}
                 self.cancel_effect_gesture()?;
-                let Some(effect) = self.engine.document().layer(LayerId(layer)).and_then(|layer| layer.effect.as_ref()) else {return Ok(());};
+                let Some(effect) = self.engine.document().scene().effect(occurrence_handle(layer)?) else {return Ok(());};
                 let Some(layer_core::EffectAuxiliary::Lut3d {resource,..}) = &effect.program.auxiliary else {return Ok(());};
-                return self.request_document(DocumentRequest::ImportLookup {target: LookupTarget {document:self.engine.document().id.clone(),activation:self.state.document_file.epoch,layer,epoch,key:resource.to_string()}});
+                return self.request_document(DocumentRequest::ImportLookup {target: LookupTarget {document:self.engine.document().artwork.id,activation:self.state.document_file.epoch,layer,epoch,key:resource.to_string()}});
             }
             EffectAction::TargetCurve {layer,epoch}=>return self.start_targeted_curve(layer,epoch),
             EffectAction::AutoLevels {layer,epoch}=>return self.start_auto_levels(layer,epoch),
@@ -914,8 +988,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             EffectAction::CancelFilter => {
                 let doc = self.engine.document();
-                if let Some(layer) = doc.layer(doc.active_layer).filter(|l| l.effect.is_some()) {
-                    self.layer_action(LayerAction::Delete { id: layer.id.0 })?;
+                if let Some(handle) = doc.working.occurrence.filter(|handle| doc.scene().effect(*handle).is_some()) {
+                    self.layer_action(LayerAction::Delete { id: occurrence_token(handle) })?;
                 }
                 self.state.customization.drawer = None;
                 self.state.customization.expanded = None;
@@ -970,7 +1044,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if stops.iter().all(|s| (s.position - position).abs() > 0.002) {
                         let color = match color {
                             Some(color) => color,
-                            None => layer_core::gradient_value(&stops, position, self.engine.document().color.space)?,
+                            None => layer_core::gradient_value(&stops, position, self.engine.document().composition().color.space)?,
                         };
                         stops.push(layer_core::GradientStop { position, color });
                         stops.sort_by(|a, b| a.position.total_cmp(&b.position));
@@ -995,7 +1069,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let EffectValue::Curve(mut points) = self.effect_parameter(layer, &key)? else {
                     return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_CURVE_REQUIRED).to_string());
                 };
-                let dragging = self.effect_gesture.as_ref().filter(|g| g.original.id.0 == layer && g.key == key);
+                let dragging = self.effect_gesture.as_ref().filter(|g| occurrence_token(g.original.occurrence()) == layer && g.key == key);
                 let detached = dragging.is_some_and(|g| g.detached_curve_point);
                 if !detached && !remove && index.is_some_and(|index| points.get(index)==Some(&point)) {return Ok(());}
                 let off_graph = dragging.is_some()
@@ -1041,48 +1115,65 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             EffectAction::Insert { effect } => {
                 let choosing = self.filter_drawer_open();
-                let effect = self.effect_catalog.get(&effect).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?;
-                let generator = effect.program.kind == layer_core::EffectKind::Generator;
+                let catalog = self.effect_catalog.get(&effect).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_FILTER).to_string())?;
+                let generator = catalog.program.kind == layer_core::EffectKind::Generator;
                 let doc = self.engine.document();
-                let current = doc.layer(doc.active_layer).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
-                let replacing = choosing && current.effect.as_ref().is_some_and(|fx| fx.program.kind == effect.program.kind);
-                let masked = !replacing && doc.selection.is_some();
-                if replacing && doc.is_locked(current.id) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
-                if replacing && current.effect.as_ref().is_some_and(|fx| fx.program.id == effect.program.id) {
-                    return Ok(());
-                }
-                let top = if choosing { current.id } else { doc.clipping_stack_top(current.id).unwrap() };
-                let index = doc.layers.iter().position(|l| l.id == top).unwrap();
-                let parent = current.properties.parent;
-                let depth = doc.color.depth;
-                let hdr = depth.is_float();
-                let mut layer = if replacing { current.clone() } else {
-                    let clipped = choosing && current.properties.clipped;
-                    let mut layer = Layer::paint(self.engine.allocate_layer_id(), resource_label(effect.label(), &self.state.localization));
-                    layer.properties.clipped = clipped;
-                    layer
-                };
-                let id = layer.id;
-                layer.kind = LayerKind::Effect;
-                layer.properties.parent = parent;
-                let mut instance = EffectInstance::new(effect.program().for_depth(depth));
-                if hdr && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
-                if generator && let Some(color) = instance.program.parameters.iter().find(|p| p.kind == EffectParameterKind::Color) {
+                let scene = doc.scene();
+                let current = doc.working.occurrence.ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
+                let occurrence = scene.occurrence(current).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
+                let replacing = choosing && scene.effect(current).is_some_and(|effect| effect.program.kind == catalog.program.kind);
+                let masked = !replacing && doc.working.selection.is_some();
+                if replacing && doc.is_locked(current) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
+                if replacing && scene.effect(current).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
+                let top = if choosing { current } else { doc.clipping_stack_top(current).ok_or("Missing clipping stack")? };
+                let parent = scene.parent(current);
+                let stack_handle = scene.stack(top).ok_or("Missing containing stack")?;
+                let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
+                let index = stack.entries.iter().position(|handle| *handle == top).ok_or("Missing insertion position")?;
+                let depth = doc.composition().color.depth;
+                let mut instance = EffectInstance::new(catalog.program().for_depth(depth));
+                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
+                if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
                     instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
                 }
-                layer.effect = Some(Arc::new(instance));
-                if masked || (generator && layer.mask.is_none()) {
-                    layer.mask = Some(self.selection_mask(&layer, false)?);
-                }
-                self.layer_edit(if replacing {
-                    Edit::ReplaceLayer(Box::new(layer))
+                let mut edits = Vec::new();
+                let definition = if let Some((handle, _, _)) = doc.artwork.definitions.iter().find(|(_, _, definition)| definition.program == instance.program) {
+                    handle
                 } else {
-                    let mut edits = vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id }];
-                    if masked {
-                        edits.push(Edit::SetSelection(None));
-                    }
-                    Edit::Batch(edits)
-                })?;
+                    let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program, dimensions: Default::default()});
+                    let handle = change.handle; edits.push(Edit::Definition(change)); handle
+                };
+                let application = EffectApplication {definition, values: instance.values, domain: if replacing {scene.local_extent(current)} else {doc.composition().size}};
+                let effect_handle = if replacing {
+                    let handle = scene.effect_handle(current).ok_or("Missing adjustment")?;
+                    edits.push(Edit::Effect(RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?));
+                    handle
+                } else {
+                    let change = RecordChange::insert(&doc.artwork.effects, application);
+                    let handle = change.handle; edits.push(Edit::Effect(change)); handle
+                };
+                let mut occurrence = if replacing { occurrence.clone() } else {
+                    let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
+                    value.clipped = choosing && occurrence.clipped; value
+                };
+                occurrence.content = OccurrenceContent::Effect(effect_handle);
+                if masked || (generator && occurrence.mask.is_none()) {
+                    let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current) } else { doc.composition().size })?;
+                    edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
+                }
+                let handle = if replacing {
+                    edits.push(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, current, Some(occurrence)).map_err(str::to_string)?)); current
+                } else {
+                    let change = RecordChange::insert(&doc.artwork.occurrences, occurrence);
+                    let handle = change.handle; edits.push(Edit::Occurrence(change));
+                    stack.entries.insert(index, handle);
+                    edits.push(Edit::Stack(RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack)).map_err(str::to_string)?)); handle
+                };
+                let mut working = doc.working.clone();
+                working.occurrence = Some(handle); working.target = None; working.inspect_mask = None;
+                if masked { working.selection = None; }
+                edits.push(Edit::Working(working));
+                self.layer_edit(Edit::Batch(edits))?;
                 if !choosing {
                     self.state.customization.expanded = None;
                     self.state.workspace.layout.reveal_after(Panel::Properties, Panel::Adjustments)?;
@@ -1093,12 +1184,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 key,
                 value,
             } => {
-                if self
-                    .engine
-                    .document()
-                    .layer(LayerId(id))
-                    .is_some_and(|l| l.effect.is_none())
-                {
+                let handle = occurrence_handle(id)?;
+                let document = self.engine.document();
+                document.scene().occurrence(handle).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string())?;
+                if document.scene().effect(handle).is_none() {
                     return match (key.as_str(), value) {
                         ("opacity", EffectValue::Number(opacity)) => {
                             self.set_layer_opacity(Some(id), opacity)
@@ -1109,22 +1198,18 @@ impl<R: CanvasRenderer> UiSession<R> {
                         _ => Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_LAYER_PROPERTY).to_string()),
                     };
                 }
-                let mut layer = self.editable_layer(id)?;
-                let effect = layer.effect.as_mut().ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_EFFECT_LAYER_REQUIRED).to_string())?;
-                let original = effect.clone();
-                let changed = Arc::make_mut(effect);
-                changed.program = changed.program.for_depth(self.engine.document().color.depth);
-                changed.set(&key, value)
-                    .map_err(str::to_string)?;
-                if *effect == original {
-                    return Ok(());
+                if document.is_locked(handle) {
+                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string());
                 }
-                let edit = Edit::ReplaceLayer(Box::new(layer));
-                if self.effect_gesture.is_some() {
-                    self.engine.preview_edit(edit).map_err(error)?;
-                } else {
-                    self.layer_edit(edit)?;
-                }
+                let original = document.scene().effect(handle).ok_or("Missing adjustment")?;
+                let mut draft = effect_draft(document, handle)?;
+                draft.program = draft.program.for_depth(document.composition().color.depth);
+                draft.set(&key, value).map_err(str::to_string)?;
+                if draft.view() == original { return Ok(()); }
+                let edit = effect_edit(document, handle, draft)?;
+                if self.effect_gesture.is_some() { self.engine.preview_edit(edit).map_err(error)?; }
+                else { self.layer_edit(edit)?; }
+
             }
         }
         Ok(())
@@ -1143,8 +1228,9 @@ mod resource_tests {
             (UiLanguage::Japanese, "単色", "グループ", "選択範囲", "Paper（単色）"),
         ] {
             let l = Localizer::shared(language);
-            let mut doc = Document::new("Titles", 32, 32, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
-            doc.active_layer = LayerId(2);
+            let mut doc = Document::new(layer_core::authored::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+            let fill = occurrence_handle(2).unwrap();
+            doc.apply(doc.select_occurrence_edit(fill).unwrap()).unwrap();
             assert_eq!(properties(&doc, Default::default(), &l).title, paper_title);
             for (kind, name, expected) in [
                 (LayerKind::Paint, "Paper", "Paper"),
@@ -1154,13 +1240,22 @@ mod resource_tests {
                 (LayerKind::Group, "Sky", if language == UiLanguage::English { "Sky (Group)" } else { "Sky（グループ）" }),
                 (LayerKind::Selection, "{ $type } 🎨", if language == UiLanguage::English { "{ $type } 🎨 (Selection)" } else { "{ $type } 🎨（選択範囲）" }),
             ] {
-                let mut layer = if kind == LayerKind::Selection {
-                    Layer::selection(LayerId(2), name, layer_core::Selection::empty())
-                } else { Layer::paint(LayerId(2), name) };
-                layer.kind = kind;
-                if kind == LayerKind::Effect { layer.effect = doc.layers[1].effect.clone(); }
                 let mut selected = doc.clone();
-                selected.layers = vec![layer];
+                let content = match kind {
+                    LayerKind::Effect => doc.scene().occurrence(fill).unwrap().content.clone(),
+                    LayerKind::Paint => doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().content.clone(),
+                    LayerKind::Group => {
+                        let stack = selected.artwork.stacks.insert(layer_core::authored::PortableId::random(), Default::default()).unwrap();
+                        OccurrenceContent::Stack(stack)
+                    }
+                    LayerKind::Selection => {
+                        let selection = selected.artwork.selections.insert(layer_core::authored::PortableId::random(), layer_core::authored::SavedSelection {
+                            selection: layer_core::Selection::empty(), display: Default::default(),
+                        }).unwrap();
+                        OccurrenceContent::Selection(selection)
+                    }
+                };
+                *selected.artwork.occurrences.get_mut(fill).unwrap() = layer_core::authored::Occurrence::new(content, name);
                 assert_eq!(properties(&selected, Default::default(), &l).title, expected);
             }
         }
@@ -1282,8 +1377,12 @@ mod resource_tests {
                 let custom = resolve(custom);
                 assert!(validate_catalog_labels(&custom, &l).is_err(), "field {field}: {key}");
                 if field != 0 {
-                    let mut document = Document::new("resource", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                    document.layers[0].effect = Some(Arc::new(EffectInstance::new(custom.get("curves").unwrap().program())));
+                    let mut document = Document::new(layer_core::authored::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                    let handle=document.working.occurrence.unwrap();
+                    let draft=EffectInstance::new(custom.get("curves").unwrap().program());
+                    let definition=document.artwork.definitions.insert(layer_core::authored::PortableId::random(),layer_core::authored::Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+                    let effect=document.artwork.effects.insert(layer_core::authored::PortableId::random(),EffectApplication {definition,values:draft.values,domain:[32;2]}).unwrap();
+                    document.artwork.occurrences.get_mut(handle).unwrap().content=OccurrenceContent::Effect(effect);
                     assert!(validate_document_labels(&document, &l).is_err(), "embedded field {field}: {key}");
                 }
             }

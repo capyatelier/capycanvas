@@ -1,7 +1,12 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile,readFile} from 'node:fs/promises';
 import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
+import {authoredIdentity,packageObject,packageOccurrences,packageResources,packageResourceIdentity,rasterIdentity} from './package-fixture.test.mjs';
 import {png} from './clone-journey.test.mjs';
+
+const selectedEffect=manifest=>packageObject(manifest,packageOccurrences(manifest).find(o=>o.data.content.effect).data.content.effect);
+const effectSlots=manifest=>packageObject(manifest,selectedEffect(manifest).data.definition).data.slots;
+const effectValues=manifest=>{const effect=selectedEffect(manifest),definition=packageObject(manifest,effect.data.definition);return Object.fromEntries(definition.data.slots.map(key=>[key,effect.data.values?.[key]??definition.data.parameters[key].default]));};
 
 export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false,localAdjustments=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p21-web';
@@ -40,7 +45,6 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     window.showOpenFilePicker=async()=>[{name:'pointwise.capy',async getFile(){return new File([placementTest.saved],'pointwise.capy')}}];`);
   const idle=()=>wait('!layerApp.state().document_file.busy&&!layerApp.documents.busy()&&layerApp.app.brush_ready()');
   const save=placementSave({evaluate,invoke,idle});
-  const rasterIdentity=m=>m.rasters.map(r=>({...r,tiles:r.tiles.map(t=>({...t,blob:m.blobs[t.blob].digest}))}));
   const reports=[];
   try {
     const original=png(256,256,(x,y)=>[x,y,255-x,255],4);
@@ -53,15 +57,19 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     const unchanged=async()=>{
       const current=await save(),actual=rasterIdentity(current);
       assert.deepEqual(sourceIdentity(current),sources);
-      assert.deepEqual(actual.filter(r=>rasters.some(original=>original.target===r.target)),rasters);
-      for(const added of actual.filter(r=>!rasters.some(original=>original.target===r.target)))assert.deepEqual(added,{target:added.target,tiles:[],watercolor:null});
+      assert.deepEqual(actual.filter(r=>rasters.some(original=>original.id===r.id)),rasters);
+      for(const added of actual.filter(r=>!rasters.some(original=>original.id===r.id))){assert.deepEqual(added.tiles,[]);assert.equal(added.material,undefined);}
       return current;
     };
     const reopen=async name=>{
-      const expected=await unchanged();
+      const expected=await unchanged(),editingIndex=await evaluate('layerApp.state().layers.findIndex(layer=>layer.editing)');
+      assert.ok(editingIndex>=0,'Archive journey has a current property owner');const owner=packageOccurrences(expected)[editingIndex].id;
       await writeFile(`${directory}/${name}.capy`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
       await invoke('open_document');await idle();
-      const actual=await unchanged();assert.deepEqual(actual.document.layers,expected.document.layers,'Native archive retains exact effect values and sources');
+      const actual=await unchanged();assert.deepEqual(authoredIdentity(actual),authoredIdentity(expected),'Native archive retains exact effect values, phases and sources');
+      const index=packageOccurrences(actual).findIndex(occurrence=>occurrence.id===owner);assert.ok(index>=0,'Reopened archive retains the property owner');
+      const layer=await evaluate(`String(layerApp.state().layers[${index}].id)`);await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(layer)})})`);await settle();
+      assert.equal(String((await properties()).layer),layer,'Analysis and controls belong to the reopened occurrence');
     };
     if(localAdjustments) {
       await evaluate(`window.localAnalysisFrames=[];window.localAnalysisFrame=layerApp.app.frame.bind(layerApp.app);layerApp.app.frame=(...args)=>{const change=localAnalysisFrame(...args);localAnalysisFrames.push({time:performance.now(),change,properties:layerApp.state().layer_properties});return change};`);
@@ -72,7 +80,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return ${JSON.stringify(points)}.map(([x,y])=>{if(x<0||y<0||x>=image.width||y>=image.height)throw Error('Artwork probe outside screenshot '+[x,y,image.width,image.height]);return Array.from(context.getImageData(Math.floor(x),Math.floor(y),1,1).data)})})()`);
       };
       const analyzed=async()=>{const owner=(await properties()).layer,end=Date.now()+120000;while(Date.now()<end){await evaluate('new Promise(resolve=>setTimeout(resolve,100))');const current=await properties();assert.equal(current.layer,owner);assert.notEqual(current.description,'Could not update this adjustment.');if(current.description==='Updating…')continue;await evaluate('layerApp.app.wait_for_canvas()');await settle();if((await properties()).description!=='Updating…')return;}throw Error('Local adjustment did not publish a ready canvas: '+JSON.stringify(await properties()));};
-      const layers=async()=>(await save()).document.layers;
+      const authored=async()=>authoredIdentity(await save());
       for(const width of widths) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
         await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();await invoke('fit_canvas');
@@ -81,19 +89,20 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await send({type:'effect',action:{op:'insert',effect:'hue_saturation'}});const lower=(await properties()).layer;
           await send({type:'effect',action:{op:'insert',effect:'shadows_highlights'}});const shadows=(await properties()).layer;if((await properties()).description==='Updating…')await capture(`analysis-pending-${width}-${theme}`);await analyzed();assert.deepEqual((await properties()).controls.map(c=>c.key),['shadows','highlights']);
           await edit('shadows','65');await edit('highlights','45');await analyzed();const adjusted=await sample();await capture(`shadows-highlights-${width}-${theme}`);await writeFile(`${directory}/analysis-status-${width}-${theme}.json`,JSON.stringify(await evaluate('JSON.parse(JSON.stringify({properties:layerApp.state().layer_properties,stats:layerApp.app.renderer_stats(),camera:layerApp.app.camera(),notices:layerApp.state().notices,frames:localAnalysisFrames,scroll:[scrollX,scrollY],canvasRect:layerApp.canvas.getBoundingClientRect().toJSON()},(_,v)=>typeof v==="bigint"?Number(v):v))'),(_,v)=>typeof v==='bigint'?Number(v):v,2));assert.notDeepEqual(adjusted,original);
-          const after=await layers();await invoke('undo');await analyzed();assert.equal((await value('highlights')).value,0);await invoke('redo');await analyzed();assert.deepEqual(await layers(),after);
+          const after=await authored();await invoke('undo');await analyzed();assert.equal((await value('highlights')).value,0);await invoke('redo');await analyzed();assert.deepEqual(await authored(),after);
           await send({type:'effect',action:{op:'insert',effect:'clarity'}});const clarity=(await properties()).layer;await analyzed();assert.deepEqual((await properties()).controls.map(c=>c.key),['amount']);
           await edit('amount','55');await analyzed();const positive=await sample();
-          await click(`${selector('amount')} .number-value`);await evaluate(`document.querySelector('${selector('amount')} .number-entry').value='99.'`);const beforeCancel=await layers();await key('Escape',27);assert.deepEqual(await layers(),beforeCancel);
+          await click(`${selector('amount')} .number-value`);await evaluate(`document.querySelector('${selector('amount')} .number-entry').value='99.'`);const beforeCancel=await authored();await key('Escape',27);assert.deepEqual(await authored(),beforeCancel);
           await edit('amount','-55');await analyzed();const negative=await sample();assert.notDeepEqual(positive,negative);
           await invoke('undo');await analyzed();assert.equal((await value('amount')).value,55);await invoke('redo');await analyzed();assert.equal((await value('amount')).value,-55);
           await send({type:'effect',action:{op:'set',layer:lower,key:'lightness',value:{kind:'number',value:-20}}});await analyzed();const changed=await sample();assert.notDeepEqual(changed,negative);await capture(`clarity-stacked-${width}-${theme}`);
+          const deleted=packageOccurrences(await save()).filter(o=>o.data.content.effect).map(o=>o.id);
           await reopen(`local-adjustments-${width}-${theme}`);await analyzed();assert.deepEqual(await sample(),changed);
           const tabs=await evaluate('JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==="bigint"?Number(v):v))'),other=tabs.tabs.find(tab=>tab.id!==tabs.selected);
           assert.ok(other);await evaluate(`layerApp.documents.select(BigInt(${other.id}))`);await idle();await wait('layerApp.app.document_park_ready()');
           await evaluate(`layerApp.documents.select(BigInt(${tabs.selected}))`);await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();
           await evaluate('layerApp.restartGpu()');await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();await capture(`local-recreated-${width}-${theme}`);
-          samples.push({width,theme,original,adjusted,positive,negative,changed});for(const id of [clarity,shadows,lower]){await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
+          samples.push({width,theme,original,adjusted,positive,negative,changed});for(const portable of deleted){const manifest=await save(),rows=await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers,(_,v)=>typeof v==="bigint"?Number(v):v))'),id=rows[packageOccurrences(manifest).findIndex(o=>o.id===portable)].id;await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
           await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:true}});
           await send({type:'move_panel',panel:'adjustments',target:{kind:'edge',edge:'right',outer:false},viewport:[width,800]});
           await send({type:'filter_picker',action:{op:'category',category:null}});
@@ -110,7 +119,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
     if(colorPages) {
       const samples=[];
       const nativeChoice=async(selector,index)=>{await evaluate(`document.querySelector(${JSON.stringify(selector)}).focus()`);await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);assert.equal(await evaluate(`Number(document.querySelector(${JSON.stringify(selector)}).value)`),index);};
-      const layers=async()=>(await save()).document.layers;
+      const authored=async()=>authoredIdentity(await save());
       for(const width of widths) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
         await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();await invoke('fit_canvas');
@@ -118,19 +127,19 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await send({type:'set_theme',theme});const original=await canvasPixel();assert.ok(original[1]>original[0]+60&&original[3]===255);
           await send({type:'effect',action:{op:'insert',effect:'selective_color'}});assert.deepEqual(await canvasPixel(),original);
           const pages=['reds','yellows','greens','cyans','blues','magentas','whites','neutrals','blacks'];assert.deepEqual((await properties()).pages.map(p=>p.id),pages);
-          let owner=(await properties()).layer,before=await layers();assert.equal(before.find(l=>l.id===owner)?.effect.values.length,37);
-          for(const id of pages)await page(id);assert.deepEqual(await layers(),before);
+          let owner=(await properties()).layer,before=await authored();assert.equal(effectSlots(await save()).length,37);
+          for(const id of pages)await page(id);assert.deepEqual(await authored(),before);
           const inks=['cyan','magenta','yellow','black'];
           for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,text] of [String((i+1)*2),'-1.25','1.5','0.5'].entries())await edit(`${pages[i]}_${inks[j]}`,text);}
           for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,n] of [(i+1)*2,-1.25,1.5,.5].entries())assert.ok(Math.abs((await value(`${pages[i]}_${inks[j]}`)).value-n)<1e-6);}
           await page('cyans');const relative=await canvasPixel();assert.notDeepEqual(relative,original);await capture(`selective-relative-${width}-${theme}`);
-          before=await layers();await nativeChoice(`${selector('mode')} select`,1);assert.equal((await value('mode')).value,1);const absolute=await canvasPixel();assert.notDeepEqual(absolute,relative);
-          const after=await layers();await invoke('undo');assert.deepEqual(await layers(),before);await invoke('redo');assert.deepEqual(await layers(),after);
+          before=await authored();await nativeChoice(`${selector('mode')} select`,1);assert.equal((await value('mode')).value,1);const absolute=await canvasPixel();assert.notDeepEqual(absolute,relative);
+          const after=await authored();await invoke('undo');assert.deepEqual(await authored(),before);await invoke('redo');assert.deepEqual(await authored(),after);
           await capture(`selective-absolute-${width}-${theme}`);await reopen(`selective-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});
           await send({type:'effect',action:{op:'insert',effect:'channel_mixer'}});assert.deepEqual(await canvasPixel(),original);assert.deepEqual((await properties()).pages.map(p=>p.id),['red','green','blue']);
-          owner=(await properties()).layer;before=await layers();assert.equal(before.find(l=>l.id===owner)?.effect.values.length,17);for(const id of ['red','green','blue'])await page(id);assert.deepEqual(await layers(),before);
+          owner=(await properties()).layer;before=await authored();assert.equal(effectSlots(await save()).length,17);for(const id of ['red','green','blue'])await page(id);assert.deepEqual(await authored(),before);
           for(const output of ['red','green','blue']){await page(output);for(const channel of ['red','green','blue'])await edit(`${output}_${channel}`,channel===output?'85':channel==='red'?'15':'-5');await edit(`${output}_constant`,'1.25');}
-          const stored=(await layers()).find(l=>l.id===owner).effect.values.slice();const rgb=await canvasPixel();assert.notDeepEqual(rgb,original);await capture(`mixer-rgb-${width}-${theme}`);
+          const stored=effectValues(await save());const rgb=await canvasPixel();assert.notDeepEqual(rgb,original);await capture(`mixer-rgb-${width}-${theme}`);
           await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);await key(' ',32);assert.equal((await value('monochrome')).value,true);assert.equal((await properties()).page,'gray');assert.deepEqual((await properties()).pages.map(p=>p.id),['gray']);
           assert.ok(await evaluate(`document.activeElement===document.querySelector('${selector('monochrome')} input')&&document.querySelector('[data-properties-page]').hidden`));
           for(const [name,text]of [['gray_red','60'],['gray_green','20'],['gray_blue','20'],['gray_constant','1.25']])await edit(name,text);
@@ -140,9 +149,9 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           const beforeCancel=(await properties()).controls.map(c=>({key:c.key,value:c.value}));await key('Escape',27);assert.deepEqual((await properties()).controls.map(c=>({key:c.key,value:c.value})),beforeCancel);assert.equal((await value('gray_constant')).value,1.25);
           await invoke('undo');assert.equal((await value('gray_red')).value,60);await invoke('redo');assert.equal((await value('gray_red')).value,65);
           const gray=await canvasPixel();assert.ok(gray[3]===255&&Math.max(...gray.slice(0,3))-Math.min(...gray.slice(0,3))<=2);await capture(`mixer-gray-${width}-${theme}`);
-          await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);before=await layers();await key(' ',32);assert.equal((await value('monochrome')).value,false);assert.ok(await evaluate(`document.activeElement===document.querySelector('${selector('monochrome')} input')`));
-          const current=(await layers()).find(l=>l.id===owner).effect.values;assert.deepEqual(current.slice(0,12),stored.slice(0,12));assert.deepEqual(current.slice(12,16).map(v=>v.value),[65,20,20,1.25]);assert.deepEqual(await canvasPixel(),rgb);
-          const restored=await layers();await invoke('undo');assert.deepEqual(await layers(),before);await invoke('redo');assert.deepEqual(await layers(),restored);
+          await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);before=await authored();await key(' ',32);assert.equal((await value('monochrome')).value,false);assert.ok(await evaluate(`document.activeElement===document.querySelector('${selector('monochrome')} input')`));
+          const current=effectValues(await save());assert.deepEqual(['red','green','blue'].flatMap(output=>['red','green','blue','constant'].map(input=>current[`${output}_${input}`])),['red','green','blue'].flatMap(output=>['red','green','blue','constant'].map(input=>stored[`${output}_${input}`])));assert.deepEqual(['red','green','blue','constant'].map(input=>current[`gray_${input}`]),[65,20,20,1.25]);assert.deepEqual(await canvasPixel(),rgb);
+          const restored=await authored();await invoke('undo');assert.deepEqual(await authored(),before);await invoke('redo');assert.deepEqual(await authored(),restored);
           await reopen(`mixer-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});samples.push({width,theme,original,relative,absolute,rgb,gray});
         }
       }
@@ -158,9 +167,9 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         await send({type:'effect',action:{op:'insert',effect:'hue_saturation'}});
         let view=await properties();assert.deepEqual(view.pages.map(p=>p.id),['rgb','reds','yellows','greens','cyans','blues','magentas']);
         const beforePages=await save();
-        assert.equal(beforePages.document.layers.find(l=>l.id===beforePages.document.active_layer).effect.values.length,42);
+        assert.equal(effectSlots(beforePages).length,42);
         for(const id of view.pages.map(p=>p.id))await page(id);
-        assert.deepEqual((await save()).document.layers,beforePages.document.layers,'Page navigation never edits stored parameters');
+        assert.deepEqual(authoredIdentity(await save()),authoredIdentity(beforePages),'Page navigation never edits stored parameters or phases');
         await page('reds');
         for(const [name,text] of [['reds_hue','27'],['reds_center','350'],['reds_width','60'],['reds_feather','0']])await edit(name,text);
         const retained=(await properties()).controls.map(c=>({key:c.key,value:c.value}));
@@ -231,7 +240,12 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
 export async function checkLookupTransport({call,evaluate,settle}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p23-web';await mkdir(directory,{recursive:true});
   const fixture=await readFile(process.env.LAYER_LOOKUP_FIXTURE??'artifacts/photo-editing-color/p23-gtk/lookup-1100-Light.capy');
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40)}poll()})`);
+  const wait=(condition,recovering=false)=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function poll(){
+    const status=document.querySelector('#status')?.textContent??'';
+    const packageView=[...document.querySelectorAll('dialog[open] button')].some(button=>button.textContent.startsWith('Copy Original'));
+    if(${recovering}&&(/Recovery (?:operation|capture) failed|Recovery unavailable/.test(status)||packageView))reject(Error('Recovery did not adopt the saved drawing: '+document.body.innerText.slice(-900)));
+    else if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-900)));else setTimeout(poll,40);
+  }poll()})`);
   const invoke=async command=>{await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);await settle();};
   const idle=()=>wait('!layerApp.state().document_file.busy&&!layerApp.documents.busy()&&layerApp.app.brush_ready()&&layerApp.startupTimes.complete!==null');
   const install=()=>evaluate(`window.placementTest={};window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){return{async write(v){placementTest.saved=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){},async abort(){}}}});`);
@@ -252,7 +266,14 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,windowsVirtualKeyCode:code});await settle();};
   const select=async index=>{await click('[data-property-resource]');await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();};
   const originalArchive=await save(),originalSources=sourceIdentity(originalArchive);
-  const lookupLayer=originalArchive.document.layers.find(layer=>layer.effect?.program.id==='color_lookup').id;await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(String(lookupLayer))})})`);await settle();
+  const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&packageObject(originalArchive,application.data.definition).data.key==='color_lookup'});assert.ok(lookupIndex>=0);
+  const lookupOccurrence=packageOccurrences(originalArchive)[lookupIndex].id;
+  const selectLookup=async manifest=>{
+    const index=packageOccurrences(manifest).findIndex(occurrence=>occurrence.id===lookupOccurrence);assert.ok(index>=0,'Reopened archive retains the lookup occurrence');
+    const layer=await evaluate(`String(layerApp.state().layers[${index}].id)`);await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(layer)})})`);await settle();
+    assert.equal(await evaluate('String(layerApp.state().layer_properties.layer)'),layer,'Lookup properties belong to the current occurrence');
+  };
+  await selectLookup(originalArchive);
   const cube='TITLE "Imported inverse"\nLUT_3D_SIZE 2\n'+Array.from({length:8},(_,i)=>`${1-(i&1)} ${1-((i>>1)&1)} ${1-((i>>2)&1)}`).join('\n');
   for(const width of [640,1100])for(const theme of ['light','dark']) {
     await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
@@ -273,29 +294,39 @@ export async function checkLookupTransport({call,evaluate,settle}) {
     await select(1);const beforeAmount=await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount=beforeAmount===50?65:50;
     await click('[data-property-key="intensity"] .number-value');await evaluate(`(()=>{const n=document.querySelector('[data-property-key="intensity"] .number-entry');n.value=${JSON.stringify(String(nextAmount))};n.dispatchEvent(new Event('input',{bubbles:true}))})()`);await key('Enter',13);
     assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount);await invoke('undo');assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),beforeAmount);await invoke('redo');assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount);await select(0);
-    const cancelled=await save();await evaluate(`window.showOpenFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')}`);await click('[data-action="import-lookup"]');await idle();assert.deepEqual((await save()).document.layers,cancelled.document.layers);
+    const cancelled=await save();await evaluate(`window.showOpenFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')}`);await click('[data-action="import-lookup"]');await idle();assert.deepEqual(authoredIdentity(await save()),authoredIdentity(cancelled));
     for(const oversized of [false,true]) {
       const beforeFailure=await save();
       await evaluate(`window.showOpenFilePicker=async()=>[{name:'invalid.cube',getFile:async()=>new File([${oversized?"' '.repeat(layerApp.app.lookup_text_limit()+1)":"'LUT_3D_SIZE 2\\n0 0 0'"}],'invalid.cube')}];`);
       await click('[data-action="import-lookup"]');await idle();assert.ok(await evaluate('layerApp.state().host_error'),'Rejected LUT reports a shared localized error');
-      assert.deepEqual((await save()).document.layers,beforeFailure.document.layers,'Rejected LUT creates no history edit');
+      assert.deepEqual(authoredIdentity(await save()),authoredIdentity(beforeFailure),'Rejected LUT creates no history edit');
     }
     const owner=await evaluate('String(layerApp.state().layer_properties.layer)'),other=await evaluate(`String(layerApp.state().layers.find(l=>String(l.id)!==${JSON.stringify(owner)}).id)`),beforeStale=await save();
     await evaluate(`window.showOpenFilePicker=()=>new Promise(resolve=>window.lookupPickerRelease=resolve)`);await click('[data-action="import-lookup"]');await wait('layerApp.state().document_file.busy');
     await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(other)})});lookupPickerRelease([{name:'stale.cube',getFile:async()=>new File([${JSON.stringify(cube)}],'stale.cube')}])`);await idle();
-    assert.deepEqual((await save()).document.layers,beforeStale.document.layers,'Deferred import cannot mutate a retired property owner');
+    assert.deepEqual(authoredIdentity(await save()),authoredIdentity(beforeStale),'Deferred import cannot mutate a retired property owner');
     await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(owner)})})`);await settle();
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'inverse.cube',getFile:async()=>new File([${JSON.stringify(cube)}],'inverse.cube')}];`);await click('[data-action="import-lookup"]');await idle();
     assert.equal(await evaluate('layerApp.state().layer_properties.resource_name'),'Imported inverse');assert.equal(await evaluate('layerApp.state().layer_properties.resource_selection??null'),null);
     assert.ok(await evaluate(`layerApp.state().layer_properties.controls.some(c=>c.key==='color_space')`));
     const imported=await save();assert.deepEqual(sourceIdentity(imported),originalSources);
     const importedPixel=await pixel();assert.notDeepEqual(importedPixel,original);
-    await evaluate(`window.showOpenFilePicker=async()=>[{name:'imported.capy',getFile:async()=>new File([placementTest.saved],'imported.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');assert.deepEqual(await pixel(),importedPixel,'Archive owns imported resource after file picker is replaced');assert.deepEqual((await save()).resources,imported.resources);
+    await evaluate(`window.showOpenFilePicker=async()=>[{name:'imported.capy',getFile:async()=>new File([placementTest.saved],'imported.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');assert.deepEqual(await pixel(),importedPixel,'Archive owns imported resource after file picker is replaced');const reopened=await save();assert.deepEqual(packageResourceIdentity(reopened),packageResourceIdentity(imported));await selectLookup(reopened);
     const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-import-${width}-${theme}.png`,Buffer.from(shot.data,'base64'));
   }
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');
-  const expected=await save();assert.equal(expected.resources.bindings.length,1);assert.equal(expected.resources.payloads.length,1);assert.ok(expected.resources.payloads[0].bytes>96);
-  const compare=async()=>{const actual=await save();assert.deepEqual(actual.resources,expected.resources,'Worker archives retain LUT descriptors and immutable payload digest');assert.deepEqual(actual.document.layers,expected.document.layers);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));};
+  const expected=await save();assert.equal(packageResources(expected,'capy.lut3d/1').length,1);assert.equal(packageOccurrences(expected).filter(o=>o.data.content.effect&&packageObject(expected,o.data.content.effect).data.values?.resource?.value?.resource).length,1);
+  const lookup=packageResources(expected,'capy.lut3d/1')[0];assert.ok(Number(lookup.data.decoded_bytes??lookup.bytes)>96);
+  const compare=async()=>{
+    const actual=await save();assert.deepEqual(packageResourceIdentity(actual),packageResourceIdentity(expected),'Worker packages retain LUT resource identities, descriptors and checksums');
+    const objects=structuredClone(actual.objects);
+    for(const output of objects.filter(object=>object.type==='capy.output/1')) {
+      const saved=packageObject(expected,output.id);
+      assert.ok(Number.isFinite(output.data.context.elapsed)&&output.data.context.elapsed>=saved.data.context.elapsed,'Each new capture preserves the running output clock');
+      output.data.context.elapsed=saved.data.context.elapsed;
+    }
+    assert.deepEqual(objects,expected.objects);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));
+  };
   const samples=[];
   for(const theme of ['light','dark']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await settle();await invoke('fit_canvas');
@@ -307,7 +338,9 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   await writeFile(`${directory}/lookup-worker.capy`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
   await evaluate(`layerApp.app.save_recovery('lookup-worker-resource-test')`);await call('Page.reload',{ignoreCache:true});await new Promise(resolve=>setTimeout(resolve,1000));
   await wait(`!![...document.querySelectorAll('dialog[open].document-dialog h2')].find(n=>n.textContent==='Recover drawing?')`);
-  await evaluate(`[...document.querySelectorAll('.document-dialog button')].find(n=>n.textContent==='Recover').click()`);await idle();
+  const recoveryTabs=await evaluate('layerApp.app.document_tabs(0).tabs.length');
+  await evaluate(`[...document.querySelectorAll('dialog[open].document-dialog button')].find(n=>n.textContent==='Recover').click()`);
+  await wait(`layerApp.app.document_tabs(0).tabs.length===${recoveryTabs+1}&&layerApp.state().document_file.modified&&layerApp.app.brush_ready()`,true);await idle();
   assert.equal(await evaluate('layerApp.state().document_file.modified'),true);assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
   await install();await invoke('fit_canvas');await compare();assert.deepEqual(await pixel(),samples.at(-1).pixel,'IndexedDB recovery retains resolved LUT pixels');
   await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: native LUT selector/picker presets, cancel/error/stale-owner rejection and four layout/theme imports preserve source/history; worker save/open, GPU recreation and IndexedDB recovery retain resource payload and visible pixels');

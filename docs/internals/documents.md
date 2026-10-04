@@ -14,12 +14,20 @@ is attached.
 
 ## Artwork and history
 
-[`Document`](../../crates/layer-core/src/lib.rs) contains the layer structure and
-its drawing data. Paint layers contain strokes and ordered operations; image
-layers refer to source assets; groups organize child layers. Layer properties
-control visibility, opacity, blending, clipping and related composition behavior.
-[Layer definitions](../../crates/layer-core/src/layers.rs) also describe masks and
-selection coverage.
+[`Document`](../../crates/layer-core/src/lib.rs) owns typed authored stores and
+working state. A stack owns ordered occurrence handles. An occurrence owns its
+name, placement and composition properties, and refers to a paint source, child
+stack, effect application or saved selection. Paper is an ordinary Solid Color
+effect occurrence. Paint and coverage sources
+own immutable raster roots; masks bind a coverage source to an occurrence.
+Working selection and explicit `SourceTarget` belong to working state.
+[Authored records](../reference/authored-model.md) define these ownership rules.
+
+`SceneView` lends those records and their derived membership index directly to
+the existing stack evaluator. `SceneSnapshot` retains immutable roots, scope and
+evaluation context for previews, bakes, export and source-aware analysis.
+A raw source scope reads source pixels independently of occurrence opacity,
+visibility or blending, while preserving the source's placed geometry.
 
 With a filter selected, a stroke paints the first artwork layer below it in the
 same group, or its clipping base. Groups, maskless generators, locked bases and
@@ -76,7 +84,7 @@ lies below the group in the reference composite.
 
 ### Blending
 
-A document's **Blending** (`Document.blend_space`) sets how its layers combine:
+A document's **Blending** (`Composition.blend`) sets how its layers combine:
 - **Perceptual**, like Photoshop and Clip Studio Paint: opacity, masks, groups,
   clipping and blend modes work on the document's encoded values, so black at
   50% over white is middle gray (8-bit 128) and Soft Light follows Photoshop's
@@ -85,12 +93,11 @@ A document's **Blending** (`Document.blend_space`) sets how its layers combine:
   on encoded values too. New 8- and 16-bit documents and photos opened as
   documents start Perceptual.
 - **Linear light**, physically based: layers combine in linear document RGB.
-  Float documents always blend this way, and documents saved before the setting
-  existed read as Linear.
+  Float documents always blend this way. An omitted wire blend value means Linear.
 
 Painted pixels keep their values either way; only their combination changes
 ([blend space](rendering.md#blend-space)). **Edit ▸ Blending** switches it in
-one undo step (`Edit::SetBlendSpace`), refused at float depth with "Float
+one undo step (a composition record edit), refused at float depth with "Float
 documents blend in linear light". Converting a document to float makes it
 Linear in the same step, and undo restores both. Paint color mixing follows each
 brush's Color mixing choice instead, and resampling, Liquify and filters that
@@ -182,20 +189,18 @@ artwork as modified.
 
 ## Editable projects
 
-[`Project`](../../crates/layer-core/src/project.rs) packages document data with
-the reachable source assets in a `.capy` file. It retains imported images, custom
-brush textures and embedded filter definitions, so reopening a drawing does not
-silently use a different version of a filter from the installed catalog.
+An immutable `ArtworkCapture` retains the authored roots, output evaluation
+context and exact editor checkpoint. `PreparedPackage` visits their resources and
+writes the portable `.capy` manifest and lossless payloads. Imported originals,
+embedded filter definitions, profiles, material state and saved selections remain
+editable after reopening. Source data can be saved without rendering a preview.
 
-The project format does not store GPU handles, preferences or the undo stack.
-It stores the drawing's editable state, not the application's entire session.
-Source images and textures are available without reading the rendered canvas back from GPU memory.
-Exporting a PNG is a separate operation that flattens the image through an explicit
-GPU readback.
-
-The [project format reference](../reference/project-format.md) describes the
-container, validation limits and replay requirements. The format is still in
-development; compatibility across unreleased builds is not guaranteed.
+The manifest excludes GPU handles, preferences, working selection and undo
+history. Shared file admission validates the artwork and color interpretation
+before renderer preparation. Unsupported artwork stays a preserved package with
+its original bytes and any separately verified preview; it cannot silently
+replace an editable document. See [project saving](../reference/project-format.md)
+and the [wire contract](../reference/capy-package.md).
 
 ## File operations
 

@@ -7,31 +7,37 @@ fn native_penup_and_following_strokes() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.NativePenupPacing");
     let mut project = new_drawing(4096, 4096, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: match std::env::var("LAYER_DRAWING_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 },
     };
-    project.document.blend_space = project.document.blend_space.for_depth(project.document.color.depth);
+    composition_mut(&mut project).blend = project.composition().blend.for_depth(project.composition().color.depth);
+    let stack = project.composition().result;
     for _ in 0..31 {
-        let id = project.document.allocate_layer_id();
-        let position = project.document.layers.len() - 1;
-        project
-            .document
-            .layers
-            .insert(position, layer_core::Layer::paint(id, "pacing layer"));
+        let source = project.artwork.paint.insert(layer_core::PortableId::random(), layer_core::PaintSource {
+            domain: [4096; 2], raster: Default::default(), original: None, operations: Default::default(),
+        }).unwrap();
+        let occurrence = project.artwork.occurrences.insert(layer_core::PortableId::random(),
+            layer_core::Occurrence::new(layer_core::OccurrenceContent::Paint(source), "pacing layer")).unwrap();
+        let entries = &mut project.artwork.stacks.get_mut(stack).unwrap().entries;
+        entries.insert(entries.len() - 1, occurrence);
     }
+    let working = project.working.clone();
+    project = layer_core::Document::from_artwork(project.artwork).unwrap();
+    project.working = working;
     let photo = std::env::var("LAYER_PEN_PROJECT").ok();
     if let Some(path) = &photo {
-        project = layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap();
+        project = open_native_document(std::fs::File::open(path).unwrap());
         if std::env::var_os("LAYER_PEN_ON_SOURCE").is_some() {
-            project.document.active_layer = project.document.layers.iter()
-                .find(|layer| layer.source.is_some()).unwrap().id;
+            let source = project.scene().order().iter().copied().find(|h| project.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).unwrap();
+            project.working.occurrence = Some(source);
+            project.working.target = project.scene().source_target(source);
         }
     }
-    let extent = [project.document.width, project.document.height];
-    let color = project.document.color;
+    let extent = project.composition().size;
+    let color = project.composition().color;
     let depth = color.depth;
-    let paint_layers = project.document.layers.len();
+    let paint_layers = project.scene().order().len();
     let preset = if photo.is_some() { layer_core::DefaultBrushPreset::GPen }
         else { layer_core::DefaultBrushPreset::PaletteKnife };
     let diameter = std::env::var("LAYER_PEN_BRUSH_PX").ok().map(|v| v.parse().unwrap())
@@ -66,7 +72,7 @@ fn native_penup_and_following_strokes() {
     }
     assert_eq!(state(&w).brush.diameter, diameter, "benchmark brush diameter");
     assert_eq!(state(&w).brush.preset, preset as u32, "benchmark brush preset");
-    if ui_session(&w).engine().document().color.depth.is_float() {
+    if ui_session(&w).engine().document().composition().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
                 layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
@@ -182,14 +188,7 @@ fn native_penup_and_following_strokes() {
             let gpu = w.gpu.borrow();
             let engine = gpu.as_ref().unwrap().session.engine();
             if engine.metrics().committed_strokes == expected {
-                let root = engine
-                    .document()
-                    .layers
-                    .iter()
-                    .find(|l| l.id == engine.document().active_layer)
-                    .unwrap()
-                    .raster
-                    .clone();
+                let root = active_raster(engine.document()).clone();
                 assert!(!root.is_empty(), "contact must create raster paint");
                 pending.push((stroke, root));
                 break;
@@ -272,7 +271,7 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};
     let app = native_test_app("art.capycanvas.TerminalWake");
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
@@ -292,7 +291,7 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
                         .paint_ready(e.document(), e.configured_brush(), false)
                     && !e.has_pending_input()
                     && !e.has_pending_document_edits()
-                    && e.document().layers[0].raster.host_backed()
+                    && active_raster(e.document()).host_backed()
             });
             if ready && w.frame_timer.borrow().is_none() {
                 break;
@@ -301,14 +300,7 @@ fn native_terminal_wake_preserves_commit_cancel_and_idle() {
         }
     };
     settle();
-    let root = || {
-        ui_session(&w)
-            .engine()
-            .document()
-            .layers[0]
-            .raster
-            .clone()
-    };
+    let root = || active_raster(ui_session(&w).engine().document()).clone();
     let committed = || {
         ui_session(&w)
             .engine()

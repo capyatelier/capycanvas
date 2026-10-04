@@ -85,9 +85,13 @@ fn proof_refusals_retain_real_producer_meanings_across_languages() {
     refusal(&mut s, result, json!({"ProofAdmission":"canvas_interaction"}));
     s.pen(event(&s, 2, PenPhase::Cancel, 0.)).unwrap();
 
-    let mut document = layer_core::Document::new("HDR", 32, 32, layer_core::DocumentNames {paint:"Current ink".into(), paper:"Paper".into()});
-    document.color.depth = SampleDepth::F32;
-    let mut hdr = UiSession::new(Recorder {color:document.color, ..Default::default()}, document, [32,32], Platform::Web).unwrap();
+    let mut document = layer_core::Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames {paint:"Current ink".into(), paper:"Paper".into()});
+    let mut composition = document.composition().clone();
+    composition.color.depth = SampleDepth::F32;
+    let color = composition.color;
+    document.apply(layer_core::Edit::Composition(layer_core::RecordChange::replace(
+        &document.artwork.compositions, document.artwork.root, Some(composition)).unwrap())).unwrap();
+    let mut hdr = UiSession::new(Recorder {color, ..Default::default()}, document, [32,32], Platform::Web).unwrap();
     let result = hdr.set_sdr_rendition(SdrRendition {exposure:13., ..Default::default()});
     refusal(&mut hdr, result, json!("ProofInvalidRendition"));
     let checkpoint = hdr.engine().checkpoint();

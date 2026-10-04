@@ -7,7 +7,7 @@ use photo_edit::{choose, document, shown, start};
 fn painted(w: &Rc<Workspace>) -> [f32; 2] {
     let (width, height) = {
         let doc = document(w);
-        (doc.width as f32, doc.height as f32)
+        (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
     };
     w.dispatch(UiAction::Invoke { command: CommandId::Pen });
     w.dispatch(UiAction::SetBrushSize { value: 60. });
@@ -16,8 +16,8 @@ fn painted(w: &Rc<Workspace>) -> [f32; 2] {
     w.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } });
     w.dispatch(UiAction::SetColor { rgba: [0.9, 0.6, 0.05, 0.7] });
     native_pen_path(w, &(0..=16).map(|i| [width * 0.5, height * (0.2 + 0.0375 * i as f32)]).collect::<Vec<_>>());
-    let count = document(w).layers.len();
-    until(|| document(w).layers.iter().all(|l| l.raster.try_data().is_some()), "both strokes are captured");
+    let count = document(w).scene().order().len();
+    until(|| document(w).artwork.paint.iter().all(|(_, _, p)| p.raster.try_data().is_some()), "both strokes are captured");
     pump(300);
     assert!(count >= 3);
     [width * 0.5, height * 0.5]
@@ -45,18 +45,18 @@ fn native_merge_down_from_ctrl_e_and_the_layer_menu() {
         {"key": 0xffe3, "down": true}, {"key": 0x65, "down": true},
         {"key": 0x65, "down": false}, {"key": 0xffe3, "down": false}
     ]));
-    until(|| document(&w).layers.len() + 1 == before.layers.len(), "Ctrl+E merges down");
+    until(|| document(&w).scene().order().len() + 1 == before.scene().order().len(), "Ctrl+E merges down");
     until(|| !ui_session(&w).engine().has_pending_document_edits(), "the merge runs");
     pump(300);
     let merged = shown(&w, center);
     assert!(crossing.iter().zip(merged).all(|(a, b)| a.abs_diff(b) <= 1), "{crossing:?} {merged:?}");
     let doc = document(&w);
-    let result = doc.layer(doc.active_layer).unwrap();
+    let result = doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap();
     assert!(result.mask.is_none() && result.opacity == 1.);
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layers.len() == before.layers.len(), "one undo step restores both layers");
+    until(|| document(&w).scene().order().len() == before.scene().order().len(), "one undo step restores both layers");
     choose(&w, &mut input, "Layer", &["Merge Down"]);
-    until(|| document(&w).layers.len() + 1 == before.layers.len(), "Layer › Merge Down merges with the mouse");
+    until(|| document(&w).scene().order().len() + 1 == before.scene().order().len(), "Layer › Merge Down merges with the mouse");
     close(&w, &input);
 }
 
@@ -65,27 +65,27 @@ fn native_merge_down_from_ctrl_e_and_the_layer_menu() {
 fn native_flatten_image_confirms_discarding_hidden_layers() {
     let (_app, w, mut input) = start("art.capycanvas.Flatten");
     let center = painted(&w);
-    let hidden = document(&w).active_layer;
-    w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: hidden.0, value: false } });
+    let hidden = document(&w).working.occurrence.unwrap();
+    w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: layer_ui::occurrence_token(hidden), value: false } });
     pump(300);
     let visible = shown(&w, center);
     choose(&w, &mut input, "Layer", &["Flatten Image"]);
     until(|| w.notice.root.is_visible(), "Flatten Image asks first");
     assert_eq!(state(&w).notice.unwrap().text, "Flattening discards 1 hidden layer");
-    assert!(document(&w).layer(hidden).is_some(), "nothing changes before it is accepted");
+    assert!(document(&w).scene().occurrence(hidden).is_some(), "nothing changes before it is accepted");
     let button = find_named(w.notice.root.upcast_ref(), "canvas-notice-action").and_downcast::<gtk::Button>().unwrap();
     assert_eq!(button.label().as_deref(), Some("Flatten"));
     input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
     until(
-        || document(&w).layers.iter().filter(|l| l.id != layer_core::LayerId(2)).count() == 1,
+        || document(&w).scene().order().len() - document(&w).scene().constant_backdrop().len() == 1,
         "Flatten leaves one layer over the paper",
     );
-    assert!(document(&w).layer(hidden).is_none(), "the hidden layer is discarded");
+    assert!(document(&w).scene().occurrence(hidden).is_none(), "the hidden layer is discarded");
     pump(300);
     let flat = shown(&w, center);
     assert!(visible.iter().zip(flat).all(|(a, b)| a.abs_diff(b) <= 1), "{visible:?} {flat:?}");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layer(hidden).is_some(), "one undo step restores every layer");
+    until(|| document(&w).scene().occurrence(hidden).is_some(), "one undo step restores every layer");
     close(&w, &input);
 }
 
@@ -97,11 +97,11 @@ fn native_stamp_visible_adds_the_visible_image_on_top() {
     let before = document(&w);
     let crossing = shown(&w, center);
     choose(&w, &mut input, "Layer", &["Stamp Visible"]);
-    until(|| document(&w).layers.len() == before.layers.len() + 1, "Stamp Visible adds a layer");
+    until(|| document(&w).scene().order().len() == before.scene().order().len() + 1, "Stamp Visible adds a layer");
     let doc = document(&w);
-    assert_eq!((doc.layers[0].id, doc.layers[0].name.as_ref()), (doc.active_layer, "Visible"));
-    for layer in before.layers.iter().filter(|l| l.id != layer_core::LayerId(2)) {
-        w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: layer.id.0, value: false } });
+    assert_eq!((doc.scene().order()[0], occurrence_at(&doc, 0).name.as_ref()), (doc.working.occurrence.unwrap(), "Visible"));
+    for &handle in before.scene().order().iter().filter(|h| !before.scene().constant_backdrop().contains(*h)) {
+        w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: layer_ui::occurrence_token(handle), value: false } });
     }
     pump(300);
     let stamp = shown(&w, center);
@@ -116,7 +116,8 @@ fn native_stamp_visible_adds_the_visible_image_on_top() {
 fn native_merge_timing() {
     let app = native_test_app("art.capycanvas.MergeTiming");
     let mut project = native_navigation::photo([6000, 4000]);
-    project.document.layers.retain(|layer| layer.source.is_some() || layer.id == layer_core::LayerId(2));
+    let remove: Vec<_> = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_none_or(|p| p.original.is_none()) && !project.scene().constant_backdrop().contains(h)).collect();
+    if !remove.is_empty() { let edit = project.delete_layers_edit(&remove).unwrap(); project.apply(edit).unwrap(); }
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
@@ -134,10 +135,10 @@ fn native_merge_timing() {
         let gpu = w.gpu.borrow();
         let engine = gpu.as_ref().unwrap().session.engine();
         !engine.has_pending_document_edits()
-            && engine.document().layers.iter().all(|l| l.raster.try_data().is_some_and(|d| d.is_ok_and(|d| d.host_backed())))
+            && engine.document().scene().targets().filter_map(|t| engine.document().target_raster(t)).all(|r| r.try_data().is_some_and(|d| d.is_ok_and(|d| d.host_backed())))
     };
     until(|| idle(&w), "the strokes are captured");
-    assert_eq!(document(&w).layers.len(), 11, "ten layers over the paper");
+    assert_eq!(document(&w).scene().order().len(), 11, "ten layers over the paper");
     for command in [CommandId::MergeVisible, CommandId::FlattenImage] {
         pump(500);
         let stall = Rc::new(Cell::new(Duration::ZERO));
@@ -150,7 +151,7 @@ fn native_merge_timing() {
         let start = Instant::now();
         w.dispatch(UiAction::Invoke { command });
         let dispatch = start.elapsed();
-        assert_eq!(document(&w).layers.len(), 2, "the merge replaces the layers");
+        assert_eq!(document(&w).scene().order().len(), 2, "the merge replaces the layers");
         until(|| idle(&w), "the merged layer is captured");
         let captured = start.elapsed();
         tick.remove();
@@ -161,7 +162,7 @@ fn native_merge_timing() {
             stall.get().as_secs_f64() * 1e3,
         );
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-        until(|| document(&w).layers.len() == 11, "undo restores the layers");
+        until(|| document(&w).scene().order().len() == 11, "undo restores the layers");
         until(|| idle(&w), "the restored layers are ready");
     }
     w.window.close();

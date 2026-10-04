@@ -30,7 +30,7 @@ struct Overview {
 }
 
 struct Prepared {
-    layer: LayerId,
+    layer: SourceTarget,
     revision: u64,
     source: Weak<SourceImage>,
     extent: [u32; 2],
@@ -182,7 +182,7 @@ impl SourceThumbnails {
     pub fn prepare(
         &mut self,
         r: &mut WgpuRasterizer,
-        layer: LayerId,
+        layer: SourceTarget,
         encoder: &mut crate::submission::CommandEncoder,
         mut tile_limit: usize,
     ) -> Result<bool, GpuRasterError> {
@@ -255,7 +255,7 @@ impl SourceThumbnails {
     fn prepare_paint(
         &mut self,
         r: &mut WgpuRasterizer,
-        layer: LayerId,
+        layer: SourceTarget,
         overview: &Overview,
         encoder: &mut crate::submission::CommandEncoder,
         tile_limit: usize,
@@ -302,7 +302,7 @@ impl SourceThumbnails {
     pub fn render(
         &mut self,
         r: &mut WgpuRasterizer,
-        layer: LayerId,
+        layer: SourceTarget,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
         self.prepare(r, layer, encoder, usize::MAX)?;

@@ -2,7 +2,7 @@
 //! and retained-source edits, shared by the native hosts.
 use crate::{NativeHost, Renderer, open::PREPARE_DEADLINE};
 use layer_core::{
-    BrushSnapshot, Project,
+    BrushSnapshot, Document,
     color::{ColorProfile, RgbSpace, source::SourceImage},
 };
 use layer_render::{CanvasRenderer, ViewState};
@@ -22,20 +22,33 @@ pub struct Preview {
     pub pixels: Vec<u8>,
 }
 
+pub fn capture_document(document: &Document) -> layer_core::authored::ArtworkCapture {
+    capture_document_at(document, document.output().context.clone())
+}
+
+pub fn capture_document_at(document: &Document, mut context: layer_core::authored::EvaluationContext) -> layer_core::authored::ArtworkCapture {
+    context.retain_effects(&document.artwork);
+    let mut artwork = document.artwork.clone();
+    artwork.outputs.get_mut(artwork.default_output).expect("Admitted output").context = context;
+    layer_core::authored::ArtworkCapture {artwork: Arc::new(artwork), checkpoint: layer_core::authored::CaptureCheckpoint {
+        owner: document.owner, document: document.artwork.id, session_generation: 0,
+        artwork_generation: document.revision, working_generation: document.working.generation, edit_checkpoint: 0,
+    }}
+}
+
 pub fn compare(
     gpu: &SnapshotGpu,
-    projects: [&Project; 2],
-    time: f32,
+    documents: [&Document; 2],
+    context: layer_core::authored::EvaluationContext,
     space: RgbSpace,
     control: CaptureControl,
 ) -> Result<Vec<Preview>, String> {
-    projects
+    documents
         .into_iter()
-        .map(|project| {
+        .map(|document| {
             let mut snapshot = gpu
                 .capture(
-                    project.clone(),
-                    time,
+                    capture_document_at(document, context.clone()),
                     control.clone(),
                 )
                 .map_err(|e| e.to_string())?;
@@ -88,7 +101,6 @@ pub struct ColorTask {
     device: wgpu::Device,
     brush: BrushSnapshot,
     view: ViewState,
-    time: f32,
     space: RgbSpace,
     previews: Vec<Preview>,
     clipped: u64,
@@ -121,7 +133,6 @@ impl ColorTask {
             device: gpu.device().clone(),
             brush: session.engine().configured_brush().clone(),
             view: session.engine().view(),
-            time: session.engine().animation_time(),
             space,
             previews: Vec::new(),
             clipped: 0,
@@ -142,8 +153,7 @@ impl ColorTask {
             ColorPreparation::Flatten { color, options } => Some(
                 self.gpu
                     .capture(
-                        self.workflow.original.clone(),
-                        self.time,
+                        capture_document_at(&self.workflow.original, self.workflow.context.clone()),
                         control.clone(),
                     )
                     .map_err(|e| e.to_string())?
@@ -158,7 +168,7 @@ impl ColorTask {
         };
         if let Some(prepared) = prepared {
             self.clipped = prepared.statistics.clipped_channels;
-            self.workflow.candidate = Some(prepared.project);
+            self.workflow.candidate = Some(prepared.document);
         }
         let project = self
             .workflow
@@ -168,8 +178,8 @@ impl ColorTask {
         let view = self.view;
         let mut brush = self.brush.clone();
         layer_render::remap_document_colors(
-            self.workflow.original.document.color.space,
-            project.document.color.space,
+            self.workflow.original.composition().color.space,
+            project.composition().color.space,
             &mut brush,
         );
         if !self.workflow.is_history() {
@@ -179,7 +189,7 @@ impl ColorTask {
                     &self.workflow.original,
                     project,
                 ],
-                self.time,
+                self.workflow.context.clone(),
                 self.space,
                 control.clone(),
             )?;
@@ -187,7 +197,7 @@ impl ColorTask {
         if !copy {
             let mut canvas = self
                 .gpu
-                .color_canvas(project.clone(), &brush, view, self.time, control)
+                .color_canvas(project.clone(), self.workflow.context.clone(), &brush, view, control)
                 .map_err(|e| e.to_string())?;
             let deadline = Instant::now() + PREPARE_DEADLINE;
             while !canvas.poll().map_err(|e| e.to_string())? {
@@ -214,15 +224,17 @@ impl ColorTask {
 
     pub fn details(&self) -> Value {
         json!({
-            "color": self.workflow.original.document.color,
-            "result": self.workflow.candidate.as_ref().map(|p| p.document.color),
+            "color": self.workflow.original.composition().color,
+            "result": self.workflow.candidate.as_ref().map(|p| p.composition().color),
             "clipped_channels": self.clipped,
             "copy": self.workflow.is_copy(),
         })
     }
 
-    pub fn write_copy(&self, stream: impl Write, cancelled: bool) -> Result<(), String> {
-        self.workflow.copy_project(cancelled)?.write(stream)
+    pub fn write_copy(&self, mut stream: impl Write, cancelled: bool) -> Result<(), String> {
+        let capture = capture_document_at(self.workflow.copy_project(cancelled)?, self.workflow.context.clone());
+        let cancel = std::sync::atomic::AtomicBool::new(cancelled);
+        layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancel)?.write(&mut stream, &cancel)
     }
 
     /// Publishes the prepared renderer, document and history in one owner turn.
@@ -254,11 +266,10 @@ impl ColorTask {
 pub struct SourceTask {
     workflow: SourceWorkflow,
     source_profile_name: Option<Option<String>>,
-    candidate: Option<Project>,
+    candidate: Option<Document>,
     converted: Option<Arc<SourceImage>>,
     gpu: SnapshotGpu,
     device: wgpu::Device,
-    time: f32,
     space: RgbSpace,
     clipped: u64,
     previews: Vec<Preview>,
@@ -292,7 +303,6 @@ impl SourceTask {
             converted: None,
             gpu: gpu.snapshot_gpu(),
             device: gpu.device().clone(),
-            time: session.engine().animation_time(),
             space,
             clipped: 0,
             previews: Vec::new(),
@@ -344,7 +354,7 @@ impl SourceTask {
                 &self.workflow.project,
                 candidate,
             ],
-            self.time,
+            self.workflow.context.clone(),
             self.space,
             control,
         )?;
@@ -364,7 +374,7 @@ impl SourceTask {
         };
         let source_profile_name = self.source_profile_name.as_ref().ok_or("Source details are not prepared")?;
         Ok(json!({
-            "color": self.workflow.project.document.color,
+            "color": self.workflow.project.composition().color,
             "profile_builtin": builtin,
             "channels": original.interpretation.channels,
             "depth": original.interpretation.depth,
@@ -407,8 +417,8 @@ mod tests {
     use layer_ui::{CommandId, UiAction};
 
     fn host() -> NativeHost {
-        let document = layer_core::Document::new("Tasks", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Mac).unwrap();
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, [64, 48], layer_ui::Platform::Mac).unwrap();
         host.session.frame(0, 0).unwrap();
@@ -456,7 +466,7 @@ mod tests {
             .unwrap();
         assert!(task.adopt(&mut host, false, || true).is_err());
         assert_eq!(
-            host.session.engine().document().color,
+            host.session.engine().document().composition().color,
             DocumentColor::default()
         );
         let mut task = ColorTask::capture(&host.session, None, RgbSpace::Srgb).unwrap();
@@ -464,7 +474,7 @@ mod tests {
         assert!(task.adopt(&mut host, false, || false).is_err());
         task.adopt(&mut host, false, || true).unwrap();
         assert_eq!(
-            host.session.engine().document().color.space,
+            host.session.engine().document().composition().color.space,
             RgbSpace::DisplayP3
         );
         assert!(host.session.state().requests.is_empty());
@@ -489,7 +499,7 @@ mod tests {
             .import_layer_source("Photo", source.finish().unwrap())
             .unwrap();
         host.session.frame(0, 0).unwrap();
-        let layer = host.session.engine().document().active_layer;
+        let layer = host.session.engine().document().working.target.unwrap();
         invoke(&mut host, CommandId::RepairSourceProfile);
         let mut task = SourceTask::capture(&host.session, None, RgbSpace::Srgb).unwrap();
         assert!(task.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).is_err());
@@ -510,9 +520,10 @@ mod tests {
         assert_ne!(task.previews()[0].pixels, task.previews()[1].pixels);
         assert_eq!(task.details_localized(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap()["adds_layer"], false);
         task.adopt(&mut host, false, || true).unwrap();
-        let repaired = host.session.engine().document().layer(layer).unwrap();
+        let layer_core::SourceTarget::Paint(handle) = layer else { panic!("paint target"); };
+        let repaired = host.session.engine().document().artwork.paint.get(handle).unwrap();
         assert_eq!(
-            repaired.source.as_ref().unwrap().interpretation.profile,
+            repaired.original.as_ref().unwrap().interpretation.profile,
             ColorProfile::Builtin(RgbSpace::DisplayP3)
         );
         assert!(host.session.state().requests.is_empty());

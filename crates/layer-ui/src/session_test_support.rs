@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{AssetId, Point};
+use layer_core::{AssetId, Point, OccurrenceHandle, SourceTarget, RasterOperation, SceneSnapshot, EvaluationContext};
 use layer_engine::{SampleFlags, ToolKind};
 use layer_render::{BackendError, FilterPreviewImage, FilterPreviewRequest, FramePacket, HostImage};
 
@@ -11,14 +11,14 @@ pub(crate) struct Recorder {
     pub(crate) analysis_accepts: usize,
     pub(crate) analysis_cancels: usize,
     pub(crate) analysis_retain_fails: bool,
-    pub(crate) analysis_retained: Vec<Vec<layer_core::LayerId>>,
+    pub(crate) analysis_retained: Vec<Vec<OccurrenceHandle>>,
     pub(crate) clipping_previews: Vec<(bool,bool)>,
     pub(crate) settling: bool,
     pub(crate) color: layer_core::color::DocumentColor,
     pub(crate) prepared_color: Option<layer_core::color::DocumentColor>,
     pub(crate) tiled_sources: bool,
     pub(crate) telemetry_enabled: bool,
-    pub(crate) pending_operations: Vec<(layer_core::LayerId, layer_core::LayerOperation)>,
+    pub(crate) pending_operations: Vec<(SourceTarget, RasterOperation)>,
     pub(crate) last_style: Option<layer_render::DabStyle>,
     pub(crate) recorded_dabs: Vec<layer_render::Dab>,
     pub(crate) dabs: usize,
@@ -46,8 +46,8 @@ pub(crate) struct Recorder {
     pub(crate) snapshot_wait: bool,
     pub(crate) snapshot_fails: bool,
     pub(crate) transform: Option<layer_render::TransformPreview>,
-    pub(crate) moving_layer: Option<layer_core::LayerId>,
-    pub(crate) moving_pixels: Option<(layer_core::LayerId, layer_core::Selection)>,
+    pub(crate) moving_layer: Option<OccurrenceHandle>,
+    pub(crate) moving_pixels: Option<(SourceTarget, layer_core::Selection)>,
     pub(crate) overlay: Option<layer_render::SelectionOverlay>,
     pub(crate) filter_preview: Option<FilterPreviewRequest>,
     pub(crate) filter_preview_ready: Option<Result<FilterPreviewImage, BackendError>>,
@@ -57,10 +57,13 @@ pub(crate) struct Recorder {
     pub(crate) reject_filter_previews: bool,
     pub(crate) max_dimension: Option<u32>,
     pub(crate) crop_overlay: Option<layer_render::CropOverlay>,
-    pub(crate) frame_layers: Vec<layer_core::Layer>,
+    pub(crate) frame_scene: Option<SceneSnapshot>,
+    pub(crate) evaluation: EvaluationContext,
 }
 impl CanvasRenderer for Recorder {
     type Error = BackendError;
+    fn evaluation_context(&self) -> EvaluationContext { self.evaluation.clone() }
+    fn seed_evaluation_context(&mut self, context: EvaluationContext) { self.evaluation = context; }
     fn set_clipping_preview(&mut self, shadows:bool, highlights:bool) {self.clipping_previews.push((shadows,highlights));}
     fn has_pending_submission(&self) -> bool { self.settling }
     fn can_submit(&self) -> bool { !self.settling }
@@ -85,10 +88,10 @@ impl CanvasRenderer for Recorder {
         self.transform = preview.cloned();
         Ok(())
     }
-    fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
+    fn prepare_moving_layer(&mut self, layer: Option<OccurrenceHandle>) {
         self.moving_layer = layer;
     }
-    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+    fn prepare_moving_pixels(&mut self, pixels: Option<(SourceTarget, layer_core::Selection)>) {
         self.moving_pixels = pixels;
     }
     fn paint_selection(&mut self,update:&layer_render::SelectionPaint)->Result<bool,Self::Error> {
@@ -115,7 +118,7 @@ impl CanvasRenderer for Recorder {
     fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> {self.analysis_reply.take()}
     fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> {self.analysis_accepts+=1;Ok(())}
     fn cancel_effect_analysis(&mut self) {self.analysis_cancels+=1;self.analysis_reply=None;}
-    fn retain_effect_analyses(&mut self, layers:&[layer_core::LayerId]) -> Result<(),Self::Error> {self.analysis_retained.push(layers.to_vec());if self.analysis_retain_fails {Err(BackendError("retain failed"))} else {Ok(())}}
+    fn retain_effect_analyses(&mut self, layers:&[OccurrenceHandle]) -> Result<(),Self::Error> {self.analysis_retained.push(layers.to_vec());if self.analysis_retain_fails {Err(BackendError("retain failed"))} else {Ok(())}}
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
         if self.snapshot_fails { return Err(BackendError("snapshot request failed")); }
         if self.snapshot_wait { return Ok(false); }
@@ -207,19 +210,12 @@ impl CanvasRenderer for Recorder {
     }
     fn release_asset(&mut self, _: &AssetId) {}
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error> {
-        self.frame_layers = packet.layers.to_vec();
+        self.evaluation.elapsed = packet.time_seconds;
+        self.frame_scene = Some(packet.scene.snapshot(self.evaluation.clone()));
         self.pending_operations.clear();
         for batch in packet.dab_batches {
-            if let layer_render::DabBatchKind::LayerOperation(index) = batch.kind {
-                let layer = packet
-                    .layers
-                    .iter()
-                    .find(|l| l.target_operations(batch.layer_id).is_some())
-                    .unwrap();
-                self.pending_operations.push((
-                    batch.layer_id,
-                    layer.target_operations(batch.layer_id).unwrap()[index as usize].clone(),
-                ));
+            if let layer_render::DabBatchKind::RasterOperation(index) = batch.kind {
+                self.pending_operations.push((batch.target, packet.scene.operations(batch.target).unwrap()[index as usize].clone()));
             }
         }
         self.dabs += packet.dabs.len();
@@ -227,28 +223,14 @@ impl CanvasRenderer for Recorder {
             self.last_style = Some(batch.style.clone());
         }
         self.recorded_dabs.extend_from_slice(packet.dabs);
-        for layer in packet.layers.iter().filter(|_| packet.commit_rasters) {
-            for (mask, revision) in std::iter::once((false, &layer.raster))
-                .chain(layer.mask.iter().map(|m| (true, &m.raster)))
-            {
+        for target in packet.scene.targets().filter(|_| packet.commit_rasters) {
+            if let Some(revision) = packet.scene.raster(target) {
                 if revision.try_data().is_none() {
                     use layer_core::raster::*;
-                    let plane = if mask {
-                        RasterPlane::Mask
-                    } else {
-                        RasterPlane::Color
-                    };
+                    let plane = if target.is_coverage() { RasterPlane::Mask } else { RasterPlane::Color };
                     let bytes = vec![128; plane.descriptor(self.document_color()).byte_len([TILE_SIZE; 2]).unwrap()];
                     let mut data = RasterData::default();
-                    data.tiles.insert(
-                        TileKey {
-                            plane,
-                            coordinate: [0, 0],
-                        },
-                        RasterTile::backed(
-                            TileBlob::encode(plane.descriptor(self.document_color()), &bytes).unwrap(),
-                        ),
-                    );
+                    data.tiles.insert(TileKey { plane, coordinate: [0, 0] }, RasterTile::backed(TileBlob::encode(plane.descriptor(self.document_color()), &bytes).unwrap()));
                     revision.publish(Ok(data)).unwrap();
                 }
             }
@@ -260,7 +242,7 @@ impl CanvasRenderer for Recorder {
 pub(crate) fn session(platform: Platform) -> UiSession<Recorder> {
     UiSession::new(
         Recorder::default(),
-        Document::new("test", 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+        Document::new(layer_core::PortableId::random(), 1000, 1000, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         [1000, 1000],
         platform,
     )
@@ -324,10 +306,10 @@ pub(crate) fn finish_fixture_content_bounds(session: &mut UiSession<Recorder>) -
         regions |= session.frame(tick, tick).unwrap().regions;
         let request = session.engine.backend().bounds_requests.last().unwrap();
         let layer_core::ContentScope::Target(target) = request.scope else { panic!("fixture target bounds"); };
-        let document = &request.document;
-        let bounds = document.selection.as_ref().map_or_else(
-            || layer_core::Rect::from_extent(document.target_extent(target)),
-            |selection| document.affine_edit_transform(target).unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
+        let scene = request.snapshot.view();
+        let bounds = request.selection.as_ref().map_or_else(
+            || layer_core::Rect::from_extent(scene.target_extent(target)),
+            |selection| scene.target_geometry(target).as_affine().unwrap().inverse().unwrap().bounds(selection.coverage_bounds()),
         );
         session.engine.backend_mut().bounds_reply = Some(Ok(bounds));
         regions |= session.frame(tick + 1, tick + 1).unwrap().regions;
@@ -432,7 +414,9 @@ pub(crate) fn rectangle([x0, y0, x1, y1]: [f32; 4]) -> layer_core::Selection {
 }
 
 pub(crate) fn select(s: &mut UiSession<Recorder>, selection: impl Into<Option<layer_core::Selection>>) {
-    s.layer_edit(layer_core::Edit::SetSelection(selection.into())).unwrap();
+    let mut working = s.engine.document().working.clone();
+    working.selection = selection.into();
+    s.layer_edit(layer_core::Edit::Working(working)).unwrap();
     s.frame(1, 1).unwrap();
 }
 
@@ -461,13 +445,13 @@ pub(crate) fn tile_anchor(layout: &DockLayout, control: ToolbarControl) -> TileA
         .map(|tile| TileAnchor { panel: panel.id, tile: tile.id })).unwrap()
 }
 
-pub(crate) fn assert_operation_undo_redo(s: &mut UiSession<Recorder>, layer: LayerId, queued: usize, committed: u64, frames: [u64; 2]) {
+pub(crate) fn assert_operation_undo_redo(s: &mut UiSession<Recorder>, target: SourceTarget, queued: usize, committed: u64, frames: [u64; 2]) {
     invoke(s, CommandId::Undo);
     s.frame(frames[0], frames[0]).unwrap();
-    assert_eq!(s.engine.document().layer(layer).unwrap().pending_operations.len(), queued);
+    assert_eq!(s.engine.document().target_operations(target).unwrap().len(), queued);
     invoke(s, CommandId::Redo);
     s.frame(frames[1], frames[1]).unwrap();
-    assert_eq!(s.engine.document().layer(layer).unwrap().raster.identity(), committed);
+    assert_eq!(s.engine.document().target_raster(target).unwrap().identity(), committed);
 }
 
 pub(crate) fn abandon_layer_drag(s: &mut UiSession<Recorder>, cancel: u8) -> bool {
@@ -484,4 +468,55 @@ pub(crate) fn abandon_layer_drag(s: &mut UiSession<Recorder>, cancel: u8) -> boo
     };
     pen_at(s, 1, PenPhase::Up, [90., 100.]);
     handled
+}
+
+
+pub(crate) fn reopen_capture(capture: &layer_core::ArtworkCapture) -> Document {
+    use layer_core::package::{ImmutableBacking, codec::{PreparedPackage, OpenOutcome}};
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let prepared = PreparedPackage::prepare(capture, None, &cancelled).unwrap();
+    let mut bytes = Vec::new(); prepared.write(&mut bytes, &cancelled).unwrap();
+    let chunks = bytes.chunks(layer_core::package::MAX_RANGE_BYTES).map(|chunk| std::sync::Arc::<[u8]>::from(chunk)).collect();
+    let source = layer_core::package::transport::ChunkedBytes::new(chunks).unwrap();
+    let backing = ImmutableBacking::new(std::sync::Arc::new(source)).unwrap();
+    let OpenOutcome::Candidate { artwork, .. } = layer_core::package::codec::open(backing, Default::default(), &cancelled).unwrap() else { panic!("editable artwork"); };
+    let document = Document::from_artwork(artwork).unwrap();
+    let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
+    let rewritten = PreparedPackage::prepare(&capture, None, &cancelled).unwrap();
+    assert_eq!(rewritten.manifest(), prepared.manifest());
+    document
+}
+pub(crate) fn package_roundtrip(document: &Document) -> Document {
+    let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
+    reopen_capture(&capture)
+}
+pub(crate) fn assert_live_artwork_eq(actual: &Document, expected: &Document) {
+    let actual = &actual.artwork; let expected = &expected.artwork;
+    assert_eq!(actual.id, expected.id);
+    assert_eq!(actual.root, expected.root);
+    assert_eq!(actual.default_output, expected.default_output);
+    assert_eq!(actual.metadata, expected.metadata);
+    assert_eq!(actual.extensions, expected.extensions);
+    macro_rules! records { ($($store:ident),+) => { $(assert_eq!(actual.$store.iter().collect::<Vec<_>>(), expected.$store.iter().collect::<Vec<_>>(), stringify!($store));)+ }; }
+    records!(compositions, stacks, occurrences, paint, coverage, effects, definitions, selections, guides, outputs);
+}
+
+pub(crate) fn package_bytes(capture: &layer_core::ArtworkCapture) -> Vec<u8> {
+    let cancelled = std::sync::atomic::AtomicBool::new(false);
+    let prepared = layer_core::package::codec::PreparedPackage::prepare(capture, None, &cancelled).unwrap();
+    let mut bytes = Vec::new(); prepared.write(&mut bytes, &cancelled).unwrap();
+    bytes
+}
+
+pub(crate) fn effect_insertion(document: &Document, draft: layer_core::EffectInstance, name: &str) -> (OccurrenceHandle, layer_core::Edit) {
+    use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent, RecordChange};
+    let artwork=&document.artwork;
+    let definition=RecordChange::insert(&artwork.definitions,Definition {program:draft.program,dimensions:Default::default()});
+    let effect=RecordChange::insert(&artwork.effects,EffectApplication {definition:definition.handle,values:draft.values,domain:document.composition().size});
+    let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Effect(effect.handle),name));
+    let handle=occurrence.handle;
+    let stack_handle=document.composition().result;
+    let mut stack=artwork.stacks.get(stack_handle).unwrap().clone(); stack.entries.insert(0,handle);
+    (handle,layer_core::Edit::Batch(vec![layer_core::Edit::Definition(definition),layer_core::Edit::Effect(effect),layer_core::Edit::Occurrence(occurrence),
+        layer_core::Edit::Stack(RecordChange::replace(&artwork.stacks,stack_handle,Some(stack)).unwrap())]))
 }

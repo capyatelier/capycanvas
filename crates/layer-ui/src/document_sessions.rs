@@ -2,7 +2,7 @@
 //! editor stays in the host's existing canvas slot; every parked owner lives
 //! here. Hosts supply completed capture inventories and schedule I/O/GPU work.
 use crate::{DocumentFileState, DocumentTabs, PixelClip, Localizer, MessageId, FluentArgs};
-use layer_core::{Project, raster_storage::RetainedTiles};
+use layer_core::{Document, raster_storage::RetainedTiles};
 use serde::{Serialize, Deserialize};
 use std::{collections::BTreeMap, ops::Deref};
 
@@ -216,7 +216,7 @@ impl<T> DocumentSessions<T> {
     pub fn storage_completed(&mut self, result: Result<(), String>) {
         self.storage_error = result.err();
     }
-    pub fn admit(&self, active: &RetainedTiles, candidate: &Project) -> Result<(), DocumentSessionError> {
+    pub fn admit(&self, active: &RetainedTiles, candidate: &Document) -> Result<(), DocumentSessionError> {
         self.admission(active).admit(candidate)
     }
     /// Freeze admission inputs before asynchronous decoding. Recheck against the
@@ -311,11 +311,11 @@ pub struct DocumentAdmission {
     storage_error: Option<String>,
 }
 impl DocumentAdmission {
-    pub fn admit(&self, candidate: &Project) -> Result<(), DocumentSessionError> {
+    pub fn admit(&self, candidate: &Document) -> Result<(), DocumentSessionError> {
         if let Some(error) = &self.storage_error {
             return Err(DocumentSessionError::StorageUnavailable { detail: error.clone() });
         }
-        let metadata = layer_core::Editor::new(candidate.document.clone())
+        let metadata = layer_core::Editor::new(candidate.clone())
             .retained_tiles()
             .metadata_bytes;
         if self
@@ -450,9 +450,7 @@ mod tests {
         let mut tabs = DocumentSessions::default();
         tabs.append("first", inventory(), &english());
         tabs.budget.metadata = 1;
-        let project = Project {
-            document: layer_core::Document::new("candidate", 16, 16, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
-        };
+        let project = layer_core::Document::new(layer_core::PortableId::random(), 16, 16, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         assert!(tabs.admit(&inventory(), &project).is_err());
         tabs.storage_completed(Err("Disk full".into()));
         assert!(

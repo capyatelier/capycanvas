@@ -168,3 +168,10 @@ documents-refusal-open-drawings-operation = 開啟繪圖前，請完成目前的
 documents-storage-retained = { $detail }
     繪圖已保留在記憶體中。請釋放磁碟空間或關閉部分分頁。
 documents-recovery-unavailable = 無法恢復：{ $detail }
+documents-package-preserved = This drawing can be viewed, but cannot be edited.
+documents-package-recovered = Only a preview of this drawing could be recovered.
+documents-package-failed = This drawing could not be opened.
+documents-package-copy-original = Copy Original File…
+
+documents-package-export-preview = Export Preview Image…
+documents-package-choose-different = Choose a different file.

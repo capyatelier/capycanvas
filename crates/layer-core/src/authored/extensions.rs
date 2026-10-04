@@ -5,7 +5,7 @@ use std::{collections::{BTreeMap, BTreeSet}, fmt, sync::{Arc, atomic::{AtomicBoo
 
 const REFERENCE_NODES: usize = 4_194_304;
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Extensions {
     pub records: BTreeMap<PortableId, Value>,
     pub resources: BTreeMap<PortableId, Arc<OpaqueResource>>,
@@ -21,6 +21,13 @@ pub struct OpaqueResource {
     pub offset: u64,
     pub length: u64,
     pub crc32: u32,
+}
+impl PartialEq for OpaqueResource {
+    fn eq(&self,other:&Self)->bool {
+        self.id==other.id && self.kind==other.kind && self.data==other.data && self.encoding==other.encoding
+            && self.extra_fields==other.extra_fields && self.backing.identity()==other.backing.identity()
+            && self.offset==other.offset && self.length==other.length && self.crc32==other.crc32
+    }
 }
 impl fmt::Debug for OpaqueResource {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

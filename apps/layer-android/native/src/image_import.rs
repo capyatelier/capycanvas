@@ -89,7 +89,7 @@ pub extern "system" fn Java_art_capycanvas_Native_imageImportTask(
             context,
             control: crate::inspection::control(cancel),
             images: layer_ui::ImageImportBatch::new(a.host.session.state().settings.photo_open,
-                a.host.session.engine().document().color.space, Default::default()),
+                a.host.session.engine().document().composition().color.space, Default::default()),
         })) as jlong)
     })();
     or_throw(&mut env, result, 0)

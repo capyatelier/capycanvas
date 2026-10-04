@@ -111,10 +111,18 @@ impl PartialEq for SourceImage {
         self.kind == other.kind
             && self.extent == other.extent
             && self.resolution == other.resolution
-            && self.interpretation == other.interpretation
+            && self.interpretation.channels == other.interpretation.channels
+            && self.interpretation.depth == other.interpretation.depth
+            && self.interpretation.profile_assumed == other.interpretation.profile_assumed
+            && match (&self.interpretation.profile, &other.interpretation.profile) {
+                (ColorProfile::Builtin(a), ColorProfile::Builtin(b)) => a == b,
+                (ColorProfile::Icc(a), ColorProfile::Icc(b)) => a.id() == b.id(),
+                _ => false,
+            }
             && self.tiles.len() == other.tiles.len()
             && self.tiles.iter().zip(&other.tiles).all(|((a, x), (b, y))| {
-                a == b && x.descriptor == y.descriptor && x.digest == y.digest
+                a == b && x.descriptor == y.descriptor && x.resource_id() == y.resource_id()
+                    && x.resource_profile().map(|p| p.id()) == y.resource_profile().map(|p| p.id())
             })
     }
 }
@@ -338,15 +346,42 @@ mod tests {
                 TileBlob::encode(tile.descriptor, &tile.decode().unwrap()).unwrap(),
             );
         }
-        assert_eq!(
-            separate, *source,
-            "equal samples need not share their allocation"
-        );
+        assert_ne!(separate, *source, "independent resources have distinct identity");
+        for (coordinate, original) in &source.tiles {
+            assert_eq!(separate.tiles[coordinate].decode().unwrap(), original.decode().unwrap());
+        }
         assert_eq!(
             accounting.charge(&Arc::new(separate)),
             index_bytes + source.resident_bytes()
         );
     }
+    #[test]
+    fn source_identity_equality_does_not_read_parked_samples() {
+        use crate::raster_storage::{RetainedTiles, TileChunk, prepare_external_spill};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        struct MissingChunk { len: usize, reads: AtomicUsize }
+        impl TileChunk for MissingChunk {
+            fn len(&self) -> usize { self.len }
+            fn poll(&self) -> Result<Option<Arc<[u8]>>, String> { self.reads.fetch_add(1, Ordering::Relaxed); Err("Unavailable parked tile".into()) }
+            fn resident_bytes(&self) -> usize { 0 }
+            fn evict(&self) {}
+        }
+        let source = rgba8_source([1, 1], |_, _| [13, 29, 71, 255]);
+        let mut restored = (*source).clone();
+        for blob in restored.tiles.values_mut() {
+            *blob = Arc::new(TileBlob::from_package(blob.resource_id(), blob.descriptor, blob.compressed().unwrap()).unwrap());
+        }
+        let retained = RetainedTiles { sources: source.tiles.values().cloned().collect(), ..Default::default() };
+        let spill = prepare_external_spill(&retained).unwrap().unwrap();
+        let missing = Arc::new(MissingChunk { len: spill.bytes.len(), reads: AtomicUsize::new(0) });
+        spill.commit(missing.clone()).unwrap();
+        assert_eq!(*source, restored);
+        source.validate().unwrap();
+        assert_eq!(missing.reads.load(Ordering::Relaxed), 0);
+        assert_eq!(source.tiles.values().next().unwrap().content_digest().unwrap_err(), "Unavailable parked tile");
+        assert_eq!(missing.reads.load(Ordering::Relaxed), 1);
+    }
+
     #[test]
     fn source_bands_preserve_integer16_hidden_rgb_and_partial_tiles() {
         let interpretation = SourceInterpretation {

@@ -10,7 +10,7 @@ use std::time::Duration;
 use std::{
     collections::BTreeMap,
     sync::{
-        Arc, Condvar, Mutex,
+        Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
 };
@@ -41,6 +41,10 @@ pub fn page_count(bounds: crate::Rect, extent: [u32; 2]) -> u64 {
 #[cfg(not(target_arch = "wasm32"))]
 const CAPTURE_TIMEOUT: Duration = Duration::from_secs(30);
 static NEXT_PUBLICATION: AtomicU64 = AtomicU64::new(1);
+static NEXT_TILE_OWNER: AtomicU64 = AtomicU64::new(1);
+fn next_tile_owner() -> u64 {
+    NEXT_TILE_OWNER.try_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1)).expect("Raster tile identity exhausted")
+}
 
 /// Awaitable single publication, with errors preserved for every consumer.
 /// Dropping a save never cancels a capture also owned by document history.
@@ -118,19 +122,24 @@ pub struct TileKey {
     pub coordinate: [u32; 2],
 }
 
-/// Independently compressed, content-addressed exact samples. Immutable backing
+/// Independently compressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
 pub struct TileBlob {
     resource_profile: Option<crate::authored::Resource<[u8]>>,
     resource_id: crate::authored::PortableId,
-    pub digest: [u8; 32],
+    owner_identity: u64,
+    encoded_fingerprint: Option<[u8; 32]>,
+    digest: OnceLock<[u8; 32]>,
+    expected_digest: Option<[u8; 32]>,
     pub descriptor: PixelDescriptor,
-    pub(crate) compressed: crate::raster_storage::Bytes,
+    pub(crate) compressed: Arc<crate::raster_storage::Bytes>,
 }
 impl std::fmt::Debug for TileBlob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TileBlob")
-            .field("digest", &self.digest)
+            .field("owner_identity", &self.owner_identity)
+            .field("resource_id", &self.resource_id)
+            .field("digest", &self.digest.get())
             .field("descriptor", &self.descriptor)
             .field("compressed_bytes", &self.compressed.len())
             .finish()
@@ -173,8 +182,14 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
 }
 
 impl TileBlob {
+    pub fn owner_identity(&self) -> u64 { self.owner_identity }
+    pub fn encoded_fingerprint(&self) -> Option<[u8; 32]> { self.encoded_fingerprint }
     pub fn resource_id(&self) -> crate::authored::PortableId { self.resource_id }
     pub fn resource_profile(&self) -> Option<&crate::authored::Resource<[u8]>> { self.resource_profile.as_ref() }
+    pub(crate) fn alias(&self, resource_id: crate::authored::PortableId) -> Self {
+        Self { resource_id, resource_profile: self.resource_profile.clone(), owner_identity: self.owner_identity,
+            encoded_fingerprint: self.encoded_fingerprint, digest: self.digest.clone(), expected_digest: self.expected_digest, descriptor: self.descriptor, compressed: self.compressed.clone() }
+    }
     /// Worst-case encoded ownership reserved before a tile is published.
     pub fn max_compressed_len(descriptor: PixelDescriptor) -> Option<usize> {
         descriptor.byte_len([TILE_SIZE; 2]).map(lz4_flex::block::get_maximum_output_size)
@@ -189,19 +204,22 @@ impl TileBlob {
         descriptor.validate_samples(bytes)?;
         // Multibyte source channels benefit from byte planes: smooth high
         // bytes no longer alternate with noisy low bytes. This is a reversible
-        // permutation, not a precision change; the digest covers original bytes.
+        // permutation, not a precision change.
         let shuffled = (descriptor.bits_per_channel > 8).then(|| shuffle_samples(descriptor, bytes));
+        let compressed = compression::compress(shuffled.as_deref().unwrap_or(bytes))?;
+        let encoded_fingerprint = Some(Self::descriptor_digest(descriptor, &compressed));
         Ok(Self {
             resource_profile: None,
             resource_id: crate::authored::PortableId::random(),
-            digest: Self::digest(descriptor, bytes),
+            owner_identity: next_tile_owner(),
+            encoded_fingerprint,
+            digest: OnceLock::new(),
+            expected_digest: None,
             descriptor,
-            compressed: Arc::<[u8]>::from(compression::compress(
-                shuffled.as_deref().unwrap_or(bytes),
-            )?).into(),
+            compressed: Arc::new(Arc::<[u8]>::from(compressed).into()),
         })
     }
-    fn digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
+    fn descriptor_digest(descriptor: PixelDescriptor, bytes: &[u8]) -> [u8; 32] {
         let mut hash = Sha256::new();
         // Representation participates in identity; equal bytes need not mean
         // equal samples. The descriptor vocabulary is intentionally restricted.
@@ -223,10 +241,21 @@ impl TileBlob {
     }
     pub fn decode(&self) -> Result<Vec<u8>, String> {
         let bytes = Self::decode_samples(self.descriptor, &self.compressed()?)?;
-        if Self::digest(self.descriptor, &bytes) != self.digest {
-            return Err("Raster tile integrity check failed".into());
+        if let Some(expected) = self.expected_digest {
+            let actual = Self::descriptor_digest(self.descriptor, &bytes);
+            if actual != expected { return Err("Raster tile integrity check failed".into()); }
+            let _ = self.digest.set(actual);
         }
         Ok(bytes)
+    }
+    /// Decodes and hashes exact samples on a worker; ordinary identity needs neither.
+    pub fn content_digest(&self) -> Result<[u8; 32], String> {
+        if let Some(digest) = self.digest.get() { return Ok(*digest); }
+        let bytes = self.decode()?;
+        if let Some(digest) = self.digest.get() { return Ok(*digest); }
+        let digest = Self::descriptor_digest(self.descriptor, &bytes);
+        let _ = self.digest.set(digest);
+        Ok(digest)
     }
     pub fn from_package(
         resource_id: crate::authored::PortableId,
@@ -234,8 +263,9 @@ impl TileBlob {
         compressed: Arc<[u8]>,
     ) -> Result<Self, String> {
         if compressed.len() > MAX_COMPRESSED_TILE_BYTES { return Err("Oversized compressed raster tile".into()); }
-        let bytes = Self::decode_samples(descriptor, &compressed)?;
-        Ok(Self { resource_profile: None, resource_id, descriptor, digest: Self::digest(descriptor, &bytes), compressed: compressed.into() })
+        Self::decode_samples(descriptor, &compressed)?;
+        Ok(Self { resource_profile: None, resource_id, owner_identity: next_tile_owner(), descriptor,
+            encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
     }
     pub fn from_profiled_package(
         resource_id: crate::authored::PortableId, descriptor: PixelDescriptor,
@@ -267,11 +297,31 @@ impl TileBlob {
             resource_profile: None,
             resource_id,
             descriptor,
-            digest,
-            compressed: bytes.into(),
+            owner_identity: next_tile_owner(),
+            encoded_fingerprint: None,
+            digest: OnceLock::new(),
+            expected_digest: Some(digest),
+            compressed: Arc::new(bytes.into()),
         };
         result.decode()?;
         Ok(result)
+    }
+
+    /// Adopts a validated worker resource without decoding on the receiving owner.
+    pub fn from_verified_resource(
+        resource_id: crate::authored::PortableId,
+        descriptor: PixelDescriptor,
+        bytes: Arc<[u8]>,
+        resource_profile: Option<crate::authored::Resource<[u8]>>,
+    ) -> Result<Self, String> {
+        if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE; 2]).is_none() {
+            return Err("Invalid raster worker blob".into());
+        }
+        if resource_profile.as_ref().is_some_and(|profile| descriptor.encoding != crate::color::TransferEncoding::Profile || profile.is_empty() || profile.len() > crate::color::source::MAX_PROFILE_BYTES) {
+            return Err("Invalid tile profile interpretation".into());
+        }
+        Ok(Self { resource_profile, resource_id, owner_identity: next_tile_owner(), descriptor,
+            encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
     }
 
     /// Transfer from this application's browser codec worker, which already
@@ -292,19 +342,9 @@ impl TileBlob {
         digest: [u8; 32],
         bytes: Arc<[u8]>,
     ) -> Result<Self, String> {
-        if bytes.is_empty()
-            || bytes.len() > MAX_COMPRESSED_TILE_BYTES
-            || descriptor.byte_len([TILE_SIZE; 2]).is_none()
-        {
-            return Err("Invalid raster worker blob".into());
-        }
-        Ok(Self {
-            resource_profile: None,
-            resource_id,
-            descriptor,
-            digest,
-            compressed: bytes.into(),
-        })
+        let mut tile = Self::from_verified_resource(resource_id, descriptor, bytes, None)?;
+        tile.expected_digest = Some(digest);
+        Ok(tile)
     }
 }
 
@@ -536,22 +576,61 @@ mod tests {
         let descriptor = crate::color::PixelDescriptor::COVERAGE8;
         let samples = vec![81; (super::TILE_SIZE * super::TILE_SIZE) as usize];
         let original = super::TileBlob::encode(descriptor, &samples).unwrap();
+        assert!(original.digest.get().is_none());
+        assert!(original.encoded_fingerprint().is_some());
+        let alias = original.alias(crate::authored::PortableId::random());
+        assert_eq!(alias.owner_identity(), original.owner_identity());
+        assert_eq!(alias.encoded_fingerprint(), original.encoded_fingerprint());
+        assert_eq!(original.decode().unwrap(), samples);
+        assert!(original.digest.get().is_none(), "ordinary decode does not compute a content hash");
         let encoded = original.compressed().unwrap();
-        let restored = super::TileBlob::from_compressed_with_id(original.resource_id(), descriptor, original.digest, encoded.clone()).unwrap();
+        let restored = super::TileBlob::from_compressed_with_id(original.resource_id(), descriptor, original.content_digest().unwrap(), encoded.clone()).unwrap();
         assert_eq!(restored.resource_id(), original.resource_id());
+        assert!(restored.encoded_fingerprint().is_none());
         assert!(std::sync::Arc::ptr_eq(&restored.compressed().unwrap(), &encoded));
         assert_eq!(restored.decode().unwrap(), samples);
         let package = super::TileBlob::from_package(original.resource_id(), descriptor, encoded.clone()).unwrap();
-        assert_eq!(package.digest, original.digest);
+        assert!(package.digest.get().is_none(), "package validation does not compute a content hash");
+        assert!(package.encoded_fingerprint().is_none());
+        let adopted = super::TileBlob::from_verified_resource(original.resource_id(), descriptor, encoded.clone(), None).unwrap();
+        assert!(adopted.encoded_fingerprint().is_none());
+        assert!(adopted.digest.get().is_none());
+        assert_ne!(package.owner_identity(), original.owner_identity());
+        assert_ne!(restored.owner_identity(), original.owner_identity());
+        assert_eq!(package.content_digest().unwrap(), original.content_digest().unwrap());
+        assert!(package.digest.get().is_some());
         assert_eq!(package.decode().unwrap(), samples);
         assert_eq!(package.resource_id(), original.resource_id());
         assert!(std::sync::Arc::ptr_eq(&package.compressed().unwrap(), &encoded));
         let independent = super::TileBlob::encode(descriptor, &samples).unwrap();
         assert_ne!(independent.resource_id(), original.resource_id());
-        assert_eq!(independent.digest, original.digest);
+        assert_ne!(independent.owner_identity(), original.owner_identity());
+        assert_eq!(independent.encoded_fingerprint(), original.encoded_fingerprint());
+        assert_eq!(independent.content_digest().unwrap(), original.content_digest().unwrap());
     }
 
     use super::*;
+    #[test]
+    fn encoded_fingerprints_distinguish_descriptors_with_equal_compressed_bytes() {
+        use crate::color::{AlphaAssociation, SampleType, TransferEncoding};
+        let rgba = PixelDescriptor { sample: SampleType::Unsigned, channels: 4, bits_per_channel: 8,
+            encoding: TransferEncoding::Srgb, alpha: AlphaAssociation::Straight };
+        let rgba16 = PixelDescriptor { bits_per_channel: 16, encoding: TransferEncoding::Linear, ..rgba };
+        for (first, second) in [
+            (rgba, PixelDescriptor { alpha: AlphaAssociation::PremultipliedLinear, ..rgba }),
+            (rgba, PixelDescriptor { encoding: TransferEncoding::Linear, ..rgba }),
+            (rgba16, PixelDescriptor { sample: SampleType::Float, ..rgba16 }),
+            (PixelDescriptor { bits_per_channel: 16, ..PixelDescriptor::COVERAGE8 },
+                PixelDescriptor { channels: 2, alpha: AlphaAssociation::Straight, ..PixelDescriptor::COVERAGE8 }),
+        ] {
+            let first = TileBlob::encode(first, &vec![0; first.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
+            let second = TileBlob::encode(second, &vec![0; second.byte_len([TILE_SIZE; 2]).unwrap()]).unwrap();
+            assert_eq!(first.compressed().unwrap(), second.compressed().unwrap());
+            assert_ne!(first.encoded_fingerprint(), second.encoded_fingerprint());
+            assert!(first.digest.get().is_none());
+            assert!(second.digest.get().is_none());
+        }
+    }
     #[test]
     fn multibyte_tiles_preserve_every_channel_and_validate_integrity() {
         use crate::color::{AlphaAssociation, SampleType, TransferEncoding};
@@ -572,7 +651,7 @@ mod tests {
             }).collect();
             let blob = TileBlob::encode(descriptor, &bytes).unwrap();
             assert_eq!(blob.decode().unwrap(), bytes, "{descriptor:?}");
-            let mut digest = blob.digest;
+            let mut digest = blob.content_digest().unwrap();
             digest[7] ^= 1;
             assert!(TileBlob::from_compressed(descriptor, digest, blob.compressed().unwrap()).is_err());
         }
@@ -580,17 +659,20 @@ mod tests {
     #[test]
     fn pending_history_charges_each_retained_tiles_own_precision() {
         use crate::color::{DocumentColor, SampleDepth, RgbSpace};
-        use crate::{Document, Edit, Editor, LayerId};
+        use crate::{Document, Edit, Editor};
         for (bits, expected_undo) in [(8, 4), (16, 2), (32, 1)] {
             // Even while the current document is still sRGB8, old revision
             // tickets own their layout. No pixel allocation/readback is needed
             // to enforce the 512 MiB history ceiling. 450 tiles leave room
             // for the codec's worst-case expansion within that ceiling.
-            let mut editor = Editor::new(Document::new("pending history", 6400, 5120, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-            let descriptor = DocumentColor {
+            let mut document = Document::new(crate::authored::PortableId::random(), 6400, 5120, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+            let color = DocumentColor {
                 space: RgbSpace::ProPhoto,
                 depth: match bits { 8 => SampleDepth::U8, 16 => SampleDepth::U16, _ => SampleDepth::F32 },
-            }.paint_descriptor();
+            };
+            document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
+            let mut editor = Editor::new(document);
+            let descriptor = color.paint_descriptor();
             for _ in 0..3 {
                 let data = RasterData {
                     tiles: (0..450)
@@ -608,17 +690,16 @@ mod tests {
                 };
                 editor
                     .perform(Edit::SetRaster {
-                        target: LayerId(1),
+                        target: editor.document().working.target.unwrap(),
                         revision: RasterRevision::backed(data),
                     })
                     .unwrap();
             }
-            editor
-                .perform(Edit::SetRaster {
-                    target: LayerId(1),
-                    revision: RasterRevision::backed(RasterData::default()),
-                })
-                .unwrap();
+            let mut composition = editor.document().composition().clone(); composition.color = DocumentColor::default();
+            editor.perform(Edit::Batch(vec![
+                Edit::SetRaster { target: editor.document().working.target.unwrap(), revision: RasterRevision::backed(RasterData::default()) },
+                Edit::Composition(crate::authored::RecordChange::replace(&editor.document().artwork.compositions, editor.document().artwork.root, Some(composition)).unwrap()),
+            ])).unwrap();
             let mut restored = 0;
             while editor.undo().unwrap() {
                 restored += 1;
@@ -665,13 +746,13 @@ mod tests {
     }
     #[test]
     fn failed_raster_suffix_recovers_atomically_without_redoing_lost_pixels() {
-        use crate::{Document, Edit, Editor, LayerId};
+        use crate::{Document, Edit, Editor};
         for tile_failure in [false, true] {
-            let mut editor = Editor::new(Document::new("recovery", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+            let mut editor = Editor::new(Document::new(crate::authored::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
             let first = RasterRevision::backed(RasterData::default());
             editor
                 .perform(Edit::SetRaster {
-                    target: LayerId(1),
+                    target: editor.document().working.target.unwrap(),
                     revision: first.clone(),
                 })
                 .unwrap();
@@ -679,7 +760,7 @@ mod tests {
             let pending = RasterRevision::pending();
             editor
                 .perform(Edit::SetRaster {
-                    target: LayerId(1),
+                    target: editor.document().working.target.unwrap(),
                     revision: pending.clone(),
                 })
                 .unwrap();
@@ -708,19 +789,17 @@ mod tests {
             }
             assert_eq!(editor.recover_failed_rasters().unwrap(), 1);
             assert_eq!(editor.checkpoint(), checkpoint);
-            assert_eq!(editor.document().layers[0].raster, first);
+            assert_eq!(editor.document().target_raster(editor.document().working.target.unwrap()).unwrap(), &first);
             assert!(!editor.can_redo());
             assert!(editor.undo().unwrap());
             assert!(editor.redo().unwrap());
-            assert_eq!(editor.document().layers[0].raster, first);
+            assert_eq!(editor.document().target_raster(editor.document().working.target.unwrap()).unwrap(), &first);
             assert_eq!(editor.recover_failed_rasters().unwrap(), 0);
         }
-        let mut document = Document::new("no retained boundary", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.layers[0].raster = RasterRevision::pending();
-        document.layers[0]
-            .raster
-            .publish(Err("lost source".into()))
-            .unwrap();
+        let mut document = Document::new(crate::authored::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let missing = RasterRevision::pending();
+        document.apply(Edit::SetRaster { target: document.working.target.unwrap(), revision: missing.clone() }).unwrap();
+        missing.publish(Err("lost source".into())).unwrap();
         let mut editor = Editor::new(document.clone());
         assert!(editor.recover_failed_rasters().is_err());
         assert_eq!(
@@ -729,11 +808,11 @@ mod tests {
             "failure cannot partially roll back"
         );
 
-        let mut editor = Editor::new(Document::new("failure after undo", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+        let mut editor = Editor::new(Document::new(crate::authored::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
         let pending = RasterRevision::pending();
         editor
             .perform(Edit::SetRaster {
-                target: LayerId(1),
+                target: editor.document().working.target.unwrap(),
                 revision: pending.clone(),
             })
             .unwrap();
@@ -800,18 +879,18 @@ mod tests {
         let mut compressed = blob.compressed().unwrap().to_vec();
         compressed[4] ^= 1;
         assert!(
-            TileBlob::from_compressed(blob.descriptor, blob.digest, compressed.into()).is_err()
+            TileBlob::from_compressed(blob.descriptor, blob.content_digest().unwrap(), compressed.into()).is_err()
         );
         assert!(
             TileBlob::from_compressed(
                 crate::color::SRGB8_PAINT,
-                blob.digest,
+                blob.content_digest().unwrap(),
                 blob.compressed().unwrap()
             )
             .is_err()
         );
         let mut tail = blob.compressed().unwrap().to_vec();
         tail.push(0);
-        assert!(TileBlob::from_compressed(blob.descriptor, blob.digest, tail.into()).is_err());
+        assert!(TileBlob::from_compressed(blob.descriptor, blob.content_digest().unwrap(), tail.into()).is_err());
     }
 }

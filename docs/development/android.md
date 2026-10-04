@@ -50,6 +50,22 @@ to look up the pending request before validating its kind.
 Photo profile prompts retain `ImportedDocument` and use its shared `interpret`
 method on the file worker before preparing the candidate session.
 
+Artwork files use shared immutable capture and the final package reader/writer.
+The render owner supplies captured effect phases before file work starts. Provider
+input can be non-seekable; package parsing uses private spooled backing. Saves
+finish the private package before opening the provider destination for replacement,
+so encoding failure cannot truncate the previous file. Provider publication still
+has the provider's durability guarantees. Shared completion checks reject stale
+owners and preserve painting performed after capture. Imported native backing
+stays alive until renderer admission succeeds; unsupported preparation presents
+the original package, while cancellation leaves the current drawing intact.
+Unsupported artwork opens
+the shared package presentation with an optional preview, Copy Original File and
+Export Preview Image, without adopting a partial editable document. Preview
+export writes the retained PNG through a private spool to a new provider
+destination; source URI, document identity and file identity checks prevent it
+from replacing the original package.
+
 ## Prerequisites
 
 Install Java 17 or newer, Node.js, Rust, Android Studio or the Android command-line tools,

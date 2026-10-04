@@ -165,10 +165,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             let center = if width > 0. && height > 0. {
                 self.surface_to_document([x + width / 2., y + height / 2.])
             } else {
-                Point { x: doc.width as f32 / 2., y: doc.height as f32 / 2. }
+                Point { x: doc.composition().size[0] as f32 / 2., y: doc.composition().size[1] as f32 / 2. }
             };
             let mut source = self.engine.clone_source();
-            source.set(Point { x: center.x.clamp(0., doc.width as f32), y: center.y.clamp(0., doc.height as f32) });
+            source.set(Point { x: center.x.clamp(0., doc.composition().size[0] as f32), y: center.y.clamp(0., doc.composition().size[1] as f32) });
             self.engine.set_clone_source(source);
         }
         self.sync_retouch_points();

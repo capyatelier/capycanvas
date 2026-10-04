@@ -50,8 +50,8 @@ fn apple_histogram_keeps_full_resolution_precision_snapshot_identity_and_cancell
             assert!(unsafe { capy_project_details(cancelled.0) }.is_null());
             assert!(cancelled.error().unwrap().contains("cancelled"));
             // Inspection captured before a later edit must still report its old revision/pixels.
-            let layer = original.active_layer;
-            app.layer_action(json!({"op":"visibility","id":layer.0,"value":false}));
+            let layer = layer_ui::occurrence_token(original.working.occurrence.unwrap());
+            app.layer_action(json!({"op":"visibility","id":layer,"value":false}));
             app.draw_until_idle();
             let output = histogram(&job);
             assert_eq!(output["revision"], original.revision);
@@ -68,8 +68,8 @@ fn apple_histogram_keeps_full_resolution_precision_snapshot_identity_and_cancell
             app.invoke("undo"); app.draw_until_idle();
             assert_eq!(histogram(&capture(&app))["histogram"], output["histogram"]);
             // Visible paper participates, transparent pixels do not.
-            let paper = original.layers.iter().find(|l| l.name.as_ref() == "Paper").unwrap().id;
-            app.layer_action(json!({"op":"visibility","id":paper.0,"value":true})); app.draw_until_idle();
+            let paper = layer_ui::occurrence_token(*original.scene().order().iter().find(|h| original.scene().effect(**h).is_some_and(|effect| effect.program.id.as_ref() == "solid_color")).unwrap());
+            app.layer_action(json!({"op":"visibility","id":paper,"value":true})); app.draw_until_idle();
             assert_eq!(histogram(&capture(&app))["histogram"]["pixels"],25);
         }
     }
@@ -122,12 +122,12 @@ fn apple_picker_samples_use_document_linear_coverage_without_changing_artwork_or
             assert!(circle[0] > 0.5 && circle[1].abs() < 0.05 && circle[2] > 0.001 && circle[2] < circle[0],
                 "Transparent paint has no weight: {circle:?}");
         });
-        let ink = unsafe { &*app.0 }.host.session.engine().document().layers.iter()
-            .find(|l| l.kind == layer_core::LayerKind::Paint && l.source.is_none()).unwrap().id;
-        app.layer_action(json!({"op":"select","id":ink.0,"mask":false}));
+        let document = unsafe { &*app.0 }.host.session.engine().document();
+        let ink = layer_ui::occurrence_token(*document.scene().order().iter().find(|h| document.scene().paint_source(**h).is_some_and(|source| source.original.is_none())).unwrap());
+        app.layer_action(json!({"op":"select","id":ink,"mask":false}));
         app.action(json!({"type":"set_color","rgba":[0.,0.,1.,1.]}));
         for command in ["select_all", "fill_selection", "deselect"] { app.invoke(command); }
-        app.layer_action(json!({"op":"visibility","id":ink.0,"value":false}));
+        app.layer_action(json!({"op":"visibility","id":ink,"value":false}));
         app.draw_until_idle();
         assert_eq!(app.state()["color_picker"]["can_sample_layer"], true);
         unchanged(&|| {

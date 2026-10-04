@@ -51,7 +51,7 @@ pub(super) struct Notices {
     epoch: u64,
     changed: bool,
     /// The mask whose editing session already explained dry coverage.
-    dry_mask: Option<LayerId>,
+    dry_mask: Option<SourceTarget>,
 }
 
 impl Notices {
@@ -209,7 +209,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     /// A mask-editing session ends when the brush target is no longer its mask.
-    pub(super) fn end_dry_mask_session(&mut self, drawing_target: Option<LayerId>) {
+    pub(super) fn end_dry_mask_session(&mut self, drawing_target: Option<SourceTarget>) {
         if self.notices.dry_mask != drawing_target {
             self.notices.dry_mask = None;
         }
@@ -226,19 +226,21 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     /// The nearest visible Paint layer, photo or painting, below the active
     /// layer.
-    pub(super) fn reference_below(&self) -> Option<&layer_core::Layer> {
+    pub(super) fn reference_below(&self) -> Option<(OccurrenceHandle, &layer_core::Occurrence)> {
         let doc = self.engine.document();
-        let index = doc.layers.iter().position(|l| l.id == doc.active_layer)?;
-        doc.layers[index + 1..]
-            .iter()
-            .find(|l| l.kind == LayerKind::Paint && doc.layer_is_visible(l.id))
+        let scene = doc.scene();
+        let index = scene.position(doc.working.occurrence?)?;
+        scene.order()[index + 1..].iter().find_map(|handle| {
+            let occurrence = scene.occurrence(*handle)?;
+            (occurrence.kind() == LayerKind::Paint && doc.layer_is_visible(*handle)).then_some((*handle, occurrence))
+        })
     }
 
     pub(super) fn use_reference_below_reason(&self) -> Option<std::sync::Arc<str>> {
         let l = self.localization();
         match self.reference_below() {
             None => Some(l.text(MessageId::COMMANDS_REFUSAL_NOTICES_NO_VISIBLE_PHOTO_OR_PAINT_LAYER_BELOW)),
-            Some(layer) if self.engine.document().reference_layers.contains(&layer.id) => {
+            Some((_, layer)) if layer.reference => {
                 Some(l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_LAYER_BELOW_IS_ALREADY_A_REFERENCE))
             }
             Some(_) => None,
@@ -247,8 +249,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn use_reference_below(&mut self) -> Result<(), String> {
         refused(self.use_reference_below_reason())?;
-        let id = self.reference_below().ok_or_else(|| self.localization().text(NO_REFERENCE_BELOW).to_string())?.id;
-        let mut references = self.engine.document().reference_layers.clone();
+        let id = self.reference_below().ok_or_else(|| self.localization().text(NO_REFERENCE_BELOW).to_string())?.0;
+        let mut references = self.engine.document().scene().references();
         references.insert(id);
         self.set_references(references)
     }
@@ -263,7 +265,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     fn offer_reference_below(&mut self, message: MessageId) {
-        if let Some(layer) = self.reference_below() {
+        if let Some((_, layer)) = self.reference_below() {
             let copy = NoticeCopy::Reference { message, name: layer.name.clone() };
             let label = copy.action_label(self.localization()).unwrap();
             self.raise_notice(copy.text(self.localization()), Some((label, UiAction::Invoke { command: CommandId::UseReferenceBelow })));
@@ -281,8 +283,14 @@ mod localization_tests {
     fn reference_offer_language_refresh_retains_literal_name_and_action() {
         let mut s = session(Platform::Gtk);
         let name = "日本語 { $name } 🎨";
-        let id = s.engine.allocate_layer_id();
-        s.engine.apply_edit(layer_core::Edit::InsertLayer { index: 1, layer: Box::new(layer_core::Layer::paint(id, name)) }).unwrap();
+        use layer_core::{Edit, authored::{Occurrence, OccurrenceContent, PaintSource, RecordChange}};
+        let artwork=&s.engine.document().artwork;
+        let paint=RecordChange::insert(&artwork.paint,PaintSource {domain:s.engine.document().composition().size,raster:Default::default(),original:None,operations:Default::default()});
+        let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Paint(paint.handle),name));
+        let id=occurrence.handle;let root=s.engine.document().composition().result;
+        let mut stack=artwork.stacks.get(root).unwrap().clone();stack.entries.insert(1,id);
+        let membership=RecordChange::replace(&artwork.stacks,root,Some(stack)).unwrap();
+        s.engine.apply_edit(Edit::Batch(vec![Edit::Paint(paint),Edit::Occurrence(occurrence),Edit::Stack(membership)])).unwrap();
         s.notify_missing_reference();
         let notice = s.state.notice.as_ref().unwrap().id;
         let document = s.engine.document().clone();
@@ -299,7 +307,7 @@ mod localization_tests {
             assert_eq!(s.engine.checkpoint(), checkpoint);
         }
         s.notice_action(notice, true).unwrap();
-        assert!(s.engine.document().reference_layers.contains(&id));
+        assert!(s.engine.document().scene().occurrence(id).unwrap().reference);
     }
 
     #[test]
@@ -308,7 +316,7 @@ mod localization_tests {
         session.raise_notice(stroke_refusal_text(StrokeRefusal::NoCloneSource, session.localization()).to_string(),
             Some((CommandId::CloneSourceArm.localized_label(session.localization()).to_string(), UiAction::Invoke { command: CommandId::CloneSourceArm })));
         session.notices.copy = Some(NoticeCopy::Stroke(StrokeRefusal::NoCloneSource));
-        session.notices.dry_mask = Some(LayerId(17));
+        session.notices.dry_mask = Some(SourceTarget::Coverage(layer_core::CoverageHandle::from_index(17)));
         let before = session.state.notice.clone().unwrap();
         let epoch = session.notices.epoch;
         assert!(session.set_localization(Localizer::shared(UiLanguage::Japanese)));
@@ -317,7 +325,7 @@ mod localization_tests {
         assert_ne!(after.text, before.text);
         assert_ne!(after.action, before.action);
         assert_eq!(session.notices.epoch, epoch);
-        assert_eq!(session.notices.dry_mask, Some(LayerId(17)));
+        assert_eq!(session.notices.dry_mask, Some(SourceTarget::Coverage(layer_core::CoverageHandle::from_index(17))));
         assert!(matches!(session.notices.action, Some(UiAction::Invoke { command: CommandId::CloneSourceArm })));
         session.notify("literal { $name } 🖌");
         assert!(session.set_localization(Localizer::shared(UiLanguage::English)));

@@ -58,10 +58,11 @@ impl WebApp {
         let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let mut brush = s.engine().configured_brush().clone();
         let view = s.engine().view();
-        let time = s.engine().animation_time();
+        let context = workflow.context.clone();
+        let time = context.elapsed;
         let control = control.inner.clone();
         Ok(future_to_promise(async move {
-            raster_project::wait_backing(&original).await?;
+            artwork_transfer::wait_backing(&original.artwork).await?;
             output::cancelled(&control)?;
             let history = workflow.is_history();
             let (project, clipped) = if let Some(project) = workflow.candidate.take() {
@@ -74,7 +75,7 @@ impl WebApp {
                 let wire = output::render_output(
                     gpu.clone(),
                     layer_ui::DocumentExport {
-                        project: original.clone(),
+                        capture: layer_core::Editor::new(original.clone()).capture(0,context.clone()).map_err(js)?,
                         time,
                     },
                     recipe,
@@ -93,17 +94,14 @@ impl WebApp {
                     .as_f64()
                     .unwrap_or(0.) as u64;
                 (
-                    raster_project::unpack(&metadata, buffers, true).await?,
+                    layer_core::Document::from_artwork(artwork_transfer::unpack(&metadata, buffers).await?).map_err(js)?,
                     clipped,
                 )
             } else {
-                let mut transfer = original.clone();
-                for layer in &mut transfer.document.layers {
-                    if layer.source.as_ref().is_some_and(|s| s.is_original()) {
-                        layer.source = None;
-                    }
-                }
-                let wire = raster_project::pack(transfer).await?;
+                let mut transfer = original.artwork.clone();
+                let handles=transfer.paint.iter().map(|(h,_,_)|h).collect::<Vec<_>>();
+                for h in handles {let paint=transfer.paint.get_mut(h).unwrap();if paint.original.as_ref().is_some_and(|s|s.is_original()){paint.original=None;}}
+                let wire = artwork_transfer::pack(transfer).await?;
                 let metadata = js_sys::Reflect::get(&wire, &js("metadata"))?
                     .as_string()
                     .ok_or_else(|| js("Missing color metadata"))?;
@@ -124,36 +122,34 @@ impl WebApp {
                 let clipped = js_sys::Reflect::get(&result, &js("clipped"))?
                     .as_f64()
                     .unwrap_or(0.) as u64;
-                let mut project = raster_project::unpack(&metadata, buffers, true).await?;
-                for layer in &mut project.document.layers {
-                    if let Some(source) = original
-                        .document
-                        .layer(layer.id)
-                        .and_then(|l| l.source.as_ref())
-                        .filter(|s| s.is_original())
-                    {
-                        layer.source = Some(source.clone());
+                let mut artwork = artwork_transfer::unpack(&metadata, buffers).await?;
+                let handles=artwork.paint.iter().map(|(h,id,_)|(h,id)).collect::<Vec<_>>();
+                for (h,id) in handles {
+                    if let Some(source)=original.artwork.paint.resolve(id).and_then(|p|original.artwork.paint.get(p)).and_then(|p|p.original.as_ref()).filter(|s|s.is_original()) {
+                        artwork.paint.get_mut(h).unwrap().original=Some(source.clone());
                     }
                 }
+                let mut project=layer_core::Document::from_artwork(artwork).map_err(js)?;
+                project.owner=original.owner;project.revision=original.revision;project.working=original.working.clone();
                 project.validate(Default::default()).map_err(js)?;
                 (project, clipped)
             };
-            hdr::admit_document(&project.document)?;
-            layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush);
+            hdr::admit_document(&project)?;
+            layer_render::remap_document_colors(original.composition().color.space, project.composition().color.space, &mut brush);
             let mut previews = Vec::new();
             if !history {
                 for source in [
                     original,
                     project.clone(),
                 ] {
-                    previews.push(hdr::preview_document(&gpu,source,time,control.clone()).await?);
+                    previews.push(hdr::preview_document(&gpu,source.artwork,context.clone(),control.clone()).await?);
                 }
             }
             let renderer = if copy {
                 None
             } else {
                 let mut canvas = gpu
-                    .color_canvas(project.clone(), &brush, view, time, control.clone())
+                    .color_canvas(project.clone(), context.clone(), &brush, view, control.clone())
                     .map_err(js)?;
                 let start = js_sys::Date::now();
                 loop {
@@ -187,10 +183,10 @@ impl WebApp {
         &self,
         candidate: &WebColorCandidate,
     ) -> Result<js_sys::Promise, JsValue> {
-        let project = candidate.workflow.copy_project(candidate.control.is_cancelled()).map_err(js)?.clone();
+        let project = layer_core::Editor::new(candidate.workflow.copy_project(candidate.control.is_cancelled()).map_err(js)?.clone()).capture(0,candidate.workflow.context.clone()).map_err(js)?;
         let control = candidate.control.clone();
         Ok(future_to_promise(async move {
-            let bytes = raster_project::save(project).await?;
+            let bytes = artwork_transfer::save(project).await?;
             output::cancelled(&control)?;
             Ok(bytes.into())
         }))
@@ -230,11 +226,11 @@ pub async fn raster_worker_color(
         change: layer_color::DocumentColorChange,
     }
     let request: Request = serde_json::from_str(metadata).map_err(js)?;
-    let project = raster_project::unpack(&request.project, buffers, false).await?;
+    let project = layer_core::Document::from_artwork(artwork_transfer::unpack(&request.project, buffers).await?).map_err(js)?;
     let converted =
-        layer_color::prepare_document_color(&project, request.change, raster_project::photo_memory_budget().encode_bytes, || false)
+        layer_color::prepare_document_color(&project, request.change, artwork_transfer::photo_memory_budget().encode_bytes, || false)
             .map_err(js)?;
-    let wire = raster_project::pack(converted.project).await?;
+    let wire = artwork_transfer::pack(converted.document.artwork).await?;
     js_sys::Reflect::set(
         &wire,
         &js("clipped"),

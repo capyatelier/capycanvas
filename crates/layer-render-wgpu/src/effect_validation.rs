@@ -197,16 +197,22 @@ fn compile_candidate(
         .push_error_scope(wgpu::ErrorFilter::OutOfMemory);
     let validation = gpu.device().push_error_scope(wgpu::ErrorFilter::Validation);
     let result = (|| {
-        for (i, program) in request.programs.iter().enumerate() {
-            let mut layer = Layer::paint(LayerId(u64::MAX - i as u64), "");
-            layer.effect = Some(Arc::new(layer_core::EffectInstance::new(program.clone())));
-            candidate.prepare(gpu, &[&layer], effects::Execution::Preview, 0., 0, Default::default())?;
+        let mut artwork = layer_core::authored::Artwork::new([1,1]).map_err(|e| GpuRasterError::Effect(e.into()))?;
+        for program in &request.programs {
+            let definition = artwork.definitions.insert(layer_core::authored::PortableId::random(), layer_core::authored::Definition {program:program.clone(),dimensions:Default::default()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let effect = artwork.effects.insert(layer_core::authored::PortableId::random(), layer_core::authored::EffectApplication {
+                definition,values:layer_core::EffectInstance::new(program.clone()).values,domain:[1,1]
+            }).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let handle = artwork.occurrences.insert(layer_core::authored::PortableId::random(), layer_core::authored::Occurrence::new(OccurrenceContent::Effect(effect), "")).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let index = Arc::new(layer_core::authored::SceneIndex::default());
+            let scene = SceneView::new(&artwork, &index);
+            candidate.prepare(gpu, scene, &[handle], effects::Execution::Preview, 0., 0, Default::default())?;
             if program.image_boundary() {
                 for pass in 0..program.passes.len().max(1) {
-                    candidate.prepare(gpu, &[&layer], effects::Execution::Image(pass), 0., 0, Default::default())?;
+                    candidate.prepare(gpu, scene, &[handle], effects::Execution::Image(pass), 0., 0, Default::default())?;
                 }
             } else {
-                candidate.prepare(gpu, &[&layer], effects::Execution::Fused, 0., 0, Default::default())?;
+                candidate.prepare(gpu, scene, &[handle], effects::Execution::Fused, 0., 0, Default::default())?;
             }
         }
         Ok::<_, GpuRasterError>(())

@@ -972,7 +972,7 @@ pub struct Workspace {
     pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
     pub(crate) image_drop: RefCell<Option<crate::files::drop::Incoming>>,
     pub(crate) image_drop_label: gtk::Label,
-    initial_project: RefCell<Option<(layer_core::Project, Option<DocumentLocation>)>>,
+    initial_project: RefCell<Option<(layer_core::Document, Option<DocumentLocation>)>>,
     initial_settings: RefCell<Option<Settings>>,
     customization: customization::Customization,
     pub(crate) drawer: Rc<drawers::Drawer>,
@@ -1085,13 +1085,13 @@ impl Workspace {
     #[cfg(test)]
     pub(crate) fn with_project(
         app: &adw::Application,
-        project: Option<(layer_core::Project, Option<DocumentLocation>)>,
+        project: Option<(layer_core::Document, Option<DocumentLocation>)>,
     ) -> Rc<Self> {
         Self::with_project_localized(app, project, layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     }
     pub(crate) fn with_project_localized(
         app: &adw::Application,
-        project: Option<(layer_core::Project, Option<DocumentLocation>)>,
+        project: Option<(layer_core::Document, Option<DocumentLocation>)>,
         localization: std::sync::Arc<layer_ui::Localizer>,
     ) -> Rc<Self> {
         static ICONS: std::sync::Once = std::sync::Once::new();
@@ -2081,7 +2081,7 @@ impl Workspace {
     pub(crate) fn view_color(&self) -> crate::display_color::ViewColor {
         self.gpu.borrow().as_ref().map_or(Default::default(), |g| {
             let document = g.session.engine().document();
-            g.session.engine().backend().view_color.with_rendition(document.color, g.session.effective_sdr_rendition())
+            g.session.engine().backend().view_color.with_rendition(document.composition().color, g.session.effective_sdr_rendition())
         })
     }
     pub(crate) fn paint_view_color(&self) -> crate::display_color::ViewColor {
@@ -2216,7 +2216,7 @@ impl Workspace {
             Ok(mut change) => {
                 if change.regions & regions::SETTINGS != 0 { self.request_language(); }
                 if let Some(g) = self.gpu.borrow_mut().as_mut() {
-                    let hdr = g.session.engine().document().color.depth.is_float();
+                    let hdr = g.session.engine().document().composition().color.depth.is_float();
                     let rendition = hdr.then(|| g.session.effective_sdr_rendition());
                     let preview = g.session.state().preview_sdr;
                     let headroom = g.session.renderer_mut().display_headroom;

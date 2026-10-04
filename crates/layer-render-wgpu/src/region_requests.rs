@@ -145,7 +145,7 @@ impl RegionRequests {
             let modify = modify.clone();
             return self.start_modify(r, request, &modify);
         }
-        let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {layer,..} => r.target_extent(*layer), _ => r.document_extent };
+        let extent = match request.source.raw_source() { layer_render::RegionSource::TransformedSelection {target,..} => r.target_extent(*target), _ => r.document_extent };
         let mapped = matches!(
             request.source,
             layer_render::RegionSource::TransformedSelection { .. }

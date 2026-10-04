@@ -5,8 +5,7 @@ use layer_ui::SelectionTool;
 fn selection(d: &Driver) -> Option<layer_core::Selection> {
     ui_session(&d.w)
         .engine()
-        .document()
-        .selection
+        .document().working.selection
         .clone()
 }
 fn canvas_point(d: &Driver, p: [f32; 2]) -> [f32; 2] {
@@ -104,7 +103,7 @@ fn native_quick_mask_input() {
     assert_eq!(state(&d.w).layer_tools.mask_editing.unwrap().layer,Some(id));
     d.click_name(&layers); pump(100);
     let w = d.w.clone();
-    let saved = || ui_session(&w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let saved = || ui_session(&w).engine().document().saved_selection(layer_ui::occurrence_handle(id).unwrap()).unwrap();
     let before = saved();
     d.w.dispatch(UiAction::Selection {action:layer_ui::SelectionAction::BeginRefine {kind:layer_ui::RefineKind::Grow,layer:Some(id)}});
     let field = d.named("selection-refine-value");
@@ -119,7 +118,7 @@ fn native_quick_mask_input() {
     let grow_idle = || state(&w).commands.iter().any(|c| c.id == CommandId::GrowSelection && c.enabled);
     until(|| state(&w).layer_tools.selection_resize.is_none() && grow_idle() && saved() != before, "Grow completed");
     d.w.dispatch(UiAction::Invoke {command:CommandId::Undo});pump(100);
-    assert_eq!(ui_session(&d.w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap(),before);
+    assert_eq!(ui_session(&d.w).engine().document().saved_selection(layer_ui::occurrence_handle(id).unwrap()).unwrap(),before);
 
     assert!(state(&d.w).host_error.is_none(),"{:?}",state(&d.w).host_error);
     d.click_name(&layers); pump(150);
@@ -713,7 +712,7 @@ fn native_tonal_selection_input() {
     d.input.key(b'q' as u32);
     d.w.dispatch(UiAction::Invoke {command:CommandId::NewSelectionLayer});wait_tonal(&d);
     let id=state(&d.w).layer_tools.mask_editing.unwrap().layer.unwrap();
-    let saved=|d:&Driver| ui_session(&d.w).engine().document().saved_selection(layer_core::LayerId(id)).unwrap();
+    let saved=|d:&Driver| ui_session(&d.w).engine().document().saved_selection(layer_ui::occurrence_handle(id).unwrap()).unwrap();
     let before=saved(&d);assert_eq!(before,layer_core::Selection::empty());
     d.click_name(&opener);d.click_name("tool-choice-tonal-tones-0");wait_tonal(&d);
     let mask=saved(&d);assert!(byte_pixel(&mask,700,700)>240 && byte_pixel(&mask,1250,700)>240);

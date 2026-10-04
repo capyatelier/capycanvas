@@ -20,7 +20,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn history_color(&self, redo: bool) -> DocumentColor {
-        let color = self.editor.document().color;
+        let color = self.editor.document().composition().color;
         self.editor
             .next_history_edit(redo)
             .map_or(color, |edit| edit.resulting_color(color))
@@ -39,15 +39,15 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         prepared: PreparedColorTransition,
     ) -> Result<(), EngineError<B::Error>> {
         self.require_color_idle()?;
-        let old = self.document().color;
-        let target = prepared.document().color;
+        let old = self.document().composition().color;
+        let target = prepared.document().composition().color;
         let mut brush = self.settings.brush.clone();
         layer_render::remap_document_colors(old.space, target.space, &mut brush);
         brush.validate().map_err(DocumentError::InvalidBrush)?;
         self.editor.commit_color_transition(prepared, |document| {
             if !self
                 .backend
-                .adopt_prepared_color(document.color)
+                .adopt_prepared_color(document.composition().color)
                 .map_err(EngineError::Backend)?
             {
                 return Err(EngineError::Document(DocumentError::InvalidLayerOperation(

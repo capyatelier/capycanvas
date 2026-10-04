@@ -1296,7 +1296,7 @@ mod tests {
         brush.stabilization.pressure_fall_micros = 0;
         let stroke = Stroke::new(
             StrokeId(17),
-            layer_core::LayerId(1),
+            layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1)),
             layer_core::StrokeTool::Brush,
             brush.clone(),
             vec![
@@ -1332,7 +1332,7 @@ mod tests {
             let brush = layer_core::default_brush(preset);
             let points = vec![point(0., 0.5, 0), point(5., 0.5, 16_000), point(10., 0.5, 32_000), point(10., 0., 40_000)];
             let stroke =
-                Stroke::new(StrokeId(3), layer_core::LayerId(1), layer_core::StrokeTool::Brush, brush, points).unwrap();
+                Stroke::new(StrokeId(3), layer_core::SourceTarget::Paint(layer_core::authored::PaintHandle::from_index(1)), layer_core::StrokeTool::Brush, brush, points).unwrap();
             let mut dabs = Vec::new();
             DabGenerator::generate(&stroke, RgbSpace::Srgb, &mut dabs);
             let end = dabs.last().unwrap();

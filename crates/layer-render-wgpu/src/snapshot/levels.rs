@@ -26,7 +26,7 @@ impl LevelsPipeline {
 }
 impl SnapshotGpu {
     pub async fn levels_statistics(&self,query:ArtworkQuery,control:CaptureControl)->Result<LevelsStatistics,String> {
-        if !matches!(query.source,ArtworkSource::EffectInput(id)|ArtworkSource::EffectChannels(id) if query.document.layer(id).and_then(|l|l.effect.as_ref()).is_some_and(|e|e.program.id.as_ref()=="levels")) {
+        if !matches!(query.source,ArtworkSource::EffectInput(id)|ArtworkSource::EffectChannels(id) if query.snapshot.view().effect(id).is_some_and(|e|e.program.id.as_ref()=="levels")) {
             return Err("Auto requires a Levels adjustment".into());
         }
         let (mut snapshot,output)=self.artwork_capture(&query,control.clone()).await?;
@@ -42,7 +42,7 @@ impl SnapshotGpu {
             });
             let mut folded=None;
             snapshot.capture_query_gpu(output,false,if phase==0 {4} else {1},summary.size()+shards.size(),None,|r,view,region,encoder| {
-                let words=[region.width(),region.height(),query.document.color.space as u32,0].into_iter().chain(ranges.map(f32::to_bits)).flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+                let words=[region.width(),region.height(),query.snapshot.view().composition().color.space as u32,0].into_iter().chain(ranges.map(f32::to_bits)).flat_map(u32::to_le_bytes).collect::<Vec<_>>();
                 let area=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("Levels region"),contents:&words,usage:wgpu::BufferUsages::UNIFORM});
                 let bind=crate::bindings::group(&r.device,"Levels region",&pipeline.layout,[wgpu::BindingResource::TextureView(view),area.as_entire_binding(),summary.as_entire_binding(),shards.as_entire_binding()]);
                 let mut pass=encoder.begin_compute_pass(&Default::default());pass.set_bind_group(0,&bind,&[]);

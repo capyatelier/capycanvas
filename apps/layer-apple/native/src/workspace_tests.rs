@@ -45,8 +45,8 @@ fn apple_stack_auto_hide_consumes_native_contact_before_the_next_contact_paints(
             let session = &unsafe { &*app.0 }.host.session;
             let [a,b,c,d,tx,ty] = session.state().camera.document_to_surface();
             let doc = session.engine().document();
-            let x = f64::from(tx + (a * doc.width as f32 + c * doc.height as f32) * 0.5);
-            let y = f64::from(ty + (b * doc.width as f32 + d * doc.height as f32) * 0.5);
+            let x = f64::from(tx + (a * doc.composition().size[0] as f32 + c * doc.composition().size[1] as f32) * 0.5);
+            let y = f64::from(ty + (b * doc.composition().size[0] as f32 + d * doc.composition().size[1] as f32) * 0.5);
             let records = [x,y,1.,0.,0.,0.,0.,1_000_000_000.,1.,
                 x+10.,y+10.,1.,0.,0.,0.,0.,1_010_000_000.,2.,
                 x+20.,y+20.,1.,0.,0.,0.,0.,1_020_000_000.,3.];

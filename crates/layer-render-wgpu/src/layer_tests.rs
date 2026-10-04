@@ -1,7 +1,9 @@
 //! Pixel assertions and bounded GPU-completion timings for layer composition.
 use super::*;
 use crate::test_support::packet;
-use layer_core::{LayerMask, LayerOperation, LayerOperationKind, Point, Rect, Selection, StrokeId};
+use layer_core::{Document, SceneView, CoverageSnapshot, RasterOperation, RasterOperationKind, Point, Rect, Selection, StrokeId,
+    authored::{Occurrence, OccurrenceContent, RecordChange, SourceTarget, Stack}};
+use placement::{paint_document, target, paint, paint_mut, occurrence_mut, set_mask, mask_snapshot, reveal_all};
 use layer_render::{DabStyle, ViewState};
 #[path = "tonal_tests.rs"]
 mod tonal_selection;
@@ -53,18 +55,18 @@ pub(super) fn dab(color: [f32; 4]) -> Dab {
         previous_contact: [0.0; 4],
     }
 }
-pub(super) fn batch(id: u64) -> DabBatch {
+pub(super) fn batch(target: SourceTarget) -> DabBatch {
     let damage = Rect { min: Point { x: 0., y: 0. }, max: Point { x: 128., y: 128. } };
-    crate::test_support::dab_batch(LayerId(id), crate::tests::test_style(BrushExecution::Dry), damage)
+    crate::test_support::dab_batch(target, crate::tests::test_style(BrushExecution::Dry), damage)
 }
 fn submit(
     r: &mut WgpuRasterizer,
-    layers: &[Layer],
+    scene: SceneView<'_>,
     dabs: &[Dab],
     batches: &[DabBatch],
     reset: bool,
 ) {
-    r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(layers, [128, 128]) })
+    r.submit(FramePacket { dabs, dab_batches: batches, reset_layers: reset, ..packet(scene, [128, 128]) })
     .unwrap();
 }
 fn pixel(r: &mut WgpuRasterizer, x: usize, y: usize) -> [u8; 4] {
@@ -82,9 +84,8 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     let reference = make_target();
     let buffered = make_target();
     let shared_again = make_target();
-    let mut layer = Layer::paint(LayerId(1), "scene paint");
-    layer.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
-    let layers = [layer];
+    let mut document = paint_document([1024; 2], "scene paint");
+    set_mask(&mut document, reveal_all([1024; 2], Point::default()));
     let camera = ViewState { width_px: 512, height_px: 512,
         ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
@@ -96,7 +97,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
         ink.radii = [24.; 2];
         ink.previous = [24., 24., 1., 0.];
         ink.contact = [1., 0., 0., 0.];
-        let mut stroke = batch(1);
+        let mut stroke = batch(placement::target(&document));
         stroke.kind = if preview { DabBatchKind::Preview } else { DabBatchKind::Persistent };
         stroke.style = preset_style(layer_core::DefaultBrushPreset::Pencil);
         stroke.damage = ink.bounds();
@@ -106,7 +107,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
             dab_batches: &[stroke],
             reset_layers: i == 0,
             composite_all: i == 0,
-            ..packet(&layers, [1024; 2])
+            ..packet(document.scene(), [1024; 2])
         }).unwrap();
         if i > 0 { assert!(r.composite_damage.area() < 1024 * 1024); }
         let cursor = [layer_render::CursorSegment { from: [x + 24., y - 24.],
@@ -171,10 +172,10 @@ pub(super) fn page_bytes(r: &WgpuRasterizer, texture: &wgpu::Texture) -> Vec<u8>
     buffer.unmap();
     bytes
 }
-fn left_mask(id: u64) -> LayerMask {
-    let mut m = LayerMask::reveal_all(LayerId(id), Point::default());
-    m.default_coverage = 0.;
-    m.initial = Some(
+fn left_mask() -> CoverageSnapshot {
+    let mut m = reveal_all([128; 2], Point::default());
+    m.source.default_coverage = 0.;
+    m.source.initial = Some(
         Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 64., y: 0. },
@@ -231,7 +232,7 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
     outside.shape = layer_core::SelectionShape::Contours(
         vec![outside.contours()[0].clone(), hole.contours()[0].clone()].into(),
     );
-    let render = |r: &mut WgpuRasterizer, layer: &Layer, brush: &DabBatch| {
+    let render = |r: &mut WgpuRasterizer, document: &Document, brush: &DabBatch| {
         let mut d = dab([1.; 4]);
         d.center = Point { x: 1024., y: 64. };
         d.radii = [3000.; 2];
@@ -240,7 +241,7 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
             dabs: &[d],
             dab_batches: std::slice::from_ref(brush),
             reset_layers: true,
-            ..packet(std::slice::from_ref(layer), extent)
+            ..packet(document.scene(), extent)
         })
         .unwrap();
         r.readback_srgb_rgba8().unwrap()
@@ -255,20 +256,20 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
         ] {
             let mut geometry = outside.translated(delta);
             geometry.inverted = inverted;
-            let mut layer = Layer::paint(LayerId(1), "scanline reference");
-            let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-            mask.default_coverage = f32::from(inverted);
-            mask.initial = Some(geometry.clone());
-            layer.mask = Some(mask);
-            let mut b = batch(1);
+            let mut document = paint_document(extent, "scanline reference");
+            let mut mask = reveal_all(extent, Point::default());
+            mask.source.default_coverage = f32::from(inverted);
+            mask.source.initial = Some(geometry.clone());
+            set_mask(&mut document, mask);
+            let mut b = batch(target(&document));
             b.damage = Rect {
                 min: Point::default(),
                 max: Point { x: 2048., y: 128. },
             };
-            let reference = render(&mut r, &layer, &b);
-            layer.mask = None;
+            let reference = render(&mut r, &document, &b);
+            occurrence_mut(&mut document).mask = None;
             b.style.selection = Some(std::sync::Arc::new(geometry));
-            let actual = render(&mut r, &layer, &b);
+            let actual = render(&mut r, &document, &b);
             for (i, (a, b)) in actual.iter().zip(reference).enumerate() {
                 assert!(
                     a.abs_diff(b) <= 1,
@@ -283,21 +284,21 @@ fn scanline_selection_handles_holes_crossings_offcanvas_and_wide_rows() {
 fn connected_and_global_regions_select_painted_disks() {
     use layer_render::{RegionRequest, RegionSource};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layer = Layer::paint(LayerId(1), "disks");
+    let document = paint_document([128; 2], "disks");
     let mut left = dab([1., 0., 0., 1.]);
     left.center = Point { x: 32., y: 64. };
     left.radii = [16.; 2];
     let mut right = left;
     right.center.x = 96.;
-    let mut disks = batch(1);
+    let mut disks = batch(target(&document));
     disks.dab_count = 2;
-    submit(&mut r, std::slice::from_ref(&layer), &[left, right], &[disks], true);
+    submit(&mut r, document.scene(), &[left, right], &[disks], true);
     for contiguous in [true, false] {
         let result = crate::test_support::receive_request(&mut r, RegionRequest {
             contiguous,
             selection: None,
             request_id: 1,
-            source: RegionSource::Layer(layer.id),
+            source: RegionSource::Source(target(&document)),
             position: [32, 64],
             tolerance: 0.,
             refinement: Default::default(),
@@ -312,12 +313,18 @@ fn connected_and_global_regions_select_painted_disks() {
 #[test]
 fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut base = Layer::paint(LayerId(1), "base");
-    let mut a = Layer::paint(LayerId(2), "clip a");
-    a.properties.clipped = true;
-    let mut b = Layer::paint(LayerId(3), "clip b");
-    b.properties.clipped = true;
-    let mut batches = vec![batch(1), batch(2), batch(3)];
+    let mut document = paint_document([128; 2], "base");
+    let base = placement::occurrence_id(&document);
+    let base_target = target(&document);
+    let source = paint(&document).clone();
+    let (a, a_target) = placement::append_paint(&mut document, "clip a", source.clone());
+    let (b, b_target) = placement::append_paint(&mut document, "clip b", source);
+    document.artwork.occurrences.get_mut(a).unwrap().clipped = true;
+    document.artwork.occurrences.get_mut(b).unwrap().clipped = true;
+    let root = document.composition().result;
+    let stack = RecordChange::replace(&document.artwork.stacks, root, Some(Stack { entries: vec![b, a, base] })).unwrap();
+    document.apply(layer_core::Edit::Stack(stack)).unwrap();
+    let mut batches = vec![batch(base_target), batch(a_target), batch(b_target)];
     for (i, b) in batches.iter_mut().enumerate() {
         b.first_dab = i as u32;
     }
@@ -326,50 +333,43 @@ fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
         dab([0., 1., 0., 1.]),
         dab([0., 0., 1., 1.]),
     ];
-    let mut layers = vec![b.clone(), a.clone(), base.clone()];
-    submit(&mut r, &layers, &dabs, &batches, true);
+    submit(&mut r, document.scene(), &dabs, &batches, true);
     assert_eq!(pixel(&mut r, 64, 64), [0, 0, 255, 102]); // export is straight-alpha sRGB
-    let mut group = Layer::paint(LayerId(4), "group");
-    group.kind = LayerKind::Group;
+    let children = RecordChange::insert(&document.artwork.stacks, Stack { entries: vec![b, a, base] });
+    let mut group = Occurrence::new(OccurrenceContent::Stack(children.handle), "group");
     group.opacity = 0.5;
-    for l in [&mut base, &mut a, &mut b] {
-        l.properties.parent = Some(group.id);
-    }
-    layers = vec![group, b, a, base];
-    submit(&mut r, &layers, &[], &[], false);
+    let group = RecordChange::insert(&document.artwork.occurrences, group);
+    let group_id = group.handle;
+    let stack = RecordChange::replace(&document.artwork.stacks, root, Some(Stack { entries: vec![group_id] })).unwrap();
+    document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Stack(children), layer_core::Edit::Occurrence(group), layer_core::Edit::Stack(stack)])).unwrap();
+    submit(&mut r, document.scene(), &[], &[], false);
     let p = pixel(&mut r, 64, 64);
     assert!((p[3] as i32 - 51).abs() <= 1, "{p:?}");
-    layers[0].visible = false;
-    submit(&mut r, &layers, &[], &[], false);
+    document.artwork.occurrences.get_mut(group_id).unwrap().visible = false;
+    submit(&mut r, document.scene(), &[], &[], false);
     assert_eq!(pixel(&mut r, 64, 64), [0; 4]);
 }
 
 #[test]
 fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut l = Layer::paint(LayerId(1), "paint");
-    l.mask = Some(left_mask(9));
-    submit(
-        &mut r,
-        &[l.clone()],
-        &[dab([1., 0., 0., 1.])],
-        &[batch(1)],
-        true,
-    );
+    let mut document = paint_document([128; 2], "paint");
+    set_mask(&mut document, left_mask());
+    submit(&mut r, document.scene(), &[dab([1., 0., 0., 1.])], &[batch(target(&document))], true);
     let before = r.readback_srgb_rgba8().unwrap();
-    let mut mask = l.mask.take().unwrap();
-    mask.show_area = false;
-    l.pending_operations.push(LayerOperation {
+    let coverage = mask_snapshot(&document);
+    occurrence_mut(&mut document).mask = None;
+    paint_mut(&mut document).operations = Arc::new(vec![RasterOperation {
         placement: layer_core::Affine::IDENTITY,
-        coverage: mask,
-        kind: LayerOperationKind::ApplyMask,
-    });
-    let mut op = batch(1);
+        coverage,
+        kind: RasterOperationKind::ApplyMask,
+    }]);
+    let mut op = batch(target(&document));
     op.dab_count = 0;
-    op.kind = DabBatchKind::LayerOperation(0);
-    submit(&mut r, &[l.clone()], &[], &[op], false);
+    op.kind = DabBatchKind::RasterOperation(0);
+    submit(&mut r, document.scene(), &[], &[op], false);
     assert_eq!(r.readback_srgb_rgba8().unwrap(), before);
-    submit(&mut r, &[l], &[dab([0., 1., 0., 1.])], &[batch(1)], false);
+    submit(&mut r, document.scene(), &[dab([0., 1., 0., 1.])], &[batch(target(&document))], false);
     assert_eq!(
         pixel(&mut r, 90, 64),
         [0, 255, 0, 255],
@@ -380,19 +380,19 @@ fn apply_mask_preserves_pixels_and_does_not_remain_a_live_mask() {
 #[test]
 fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let l = Layer::paint(LayerId(1), "paint");
+    let document = paint_document([128; 2], "paint");
     submit(
         &mut r,
-        std::slice::from_ref(&l),
+        document.scene(),
         &[dab([1., 0., 0., 0.4])],
-        &[batch(1)],
+        &[batch(target(&document))],
         true,
     );
-    let mut locked = batch(1);
+    let mut locked = batch(target(&document));
     locked.style.alpha_locked = true;
     submit(
         &mut r,
-        std::slice::from_ref(&l),
+        document.scene(),
         &[dab([0., 0., 1., 0.5])],
         &[locked.clone()],
         false,
@@ -404,7 +404,7 @@ fn alpha_lock_preserves_partial_alpha_and_eraser_is_noop() {
     );
     assert_eq!(p[3], 102);
     locked.style.mode = DabMode::Erase;
-    submit(&mut r, &[l], &[dab([1.; 4])], &[locked], false);
+    submit(&mut r, document.scene(), &[dab([1.; 4])], &[locked], false);
     assert_eq!(pixel(&mut r, 64, 64), p);
 }
 
@@ -414,21 +414,21 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor {
         space: RgbSpace::Srgb, depth: SampleDepth::U8,
     }).unwrap();
-    let layers = [Layer::paint(LayerId(1), "small swept preview")];
+    let document = paint_document([1024; 2], "small swept preview");
     let render = |r: &mut WgpuRasterizer, dabs: &[Dab], batches: &[DabBatch], reset| {
         r.submit(FramePacket {
             view: view(),
             dabs,
             dab_batches: batches,
             reset_layers: reset,
-            ..packet(&layers, [1024; 2])
+            ..packet(document.scene(), [1024; 2])
         }).unwrap();
     };
     for preset in layer_core::CONTACT_BRUSH_PRESETS {
         let mut base = dab([0.7, 0.1, 0.2, 0.8]);
         base.center = Point { x: 512., y: 512. };
         base.radii = [900.; 2];
-        let mut base_batch = batch(1);
+        let mut base_batch = batch(target(&document));
         base_batch.damage = base.bounds();
         let mut first = dab([0.1, 0.3, 0.8, 0.7]);
         first.center = Point { x: 260., y: 255. };
@@ -440,7 +440,7 @@ fn small_swept_contact_preview_matches_commit_and_preserves_distant_pixels() {
         let mut last = first;
         last.center = Point { x: 770., y: 790. };
         last.motion = [-21., 31.];
-        let mut stroke = batch(1);
+        let mut stroke = batch(target(&document));
         stroke.stroke_id = StrokeId(2);
         stroke.style = preset_style(preset);
         stroke.dab_count = 2;

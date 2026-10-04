@@ -308,7 +308,7 @@ impl App {
         }
     }
     pub(crate) fn hdr_output(&self) -> bool {
-        self.hdr_capable() && self.host.session.engine().document().color.depth.is_float()
+        self.hdr_capable() && self.host.session.engine().document().composition().color.depth.is_float()
             && self.host.session.hdr_presentation_allowed()
     }
     pub(crate) fn presentation_timings(&mut self, enabled: bool) -> serde_json::Value {
@@ -410,7 +410,7 @@ impl App {
                 .ok_or("GPU generation exhausted")?;
             self.gpu_watch = layer_host::DeviceWatch::observe(&device);
             let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
-                self.host.session.engine().document().color,
+                self.host.session.engine().document().composition().color,
                 &self.host.renderer_options(Some(cache_directory.into())),
                 false,
             )?;

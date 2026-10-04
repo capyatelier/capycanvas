@@ -3,9 +3,9 @@ use super::*;
 #[test]
 fn display_level_updates_share_one_compute_pass() {
     let doc = document();
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
-    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap();
     r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
@@ -28,14 +28,14 @@ fn strokes_and_replays_repair_only_touched_pages() {
     for (enabled, preset, taper) in [(false, DefaultBrushPreset::GPen, 0.), (true, DefaultBrushPreset::GPen, 0.),
         (true, DefaultBrushPreset::CloneStamp, 0.), (true, DefaultBrushPreset::GPen, 1.)] {
         let mut doc = document_at([1537, 1025]);
-        doc.blend_space = layer_core::BlendSpace::Perceptual;
-        doc.reference_layers.insert(doc.layers[0].id);
-        doc.layers.insert(0, Layer::paint(LayerId(80), "stroke"));
-        doc.active_layer = LayerId(80);
+        composition_mut(&mut doc).blend = layer_core::BlendSpace::Perceptual;
+        occurrence_mut(&mut doc,0).reference=true;
+        let stroke=paint_occurrence(&mut doc,"stroke",None);insert_occurrence(&mut doc,stroke,0);
+        doc.working.occurrence=Some(stroke);doc.working.target=Some(source_at(&doc,0));
         let mut v = crate::test_support::view([256, 192]);
         v.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         let (mut input, consumer) = input_queue(64);
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.set_complete_display_allowance(1024 << 20);
         let mut engine = CanvasEngine::new(r, doc, consumer, v,
             ViewTransform { revision: 0, surface_to_document: [8., 0., 0., 8., 0., 0.] }).unwrap();
@@ -68,7 +68,7 @@ fn strokes_and_replays_repair_only_touched_pages() {
                 drain(&mut engine, false);
             }
             assert_eq!(engine.metrics().committed_strokes, stroke as u64 + 1);
-            let backing = engine.document().layers[0].raster.wait_data().unwrap();
+            let backing = paint_at(engine.document(),0).raster.wait_data().unwrap();
             let pages = backing.tiles.len() as u64;
             assert!(pages > 0 && pages < 10, "sparse stroke: {pages} pages");
             let work = engine.backend().metrics.composited_pixels;
@@ -76,9 +76,9 @@ fn strokes_and_replays_repair_only_touched_pages() {
             assert!(engine.backend().metrics.composited_pixels - work <= pages * u64::from(PAGE_SIZE).pow(2),
                 "native publication must not expand exact repair beyond {pages} touched pages: {} pixels",
                 engine.backend().metrics.composited_pixels - work);
-            let mut exact = WgpuRasterizer::new_native_headless(engine.document().color).unwrap();
+            let mut exact = WgpuRasterizer::new_native_headless(engine.document().composition().color).unwrap();
             exact.test.reference = true;
-            let frame = FramePacket { view: v, blend_space: engine.document().blend_space, ..packet(&engine.document().layers, [1537, 1025]) };
+            let frame = FramePacket { view: v, blend_space: engine.document().composition().blend, ..packet(engine.document().scene(), [1537, 1025]) };
             exact.submit(frame).unwrap();
             let expected = pixels(&exact, crate::test_support::document_texture(&exact));
             let error = quality(&display_pixels(engine.backend()), &expected, engine.backend().scale_display.as_ref().unwrap().plan);
@@ -92,11 +92,11 @@ fn strokes_and_replays_repair_only_touched_pages() {
 #[test]
 fn idle_refinement_presents_completion_and_never_holds_new_input() {
     let doc = document_at([1537, 1025]);
-    let extent = [doc.width, doc.height];
+    let extent = doc.composition().size;
     for allowance in [0, 1024 << 20] {
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.set_complete_display_allowance(allowance);
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(frame).unwrap();
@@ -119,7 +119,7 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
         assert!(presenter.needs_present(&r, frame.view, [0.; 4]));
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
         let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-        let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
         assert!(presenter.needs_present(&r, frame.view, [0.; 4]));
         presenter.present(&r, &target, frame.view, [0.; 4]).unwrap();
@@ -148,15 +148,14 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
 fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
     for (visible,opacity) in [(true,1.),(false,1.),(true,0.35)] {
         let mut doc = document_at([1537, 1025]);
-        doc.layers.push(Layer::solid_color(LayerId(2), "Paper", layer_core::color::RgbColor::WHITE));
-        let fill=doc.layers.last_mut().unwrap();
-        let fill_id=fill.id;
+        let fill_id=add_fill(&mut doc, layer_core::color::RgbColor::WHITE);
+        let fill=doc.artwork.occurrences.get_mut(fill_id).unwrap();
         fill.visible=visible;fill.opacity=opacity;
-        let extent = [doc.width, doc.height];
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let extent = doc.composition().size;
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
@@ -182,18 +181,18 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
         r.submit(frame).unwrap();
         assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch: fill visible={visible}, opacity={opacity}");
         let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-        let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
         let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
         for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
         assert!(r.metrics.submissions>submissions,"fresh artwork still submits: fill visible={visible}, opacity={opacity}");
         r.background_ready.store(true, std::sync::atomic::Ordering::Release);
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-        let mut changed=doc.layers.clone();
-        changed.iter_mut().find(|layer|layer.id==fill_id).unwrap().visible=!visible;
+        let mut changed=doc.clone();
+        changed.artwork.occurrences.get_mut(fill_id).unwrap().visible=!visible;
         r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
         r.background_refinement=true;
         let submissions=r.metrics.submissions;
-        r.submit(FramePacket {layers:&changed,..frame}).unwrap();
+        r.submit(FramePacket {scene:changed.scene(),..frame}).unwrap();
         assert!(r.metrics.submissions>submissions,"fill visibility edits bypass unfinished idle backpressure");
     }
 }
@@ -201,25 +200,25 @@ fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
 #[test]
 fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     let doc = document_at([769, 513]);
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     let dabs = [[90., 80.], [620., 390.]].map(|position| crate::tests::test_dab(position, [0.9, 0.1, 0.3, 1.], 0.8));
-    let mut batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs[0].bounds().union(dabs[1].bounds()));
+    let mut batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs[0].bounds().union(dabs[1].bounds()));
     batch.dab_count = dabs.len() as u32;
     let stroke = FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..frame };
-    let source = &r.scene.as_ref().unwrap().scale_sources.entries[&doc.layers[0].id];
+    let source = &r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc, 0)];
     let updates = source.updates;
     let levels = source.levels.len() as u64;
     for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
-    assert!(r.scene.as_ref().unwrap().scale_sources.entries[&doc.layers[0].id].updates - updates <= 2 * levels,
+    assert!(r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc, 0)].updates - updates <= 2 * levels,
         "only touched source pages need reduction at each retained level");
     let work = r.metrics.composited_pixels;
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -229,12 +228,12 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
 #[test]
 fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let mut doc = document_at([769, 513]);
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -254,7 +253,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     }
     let drawing_target = r.scale_display.as_ref().unwrap().texture().clone();
     let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    let batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
     r.submit(stroke).unwrap(); exact.submit(stroke).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().texture(), &drawing_target, "drawing updates the resident level");
@@ -267,7 +266,7 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     frame.view.document_to_surface = [1., 0., 0., 1., 0., 0.];
     r.submit(frame).unwrap();
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-    let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
+    let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0),
         moving: true, selection: None, transform: layer_core::ImageTransform::affine(Affine::translation(Point { x: 23., y: 17. })) };
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for moving in [true, false] {
@@ -285,13 +284,11 @@ fn settled_composition_reuses_every_zoom_and_refines_only_changed_pages() {
     let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
     for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
-    let mut effect = Layer::paint(LayerId(80), "native blur");
-    effect.kind = LayerKind::Effect;
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.resolution = layer_core::EffectResolution::Native;
-    effect.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    doc.layers.insert(0, effect);
-    frame = packet(&doc.layers, extent);
+    let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
+    insert_occurrence(&mut doc,effect,0);
+    frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
@@ -302,12 +299,13 @@ use layer_core::{Affine, EffectInstance, EffectValue, Point};
 #[test]
 fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     let mut doc = document_at([65, 33]);
-    doc.width = 2561; doc.height = 2561;
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    composition_mut(&mut doc).size=[2561;2];
+    paint_mut(&mut doc,0).domain = [2561;2];
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024 << 20);
     r.native_edit.as_mut().unwrap().composition_bytes = 0;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap();
@@ -322,19 +320,17 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.resolution = layer_core::EffectResolution::Native;
     program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
-    let mut effect = Layer::paint(LayerId(80), "global");
-    effect.kind = LayerKind::Effect;
-    effect.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    doc.layers.insert(0, effect);
+    let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
+    insert_occurrence(&mut doc,effect,0);
     let budget = r.native_edit.as_ref().unwrap();
-    assert!(windows::Plan::new(&doc.layers, extent, budget.image_pixel_budget(resident)).is_err());
-    assert!(windows::Plan::new(&doc.layers, extent, budget.image_pixel_budget(0)).is_ok());
-    frame = packet(&doc.layers, extent);
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(resident)).is_err());
+    assert!(windows::Plan::new(doc.scene(), extent, budget.image_pixel_budget(0)).is_ok());
+    frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap();
     assert_eq!(r.scale_display.as_ref().unwrap().resident_bytes(), 0);
     assert!(!r.scale_display.as_ref().unwrap().has_pending_work(&r));
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     exact.submit(frame).unwrap();
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
@@ -344,22 +340,20 @@ fn global_filters_evict_optional_levels_before_rejecting_the_document() {
 fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigation() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document_at([1541, 771]);
-        let extent = [doc.width, doc.height];
-        let mut effect = Layer::paint(LayerId(80), "native blur");
-        effect.kind = LayerKind::Effect;
+        let extent = doc.composition().size;
         let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
         program.resolution = layer_core::EffectResolution::Native;
         let mut instance = EffectInstance::new(Arc::new(program));
         instance.set("sigma", EffectValue::Number(7.)).unwrap();
-        effect.effect = Some(Arc::new(instance));
-        doc.layers.insert(0, effect);
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let effect=effect_occurrence(&mut doc,instance,"effect");
+        insert_occurrence(&mut doc,effect,0);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.native_edit.as_mut().unwrap().image_pixel_bytes = Some(8 * 1024 * 1024);
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
         for (zoom, x, opacity) in [(0.5, -192., 0.8), (0.5, -384., 0.8), (1., -512., 0.8), (1., -512., 0.4), (0.125, 0., 0.4)] {
-            doc.layers[1].opacity = opacity;
-            let mut frame = packet(&doc.layers, extent);
+            occurrence_mut(&mut doc,1).opacity = opacity;
+            let mut frame = packet(doc.scene(), extent);
             frame.blend_space = space;
             frame.view.width_px = 96;
             frame.view.height_px = 64;
@@ -378,11 +372,11 @@ fn native_filter_windows_share_display_storage_and_preserve_halos_during_navigat
 fn watercolor_uses_the_display_graph_across_preview_commit_and_zoom() {
     for space in layer_core::BlendSpace::ALL {
         let doc = document();
-        let extent = [doc.width, doc.height];
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let extent = doc.composition().size;
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.composite_all = false;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
@@ -391,7 +385,7 @@ fn watercolor_uses_the_display_graph_across_preview_commit_and_zoom() {
             let mut dab = crate::tests::test_dab([252. + step as f32 * 20., 128.], [0.2, 0.3, 0.8, 0.8], 0.8);
             dab.radii = [90.; 2];
             dab.material = [0.5, 0.8, 1., 0.8];
-            let mut batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash), dab.bounds());
+            let mut batch = dab_batch(source_at(&doc, 0), crate::layer_tests::preset_style(DefaultBrushPreset::WatercolorWash), dab.bounds());
             batch.kind = kind;
             batch.stroke_start = step == 0;
             batch.stroke_end = step == 2;
@@ -417,14 +411,14 @@ fn watercolor_uses_the_display_graph_across_preview_commit_and_zoom() {
 #[test]
 fn idle_display_refines_an_overview_created_during_transform_motion() {
     let doc = document_at([1541, 771]);
-    let extent = [doc.width, doc.height];
-    let mut preview = layer_render::TransformPreview { transaction: 1, layer: doc.layers[0].id,
+    let extent = doc.composition().size;
+    let mut preview = layer_render::TransformPreview { transaction: 1, target: source_at(&doc, 0),
         moving: true, selection: None, transform: layer_core::ImageTransform::affine(
             Affine::around(Point { x: 770., y: 385. }, [0.8, 0.9], 0.15, Point::default())) };
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.composite_all = false;
     frame.view.width_px = 96;
     frame.view.height_px = 64;
@@ -441,19 +435,17 @@ fn idle_display_refines_an_overview_created_during_transform_motion() {
 #[test]
 fn animated_display_invalidates_retained_pixels_when_time_changes() {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
+    let extent = doc.composition().size;
     let mut program = crate::tests::with_time_controls((*crate::tests::fixture("exposure").program()).clone());
     program.id = "time_probe".into();
     program.entry = "time_probe".into();
     program.wgsl = "fn time_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*(.5+.1*fx_time(b)),c.a);}".into();
-    let mut effect = Layer::paint(LayerId(80), "clock");
-    effect.kind = LayerKind::Effect;
-    effect.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    doc.layers.insert(0, effect);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
+    insert_occurrence(&mut doc,effect,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     r.submit(frame).unwrap(); exact.submit(frame).unwrap();
     let original = display_pixels(&r);
@@ -470,13 +462,13 @@ fn animated_display_invalidates_retained_pixels_when_time_changes() {
 fn idle_display_refines_placement_windows_and_reuses_exact_overlap() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document_at([1541, 771]);
-        let extent = [doc.width, doc.height];
-        doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default()));
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let extent = doc.composition().size;
+        occurrence_mut(&mut doc,0).placement = layer_core::LayerPlacement::from_affine(Affine::around(Point { x: 770., y: 385. }, [0.9, 0.8], 0.17, Point::default()));
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         r.set_complete_display_allowance(0);
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.composite_all = false;
         frame.view.width_px = 96;
@@ -498,23 +490,21 @@ fn idle_display_refines_placement_windows_and_reuses_exact_overlap() {
 #[test]
 fn idle_display_reuses_global_effect_dependencies_until_the_next_edit() {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
+    let extent = doc.composition().size;
     let mut program = (*crate::tests::fixture("gaussian_blur").program()).clone();
     program.id = "global_probe".into();
     program.entry = "global_probe".into();
     program.wgsl = "fn global_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_sample(fx_extent()-p)*.6+fx_original(p)*.4;}".into();
     program.lookups = Arc::new([]);
     program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
-    let mut effect = Layer::paint(LayerId(80), "global");
-    effect.kind = LayerKind::Effect;
-    effect.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    doc.layers.insert(0, effect);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let effect=effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"effect");
+    insert_occurrence(&mut doc,effect,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for opacity in [0.7, 0.4] {
-        doc.layers[1].opacity = opacity;
-        let mut frame = packet(&doc.layers, extent);
+        occurrence_mut(&mut doc,1).opacity = opacity;
+        let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         r.submit(FramePacket { composite_all: false, ..frame }).unwrap();
@@ -529,19 +519,17 @@ fn idle_display_reuses_global_effect_dependencies_until_the_next_edit() {
 fn idle_display_refines_spatial_effects_and_invalidates_committed_paint() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document();
-        let extent = [doc.width, doc.height];
-        let paint = doc.layers[0].id;
-        let mut effect = Layer::paint(LayerId(80), "blur");
-        effect.kind = LayerKind::Effect;
-        effect.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture("gaussian_blur").program())));
-        Arc::make_mut(effect.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(7.)).unwrap();
-        effect.mask = Some(layer_core::LayerMask::reveal_all(LayerId(81), Point::default()));
-        effect.mask.as_mut().unwrap().default_coverage = 0.7;
-        doc.layers.insert(0, effect);
-        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let extent = doc.composition().size;
+        let paint = source_at(&doc, 0);
+        let effect=effect_occurrence(&mut doc,EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),"blur");
+        set_effect_value(&mut doc,effect,"sigma",EffectValue::Number(7.));
+        let mask=coverage_mask(&mut doc,effect,Point::default(),None);
+        doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.7;
+        insert_occurrence(&mut doc,effect,0);
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         exact.test.reference = true;
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();

@@ -1,91 +1,53 @@
 use super::*;
-
-const PAPER: LayerId = LayerId(2);
-
-/// Top to bottom: the named paint layers, then the paper.
+use crate::operation_test_support as fixture;
+use fixture::*;
 fn document(names: &[&str]) -> Document {
-    let mut doc = Document::new("merge", 600, 400, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.remove(0);
-    for (i, name) in names.iter().enumerate() {
-        let id = doc.allocate_layer_id();
-        doc.layers.insert(i, Layer::paint(id, *name));
-    }
-    doc.active_layer = doc.layers[0].id;
-    doc
+    fixture::document([600, 400], names)
 }
-
-fn id(doc: &Document, name: &str) -> LayerId {
-    doc.layers.iter().find(|l| &*l.name == name).unwrap().id
-}
-
-fn layer_mut<'a>(doc: &'a mut Document, name: &str) -> &'a mut Layer {
-    doc.layers.iter_mut().find(|l| &*l.name == name).unwrap()
-}
-
-fn activate(doc: &mut Document, name: &str) {
-    doc.active_layer = id(doc, name);
-}
-
-fn effect(doc: &mut Document, name: &str, filter: &str) {
-    let layer = layer_mut(doc, name);
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(EffectInstance::new(
-        crate::bundled_effect_catalog().get(filter).unwrap().program(),
-    )));
-}
-
-fn nest(doc: &mut Document, name: &str, children: &[&str]) {
-    let group = id(doc, name);
-    layer_mut(doc, name).kind = LayerKind::Group;
-    for child in children {
-        layer_mut(doc, child).properties.parent = Some(group);
-    }
-}
-
 fn baked(doc: &Document, kind: MergeKind) -> Vec<String> {
-    let plan = doc.merge_plan(kind, LayerId(100), LayerId(101)).unwrap();
-    let LayerOperationKind::Bake { members, .. } = &plan.operation.kind else { unreachable!() };
-    members.iter().map(|l| l.name.to_string()).collect()
+    let plan = doc.merge_plan(kind).unwrap();
+    let RasterOperationKind::Bake { scene, scope, .. } = &plan.operation.kind else { panic!("Bake") };
+    let SceneScope::Members(members) = scope else { panic!("Members") };
+    members.iter().map(|h| scene.view().occurrence(*h).unwrap().name.to_string()).collect()
 }
-
-fn names(doc: &Document) -> Vec<String> {
-    doc.layers.iter().map(|l| l.name.to_string()).collect()
-}
-
-/// Apply the plan as `insert_with_operations` would, returning its inverse.
 fn merged(doc: &mut Document, kind: MergeKind) -> Edit {
-    let plan = doc.merge_plan(kind, LayerId(100), LayerId(101)).unwrap();
+    let plan = doc.merge_plan(kind).unwrap();
     let mut edits = plan.edits;
     for edit in &mut edits {
-        if let Edit::InsertLayer { layer, .. } = edit {
-            layer.pending_operations.push(plan.operation.clone());
+        if let Edit::Paint(change) = edit {
+            if Some(SourceTarget::Paint(change.handle)) == Some(plan.target) {
+                Arc::make_mut(&mut change.value.as_mut().unwrap().operations).push(plan.operation.clone());
+            }
         }
     }
     doc.apply(Edit::Batch(edits)).unwrap()
 }
-
+fn references(doc: &Document) -> BTreeSet<OccurrenceHandle> {
+    doc.scene().references()
+}
 #[test]
 fn merge_down_replaces_both_layers_in_one_reversible_edit_and_transfers_references() {
     let mut doc = document(&["Top", "Upper", "Lower", "Bottom"]);
     activate(&mut doc, "Upper");
-    layer_mut(&mut doc, "Upper").opacity = 0.4;
-    layer_mut(&mut doc, "Lower").properties.alpha_locked = true;
-    doc.reference_layers = [id(&doc, "Upper"), id(&doc, "Bottom")].into();
+    occurrence_mut(&mut doc, "Upper").opacity = 0.4;
+    occurrence_mut(&mut doc, "Lower").alpha_locked = true;
+    for name in ["Upper", "Bottom"] {
+        occurrence_mut(&mut doc, name).reference = true;
+    }
     let before = doc.clone();
     assert_eq!(baked(&doc, MergeKind::Down), ["Upper", "Lower"]);
     let undo = merged(&mut doc, MergeKind::Down);
     assert_eq!(names(&doc), ["Top", "Lower", "Bottom", "Paper"]);
-    let result = doc.layer(LayerId(100)).unwrap();
-    assert_eq!((result.opacity, result.properties.blend, result.mask.is_none()), (1., LayerBlend::Normal, true));
-    assert!(result.properties.alpha_locked, "the result keeps the lower layer's alpha lock");
-    assert_eq!(result.properties.extent, None);
-    assert_eq!(doc.active_layer, LayerId(100));
-    assert_eq!(doc.reference_layers, [LayerId(100), id(&before, "Bottom")].into());
+    let result = doc.working.occurrence.unwrap();
+    let o = doc.scene().occurrence(result).unwrap();
+    assert_eq!((o.opacity, o.blend, o.mask.is_none()), (1., LayerBlend::Normal, true));
+    assert!(o.alpha_locked);
+    assert_eq!(doc.scene().local_extent(result), doc.composition().size);
+    assert_eq!(references(&doc), [result, id(&before, "Bottom")].into());
     doc.apply(undo).unwrap();
-    assert_eq!(doc.layers, before.layers);
-    assert_eq!((doc.active_layer, &doc.reference_layers), (before.active_layer, &before.reference_layers));
+    restored(&before, &doc);
+    assert_eq!(references(&doc), references(&before));
 }
-
 #[test]
 fn merge_down_refuses_with_a_reason() {
     use MergeRefusal as R;
@@ -95,241 +57,241 @@ fn merge_down_refuses_with_a_reason() {
         doc.merge_refusal(MergeKind::Down)
     };
     assert_eq!(refusal(&|_| {}), None);
-    assert_eq!(refusal(&|d| drop(d.layers.remove(1))), None);
+    assert_eq!(
+        refusal(&|d| {
+            let h = id(d, "Lower");
+            let root = d.composition().result;
+            d.artwork.stacks.get_mut(root).unwrap().entries.retain(|v| *v != h);
+            refresh(d);
+        }),
+        None
+    );
     assert_eq!(refusal(&|d| activate(d, "Lower")), None);
-    assert_eq!(refusal(&|d| d.active_layer = PAPER), Some(R::NoLayerBelow));
-    assert_eq!(refusal(&|d| d.active_layer = LayerId(99)), Some(R::NoLayer));
-    assert_eq!(refusal(&|d| layer_mut(d, "Upper").visible = false), Some(R::Hidden));
-    assert_eq!(refusal(&|d| layer_mut(d, "Upper").properties.blend = LayerBlend::Multiply), Some(R::NotNormal));
-    assert_eq!(refusal(&|d| layer_mut(d, "Upper").properties.locked = true), Some(R::Locked));
-    assert_eq!(refusal(&|d| layer_mut(d, "Lower").visible = false), Some(R::BelowHidden));
-    assert_eq!(refusal(&|d| layer_mut(d, "Lower").properties.locked = true), Some(R::BelowLocked));
-    assert_eq!(refusal(&|d| layer_mut(d, "Lower").properties.blend = LayerBlend::Screen), Some(R::BelowNotNormal));
+    assert_eq!(refusal(&|d| activate(d, "Paper")), Some(R::NoLayerBelow));
+    assert_eq!(refusal(&|d| d.working.occurrence = Some(OccurrenceHandle::INVALID)), Some(R::NoLayer));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Upper").visible = false), Some(R::Hidden));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Upper").blend = LayerBlend::Multiply), Some(R::NotNormal));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Upper").locked = true), Some(R::Locked));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Lower").visible = false), Some(R::BelowHidden));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Lower").locked = true), Some(R::BelowLocked));
+    assert_eq!(refusal(&|d| occurrence_mut(d, "Lower").blend = LayerBlend::Screen), Some(R::BelowNotNormal));
     assert_eq!(refusal(&|d| effect(d, "Lower", "levels")), Some(R::BelowEffect));
-    assert_eq!(refusal(&|d| layer_mut(d, "Upper").kind = LayerKind::Selection), Some(R::SelectionLayer));
+    assert_eq!(refusal(&|d| saved(d, "Upper", Selection::empty())), Some(R::SelectionLayer));
     let mut doc = document(&["Upper", "Lower"]);
-    let group = doc.allocate_layer_id();
-    doc.layers.insert(0, Layer { kind: LayerKind::Group, ..Layer::paint(group, "Group") });
-    layer_mut(&mut doc, "Upper").properties.parent = Some(group);
-    assert_eq!(doc.merge_refusal(MergeKind::Down), Some(R::NoLayerBelow), "the layer below is in the same group");
-    layer_mut(&mut doc, "Group").properties.locked = true;
-    assert_eq!(doc.merge_refusal(MergeKind::Down), Some(R::Locked), "ancestor locks apply");
+    insert_paint(&mut doc, "Group", 0, None);
+    nest(&mut doc, "Group", &["Upper"]);
+    assert_eq!(doc.merge_refusal(MergeKind::Down), Some(R::NoLayerBelow));
+    occurrence_mut(&mut doc, "Group").locked = true;
+    assert_eq!(doc.merge_refusal(MergeKind::Down), Some(R::Locked));
 }
-
 #[test]
 fn clipping_bases_bake_their_visible_stack_and_keep_hidden_clips() {
     let mut doc = document(&["Hidden clip", "Shade", "Base", "Below"]);
     for name in ["Hidden clip", "Shade"] {
-        layer_mut(&mut doc, name).properties.clipped = true;
+        occurrence_mut(&mut doc, name).clipped = true;
     }
-    layer_mut(&mut doc, "Hidden clip").visible = false;
-    layer_mut(&mut doc, "Shade").properties.blend = LayerBlend::Multiply;
+    occurrence_mut(&mut doc, "Hidden clip").visible = false;
+    occurrence_mut(&mut doc, "Shade").blend = LayerBlend::Multiply;
     activate(&mut doc, "Base");
     assert_eq!(doc.merge_down(), MergeDown::ClippingStack);
     assert_eq!(baked(&doc, MergeKind::Down), ["Shade", "Base"]);
     merged(&mut doc, MergeKind::Down);
     assert_eq!(names(&doc), ["Hidden clip", "Base", "Below", "Paper"]);
-    assert_eq!(doc.clipping_base(id(&doc, "Hidden clip")), Some(LayerId(100)));
-    assert!(!doc.layer(LayerId(100)).unwrap().properties.clipped);
-
+    let result = doc.working.occurrence.unwrap();
+    assert_eq!(doc.clipping_base(id(&doc, "Hidden clip")), Some(result));
+    assert!(!doc.scene().occurrence(result).unwrap().clipped);
     let mut doc = document(&["Shade", "Base"]);
-    layer_mut(&mut doc, "Shade").properties.clipped = true;
-    layer_mut(&mut doc, "Shade").visible = false;
+    occurrence_mut(&mut doc, "Shade").clipped = true;
+    occurrence_mut(&mut doc, "Shade").visible = false;
     activate(&mut doc, "Base");
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::ClipsHidden));
-    layer_mut(&mut doc, "Shade").visible = true;
-    layer_mut(&mut doc, "Base").properties.blend = LayerBlend::Multiply;
+    occurrence_mut(&mut doc, "Shade").visible = true;
+    occurrence_mut(&mut doc, "Base").blend = LayerBlend::Multiply;
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::NotNormal));
 }
-
 #[test]
 fn clipped_layers_merge_within_their_stack() {
     let mut doc = document(&["Upper", "Lower", "Base", "Free"]);
     for name in ["Upper", "Lower"] {
-        layer_mut(&mut doc, name).properties.clipped = true;
+        occurrence_mut(&mut doc, name).clipped = true;
     }
     assert_eq!(doc.merge_down(), MergeDown::Layer);
-    let plan = doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap();
-    let LayerOperationKind::Bake { members, offset } = &plan.operation.kind else { unreachable!() };
-    assert!(
-        bake_layers(members, *offset).iter().all(|l| !l.properties.clipped),
-        "clips without their base composite as an ordinary stack"
-    );
+    let plan = doc.merge_plan(MergeKind::Down).unwrap();
+    let RasterOperationKind::Bake { scene, scope, .. } = &plan.operation.kind else { panic!("Bake") };
+    let SceneScope::Members(members) = scope else { panic!("members") };
+    assert_eq!(members.iter().map(|h| scene.view().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["Upper", "Lower"]);
+    assert!(members.iter().all(|h| !scene.view().with_scope(scope).effective_clipped(*h)));
+    assert!(!members.contains(&id(&doc, "Base")));
     merged(&mut doc, MergeKind::Down);
-    assert!(doc.layer(LayerId(100)).unwrap().properties.clipped, "the result stays clipped to the base");
-    assert_eq!(doc.clipping_base(LayerId(100)), Some(id(&doc, "Base")));
-
+    let result = doc.working.occurrence.unwrap();
+    assert!(doc.scene().occurrence(result).unwrap().clipped);
+    assert_eq!(doc.clipping_base(result), Some(id(&doc, "Base")));
     let mut doc = document(&["Upper", "Base", "Other"]);
-    layer_mut(&mut doc, "Upper").properties.clipped = true;
+    occurrence_mut(&mut doc, "Upper").clipped = true;
     assert_eq!(baked(&doc, MergeKind::Down), ["Upper", "Base"]);
     let mut doc = document(&["Upper", "Clip", "Base"]);
-    layer_mut(&mut doc, "Clip").properties.clipped = true;
+    occurrence_mut(&mut doc, "Clip").clipped = true;
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::BelowClipped));
 }
-
 #[test]
 fn effects_apply_to_the_layer_below_or_bake_their_clipping_stack() {
     let mut doc = document(&["Levels", "Photo", "Backdrop"]);
     effect(&mut doc, "Levels", "levels");
     assert_eq!(doc.merge_down(), MergeDown::ApplyEffect);
     assert_eq!(baked(&doc, MergeKind::Down), ["Levels", "Photo"]);
-    let plan = doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap();
-    let result = plan.edits.iter().find_map(|e| match e {
-        Edit::InsertLayer { layer, .. } => Some(layer),
-        _ => None,
-    });
-    assert_eq!(result.unwrap().properties.extent, None, "effects bake the canvas only");
-
+    let plan = doc.merge_plan(MergeKind::Down).unwrap();
+    let source = plan
+        .edits
+        .iter()
+        .find_map(|e| match e {
+            Edit::Paint(c) => c.value.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(source.domain, doc.composition().size);
     let mut doc = document(&["Levels", "Shade", "Base", "Below"]);
     effect(&mut doc, "Levels", "levels");
     for name in ["Levels", "Shade"] {
-        layer_mut(&mut doc, name).properties.clipped = true;
+        occurrence_mut(&mut doc, name).clipped = true;
     }
     assert_eq!(doc.merge_down(), MergeDown::ClippingStack);
     assert_eq!(baked(&doc, MergeKind::Down), ["Levels", "Shade", "Base"]);
-    layer_mut(&mut doc, "Base").visible = false;
+    occurrence_mut(&mut doc, "Base").visible = false;
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::BaseHidden));
 }
-
 #[test]
 fn merge_group_keeps_the_groups_blend_and_opacity_and_bakes_its_mask() {
     let mut doc = document(&["Group", "Inside", "Hidden", "Outside"]);
-    nest(&mut doc, "Group", &["Inside", "Hidden"]);
-    layer_mut(&mut doc, "Hidden").visible = false;
-    let mask = doc.allocate_layer_id();
-    let group = layer_mut(&mut doc, "Group");
-    group.opacity = 0.5;
-    group.properties.blend = LayerBlend::Screen;
-    group.mask = Some(LayerMask::reveal_all(mask, Point::default()));
+    let group = nest(&mut doc, "Group", &["Inside", "Hidden"]);
+    occurrence_mut(&mut doc, "Hidden").visible = false;
+    add_mask(&mut doc, group, [600, 400], Point::default());
+    occurrence_mut(&mut doc, "Group").opacity = 0.5;
+    occurrence_mut(&mut doc, "Group").blend = LayerBlend::Screen;
     assert_eq!(doc.merge_refusal(MergeKind::Group), None);
-    let plan = doc.merge_plan(MergeKind::Group, LayerId(100), LayerId(101)).unwrap();
-    let LayerOperationKind::Bake { members, .. } = &plan.operation.kind else { unreachable!() };
-    let baked = &members[0];
-    assert_eq!((baked.opacity, baked.properties.blend, baked.mask.is_some()), (1., LayerBlend::Normal, true));
+    let plan = doc.merge_plan(MergeKind::Group).unwrap();
+    let RasterOperationKind::Bake { scene, .. } = &plan.operation.kind else { panic!("Bake") };
+    let baked = scene.view().occurrence(group).unwrap();
+    assert_eq!((baked.opacity, baked.blend, baked.mask.is_some()), (1., LayerBlend::Normal, true));
     merged(&mut doc, MergeKind::Group);
     assert_eq!(names(&doc), ["Group", "Outside", "Paper"]);
-    let result = doc.layer(LayerId(100)).unwrap();
-    assert_eq!((result.kind, result.opacity, result.properties.blend), (LayerKind::Paint, 0.5, LayerBlend::Screen));
+    let result = occurrence(&doc, "Group");
+    assert_eq!((result.kind(), result.opacity, result.blend), (LayerKind::Paint, 0.5, LayerBlend::Screen));
     activate(&mut doc, "Outside");
     assert_eq!(doc.merge_refusal(MergeKind::Group), Some(MergeRefusal::NotGroup));
-
     let mut doc = document(&["Group", "Inside", "Outside"]);
-    nest(&mut doc, "Group", &["Inside"]);
-    layer_mut(&mut doc, "Group").properties.blend = LayerBlend::PassThrough;
-    layer_mut(&mut doc, "Group").opacity = 0.5;
+    let group = nest(&mut doc, "Group", &["Inside"]);
+    occurrence_mut(&mut doc, "Group").blend = LayerBlend::PassThrough;
+    occurrence_mut(&mut doc, "Group").opacity = 0.5;
     activate(&mut doc, "Group");
-    let plan = doc.merge_plan(MergeKind::Group, LayerId(100), LayerId(101)).unwrap();
-    let LayerOperationKind::Bake { members, .. } = &plan.operation.kind else { unreachable!() };
-    assert_eq!(members[0].properties.blend, LayerBlend::Normal, "the group bakes isolated");
+    let plan = doc.merge_plan(MergeKind::Group).unwrap();
+    let RasterOperationKind::Bake { scene, .. } = &plan.operation.kind else { panic!("Bake") };
+    assert_eq!(scene.view().occurrence(group).unwrap().blend, LayerBlend::Normal);
     merged(&mut doc, MergeKind::Group);
-    let result = doc.layer(LayerId(100)).unwrap();
-    assert_eq!((result.opacity, result.properties.blend), (0.5, LayerBlend::Normal), "a Pass Through group merges into a Normal layer");
-
+    let result = occurrence(&doc, "Group");
+    assert_eq!((result.opacity, result.blend), (0.5, LayerBlend::Normal));
     let mut doc = document(&["Group", "Selection"]);
     nest(&mut doc, "Group", &["Selection"]);
-    let selection = layer_mut(&mut doc, "Selection");
-    selection.kind = LayerKind::Selection;
+    saved(&mut doc, "Selection", Selection::empty());
     assert_eq!(doc.merge_refusal(MergeKind::Group), Some(MergeRefusal::SelectionLayersInside));
 }
-
 #[test]
 fn merge_visible_keeps_hidden_layers_and_releases_their_clipping() {
     let mut doc = document(&["Top", "Hidden clip", "Base", "Hidden", "Bottom"]);
-    layer_mut(&mut doc, "Hidden clip").properties.clipped = true;
+    occurrence_mut(&mut doc, "Hidden clip").clipped = true;
     for name in ["Hidden clip", "Hidden"] {
-        layer_mut(&mut doc, name).visible = false;
+        occurrence_mut(&mut doc, name).visible = false;
     }
-    layer_mut(&mut doc, "Top").properties.blend = LayerBlend::Multiply;
+    occurrence_mut(&mut doc, "Top").blend = LayerBlend::Multiply;
     assert_eq!(baked(&doc, MergeKind::Visible), ["Top", "Base", "Bottom", "Paper"]);
     merged(&mut doc, MergeKind::Visible);
     assert_eq!(names(&doc), ["Hidden clip", "Hidden", "Paper"]);
-    assert!(!doc.layer(id(&doc, "Hidden clip")).unwrap().properties.clipped);
-    assert_eq!(doc.layer(LayerId(100)).unwrap().name.as_ref(), "Paper");
-
+    assert!(!occurrence(&doc, "Hidden clip").clipped);
+    assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().name.as_ref(), "Paper");
     let mut doc = document(&["Clip", "Base"]);
-    layer_mut(&mut doc, "Clip").properties.clipped = true;
-    layer_mut(&mut doc, "Base").visible = false;
-    layer_mut(&mut doc, "Paper").visible = false;
+    occurrence_mut(&mut doc, "Clip").clipped = true;
+    occurrence_mut(&mut doc, "Base").visible = false;
+    occurrence_mut(&mut doc, "Paper").visible = false;
     assert_eq!(doc.merge_refusal(MergeKind::Visible), Some(MergeRefusal::NothingVisible), "a hidden base hides its clips");
-    layer_mut(&mut doc, "Base").visible = true;
-    layer_mut(&mut doc, "Clip").properties.locked = true;
+    occurrence_mut(&mut doc, "Base").visible = true;
+    occurrence_mut(&mut doc, "Clip").locked = true;
     assert_eq!(doc.merge_refusal(MergeKind::Visible), Some(MergeRefusal::Locked));
-    assert_eq!(doc.merge_refusal(MergeKind::Stamp), None, "stamping never changes the layers");
+    assert_eq!(doc.merge_refusal(MergeKind::Stamp), None);
 }
-
 #[test]
 fn flatten_bakes_fill_layers_and_keeps_selection_layers() {
     let mut doc = document(&["Visible", "Hidden", "Group", "Hidden child", "Shown child", "Saved"]);
     nest(&mut doc, "Group", &["Hidden child", "Shown child"]);
-    layer_mut(&mut doc, "Group").visible = false;
-    layer_mut(&mut doc, "Hidden").visible = false;
-    layer_mut(&mut doc, "Hidden child").visible = false;
-    let saved = layer_mut(&mut doc, "Saved");
-    saved.kind = LayerKind::Selection;
-    saved.selection = Some(Selection::polygon(vec![
-        Point { x: 0., y: 0. },
-        Point { x: 10., y: 0. },
-        Point { x: 10., y: 10. },
-    ]).unwrap());
-    assert_eq!(doc.flatten_discards(), 2, "a hidden group counts once");
+    for name in ["Group", "Hidden", "Hidden child"] {
+        occurrence_mut(&mut doc, name).visible = false;
+    }
+    saved(&mut doc, "Saved", Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 10., y: 0. }, Point { x: 10., y: 10. }]).unwrap());
+    assert_eq!(doc.flatten_discards(), 2);
     let before = doc.clone();
     let undo = merged(&mut doc, MergeKind::Flatten);
     assert_eq!(names(&doc), ["Saved", "Paper"]);
-    assert_eq!(doc.layer(LayerId(100)).unwrap().properties.extent, None);
+    assert_eq!(doc.target_extent(doc.working.target.unwrap()), doc.composition().size);
     doc.apply(undo).unwrap();
-    assert_eq!(doc.layers, before.layers);
-    layer_mut(&mut doc, "Hidden").properties.locked = true;
-    assert_eq!(doc.merge_refusal(MergeKind::Flatten), Some(MergeRefusal::Locked), "discarding needs unlocked layers");
+    restored(&before, &doc);
+    occurrence_mut(&mut doc, "Hidden").locked = true;
+    assert_eq!(doc.merge_refusal(MergeKind::Flatten), Some(MergeRefusal::Locked));
     let mut empty = document(&["Hidden"]);
-    layer_mut(&mut empty, "Hidden").visible = false;
-    layer_mut(&mut empty, "Paper").visible = false;
+    occurrence_mut(&mut empty, "Hidden").visible = false;
+    occurrence_mut(&mut empty, "Paper").visible = false;
     assert_eq!(empty.merge_refusal(MergeKind::Flatten), Some(MergeRefusal::NothingVisible));
 }
-
 #[test]
 fn stamp_visible_adds_a_top_layer_and_keeps_every_member() {
     let mut doc = document(&["Top", "Hidden", "Bottom"]);
-    layer_mut(&mut doc, "Hidden").visible = false;
-    layer_mut(&mut doc, "Bottom").properties.locked = true;
-    doc.reference_layers = [id(&doc, "Top")].into();
+    occurrence_mut(&mut doc, "Hidden").visible = false;
+    occurrence_mut(&mut doc, "Bottom").locked = true;
+    occurrence_mut(&mut doc, "Top").reference = true;
     activate(&mut doc, "Bottom");
     assert_eq!(baked(&doc, MergeKind::Stamp), ["Top", "Bottom", "Paper"]);
     merged(&mut doc, MergeKind::Stamp);
     assert_eq!(names(&doc), ["Visible", "Top", "Hidden", "Bottom", "Paper"]);
-    assert_eq!(doc.active_layer, LayerId(100));
-    assert_eq!(doc.reference_layers, [id(&doc, "Top")].into());
+    assert_eq!(doc.working.occurrence, Some(id(&doc, "Visible")));
+    assert_eq!(references(&doc), [id(&doc, "Top")].into());
 }
-
 #[test]
 fn bakes_keep_pixels_outside_the_canvas_on_whole_pages() {
     let mut doc = document(&["Upper", "Lower"]);
-    layer_mut(&mut doc, "Upper").properties.offset = Point { x: -100., y: 30. };
-    layer_mut(&mut doc, "Lower").properties.extent = Some([900, 400]);
-    let plan = doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap();
-    let result = plan.edits.iter().find_map(|e| match e {
-        Edit::InsertLayer { layer, .. } => Some(layer.clone()),
-        _ => None,
-    }).unwrap();
-    assert_eq!(result.properties.offset, Point { x: -256., y: 0. });
-    assert_eq!(result.properties.extent, Some([1156, 430]));
-    let LayerOperationKind::Bake { members, offset } = &plan.operation.kind else { unreachable!() };
+    occurrence_mut(&mut doc, "Upper").translation = Point { x: -100., y: 30. };
+    paint_mut(&mut doc, "Lower").domain = [900, 400];
+    let plan = doc.merge_plan(MergeKind::Down).unwrap();
+    let result = plan
+        .edits
+        .iter()
+        .find_map(|e| match e {
+            Edit::Occurrence(c) if c.handle == plan.result => c.value.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    let p = plan
+        .edits
+        .iter()
+        .find_map(|e| match e {
+            Edit::Paint(c) => c.value.as_ref(),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(result.translation, Point { x: -256., y: 0. });
+    assert_eq!(p.domain, [1156, 430]);
+    let RasterOperationKind::Bake { scene, offset, .. } = &plan.operation.kind else { panic!("Bake") };
     assert_eq!(*offset, Point { x: 256., y: 0. });
-    let layers = bake_layers(members, *offset);
-    assert_eq!(layers[0].properties.offset, Point { x: 156., y: 30. });
-    assert_eq!(layers[1].properties.offset, Point { x: 256., y: 0. });
+    assert_eq!(Affine::translation(*offset).map(scene.view().target_offset(target(&doc, "Upper"))), Point { x: 156., y: 30. });
+    assert_eq!(Affine::translation(*offset).map(scene.view().target_offset(target(&doc, "Lower"))), Point { x: 256., y: 0. });
     let mut after = doc.clone();
     merged(&mut after, MergeKind::Down);
     assert!(after.extents_cover_canvas());
-    let flatten = doc.merge_plan(MergeKind::Flatten, LayerId(100), LayerId(101)).unwrap();
-    assert!(
-        flatten.edits.iter().any(|e| matches!(e, Edit::InsertLayer { layer, .. }
-            if layer.properties.extent.is_none() && layer.properties.offset == Point::default())),
-        "Flatten covers the canvas only"
-    );
+    let flatten = doc.merge_plan(MergeKind::Flatten).unwrap();
+    assert!(flatten.edits.iter().any(|e| matches!(e,Edit::Paint(c) if c.value.as_ref().is_some_and(|p|p.domain==doc.composition().size))));
+    assert!(flatten.edits.iter().any(
+        |e| matches!(e,Edit::Occurrence(c) if c.handle==flatten.result&&c.value.as_ref().is_some_and(|o|o.translation==Point::default()))
+    ));
 }
-
 #[test]
 fn bake_bounds_follow_content_photos_and_effects() {
+    let extent = [1024, 768];
     let descriptor = raster::RasterPlane::Color.descriptor(Default::default());
     let tiles = |coordinates: &[[u32; 2]]| {
         raster::RasterRevision::backed(raster::RasterData {
@@ -342,86 +304,86 @@ fn bake_bounds_follow_content_photos_and_effects() {
             watercolor: None,
         })
     };
-    let mut upper = Layer::paint(LayerId(5), "Upper");
-    upper.raster = tiles(&[[1, 0]]);
-    upper.properties.offset = Point { x: 10., y: 20. };
-    let lower = Layer::paint(LayerId(6), "Lower");
-    let extent = [1024, 768];
-    let bounds = |members: &[Layer]| LayerOperation::bounds(&LayerOperation {
-        placement: Affine::IDENTITY,
-        coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
-        kind: LayerOperationKind::Bake { members: members.into(), offset: Point { x: 100., y: 0. } },
-    }, extent);
-    assert!(bounds(std::slice::from_ref(&lower)).is_empty(), "an empty layer bakes nothing");
+    let bounds = |doc: &Document, members: &[&str]| {
+        let scope = SceneScope::Members(members.iter().map(|n| id(doc, n)).collect::<Vec<_>>().into());
+        RasterOperation {
+            placement: Affine::IDENTITY,
+            coverage: CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), extent, Point::default()),
+            kind: RasterOperationKind::Bake { scene: doc.snapshot(), scope, offset: Point { x: 100., y: 0. } },
+        }
+        .bounds(extent)
+    };
+    let mut doc = fixture::document(extent, &["Upper", "Lower"]);
+    paint_mut(&mut doc, "Upper").raster = tiles(&[[1, 0]]);
+    occurrence_mut(&mut doc, "Upper").translation = Point { x: 10., y: 20. };
+    assert!(bounds(&doc, &["Lower"]).is_empty());
     let expected = Rect { min: Point { x: 366., y: 20. }, max: Point { x: 622., y: 276. } };
-    assert_eq!(bounds(&[upper.clone(), lower.clone()]), expected);
-    let mut hidden = upper.clone();
-    hidden.visible = false;
-    assert!(bounds(&[hidden]).is_empty());
-    let mut pending = lower.clone();
-    pending.raster = raster::RasterRevision::pending();
-    assert_eq!(bounds(&[pending]), Rect { min: Point { x: 100., y: 0. }, max: Point { x: 1024., y: 768. } });
-    let program = |id: &str| Some(Arc::new(EffectInstance::new(crate::bundled_effect_catalog().get(id).unwrap().program())));
-    let mut levels = Layer { kind: LayerKind::Effect, ..Layer::paint(LayerId(7), "Levels") };
-    levels.effect = program("levels");
-    assert_eq!(bounds(&[levels.clone(), upper.clone()]), expected, "adjustments keep coverage");
-    let mut blur = levels.clone();
-    blur.effect = program("gaussian_blur");
-    assert_eq!(bounds(&[blur, upper.clone()]), expected.outset(18.));
-    let mut fill = levels;
-    fill.effect = program("solid_color");
-    assert_eq!(bounds(&[fill, upper]), Rect::from_extent(extent));
+    assert_eq!(bounds(&doc, &["Upper", "Lower"]), expected);
+    occurrence_mut(&mut doc, "Upper").visible = false;
+    assert!(bounds(&doc, &["Upper"]).is_empty());
+    occurrence_mut(&mut doc, "Upper").visible = true;
+    paint_mut(&mut doc, "Lower").raster = raster::RasterRevision::pending();
+    assert_eq!(bounds(&doc, &["Lower"]), Rect { min: Point { x: 100., y: 0. }, max: Point { x: 1024., y: 768. } });
+    insert_paint(&mut doc, "Levels", 0, None);
+    effect(&mut doc, "Levels", "levels");
+    assert_eq!(bounds(&doc, &["Levels", "Upper"]), expected);
+    effect(&mut doc, "Levels", "gaussian_blur");
+    assert_eq!(bounds(&doc, &["Levels", "Upper"]), expected.outset(18.));
+    effect(&mut doc, "Levels", "solid_color");
+    assert_eq!(bounds(&doc, &["Levels", "Upper"]), Rect::from_extent(extent));
 }
-
 #[test]
 fn bakes_above_the_publication_limit_are_refused_and_bakes_need_history_room() {
     let mut doc = document(&["Upper", "Lower"]);
-    doc.width = 16384;
-    doc.height = 16384;
-    doc.color.depth = color::SampleDepth::F32;
+    let composition = doc.artwork.compositions.get_mut(doc.artwork.root).unwrap();
+    composition.size = [16384; 2];
+    composition.color.depth = color::SampleDepth::F32;
     for name in ["Upper", "Lower"] {
-        layer_mut(&mut doc, name).raster = raster::RasterRevision::pending();
+        let p = paint_mut(&mut doc, name);
+        p.domain = [16384; 2];
+        p.raster = raster::RasterRevision::pending();
     }
     assert_eq!(doc.merge_refusal(MergeKind::Down), None);
-    assert_eq!(doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap_err(), MergeRefusal::TooLarge);
+    assert_eq!(doc.merge_plan(MergeKind::Down).unwrap_err(), MergeRefusal::TooLarge);
     let doc = document(&["Upper", "Lower"]);
-    let plan = doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap();
-    let mut insert = plan.edits.iter().find(|e| matches!(e, Edit::InsertLayer { .. })).unwrap().clone();
+    let plan = doc.merge_plan(MergeKind::Down).unwrap();
+    let mut insert = plan.edits.iter().find(|e| matches!(e,Edit::Paint(c) if c.value.is_some())).unwrap().clone();
     assert!(!insert.requires_history_admission(&doc));
-    if let Edit::InsertLayer { layer, .. } = &mut insert {
-        layer.pending_operations.push(plan.operation.clone());
+    if let Edit::Paint(c) = &mut insert {
+        Arc::make_mut(&mut c.value.as_mut().unwrap().operations).push(plan.operation);
     }
     assert!(insert.requires_history_admission(&doc));
 }
-
 #[test]
 fn a_merge_that_undo_history_cannot_hold_is_refused_whole() {
     let mut doc = document(&["Upper", "Lower"]);
-    doc.width = 8192;
-    doc.height = 8192;
-    doc.color.depth = color::SampleDepth::F32;
-    let descriptor = raster::RasterPlane::Color.descriptor(doc.color);
-    layer_mut(&mut doc, "Lower").raster = raster::RasterRevision::backed(raster::RasterData {
+    let composition = doc.artwork.compositions.get_mut(doc.artwork.root).unwrap();
+    composition.size = [8192; 2];
+    composition.color.depth = color::SampleDepth::F32;
+    let descriptor = raster::RasterPlane::Color.descriptor(doc.composition().color);
+    paint_mut(&mut doc, "Lower").domain = [8192; 2];
+    paint_mut(&mut doc, "Lower").raster = raster::RasterRevision::backed(raster::RasterData {
         tiles: (0..32u32)
             .flat_map(|x| (0..20u32).map(move |y| [x, y]))
-            .map(|coordinate| {
-                (raster::TileKey { plane: raster::RasterPlane::Color, coordinate }, raster::RasterTile::pending(descriptor))
-            })
+            .map(|coordinate| (raster::TileKey { plane: raster::RasterPlane::Color, coordinate }, raster::RasterTile::pending(descriptor)))
             .collect(),
         watercolor: None,
     });
     let mut editor = Editor::new(doc.clone());
-    let plan = doc.merge_plan(MergeKind::Down, LayerId(100), LayerId(101)).unwrap();
+    let plan = doc.merge_plan(MergeKind::Down).unwrap();
     let mut edits = plan.edits;
     for edit in &mut edits {
-        if let Edit::InsertLayer { layer, .. } = edit {
-            layer.raster = raster::RasterRevision::pending();
-            layer.pending_operations.push(plan.operation.clone());
+        if let Edit::Paint(c) = edit {
+            if c.value.is_some() {
+                let p = c.value.as_mut().unwrap();
+                p.raster = raster::RasterRevision::pending();
+                Arc::make_mut(&mut p.operations).push(plan.operation.clone());
+            }
         }
     }
     assert_eq!(
         editor.perform(Edit::Batch(edits)),
         Err(DocumentError::InvalidLayerOperation("This edit exceeds the Undo/Redo memory limit"))
     );
-    assert_eq!(editor.document().layers, doc.layers, "nothing changes");
+    assert_eq!(editor.document(), &doc);
 }

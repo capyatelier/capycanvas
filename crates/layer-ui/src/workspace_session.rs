@@ -234,9 +234,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn restore_editing(&mut self, mut state: EditingState) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
         state.validate().map_err(|reason| reason.message(self.localization()))?;
-        let space = self.engine.document().color.space;
+        let space = self.engine.document().composition().color.space;
         state.colors.set_rgb_space(space)?;
-        state.colors.set_document_depth(self.engine.document().color.depth)?;
+        state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
         state.mask_colors.set_document_depth(layer_core::color::SampleDepth::U8)?;
         let mut brush = state.tools.brush_in(preset(state.preset)?, space);
         let tool = stroke_paint(tools::group(state.preset).tool(), &state.colors, space, &mut brush)?;
@@ -279,8 +279,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
-        self.state.colors.load_paint(&mut brush, self.engine.document().color.space)?;
+        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().composition().color.space);
+        self.state.colors.load_paint(&mut brush, self.engine.document().composition().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();
         self.state.brush.diameter = brush.diameter;

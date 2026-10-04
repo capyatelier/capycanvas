@@ -18,6 +18,25 @@ canvas is 6000 × 4000.
 
 ## Operations
 
+The BUILD20 comparisons measure the frozen M3 candidate on `4a2cf6aa0`.
+Earlier operation rows and 83/BUILD15 effect and transform probes apply
+to their named binaries; they do not establish BUILD20 canvas performance.
+No selected BUILD20 canvas measurements were collected on this tier.
+
+Overall M3 performance qualification remains pending. The finalized six normal
+release offscreen navigation runs meet the warmed 5% p95 and +1 ms p99 comparison
+bounds in all fifteen paired observations, for frame CPU, CPU through submission
+and completion time. Cold half/native/double navigation in the first pair exceeds
+5% p95; later same-phase comparisons improve, but individual cold observations
+are not all accepted. The later 100-repeat sixteen-layer affinity ABBA pair on
+frozen `4a2cf6aa0` meets the common moving and pen-up CPU-submit/completed bounds
+in both adjacent temporal comparisons; pen-up completion p99 changes by -0.246
+and -0.396 ms. This clears that bounded diagnostic, not the unrestricted matrix.
+These frozen binaries do not qualify current `192601dac` source, reference-tablet
+performance or physical input-to-present response. Exact results are retained in
+`artifacts/format/m3-uninstrumented-27/navigation-analysis.txt` and
+`artifacts/format/m3-final-ordinary-fixture-20261004/measurements/affinity-analysis.txt`.
+
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Pan: Hand tool, one or two fingers | 90 | Renderer 60.1 completed canvas updates/s; completion gap p99 18.8–19.3 ms, 24 MP photo | Spatial composition comparison below; 90 Hz not met |
@@ -46,7 +65,7 @@ canvas is 6000 × 4000.
 | Layer reorder drag | 90 | | |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android 59.0–59.2 fps, interval p99 16.8 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
-| Drawing with 16 visible paint layers, G-Pen 1024 px | 90 | | |
+| Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD20: 74.304–75.047 fresh updates/s; fresh gap p99 18.236–19.527 ms, Linear | [BUILD20 middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); common response bound not cleared |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
 | Panel or column resize | 90 | | |
 | Drawer open and close | 90 | | |
@@ -193,6 +212,79 @@ refinement. The actual tablet viewport admits the 24 MP single-filter window
 under the 608 MiB composition-cache limit; total renderer storage includes
 additional source and paint allocations and is not bounded by that cache limit.
 
+## BUILD20 G-Pen comparison
+
+Measured on 2026-10-04 UTC with the clean `4a2cf6aa0` baseline and the M3
+candidate based on the same revision. Both are benchmark APKs with release Rust.
+The tier photo has one drawing layer above it, Paper hidden, Linear blending,
+Navigator open, Stats closed and default glass. Pressure is 1 and prediction is
+enabled. A priming stroke is undone before three warmed ten-second strokes with
+200 Hz OS-injected stylus input. Both before/after thermal samples are zero.
+The matched Fit zoom is 15.9900%, with screen semiaxes 310 × 150 px; the
+nominal full brush tip remains at least 46.90 px inside the photo.
+
+Rates count completed nonempty updates consuming new paint input inside the
+contact, excluding refinement-only completions. Response is the latest consumed
+input event to GPU completion; its p99 differs from the intercompletion gap.
+Neither metric establishes physical pen latency or screen presentation.
+
+| Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline 1 | 59.067 | 28.304 | 58.165 | 10.016 |
+| Baseline 2 | 59.393 | 27.050 | 54.822 | 9.825 |
+| Baseline 3 | 59.128 | 26.423 | 56.324 | 9.803 |
+| Candidate 1 | 58.890 | 27.519 | 56.363 | 10.096 |
+| Candidate 2 | 59.327 | 25.264 | 57.640 | 10.058 |
+| Candidate 3 | 59.790 | 25.503 | 57.149 | 10.003 |
+
+Both builds miss 90 fresh updates/s and the 22.2 ms gap limit at 1536 px.
+Candidate rate changes range from −0.30% to +1.12%, with owner CPU p95 growth
+of 0.80–2.37%. Response p99 changes by −1.802 / +2.818 / +0.826 ms; the second
+stroke exceeds the +1 ms bound, while the first improves. The samples do not
+resolve a common response pass or a repeatable regression.
+
+Accounted renderer residency is 1466.523 MiB candidate versus 1467.523 MiB
+baseline. Both retain 384 decoded source slots.
+
+### Drawing in the middle of sixteen photo layers
+
+This additional matched 1024 px workload has sixteen photos plus the drawing
+layer: seventeen visible layers, with eight photos above and eight below the
+paint layer. Photo copies have 35% opacity over the opaque base photo. Other
+settings match the guarantee run. Its nominal full-tip margin is 87.83 px.
+
+| Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline 1 | 75.333 | 18.901 | 41.797 | 10.456 |
+| Baseline 2 | 74.592 | 19.177 | 42.259 | 10.558 |
+| Baseline 3 | 75.477 | 18.473 | 40.982 | 10.311 |
+| Candidate 1 | 74.304 | 19.244 | 44.138 | 10.501 |
+| Candidate 2 | 74.861 | 19.527 | 44.399 | 10.420 |
+| Candidate 3 | 75.047 | 18.236 | 40.778 | 10.189 |
+
+Both builds miss 90 updates/s. Candidate throughput changes by
+−1.37 / +0.36 / −0.57%, and owner CPU p95 remains within 5%. Response p99
+changes by +2.341 / +2.140 / −0.204 ms: two strokes exceed +1 ms, so the common
+response bound is not cleared. The adverse repetitions remain part of the
+comparison. Accounted renderer residency is 1709.094 MiB in both builds.
+
+Measured resident boundaries stay within the additional max(16 MiB, 5%)
+comparison ceiling. Allocator snapshots are taken after settling, not inside
+motion; they do not establish continuous renderer/process/driver peaks or
+edit/undo/output lifetime. GPU execution p95 is unmeasured. Logical workload
+settings match; dynamic admission budgets are retained separately. One paired
+batch does not establish the repeatability of response outliers or complete M3
+qualification. Other brushes and earlier effect/transform rows retain their
+stated scope.
+
+Baseline APK SHA-256:
+`2dd557379b1cac6ac51ce813f8a168a46cd9a460249846efe08a8e79b5801af2`.
+Candidate APK SHA-256:
+`83aa369e1b7cc2d9eb16eaf4c2dc1f0f40f574ddeaa0a2965317feb75c2ca01e`.
+Exact app/test APK and source provenance is under
+`artifacts/format/m3-{baseline,candidate}4a-android-build-20/`; raw strokes and
+per-repetition analysis are under `artifacts/format/m3-final-android-performance-20/`.
+
 ## Brushes
 
 Target: **90 completed updates/s** at the guaranteed size, on the 24 MP canvas.
@@ -252,7 +344,7 @@ the rest of the simple class remains unqualified there.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1536 px | Pinned localization candidate: 55.81–56.45 fresh updates/s; fresh gap p99 ≤29.55 ms | **Not met**; current successor unqualified |
+| G-Pen (1) | Simple | 1536 px | BUILD20: 58.890–59.790 fresh updates/s; fresh gap p99 25.264–27.520 ms, Linear | **Not met**; [BUILD20](#build20-g-pen-comparison) |
 | Rough G-Pen (28) | Simple | 2048 px | 12.2 updates/s (12.0–12.2); gap p99 152.2 ms | 1536 px unmeasured |
 | Calligraphy Pen (29) | Simple | 2048 px | 35.2 updates/s (35.1–35.3); gap p99 73.2 ms | 1536 px unmeasured |
 | Antique Pen (30) | Simple | 2048 px | 16.2 updates/s (16.0–16.3); gap p99 171.2 ms | 1536 px unmeasured |

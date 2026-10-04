@@ -244,14 +244,19 @@ impl Launcher {
             match result {
                 Ok(Some(project)) => {
                     if let Some(w) = &target {
-                        if let Err(error) = w.documents.open(w, (project.0, project.1, None)).await
+                        if let Err(error) = w.documents.open_imported(w, project.0, project.1, None).await
                         {
                             w.changed(Err(error));
                             break;
                         }
                     } else if let Some(windows) = self.windows.upgrade() {
-                        crate::open_workspace(app, &windows, Some(project), None);
+                        crate::open_workspace_ready(app, &windows, None, None, Some(settings), localization.clone());
                         target = windows.borrow().last().cloned();
+                        if let Some(w) = &target {
+                            if let Err(error) = w.documents.open_initial_imported(w, project.0, project.1).await {
+                                w.changed(Err(error));
+                            }
+                        }
                         if let Some(window) = &placeholder {
                             window.destroy();
                         }

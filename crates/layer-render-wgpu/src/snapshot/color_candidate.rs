@@ -6,9 +6,9 @@ use layer_render::{EffectValidationRequest, ViewState};
 
 pub struct ColorCanvas {
     renderer: Option<WgpuRasterizer>,
-    project: Project,
+    document: layer_core::Document,
     view: ViewState,
-    time: f32,
+    context: EvaluationContext,
     control: CaptureControl,
     validating: bool,
     analysis: Option<crate::effect_analysis::Job>,
@@ -19,40 +19,31 @@ pub struct ColorCanvas {
 impl SnapshotGpu {
     pub fn color_canvas(
         &self,
-        project: Project,
+        document: layer_core::Document,
+        context: EvaluationContext,
         brush: &BrushSnapshot,
         view: ViewState,
-        time: f32,
         control: CaptureControl,
     ) -> Result<ColorCanvas, GpuRasterError> {
         control.check()?;
-        project
-            .validate(Default::default())
-            .map_err(GpuRasterError::Color)?;
+        document.validate(Default::default()).map_err(GpuRasterError::Color)?;
         let mut renderer = WgpuRasterizer::native_staged_on_device(
             self.adapter.clone(),
             self.device.clone(),
             self.queue.clone(),
-            project.document.color,
+            document.composition().color,
         )?;
         #[cfg(target_arch = "wasm32")]
         if let Some(encoder) = self.encoder.clone() {
             renderer.set_browser_raster_encoder(encoder);
         }
-        renderer.effect_clocks = self.effect_clocks.clone();
+        renderer.seed_evaluation_context(context.clone());
         #[cfg(target_arch = "wasm32")]
         { renderer.analysis_backing_waiter = self.analysis_backing_waiter.clone(); }
         renderer.resize_surface(view.width_px, view.height_px)?;
         let mut programs = Vec::new();
-        for effect in project
-            .document
-            .layers
-            .iter()
-            .filter_map(|l| l.effect.as_ref())
-        {
-            if !programs.contains(&effect.program) {
-                programs.push(effect.program.clone());
-            }
+        for (_, _, definition) in document.artwork.definitions.iter() {
+            if !programs.contains(&definition.program) { programs.push(definition.program.clone()); }
         }
         let validating = !programs.is_empty();
         if validating {
@@ -62,14 +53,14 @@ impl SnapshotGpu {
                 programs,
             })?;
         }
-        renderer.prepare_startup(&project.document, brush, false)?;
+        renderer.prepare_startup(&document, brush, false)?;
         #[cfg(not(target_arch = "wasm32"))]
         renderer.finish_startup_cache();
         Ok(ColorCanvas {
             renderer: Some(renderer),
-            project,
+            context,
+            document,
             view,
-            time,
             control,
             validating,
             analysis: None,
@@ -107,42 +98,37 @@ impl ColorCanvas {
         if self.validating || !ready.canvas_ready || !ready.brush_ready {
             return Ok(false);
         }
-        let document = &self.project.document;
-        if !self.analysed && document.layers.iter().any(|layer| document.layer_is_visible(layer.id)
-            && layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) {
+        let document = &self.document;
+        let scene = document.scene();
+        if !self.analysed && scene.order().iter().any(|&h| scene.visible(h) && scene.effect(h).is_some_and(|effect| effect.program.analysis().is_some())) {
             if let Some(job) = &mut self.analysis {
                 let Some(candidate) = job.take() else { return Ok(false); };
                 renderer.apply_effect_analysis(candidate.map_err(GpuRasterError::Effect)?);
                 self.analysis = None; self.analysed = true;
             } else {
                 self.analysis = Some(crate::effect_analysis::Job::frame(renderer.snapshot_gpu(), crate::effect_analysis::BakeInput {
-                    members: document.layers.clone().into(), offset: layer_core::Point::default(), extent: [document.width, document.height],
-                    color: document.color, blend: document.blend_space, time: self.time,
+                    scene: document.snapshot_with_context(self.context.clone()), scope: SceneScope::All, offset: layer_core::Point::default(), extent: document.composition().size,
+                    color: document.composition().color, blend: document.composition().blend, time: self.context.elapsed,
                 }).map_err(GpuRasterError::Effect)?);
                 return Ok(false);
             }
         }
 
-        let restored: Vec<_> = document
-            .layers
-            .iter()
-            .flat_map(|l| {
-                std::iter::once((l.id, l.raster.clone()))
-                    .chain(l.masks().map(|m| (m.id, m.raster.clone())))
-            })
-            .collect();
+        let restored: Vec<_> = scene.targets().filter_map(|t| scene.raster(t).map(|r| (t, r.clone()))).collect();
         let packet = FramePacket {
             commit_rasters: true,
-            time_seconds: self.time,
+            time_seconds: self.context.elapsed,
             view: self.view,
-            document_extent: [document.width, document.height],
-            layers: &document.layers,
+            document_extent: document.composition().size,
+            scene,
+            selection_visibility: None,
+            inspect_mask: None,
             dabs: &[],
             dab_batches: &[],
             restore_rasters: &restored,
             reset_layers: true,
             composite_all: true,
-            blend_space: document.blend_space,
+            blend_space: document.composition().blend,
         };
         if !renderer.raster_dependencies_ready(packet) {
             return Ok(false);

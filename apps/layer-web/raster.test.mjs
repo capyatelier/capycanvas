@@ -1,3 +1,4 @@
+import {packageManifest,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 
@@ -24,13 +25,14 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   }
   await wait('layerApp.state().document_file.modified');
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-  assert.equal(await evaluate('new TextDecoder().decode([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,10))'),'CAPYRASTER');
+  assert.deepEqual(await evaluate('Array.from([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,4))'),[80,75,3,4]);
   console.log('Captured raster archive',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length}))'));
   await evaluate(`window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
-    window.rasterManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));
+    window.rasterManifest=${packageManifest.toString()};
     window.rasterOriginalIndex=rasterManifest(rasterOriginal);
     window.showOpenFilePicker=async()=>[{name:'restored.capy',async getFile(){return new File([rasterOriginal],'restored.capy')}}];`);
-  assert.ok(await evaluate('rasterOriginalIndex.blobs.length>0'));
+  const originalPackage = await readPackage(evaluate, 'rasterOriginal');
+  assert.ok(packageResourceIdentity(originalPackage).length>0);
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');
   await evaluate(`window.rasterPaintPng=[...rasterFiles].find(([name])=>name.endsWith('.png'))[1].slice();
     window.rasterHash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).join(',');`);
@@ -39,13 +41,23 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="restored.capy"');
   await wait('layerApp.app.brush_ready()');
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
-  assert.deepEqual(await evaluate(`rasterManifest(rasterFiles.get('restored.capy')).blobs`),await evaluate('rasterOriginalIndex.blobs'));
+  assert.deepEqual(packageResourceIdentity(await readPackage(evaluate, "rasterFiles.get('restored.capy')")),packageResourceIdentity(originalPackage));
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');
   assert.equal(await evaluate(`rasterHash(rasterFiles.get('restored.png'))`),await evaluate('rasterHash(rasterPaintPng)'),'Restoring exact tiles produces identical full-canvas PNG pixels');
   await evaluate(`window.rasterGood=rasterOriginal.slice();rasterOriginal[rasterOriginal.length-1]^=1;`);
   const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
-  await invoke('open_document');await wait('!layerApp.state().document_file.busy');
-  assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt archive cannot replace the document');
+  await evaluate(`window.rasterPackageView=layerApp.app.package_view.bind(layerApp.app);window.rasterFailedPackage=null;layerApp.app.package_view=candidate=>{const model=rasterPackageView(candidate);if(model)rasterFailedPackage=model;return model};`);
+  try {
+    await invoke('open_document');await wait('rasterFailedPackage!==null&&!!document.querySelector("dialog[open].document-dialog")');
+    const failed=await evaluate('rasterFailedPackage');
+    assert.equal(failed.disposition,'failed');
+    assert.deepEqual(failed.capabilities,{view:false,copy_original:true,edit:false,save:false,export:false});
+    assert.ok(failed.reason.length>0);
+    assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt package inspection keeps the live document');
+    await evaluate(`(()=>{const close=[...document.querySelectorAll('dialog[open].document-dialog button')].find(button=>button.textContent===rasterFailedPackage.close);if(!close)throw Error('Missing failed package Close action');close.click()})()`);
+    await wait('!layerApp.state().document_file.busy');
+    assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt archive cannot replace the document');
+  } finally {await evaluate('layerApp.app.package_view=rasterPackageView');}
   await evaluate('rasterOriginal=rasterGood');
   await evaluate(`(async()=>{
     const suspend=layerApp.app.suspend_gpu.bind(layerApp.app);

@@ -322,7 +322,7 @@ impl CapyHost {
             config.view_formats.clear();
         }
         let renderer = layer_host::GpuContext { adapter, device, queue }.rasterizer(
-            self.native.session.engine().document().color, &self.native.renderer_options(None), false)?;
+            self.native.session.engine().document().composition().color, &self.native.renderer_options(None), false)?;
         let encoding = self.display.encoding(config.format);
         let mut presenter = ViewportPresenter::for_surface(&renderer, config.format, encoding).map_err(err)?;
         self.presenter_key = Some((renderer.document_color(), encoding));

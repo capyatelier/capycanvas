@@ -12,20 +12,18 @@ fn geometry(origin: [i32; 2], size: [u32; 2]) -> CanvasGeometry {
 /// Two painted layers across tile boundaries, the upper one masked by a
 /// selection so its mask offset and initial coverage are exercised too.
 fn painted() -> (Engine, InputProducer<PenEvent>) {
-    let mut doc = Document::new("canvas geometry", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let upper = doc.allocate_layer_id();
-    let mut layer = Layer::paint(upper, "Upper");
-    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), Point::default());
-    mask.default_coverage = 0.;
-    mask.initial = Some(Selection::polygon(vec![
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let upper = add_paint(&mut doc, "Upper", 0);
+    let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), SIZE, Point::default());
+    mask.source.default_coverage = 0.;
+    mask.source.initial = Some(Selection::polygon(vec![
         Point { x: 0., y: 0. },
         Point { x: 300., y: 0. },
         Point { x: 300., y: 200. },
         Point { x: 0., y: 200. },
     ]).unwrap());
-    layer.mask = Some(mask);
-    doc.layers.insert(0, layer);
-    let lower = doc.layers[1].id;
+    doc.apply(mask_edit(&doc, upper, mask)).unwrap();
+    let lower = doc.scene().order()[1];
     let (mut engine, mut input) = engine(doc);
     engine.set_active_layer(lower).unwrap();
     draw(&mut engine, &mut input, [0.8, 0.1, 0.05, 1.], Point { x: 20., y: 30. }, Point { x: 370., y: 230. }, 1_000_000_000);
@@ -83,19 +81,15 @@ fn painting_reaches_a_new_strip_on_the_left_and_top() {
     assert!(engine.document().extents_cover_canvas());
     let grown = image(&mut engine, 4_000_000_000);
     grown.crop([300, 280], SIZE).assert_eq(&original, "grown");
-    let lower = engine.document().layers[1].id;
+    let lower = engine.document().scene().order()[1];
     engine.set_active_layer(lower).unwrap();
     draw(&mut engine, &mut input, [0.1, 0.7, 0.2, 1.], Point { x: 10., y: 10. }, Point { x: 330., y: 300. }, 5_000_000_000);
     let painted = image(&mut engine, 6_000_000_000);
     let corner = painted.crop([10, 10], [8, 8]);
     assert!(corner.rgba.chunks(4).all(|p| p[1] > p[0] && p[1] > p[2]), "the stroke starts in the new corner");
     assert_ne!(painted.crop([0, 0], [300, 280]).rgba, grown.crop([0, 0], [300, 280]).rgba);
-    let archive = {
-        let mut bytes = Vec::new();
-        Project::snapshot(engine.document()).unwrap().write(&mut bytes).unwrap();
-        bytes
-    };
-    let (mut reopened, _) = self::engine(Project::read(archive.as_slice(), ProjectLimits::default()).unwrap().document);
+    let archive = package_bytes(engine.document());
+    let (mut reopened, _) = self::engine(reopen(&archive));
     image(&mut reopened, 0).assert_eq(&painted, "save and reopen");
     assert!(engine.undo().unwrap());
     image(&mut engine, 6_100_000_000).assert_eq(&grown, "undo the stroke");
@@ -105,18 +99,18 @@ fn painting_reaches_a_new_strip_on_the_left_and_top() {
 
 #[test]
 fn a_placed_photo_crops_as_metadata_and_never_rebases() {
-    let mut doc = Document::new("photo geometry", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let photo = doc.scene().order()[0];
+    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(SIZE, |x, y| {
         [(x * 5 % 256) as u8, (y * 3 % 256) as u8, ((x ^ y) % 256) as u8, 255]
     }));
-    let photo = doc.layers[0].id;
     let (mut engine, _input) = engine(doc);
     let original = image(&mut engine, 0);
     engine.apply_canvas_geometry(&geometry([100, 60], [200, 120])).unwrap();
     image(&mut engine, 1_000_000_000).assert_eq(&original.crop([100, 60], [200, 120]), "photo crop");
     engine.apply_canvas_geometry(&geometry([-400, -300], [684, 556])).unwrap();
-    let layer = engine.document().layer(photo).unwrap();
-    assert_eq!(layer.properties.offset, Point { x: 300., y: 240. });
+    let layer = engine.document().scene().occurrence(photo).unwrap();
+    assert_eq!(layer.translation, Point { x: 300., y: 240. });
     let grown = image(&mut engine, 2_000_000_000);
     grown.crop([300, 240], SIZE).assert_eq(&original, "the whole photo is back");
     assert!(engine.undo().unwrap());
@@ -128,7 +122,7 @@ fn a_placed_photo_crops_as_metadata_and_never_rebases() {
 fn deleting_cropped_pixels_leaves_nothing_hidden_to_reveal() {
     let (mut engine, _input) = painted();
     let original = image(&mut engine, 3_000_000_000);
-    let (mut blank_engine, _) = self::engine(Document::new("blank", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+    let (mut blank_engine, _) = self::engine(Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
     let blank = image(&mut blank_engine, 0);
     let delete = CanvasGeometry { delete_outside: true, ..geometry([50, 30], [200, 150]) };
     engine.apply_canvas_geometry(&delete).unwrap();
@@ -157,21 +151,21 @@ fn deleting_cropped_pixels_leaves_nothing_hidden_to_reveal() {
 /// Two smooth gradients, so interpolation differs from the oracle by less
 /// than a code, with the paper hidden so coverage shows in alpha.
 fn gradients() -> (Engine, InputProducer<PenEvent>) {
-    let mut doc = Document::new("straighten", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let upper = doc.allocate_layer_id();
-    doc.layers.insert(0, Layer::paint(upper, "Upper"));
-    doc.layers.last_mut().unwrap().visible = false;
-    let lower = doc.layers[1].id;
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let upper = add_paint(&mut doc, "Upper", 0);
+    let paper = *doc.scene().order().last().unwrap();
+    doc.apply(occurrence_edit(&doc, paper, |o| o.visible = false)).unwrap();
+    let lower = doc.scene().order()[1];
     let (mut engine, input) = engine(doc);
     for (id, start, end, colors) in [
         (lower, Point { x: 0., y: 0. }, Point { x: SIZE[0] as f32, y: 0. }, [[0.9, 0.2, 0.05, 1.], [0.05, 0.3, 0.9, 1.]]),
         (upper, Point { x: 0., y: 0. }, Point { x: 0., y: SIZE[1] as f32 }, [[0.1, 0.8, 0.1, 0.6], [0.9, 0.9, 0.2, 0.2]]),
     ] {
         engine
-            .append_layer_operation(id, LayerOperation {
+            .append_raster_operation(engine.document().scene().source_target(id).unwrap(), RasterOperation {
                 placement: Affine::IDENTITY,
-                coverage: LayerMask::reveal_all(LayerId(900 + id.0), Point::default()),
-                kind: LayerOperationKind::Gradient { start, end, colors, radial: false, alpha_locked: false },
+                coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), SIZE, Point::default()),
+                kind: RasterOperationKind::Gradient { start, end, colors, radial: false, alpha_locked: false },
             })
             .unwrap();
         image(&mut engine, 1_000_000);
@@ -260,19 +254,19 @@ fn straightening_matches_a_cpu_rotation_and_keeps_the_hidden_corners() {
 
 #[test]
 fn straightening_turns_a_placed_photo_without_resampling_its_pixels() {
-    let mut doc = Document::new("photo straighten", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers[0].source = Some(color::source::rgba8_source(SIZE, |x, y| {
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let photo = doc.scene().order()[0];
+    paint_mut(&mut doc, photo).original = Some(color::source::rgba8_source(SIZE, |x, y| {
         [(60 + x / 3) as u8, (40 + y / 2) as u8, (200 - (x + y) / 6) as u8, 255]
     }));
-    let photo = doc.layers[0].id;
     let (mut engine, _input) = engine(doc);
     let original = image(&mut engine, 0);
-    let source = engine.document().layer(photo).unwrap().source.clone().unwrap();
+    let source = paint(engine.document(), photo).original.clone().unwrap();
     let geometry = straightened(-0.15, false);
     engine.apply_canvas_geometry(&geometry).unwrap();
-    let layer = engine.document().layer(photo).unwrap();
-    assert!(std::sync::Arc::ptr_eq(layer.source.as_ref().unwrap(), &source), "the original is kept");
-    assert!(layer.pending_operations.is_empty(), "no pixel work");
+    let layer = paint(engine.document(), photo);
+    assert!(std::sync::Arc::ptr_eq(layer.original.as_ref().unwrap(), &source), "the original is kept");
+    assert!(layer.operations.is_empty(), "no pixel work");
     let straight = image(&mut engine, 1_000_000_000);
     assert_rotation(&straight, &original, geometry.to_canvas(), 2., "placed photo");
 }
@@ -290,7 +284,7 @@ fn growing_past_a_filled_edge_adds_transparent_canvas() {
 }
 
 /// The coordinates of a target's tiles in `plane`.
-fn tiles(engine: &Engine, id: LayerId, plane: raster::RasterPlane) -> std::collections::BTreeSet<[u32; 2]> {
+fn tiles(engine: &Engine, id: SourceTarget, plane: raster::RasterPlane) -> std::collections::BTreeSet<[u32; 2]> {
     let raster = engine.document().target_raster(id).unwrap().wait_data().unwrap();
     raster.tiles.keys().filter(|k| k.plane == plane).map(|k| k.coordinate).collect()
 }
@@ -315,14 +309,14 @@ fn settled(engine: &mut Engine, time: u64) {
 #[test]
 fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
     let extent = [6000, 4000];
-    let doc = Document::new("24 MP resize", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let paint = doc.layers[0].id;
+    let doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let paint = doc.scene().source_target(doc.scene().order()[0]).unwrap();
     let (mut engine, _input) = engine(doc);
     engine
-        .append_layer_operation(paint, LayerOperation {
+        .append_raster_operation(paint, RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: LayerMask::reveal_all(LayerId(900), Point::default()),
-            kind: LayerOperationKind::Fill { color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
+            coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), extent, Point::default()),
+            kind: RasterOperationKind::Fill { color: [0.2, 0.4, 0.8, 0.5], alpha_locked: false },
         })
         .unwrap();
     settled(&mut engine, 0);
@@ -345,23 +339,23 @@ fn resizing_a_whole_layer_leaves_no_vacated_tiles() {
 }
 
 /// A non-square drawing on a layer moved left of the canvas, with a mask.
-fn oriented_fixture() -> (Engine, InputProducer<PenEvent>, LayerId) {
-    let mut doc = Document::new("orientation", SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let upper = doc.allocate_layer_id();
-    let mut layer = Layer::paint(upper, "Upper");
-    layer.properties.offset = Point { x: -256., y: 0. };
-    layer.properties.extent = Some([SIZE[0] + 256, SIZE[1]]);
-    let mut mask = LayerMask::reveal_all(doc.allocate_layer_id(), layer.properties.offset);
-    mask.default_coverage = 0.;
-    mask.initial = Some(Selection::polygon(vec![
+fn oriented_fixture() -> (Engine, InputProducer<PenEvent>, OccurrenceHandle) {
+    let mut doc = Document::new(PortableId::random(), SIZE[0], SIZE[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let upper = add_paint(&mut doc, "Upper", 0);
+    let translation = Point { x: -256., y: 0. };
+    let domain = [SIZE[0] + 256, SIZE[1]];
+    paint_mut(&mut doc, upper).domain = domain;
+    doc.apply(occurrence_edit(&doc, upper, |o| o.translation = translation)).unwrap();
+    let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), domain, translation);
+    mask.source.default_coverage = 0.;
+    mask.source.initial = Some(Selection::polygon(vec![
         Point { x: 256., y: 0. },
         Point { x: 556., y: 0. },
         Point { x: 556., y: 200. },
         Point { x: 256., y: 200. },
     ]).unwrap());
-    layer.mask = Some(mask);
-    doc.layers.insert(0, layer);
-    let lower = doc.layers[1].id;
+    doc.apply(mask_edit(&doc, upper, mask)).unwrap();
+    let lower = doc.scene().order()[1];
     let (mut engine, mut input) = engine(doc);
     engine.set_active_layer(lower).unwrap();
     draw(&mut engine, &mut input, [0.8, 0.1, 0.05, 1.], Point { x: 20., y: 30. }, Point { x: 370., y: 230. }, 1_000_000_000);
@@ -389,24 +383,25 @@ fn assert_permutation(after: &Image, before: &Image, linear: Affine, what: &str)
 fn flips_and_turns_move_every_pixel_exactly_in_one_undo_step() {
     use ImageOrientation::*;
     let (mut engine, _input, upper) = oriented_fixture();
-    let mask = engine.document().layer(upper).unwrap().mask.as_ref().unwrap().id;
+    let paint_target = engine.document().scene().source_target(upper).unwrap();
+    let mask = SourceTarget::Coverage(engine.document().scene().occurrence(upper).unwrap().mask.as_ref().unwrap().source);
     let original = image(&mut engine, 4_000_000_000);
     let mut time = 5_000_000_000;
     for orientation in [FlipHorizontal, FlipVertical, Rotate180, RotateRight, RotateLeft] {
-        let canvas = [engine.document().width, engine.document().height];
+        let canvas = engine.document().composition().size;
         let geometry = CanvasGeometry::orient(canvas, orientation);
-        let before = [upper, mask].map(|id| (id, engine.document().clone()));
+        let before = [paint_target, mask].map(|id| (id, engine.document().clone()));
         engine.apply_canvas_geometry(&geometry).unwrap();
         assert!(engine.document().extents_cover_canvas());
         let oriented = image(&mut engine, time);
         assert_eq!(oriented.size, geometry.rect.size);
         assert_permutation(&oriented, &original, geometry.to_canvas(), &format!("{orientation:?}"));
         for (id, document) in before {
-            let plane = if id == upper { raster::RasterPlane::Color } else { raster::RasterPlane::Mask };
-            let old = target_geometry(&document.layers, id).as_affine().unwrap();
-            let new = target_geometry(&engine.document().layers, id).as_affine().unwrap().inverse().unwrap();
+            let plane = if id == paint_target { raster::RasterPlane::Color } else { raster::RasterPlane::Mask };
+            let old = document.scene().target_geometry(id).as_affine().unwrap();
+            let new = engine.document().scene().target_geometry(id).as_affine().unwrap().inverse().unwrap();
             let extent = document.target_extent(id).map(|v| v as f32);
-            let initial = document.layer(upper).unwrap().mask.as_ref().filter(|m| m.id == id).and_then(|m| m.initial.as_ref());
+            let initial = match id { SourceTarget::Coverage(h) => document.scene().coverage(h).unwrap().initial.as_ref(), _ => None };
             let page = |[x, y]: [u32; 2]| Rect {
                 min: Point { x: (x * 256) as f32, y: (y * 256) as f32 },
                 max: Point { x: ((x + 1) * 256) as f32, y: ((y + 1) * 256) as f32 },
@@ -432,7 +427,7 @@ fn flips_and_turns_move_every_pixel_exactly_in_one_undo_step() {
     }
     for (orientation, times) in [(FlipHorizontal, 2), (FlipVertical, 2), (Rotate180, 2), (RotateRight, 4), (RotateLeft, 4)] {
         for step in 0..times {
-            let canvas = [engine.document().width, engine.document().height];
+            let canvas = engine.document().composition().size;
             engine.apply_canvas_geometry(&CanvasGeometry::orient(canvas, orientation)).unwrap();
             settled(&mut engine, time + step);
         }

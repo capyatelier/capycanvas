@@ -84,7 +84,7 @@ pub(super) struct Counts {
 /// marks a page that was empty when the stroke first painted it.
 struct StrokePages {
     id: StrokeId,
-    target: LayerId,
+    target: SourceTarget,
     retouch: layer_core::Retouch,
     pages: BTreeMap<[u32; 2], Option<usize>>,
     /// Bounds of the dabs the stroke laid down on each page, in the target's
@@ -96,29 +96,23 @@ struct StrokePages {
 /// placement and appearance. The target is not a member, so painting it keeps
 /// the cache.
 struct ReferenceKey {
-    members: Arc<BTreeSet<LayerId>>,
+    members: Arc<BTreeSet<OccurrenceHandle>>,
     extent: [u32; 2],
     blend_space: layer_core::BlendSpace,
-    layers: Vec<Layer>,
+    scene: Arc<SceneSnapshot>,
+    scope: SceneScope,
 }
 impl ReferenceKey {
-    fn members<'a>(frame: &'a artwork::Frame, members: &'a BTreeSet<LayerId>) -> impl Iterator<Item = &'a Layer> {
-        frame.layers.iter().filter(|l| members.contains(&l.id))
+    fn new(frame: &artwork::Frame, members: &Arc<BTreeSet<OccurrenceHandle>>, extent: [u32; 2]) -> Self {
+        Self {members: members.clone(), extent, blend_space: frame.blend_space,
+            scene: frame.scene.clone(), scope: SceneScope::Members(members.iter().copied().collect::<Vec<_>>().into())}
     }
-    fn new(frame: &artwork::Frame, members: &Arc<BTreeSet<LayerId>>, extent: [u32; 2]) -> Self {
-        Self {
-            members: members.clone(),
-            extent,
-            blend_space: frame.blend_space,
-            layers: Self::members(frame, members).cloned().collect(),
-        }
-    }
-    fn matches(&self, frame: &artwork::Frame, members: &BTreeSet<LayerId>, extent: [u32; 2]) -> bool {
-        *self.members == *members
-            && self.extent == extent
-            && self.blend_space == frame.blend_space
-            && Self::members(frame, members).count() == self.layers.len()
-            && Self::members(frame, members).zip(&self.layers).all(|(a, b)| a.same_artwork(b))
+    fn matches(&self, frame: &artwork::Frame, members: &BTreeSet<OccurrenceHandle>, extent: [u32; 2]) -> bool {
+        let previous=self.scene.view().with_scope(&self.scope);let current=frame.scene.view().with_scope(&self.scope);
+        *self.members == *members && self.extent == extent && self.blend_space == frame.blend_space
+            && self.members.iter().all(|&h| previous.same_occurrence(current,h,true)
+                && previous.visible(h)==current.visible(h) && previous.occurrence_offset(h)==current.occurrence_offset(h)
+                && previous.source_target(h).is_none_or(|target|previous.target_geometry(target)==current.target_geometry(target)))
     }
 }
 
@@ -142,7 +136,7 @@ struct ReferenceCache {
     analyses: Option<Result<crate::effect_analysis::Candidate, String>>,
 }
 impl ReferenceCache {
-    fn validate(&mut self, frame: &artwork::Frame, members: &Arc<BTreeSet<LayerId>>, extent: [u32; 2]) {
+    fn validate(&mut self, frame: &artwork::Frame, members: &Arc<BTreeSet<OccurrenceHandle>>, extent: [u32; 2]) {
         if self.key.as_ref().is_some_and(|key| key.matches(frame, members, extent)) {
             let mut current = reference_frame(frame, members);
             if let Some(previous) = &self.frame { current.time = previous.time; }
@@ -160,13 +154,13 @@ impl ReferenceCache {
     }
     fn analysis_ready(&mut self, r: &WgpuRasterizer) -> Result<bool, GpuRasterError> {
         let Some(frame) = &self.frame else { return Ok(true); };
-        if !frame.layers.iter().any(|layer| layer_core::layer_is_visible(&frame.layers, layer.id)
-            && layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) { return Ok(true); }
+        if !frame.scene.view().order().iter().any(|&h| frame.scene.view().with_scope(&frame.scope).visible(h)
+            && frame.scene.view().effect(h).is_some_and(|effect| effect.program.analysis().is_some())) { return Ok(true); }
         if let Some(result) = &self.analyses { return result.as_ref().map(|_| true).map_err(|e| GpuRasterError::Effect(e.clone())); }
         if let Some(job) = &mut self.analysis_job {
             if let Some(result) = job.take() { self.analyses = Some(result); self.analysis_job = None; return self.analysis_ready(r); }
         } else {
-            let input = crate::effect_analysis::BakeInput {members: frame.layers.clone().into(), offset: layer_core::Point::default(), extent: self.key.as_ref().unwrap().extent,
+            let input = crate::effect_analysis::BakeInput {scene: frame.scene.clone(), scope: frame.scope.clone(), offset: layer_core::Point::default(), extent: self.key.as_ref().unwrap().extent,
                 color: r.document_color, blend: frame.blend_space, time: frame.time};
             match crate::effect_analysis::Job::frame(r.snapshot_gpu(), input) {
                 Ok(job) => self.analysis_job = Some(job),
@@ -207,30 +201,19 @@ impl ReferenceCache {
 }
 
 /// The document frame with only `members` visible: references render without
-/// the target or anything above it.
-fn reference_frame(frame: &artwork::Frame, members: &BTreeSet<LayerId>) -> artwork::Frame {
-    let mut reference = frame.clone();
-    reference.previews.clear();
-    for layer in &mut reference.layers {
-        layer.visible &= members.contains(&layer.id);
-    }
+/// the target or anything above it, over the paper only when it is a member.
+fn reference_frame(frame: &artwork::Frame, members: &BTreeSet<OccurrenceHandle>) -> artwork::Frame {
+    let mut reference = frame.clone(); reference.previews.clear();
+    reference.scope = SceneScope::Members(members.iter().copied().collect::<Vec<_>>().into());
     reference
 }
 
-/// A lone, untransformed layer at full opacity is its own composite.
-fn lone_layer(frame: &artwork::Frame) -> Option<LayerId> {
-    let mut visible = frame.layers.iter().filter(|l| l.visible);
-    let layer = visible.next()?;
-    (visible.next().is_none()
-        && layer.kind == LayerKind::Paint
-        && layer.opacity == 1.
-        && layer.mask.is_none()
-        && layer.effect.is_none()
-        && layer.properties.parent.is_none()
-        && !layer.properties.clipped
-        && layer.properties.blend == layer_core::LayerBlend::Normal
-        && layer_core::target_geometry(&frame.layers, layer.id).is_identity())
-        .then_some(layer.id)
+fn lone_layer(frame: &artwork::Frame) -> Option<SourceTarget> {
+    let scene = frame.scene.view().with_scope(&frame.scope);
+    let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h));
+    let handle = visible.next()?; let o = scene.occurrence(handle)?; let target = scene.source_target(handle)?;
+    (visible.next().is_none() && matches!(target, SourceTarget::Paint(_)) && o.opacity == 1. && o.mask.is_none()
+        && scene.parent(handle).is_none() && !o.clipped && o.blend == layer_core::LayerBlend::Normal && scene.target_geometry(target).is_identity()).then_some(target)
 }
 
 /// Pages within `PREFETCH_RING` of each point, nearest rings first.
@@ -264,7 +247,7 @@ pub(super) struct Gather {
     pub region: PixelRect,
     pub scale: [f32; 2],
     pub offset: [f32; 2],
-    pub stroke: Option<(StrokeId, LayerId, layer_core::Retouch)>,
+    pub stroke: Option<(StrokeId, SourceTarget, layer_core::Retouch)>,
 }
 
 /// What `retouch_sample.wgsl` reads for a gather: sixteen words that map its
@@ -273,9 +256,9 @@ pub(super) struct Gather {
 pub(super) struct Mapping {
     pub words: [u32; 16],
     mode: Mode,
-    target: LayerId,
+    target: SourceTarget,
     stroke: Option<StrokeId>,
-    references: Option<Arc<BTreeSet<LayerId>>>,
+    references: Option<Arc<BTreeSet<OccurrenceHandle>>>,
     blocks: [[i64; 2]; 2],
 }
 
@@ -294,7 +277,7 @@ impl Mapping {
         let mode = if tint { Mode::Tint } else { Mode::None };
         let mut words = [0; 16];
         words[13] = mode as u32;
-        Self { words, mode, target: LayerId(0), stroke: None, references: None, blocks: [[0; 2]; 2] }
+        Self { words, mode, target: SourceTarget::default(), stroke: None, references: None, blocks: [[0; 2]; 2] }
     }
 }
 
@@ -388,7 +371,7 @@ impl RetouchSources {
     fn note_batches(&mut self, batches: &[DabBatch], reset: bool) {
         let Some(batch) = batches
             .iter()
-            .find(|b| b.style.retouch.is_some() && !matches!(b.kind, DabBatchKind::LayerOperation(_)))
+            .find(|b| b.style.retouch.is_some() && !matches!(b.kind, DabBatchKind::RasterOperation(_)))
         else {
             if reset {
                 self.live = None;
@@ -425,7 +408,7 @@ impl RetouchSources {
     fn keep_page(
         &mut self,
         r: &WgpuRasterizer,
-        layer: LayerId,
+        layer: SourceTarget,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
     ) {
@@ -493,7 +476,7 @@ impl RetouchSources {
     fn copy_lone_layer(
         &mut self,
         r: &mut WgpuRasterizer,
-        layer: LayerId,
+        layer: SourceTarget,
         coordinate: [u32; 2],
         wait: bool,
         encoder: &mut crate::submission::CommandEncoder,
@@ -569,7 +552,7 @@ impl RetouchSources {
     fn target_page(
         &mut self,
         r: &mut WgpuRasterizer,
-        target: LayerId,
+        target: SourceTarget,
         stroke: Option<StrokeId>,
         coordinate: [u32; 2],
         encoder: &mut crate::submission::CommandEncoder,
@@ -638,12 +621,12 @@ impl RetouchSources {
             (Some((stroke, target, retouch)), ..) => (*target, retouch, Some(*stroke)),
             (None, Some(stroke), _) => (stroke.target, &stroke.retouch, None),
             (None, None, Some(prepared)) => (prepared.target, &prepared.retouch, None),
-            (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(LayerId(0))),
+            (None, None, None) => return Err(GpuRasterError::MissingPaintLayer(SourceTarget::default())),
         };
         let frame = if retouch.source == layer_core::RetouchSource::References && !retouch.references.is_empty() {
             self.cache.frame.as_ref()
         } else { r.artwork_frame.as_ref() }.ok_or(GpuRasterError::InvalidExtent)?;
-        let layer_core::Affine([a, b, c, d, tx, ty]) = layer_core::affine_edit_transform(&frame.layers, target)
+        let layer_core::Affine([a, b, c, d, tx, ty]) = frame.scene.view().target_geometry(target).as_affine()
             .ok_or(GpuRasterError::InvalidTransform("Apply the transform to edit these pixels"))?;
         let region = gather.region;
         if [a, b, c, d] != [1., 0., 0., 1.] || region.is_empty() || region.width().max(region.height()) > PAGE_SIZE {
@@ -664,7 +647,7 @@ impl RetouchSources {
         let exact = gather.scale.iter().all(|s| s.abs() == 1.)
             && whole(gather.offset)
             && (references.is_none() || whole([gather.offset[0] + tx, gather.offset[1] + ty]));
-        let opacity = frame.layers.iter().find(|l| l.id == target).map_or(1., |l| l.opacity);
+        let opacity = frame.scene.view().source_owner(target).and_then(|h| frame.scene.view().occurrence(h)).map_or(1., |o| o.opacity);
         let page = i64::from(PAGE_SIZE);
         let mode = if references.is_some() { Mode::References } else { Mode::Target };
         let mut words = [0u32; 16];
@@ -820,7 +803,7 @@ enum Prepared {
 
 /// A lone reference layer's page as the renderer holds it: painted, or an
 /// original or backed tile it already decoded.
-fn lone_page(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepared {
+fn lone_page(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 2]) -> Prepared {
     r.paint_layers
         .iter()
         .find(|l| l.id == layer)
@@ -830,7 +813,7 @@ fn lone_page(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepar
 
 /// A layer page the renderer can read without uploading: an original or
 /// backed tile it already decoded. `Decode` when reading needs an upload.
-fn raw_prepared_view(r: &WgpuRasterizer, layer: LayerId, coordinate: [u32; 2]) -> Prepared {
+fn raw_prepared_view(r: &WgpuRasterizer, layer: SourceTarget, coordinate: [u32; 2]) -> Prepared {
     let sources = r.source_tiles.borrow();
     match r.native_color_tile(layer, coordinate) {
         Ok(Some(blob)) => {
@@ -859,9 +842,9 @@ impl WgpuRasterizer {
         let mut sources = self.retouch_sources();
         let same_stroke = sources.stroke.as_ref().is_some_and(|stroke| stroke.id == batch.stroke_id);
         if !same_stroke {
-            let frame = artwork::Frame::new(packet);
-            if sources.cache.frame.as_ref().is_some_and(|old| old.time != frame.time && old.layers.iter().any(|layer|
-                references.contains(&layer.id) && layer.effect.as_ref().is_some_and(|effect| effect.animated()))) { sources.cache.key = None; }
+            let frame = artwork::Frame::new(packet, self.evaluation_context());
+            if sources.cache.frame.as_ref().is_some_and(|old| old.time != frame.time && old.scene.view().order().iter().any(|h|
+                references.contains(h) && old.scene.view().effect(*h).is_some_and(|effect| effect.animated()))) { sources.cache.key = None; }
             sources.cache.validate(&frame, references, packet.document_extent);
         }
         let ready = sources.cache.analysis_ready(self).unwrap_or(true);
@@ -928,12 +911,12 @@ impl WgpuRasterizer {
         };
         let mut retouch = self.retouch_sources();
         if first.stroke_start
-            || retouch.stroke.as_ref().is_none_or(|s| s.id != first.stroke_id || s.target != first.layer_id)
+            || retouch.stroke.as_ref().is_none_or(|s| s.id != first.stroke_id || s.target != first.target)
         {
             retouch.release_stroke();
             retouch.stroke = Some(StrokePages {
                 id: first.stroke_id,
-                target: first.layer_id,
+                target: first.target,
                 retouch: first.style.retouch.clone().unwrap(),
                 pages: BTreeMap::new(),
                 damage: BTreeMap::new(),
@@ -941,7 +924,7 @@ impl WgpuRasterizer {
         }
         for (batch, tiles) in retouching {
             for tile in tiles {
-                retouch.keep_page(self, batch.layer_id, tile.coordinate, encoder);
+                retouch.keep_page(self, batch.target, tile.coordinate, encoder);
                 let [x, y] = tile.coordinate.map(|v| v * PAGE_SIZE);
                 let local = tile.local;
                 let dabs = PixelRect::new(x + local.min_x(), y + local.min_y(), x + local.max_x(), y + local.max_y());
@@ -985,7 +968,7 @@ impl WgpuRasterizer {
                     region,
                     scale: retouch.flip.map(|f| if f { -1. } else { 1. }),
                     offset: retouch.offset,
-                    stroke: Some((batch.stroke_id, batch.layer_id, retouch.clone())),
+                    stroke: Some((batch.stroke_id, batch.target, retouch.clone())),
                 };
                 let retouch = self.retouch_sources();
                 let mapping = retouch.mapping(self, &gather);

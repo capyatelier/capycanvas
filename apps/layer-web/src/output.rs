@@ -63,7 +63,7 @@ pub(super) struct ClipMetadata {
 pub(super) fn clip_metadata(
     token: &str,
     extent: [u32; 2],
-    document: &layer_core::Document,
+    document: layer_core::SceneView<'_>,
     rendition: Option<layer_core::color::hdr::SdrRendition>,
     guide: Option<([u32; 2], f32)>,
     clip: ClipMetadata,
@@ -71,8 +71,8 @@ pub(super) fn clip_metadata(
     serde_json::to_string(&OutputMetadata {
         token: token.into(),
         extent,
-        color: document.color,
-        resolution: document.resolution,
+        color: document.composition().color,
+        resolution: document.composition().resolution,
         recipe: ExportRecipe::web_share(),
         original: None,
         preview: false,
@@ -111,7 +111,7 @@ impl WebApp {
         let recipe: ExportRecipe = serde_wasm_bindgen::from_value(value).map_err(js)?;
         let document = self.session.engine().document();
         recipe.validate().map_err(color_preferences::color_feature_rejection)?;
-        recipe.output_extent([document.width, document.height]).map_err(color_preferences::color_feature_rejection)?;
+        recipe.output_extent(document.composition().size).map_err(color_preferences::color_feature_rejection)?;
         let snapshot = self.session.capture_project_export(id).map_err(js)?;
         let gpu = self
             .session
@@ -142,31 +142,27 @@ pub(super) async fn render_output(
     preview: bool,
     flatten: Option<layer_core::color::DocumentColor>,
 ) -> Result<JsValue, JsValue> {
-    raster_project::wait_backing(&snapshot.project).await?;
+    artwork_transfer::wait_backing(&snapshot.capture.artwork).await?;
     let mut metadata = OutputMetadata {
         token: String::new(),
-        extent: [
-            snapshot.project.document.width,
-            snapshot.project.document.height,
-        ],
-        color: snapshot.project.document.color,
+        extent: snapshot.composition().size,
+        color: snapshot.composition().color,
         resolution: recipe
-            .output_resolution(snapshot.project.document.resolution)
+            .output_resolution(snapshot.composition().resolution)
             .map_err(color_preferences::color_feature_rejection)?,
         recipe,
         original: None,
         preview,
-        rendition: snapshot.project.document.color.depth.is_float().then_some(snapshot.project.document.sdr_rendition),
+        rendition: snapshot.composition().color.depth.is_float().then_some(snapshot.output().sdr),
         flatten,
         guide: None,
         clip: None,
         photo: [None; 3],
     };
-    let photo = snapshot.project.document.metadata.clone();
+    let photo = snapshot.capture.artwork.metadata.clone();
     let mut capture = gpu
         .capture(
-            snapshot.project,
-            snapshot.time,
+            snapshot.capture,
             control.clone(),
         )
         .map_err(js)?;
@@ -188,7 +184,7 @@ pub(super) async fn render_output(
         let project =
             layer_color::photo_project((*original).clone(), Default::default(), layer_core::DocumentNames { paint: "Original".into(), paper: "".into() }, metadata.color.depth)
                 .map_err(js)?;
-        let packed = raster_project::pack(project).await?;
+        let packed = artwork_transfer::pack(project.artwork).await?;
         metadata.original = Some(
             js_sys::Reflect::get(&packed, &js("metadata"))?
                 .as_string()
@@ -391,16 +387,17 @@ pub async fn raster_worker_output(
             resolution: metadata.resolution,
             rendition: metadata.rendition.zip(guide.as_ref()),
             source: clip.source,
-            limit: raster_project::photo_memory_budget().encode_bytes,
+            limit: artwork_transfer::photo_memory_budget().encode_bytes,
         };
         let (source, png) = layer_color::write_clip_rows(rows, &mut read_row).map_err(js)?;
         let result = match source {
             Some(source) => {
-                let mut document = layer_core::Document::new("Clipboard", source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
-                document.color = metadata.color;
-                document.layers.truncate(1);
-                document.layers[0].source = Some(std::sync::Arc::new(source));
-                raster_project::pack(layer_core::Project { document }).await?
+                let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), source.extent[0], source.extent[1], layer_core::DocumentNames { paint: "".into(), paper: "".into() });
+                let root=document.artwork.root; document.artwork.compositions.get_mut(root).unwrap().color=metadata.color;
+                let layer_core::SourceTarget::Paint(paint)=document.working.target.unwrap() else {unreachable!()};
+                document.artwork.paint.get_mut(paint).unwrap().original=Some(std::sync::Arc::new(source));
+                let stack=document.composition().result; document.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1);
+                artwork_transfer::pack(document.artwork).await?
             }
             None => {
                 let empty = js_sys::Object::new();
@@ -424,7 +421,7 @@ pub async fn raster_worker_output(
             let rendition = metadata.rendition.ok_or_else(|| js("Missing SDR rendition"))?;
             let guide = guide.as_ref().ok_or_else(|| js("Missing output illumination guide"))?;
             let options = layer_color::photo::GainMapEncodeOptions::from_memory_budget(
-                recipe.jpeg_quality, raster_project::photo_memory_budget(),
+                recipe.jpeg_quality, artwork_transfer::photo_memory_budget(),
             );
             // The editor cancels the isolated worker from its own event loop,
             // including during synchronous codec calls. No shared Wasm memory
@@ -504,7 +501,7 @@ pub async fn raster_worker_output(
                 color,
                 metadata.resolution,
                 target,
-                raster_project::photo_memory_budget().encode_bytes,
+                artwork_transfer::photo_memory_budget().encode_bytes,
                 rows,
             )?);
             return Ok(());
@@ -545,7 +542,7 @@ pub async fn raster_worker_output(
                 extent,
                 target,
                 &delivery,
-                layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, raster_project::photo_memory_budget()),
+                layer_color::photo::JpegEncodeOptions::from_memory_budget(recipe.jpeg_quality, artwork_transfer::photo_memory_budget()),
                 rows,
             ),
             ExportFormat::Webp => layer_color::photo::write_webp_rows(
@@ -553,18 +550,14 @@ pub async fn raster_worker_output(
                 extent,
                 target,
                 &delivery,
-                raster_project::photo_memory_budget().encode_bytes,
+                artwork_transfer::photo_memory_budget().encode_bytes,
                 rows,
             ),
         }
     };
     let clipped = if let Some(original) = metadata.original {
-        let project = raster_project::unpack(&original, buffers, true).await?;
-        let source = project
-            .document
-            .layers
-            .iter()
-            .find_map(|l| l.source.as_ref())
+        let project = artwork_transfer::unpack(&original, buffers).await?;
+        let source = project.paint.iter().find_map(|(_,_,paint)| paint.original.as_ref())
             .ok_or_else(|| js("Missing original source"))?;
         if source.extent != extent
             || source.interpretation.channels != target.channels
@@ -589,8 +582,8 @@ pub async fn raster_worker_output(
         .clipped_channels
     };
     if let Some(mut project) = flattened {
-        project.document.metadata = delivery.photo;
-        let wire = raster_project::pack(project).await?;
+        project.artwork.metadata = std::sync::Arc::new(delivery.photo);
+        let wire = artwork_transfer::pack(project.artwork).await?;
         js_sys::Reflect::set(&wire, &js("clipped"), &JsValue::from_f64(clipped as f64))?;
         return Ok(wire);
     }

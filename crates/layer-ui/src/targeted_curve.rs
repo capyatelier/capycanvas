@@ -1,9 +1,10 @@
 use super::*;
 use super::calibration::CalibrationFailure;
-use layer_core::{ArtworkQuery,ArtworkSample,ArtworkSampleRequest,ArtworkSource,EffectValue,Layer,Point};
+use layer_core::{ArtworkQuery,ArtworkSample,ArtworkSampleRequest,ArtworkSource,EffectValue,Point,authored::{EffectBaseline,Occurrence,OccurrenceHandle,CoverageSource}};
+use std::sync::Arc;
 
 pub(super) struct TargetedCurve {
-    layer:LayerId,
+    layer:OccurrenceHandle,
     epoch:u64,
     document_epoch:u64,
     page:u8,
@@ -12,7 +13,9 @@ pub(super) struct TargetedCurve {
 struct Contact {
     pointer:(PointerKind,u64),
     request:ArtworkSampleRequest,
-    expected:Layer,
+    expected:EffectBaseline,
+    occurrence:Occurrence,
+    coverage:Option<CoverageSource>,
     start:f32,
     current:f32,
     scale:f32,
@@ -40,10 +43,10 @@ impl<R:CanvasRenderer> UiSession<R> {
         if self.targeted_curve.is_some() {self.cancel_picker();return Ok(());}
         self.require_idle()?;
         let document=self.engine.document();
-        if document.is_locked(LayerId(layer)) || document.layer(LayerId(layer)).and_then(|l|l.effect.as_ref()).is_none_or(|e|e.program.id.as_ref()!="curves") {return Err("Choose a Curves adjustment".into());}
+        if document.is_locked(occurrence_handle(layer)?) || document.scene().effect(occurrence_handle(layer)?).is_none_or(|e|e.program.id.as_ref()!="curves") {return Err("Choose a Curves adjustment".into());}
         self.cancel_picker();self.cancel_auto_levels();self.cancel_histogram();self.start_picker()?;
         self.eyedropper.cancel();self.eyedropper.layer=false;
-        self.targeted_curve=Some(TargetedCurve {layer:LayerId(layer),epoch,document_epoch:self.state.document_file.epoch,page:0,contact:None});
+        self.targeted_curve=Some(TargetedCurve {layer:occurrence_handle(layer)?,epoch,document_epoch:self.state.document_file.epoch,page:0,contact:None});
         self.sync_targeted_page();self.refresh_tools();Ok(())
     }
     pub(super) fn targeted_curve_input(&mut self,input:&UiInput)->Result<Option<UiChange>,String> {
@@ -56,11 +59,13 @@ impl<R:CanvasRenderer> UiSession<R> {
                 if position.iter().any(|v|!v.is_finite()) {return Ok(Some(UiChange::default()));}
                 let Some(mode)=&self.targeted_curve else {return Ok(None);};
                 if phase==ContactPhase::Down && button==PointerButton::Primary && mode.contact.is_none() {
-                    let document=self.engine.document();let original=document.layer(mode.layer).ok_or("The adjustment was removed")?.clone();
+                    let document=self.engine.document();let original=effects::effect_baseline(document,mode.layer)?;
+                    let occurrence=document.scene().occurrence(mode.layer).ok_or("The adjustment was removed")?.clone();
+                    let coverage=document.scene().mask(mode.layer).map(|(_,source)|source.clone());
                     let point=self.state.camera.input_transform().map(Point {x:position[0],y:position[1]});
-                    let mut query=ArtworkQuery::new(document,ArtworkSource::EffectInput(mode.layer));query.time=self.engine.animation_time();
+                    let mut query=ArtworkQuery::new(document,ArtworkSource::EffectInput(mode.layer));Arc::make_mut(&mut query.snapshot).context.elapsed=self.engine.animation_time();
                     let scale=self.logical_viewport.map_or(1.,|logical|self.state.camera.viewport[0] as f32/logical[0]);
-                    self.targeted_curve.as_mut().unwrap().contact=Some(Contact {pointer:(kind,id),request:ArtworkSampleRequest {query,position:[point.x,point.y],width:5},expected:original,start:position[1],current:position[1],scale,released:false,submitted:false,point:None});
+                    self.targeted_curve.as_mut().unwrap().contact=Some(Contact {pointer:(kind,id),request:ArtworkSampleRequest {query,position:[point.x,point.y],width:5},expected:original,occurrence,coverage,start:position[1],current:position[1],scale,released:false,submitted:false,point:None});
                 } else if mode.contact.as_ref().is_some_and(|contact|contact.pointer==(kind,id) && !contact.released) {
                     if phase==ContactPhase::Cancel {self.cancel_targeted_contact()?;}
                     else if matches!(phase,ContactPhase::Move|ContactPhase::Up) {
@@ -80,22 +85,24 @@ impl<R:CanvasRenderer> UiSession<R> {
             let Some((points,index))=&contact.point else {return Ok(());};
             let mut changed=points.clone();changed[*index][1]=(points[*index][1]+(contact.start-contact.current)/(contact.scale*255.)).clamp(0.,1.);
             let key=format!("curve_{}",mode.page);
-            let action=EffectAction::Set {layer:mode.layer.0,key:key.clone(),value:EffectValue::Curve(changed.clone())};
+            let action=EffectAction::Set {layer:occurrence_token(mode.layer),key:key.clone(),value:EffectValue::Curve(changed.clone())};
             let started=self.effect_gesture.is_some();
             self.effect_gesture_action(if started {ContactPhase::Move} else {ContactPhase::Down},action.clone())?;
-            self.property_editor.select(mode.layer.0,mode.epoch,&key,Some(*index),&changed);
+            self.property_editor.select(occurrence_token(mode.layer),mode.epoch,&key,Some(*index),&changed);
             if contact.released {self.effect_gesture_action(ContactPhase::Up,action)?;mode.contact=None;mode.epoch=self.state.layer_properties.epoch;}
-            else {contact.expected=self.engine.document().layer(mode.layer).ok_or("The adjustment was removed")?.clone();}
+            else {contact.expected=effects::effect_baseline(self.engine.document(),mode.layer)?;}
             Ok(())
         })();
         self.targeted_curve=Some(mode);outcome
     }
     pub(super) fn poll_targeted_curve(&mut self)->u32 {
         let Some(mut mode)=self.targeted_curve.take() else {return 0;};
-        let current=self.state.document_file.epoch==mode.document_epoch && self.engine.document().active_layer==mode.layer
-            && self.property_editor.accepts(mode.layer.0,mode.epoch)
+        let current=self.state.document_file.epoch==mode.document_epoch && self.engine.document().working.occurrence==Some(mode.layer)
+            && self.property_editor.accepts(occurrence_token(mode.layer),mode.epoch)
             && mode.contact.as_ref().is_none_or(|c|c.request.query.matches_source(self.engine.document())
-                && self.engine.document().layer(mode.layer).is_some_and(|layer|layer.same_artwork(&c.expected)));
+                && self.engine.document().scene().effect_application(mode.layer)==Some(&c.expected.application)
+                && self.engine.document().scene().occurrence(mode.layer)==Some(&c.occurrence)
+                && self.engine.document().scene().mask(mode.layer).map(|(_,source)|source)==c.coverage.as_ref());
         if !current {self.targeted_curve=Some(mode);self.cancel_picker();return regions::DOCUMENT|regions::BRUSH|regions::COMMANDS;}
         let Some(contact)=mode.contact.as_mut() else {self.targeted_curve=Some(mode);return 0;};
         let mut ready=false;
@@ -105,8 +112,8 @@ impl<R:CanvasRenderer> UiSession<R> {
                 contact.submitted=false;
                 result.map_err(error).map_err(CalibrationFailure::Diagnostic).and_then(|result| {
                     let layer_render::SnapshotResult::ArtworkSample(ArtworkSample::Color([r,g,b,_]))=result else {return Err(CalibrationFailure::Message(MessageId::RESOURCES_PICKER_EMPTY));};
-                    let effect=contact.expected.effect.as_ref().ok_or_else(||CalibrationFailure::Diagnostic("The adjustment was removed".into()))?;
-                    contact.point=Some(layer_core::curves::targeted_curve_point(effect,[r,g,b],contact.request.document.color.space,mode.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?);
+                    let effect=effects::effect_draft(self.engine.document(),mode.layer)?;
+                    contact.point=Some(layer_core::curves::targeted_curve_point(&effect,[r,g,b],contact.request.snapshot.view().composition().color.space,mode.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?);
                     ready=true;Ok(())
                 })
             } else {Ok(())}

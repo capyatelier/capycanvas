@@ -18,7 +18,7 @@ impl Default for Hue {
         Self { master: [0.; 3], ranges: CENTERS.map(|center| [0., 0., 0., center, 30., 30.]), colorize: None }
     }
 }
-fn configure(layer: &mut Layer, hue: &Hue) {
+fn configure(layer: &mut EffectInstance, hue: &Hue) {
     for (key, value) in ["hue", "saturation", "lightness"].into_iter().zip(hue.master) {
         set(layer, key, EffectValue::Number(value as f32));
     }
@@ -126,9 +126,9 @@ fn assert_color_bound(actual: [f32; 4], expected: [f64; 3], alpha: f32, toleranc
 fn input_reference(rgb: [f32; 3], alpha: f32) -> [f64; 3] {
     if alpha == 0. { [0.; 3] } else { rgb.map(|v| f64::from(v * alpha) / f64::from(alpha)) }
 }
-fn threshold(image: bool, value: f32) -> Layer {
+fn threshold(image: bool, value: f32) -> EffectInstance {
     let mut layer = effect(2, "threshold", image);
-    let instance = Arc::make_mut(layer.effect.as_mut().unwrap());
+    let instance = &mut layer;
     instance.program = instance.program.for_depth(SampleDepth::F32);
     set(&mut layer, "threshold", EffectValue::Number(value)); layer
 }
@@ -174,7 +174,7 @@ fn p21_hue_literal_weights_lock_wrap_closed_edges_support_and_chroma_gate() {
     ] {
         assert!((membership(h, c, center, width, feather) - expected).abs() < 1e-12);
         let mut probe = effect(2, "hue_saturation", false);
-        let program = Arc::make_mut(&mut Arc::make_mut(probe.effect.as_mut().unwrap()).program);
+        let program = Arc::make_mut(&mut probe.program);
         program.entry = "weight_probe".into();
         let shader = program.wgsl.sources().unwrap().iter().map(|s| s.as_ref()).collect::<Vec<_>>().join("\n");
         program.wgsl = format!("{shader}\nfn weight_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let w=fx_hue_weight(vec2<f32>({h:?},{c:?}),{center:?},{width:?},{feather:?});return vec4<f32>(w,w,w,1.);}}").into();
@@ -190,7 +190,7 @@ fn p21_hue_coordinates_and_membership_are_physical_across_profiles_at_tiny_alpha
     for space in RgbSpace::ALL {
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space, depth: SampleDepth::F32 }).unwrap();
         let mut probe = effect(2, "hue_saturation", false);
-        let program = Arc::make_mut(&mut Arc::make_mut(probe.effect.as_mut().unwrap()).program);
+        let program = Arc::make_mut(&mut probe.program);
         let shader = program.wgsl.sources().unwrap().iter().map(|s| s.as_ref()).collect::<Vec<_>>().join("\n");
         program.entry = "coordinates_probe".into();
         program.wgsl = format!("{shader}\nfn coordinates_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let h=fx_hue_coordinates(c);let w=fx_hue_weight(h,0.,0.,90.);return vec4<f32>(vec3<f32>(h.x/360.,h.y,w)*c.a,c.a);}}").into();

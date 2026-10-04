@@ -8,7 +8,7 @@ type PreviewKey = (Vec<(Selection, layer_core::SelectionMaskProperties)>, [u32; 
 
 #[derive(Default)]
 pub(super) struct SelectionPreviews {
-    pub definitions: std::collections::BTreeMap<LayerId, Selection>,
+    pub definitions: std::collections::BTreeMap<SourceTarget, Selection>,
     key: Option<PreviewKey>,
     pub buffer: Option<wgpu::Buffer>,
     pub texture: Option<wgpu::TextureView>,
@@ -125,55 +125,30 @@ impl PreviewPipeline {
 impl WgpuRasterizer {
     pub(super) fn prepare_selection_previews(
         &mut self,
-        layers: &[Layer],
+        packet: FramePacket<'_>,
     ) -> Result<(), GpuRasterError> {
+        let scene = packet.scene;
         let mut previews = mem::take(&mut self.selection_previews);
         let result = (|| {
-            previews.definitions.retain(|id, _| {
-                id.0 == 0
-                    || layers
-                        .iter()
-                        .any(|l| l.id == *id && l.kind == LayerKind::Selection)
-            });
-            for layer in layers.iter().filter(|l| l.kind == LayerKind::Selection) {
-                let coverage = layer
-                    .selection
-                    .as_ref()
-                    .ok_or(GpuRasterError::InvalidImage)?
-                    .mapped(&layer_core::target_geometry(layers, layer.id).placement)
+            previews.definitions.retain(|target, _| *target == SourceTarget::Selection(layer_core::authored::SelectionHandle::INVALID)
+                || scene.targets().any(|current| current == *target));
+            for &handle in scene.order() {
+                let Some(SourceTarget::Selection(target)) = scene.source_target(handle) else { continue; };
+                let saved = scene.artwork().selections.get(target).ok_or(GpuRasterError::InvalidImage)?;
+                let coverage = saved.selection.mapped(&scene.target_geometry(SourceTarget::Selection(target)).placement)
                     .map_err(|_| GpuRasterError::InvalidImage)?;
-                previews.definitions.insert(layer.id, coverage);
+                previews.definitions.insert(SourceTarget::Selection(target), coverage);
             }
-            let Some(options) = self.selection_overlay else {
-                previews.reset();
-                return Ok(());
-            };
-            let masks: Vec<_> = layers
-                .iter()
-                .rev()
-                .filter(|l| {
-                    l.kind == LayerKind::Selection && Some(l.id) != options.editing && {
-                        let mut current = Some(l.id);
-                        let mut visible = true;
-                        while let Some(id) = current {
-                            let Some(l) = layers.iter().find(|l| l.id == id) else {
-                                break;
-                            };
-                            visible &= l.visible;
-                            current = l.properties.parent;
-                        }
-                        visible
-                    }
-                })
-                .filter_map(|l| {
-                    previews.definitions.get(&l.id).cloned().map(|mask| {
-                        (
-                            mask,
-                            l.properties.selection_mask.clone().unwrap_or_default(),
-                        )
-                    })
-                })
-                .collect();
+            let Some(options) = self.selection_overlay else { previews.reset(); return Ok(()); };
+            let masks: Vec<_> = scene.order().iter().rev().filter_map(|&handle| {
+                let target = scene.source_target(handle)?;
+                let SourceTarget::Selection(saved) = target else { return None; };
+                let visible = packet.selection_visibility.and_then(|visibility| visibility.get(&handle)).copied()
+                    .unwrap_or_else(|| scene.occurrence(handle).is_some_and(|occurrence| occurrence.visible));
+                if Some(handle) == options.editing || !visible || scene.parent(handle).is_some_and(|parent| !scene.visible(parent)) { return None; }
+                let source = scene.artwork().selections.get(saved)?;
+                previews.definitions.get(&target).cloned().map(|coverage| (coverage, source.display.clone()))
+            }).collect();
             if masks.is_empty() {
                 previews.reset();
                 return Ok(());
@@ -293,7 +268,7 @@ impl WgpuRasterizer {
         result
     }
     /// Poll cold mask preview pipelines without blocking the host UI thread.
-    pub fn prepare_selection_thumbnail(&mut self, id: LayerId) -> Result<bool, GpuRasterError> {
+    pub fn prepare_selection_thumbnail(&mut self, id: SourceTarget) -> Result<bool, GpuRasterError> {
         if !self.selection_previews.definitions.contains_key(&id) {
             return Ok(true);
         }
@@ -308,7 +283,7 @@ impl WgpuRasterizer {
     }
     pub(super) fn render_selection_thumbnail(
         &mut self,
-        id: LayerId,
+        id: SourceTarget,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
         let mask = self.selection_previews.definitions[&id].clone();

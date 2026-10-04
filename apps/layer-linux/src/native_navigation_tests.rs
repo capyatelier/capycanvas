@@ -3,19 +3,18 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 use std::sync::Arc;
+use layer_core::authored::{PortableId, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, Definition, EffectApplication, Stack};
 
-pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
+pub(super) fn photo(extent: [u32; 2]) -> layer_core::Document {
     let depth = match std::env::var("LAYER_NAVIGATION_HDR").as_deref() { Ok("32") => SampleDepth::F32, Ok("1") => SampleDepth::F16, _ => SampleDepth::U16 };
     let hdr = depth.is_float();
     let mut project = new_drawing(1, 1, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    // Imported photographs may exceed the New Drawing dialog's size ceiling.
-    project.document.width = extent[0];
-    project.document.height = extent[1];
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).size = extent;
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth,
     };
-    project.document.blend_space = match std::env::var("LAYER_PHOTO_BLENDING").as_deref() {
+    composition_mut(&mut project).blend = match std::env::var("LAYER_PHOTO_BLENDING").as_deref() {
         Ok("perceptual") => layer_core::BlendSpace::Perceptual.for_depth(depth),
         _ => layer_core::BlendSpace::Linear,
     };
@@ -59,13 +58,14 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
         }
         source.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+    let active = project.working.occurrence.unwrap();
+    let OccurrenceContent::Paint(paint) = project.scene().occurrence(active).unwrap().content else { unreachable!() };
+    let source_image = Arc::new(source.finish().unwrap());
+    let paint = project.artwork.paint.get_mut(paint).unwrap();
+    paint.domain = extent;
+    paint.original = Some(source_image);
     for _ in 0..31 {
-        let id = project.document.allocate_layer_id();
-        project
-            .document
-            .layers
-            .insert(1, layer_core::Layer::paint(id, "empty"));
+        insert_paint(&mut project, "empty", None, 1);
     }
     for (name, key, value) in [
         ("exposure", "exposure", 0.25),
@@ -77,9 +77,6 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
         (std::env::var("LAYER_NAVIGATION_PHYSICAL").as_deref() == Ok("1"))
             .then_some(("gaussian_blur", "sigma", 4.)),
     ) {
-        let id = project.document.allocate_layer_id();
-        let mut layer = layer_core::Layer::paint(id, name);
-        layer.kind = layer_core::LayerKind::Effect;
         let mut effect = layer_core::EffectInstance::new(
             layer_core::bundled_effect_catalog()
                 .get(name)
@@ -89,33 +86,50 @@ pub(super) fn photo(extent: [u32; 2]) -> layer_core::Project {
         effect
             .set(key, layer_core::EffectValue::Number(value))
             .unwrap();
-        layer.effect = Some(Arc::new(effect));
-        project.document.layers.insert(0, layer);
+        insert_effect(&mut project, name, effect, 0);
     }
     if std::env::var("LAYER_NAVIGATION_LONG_CHAIN").as_deref() == Ok("1") {
         for index in 0..24 {
-            let id = project.document.allocate_layer_id();
-            let mut layer = layer_core::Layer::paint(id, "HDR long chain");
-            layer.kind = layer_core::LayerKind::Effect;
             let mut effect = layer_core::EffectInstance::new(
                 layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
             effect.set("exposure", layer_core::EffectValue::Number(if index % 2 == 0 { 0.25 } else { -0.25 })).unwrap();
-            layer.effect = Some(Arc::new(effect));
-            project.document.layers.insert(0, layer);
+            insert_effect(&mut project, "HDR long chain", effect, 0);
         }
     }
     project.validate(Default::default()).unwrap();
     project
 }
 
-/// Keep the photo with painted strokes above it and a second photo below,
-/// the photo active.
-pub(super) fn layered(project: &mut layer_core::Project) {
-    let document = &mut project.document;
-    document.layers.retain(|layer| layer.source.is_some());
-    let photo = document.layers[0].id;
-    let extent = [document.width, document.height];
-    let depth = document.color.depth;
+fn refresh(document: &mut layer_core::Document) {
+    let working = document.working.clone();
+    *document = layer_core::Document::from_artwork(document.artwork.clone()).unwrap();
+    document.working = working;
+}
+fn insert_paint(document: &mut layer_core::Document, name: &str, original: Option<Arc<SourceImage>>, index: usize) -> OccurrenceHandle {
+    let source = document.artwork.paint.insert(PortableId::random(), PaintSource {domain:document.composition().size, original, raster:Default::default(), operations:Default::default()}).unwrap();
+    let occurrence = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source),name)).unwrap();
+    document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);
+    refresh(document);
+    occurrence
+}
+fn insert_effect(document: &mut layer_core::Document, name: &str, draft: layer_core::EffectInstance, index: usize) -> OccurrenceHandle {
+    let definition = document.artwork.definitions.insert(PortableId::random(),Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+    let effect = document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values,domain:document.composition().size}).unwrap();
+    let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),name)).unwrap();
+    document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);
+    refresh(document);
+    occurrence
+}
+fn retain_photos(document: &mut layer_core::Document) {
+    let photos: Vec<_> = document.scene().children(None).iter().copied().filter(|h|document.scene().paint_source(*h).is_some_and(|p|p.original.is_some())).collect();
+    document.artwork.stacks.get_mut(document.composition().result).unwrap().entries = photos;
+    refresh(document);
+}
+pub(super) fn layered(document: &mut layer_core::Document) {
+    retain_photos(document);
+    let photo = document.scene().children(None)[0];
+    let extent = document.composition().size;
+    let depth = document.composition().color.depth;
     let source = |pixel: &dyn Fn(u32, u32) -> [u16; 4]| {
         let mut builder = SourceBuilder::new(
             extent,
@@ -141,62 +155,51 @@ pub(super) fn layered(project: &mut layer_core::Project) {
         Arc::new(builder.finish().unwrap())
     };
     assert_eq!(depth, SampleDepth::U16, "the layered fixture paints 16-bit sources");
-    let mut strokes = layer_core::Layer::paint(document.allocate_layer_id(), "strokes");
-    strokes.source = Some(source(&|x, y| {
+    let strokes = source(&|x, y| {
         let band = (x + 2 * y) % 900;
         let alpha = if band < 60 { 65535 } else if band < 80 { ((80 - band) * 3276) as u16 } else { 0 };
         [52000, 21000, 9000, alpha]
-    }));
-    let mut backdrop = layer_core::Layer::paint(document.allocate_layer_id(), "backdrop");
-    backdrop.source = Some(source(&|x, y| {
+    });
+    insert_paint(document, "strokes", Some(strokes), 0);
+    let backdrop = source(&|x, y| {
         [(x * 11 % 50000) as u16, (y * 13 % 50000) as u16, ((x ^ y) % 40000) as u16, 65535]
-    }));
-    document.layers.insert(0, strokes);
-    document.layers.push(backdrop);
-    document.active_layer = photo;
+    });
+    insert_paint(document, "backdrop", Some(backdrop), 2);
+    document.working.occurrence = Some(photo);
+    document.working.target = document.scene().source_target(photo);
 }
-
-/// The layered photo under non-Normal layers: Screen strokes, a Color copy of
-/// them and a Soft Light copy of the backdrop, sharing their sources.
-pub(super) fn blended(project: &mut layer_core::Project) {
-    layered(project);
-    let document = &mut project.document;
+pub(super) fn blended(document: &mut layer_core::Document) {
+    layered(document);
     let copy = |document: &mut layer_core::Document, index: usize, name: &str, blend, opacity| {
-        let mut layer = document.layers[index].clone();
-        layer.id = document.allocate_layer_id();
-        layer.name = name.into();
-        layer.properties.blend = blend;
-        layer.opacity = opacity;
-        layer
+        let mut occurrence = document.scene().occurrence(document.scene().children(None)[index]).unwrap().clone();
+        let OccurrenceContent::Paint(source)=occurrence.content else {unreachable!()};
+        let source=document.artwork.paint.get(source).unwrap().clone();
+        let source=document.artwork.paint.insert(PortableId::random(),source).unwrap();
+        occurrence.content=OccurrenceContent::Paint(source);
+        occurrence.name = name.into(); occurrence.blend = blend; occurrence.opacity = opacity;
+        document.artwork.occurrences.insert(PortableId::random(),occurrence).unwrap()
     };
     let tone = copy(document, 2, "tone", layer_core::LayerBlend::SoftLight, 0.6);
     let color = copy(document, 0, "color", layer_core::LayerBlend::Color, 0.7);
-    document.layers[0].properties.blend = layer_core::LayerBlend::Screen;
-    document.layers.insert(1, tone);
-    document.layers.insert(0, color);
+    let strokes = document.scene().children(None)[0];
+    document.artwork.occurrences.get_mut(strokes).unwrap().blend = layer_core::LayerBlend::Screen;
+    let root = document.composition().result;
+    let entries = &mut document.artwork.stacks.get_mut(root).unwrap().entries;
+    entries.insert(1,tone); entries.insert(0,color);
+    refresh(document);
 }
-
-/// The blended photo with its non-Normal layers and a Hue/Saturation
-/// adjustment in a Pass Through group, so they reach the photo below it.
-pub(super) fn pass_through(project: &mut layer_core::Project) {
-    blended(project);
-    let document = &mut project.document;
-    let mut group = layer_core::Layer::paint(document.allocate_layer_id(), "pass through");
-    group.kind = layer_core::LayerKind::Group;
-    group.properties.blend = layer_core::LayerBlend::PassThrough;
-    let mut adjustment = layer_core::Layer::paint(document.allocate_layer_id(), "hue_saturation");
-    adjustment.kind = layer_core::LayerKind::Effect;
-    let mut effect = layer_core::EffectInstance::new(
-        layer_core::bundled_effect_catalog().get("hue_saturation").unwrap().program(),
-    );
+pub(super) fn pass_through(document: &mut layer_core::Document) {
+    blended(document);
+    let mut effect = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("hue_saturation").unwrap().program());
     effect.set("saturation", layer_core::EffectValue::Number(25.)).unwrap();
-    adjustment.effect = Some(Arc::new(effect));
-    for layer in &mut document.layers[..3] {
-        layer.properties.parent = Some(group.id);
-    }
-    adjustment.properties.parent = Some(group.id);
-    document.layers.insert(0, adjustment);
-    document.layers.insert(0, group);
+    insert_effect(document,"hue_saturation",effect,0);
+    let root = document.composition().result;
+    let children: Vec<_> = document.artwork.stacks.get_mut(root).unwrap().entries.drain(..4).collect();
+    let stack = document.artwork.stacks.insert(PortableId::random(),Stack {entries:children}).unwrap();
+    let mut group = Occurrence::new(OccurrenceContent::Stack(stack),"pass through"); group.blend = layer_core::LayerBlend::PassThrough;
+    let group = document.artwork.occurrences.insert(PortableId::random(),group).unwrap();
+    document.artwork.stacks.get_mut(root).unwrap().entries.insert(0,group);
+    refresh(document);
 }
 
 #[test]
@@ -260,18 +263,18 @@ fn native_large_photo_navigation() {
         let snapshot = {
             let g = w.gpu.borrow();
             let session = &g.as_ref().unwrap().session;
-            DocumentExport { project: session.capture_project_recovery().unwrap(),
+            DocumentExport { capture: session.capture_project_recovery().unwrap(),
                 time: session.engine().animation_time() }
         };
         let prefix = std::path::PathBuf::from(std::env::var("LAYER_PACING_REPORT").unwrap());
         std::thread::spawn(move || {
             let start = Instant::now();
             let project = prefix.with_extension("capy");
-            layer_core::atomic_write(&project, |file| snapshot.project.write(file)).unwrap();
+            layer_core::atomic_write(&project, |file| write_capture(&snapshot.capture,file)).unwrap();
             let saved_ms = start.elapsed().as_secs_f64() * 1000.;
-            let reopened = layer_core::Project::read(std::fs::File::open(&project).unwrap(), Default::default()).unwrap();
-            assert_eq!(reopened.document.proof, snapshot.project.document.proof);
-            let recipe = ExportRecipe::further_editing(snapshot.project.document.color);
+            let reopened = open_native_document(std::fs::File::open(&project).unwrap());
+            assert_eq!(reopened.output().proof, snapshot.output().proof);
+            let recipe = ExportRecipe::further_editing(snapshot.composition().color);
             let delivery = prefix.with_extension(recipe.format.extension());
             crate::files::export::write_snapshot(gpu, snapshot, recipe, &delivery, &Default::default()).unwrap();
             serde_json::json!({"save_ms": saved_ms, "save_export_ms": start.elapsed().as_secs_f64()*1000.,
@@ -414,13 +417,13 @@ fn native_large_photo_navigation() {
         "idle_after_300_ms": idle_after_300_ms, "settled_after_input_ms": settled_after_input_ms,
         "idle_navigation": idle, "rendering_suspended": suspended,
         "document_unchanged": document_unchanged, "preview_revision_unchanged": revision_unchanged,
-        "hdr": original.color.depth.is_float(),
-        "reference_white_nits": if original.color.depth.is_float() { Some(203) } else { None },
-        "effect_count": original.layers.iter().filter(|layer| layer.effect.is_some()).count(),
+        "hdr": original.composition().color.depth.is_float(),
+        "reference_white_nits": if original.composition().color.depth.is_float() { Some(203) } else { None },
+        "effect_count": original.scene().order().iter().filter(|h| original.scene().effect(**h).is_some()).count(),
         "process_memory": process_memory(),
         "renderer_resident_bytes": telemetry.resident_bytes,
         "proof": proof,
-        "extent": extent, "space": "ProPhoto", "depth": original.color.depth.bits(), "viewport": viewport,
+        "extent": extent, "space": "ProPhoto", "depth": original.composition().color.depth.bits(), "viewport": viewport,
         "gtk_renderer": w.window.renderer().unwrap().type_().name(),
         "requests": requests, "camera_views": stats.camera_views,
         "camera_work": stats.camera_work,
@@ -461,9 +464,9 @@ fn native_large_photo_navigation() {
 fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
     let app = native_test_app("art.capycanvas.PhotoThumbnailIdle");
     let mut project = photo([2049, 1537]);
-    project.document.layers.retain(|layer| layer.source.is_some());
-    let original = project.document.clone();
-    let target = original.layers[0].id.0;
+    retain_photos(&mut project);
+    let original = project.clone();
+    let target = u64::from(original.scene().children(None)[0].index()) + 1;
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
 
@@ -489,11 +492,13 @@ fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
     assert_ne!(before, cleared);
     click(&command(&w, CommandId::Undo));
     assert_eq!(wait(&|bytes| bytes == before), before);
-    let mut restored = ui_session(&w).engine().document().clone();
+    let restored = ui_session(&w).engine().document().clone();
     // Undo publishes a new document revision while restoring exact artwork.
     assert!(restored.revision > original.revision);
-    restored.revision = original.revision;
-    assert_eq!(restored, original);
+    assert_eq!(restored.artwork, original.artwork);
+    assert_eq!(restored.working.occurrence, original.working.occurrence);
+    assert_eq!(restored.working.target, original.working.target);
+    assert_eq!(restored.working.selection, original.working.selection);
     w.window.destroy();
     pump(100);
 }
@@ -503,16 +508,13 @@ fn native_photo_thumbnail_finishes_after_idle_and_restores_on_undo() {
 fn native_spatial_filter_windows() {
     let app = native_test_app("art.capycanvas.SpatialFilterWindows");
     let mut project = photo([6000, 4000]);
-    project.document.layers.retain(|layer| layer.source.is_some());
+    retain_photos(&mut project);
     for sigma in [9., 85., 13.] {
-        let mut layer = layer_core::Layer::paint(project.document.allocate_layer_id(), "Gaussian Blur");
-        layer.kind = layer_core::LayerKind::Effect;
         let mut effect = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
         effect.set("sigma", layer_core::EffectValue::Number(sigma)).unwrap();
-        layer.effect = Some(Arc::new(effect));
-        project.document.layers.insert(0, layer);
+        insert_effect(&mut project, "Gaussian Blur", effect, 0);
     }
-    let filter = project.document.layers[0].id;
+    let mut filter = project.scene().children(None)[0];
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();
@@ -530,7 +532,7 @@ fn native_spatial_filter_windows() {
     };
     wait();
     assert!(matches!(w.window.width(),640|1100));
-    w.dispatch(UiAction::SelectLayer { id: filter.0 });
+    w.dispatch(UiAction::SelectLayer { id: layer_ui::occurrence_token(filter) });
     super::pointwise::configure_properties(&w);
     let mut input=RemoteInput::new().timeout_secs(30);input.ready();
     let dir = artifact_dir("../../artifacts/ui/spatial-filter-windows-gtk");
@@ -546,7 +548,7 @@ fn native_spatial_filter_windows() {
     };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        w.dispatch(UiAction::SelectLayer {id:filter.0});wait();
+        w.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(filter)});wait();
         let before=super::pointwise::value(&w,"sigma");
         super::pointwise::edit(&w,&mut input,"sigma","85");
         w.dispatch(UiAction::Invoke {command:CommandId::Undo});wait();
@@ -566,7 +568,7 @@ fn native_spatial_filter_windows() {
         assert!((state(&w).camera.zoom - 0.5).abs() < 1e-6);
         for (step, (center, sigma)) in [([2400., 1600.], 85.), ([3300., 2100.], 85.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
             w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set {
-                layer: filter.0, key: "sigma".into(), value: layer_core::EffectValue::Number(sigma),
+                layer: u64::from(filter.index()) + 1, key: "sigma".into(), value: layer_core::EffectValue::Number(sigma),
             } });
             let camera = state(&w).camera;
             let m = camera.document_to_surface();
@@ -574,31 +576,37 @@ fn native_spatial_filter_windows() {
             let change = ui_session_mut(&w).gesture(from, camera.viewport.map(|v| v as f32 * 0.5), 1., 0.);
             w.changed(change);
             wait();
-            assert_eq!(ui_session(&w).engine().document().layer(filter).unwrap().effect.as_ref().unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(sigma)));
+            assert_eq!(ui_session(&w).engine().document().scene().effect(filter).unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(sigma)));
             pixel(center);
             crate::capture(&w, &format!("{dir}/{}-{theme:?}-{step}.png",w.window.width()));
         }
         w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:"unsharp_mask".into()}});wait();
         super::pointwise::edit(&w,&mut input,"sigma","85");
         pixel([2400.,1600.]);
-        let document=ui_session(&w).engine().document().clone();let unsharp=document.active_layer;
-        assert_eq!(document.layer(unsharp).unwrap().effect.as_ref().unwrap().program.id.to_string(),"unsharp_mask");
-        let bytes=super::place_source::snapshot(&w);
-        let reopened=layer_core::Project::read(std::io::Cursor::new(&bytes),Default::default()).unwrap();
-        assert_eq!(reopened.document.layers,document.layers);
+        let document=ui_session(&w).engine().document().clone();let unsharp=document.working.occurrence.unwrap();
+        let unsharp_id=document.artwork.occurrences.id(unsharp).unwrap();
+        let filter_id=document.artwork.occurrences.id(filter).unwrap();
+        assert_eq!(document.scene().effect(unsharp).unwrap().program.id.to_string(),"unsharp_mask");
+        let (saved,bytes)=super::pointwise::saved_artwork(&w);
+        let reopened=open_native_document(std::io::Cursor::new(&bytes));
+        super::pointwise::assert_saved_artwork(&saved,&reopened);
         std::fs::write(format!("{dir}/{}-{theme:?}.capy",w.window.width()),bytes).unwrap();
         let activation=state(&w).document_file.epoch;
         w.documents.enqueue(&w,(reopened,None,None));
-        until(||state(&w).document_file.epoch>activation,"spatial filter archive activation");wait();
-        assert_eq!(ui_session(&w).engine().document().layers,document.layers);
+        super::new_photo::ready(&w);
+        assert!(state(&w).document_file.epoch>activation,"spatial filter archive activation");wait();
+        assert_live_artwork_eq(ui_session(&w).engine().document(),&capture_document(&saved));
+        let unsharp=ui_session(&w).engine().document().artwork.occurrences.resolve(unsharp_id).unwrap();
+        filter=ui_session(&w).engine().document().artwork.occurrences.resolve(filter_id).unwrap();
+        w.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(unsharp)});wait();
         assert_eq!(super::pointwise::value(&w,"sigma"),layer_core::EffectValue::Number(85.));
         pixel([3000.,2000.]);
         crate::capture(&w,&format!("{dir}/{}-{theme:?}-unsharp85-reopened.png",w.window.width()));
-        w.dispatch(UiAction::SelectLayer {id:unsharp.0});wait();
-        assert_eq!(ui_session(&w).engine().document().active_layer,unsharp);
+        w.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(unsharp)});wait();
+        assert_eq!(ui_session(&w).engine().document().working.occurrence,Some(unsharp));
         w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});wait();
-        assert!(ui_session(&w).engine().document().layer(unsharp).is_none());
-        assert!(ui_session(&w).engine().document().layer(filter).is_some());
+        assert!(ui_session(&w).engine().document().scene().occurrence(unsharp).is_none());
+        assert!(ui_session(&w).engine().document().scene().occurrence(filter).is_some());
     }
     input.finish();
     w.window.destroy();

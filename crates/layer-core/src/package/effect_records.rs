@@ -361,6 +361,7 @@ mod tests {
             let decoded=decode_definition(&encoded,&mut resources).unwrap();
             assert_eq!(encode_definition(&decoded,&mut resources).unwrap(),encoded,"{}",filter.id());
             assert_eq!(decoded.program.parameters,definition.program.parameters);
+            assert_eq!(decoded.program.constant_color,definition.program.constant_color);
             for (source,reopened) in definition.program.wgsl.sources().unwrap().iter().zip(decoded.program.wgsl.sources().unwrap()) {
                 assert_eq!(source.id(),reopened.id()); assert!(source.same_owner(reopened));
                 assert_eq!(source.as_ref(),reopened.as_ref());

@@ -140,17 +140,17 @@ fn catalog_invocation_rechecks_current_layer_and_preserves_history() {
             text: "clear layer".into(),
         },
     );
-    let active = s.engine.document().active_layer;
-    layer(&mut s, LayerAction::Lock { id: active.0, value: true, });
+    let active = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(active), value: true, });
     assert!(s.execute_catalog_command(&clear.id, None).is_err());
     search_action(&mut s, CommandSearchAction::Close);
-    layer(&mut s, LayerAction::Lock { id: active.0, value: false, });
-    let before = s.engine.document().layers.len();
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(active), value: false, });
+    let before = s.engine.document().scene().order().len();
     s.execute_catalog_command("command.add_layer", None)
         .unwrap();
-    assert_eq!(s.engine.document().layers.len(), before + 1);
+    assert_eq!(s.engine.document().scene().order().len(), before + 1);
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().layers.len(), before);
+    assert_eq!(s.engine.document().scene().order().len(), before);
     invoke(&mut s, CommandId::SearchCommands);
     s.state.document_file.epoch += 1;
     assert!(
@@ -238,7 +238,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
     })
     .unwrap();
     invoke(&mut s, CommandId::AddLayer);
-    let layers = s.engine.document().layers.len();
+    let layers = s.engine.document().scene().order().len();
     s.set_command_focus(CommandFocus::Palette);
     invoke(&mut s, CommandId::SearchCommands);
     s.set_command_focus(CommandFocus::Canvas); // The search entry taking focus cannot retarget history.
@@ -248,7 +248,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
             text: "undo".into(),
         },
     );
-    assert_eq!(s.engine.document().layers.len(), layers);
+    assert_eq!(s.engine.document().scene().order().len(), layers);
     assert_eq!(
         s.state
             .color_library
@@ -283,7 +283,7 @@ fn command_opener_works_from_text_focus_without_stealing_plain_typing() {
 #[test]
 fn active_layer_command_ids_resolve_new_targets_and_toggle_values() {
     let mut s = session(Platform::Gtk);
-    let first = s.engine.document().active_layer;
+    let first = s.engine.document().working.occurrence.unwrap();
     let lock = s
         .command_catalog()
         .into_iter()
@@ -291,7 +291,7 @@ fn active_layer_command_ids_resolve_new_targets_and_toggle_values() {
         .unwrap()
         .id;
     invoke(&mut s, CommandId::AddLayer);
-    let second = s.engine.document().active_layer;
+    let second = s.engine.document().working.occurrence.unwrap();
     s.execute_catalog_command(&lock, None).unwrap();
     assert!(!s.engine.document().is_locked(first));
     assert!(s.engine.document().is_locked(second));
@@ -341,13 +341,13 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
     assert_eq!(s.state.color_picker.sample_width, 5);
 
     invoke(&mut s, CommandId::AddLayer);
-    let layer = s.engine.document().active_layer;
+    let layer = s.engine.document().working.occurrence.unwrap();
     let opacity = find(&s, "Layer opacity…");
     assert_eq!(opacity.id, "layer_property.opacity");
     assert!(opacity.description.ends_with("Current 100 % · Range 0–100 %"), "{}", opacity.description);
     execute(&mut s, &opacity.id, Some("40"));
-    let properties = |s: &UiSession<Recorder>| s.engine.document().layer(layer).unwrap().properties.clone();
-    assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);
+    let properties = |s: &UiSession<Recorder>| s.engine.document().scene().occurrence(layer).unwrap().clone();
+    assert!((s.engine.document().scene().occurrence(layer).unwrap().opacity - 0.4).abs() < 1e-4);
     let blend = |s: &UiSession<Recorder>, label: &str| {
         s.command_catalog()
             .into_iter()
@@ -363,7 +363,7 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
     assert!(!blend(&s, "Normal").selected);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(properties(&s).blend, layer_core::LayerBlend::Normal);
-    assert!((s.engine.document().layer(layer).unwrap().opacity - 0.4).abs() < 1e-4);
+    assert!((s.engine.document().scene().occurrence(layer).unwrap().opacity - 0.4).abs() < 1e-4);
 
     let id = find(&s, "Background color").id;
     execute(&mut s, &id, None);
@@ -390,7 +390,7 @@ fn catalog_reaches_tool_variants_layer_properties_workspaces_and_paint_slots() {
 fn equivalent_menu_actions_share_command_identities_and_explain_unavailability() {
     let mut s = session(Platform::Gtk);
     let catalog = s.command_catalog();
-    let active = s.engine.document().active_layer.0;
+    let active = occurrence_token(s.engine.document().working.occurrence.unwrap());
     for action in [
         LayerAction::Clear { id: active },
         LayerAction::Delete { id: active },
@@ -542,7 +542,7 @@ fn canvas_bar_items_carry_the_reason_they_are_disabled() {
 fn apply_mask_explains_group_and_effect_masks() {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
-    let group = s.engine.document().active_layer.0;
+    let group = occurrence_token(s.engine.document().working.occurrence.unwrap());
     s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: group, replace: false } }).unwrap();
     let apply = UiAction::Layer { action: LayerAction::ApplyMask { id: group } };
     let error = s.dispatch(apply.clone()).unwrap_err();
@@ -654,9 +654,9 @@ fn static_refusal_providers_retain_cached_reasons_before_published_comparison() 
     let mut s = filled_selection_session();
     invoke(&mut s, CommandId::ScaleRotate);
     assert!(std::sync::Arc::ptr_eq(&s.operation_refusal(), &s.operation_refusal()));
-    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = layer_core::color::SampleDepth::F32;
-    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut document = Document::new(layer_core::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = layer_core::color::SampleDepth::F32;
+    let renderer = Recorder { color: document.composition().color, ..Default::default() };
     let s = UiSession::new(renderer, document, [256, 256], Platform::Gtk).unwrap();
     shared(s.blending_refusal(), s.blending_refusal());
 }
@@ -697,14 +697,14 @@ fn numeric_parameters_match_active_and_canonical_labels_with_stable_targets() {
     let mut canonical = session(Platform::Gtk);
     invoke(&mut canonical, CommandId::AddLayer);
     canonical.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } }).unwrap();
-    canonical.dispatch(UiAction::Layer { action: LayerAction::Rename { id: canonical.engine.document().active_layer.0, name: "Literal { $name }".into() } }).unwrap();
+    canonical.dispatch(UiAction::Layer { action: LayerAction::Rename { id: occurrence_token(canonical.engine.document().working.occurrence.unwrap()), name: "Literal { $name }".into() } }).unwrap();
     let english = canonical.command_catalog();
     for language in UiLanguage::ALL {
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk,
             Localizer::shared(language)).unwrap();
         invoke(&mut s, CommandId::AddLayer);
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "exposure".into() } }).unwrap();
-        s.dispatch(UiAction::Layer { action: LayerAction::Rename { id: s.engine.document().active_layer.0, name: "Literal { $name }".into() } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Rename { id: occurrence_token(s.engine.document().working.occurrence.unwrap()), name: "Literal { $name }".into() } }).unwrap();
         let active = s.command_catalog();
         assert!(active.iter().any(|row| row.parameter.is_some() && row.id.starts_with("layer_property.") && row.id != "layer_property.opacity"));
         invoke(&mut s, CommandId::SearchCommands);
@@ -754,7 +754,7 @@ fn filter_insertions_match_active_and_canonical_labels_with_stable_targets() {
             search_action(&mut s, CommandSearchAction::Execute { id, value: None });
             assert!(s.state.command_search.is_none());
             let document = s.engine.document();
-            let inserted = document.layer(document.active_layer).unwrap().effect.as_ref().unwrap();
+            let inserted = document.scene().effect(document.working.occurrence.unwrap()).unwrap();
             assert_eq!(&*inserted.program.id, effect);
             assert_eq!(inserted.program.label, s.effect_catalog.get(effect).unwrap().program.label);
         }
@@ -798,7 +798,7 @@ fn filter_insertion_search_keeps_admitted_literal_replacements_and_custom_labels
             assert!(row.enabled);
             search_action(&mut s, CommandSearchAction::Execute { id, value: None });
             let document = s.engine.document();
-            let inserted = document.layer(document.active_layer).unwrap().effect.as_ref().unwrap();
+            let inserted = document.scene().effect(document.working.occurrence.unwrap()).unwrap();
             assert_eq!(&*inserted.program.id, effect);
             assert_eq!(inserted.program.label, layer_core::ResourceLabel::from(literal));
             invoke(&mut s, CommandId::SearchCommands);

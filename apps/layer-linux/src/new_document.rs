@@ -94,11 +94,11 @@ impl Form {
     }
 }
 
-pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Project>, String> {
+pub(crate) async fn run(w: &Rc<Workspace>) -> Result<Option<layer_core::Document>, String> {
     configure(w, false).await
 }
 
-pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<Option<layer_core::Project>, String> {
+pub(crate) async fn configure(w: &Rc<Workspace>, defaults_only: bool) -> Result<Option<layer_core::Document>, String> {
     let (settings, localization) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or_else(|| NewDocumentError::CanvasUnavailable.message(&w.localization()))?.session;

@@ -87,15 +87,14 @@ pub(crate) fn write_snapshot(
     job: &ExportJob,
 ) -> Result<u64, layer_ui::ColorFeatureError> {
     let result = (|| {
-        recipe.validate_for_document(&snapshot.project.document)?;
+        recipe.validate_for_composition(snapshot.composition())?;
         let extent = recipe.output_extent([
-            snapshot.project.document.width,
-            snapshot.project.document.height,
+            snapshot.composition().size[0],
+            snapshot.composition().size[1],
         ])?;
-        let metadata = recipe.delivery_metadata(&snapshot.project.document)?;
+        let metadata = recipe.delivery_metadata_for_artwork(&snapshot.capture.artwork)?;
         let mut renderer = gpu.capture(
-            snapshot.project,
-            snapshot.time,
+            snapshot.capture,
             job.control.clone(),
         )
         .map_err(|e| e.to_string())?;
@@ -153,16 +152,16 @@ struct Choice {
 }
 
 async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<Option<Choice>, String> {
-    let document = snapshot.project.document.color;
-    let master_resolution = snapshot.project.document.resolution;
+    let document = snapshot.composition().color;
+    let master_resolution = snapshot.composition().resolution;
     let library = Rc::new(std::cell::RefCell::new(presets::load(document).await.map_err(|reason| reason.preset_message(&w.localization()))?));
     let localization = w.localization();
     let copy = layer_ui::color_feature_copy::ExportCopy::new(&localization);
     let updating = Rc::new(std::cell::Cell::new(false));
     let destination = Rc::new(std::cell::Cell::new(0usize));
     let extent = [
-        snapshot.project.document.width,
-        snapshot.project.document.height,
+        snapshot.composition().size[0],
+        snapshot.composition().size[1],
     ];
     let dialog = adw::Dialog::builder().title(copy.title.as_ref())
         .content_width(480).content_height(680).build();
@@ -396,7 +395,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     quality.set_value(90.);
     quality.set_visible(false);
     delivery_group.add(&quality);
-    let photo_metadata = !snapshot.project.document.metadata.is_empty();
+    let photo_metadata = !snapshot.metadata().is_empty();
     let metadata_view = ExportRecipe::web_share().draft_localized(ExportDraftAction::Refresh, &localization).metadata;
     let metadata_choices: Rc<Vec<MetadataKeep>> = Rc::new(metadata_view.choices.iter().map(|c| c.value).collect());
     let metadata = combo(&delivery_group, &metadata_view.label, "export-metadata",
@@ -437,11 +436,11 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         ],
     );
     advanced.add_row(&intent);
-    let print_delivery=adw::ActionRow::builder().title(copy.use_print_profile.as_ref()).activatable(true).visible(snapshot.project.document.proof.is_some()).build();
+    let print_delivery=adw::ActionRow::builder().title(copy.use_print_profile.as_ref()).activatable(true).visible(snapshot.output().proof.is_some()).build();
     print_delivery.set_widget_name("export-print-profile");
     print_delivery.add_suffix(&gtk::Image::from_icon_name("go-next-symbolic"));
     color_group.add(&print_delivery);
-    if let Some(proof)=snapshot.project.document.proof.clone(){
+    if let Some(proof)=snapshot.output().proof.clone(){
         print_delivery.set_subtitle(&proof.name);
         let choose=profile.validated_selection();
         print_delivery.connect_activated(glib::clone!(#[weak] intent, move |_|{
@@ -835,7 +834,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
         }
     ));
     let comparison =
-        super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.project.clone(), w.view_color(), &w.localization());
+        super::preview::Comparison::for_output(w.snapshot_gpu()?, snapshot.capture.clone(), w.view_color(), &w.localization());
     comparison.set_headroom(w.picker_headroom());
     rendition_view.connect_active_name_notify(glib::clone!(#[weak] comparison, move |group| comparison.show_fallback(group.active_name().as_deref()==Some("sdr"))));
     let recommend=Rc::new(std::cell::Cell::new(false));
@@ -1131,13 +1130,16 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
 pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
     w.proof_panel.finish_pending(w).await?;
     // The preview and final file share one immutable artwork revision and time.
-    let snapshot = w
-        .gpu
-        .borrow()
-        .as_ref()
-        .ok_or("Canvas unavailable")?
-        .session
-        .capture_project_export(id)?;
+    let (mut snapshot, context) = {
+        let gpu = w.gpu.borrow();
+        let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
+        (session.capture_project_export(id)?, session.engine().backend().capture_context()?)
+    };
+    snapshot = gio::spawn_blocking(move || {
+        context.install(&mut snapshot.capture)?;
+        snapshot.time = snapshot.output().context.elapsed;
+        Ok::<_, String>(snapshot)
+    }).await.map_err(|_| "Export capture worker failed".to_string())??;
     let Some(choice) = choose_recipe(w, &snapshot).await? else { return Ok(false); };
     let recipe = choice.recipe;
     recipe.validate().map_err(|reason| reason.message(&w.localization()))?;
@@ -1196,8 +1198,8 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         return Err(layer_ui::DocumentDeliveryMessage::ExportExtension {extension: recipe.format.extension().into()}.message(&w.localization()));
     }
     let height = recipe.output_extent([
-        snapshot.project.document.width,
-        snapshot.project.document.height,
+        snapshot.composition().size[0],
+        snapshot.composition().size[1],
     ]).map_err(|reason| reason.message(&w.localization()))?[1];
     let gpu = w.snapshot_gpu()?;
     let job = ExportJob::default();

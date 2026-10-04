@@ -1,7 +1,5 @@
-//! Merge Down, Merge Group, Merge Visible, Flatten Image and Stamp Visible.
-//! Each composites its members, isolated, into one new paint layer through a
-//! pending `Bake` operation, and replaces them with it in one undo step.
 use super::*;
+use crate::authored::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeKind {
@@ -45,432 +43,344 @@ pub enum MergeRefusal {
     TooLarge,
 }
 
-/// Edits that insert `result` with its pending `operation` and remove the
-/// merged layers. `CanvasEngine::insert_with_operations` runs them as one step.
 #[derive(Clone, Debug)]
 pub struct MergePlan {
     pub edits: Vec<Edit>,
-    pub result: LayerId,
-    pub operation: LayerOperation,
+    pub result: OccurrenceHandle,
+    pub target: SourceTarget,
+    pub operation: RasterOperation,
 }
-
-struct Merge<'a> {
-    /// Composited in document order, with their subtrees.
-    members: BTreeSet<LayerId>,
-    /// Removed without being composited: layers Flatten Image discards.
-    discarded: BTreeSet<LayerId>,
-    /// Hidden layers clipped to a merged base stay, released.
-    released: Vec<LayerId>,
-    /// The result takes this layer's place, name and clipping; without one it
-    /// goes on top of the image and keeps every member.
-    anchor: Option<&'a Layer>,
-    /// A merged group keeps its blend mode and opacity instead of baking them;
-    /// a Pass Through group becomes Normal.
+struct Merge {
+    members: BTreeSet<OccurrenceHandle>,
+    discarded: BTreeSet<OccurrenceHandle>,
+    released: Vec<OccurrenceHandle>,
+    anchor: Option<OccurrenceHandle>,
     group: bool,
-    /// The result covers the canvas only, dropping pixels outside it.
     canvas: bool,
 }
-
-fn adjustment(layer: &Layer) -> bool {
-    layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Adjustment)
+fn adjustment(scene: SceneView<'_>, h: OccurrenceHandle) -> bool {
+    scene.effect(h).is_some_and(|e| e.program.kind == EffectKind::Adjustment)
 }
-
-/// The members of a `Bake` as root layers of the result's pixels. Members
-/// whose parent is not a member move by `offset`; clipped layers left without
-/// their base are released, since the result takes the base's place.
-pub fn bake_layers(members: &[Layer], offset: Point) -> Vec<Layer> {
-    let mut layers = members.to_vec();
-    let mut based = false;
-    for layer in layers.iter_mut().rev() {
-        if layer.properties.parent.is_some_and(|p| members.iter().any(|m| m.id == p)) {
-            continue;
-        }
-        layer.properties.parent = None;
-        layer.properties.offset.x += offset.x;
-        layer.properties.offset.y += offset.y;
-        if let Some(mask) = &mut layer.mask {
-            mask.offset.x += offset.x;
-            mask.offset.y += offset.y;
-        }
-        if !layer.properties.clipped {
-            based = true;
-        } else if !based {
-            layer.properties.clipped = false;
-        }
-    }
-    layers
-}
-
-/// `layer` as a member of a `Bake`: as committed, without pending operations.
-pub(crate) fn bake_member(layer: &Layer) -> Layer {
-    let mut member = layer.clone();
-    member.pending_operations.clear();
-    if let Some(mask) = &mut member.mask {
-        mask.pending_operations = Arc::default();
-    }
-    member
-}
-
-/// Local pixels a paint layer may hold: its tiles and its photo.
-fn content(layer: &Layer, extent: [u32; 2]) -> Rect {
-    let Some(Ok(data)) = layer.raster.try_data() else {
-        return Rect::from_extent(layer.local_extent(extent));
+fn content(scene: SceneView<'_>, h: OccurrenceHandle) -> Rect {
+    let Some(paint) = scene.paint_source(h) else {
+        return Rect::EMPTY;
+    };
+    let Some(Ok(data)) = paint.raster.try_data() else {
+        return Rect::from_extent(paint.domain);
     };
     let size = raster::TILE_SIZE as f32;
-    let tiles = data.tiles.keys().fold(Rect::EMPTY, |bounds, key| {
-        let [x, y] = key.coordinate.map(|v| v as f32 * size);
-        bounds.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } })
+    let bounds = data.tiles.keys().fold(Rect::EMPTY, |b, k| {
+        let [x, y] = k.coordinate.map(|v| v as f32 * size);
+        b.union(Rect { min: Point { x, y }, max: Point { x: x + size, y: y + size } })
     });
-    layer.source.as_ref().map_or(tiles, |source| tiles.union(Rect::from_extent(source.extent)))
+    paint.original.as_ref().map_or(bounds, |s| bounds.union(Rect::from_extent(s.extent)))
 }
-
-/// Pixels of a result `extent` large that baking `members` can cover.
-pub(crate) fn bake_bounds(members: &[Layer], offset: Point, extent: [u32; 2]) -> Rect {
-    let layers = bake_layers(members, offset);
-    let visible = |layer: &Layer| {
-        let mut current = Some(layer);
-        while let Some(layer) = current {
-            if !layer.visible {
-                return false;
-            }
-            current = layer.properties.parent.and_then(|p| layers.iter().find(|l| l.id == p));
-        }
-        true
-    };
+pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: Point, extent: [u32; 2]) -> Rect {
+    let scene = snapshot.view().with_scope(scope).with_offset(offset);
     let mut bounds = Rect::EMPTY;
-    for layer in layers.iter().filter(|l| l.kind == LayerKind::Paint && visible(l)) {
-        bounds = bounds.union(target_geometry(&layers, layer.id).forward_bounds(content(layer, extent)));
+    for h in scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)) {
+        if let Some(target) = scene.source_target(h).filter(|t| matches!(t, SourceTarget::Paint(_))) {
+            let transform = scene.target_geometry(target);
+            let mapped = transform.forward_bounds(content(scene, h));
+            bounds = bounds.union(mapped);
+        }
     }
-    for effect in layers.iter().filter(|l| visible(l)).filter_map(|l| l.effect.as_ref()) {
+    for effect in scene.order().iter().copied().filter(|h| layer_is_visible(scene, *h)).filter_map(|h| scene.effect(h)) {
         match (effect.program.kind, effect.program.alpha) {
             (EffectKind::Generator, _) => return Rect::from_extent(extent),
             (EffectKind::Adjustment, EffectAlpha::Filter) => match effect.damage_radius() {
-                Some(radius) => bounds = bounds.outset(radius as f32),
+                Some(r) => bounds = bounds.outset(r as f32),
                 None => return Rect::from_extent(extent),
             },
-            (EffectKind::Adjustment, EffectAlpha::Preserve) => {}
+            _ => {}
         }
     }
-    if bounds.is_empty() {
-        return bounds;
-    }
-    Rect {
-        min: Point { x: bounds.min.x.max(0.), y: bounds.min.y.max(0.) },
-        max: Point {
-            x: bounds.max.x.min(extent[0] as f32),
-            y: bounds.max.y.min(extent[1] as f32),
-        },
-    }
+    if bounds.is_empty() { bounds } else { bounds.intersect(Rect::from_extent(extent)) }
 }
-
 impl Document {
-    fn sibling_below(&self, index: usize) -> Option<&Layer> {
-        let parent = self.layers[index].properties.parent;
-        self.layers[index + 1..]
-            .iter()
-            .find(|l| l.is_artwork() && l.properties.parent == parent)
-    }
-
-    fn clips_above(&self, index: usize) -> impl Iterator<Item = &Layer> {
-        let parent = self.layers[index].properties.parent;
-        self.layers[..index]
+    fn clips_above(&self, h: OccurrenceHandle) -> Vec<OccurrenceHandle> {
+        let scene = self.scene();
+        let siblings = scene.children(scene.parent(h));
+        let Some(index) = siblings.iter().position(|s| *s == h) else {
+            return Vec::new();
+        };
+        siblings[..index]
             .iter()
             .rev()
-            .filter(move |l| l.is_artwork() && l.properties.parent == parent)
-            .take_while(|l| l.properties.clipped)
+            .copied()
+            .filter(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()))
+            .take_while(|h| scene.occurrence(*h).is_some_and(|o| o.clipped))
+            .collect()
     }
-
-    /// What Merge Down does for the active layer, for its label.
+    fn sibling_below(&self, h: OccurrenceHandle) -> Option<OccurrenceHandle> {
+        let scene = self.scene();
+        let siblings = scene.children(scene.parent(h));
+        let index = siblings.iter().position(|s| *s == h)?;
+        siblings[index + 1..].iter().copied().find(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()))
+    }
     pub fn merge_down(&self) -> MergeDown {
-        let Some(index) = self.layers.iter().position(|l| l.id == self.active_layer) else {
+        let Some(h) = self.working.occurrence else {
             return MergeDown::Layer;
         };
-        let upper = &self.layers[index];
-        match (upper.properties.clipped, adjustment(upper)) {
+        let scene = self.scene();
+        let Some(o) = scene.occurrence(h) else {
+            return MergeDown::Layer;
+        };
+        match (o.clipped, adjustment(scene, h)) {
             (true, true) => MergeDown::ClippingStack,
             (true, false) => MergeDown::Layer,
-            (false, _) if self.clips_above(index).next().is_some() => MergeDown::ClippingStack,
+            (false, _) if !self.clips_above(h).is_empty() => MergeDown::ClippingStack,
             (false, true) => MergeDown::ApplyEffect,
-            (false, false) => MergeDown::Layer,
+            _ => MergeDown::Layer,
         }
     }
-
-    /// Why a merge can't run, without planning it. The size limit is checked
-    /// by `merge_plan` only.
     pub fn merge_refusal(&self, kind: MergeKind) -> Option<MergeRefusal> {
         self.merge(kind).err()
     }
-
-    /// Hidden layers Flatten Image discards, counting a hidden group once.
     pub fn flatten_discards(&self) -> usize {
-        self.merge(MergeKind::Flatten).map_or(0, |merge| {
-            let hidden = |id: &LayerId| {
-                self.layer(*id).is_some_and(|l| {
-                    !l.visible && l.properties.parent.is_none_or(|p| self.layer(p).is_some_and(|p| p.visible))
+        self.merge(MergeKind::Flatten).map_or(0, |m| {
+            let scene = self.scene();
+            m.discarded
+                .iter()
+                .chain(&m.members)
+                .filter(|h| {
+                    scene
+                        .occurrence(**h)
+                        .is_some_and(|o| !o.visible && scene.parent(**h).is_none_or(|p| scene.occurrence(p).is_some_and(|o| o.visible)))
                 })
-            };
-            merge.discarded.iter().chain(&merge.members).filter(|id| hidden(id)).count()
-                + self
-                    .layers
-                    .iter()
-                    .filter(|l| l.visible && l.properties.parent.is_none() && merge.discarded.contains(&l.id))
-                    .count()
+                .count()
+                + m.discarded.iter().filter(|h| scene.parent(**h).is_none() && scene.occurrence(**h).is_some_and(|o| o.visible)).count()
         })
     }
-
-    fn checked(&self, members: BTreeSet<LayerId>) -> Result<BTreeSet<LayerId>, MergeRefusal> {
-        for &id in &members {
-            if self.is_locked(id) {
+    fn checked(&self, members: BTreeSet<OccurrenceHandle>) -> Result<BTreeSet<OccurrenceHandle>, MergeRefusal> {
+        for h in &members {
+            if self.is_locked(*h) {
                 return Err(MergeRefusal::Locked);
             }
-            if self.layer(id).is_some_and(|l| l.kind == LayerKind::Selection) {
+            if self.scene().occurrence(*h).is_some_and(|o| o.kind() == LayerKind::Selection) {
                 return Err(MergeRefusal::SelectionLayersInside);
             }
         }
         Ok(members)
     }
-
-    fn merge(&self, kind: MergeKind) -> Result<Merge<'_>, MergeRefusal> {
-        let merge = Merge {
-            members: BTreeSet::new(),
-            discarded: BTreeSet::new(),
+    fn merge(&self, kind: MergeKind) -> Result<Merge, MergeRefusal> {
+        let scene = self.scene();
+        let mut m = Merge {
+            members: Default::default(),
+            discarded: Default::default(),
             released: Vec::new(),
             anchor: None,
             group: false,
             canvas: false,
         };
         match kind {
-            MergeKind::Down => self.merge_down_members(merge),
             MergeKind::Group => {
-                let group = self.layer(self.active_layer).ok_or(MergeRefusal::NoLayer)?;
-                if group.kind != LayerKind::Group {
+                let h = self.working.occurrence.ok_or(MergeRefusal::NoLayer)?;
+                let o = scene.occurrence(h).ok_or(MergeRefusal::NoLayer)?;
+                if o.kind() != LayerKind::Group {
                     return Err(MergeRefusal::NotGroup);
                 }
-                if !group.visible {
+                if !o.visible {
                     return Err(MergeRefusal::Hidden);
                 }
-                let members = self.checked(self.layer_subtrees(&[group.id]))?;
-                Ok(Merge { members, anchor: Some(group), group: true, ..merge })
+                m.members = self.checked(self.layer_subtrees(&[h]))?;
+                m.anchor = Some(h);
+                m.group = true;
+            }
+            MergeKind::Down => {
+                let h = self.working.occurrence.ok_or(MergeRefusal::NoLayer)?;
+                let o = scene.occurrence(h).ok_or(MergeRefusal::NoLayer)?;
+                if o.kind() == LayerKind::Selection { return Err(MergeRefusal::SelectionLayer); }
+                if !o.visible {
+                    return Err(MergeRefusal::Hidden);
+                }
+                if o.blend != LayerBlend::Normal {
+                    return Err(MergeRefusal::NotNormal);
+                }
+                if self.is_locked(h) {
+                    return Err(MergeRefusal::Locked);
+                }
+                if self.merge_down() == MergeDown::ClippingStack {
+                    let base = if o.clipped { self.clipping_base(h).ok_or(MergeRefusal::NoLayerBelow)? } else { h };
+                    let b = scene.occurrence(base).ok_or(MergeRefusal::NoLayer)?;
+                    if !b.visible {
+                        return Err(MergeRefusal::BaseHidden);
+                    }
+                    if b.blend != LayerBlend::Normal {
+                        return Err(MergeRefusal::BaseNotNormal);
+                    }
+                    let mut stack = vec![base];
+                    stack.extend(self.clips_above(base).into_iter().filter(|h| scene.occurrence(*h).is_some_and(|o| o.visible)));
+                    if stack.len() == 1 {
+                        return Err(MergeRefusal::ClipsHidden);
+                    }
+                    m.members = self.checked(self.layer_subtrees(&stack))?;
+                    m.anchor = Some(base);
+                } else {
+                    let below = self.sibling_below(h).ok_or(MergeRefusal::NoLayerBelow)?;
+                    let b = scene.occurrence(below).unwrap();
+                    if adjustment(scene, below) {
+                        return Err(MergeRefusal::BelowEffect);
+                    }
+                    if b.clipped && !o.clipped {
+                        return Err(MergeRefusal::BelowClipped);
+                    }
+                    if !b.visible {
+                        return Err(MergeRefusal::BelowHidden);
+                    }
+                    if b.blend != LayerBlend::Normal {
+                        return Err(MergeRefusal::BelowNotNormal);
+                    }
+                    if self.layer_subtrees(&[below]).iter().any(|h| self.is_locked(*h)) {
+                        return Err(MergeRefusal::BelowLocked);
+                    }
+                    m.members = self.checked(self.layer_subtrees(&[h, below]))?;
+                    m.anchor = Some(below);
+                }
             }
             MergeKind::Visible | MergeKind::Flatten | MergeKind::Stamp => {
-                let visible_base = |layer: &Layer| {
-                    self.clipping_base(layer.id)
-                        .and_then(|base| self.layer(base))
-                        .is_some_and(|base| base.visible)
-                };
-                let roots: Vec<_> = self
-                    .layers
+                let roots: Vec<_> = scene
+                    .children(None)
                     .iter()
-                    .filter(|l| {
-                        l.properties.parent.is_none() && l.is_artwork()
-                    })
+                    .copied()
+                    .filter(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()))
                     .collect();
                 let visible: Vec<_> = roots
                     .iter()
                     .copied()
-                    .filter(|l| l.visible && (!l.properties.clipped || visible_base(l)))
+                    .filter(|h| {
+                        scene.occurrence(*h).is_some_and(|o| {
+                            o.visible && (!o.clipped || self.clipping_base(*h).and_then(|b| scene.occurrence(b)).is_some_and(|b| b.visible))
+                        })
+                    })
                     .collect();
                 let anchor = *visible.last().ok_or(MergeRefusal::NothingVisible)?;
-                let members = self.layer_subtrees(&visible.iter().map(|l| l.id).collect::<Vec<_>>());
+                m.members = self.layer_subtrees(&visible);
                 if kind == MergeKind::Stamp {
-                    return Ok(Merge { members, canvas: true, ..merge });
+                    m.canvas = true;
+                } else {
+                    m.members = self.checked(m.members)?;
+                    m.anchor = Some(anchor);
+                    if kind == MergeKind::Flatten {
+                        let hidden: Vec<_> = roots.iter().copied().filter(|h| !m.members.contains(h)).collect();
+                        m.discarded = self.checked(self.layer_subtrees(&hidden))?;
+                        m.canvas = true;
+                    } else {
+                        m.released = roots
+                            .iter()
+                            .copied()
+                            .filter(|h| {
+                                scene.occurrence(*h).is_some_and(|o| !o.visible && o.clipped)
+                                    && self.clipping_base(*h).is_some_and(|b| m.members.contains(&b))
+                            })
+                            .collect();
+                    }
                 }
-                let members = self.checked(members)?;
-                if kind == MergeKind::Flatten {
-                    let hidden: Vec<_> = roots.iter().filter(|l| !members.contains(&l.id)).map(|l| l.id).collect();
-                    let discarded = self.checked(self.layer_subtrees(&hidden))?;
-                    return Ok(Merge { members, discarded, anchor: Some(anchor), canvas: true, ..merge });
-                }
-                let released = roots
-                    .iter()
-                    .filter(|l| {
-                        !l.visible
-                            && l.properties.clipped
-                            && self.clipping_base(l.id).is_some_and(|base| members.contains(&base))
-                    })
-                    .map(|l| l.id)
-                    .collect();
-                Ok(Merge { members, released, anchor: Some(anchor), ..merge })
             }
         }
+        Ok(m)
     }
-
-    fn merge_down_members<'a>(&'a self, merge: Merge<'a>) -> Result<Merge<'a>, MergeRefusal> {
-        let index = self
-            .layers
-            .iter()
-            .position(|l| l.id == self.active_layer)
-            .ok_or(MergeRefusal::NoLayer)?;
-        let upper = &self.layers[index];
-        if upper.kind == LayerKind::Selection { return Err(MergeRefusal::SelectionLayer); }
-        if !upper.visible {
-            return Err(MergeRefusal::Hidden);
-        }
-        if upper.properties.blend != LayerBlend::Normal {
-            return Err(MergeRefusal::NotNormal);
-        }
-        if self.is_locked(upper.id) {
-            return Err(MergeRefusal::Locked);
-        }
-        if self.merge_down() == MergeDown::ClippingStack {
-            let base = if upper.properties.clipped {
-                self.clipping_base(upper.id).ok_or(MergeRefusal::NoLayerBelow)?
-            } else {
-                upper.id
-            };
-            let base_index = self.layers.iter().position(|l| l.id == base).ok_or(MergeRefusal::NoLayer)?;
-            let base = &self.layers[base_index];
-            if !base.visible {
-                return Err(MergeRefusal::BaseHidden);
-            }
-            if base.properties.blend != LayerBlend::Normal {
-                return Err(MergeRefusal::BaseNotNormal);
-            }
-            let mut stack = vec![base.id];
-            stack.extend(self.clips_above(base_index).filter(|l| l.visible).map(|l| l.id));
-            if stack.len() == 1 {
-                return Err(MergeRefusal::ClipsHidden);
-            }
-            let members = self.checked(self.layer_subtrees(&stack))?;
-            return Ok(Merge { members, anchor: Some(base), ..merge });
-        }
-        let below = self.sibling_below(index).ok_or(MergeRefusal::NoLayerBelow)?;
-        if adjustment(below) {
-            return Err(MergeRefusal::BelowEffect);
-        }
-        if below.properties.clipped && !upper.properties.clipped {
-            return Err(MergeRefusal::BelowClipped);
-        }
-        if !below.visible {
-            return Err(MergeRefusal::BelowHidden);
-        }
-        if below.properties.blend != LayerBlend::Normal {
-            return Err(MergeRefusal::BelowNotNormal);
-        }
-        let lower = self.layer_subtrees(&[below.id]);
-        if lower.iter().any(|&id| self.is_locked(id)) {
-            return Err(MergeRefusal::BelowLocked);
-        }
-        let members = self.checked(self.layer_subtrees(&[upper.id, below.id]))?;
-        Ok(Merge { members, anchor: Some(below), ..merge })
-    }
-
-    /// Where the members' pixels lie in document coordinates, with the
-    /// canvas, grown to whole pages from the canvas origin.
-    pub fn bake_extent(&self, members: &BTreeSet<LayerId>) -> Result<(Point, [u32; 2]), MergeRefusal> {
-        let canvas = [self.width, self.height];
-        let bounds = self
-            .layers
-            .iter()
-            .filter(|l| l.kind == LayerKind::Paint && members.contains(&l.id))
-            .fold(Rect::from_extent(canvas), |bounds, l| {
-                bounds.union(self.layer_geometry(l.id).forward_bounds(Rect::from_extent(l.local_extent(canvas))))
-            });
+    pub fn bake_extent(&self, members: &BTreeSet<OccurrenceHandle>) -> Result<(Point, [u32; 2]), MergeRefusal> {
+        let scene = self.scene();
+        let bounds =
+            scene.order().iter().copied().filter(|h| members.contains(h) && scene.paint_source(*h).is_some()).fold(
+                Rect::from_extent(self.composition().size),
+                |b, h| {
+                    b.union(scene.target_geometry(scene.source_target(h).unwrap()).forward_bounds(Rect::from_extent(scene.local_extent(h))))
+                },
+            );
         let size = raster::TILE_SIZE as f32;
-        let origin = Point {
-            x: (bounds.min.x / size).floor() * size,
-            y: (bounds.min.y / size).floor() * size,
-        };
-        let span = |max: f32, min: f32| (max - min).ceil();
-        let extent = [span(bounds.max.x, origin.x), span(bounds.max.y, origin.y)];
+        let origin = Point { x: (bounds.min.x / size).floor() * size, y: (bounds.min.y / size).floor() * size };
+        let extent = [(bounds.max.x - origin.x).ceil(), (bounds.max.y - origin.y).ceil()];
         if !extent.iter().all(|v| v.is_finite() && *v <= MAX_EXTENT as f32) {
             return Err(MergeRefusal::TooLarge);
         }
         Ok((origin, extent.map(|v| v as u32)))
     }
-
-    /// Whether the pages `operation` writes into a paint layer `extent` large
-    /// exceed the publication limit of one edit.
-    pub(crate) fn exceeds_publication(&self, operation: &LayerOperation, extent: [u32; 2]) -> bool {
-        raster::RasterPlane::Color
-            .descriptor(self.color)
-            .byte_len([raster::TILE_SIZE; 2])
-            .is_none_or(|page| {
-                raster::page_count(operation.bounds(extent), extent).saturating_mul(page as u64)
-                    > raster::MAX_PUBLICATION_BYTES
-            })
+    pub(crate) fn exceeds_publication(&self, operation: &RasterOperation, extent: [u32; 2]) -> bool {
+        raster::RasterPlane::Color.descriptor(self.composition().color).byte_len([raster::TILE_SIZE; 2]).is_none_or(|page| {
+            raster::page_count(operation.bounds(extent), extent).saturating_mul(page as u64) > raster::MAX_PUBLICATION_BYTES
+        })
     }
-
-    /// Plan a merge into a new layer `result` whose pending bake uses the
-    /// coverage identity `coverage`. Placed photos become document pixels.
-    pub fn merge_plan(&self, kind: MergeKind, result: LayerId, coverage: LayerId) -> Result<MergePlan, MergeRefusal> {
-        let merge = self.merge(kind)?;
-        let canvas = [self.width, self.height];
-        let members: Vec<Layer> = self
-            .layers
-            .iter()
-            .filter(|l| merge.members.contains(&l.id))
-            .map(|l| {
-                let mut layer = bake_member(l);
-                if merge.group && Some(l.id) == merge.anchor.map(|a| a.id) {
-                    layer.opacity = 1.;
-                    layer.properties.blend = LayerBlend::Normal;
-                }
-                layer
-            })
-            .collect();
-        let (origin, extent) = if merge.canvas || members.iter().any(|l| l.kind == LayerKind::Effect) {
+    pub fn merge_plan(&self, kind: MergeKind) -> Result<MergePlan, MergeRefusal> {
+        let m = self.merge(kind)?;
+        let scene = self.scene();
+        let canvas = self.composition().size;
+        let (origin, extent) = if m.canvas || m.members.iter().any(|h| scene.effect(*h).is_some()) {
             (Point::default(), canvas)
         } else {
-            self.bake_extent(&merge.members)?
+            self.bake_extent(&m.members)?
         };
-        let parent = merge.anchor.and_then(|a| a.properties.parent);
+        let parent = m.anchor.and_then(|h| scene.parent(h));
         let parent_offset = parent.map_or(Point::default(), |p| self.layer_offset(p));
-        let offset = Point { x: parent_offset.x - origin.x, y: parent_offset.y - origin.y };
-        let operation = LayerOperation {
+        let mut snapshot = self.snapshot();
+        if m.group {
+            let h = m.anchor.unwrap();
+            let mut group = snapshot.artwork.occurrences.get(h).unwrap().clone();
+            group.opacity = 1.;
+            group.blend = LayerBlend::Normal;
+            if let Some(occurrence) = Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(h) { *occurrence = group; }
+        }
+        let scope = SceneScope::Members(scene.order().iter().copied().filter(|h| m.members.contains(h)).collect::<Vec<_>>().into());
+        let operation = RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: LayerMask::reveal_all(coverage, Point::default()),
-            kind: LayerOperationKind::Bake { members: members.into(), offset },
+            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), extent, Point::default()),
+            kind: RasterOperationKind::Bake { scene: snapshot, scope, offset: Point { x: -origin.x, y: -origin.y } },
         };
         if self.exceeds_publication(&operation, extent) {
             return Err(MergeRefusal::TooLarge);
         }
-        let mut layer = Layer::paint(result, merge.anchor.map_or_else(|| "Visible".into(), |a| a.name.clone()));
-        layer.properties.parent = parent;
-        layer.properties.offset = Point { x: origin.x - parent_offset.x, y: origin.y - parent_offset.y };
-        layer.properties.extent = (extent != canvas).then_some(extent);
-        if let Some(anchor) = merge.anchor {
-            layer.properties.clipped = anchor.properties.clipped;
-            layer.properties.alpha_locked =
-                kind == MergeKind::Down && anchor.kind == LayerKind::Paint && anchor.properties.alpha_locked;
-            if merge.group {
-                layer.opacity = anchor.opacity;
-                layer.properties.blend = match anchor.properties.blend {
-                    LayerBlend::PassThrough => LayerBlend::Normal,
-                    blend => blend,
-                };
+        let paint = RecordChange::insert(
+            &self.artwork.paint,
+            PaintSource { domain: extent, raster: Default::default(), original: None, operations: Arc::default() },
+        );
+        let target = SourceTarget::Paint(paint.handle);
+        let mut result = Occurrence::new(
+            OccurrenceContent::Paint(paint.handle),
+            m.anchor.and_then(|h| scene.occurrence(h)).map_or_else(|| Arc::from("Visible"), |o| o.name.clone()),
+        );
+        result.translation = Point { x: origin.x - parent_offset.x, y: origin.y - parent_offset.y };
+        if let Some(h) = m.anchor {
+            let anchor = scene.occurrence(h).unwrap();
+            result.clipped = anchor.clipped;
+            result.alpha_locked = kind == MergeKind::Down && anchor.kind() == LayerKind::Paint && anchor.alpha_locked;
+            if m.group {
+                result.opacity = anchor.opacity;
+                result.blend = if anchor.blend == LayerBlend::PassThrough { LayerBlend::Normal } else { anchor.blend };
             }
         }
-        let removed: BTreeSet<_> = if merge.anchor.is_some() {
-            merge.members.union(&merge.discarded).copied().collect()
-        } else {
-            BTreeSet::new()
-        };
-        let index = merge.anchor.map_or(0, |anchor| {
-            self.layers.iter().position(|l| l.id == anchor.id).unwrap_or(0)
-        });
-        let mut edits = vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id: result }];
-        edits.extend(
-            self.ordered_layers()
-                .into_iter()
-                .rev()
-                .filter(|l| removed.contains(&l.id))
-                .map(|l| Edit::RemoveLayer { id: l.id }),
-        );
-        for id in &merge.released {
-            let mut layer = self.layer(*id).ok_or(MergeRefusal::NoLayer)?.clone();
-            layer.properties.clipped = false;
-            edits.push(Edit::ReplaceLayer(Box::new(layer)));
+        let removed: BTreeSet<_> = if m.anchor.is_some() { m.members.union(&m.discarded).copied().collect() } else { Default::default() };
+        result.reference = removed.iter().any(|h| scene.occurrence(*h).is_some_and(|o| o.reference));
+        let occurrence = RecordChange::insert(&self.artwork.occurrences, result);
+        let result = occurrence.handle;
+        let containing = m.anchor.and_then(|h| scene.stack(h)).unwrap_or(self.composition().result);
+        let mut edits = vec![Edit::Paint(paint), Edit::Occurrence(occurrence)];
+        for (h, _, before) in self.artwork.stacks.iter() {
+            let mut stack = before.clone();
+            let index = if h == containing { m.anchor.and_then(|a| stack.entries.iter().position(|h| *h == a)).unwrap_or(0) } else { 0 };
+            let retained_before = stack.entries[..index].iter().filter(|h| !removed.contains(h)).count();
+            stack.entries.retain(|h| !removed.contains(h));
+            if h == containing {
+                stack.entries.insert(retained_before, result);
+            }
+            if stack != *before {
+                edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, h, Some(stack)).map_err(|_| MergeRefusal::NoLayer)?));
+            }
         }
-        if self.reference_layers.iter().any(|id| removed.contains(id)) {
-            let mut references: BTreeSet<_> = self.reference_layers.difference(&removed).copied().collect();
-            references.insert(result);
-            edits.push(Edit::SetReferences(references));
+        edits.extend(self.removal_edits(&removed).map_err(|_| MergeRefusal::NoLayer)?);
+        for h in m.released {
+            let mut o = scene.occurrence(h).unwrap().clone();
+            o.clipped = false;
+            edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o)).map_err(|_| MergeRefusal::NoLayer)?));
         }
-        Ok(MergePlan { edits, result, operation })
+        let mut working = self.working.clone();
+        working.occurrence = Some(result);
+        working.target = Some(target);
+        working.inspect_mask = None;
+        edits.push(Edit::Working(working));
+        Ok(MergePlan { edits, result, target, operation })
     }
 }
-
 #[cfg(test)]
 #[path = "merge_tests.rs"]
 mod tests;

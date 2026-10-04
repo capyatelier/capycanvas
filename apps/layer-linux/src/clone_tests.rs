@@ -44,14 +44,14 @@ pub(super) fn fill(w: &Rc<Workspace>, rgba: [f32; 4], [x0, y0, x1, y1]: [f32; 4]
     w.dispatch(UiAction::SetColor { rgba });
     let revision = document(w).revision;
     let doc = document(w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
-    let paint = doc.active_layer;
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
+    let paint = doc.working.target.unwrap();
     w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
     let [x0, y0, x1, y1] = [width * x0, height * y0, width * x1, height * y1];
     native_pen_path(w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
     w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
     until(
-        || !document(w).layer(paint).unwrap().raster.is_empty() && document(w).revision > revision,
+        || !document(w).target_raster(paint).unwrap().is_empty() && document(w).revision > revision,
         "the fill paints the selection",
     );
     w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
@@ -161,7 +161,7 @@ pub(super) fn finish(w: &Workspace, input: &RemoteInput) {
 fn native_clone_alt_click_stroke_disc_and_bar_with_the_mouse() {
     let (_app, w, mut input) = clone_ready("art.capycanvas.CloneMouse");
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     let source = [width * 0.2, height * 0.5];
     input.perform(json!([{ "key": ALT, "down": true }]));
     until(|| state(&w).commands.iter().any(|c| c.id == CommandId::CloneSourceArm && c.selected), "Alt arms Set Source");
@@ -220,7 +220,7 @@ fn native_clone_disc_drags_and_taps_with_a_finger() {
 fn native_clone_side_button_disc_and_strokes_with_the_pen() {
     let (_app, w, mut input) = clone_ready("art.capycanvas.ClonePen");
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     w.dispatch(UiAction::Invoke { command: CommandId::KeyboardShortcuts });
     for action in [
         PreferenceAction::EditPenButton { trigger: "pen.button.primary".into() },
@@ -246,7 +246,7 @@ fn native_clone_side_button_disc_and_strokes_with_the_pen() {
 
     drag_disc(&w, &mut input, "pen", [40., -30.]);
     let moved = source_point(&w);
-    let before = document(&w).layer(document(&w).active_layer).unwrap().raster.clone();
+    let before = active_raster(&document(&w)).clone();
     for (i, y) in [0.45f32, 0.6].into_iter().enumerate() {
         stroke(&mut input, "pen", window_point(&w, [width * 0.6, height * y]), window_point(&w, [width * 0.72, height * y]));
         until(|| strokes(&w) == i as u64 + 1, "the pen clones a stroke");
@@ -258,14 +258,14 @@ fn native_clone_side_button_disc_and_strokes_with_the_pen() {
     pump(200);
     assert!(blue(shown(&w, [width * 0.62, height * 0.45])), "undo removes only the last stroke");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).layer(document(&w).active_layer).unwrap().raster == before, "each stroke is one undo step");
+    until(|| *active_raster(&document(&w)) == before, "each stroke is one undo step");
     tap(&mut input, "pen", window_point(&w, source_point(&w)));
     until(|| disc_bar(&w), "a pen tap on the disc shows its bar");
     finish(&w, &input);
 }
 
 fn raster(w: &Workspace) -> layer_core::raster::RasterRevision {
-    document(w).layer(document(w).active_layer).unwrap().raster.clone()
+    active_raster(&document(w)).clone()
 }
 
 fn blueish(pixel: [u8; 4]) -> bool {
@@ -278,7 +278,7 @@ fn blueish(pixel: [u8; 4]) -> bool {
 fn heal_journey(id: &str, device: &str) {
     let (_app, w, mut input) = retouch_ready(id, CommandId::Heal, &[(BLUE, [0.1, 0.2, 0.35, 0.8])]);
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     let source = [width * 0.2, height * 0.5];
     input.perform(json!([{ "key": ALT, "down": true }]));
     until(|| state(&w).commands.iter().any(|c| c.id == CommandId::CloneSourceArm && c.selected), "Alt arms Set Source");
@@ -313,7 +313,7 @@ fn spot_heal_journey(id: &str, device: &str) {
     let (_app, w, mut input) =
         retouch_ready(id, CommandId::SpotHeal, &[(pale, [0.2, 0.2, 0.8, 0.8]), (BLUE, [0.49, 0.49, 0.51, 0.51])]);
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     let spot = [width * 0.5, height * 0.5];
     assert!(blueish(shown(&w, spot)), "the spot is blue");
     assert!(state(&w).commands.iter().any(|c| c.id == CommandId::CloneSourceArm && !c.enabled), "spot healing has no source to set");
@@ -350,7 +350,7 @@ fn native_navigation_and_queued_paint_during_healing() {
     let (_app, w, input) = retouch_ready("art.capycanvas.HealNavigation", CommandId::SpotHeal, &[(BLUE, [0.1, 0.2, 0.35, 0.8])]);
     let mut input = input.settle_ms(0);
     let doc = document(&w);
-    let [width, height] = [doc.width as f32, doc.height as f32];
+    let [width, height] = [doc.composition().size[0] as f32, doc.composition().size[1] as f32];
     let before = raster(&w);
     w.dispatch(UiAction::SetBrushSize { value: width * 0.15 });
     stroke(&mut input, "pen", window_point(&w, [width * 0.4, height * 0.5]), window_point(&w, [width * 0.8, height * 0.5]));

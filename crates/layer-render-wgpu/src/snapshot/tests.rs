@@ -2,8 +2,10 @@ use super::*;
 use crate::test_support::packet;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::SourceBuilder};
 use layer_core::raster::{RasterRevision, RasterTile, RasterWatercolor, TileBlob, TileKey};
-use layer_core::{Affine, Document, EffectInstance, LayerMask, Point, Selection, SelectionPixels};
+use layer_core::{Affine, Document, EffectInstance, Point, Selection, SelectionPixels};
 use std::io::Cursor;
+use layer_core::authored::*;
+use crate::artwork_sample_tests::{paint_id,paint_mut,paint_occurrence,refresh,insert_effect,effect_draft,set_effect,add_group};
 
 mod placement;
 mod local_adjustments;
@@ -12,8 +14,22 @@ fn gpu() -> SnapshotGpu {
     static GPU: std::sync::OnceLock<SnapshotGpu> = std::sync::OnceLock::new();
     GPU.get_or_init(|| WgpuRasterizer::new_native_headless(Default::default()).unwrap().snapshot_gpu()).clone()
 }
-fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
-    gpu().capture(project, 0., Default::default())
+fn capture(document: Document) -> Result<SnapshotRenderer, GpuRasterError> {
+    gpu().capture_scene(document.snapshot(),SceneScope::All,Default::default())
+}
+
+fn hide_paper(document:&mut Document) {
+    let paper=document.scene().children(None)[1];document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
+}
+fn roundtrip(document:&Document)->Document {
+    use layer_core::package::{codec::{PreparedPackage,OpenOutcome,open},ImmutableBacking};
+    let cancelled=std::sync::atomic::AtomicBool::new(false);
+    let checkpoint=CaptureCheckpoint {document:document.artwork.id,owner:document.owner,session_generation:0,artwork_generation:0,working_generation:0,edit_checkpoint:0};
+    let capture=document.artwork.capture(checkpoint).unwrap();let mut bytes=Vec::new();
+    PreparedPackage::prepare(&capture,None,&cancelled).unwrap().write(&mut bytes,&cancelled).unwrap();
+    let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+    let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&cancelled).unwrap() else {panic!("editable snapshot");};
+    Document::from_artwork(artwork).unwrap()
 }
 
 #[test]
@@ -24,19 +40,19 @@ fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
     let target=SourceInterpretation{depth:SampleDepth::U16,..input.clone()};
     for depth in [SampleDepth::U16,SampleDepth::F32] {
     for c in [[0.25_f32,0.5,0.75,1.],[4.,-2.,8.,1.],[0.1,0.2,0.4,0.5]] {
-        let mut document=Document::new("Gaussian coverage",extent[0],extent[1],
+        let mut document=Document::new(PortableId::random(),extent[0],extent[1],
             layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
-        document.color.depth=depth;document.layers[1].visible=false;
+        let root=document.artwork.root;
+        document.artwork.compositions.get_mut(root).unwrap().color.depth=depth;hide_paper(&mut document);
         let mut source=SourceBuilder::new(extent,input.clone(),1<<20).unwrap();
         let row=(0..extent[0]).flat_map(|_|c).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
         for _ in 0..extent[1]{source.push_row(&row).unwrap();}
-        document.layers[0].source=Some(Arc::new(source.finish().unwrap()));
-        let id=document.allocate_layer_id();let mut filter=Layer::paint(id,"Gaussian Blur");filter.kind=LayerKind::Effect;
-        filter.effect=Some(Arc::new(EffectInstance::new(crate::tests::fixture("gaussian_blur").program())));
-        document.layers.insert(0,filter);
+        paint_mut(&mut document).original=Some(Arc::new(source.finish().unwrap()));
+        let filter=insert_effect(&mut document,EffectInstance::new(crate::tests::fixture("gaussian_blur").program()),0);
         for sigma in [0.,0.1,1.,3.,21.,21.1,64.,85.] {
-            Arc::make_mut(document.layers[0].effect.as_mut().unwrap()).set("sigma",layer_core::EffectValue::Number(sigma)).unwrap();
-            let mut reader=capture(Project{document:document.clone()}).unwrap();let mut png=Vec::new();
+            let mut draft=effect_draft(&document,filter);
+            draft.set("sigma",layer_core::EffectValue::Number(sigma)).unwrap();set_effect(&mut document,filter,draft);
+            let mut reader=capture(document.clone()).unwrap();let mut png=Vec::new();
             reader.write_png(&mut png,&target,Default::default(),None)
                 .unwrap_or_else(|error|panic!("depth={depth:?} sigma={sigma} original={c:?}: {error}"));
             let decoded=layer_color::photo::read_photo(Cursor::new(png),Default::default()).unwrap();
@@ -51,11 +67,14 @@ fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
 
 #[test]
 fn read_only_capture_does_not_compile_paint_publication_pipelines() {
-    let mut document = Document::new("Read-only capture", 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let fill = layer_core::color::RgbColor::from_linear(document.color.space, [0.25, 0.5, 0.75, 1.]).unwrap();
-    let color = fill.linear_in(document.color.space).unwrap();
-    document.layers[1] = Layer::solid_color(LayerId(2), "Fill", fill);
-    let mut capture = gpu().capture(Project { document }, 0., Default::default()).unwrap();
+    let mut document = Document::new(PortableId::random(), 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let fill_color=layer_core::color::RgbColor::from_linear(RgbSpace::Srgb,[0.25,0.5,0.75,1.]).unwrap();
+    let color=fill_color.linear_in(RgbSpace::Srgb).unwrap();
+    hide_paper(&mut document);
+    let mut fill=EffectInstance::new(crate::tests::fixture("solid_color").program());
+    fill.set("color",layer_core::EffectValue::Color(fill_color)).unwrap();
+    insert_effect(&mut document,fill,1);
+    let mut capture = gpu().capture_scene(document.snapshot(),SceneScope::All,Default::default()).unwrap();
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
     assert!(capture.read_region([0, 0, 33, 17]).unwrap().iter().all(|p| *p == color));
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
@@ -63,7 +82,7 @@ fn read_only_capture_does_not_compile_paint_publication_pipelines() {
 
 #[test]
 fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
-    let mut doc = Document::new("Animation phase", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let mut doc = Document::new(PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let program = crate::tests::fixture("domain_warp").program();
     let mut program = (*program).clone();
     // A uniform time signal makes this independent of the filter's appearance.
@@ -73,29 +92,26 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     let mut effect = EffectInstance::new(Arc::new(program));
     effect.set("animate", layer_core::EffectValue::Toggle(true)).unwrap();
     effect.set("speed", layer_core::EffectValue::Number(1.)).unwrap();
-    let mut filter = Layer::paint(LayerId(3), "Phase");
-    filter.kind = LayerKind::Effect;
-    filter.effect = Some(Arc::new(effect));
-    doc.layers.insert(0, filter);
-    doc.allocate_layer_id();
-    let mut live = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let filter = insert_effect(&mut doc,effect,0);
+    let mut live = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let mut before = None;
     for (elapsed, speed, phase) in [(2.,1.,2.),(2.,2.,2.),(3.,2.,4.),(3.,0.,4.),(8.,0.,4.),(8.,2.,4.),(9.,2.,6.)] {
-        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("speed", layer_core::EffectValue::Number(speed)).unwrap();
+        let mut effect=effect_draft(&doc,filter);
+        effect.set("speed",layer_core::EffectValue::Number(speed)).unwrap();set_effect(&mut doc,filter,effect);
         live.submit(FramePacket {
             view: layer_render::ViewState { width_px:32, height_px:32, document_to_surface: [1.,0.,0.,1.,0.,0.], },
             time_seconds: elapsed,
             reset_layers: before.is_none(),
-            ..packet(&doc.layers, [32,32])
+            ..packet(doc.scene(), [32,32])
         }).unwrap();
         let pixels = live.readback_srgb_rgba8().unwrap();
         if let Some((previous_time, previous_pixels)) = &before {
             if *previous_time == elapsed || speed == 0. { assert_eq!(&pixels, previous_pixels, "rate changes do not seek"); }
             else { assert_ne!(&pixels, previous_pixels, "playback advances"); }
         }
-        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone() }, elapsed, Default::default()).unwrap();
-        let exported = capture.renderer.effect_clocks.get(&LayerId(3)).unwrap().1.clone()
-            .advance(doc.layers[0].effect.as_ref().unwrap(),elapsed);
+        let mut capture = live.snapshot_gpu().capture_scene(doc.snapshot_with_context(live.evaluation_context()),SceneScope::All, Default::default()).unwrap();
+        let exported = capture.renderer.effect_clocks.get(&filter).unwrap().1.clone()
+            .advance(doc.scene().effect(filter).unwrap(),elapsed);
         assert_eq!(exported, phase);
         let sample = capture.preview_linear_document([32,32]).unwrap().pixels[0];
         assert!((sample[0] - phase/10.).abs()<0.01, "export phase {sample:?}");
@@ -105,16 +121,16 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
 
 #[test]
 fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
-    let mut document = Document::new("Float32 delivery", 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F32;
-    document.layers[1].visible = false;
+    let mut document = Document::new(PortableId::random(), 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+    hide_paper(&mut document);
     let target = SourceInterpretation { channels: SourceChannels::Rgba,
         depth: SampleDepth::F32, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
     let input = [[100000.125f32, -0.125, 2., 0.5], [4., 2., 1., 1.], [1e-20, -1., 4., 1. / 65536.]];
     let mut builder = SourceBuilder::new([3, 1], target.clone(), 1024 * 1024).unwrap();
     builder.push_row(&input.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>()).unwrap();
-    document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    let project = Project { document };
+    paint_mut(&mut document).original = Some(Arc::new(builder.finish().unwrap()));
+    let project = document;
     let mut renderer = capture(project.clone()).unwrap();
     let before = renderer.preview_linear_document([3, 1]).unwrap().pixels;
     let mut output = Cursor::new(Vec::new());
@@ -140,9 +156,9 @@ fn float32_exr_and_deliberate_pq_sdr_delivery_leave_master_unchanged() {
 #[test]
 fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
     let extent = [1027, 33];
-    let mut document = Document::new("Float32 shared capture", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::F32 };
-    document.layers[1].visible = false;
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::F32 };
+    hide_paper(&mut document);
     let target = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: SampleDepth::F32,
@@ -163,13 +179,11 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
         source.push_row(&row).unwrap();
         straight.extend(row);
     }
-    document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
-    let project = Project { document };
+    paint_mut(&mut document).original = Some(Arc::new(source.finish().unwrap()));
+    let project = document;
     let (live, rendered) = frame(&project);
     assert_eq!(rendered, expected);
-    let mut capture = live.snapshot_gpu().capture(
-        project, 0., Default::default(),
-    ).unwrap();
+    let mut capture = live.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
     let (rows, pixels) = capture.read_band(0).unwrap();
     assert_eq!(rows, extent[1]);
     assert_eq!(pixels, expected, "shared capture must retain signed, low-alpha and above-half-range samples");
@@ -189,24 +203,20 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
 #[test]
 fn hdr_flattened_storage_ignores_sdr_rendition() {
     use layer_core::color::hdr;
-    let mut document = Document::new("HDR flattened copy", 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F16;
-    document.layers[1].visible = false;
+    let mut document = Document::new(PortableId::random(), 3, 1, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F16;
+    hide_paper(&mut document);
     let target = SourceInterpretation { channels: SourceChannels::Rgba,
         depth: SampleDepth::F16, profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false };
     let input = [[8., -0.125, 2., 0.5], [4., 2., 1., 1.], [1. / 65536., -1., 4., 1. / 65536.]];
     let mut builder = SourceBuilder::new([3, 1], target.clone(), 1024 * 1024).unwrap();
     builder.push_row(&input.into_iter().flat_map(|p| hdr::encode_pixel(p).unwrap()).flat_map(u16::to_le_bytes).collect::<Vec<_>>()).unwrap();
-    document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    let id = document.allocate_layer_id();
-    let mut layer = Layer::paint(id, "+1 EV");
-    layer.kind = LayerKind::Effect;
+    paint_mut(&mut document).original = Some(Arc::new(builder.finish().unwrap()));
     let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
     effect.set("exposure", layer_core::EffectValue::Number(1.)).unwrap();
-    layer.effect = Some(Arc::new(effect));
-    document.layers.insert(0, layer);
-    document.sdr_rendition = hdr::SdrRendition { exposure: -4., contrast: 2., headroom: 4., ..Default::default() };
-    let mut renderer = capture(Project { document }).unwrap();
+    insert_effect(&mut document,effect,0);
+    document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().sdr = hdr::SdrRendition { exposure: -4., contrast: 2., headroom: 4., ..Default::default() };
+    let mut renderer = capture(document).unwrap();
     let mut bytes = vec![0; 24];
     renderer.write_rows(&target, Default::default(), None, |_, _, read| read(0, &mut bytes)).unwrap();
     let expected: Vec<_> = input.into_iter().flat_map(|p| hdr::encode_pixel([2. * p[0], 2. * p[1], 2. * p[2], p[3]]).unwrap()).flat_map(u16::to_le_bytes).collect();
@@ -234,10 +244,10 @@ fn hdr_flattened_storage_ignores_sdr_rendition() {
     assert!(renderer.preview_document_with_coverage([3, 1], RgbSpace::Srgb, f32::NAN).is_err());
 }
 
-fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
-    let mut document = Document::new("snapshot fixture", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color = color;
-    document.layers[1].visible = false;
+fn source_document(color: DocumentColor, extent: [u32; 2]) -> Document {
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
+    hide_paper(&mut document);
     let mut builder = SourceBuilder::new(
         extent,
         SourceInterpretation {
@@ -275,8 +285,8 @@ fn source_project(color: DocumentColor, extent: [u32; 2]) -> Project {
         }
         builder.push_row(&row).unwrap();
     }
-    document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    Project { document }
+    paint_mut(&mut document).original = Some(Arc::new(builder.finish().unwrap()));
+    document
 }
 fn decode(bytes: Vec<u8>) -> layer_core::color::source::SourceImage {
     layer_color::photo::read_photo(Cursor::new(bytes), Default::default()).unwrap()
@@ -291,12 +301,12 @@ fn raw_rows(source: &layer_core::color::source::SourceImage) -> Vec<u8> {
     }
     all
 }
-fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
-    let mut r = WgpuRasterizer::new_native_headless(project.document.color).unwrap();
-    let extent = [project.document.width, project.document.height];
+fn frame(document: &Document) -> (WgpuRasterizer, Vec<[f32; 4]>) {
+    let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let extent = document.composition().size;
     r.submit(FramePacket {
         reset_layers: true,
-        ..packet(&project.document.layers, extent)
+        ..packet(document.scene(), extent)
     })
     .unwrap();
     let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
@@ -313,8 +323,8 @@ fn frame(project: &Project) -> (WgpuRasterizer, Vec<[f32; 4]>) {
 fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
-            let project = source_project(DocumentColor { space, depth }, [257, 256]);
-            let source = project.document.layers[0].source.as_ref().unwrap().clone();
+            let project = source_document(DocumentColor { space, depth }, [257, 256]);
+            let source = project.scene().paint(paint_id(&project)).unwrap().original.as_ref().unwrap().clone();
             let expected = raw_rows(&source);
             let target = source.interpretation.clone();
             let mut reader =
@@ -351,14 +361,14 @@ fn snapshot_identity_png_tiff_preserve_every_code_and_hidden_rgb() {
 
 #[test]
 fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
-    let mut project = source_project(
+    let mut project = source_document(
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
         },
         [257, 256],
     );
-    let original = project.document.layers[0].source.as_ref().unwrap().clone();
+    let original = project.scene().paint(paint_id(&project)).unwrap().original.as_ref().unwrap().clone();
     let target = SourceInterpretation {
         channels: SourceChannels::GrayAlpha,
         ..original.interpretation.clone()
@@ -376,7 +386,7 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     }
     let gray = Arc::new(builder.finish().unwrap());
     let expected = raw_rows(&gray);
-    project.document.layers[0].source = Some(gray);
+    paint_mut(&mut project).original = Some(gray);
     let mut reader = capture(project).unwrap();
     for tiff in [false, true] {
         let mut file = Cursor::new(Vec::new());
@@ -395,15 +405,15 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     }
     // An explicit matte defeats the raw-source shortcut even when profile,
     // channels and depth are unchanged. Transparent samples become opaque.
-    let project = source_project(
+    let project = source_document(
         DocumentColor {
             space: RgbSpace::DisplayP3,
             depth: SampleDepth::U16,
         },
         [33, 17],
     );
-    let target = project.document.layers[0]
-        .source
+    let target = project.scene().paint(paint_id(&project)).unwrap()
+        .original
         .as_ref()
         .unwrap()
         .interpretation
@@ -423,14 +433,12 @@ fn snapshot_gray_identity_and_explicit_matte_keep_their_output_contracts() {
     }
 }
 
-fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
-    let mut project = source_project(color, [641, 389]);
-    let doc = &mut project.document;
-    let mask_id = doc.allocate_layer_id();
-    let group_id = doc.allocate_layer_id();
-    let effect_id = doc.allocate_layer_id();
-    let mut mask = LayerMask::reveal_all(mask_id, Point { x: 13., y: -7. });
-    mask.default_coverage = 0.;
+fn rich_document(color: DocumentColor, mask_kind: u32) -> Document {
+    let mut project = source_document(color, [641, 389]);
+    let doc = &mut project;
+    let coverage=doc.artwork.coverage.next_handle();
+    let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[641,389],Point{x:13.,y:-7.});
+    mask.source.default_coverage = 0.;
     let mut selection = if mask_kind == 0 {
         Selection::polygon(vec![
             Point { x: 10., y: 8. },
@@ -459,7 +467,7 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         .unwrap()
     };
     selection.inverted = mask_kind == 2;
-    mask.initial = Some(selection);
+    mask.source.initial = Some(selection);
     let scalar = match color.depth {
                 SampleDepth::F16 | SampleDepth::F32 => unreachable!("SDR-only fixture"),
         SampleDepth::U8 => vec![123; 65536],
@@ -473,7 +481,7 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         },
         RasterTile::backed(TileBlob::encode(color.coverage_descriptor(), &scalar).unwrap()),
     );
-    mask.raster = RasterRevision::backed(mask_data);
+    mask.source.raster = RasterRevision::backed(mask_data);
     let mut data = RasterData {
         watercolor: Some(RasterWatercolor {
             wet_edge: 0.6,
@@ -507,13 +515,12 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
             RasterTile::backed(TileBlob::encode(color.coverage_descriptor(), &scalar).unwrap()),
         );
     }
-    doc.layers[0].raster = RasterRevision::backed(data);
-    doc.layers[0].mask = Some(mask);
-    doc.layers[0].properties.offset = Point { x: -11., y: 9. };
-    doc.layers[0].properties.parent = Some(group_id);
-    let mut effect = Layer::paint(effect_id, "blur");
-    effect.kind = LayerKind::Effect;
-    effect.properties.parent = Some(group_id);
+    paint_mut(doc).raster = RasterRevision::backed(data);
+    assert_eq!(doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap(),coverage);
+    let paint=paint_occurrence(doc);
+    let occurrence=doc.artwork.occurrences.get_mut(paint).unwrap();
+    occurrence.mask=Some(mask.use_);
+    occurrence.translation=Point {x:-11.,y:9.};
     let mut program = (*crate::tests::fixture("exposure").program()).clone();
     program.entry = "blur".into();
     program.wgsl="fn blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p+vec2<f32>(3.,0.))+c+fx_sample(p-vec2<f32>(3.,0.)))/3.;}".into();
@@ -522,13 +529,10 @@ fn rich_project(color: DocumentColor, mask_kind: u32) -> Project {
         sampling: layer_core::EffectSampling::Neighborhood { radius: 3 },
     }]
     .into();
-    effect.effect = Some(Arc::new(EffectInstance::new(Arc::new(program))));
-    let mut group = Layer::paint(group_id, "group");
-    group.kind = LayerKind::Group;
-    group.properties.offset = Point { x: 3., y: 5. };
-    group.opacity = 0.73;
-    doc.layers.insert(0, effect);
-    doc.layers.insert(0, group);
+    let effect=insert_effect(doc,EffectInstance::new(Arc::new(program)),0);
+    let group=add_group(doc,vec![effect,paint],0);
+    let occurrence=doc.artwork.occurrences.get_mut(group).unwrap();
+    occurrence.translation=Point{x:3.,y:5.};occurrence.opacity=0.73;
     project
 }
 
@@ -541,18 +545,14 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
             depth: SampleDepth::U16,
         },
     ] {
-        let project = rich_project(color, 1);
+        let project = rich_document(color, 1);
         let (mut live, expected) = frame(&project);
         let cached_before = live.source_sample_cache_stats();
         let expected = Arc::new(expected);
-        let [width, height] = [project.document.width, project.document.height];
+        let [width, height] = project.composition().size;
         let mut capture = live
             .snapshot_gpu()
-            .capture(
-                project.clone(),
-                0.,
-                Default::default(),
-            )
+            .capture_scene(project.clone().snapshot(),SceneScope::All,Default::default())
             .unwrap();
         assert!(
             Arc::ptr_eq(
@@ -575,11 +575,12 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
             }
             capture
         });
-        let mut layers = project.document.layers.clone();
+        let mut changed = project.clone();
+        let group=changed.scene().children(None)[0];
         for i in 0..16 {
-            layers[0].opacity = if i % 2 == 0 { 0.2 } else { 0.9 };
+            changed.artwork.occurrences.get_mut(group).unwrap().opacity=if i%2==0 {0.2}else{0.9};
             live.submit(FramePacket {
-                ..packet(&layers, [width, height])
+                ..packet(changed.scene(),[width,height])
             })
             .unwrap();
             live.wait_idle().unwrap();
@@ -609,10 +610,10 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let project = rich_project(color, 1);
+    let project = rich_document(color, 1);
     let control = CaptureControl::with_allocation_tracking();
     let mut reader =
-        gpu().capture(project, 0., control.clone())
+        gpu().capture_scene(project.snapshot(),SceneScope::All,control.clone())
             .unwrap();
     let [width, height] = reader.extent();
     let mut reference = Vec::new();
@@ -676,13 +677,12 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
 
 #[test]
 fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries() {
-    let mut project = rich_project(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
-    project.document.width = 2053;
-    for layer in &mut project.document.layers {
-        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.outer.0[2] += 800.; }
-    }
+    let mut project = rich_document(DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 }, 1);
+    project.artwork.compositions.get_mut(project.artwork.root).unwrap().size[0]=2053;
+    let paint=paint_occurrence(&project);
+    project.artwork.occurrences.get_mut(paint).unwrap().placement.outer.0[2]+=800.;
     let (live, expected) = frame(&project);
-    let mut capture = live.snapshot_gpu().capture(project, 0., Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
     let mut actual = Vec::new();
     let mut y = 0;
     while y < capture.extent()[1] {
@@ -698,17 +698,16 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
 #[test]
 fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let color = DocumentColor { space: RgbSpace::ProPhoto, depth: SampleDepth::U16 };
-    let mut project = rich_project(color,1);
-    project.document.width = 2053;
-    for layer in &mut project.document.layers {
-        if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.outer.0[2] += 800.; }
-    }
-    let extent = [project.document.width,project.document.height];
+    let mut project = rich_document(color,1);
+    project.artwork.compositions.get_mut(project.artwork.root).unwrap().size[0]=2053;
+    let paint=paint_occurrence(&project);
+    project.artwork.occurrences.get_mut(paint).unwrap().placement.outer.0[2]+=800.;
+    let extent = project.composition().size;
     let (live,pixels) = frame(&project);
     let mut cpu = layer_core::color::hdr::LocalToneBuilder::new(extent,color.space).unwrap();
     for row in pixels.chunks_exact(extent[0] as usize) { cpu.push(row).unwrap(); }
     let expected = cpu.finish(||false).unwrap();
-    let mut capture = live.snapshot_gpu().capture(project,0.,Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
     let gpu = capture.gpu_local_tone_guide().unwrap();
     assert!(Arc::ptr_eq(&gpu,&capture.gpu_local_tone_guide().unwrap()));
     let actual = capture.local_tone_guide().unwrap();
@@ -741,21 +740,15 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
         },
     ] {
         for mask in 0..3 {
-            let project = rich_project(color, mask);
+            let project = rich_document(color, mask);
             let (_full_renderer, full) = frame(&project);
             let mut project = if mask == 2 {
-                let mut archive = Vec::new();
-                project.write(&mut archive).unwrap();
-                Project::read(Cursor::new(archive), Default::default()).unwrap()
+                roundtrip(&project)
             } else {
                 project
             };
             // Viewing the mask area must not change snapshot artwork.
-            for layer in &mut project.document.layers {
-                if let Some(mask) = &mut layer.mask {
-                    mask.show_area = true;
-                }
-            }
+            project.working.inspect_mask=Some(paint_occurrence(&project));
             let mut reader =
                 capture(project).unwrap();
             assert!(reader.renderer.scale_display.is_none());
@@ -790,7 +783,7 @@ fn snapshot_crops_restore_masked_native_material_and_selection_windows() {
 
 #[test]
 fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cancel() {
-    let project = rich_project(
+    let project = rich_document(
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
@@ -798,11 +791,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
         2,
     );
     let (_r, full) = frame(&project);
-    let before = project
-        .document
-        .layers
-        .iter()
-        .map(|l| l.raster.identity())
+    let before = project.artwork.paint.iter().map(|(_,_,source)|source.raster.identity())
         .collect::<Vec<_>>();
     let mut reader =
         capture(project.clone()).unwrap();
@@ -856,11 +845,7 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
     }
     assert_eq!(
         before,
-        project
-            .document
-            .layers
-            .iter()
-            .map(|l| l.raster.identity())
+        project.artwork.paint.iter().map(|(_,_,source)|source.raster.identity())
             .collect::<Vec<_>>()
     );
     reader.planned_pixel_bytes = 1;
@@ -890,18 +875,14 @@ fn snapshot_profiled_composite_rows_match_full_render_and_honor_budget_and_cance
 fn cancelled_snapshot_does_not_initialize_a_device_or_resolve_backing() {
     let control = CaptureControl::default();
     control.cancel();
-    let result = gpu().capture(
-        source_project(DocumentColor::default(), [8, 8]),
-        0.,
-        control.clone(),
-    );
+    let result = gpu().capture_scene(source_document(DocumentColor::default(),[8,8]).snapshot(),SceneScope::All,control.clone());
     assert!(matches!(result, Err(GpuRasterError::Color(e)) if e.contains("cancelled")));
     assert_eq!(control.output_rows(), 0);
 }
 
 #[test]
 fn snapshot_jpeg_applies_profile_and_linear_matte_before_lossy_encoding() {
-    let project = source_project(
+    let project = source_document(
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
@@ -951,7 +932,7 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let project = source_project(color, [513, 35]);
+    let project = source_document(color, [513, 35]);
     let original = project.clone();
     let mut reader =
         capture(project.clone()).unwrap();
@@ -996,14 +977,14 @@ fn snapshot_dither_is_repeatable_across_formats_and_keeps_master_and_identity_sa
     }
     assert_eq!(project, original);
     // Dithering never bypasses exact same-depth/source delivery to make noise.
-    let project = source_project(
+    let project = source_document(
         DocumentColor {
             depth: SampleDepth::U8,
             ..color
         },
         [513, 35],
     );
-    let source = project.document.layers[0].source.as_ref().unwrap().clone();
+    let source = project.scene().paint(paint_id(&project)).unwrap().original.as_ref().unwrap().clone();
     let mut reader = capture(project).unwrap();
     let mut bytes = Vec::new();
     reader
@@ -1016,14 +997,14 @@ mod resized;
 
 #[test]
 fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution() {
-    let mut original = rich_project(
+    let mut original = rich_document(
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
         },
         2,
     );
-    original.document.resolution = Some(layer_core::ImageResolution::ppi(300));
+    original.artwork.compositions.get_mut(original.artwork.root).unwrap().resolution = Some(layer_core::ImageResolution::ppi(300));
     let (_, full) = frame(&original);
     let mut reader =
         capture(original.clone()).unwrap();
@@ -1034,22 +1015,22 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
     let result = reader
         .flattened_document(color, Default::default(), 64 * 1024 * 1024)
         .unwrap();
-    let copy = result.project;
-    assert_eq!(copy.document.color, color);
+    let copy = result.document;
+    assert_eq!(copy.composition().color, color);
     assert_eq!(
-        [copy.document.width, copy.document.height],
-        [original.document.width, original.document.height]
+        copy.composition().size,
+        original.composition().size
     );
-    assert_eq!(copy.document.resolution, original.document.resolution);
-    assert_eq!(copy.document.layers.len(), 1);
-    let source = copy.document.layers[0].source.as_ref().unwrap();
+    assert_eq!(copy.composition().resolution, original.composition().resolution);
+    assert_eq!(copy.scene().order().len(), 1);
+    let source = copy.scene().paint(paint_id(&copy)).unwrap().original.as_ref().unwrap();
     assert_eq!(
         source.kind,
         layer_core::color::source::SourceKind::Rasterized
     );
-    assert_eq!(source.resolution, original.document.resolution);
+    assert_eq!(source.resolution, original.composition().resolution);
     let encoder = layer_color::WorkingEncoder::new(
-        original.document.color.space,
+        original.composition().color.space,
         &source.interpretation,
         Default::default(),
     )
@@ -1066,18 +1047,69 @@ fn flattened_copy_preserves_complete_composition_precision_extent_and_resolution
                 <= 1
         );
     }
-    let mut bytes = Vec::new();
-    copy.write(&mut bytes).unwrap();
-    let reopened = Project::read(Cursor::new(bytes), Default::default()).unwrap();
+    let reopened = roundtrip(&copy);
     assert_eq!(
-        raw_rows(reopened.document.layers[0].source.as_ref().unwrap()),
+        raw_rows(reopened.scene().paint(paint_id(&reopened)).unwrap().original.as_ref().unwrap()),
         actual
     );
-    assert_eq!(reopened.document.resolution, original.document.resolution);
+    assert_eq!(reopened.composition().resolution, original.composition().resolution);
     reader.control().cancel();
     assert!(
         reader
             .flattened_document(color, Default::default(), 64 * 1024 * 1024)
             .is_err()
     );
+}
+
+#[test]
+fn applying_projective_pixels_from_linked_coverage_keeps_paired_paint_and_source_handles() {
+    let extent = [33, 17];
+    let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames {
+        paint: "Paired paint".into(), paper: "Paper".into(),
+    });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+    let paint = paint_id(&document);
+    let owner = paint_occurrence(&document);
+    let color = document.composition().color;
+    let rgba = [0.375_f32, 0.125, 0.0625, 1.];
+    let mut data = RasterData::default();
+    data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate: [0; 2] },
+        RasterTile::backed(TileBlob::encode(color.paint_descriptor(), &rgba.into_iter().flat_map(f32::to_le_bytes).collect::<Vec<_>>().repeat(65536)).unwrap()));
+    document.artwork.paint.get_mut(paint).unwrap().raster = RasterRevision::backed(data);
+    let coverage = document.artwork.coverage.next_handle();
+    let mut mask = layer_core::CoverageSnapshot::reveal_all(coverage, extent, Point::default());
+    mask.source.default_coverage = 0.;
+    let mut data = RasterData::default();
+    data.tiles.insert(TileKey { plane: RasterPlane::Mask, coordinate: [0; 2] },
+        RasterTile::backed(TileBlob::encode(color.coverage_descriptor(), &16384_u16.to_le_bytes().repeat(65536)).unwrap()));
+    mask.source.raster = RasterRevision::backed(data);
+    assert_eq!(document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap(), coverage);
+    let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
+    occurrence.mask = Some(mask.use_);
+    occurrence.placement = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(
+        layer_core::Rect::from_extent(extent), [[4., 3.], [30., 5.], [29., 15.], [2., 14.]].map(|[x, y]| Point { x, y }),
+    ).unwrap());
+    refresh(&mut document);
+    let target = SourceTarget::Coverage(coverage);
+    let plan = document.transform_pixels_plan(target, layer_core::Interpolation::Nearest, Default::default()).unwrap();
+    assert_eq!(plan.target, target);
+    assert_eq!(plan.paint, Some(paint));
+    assert_eq!(plan.coverage, Some(coverage));
+    let output = pollster::block_on(gpu().transform_pixels(plan, Default::default())).unwrap();
+    document.apply(output).unwrap();
+    let bytes = |target, plane| {
+        let data = document.target_raster(target).unwrap().wait_data().unwrap();
+        data.tiles[&TileKey { plane, coordinate: [0; 2] }].wait_backing().unwrap().decode().unwrap()
+    };
+    let offset = (8 * 256 + 10) as usize;
+    let paint_bytes = bytes(SourceTarget::Paint(paint), RasterPlane::Color);
+    let pixel: [f32; 4] = std::array::from_fn(|channel| {
+        let start = offset * 16 + channel * 4;
+        f32::from_le_bytes(paint_bytes[start..start + 4].try_into().unwrap())
+    });
+    assert_eq!(pixel, rgba);
+    let mask_bytes = bytes(target, RasterPlane::Mask);
+    assert_eq!(u16::from_le_bytes(mask_bytes[offset * 2..offset * 2 + 2].try_into().unwrap()), 16384);
+    assert_eq!(document.scene().source_target(owner), Some(SourceTarget::Paint(paint)));
+    assert_eq!(document.scene().mask(owner).unwrap().0.source, coverage);
 }

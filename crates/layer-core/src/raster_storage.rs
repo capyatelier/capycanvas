@@ -12,6 +12,7 @@ use std::{
 pub(crate) struct Bytes {
     len: usize,
     value: Mutex<Value>,
+    integrity: crate::authored::IntegrityCache,
 }
 enum Value {
     Memory(Arc<[u8]>),
@@ -42,10 +43,21 @@ impl From<Arc<[u8]>> for Bytes {
         Self {
             len: bytes.len(),
             value: Mutex::new(Value::Memory(bytes)),
+            integrity: crate::authored::IntegrityCache::default(),
         }
     }
 }
 impl Bytes {
+    pub(crate) fn integrity(&self, cancelled:&std::sync::atomic::AtomicBool) -> Result<crate::authored::EncodedIntegrity,String> {
+        self.integrity.get_or_compute(cancelled,||self.read())
+    }
+    pub(crate) fn digest(&self,cancelled:&std::sync::atomic::AtomicBool)->Result<[u8;32],String> {
+        self.integrity.digest(cancelled,||self.read())
+    }
+    pub(crate) fn set_integrity(&self,value:crate::authored::EncodedIntegrity)->Result<(),String> {
+        if value.bytes!=self.len as u64 {return Err("Immutable tile integrity length mismatch".into());}
+        self.integrity.seed(value)
+    }
     fn resident_owner(&self) -> (usize, usize) {
         match &*self.value.lock().unwrap() {
             Value::Memory(bytes) => (Arc::as_ptr(bytes) as *const () as usize, bytes.len()),
@@ -197,87 +209,49 @@ pub fn prepare_external_spill(tiles: &RetainedTiles) -> Result<Option<PreparedSp
 pub struct RetainedTiles {
     pub(crate) rasters: Vec<RasterRevision>,
     pub(crate) sources: Vec<Arc<TileBlob>>,
+    pub(crate) backings: Vec<crate::package::ImmutableBacking>,
     pub metadata_bytes: usize,
 }
 impl Editor {
     pub fn retained_tiles(&self) -> RetainedTiles {
-        let mut rasters = Vec::new();
-        let mut sources = Vec::new();
-        let mut resources = Vec::new();
-        let mut selections: Vec<_> = self.document.selection.iter().collect();
-        for layer in &self.document.layers {
-            rasters.push(&layer.raster);
-            rasters.extend(layer.masks().map(|m| &m.raster));
-            sources.extend(layer.source.iter());
-            layer.selection_roots(&mut selections);
-            layer.resource_roots(&mut resources);
-        }
-        let mut metadata_bytes = 0usize;
-        if let Some(proof) = &self.document.proof {
-            metadata_bytes = proof.name.len();
-            if let crate::color::ColorProfile::Icc(bytes) = &proof.profile {
-                metadata_bytes = metadata_bytes.saturating_add(bytes.len());
-            }
-        }
-        for entry in self.undo.iter().chain(&self.redo) {
-            entry.edit.raster_roots(&mut rasters);
-            entry.edit.source_roots(&mut sources);
-            entry.edit.selection_roots(&mut selections);
-            entry.edit.resource_roots(&mut resources);
-            metadata_bytes = metadata_bytes.saturating_add(entry.metadata_bytes);
-        }
-        let mut seen = HashSet::new();
-        let rasters: Vec<_> = rasters
-            .into_iter()
-            .filter(|r| seen.insert(r.identity()))
-            .cloned()
-            .collect();
+        let mut roots=crate::RootInventory::default();
+        roots.document(&self.document);
+        let mut metadata_bytes=crate::artwork_metadata(&self.document.artwork).saturating_add(self.document.working.selection_visibility.len().saturating_mul(64));
+        for entry in self.undo.iter().chain(&self.redo) {entry.edit.roots(&mut roots);metadata_bytes=metadata_bytes.saturating_add(entry.metadata_bytes);}
+        let mut seen=HashSet::new();
+        let rasters:Vec<_>=roots.rasters.into_iter().filter(|r|seen.insert(r.identity())).cloned().collect();
         for raster in &rasters {
-            // Sparse maps and publication handles stay resident after payloads
-            // spill. Count them even though project JSON omits raster backing.
-            let tiles = raster.try_data().and_then(Result::ok).map_or_else(
-                || raster.pending_bytes() / crate::raster::MAX_TILE_BYTES,
-                |data| data.tiles.len(),
-            );
-            metadata_bytes = metadata_bytes.saturating_add(tiles.saturating_mul(192));
+            let tiles=raster.try_data().and_then(Result::ok).map_or_else(||raster.pending_bytes()/crate::raster::MAX_TILE_BYTES,|data|data.tiles.len());
+            metadata_bytes=metadata_bytes.saturating_add(tiles.saturating_mul(192));
         }
         seen.clear();
-        for source in &sources {
+        let mut profiles=HashSet::new();
+        for source in &roots.sources {
             if seen.insert(Arc::as_ptr(source) as usize as u64) {
-                metadata_bytes =
-                    metadata_bytes.saturating_add(source.tiles.len().saturating_mul(192));
-                if let crate::color::ColorProfile::Icc(bytes) = &source.interpretation.profile {
-                    metadata_bytes = metadata_bytes.saturating_add(bytes.len());
+                metadata_bytes=metadata_bytes.saturating_add(source.tiles.len().saturating_mul(192));
+                if let crate::color::ColorProfile::Icc(bytes)=&source.interpretation.profile && profiles.insert(bytes.as_ptr() as usize) {
+                    metadata_bytes=metadata_bytes.saturating_add(bytes.len());
                 }
             }
         }
         seen.clear();
-        let sources = sources
-            .into_iter()
-            .flat_map(|s| s.tiles.values())
-            .filter(|t| seen.insert(Arc::as_ptr(t) as usize as u64))
-            .cloned()
-            .collect();
-        // Coverage is unspillable but shared, and its binary allocation is not
-        // proportional to JSON text. Never serialize millions of mask words on
-        // the interaction thread just to estimate resident memory.
-        let mut accounting = crate::history_budget::Accounting::default();
-        for resource in resources { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_resource(resource)); }
-        for selection in selections { metadata_bytes = metadata_bytes.saturating_add(accounting.charge_selection(selection)); }
-        for layer in &self.document.layers{let mut roots=Vec::new();layer.mesh_roots(&mut roots);for mesh in roots{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_mesh(mesh));}}
-        let mut document = self.document.clone();
-        document.selection = None;
-        for layer in &mut document.layers {
-            crate::without_shared_payloads(layer);
+        let sources=roots.sources.into_iter().flat_map(|s|s.tiles.values()).filter(|t|seen.insert(t.owner_identity())).cloned().collect();
+        let mut accounting=crate::history_budget::Accounting::default();
+        accounting.charge_extension_metadata(&self.document.artwork.extensions);
+        let mut backing_ids=HashSet::new();let mut backings=Vec::new();
+        for extensions in roots.extensions {
+            metadata_bytes=metadata_bytes.saturating_add(accounting.charge_extension_metadata(extensions));
+            for resource in extensions.resources.values() {
+                if backing_ids.insert(resource.backing.identity()){backings.push(resource.backing.clone());}
+            }
         }
-        // Metadata excludes payloads (sources/rasters are independently stored).
-        metadata_bytes =
-            metadata_bytes.saturating_add(crate::json_len(&document).saturating_mul(4));
-        RetainedTiles {
-            rasters,
-            sources,
-            metadata_bytes,
-        }
+        for resource in roots.resources{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_resource(resource));}
+        for selection in roots.selections{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_selection(selection));}
+        for mesh in roots.meshes{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_mesh(mesh));}
+        for profile in roots.profiles{if let crate::color::ColorProfile::Icc(bytes)=profile && profiles.insert(bytes.as_ptr() as usize){metadata_bytes=metadata_bytes.saturating_add(bytes.len());}}
+        for program in roots.programs{metadata_bytes=metadata_bytes.saturating_add(accounting.charge_program(program));}
+        for block in self.document.artwork.metadata.blocks().into_iter().flatten(){metadata_bytes=metadata_bytes.saturating_add(block.len());}
+        RetainedTiles{rasters,sources,backings,metadata_bytes}
     }
 }
 impl RetainedTiles {
@@ -298,7 +272,7 @@ impl RetainedTiles {
             }
         }
         let mut seen = HashSet::new();
-        blobs.retain(|b| seen.insert(Arc::as_ptr(b) as usize));
+        blobs.retain(|b| seen.insert(b.owner_identity()));
         Ok(Some(blobs))
     }
 
@@ -311,18 +285,18 @@ impl RetainedTiles {
             }
         }
         let mut seen = HashSet::new();
-        blobs.retain(|b| seen.insert(Arc::as_ptr(b) as usize));
+        blobs.retain(|b| seen.insert(b.owner_identity()));
         Ok(blobs)
     }
     /// Conservative nonblocking accounting; pending captures reserve their limit.
     pub fn resident_bytes(&self) -> usize {
         self.resident_bytes_with(&mut HashSet::new())
     }
-    fn resident_bytes_with(&self, seen: &mut HashSet<usize>) -> usize {
+    fn resident_bytes_with(&self, seen: &mut HashSet<(u8,u64)>) -> usize {
         let mut bytes = 0usize;
         let mut charge = |blob: &Arc<TileBlob>| {
             let (identity, size) = blob.compressed.resident_owner();
-            if seen.insert(identity) {
+            if seen.insert((0,identity as u64)) {
                 bytes = bytes.saturating_add(size);
             }
         };
@@ -345,6 +319,9 @@ impl RetainedTiles {
                 None => pending = pending.saturating_add(raster.pending_bytes()),
                 Some(Err(_)) => (),
             }
+        }
+        for backing in &self.backings {
+            if seen.insert((1,backing.identity())) {bytes=bytes.saturating_add(backing.resident_bytes());}
         }
         bytes.saturating_add(pending)
     }
@@ -430,7 +407,7 @@ pub fn spill_tiles(blobs: &[Arc<TileBlob>], mut file: std::fs::File) -> Result<u
     let mut offset = 0u64;
     let mut seen = HashSet::new();
     for blob in blobs {
-        if !seen.insert(Arc::as_ptr(blob) as usize) {
+        if !seen.insert(blob.owner_identity()) {
             continue;
         }
         let value = blob
@@ -465,7 +442,7 @@ pub fn spill_tiles(blobs: &[Arc<TileBlob>], mut file: std::fs::File) -> Result<u
 #[cfg(all(test, any(unix, windows)))]
 mod tests {
     use super::*;
-    use crate::{Document, Edit, Project, ProjectLimits, raster::*};
+    use crate::{Document, Edit, raster::*};
     use std::io::{Seek, SeekFrom, Write};
     fn file() -> std::fs::File {
         use std::sync::atomic::{AtomicUsize, Ordering};
@@ -492,6 +469,52 @@ mod tests {
             )
             .unwrap(),
         )
+    }
+    #[test]
+    fn ancillary_resources_retain_and_charge_the_shared_package_owner_once() {
+        use crate::{authored::{Extensions, OpaqueResource, PortableId, RecordChange}, package::{ByteSource, ImmutableBacking, RangeState}};
+        struct Memory {bytes:Arc<[u8]>}
+        impl ByteSource for Memory {
+            fn byte_len(&self)->u64 {self.bytes.len() as u64}
+            fn poll(&self,_:u64,_:usize)->Result<RangeState,String> {panic!("Accounting must not read package bytes")}
+        }
+        let bytes:Arc<[u8]>=vec![31;32*1024].into();let weak=Arc::downgrade(&bytes);
+        let backing=ImmutableBacking::new(Arc::new(Memory{bytes})).unwrap();let owner=backing.identity();
+        let mut document=crate::operation_test_support::document([32,32], &["Ink"]);
+        let baseline=Editor::new(document.clone()).retained_tiles().metadata_bytes;
+        let mut extensions=Extensions::default();
+        for offset in [0,8] {
+            let id=PortableId::random();
+            extensions.records.insert(PortableId::random(),serde_json::json!({"type":"future.note/1","ancillary":true,"copy_safe":true,"data":{"payload":{"ref":id}}}));
+            extensions.resources.insert(id,Arc::new(OpaqueResource{id,kind:Arc::from("future.attachment/1"),data:serde_json::json!({}),encoding:Arc::from("raw"),extra_fields:Default::default(),backing:backing.clone(),offset,length:8,crc32:0}));
+        }
+        let ids:Vec<_>=extensions.resources.keys().copied().collect();
+        document.artwork.extensions=Arc::new(extensions);drop(backing);
+        let mut editor=Editor::new(document);
+        let first=editor.capture(7,Default::default()).unwrap();
+        let handle=editor.document().working.occurrence.unwrap();
+        let mut occurrence=editor.document().artwork.occurrences.get(handle).unwrap().clone();occurrence.name=Arc::from("Renamed");
+        let change=RecordChange::replace(&editor.document().artwork.occurrences,handle,Some(occurrence)).unwrap();editor.perform(Edit::Occurrence(change)).unwrap();
+        let second=editor.capture(7,Default::default()).unwrap();
+        assert!(Arc::ptr_eq(&first.artwork.extensions,&second.artwork.extensions));
+        for capture in [&first,&second] {
+            assert_eq!(capture.artwork.extensions.resources.keys().copied().collect::<Vec<_>>(),ids);
+            assert!(capture.artwork.extensions.resources.values().all(|resource|resource.backing.identity()==owner));
+        }
+        let retained=editor.retained_tiles();
+        let other=Editor::new(Document::from_artwork((*first.artwork).clone()).unwrap());let shared=other.retained_tiles();
+        assert_eq!(retained.backings.len(),1);assert_eq!(shared.backings.len(),1);
+        assert_eq!(retained.resident_bytes(),32*1024);assert_eq!(resident_tile_bytes([&retained,&shared]),32*1024);
+        assert!(retained.metadata_bytes>baseline+crate::extension_metadata(&first.artwork.extensions));
+        let mut accounting=crate::history_budget::Accounting::default();
+        assert_eq!(accounting.charge_extensions(&first.artwork.extensions),32*1024+crate::extension_metadata(&first.artwork.extensions));
+        assert_eq!(accounting.charge_extensions(&second.artwork.extensions),0);
+        let copied=Arc::new((*first.artwork.extensions).clone());
+        assert_eq!(accounting.charge_extensions(&copied),crate::extension_record_metadata(&copied));
+        assert_eq!(crate::history_budget::Accounting::new(editor.document()).charge_extensions(&copied),crate::extension_record_metadata(&copied));
+        drop(copied);drop(first);drop(second);drop(editor);drop(other);drop(retained);
+        assert!(weak.upgrade().is_some(),"The final retained inventory owns the package independently");
+        drop(shared);assert!(weak.upgrade().is_none());
     }
     #[test]
     fn external_chunks_publish_only_after_commit_and_keep_exact_identity() {
@@ -586,8 +609,8 @@ mod tests {
     }
     #[test]
     fn nonblocking_parking_waits_for_redo_only_captures_and_reports_failure() {
-        let mut editor = Editor::new(Document::new("pending redo", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        let target = editor.document().layers[0].id;
+        let mut editor = Editor::new(Document::new(crate::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+        let target = editor.document().working.target.unwrap();
         let root = RasterRevision::pending();
         editor
             .perform(Edit::SetRaster {
@@ -617,8 +640,8 @@ mod tests {
     }
     #[test]
     fn spill_shared_history_save_and_restore_are_exact() {
-        let mut editor = Editor::new(Document::new("parked", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        let target = editor.document().layers[0].id;
+        let mut editor = Editor::new(Document::new(crate::PortableId::random(), 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
+        let target = editor.document().working.target.unwrap();
         let first = blob(30);
         let second = blob(80);
         editor
@@ -642,14 +665,14 @@ mod tests {
         assert_eq!(retained.resident_bytes(), 0);
         assert_eq!(first.decode().unwrap(), vec![30; 256 * 256 * 4]);
         editor.redo().unwrap();
-        let project = Project {
-            document: editor.document().clone(),
-        };
-        let mut saved = Vec::new();
-        project.write(&mut saved).unwrap();
-        let loaded = Project::read(saved.as_slice(), ProjectLimits::default()).unwrap();
+        let cancelled=std::sync::atomic::AtomicBool::new(false);
+        let capture=editor.capture(0,crate::EvaluationContext::default()).unwrap();
+        let prepared=crate::package::codec::PreparedPackage::prepare(&capture,None,&cancelled).unwrap();
+        let mut saved=Vec::new();prepared.write(&mut saved,&cancelled).unwrap();
+        let loaded=crate::package::codec::open(crate::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(saved))).unwrap(),crate::ProjectLimits::default(),&cancelled).unwrap();
+        let crate::package::codec::OpenOutcome::Candidate{artwork,..}=loaded else{panic!("editable package")};
         assert_eq!(
-            loaded.document.layers[0]
+            artwork.paint.iter().next().unwrap().2
                 .raster
                 .wait_data()
                 .unwrap()

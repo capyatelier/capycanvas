@@ -29,7 +29,7 @@ fn gray_and_gray_alpha_delivery_preserve_samples_and_embed_matching_profiles() {
                         assert_eq!(actual.interpretation.profile, crate::gray_profile(space).unwrap());
                     } else { assert_eq!(space, RgbSpace::Srgb); }
                     for (key, expected) in &source.tiles {
-                        assert_eq!(actual.tiles[key].digest, expected.digest, "{space:?} {depth:?} {channels:?} TIFF={tiff}");
+                        assert_eq!(actual.tiles[key].content_digest().unwrap(), expected.content_digest().unwrap(), "{space:?} {depth:?} {channels:?} TIFF={tiff}");
                     }
                 }
             }
@@ -80,7 +80,7 @@ pub(super) fn exact_pixels(before: &SourceImage, after: &SourceImage) {
     );
     assert_eq!(before.tiles.len(), after.tiles.len());
     for (key, tile) in &before.tiles {
-        assert_eq!(tile.digest, after.tiles[key].digest);
+        assert_eq!(tile.content_digest().unwrap(), after.tiles[key].content_digest().unwrap());
     }
 }
 

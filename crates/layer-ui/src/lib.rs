@@ -43,8 +43,11 @@ pub mod proof_panel;
 pub mod color_management;
 pub mod parameter_pad;
 
+mod package_view;
+pub use package_view::{PackageView, PackagePresentation, PackageViewSummary, PackageCapabilities, PackageDisposition, PackageAction, PackageOutput};
+
 mod import_policy;
-pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportedDocument, photo_document_names, read_import};
+pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportOutcome, ImportedDocument, photo_document_names, read_import};
 
 pub mod recovery;
 mod workspace_update;
@@ -60,7 +63,7 @@ pub use layer_core::{FigurePaint, FigureShape, RulerKind};
 mod navigator;
 pub use navigator::NavigatorGeometry;
 pub use session::tonal_selection::{TonalAction, TonalOptions};
-pub use session::{FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
+pub use session::{occurrence_token, occurrence_handle, FilterPreviewCache, FilterPreviewStatus, FilterPreviewUpdate};
 mod color;
 mod tool_settings;
 mod toolbar_components;

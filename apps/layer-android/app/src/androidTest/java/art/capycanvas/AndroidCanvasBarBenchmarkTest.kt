@@ -286,9 +286,7 @@ class AndroidCanvasBarBenchmarkTest {
                         android.os.ParcelFileDescriptor.MODE_CREATE or android.os.ParcelFileDescriptor.MODE_TRUNCATE or android.os.ParcelFileDescriptor.MODE_READ_WRITE).detachFd(), 0, 0)
                     native { Native.documentComplete(it, job.second, true, "null") }
                 } finally { Native.projectFree(job.first) }
-                val bytes = project.readBytes()
-                val manifestSize = java.nio.ByteBuffer.wrap(bytes, 12, 8).order(java.nio.ByteOrder.LITTLE_ENDIAN).long.toInt()
-                return JSONObject(bytes.copyOfRange(52, 52 + manifestSize).decodeToString())
+                return packageManifest(project.readBytes())
             }
             fun recordProcessMemory(label: String) {
                 if (!memory) return
@@ -303,13 +301,13 @@ class AndroidCanvasBarBenchmarkTest {
                 action(obj("type" to "set_tool_setting", "id" to "transform_x", "value" to 16.0))
                 invoke("apply_transform")
                 val retained = saveProject("bake-retained.capy")
-                val owner = retained.getJSONObject("document").array("layers").objects().first {
-                    it.getString("kind") == "Paint" && it.getJSONObject("properties").affinePlacement().let { pose ->
+                val owner = retained.occurrenceRecords().objects().first {
+                    it.getJSONObject("data").getJSONObject("content").has("paint") && it.getJSONObject("data").authoredAffine().let { pose ->
                         (0 until 6).map { pose.getDouble(it) } != listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0)
                     }
-                }.getLong("id")
-                fun raster(project: JSONObject) = project.array("rasters").objects().first { it.getLong("target") == owner }
-                val style = raster(retained).getJSONObject("watercolor").toString()
+                }.getString("id")
+                fun raster(project: JSONObject) = project.paintData(owner)
+                val style = raster(retained).getJSONObject("material").getJSONObject("watercolor").toString()
                 check(state().array("commands").objects().any { it.getString("id") == "apply_transform_pixels" && it.getBoolean("enabled") })
                 val samples = JSONArray()
                 fun sample() {
@@ -339,16 +337,16 @@ class AndroidCanvasBarBenchmarkTest {
                 val completed = android.os.SystemClock.elapsedRealtimeNanos()
                 sample()
                 val baked = saveProject("bake-completed.capy")
-                check(baked.getJSONObject("tiled_sources").array("images").length() == 0) { "The retained source remains after bake" }
-                val properties = baked.getJSONObject("document").array("layers").objects().first { it.getLong("id") == owner }.getJSONObject("properties")
-                check((0 until 6).map { properties.affinePlacement().getDouble(it) } == listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
-                check(raster(baked).getJSONObject("watercolor").toString() == style)
-                val planes = raster(baked).array("tiles").objects().map { it.getJSONObject("key").getString("plane") }
-                check("Color" in planes && "WatercolorWetness" in planes) { "Baked native material is missing" }
+                check(baked.originalImages().length() == 0) { "The retained source remains after bake" }
+                val properties = baked.packageData(owner)
+                check((0 until 6).map { properties.authoredAffine().getDouble(it) } == listOf(1.0, 0.0, 0.0, 1.0, 0.0, 0.0))
+                check(raster(baked).getJSONObject("material").getJSONObject("watercolor").toString() == style)
+                val planes = raster(baked).array("tiles").objects().map { it.getString("plane") }
+                check("color" in planes && "watercolor_wetness" in planes) { "Baked native material is missing" }
                 openProject(File(output, "bake-completed.capy"))
                 val reopened = saveProject("bake-reopened.capy")
-                fun digests(project: JSONObject) = project.array("blobs").objects().map {
-                    JSONObject(it.toString()).apply { remove("offset") }.toString()
+                fun digests(project: JSONObject) = project.rasterResources().objects().map {
+                    JSONObject(it.toString()).toString()
                 }.sorted()
                 check(digests(baked) == digests(reopened)) { "Baked native backing changed on reopen" }
                 check(raster(baked).toString() == raster(reopened).toString()) { "Baked material changed on reopen" }
@@ -917,10 +915,10 @@ class AndroidCanvasBarBenchmarkTest {
                         Log.i("CapyBarPerf", "material setup: save raw material")
                         val manifest = saveProject("material-input.capy")
                         File(output, "material-manifest.json").writeText(manifest.toString(2))
-                        val rasters = manifest.getJSONArray("rasters").objects()
-                        check(rasters.any { !it.isNull("watercolor") && it.getJSONArray("tiles").objects().any { tile ->
-                            tile.getJSONObject("key").getString("plane") == "WatercolorWetness" } }) { "The workload has no stored watercolor material" }
-                        check(manifest.getJSONObject("tiled_sources").getJSONArray("images").length() > 0) { "The photo source was lost" }
+                        val rasters = manifest.paintRecords().objects().map {it.getJSONObject("data")}
+                        check(rasters.any { it.optJSONObject("material")?.isNull("watercolor") == false && it.getJSONArray("tiles").objects().any { tile ->
+                            tile.getString("plane") == "watercolor_wetness" } }) { "The workload has no stored watercolor material" }
+                        check(manifest.originalImages().length() > 0) { "The photo source was lost" }
                     }
                     if (args.getString("transformSnapping") == "true") {
                         val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
@@ -935,8 +933,10 @@ class AndroidCanvasBarBenchmarkTest {
                         val center = width * .5 * zoom + shift.getDouble(0) to height * .5 * zoom + shift.getDouble(1)
                         drag(center, 300) { t -> 40 * t to 0.0 }
                         val target = saveProject("snap-input.capy")
-                        check(target.array("rasters").objects().any { it.getLong("target") == snapNeighbor && it.array("tiles").objects().any { tile ->
-                            tile.getJSONObject("key").getString("plane") == "Color" } }) { "Snapping has no painted target" }
+                        val neighborIndex = state().array("layers").objects().indexOfFirst {it.getLong("id") == snapNeighbor}
+                        check(neighborIndex >= 0)
+                        val neighbor = target.occurrenceRecords().getJSONObject(neighborIndex).getString("id")
+                        check(target.paintData(neighbor).array("tiles").objects().any {it.getString("plane") == "color"}) { "Snapping has no painted target" }
                         action(obj("type" to "select_layer", "id" to photoLayer))
                     }
                     val entryBegan = android.os.SystemClock.elapsedRealtimeNanos()

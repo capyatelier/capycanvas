@@ -44,7 +44,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         app.invoke("deselect");
         app.draw_until_idle();
         let mut original = unsafe { &*app.0 }.host.session.engine().document().clone();
-        let raster = raster_samples(&original.layer(original.active_layer).unwrap().raster);
+        let raster = raster_samples(active_raster(&original));
         assert!(!raster.0.is_empty());
         assert!(
             raster
@@ -89,14 +89,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         );
         assert_eq!(
             raster_samples(
-                &unsafe { &*app.0 }
-                    .host
-                    .session
-                    .engine()
-                    .document()
-                    .layer(original.active_layer)
-                    .unwrap()
-                    .raster
+                unsafe { &*app.0 }.host.session.engine().document().target_raster(original.working.target.unwrap()).unwrap()
             ),
             raster
         );
@@ -176,9 +169,9 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             save.error()
         );
         archive.rewind().unwrap();
-        let saved = layer_core::Project::read(&mut archive, Default::default()).unwrap();
-        assert_project_document(&saved.document, &original);
-        assert_eq!(saved.document.sdr_rendition, original.sdr_rendition);
+        let saved = read_document(&mut archive);
+        assert_saved_document(&saved, &original);
+        assert_eq!(saved.output().sdr, original.output().sdr);
         // Profiled SDR and portable HDR PNG use the actual immutable file worker.
         app.invoke("export_document");
         let id = app.state()["requests"]
@@ -255,7 +248,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         );
         assert_eq!(unsafe { capy_apple_project_recover(restored.0, open.0) }, 0);
         restored.draw_until_idle();
-        assert_project_document(
+        assert_saved_document(
             unsafe { &*restored.0 }.host.session.engine().document(),
             &original,
         );
@@ -264,7 +257,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         let a = unsafe { &mut *restored.0 };
         a.metal.install_renderer(&mut a.host, gpu.into()).unwrap();
         restored.draw_until_idle();
-        assert_project_document(
+        assert_saved_document(
             unsafe { &*restored.0 }.host.session.engine().document(),
             &original,
         );

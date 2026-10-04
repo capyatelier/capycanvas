@@ -3,7 +3,7 @@
 use crate::localization::{Localizer, MessageId};
 use super::*;
 pub use layer_core::SelectionMode;
-use layer_core::{Edit, Point, Selection};
+use layer_core::{ Point, Selection};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -343,7 +343,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.queue_selection(selection, options);
             Ok(())
         } else {
-            self.layer_edit(Edit::SetSelection(Some(selection)))
+            self.set_mask_coverage(layer_core::SelectionTarget::Current, selection)
                 .map(|_| ())
         }
     }
@@ -364,7 +364,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 } else {
                     self.engine
                         .document()
-                        .selection
+                        .working.selection
                         .clone()
                         .map(std::sync::Arc::new)
                 },

@@ -1,6 +1,6 @@
 //! Real retained GTK window/session/worker lifecycle on the isolated compositor.
 use super::*;
-use layer_core::{Project, raster::*};
+use layer_core::raster::*;
 
 fn switch(w: &Rc<Workspace>, id: u64) {
     glib::MainContext::default()
@@ -200,11 +200,13 @@ fn native_document_tabs_history_storage_and_close() {
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let blob = TileBlob::encode(
-        project.document.color.paint_descriptor(),
+        project.composition().color.paint_descriptor(),
         &vec![128; 256 * 256 * 4],
     )
     .unwrap();
-    project.document.layers[0].raster = RasterRevision::backed(RasterData {
+    let initial_paint=match occurrence_at(&project,0).content {layer_core::authored::OccurrenceContent::Paint(handle)=>handle,_=>panic!("Initial occurrence must be paint")};
+    let initial_paint_id=project.artwork.paint.id(initial_paint).unwrap();
+    project.artwork.paint.get_mut(initial_paint).unwrap().raster = RasterRevision::backed(RasterData {
         tiles: [(
             TileKey {
                 plane: RasterPlane::Color,
@@ -216,7 +218,10 @@ fn native_document_tabs_history_storage_and_close() {
         ..Default::default()
     });
     crate::open_workspace(&app, &windows, Some((project.clone(), None)), None);
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "new document window mapped");
     let w = windows.borrow()[0].clone();
+    new_photo::ready(&w);
+    apply_fixture_theme(&w);
     new_photo::ready(&w);
     let plain_title = named::<gtk::Label>(w.window.upcast_ref(), "single-document-title");
     assert_eq!(
@@ -274,10 +279,7 @@ fn native_document_tabs_history_storage_and_close() {
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|s| s == "capy"))
         .map(|e| {
-            Project::read(std::fs::File::open(e.path()).unwrap(), Default::default())
-                .unwrap()
-                .document
-                .width
+            open_native_document(std::fs::File::open(e.path()).unwrap()).composition().size[0]
         })
         .collect();
     widths.sort();
@@ -310,35 +312,25 @@ fn native_document_tabs_history_storage_and_close() {
     assert_eq!(
         ui_session(&w)
             .engine()
-            .document()
-            .layers
-            .len(),
-        project.document.layers.len()
+            .document().scene().order().len(),
+        project.scene().order().len()
     );
     new_photo::invoke(&w, CommandId::Redo);
     assert_eq!(
         ui_session(&w)
             .engine()
-            .document()
-            .layers
-            .len(),
-        original.layers.len()
+            .document().scene().order().len(),
+        original.scene().order().len()
     );
     // A native save traverses disk-backed tiles, including exact historical data.
     let captured = ui_session(&w)
         .capture_project_recovery()
         .unwrap();
     let mut bytes = Vec::new();
-    captured.write(&mut bytes).unwrap();
-    let reopened = Project::read(bytes.as_slice(), Default::default()).unwrap();
+    write_capture(&captured, &mut bytes).unwrap();
+    let reopened = open_native_document(std::io::Cursor::new(bytes.as_slice()));
     assert_eq!(
-        reopened
-            .document
-            .layers
-            .iter()
-            .find(|l| l.id == project.document.layers[0].id)
-            .unwrap()
-            .raster
+        reopened.artwork.paint.get(reopened.artwork.paint.resolve(initial_paint_id).unwrap()).unwrap().raster
             .wait_data()
             .unwrap()
             .tiles
@@ -699,6 +691,8 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
     let w = Workspace::with_project(&app, Some((new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     new_photo::ready(&w);
+    apply_fixture_theme(&w);
+    new_photo::ready(&w);
     new_photo::invoke(&w, CommandId::AddLayer);
     let first = w.documents.selected();
     glib::MainContext::default()
@@ -755,7 +749,10 @@ fn native_document_tabs_multiple_recovery_offers() {
         Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         None,
     );
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "new document window mapped");
     let w = windows.borrow()[0].clone();
+    new_photo::ready(&w);
+    apply_fixture_theme(&w);
     new_photo::ready(&w);
     let dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
     std::fs::create_dir_all(&dir).unwrap();
@@ -764,10 +761,8 @@ fn native_document_tabs_multiple_recovery_offers() {
         .enumerate()
         .map(|(i, width)| {
             let path = dir.join(format!("999999999-tab-{i}.capy"));
-            new_drawing(width, width, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-                .unwrap()
-                .write(std::fs::File::create(&path).unwrap())
-                .unwrap();
+            let document = new_drawing(width, width, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+            write_document(&document, &mut std::fs::File::create(&path).unwrap()).unwrap();
             path
         })
         .collect();
@@ -782,8 +777,7 @@ fn native_document_tabs_multiple_recovery_offers() {
         assert_eq!(
             ui_session(&w)
                 .engine()
-                .document()
-                .width,
+                .document().composition().size[0],
             width
         );
         assert!(state(&w).document_file.modified);
@@ -825,6 +819,8 @@ fn native_document_tabs_immediate_stroke_and_undo() {
     let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     new_photo::ready(&w);
+    apply_fixture_theme(&w);
+    new_photo::ready(&w);
     w.documents.ram_budget.set(0);
     glib::MainContext::default()
         .block_on(
@@ -857,7 +853,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
             if undo {
                 // Submit, then immediately move its still-pending capture to redo.
                 session.frame(now + 2, now + 2).unwrap();
-                let root = session.engine().document().layers[0].raster.clone();
+                let root = active_paint(session.engine().document()).raster.clone();
                 session
                     .dispatch(UiAction::Invoke {
                         command: CommandId::Undo,
@@ -886,7 +882,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
             .engine()
             .document()
             .clone();
-        let raster = &document.layers[0].raster;
+        let raster = &active_paint(&document).raster;
         if let Some(root) = root {
             assert_eq!(raster.identity(), root.identity());
         }
@@ -916,12 +912,12 @@ fn native_document_tabs_disk_failure_keeps_data() {
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let blob = std::sync::Arc::new(
         TileBlob::encode(
-            project.document.color.paint_descriptor(),
+            project.composition().color.paint_descriptor(),
             &vec![128; 256 * 256 * 4],
         )
         .unwrap(),
     );
-    project.document.layers[0].raster = RasterRevision::backed(RasterData {
+    active_paint_mut(&mut project).raster = RasterRevision::backed(RasterData {
         tiles: [(
             TileKey {
                 plane: RasterPlane::Color,
@@ -934,6 +930,8 @@ fn native_document_tabs_disk_failure_keeps_data() {
     });
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
+    new_photo::ready(&w);
+    apply_fixture_theme(&w);
     new_photo::ready(&w);
     w.documents.ram_budget.set(0);
     glib::MainContext::default()
@@ -962,8 +960,8 @@ fn native_document_tabs_disk_failure_keeps_data() {
         .capture_project_recovery()
         .unwrap();
     let mut saved = Vec::new();
-    captured.write(&mut saved).unwrap();
-    Project::read(saved.as_slice(), Default::default()).unwrap();
+    write_capture(&captured, &mut saved).unwrap();
+    open_native_document(std::io::Cursor::new(saved.as_slice()));
     w.documents.select(&w, 1, true);
     until(
         || w.documents.len() == 1 && !w.documents.changing.get(),
@@ -971,4 +969,138 @@ fn native_document_tabs_disk_failure_keeps_data() {
     );
     w.window.destroy();
     pump(100);
+}
+
+fn begin_preserved_import(w: &Rc<Workspace>, imported: layer_ui::ImportedDocument, source: &std::path::Path) -> Rc<RefCell<Option<Result<(),String>>>> {
+    let completed = Rc::new(RefCell::new(None));
+    let previous = w.window.visible_dialog();
+    let file = gtk::gio::File::for_path(source);
+    let location = layer_ui::DocumentLocation {uri:file.uri().to_string(),name:"Original.capy".into()};
+    glib::spawn_future_local(glib::clone!(#[strong] w, #[strong] completed, async move {
+        *completed.borrow_mut() = Some(w.documents.open_imported(&w, imported, Some(location), None).await);
+    }));
+    until(|| w.window.visible_dialog().is_some_and(|dialog|Some(&dialog)!=previous.as_ref()
+        && dialog.widget_name()=="preserved-package-preview" && dialog.is_mapped()
+        && dialog.downcast_ref::<adw::AlertDialog>().and_then(|dialog|dialog.extra_child()).is_some_and(|picture|picture.is_mapped())),"unsupported admission presents the package preview");
+    completed
+}
+
+#[test]
+#[ignore = "isolated Wayland and GPU"]
+fn native_import_admission_failure_preserves_package_and_current_drawing() {
+    use layer_core::package::{codec::{CapturedPreview,PreparedPackage},preview::Preview};
+    use layer_render_wgpu::snapshot::{CaptureControl,SnapshotPreview};
+    let app = native_test_app("art.capycanvas.ImportAdmission");
+    let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
+    let w = Workspace::with_project(&app, Some((new_drawing(64,48,&localization).unwrap(), None)));
+    w.window.present();
+    new_photo::ready(&w);
+    new_photo::invoke(&w, CommandId::AddLayer);
+    let original = ui_session(&w).engine().document().clone();
+    let checkpoint = ui_session(&w).engine().checkpoint();
+    let selected = w.documents.selected();
+    let directory = std::env::temp_dir().join(format!("capy-import-admission-{}",layer_core::PortableId::random()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let source = directory.join("Original.capy");
+    let symbolic = directory.join("Symbolic.png");
+    let linked = directory.join("Linked.png");
+    let document = layer_ui::NewDocumentOptions {extent:[80,60],background:layer_ui::DocumentBackground::White,..Default::default()}.project(&localization).unwrap();
+    let backdrop = *document.scene().constant_backdrop().first().unwrap();
+    let paper = document.scene().occurrence(backdrop).unwrap();
+    assert_eq!(document.scene().effect(backdrop).unwrap().constant_color(),Some(layer_core::color::RgbColor::WHITE));
+    assert!(paper.visible);
+    assert_eq!(paper.opacity,1.);
+    let context = document.output().context.clone();
+    let capture = layer_core::Editor::new(document).capture(0,context).unwrap();
+    let gpu = ui_session(&w).engine().backend().snapshot_gpu().unwrap();
+    let path = source.clone();
+    let preview = glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
+        let mut renderer = gpu.capture(capture.clone(),CaptureControl::default()).unwrap();
+        let pixels = renderer.read_region([0,0,80,60]).unwrap();
+        let image = SnapshotPreview {extent:[80,60],space:renderer.color().space,pixels}.srgb_bytes().unwrap();
+        assert!(image.chunks_exact(4).all(|pixel|pixel==[255,255,255,255]));
+        let preview = Preview::from_rgba([80,60],image.into()).unwrap();
+        let paired = CapturedPreview {checkpoint:capture.checkpoint,context:capture.output().context.clone(),preview:preview.clone()};
+        let cancelled = std::sync::atomic::AtomicBool::new(false);
+        PreparedPackage::prepare(&capture,Some(paired),&cancelled).unwrap().write(&mut std::fs::File::create(path).unwrap(),&cancelled).unwrap();
+        preview
+    })).unwrap();
+    std::os::unix::fs::symlink(&source,&symbolic).unwrap();
+    std::fs::hard_link(&source,&linked).unwrap();
+    let bytes = std::fs::read(&source).unwrap();
+    let imported = match layer_ui::read_import(std::io::Cursor::new(bytes.clone()),layer_ui::ImportIntent::Open,Default::default(),layer_ui::photo_document_names("Original.capy",&localization),Default::default(),Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
+        layer_ui::ImportOutcome::Editable(imported) => imported,
+        _ => panic!("Expected supported native package"),
+    };
+    w.documents.model.borrow_mut().budget.metadata = 0;
+    let refusal = localization.text(layer_ui::MessageId::DOCUMENTS_PACKAGE_CHOOSE_DIFFERENT).to_string();
+    for (theme,name) in [(Theme::Light,"light"),(Theme::Dark,"dark")] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        pump(100);
+        let completed = begin_preserved_import(&w,imported.clone(),&source);
+        let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        assert!(dialog.is_response_enabled("copy"));
+        assert!(dialog.is_response_enabled("export"));
+        assert!(!dialog.has_response("edit"));
+        assert!(!dialog.has_response("save"));
+        assert_eq!(dialog.response_label("copy"),localization.text(layer_ui::MessageId::DOCUMENTS_PACKAGE_COPY_ORIGINAL).as_ref());
+        assert_eq!(dialog.response_label("export"),localization.text(layer_ui::MessageId::DOCUMENTS_PACKAGE_EXPORT_PREVIEW).as_ref());
+        let picture = dialog.extra_child().unwrap().downcast::<gtk::Picture>().unwrap();
+        assert!(picture.is_mapped());
+        let texture = picture.paintable().unwrap().downcast::<gtk::gdk::Texture>().unwrap();
+        assert_eq!([texture.width(),texture.height()],[80,60]);
+        let mut shown = vec![0;80*60*4];
+        texture.download(&mut shown,80*4);
+        assert!(shown.chunks_exact(4).all(|pixel|pixel==[255,255,255,255]));
+        assert_eq!(w.documents.selected(),selected);
+        assert_eq!(w.documents.len(),1);
+        assert_eq!(ui_session(&w).engine().document(),&original);
+        assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
+        if let Ok(output) = std::env::var("LAYER_NATIVE_CAPTURE_DIR") {
+            std::fs::create_dir_all(&output).unwrap();
+            crate::capture(&w,&format!("{output}/preserved-package-{name}.png"));
+        }
+        let copy = directory.join(format!("Copy-{name}.capy"));
+        crate::files::choose_next_save(copy.clone());
+        new_photo::response(&w,"copy");
+        until(||copy.exists()&&w.window.visible_dialog().is_some_and(|current|current!=dialog.clone().upcast::<adw::Dialog>()
+            && current.widget_name()=="preserved-package-preview" && current.is_mapped()),"original package copied from retained backing");
+        assert_eq!(std::fs::read(copy).unwrap(),bytes);
+        let image = directory.join(format!("Preview-{name}.png"));
+        crate::files::choose_next_save(image.clone());
+        let previous = w.window.visible_dialog().unwrap();
+        new_photo::response(&w,"export");
+        until(||image.exists()&&w.window.visible_dialog().is_some_and(|current|current!=previous
+            && current.widget_name()=="preserved-package-preview" && current.is_mapped()),"verified preview exported separately");
+        let encoded = std::fs::read(image).unwrap();
+        assert_eq!(encoded.as_slice(),preview.encoded().as_ref());
+        let decoded = Preview::decode(encoded.into()).unwrap();
+        assert_eq!(decoded.size(),[80,60]);
+        assert!(decoded.pixels().chunks_exact(4).all(|pixel|pixel==[255,255,255,255]));
+        new_photo::response(&w,"close");
+        until(||completed.borrow().is_some(),"preserved view closes without adoption");
+        assert_eq!(completed.borrow_mut().take().unwrap(),Ok(()));
+        for destination in [&source,&symbolic,&linked] {
+            let completed = begin_preserved_import(&w,imported.clone(),&source);
+            crate::files::choose_next_save(destination.to_owned());
+            new_photo::response(&w,"export");
+            until(||completed.borrow().is_some(),"original destination refused before publication");
+            assert_eq!(completed.borrow_mut().take().unwrap(),Err(refusal.clone()));
+            assert_eq!(std::fs::read(&source).unwrap(),bytes);
+            assert_eq!(std::fs::read(destination).unwrap(),bytes);
+            assert_eq!(ui_session(&w).engine().document(),&original);
+            assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
+            assert_eq!(w.documents.selected(),selected);
+            assert_eq!(w.documents.len(),1);
+        }
+    }
+    w.documents.cancel_open.set(true);
+    assert!(glib::MainContext::default().block_on(w.documents.open_imported(&w,imported,None,None)).is_err());
+    assert!(w.window.visible_dialog().is_none());
+    assert_eq!(ui_session(&w).engine().document(),&original);
+    assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
+    w.documents.cancel_open.set(false);
+    w.window.destroy();
+    pump(100);
+    std::fs::remove_dir_all(directory).unwrap();
 }

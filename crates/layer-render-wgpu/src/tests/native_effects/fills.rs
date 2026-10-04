@@ -5,8 +5,9 @@ use layer_core::{GradientStop, color::RgbColor};
 const EXTENT: [u32; 2] = [256, 256];
 const DEPTHS: [SampleDepth; 4] = [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32];
 
-fn composite(r: &mut WgpuRasterizer, layers: &[Layer]) -> Vec<[f32; 4]> {
-    r.submit(packet(layers, EXTENT)).unwrap();
+fn composite(r: &mut WgpuRasterizer, layers: &[EffectInstance]) -> Vec<[f32; 4]> {
+    let document=effect_document(layers,EXTENT,r.document_color);
+    r.submit(packet(document.scene().with_owner(0,0),EXTENT)).unwrap();
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .chunks_exact(16)
         .map(|p| std::array::from_fn(|c| f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap())))
@@ -24,7 +25,7 @@ struct Gradient {
     center: [f32; 2],
 }
 impl Gradient {
-    fn layer(&self, space: RgbSpace, end: [f32; 3]) -> Layer {
+    fn layer(&self, space: RgbSpace, end: [f32; 3]) -> EffectInstance {
         let mut layer = effect(3, "gradient_fill", false);
         let stop = |position, rgb: [f32; 3]| GradientStop {
             position,
@@ -73,13 +74,13 @@ fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() 
             Gradient { radial: false, reverse: true, angle: 90., scale: 60., center: [40., 60.] },
             Gradient { radial: true, reverse: false, angle: 0., scale: 80., center: [30., 70.] },
         ] {
-            let mut layer = gradient.layer(RgbSpace::Srgb, [1.; 3]);
-            layer.opacity = 0.1;
-            let mut mask = layer_core::LayerMask::reveal_all(LayerId(4), Default::default());
-            mask.default_coverage = 0.;
-            layer.mask = Some(mask);
-            r.submit(packet(&[layer], EXTENT)).unwrap();
-            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, LayerId(3));
+            let layer = gradient.layer(RgbSpace::Srgb, [1.; 3]);
+            let mut document = effect_document(&[layer], EXTENT, r.document_color);
+            let owner = document.scene().order()[0];
+            document.artwork.occurrences.get_mut(owner).unwrap().opacity = 0.1;
+            mask(&mut document, owner, 0.);
+            r.submit(packet(document.scene().with_owner(0,0), EXTENT)).unwrap();
+            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, layer_render::ThumbnailTarget::Occurrence(owner));
             assert_ne!(bytes, previous, "edited parameters must replace the gradient thumbnail");
             for [x, y] in points {
                 let expected = (gradient.position([(x as f64 + 0.5) * 8., (y as f64 + 0.5) * 8.]) * 255.).round() as i32;
@@ -90,7 +91,7 @@ fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() 
             previous = bytes;
         }
         let mut layer = effect(5, "solid_color", false);
-        let program = Arc::make_mut(&mut Arc::make_mut(layer.effect.as_mut().unwrap()).program);
+        let program = Arc::make_mut(&mut layer.program);
         program.id = "future_fill".into();
         program.constant_color = None;
         program.entry = "future_first".into();
@@ -99,11 +100,14 @@ fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() 
             EffectPass { entry: "future_first".into(), sampling: EffectSampling::Neighborhood { radius: 0 } },
             EffectPass { entry: "future_second".into(), sampling: EffectSampling::Document },
         ].into();
-        layer.visible = false;
-        layer.opacity = 0.1;
         for extent in [[96, 64], [2040, 1360]] {
-            r.submit(packet(std::slice::from_ref(&layer), extent)).unwrap();
-            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, layer.id);
+            let mut document = effect_document(std::slice::from_ref(&layer), extent, r.document_color);
+            let owner = document.scene().order()[0];
+            let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
+            occurrence.visible = false;
+            occurrence.opacity = 0.1;
+            r.submit(packet(document.scene().with_owner(0,0), extent)).unwrap();
+            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, layer_render::ThumbnailTarget::Occurrence(owner));
             for [x, y] in points {
                 let checker = if (x / 4 + y / 4) % 2 == 0 { 0.855 } else { 0.497 };
                 let expected = [0.25, (y as f64 + 0.5 - 16. / 3.) / (64. / 3.), (x as f64 + 0.5) / 32.]

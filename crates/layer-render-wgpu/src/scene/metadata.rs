@@ -1,21 +1,40 @@
-//! Cache comparisons must not own retired originals or raster history.
 use super::*;
+use layer_core::authored::{Occurrence, EffectApplication, MaskUse};
 use std::sync::Weak;
+
+#[derive(Clone, PartialEq)]
+pub(super) struct MaskMetadata {
+    pub use_: MaskUse,
+    pub domain: [u32; 2],
+    pub initial: Option<layer_core::Selection>,
+    pub default_coverage: f32,
+}
+pub(super) fn mask_metadata(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Option<MaskMetadata> {
+    scene.mask(handle).map(|(use_, source)| MaskMetadata {
+        use_: use_.clone(), domain: source.domain, initial: source.initial.clone(), default_coverage: source.default_coverage,
+    })
+}
 
 #[derive(Clone)]
 pub(super) struct Metadata {
-    layer: Layer,
+    pub id: OccurrenceHandle,
+    pub parent: Option<OccurrenceHandle>,
+    pub evaluation_offset: layer_core::Point,
+    pub occurrence: Occurrence,
+    pub effect: Option<Weak<EffectApplication>>,
+    pub effect_contract: Option<(layer_core::EffectKind, layer_core::EffectSpace, bool)>,
+    definition: Option<Weak<layer_core::authored::Definition>>,
+    pub mask: Option<MaskMetadata>,
     source: Option<Weak<layer_core::color::source::SourceImage>>,
-}
-impl std::ops::Deref for Metadata {
-    type Target = Layer;
-    fn deref(&self) -> &Layer {
-        &self.layer
-    }
 }
 impl PartialEq for Metadata {
     fn eq(&self, other: &Self) -> bool {
-        self.layer == other.layer
+        self.id == other.id && self.parent == other.parent && self.evaluation_offset == other.evaluation_offset && self.occurrence == other.occurrence
+            && match (&self.effect, &other.effect) {
+                (None, None) => true, (Some(a), Some(b)) => Weak::ptr_eq(a, b), _ => false,
+            } && self.effect_contract == other.effect_contract
+            && match (&self.definition, &other.definition) { (None, None) => true, (Some(a), Some(b)) => Weak::ptr_eq(a, b), _ => false }
+            && self.mask == other.mask
             && match (&self.source, &other.source) {
                 (None, None) => true,
                 (Some(a), Some(b)) => Weak::ptr_eq(a, b),
@@ -23,48 +42,38 @@ impl PartialEq for Metadata {
             }
     }
 }
-fn empty_raster() -> layer_core::raster::RasterRevision {
-    static EMPTY: std::sync::OnceLock<layer_core::raster::RasterRevision> =
-        std::sync::OnceLock::new();
-    EMPTY.get_or_init(Default::default).clone()
-}
-pub(super) fn mask_metadata(mask: &Option<layer_core::LayerMask>) -> Option<layer_core::LayerMask> {
-    static EMPTY: std::sync::OnceLock<Arc<Vec<layer_core::LayerOperation>>> =
-        std::sync::OnceLock::new();
-    mask.as_ref().map(|mask| {
-        let mut mask = mask.clone();
-        mask.raster = empty_raster();
-        mask.pending_operations = EMPTY.get_or_init(Default::default).clone();
-        mask
-    })
-}
 impl Metadata {
-    pub(super) fn new(layer: &Layer) -> Self {
-        let mut metadata = layer.composite_snapshot();
-        metadata.source = None;
-        metadata.raster = empty_raster();
-        metadata.mask = mask_metadata(&layer.mask);
+    pub(super) fn new(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Self {
+        let mut occurrence = scene.occurrence(handle).unwrap().clone();
+        occurrence.name = Arc::from("");
+        occurrence.locked = false;
+        occurrence.alpha_locked = false;
+        occurrence.reference = false;
+        occurrence.clipped = scene.effective_clipped(handle);
+        let effect = match occurrence.content {
+            layer_core::authored::OccurrenceContent::Effect(effect) => scene.artwork().effects.shared(effect).map(Arc::downgrade),
+            _ => None,
+        };
         Self {
-            layer: metadata,
-            source: layer.source.as_ref().map(Arc::downgrade),
+            id: handle, parent: scene.evaluation_parent(handle), evaluation_offset: scene.occurrence_offset(handle), occurrence, effect,
+            effect_contract: scene.effect(handle).map(|effect| (effect.program.kind, effect.program.space, effect.program.image_boundary())),
+            definition: scene.effect_application(handle).and_then(|application| scene.artwork().definitions.shared(application.definition)).map(Arc::downgrade),
+            mask: mask_metadata(scene, handle), source: scene.paint_source(handle).and_then(|paint| paint.original.as_ref()).map(Arc::downgrade),
         }
     }
 }
 
-/// Preview queries also distinguish raster publication identities. Unlike the
-/// live compositor, they do not receive an individual damage list with requests.
 #[derive(PartialEq)]
 pub(super) struct PreviewMetadata {
     metadata: Metadata,
-    raster: u64,
+    raster: Option<u64>,
     mask_raster: Option<u64>,
 }
 impl PreviewMetadata {
-    pub(super) fn new(layer: &Layer) -> Self {
+    pub(super) fn new(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Self {
         Self {
-            metadata: Metadata::new(layer),
-            raster: layer.raster.identity(),
-            mask_raster: layer.mask.as_ref().map(|m| m.raster.identity()),
+            metadata: Metadata::new(scene, handle), raster: scene.paint_source(handle).map(|paint| paint.raster.identity()),
+            mask_raster: scene.mask(handle).map(|(_, source)| source.raster.identity()),
         }
     }
 }
@@ -88,23 +97,29 @@ mod tests {
         )
         .unwrap();
         builder.push_row(&[255; 8]).unwrap();
-        let mut layer = Layer::paint(LayerId(1), "original");
-        layer.source = Some(Arc::new(builder.finish().unwrap()));
-        let source = Arc::downgrade(layer.source.as_ref().unwrap());
-        let raster = Arc::downgrade(&layer.raster.wait_data().unwrap());
-        let key = Metadata::new(&layer);
-        let preview = PreviewMetadata::new(&layer);
-        assert!(key == Metadata::new(&layer));
-        assert!(preview == PreviewMetadata::new(&layer));
+        let mut artwork = layer_core::authored::Artwork::new([1, 1]).unwrap();
+        let paint = artwork.paint.insert(layer_core::authored::PortableId::random(), layer_core::authored::PaintSource {
+            domain: [1, 1], raster: Default::default(), original: Some(Arc::new(builder.finish().unwrap())), operations: Arc::default(),
+        }).unwrap();
+        let handle = artwork.occurrences.insert(layer_core::authored::PortableId::random(), layer_core::authored::Occurrence::new(
+            layer_core::authored::OccurrenceContent::Paint(paint), "original")).unwrap();
+        let stack = artwork.compositions.get(artwork.root).unwrap().result;
+        artwork.stacks.get_mut(stack).unwrap().entries.push(handle);
+        let index = Arc::new(layer_core::SceneIndex::build(&artwork).unwrap());
+        let source = Arc::downgrade(artwork.paint.get(paint).unwrap().original.as_ref().unwrap());
+        let raster = Arc::downgrade(&artwork.paint.get(paint).unwrap().raster.wait_data().unwrap());
+        let key = Metadata::new(SceneView::new(&artwork, &index), handle);
+        let preview = PreviewMetadata::new(SceneView::new(&artwork, &index), handle);
+        assert!(key == Metadata::new(SceneView::new(&artwork, &index), handle));
+        assert!(preview == PreviewMetadata::new(SceneView::new(&artwork, &index), handle));
         assert_eq!(source.strong_count(), 1);
-        layer.source = Some(Arc::new((**layer.source.as_ref().unwrap()).clone()));
-        assert!(
-            key != Metadata::new(&layer),
-            "new source interpretation invalidates pixels"
-        );
-        assert!(preview != PreviewMetadata::new(&layer));
+        let original = artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+        let replacement = Arc::new((**original).clone());
+        artwork.paint.get_mut(paint).unwrap().original = Some(replacement);
+        assert!(key != Metadata::new(SceneView::new(&artwork, &index), handle), "new source interpretation invalidates pixels");
+        assert!(preview != PreviewMetadata::new(SceneView::new(&artwork, &index), handle));
         assert_eq!(source.strong_count(), 0);
-        layer.raster = Default::default();
+        artwork.paint.get_mut(paint).unwrap().raster = Default::default();
         assert_eq!(
             raster.strong_count(),
             0,

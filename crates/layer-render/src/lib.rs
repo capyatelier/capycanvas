@@ -7,7 +7,8 @@
 
 use layer_core::{
     AssetId, BrushDeform, BrushExecution, BrushGrain, BrushRendering, BrushTip, BrushTransport,
-    BrushWetMix, Layer, LayerId, Point, Rect, StrokeId,
+    BrushWetMix, Point, Rect, StrokeId,
+    authored::{SourceTarget, OccurrenceHandle, SceneView, SceneSnapshot, SceneScope, EvaluationContext},
 };
 use std::fmt;
 mod outline;
@@ -18,7 +19,6 @@ pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
 
 #[derive(Clone, Debug)]
-#[expect(clippy::large_enum_variant, reason = "Transform snapshot retries retain an inline plan without allocating")]
 pub enum SnapshotRequest {
     LevelsStatistics(layer_core::ArtworkQuery),
     ArtworkStatistics(layer_core::ArtworkStatisticsRequest),
@@ -32,7 +32,7 @@ pub enum SnapshotResult {
     ArtworkStatistics(layer_core::color::histogram::Histogram),
     ArtworkSample(layer_core::ArtworkSample),
     Bounds(Rect),
-    TransformPixels(Box<Layer>),
+    TransformPixels(layer_core::Edit),
 }
 
 /// Immutable brush source shared across a render-worker boundary. Pixel storage
@@ -227,7 +227,7 @@ impl DabStyle {
 /// `points`, in document coordinates, while nothing is painting.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RetouchPreparation {
-    pub target: LayerId,
+    pub target: SourceTarget,
     pub retouch: layer_core::Retouch,
     pub points: Vec<Point>,
 }
@@ -235,7 +235,7 @@ pub struct RetouchPreparation {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DabBatchKind {
     /// Ordered fill / destructive mask application between committed strokes.
-    LayerOperation(u32),
+    RasterOperation(u32),
     /// Incrementally changes the persistent active-layer image.
     Persistent,
     /// Replaces renderer-owned predicted-input preview state for this frame.
@@ -250,7 +250,7 @@ pub struct DabBatch {
     /// Stable stroke identity. Stateful GPU resources use this to distinguish
     /// adjacent strokes that happen to share the same brush style.
     pub stroke_id: StrokeId,
-    pub layer_id: LayerId,
+    pub target: SourceTarget,
     pub kind: DabBatchKind,
     /// This batch contains the first committed or provisional contacts of the
     /// stroke. A batch may carry only a boundary and contain zero dabs.
@@ -270,7 +270,7 @@ pub struct DabBatch {
 pub struct FramePacket<'a> {
     /// Bounded rollback for cancellation or late correction of the latest
     /// contact. Committed undo/redo uses the revisions on the layer metadata.
-    pub restore_rasters: &'a [(LayerId, layer_core::raster::RasterRevision)],
+    pub restore_rasters: &'a [(SourceTarget, layer_core::raster::RasterRevision)],
     /// Monotonic seconds since this editor session started; never wall time.
     pub time_seconds: f32,
     pub view: ViewState,
@@ -280,7 +280,9 @@ pub struct FramePacket<'a> {
     /// Canonical front-to-back layer order and properties. This is borrowed
     /// directly from the document so empty and image-backed layers cannot be
     /// lost when a renderer is recreated.
-    pub layers: &'a [Layer],
+    pub scene: SceneView<'a>,
+    pub inspect_mask: Option<OccurrenceHandle>,
+    pub selection_visibility: Option<&'a std::collections::BTreeMap<OccurrenceHandle, bool>>,
     pub dabs: &'a [Dab],
     pub dab_batches: &'a [DabBatch],
     /// Clear renderer-owned paint storage before applying persistent batches.
@@ -316,22 +318,25 @@ pub struct ReadbackImage {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Clone,Copy,Debug,PartialEq,Eq)]
+pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),QuickMask}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterPreviewSource {
-    LayerStack(LayerId),
-    EffectInput(LayerId),
+    LayerStack(OccurrenceHandle),
+    EffectInput(OccurrenceHandle),
 }
+
 /// Small idle-time picker request; paint stays in renderer-owned GPU storage.
 #[derive(Clone, Debug)]
 pub struct FilterPreviewRequest {
-    pub request_id: u64,
-    pub source: FilterPreviewSource,
-    pub size: [u32; 2],
-    pub extent: [u32; 2],
-    pub view: ViewState,
-    pub blend_space: layer_core::BlendSpace,
-    pub layers: Vec<Layer>,
-    pub filters: Vec<std::sync::Arc<layer_core::EffectInstance>>,
+    pub request_id:u64,
+    pub source:FilterPreviewSource,
+    pub size:[u32;2],
+    pub view:ViewState,
+    pub snapshot:std::sync::Arc<SceneSnapshot>,
+    pub scope:SceneScope,
+    pub filters:Vec<std::sync::Arc<layer_core::EffectInstance>>,
 }
 
 /// Rows of equal-sized previews packed vertically in a single small image.
@@ -372,7 +377,7 @@ pub struct ColorPickerOverlay {
 pub enum ColorSampleSource {
     Composite,
     /// Raw paint color, before layer opacity, masks and clipping.
-    Layer(LayerId),
+    Source(SourceTarget),
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum ColorSampleArea {
@@ -426,11 +431,11 @@ pub struct ColorSample {
 pub enum RegionSource {
     Composite,
     /// Placed raw paint, in document coordinates.
-    Layer(LayerId),
+    Source(SourceTarget),
     /// Placed raw content alpha or mask coverage, in document coordinates.
-    Coverage(LayerId),
+    Coverage(SourceTarget),
     /// Composition snapshot with original indices and selected visibility.
-    Layers(Vec<Layer>),
+    Scene { snapshot: std::sync::Arc<SceneSnapshot>, scope: SceneScope },
     /// Rasterize selection geometry without color classification.
     Selection(std::sync::Arc<layer_core::Selection>),
     /// Continuous luminance classification of a raw layer or artwork composite.
@@ -439,7 +444,7 @@ pub enum RegionSource {
     /// cannot express, resampled into the target's local pixels. Inversion is
     /// the caller's: the result is the moved, uninverted coverage.
     TransformedSelection {
-        layer: LayerId,
+        target: SourceTarget,
         selection: std::sync::Arc<layer_core::Selection>,
         map: layer_core::LayerPlacement,
     },
@@ -475,7 +480,7 @@ pub struct TonalSample {
 }
 impl TonalRequest {
     pub fn valid(&self, extent: [u32; 2]) -> bool {
-        matches!(self.source, RegionSource::Composite | RegionSource::Layer(_) | RegionSource::Layers(_))
+        matches!(self.source, RegionSource::Composite | RegionSource::Source(_) | RegionSource::Scene { .. })
             && self.bands.len() <= layer_core::tonal::MAX_BANDS
             && self.bands.iter().all(|b| b.validate().is_ok())
             && self.probe.is_none_or(|p| {
@@ -606,7 +611,7 @@ pub struct TransformPreview {
     /// Lanczos transform bilinearly until the preview stops moving; Apply then
     /// resamples at the requested filter unless a still preview was drawn.
     pub moving: bool,
-    pub layer: LayerId,
+    pub target: SourceTarget,
     pub selection: Option<layer_core::Selection>,
     pub transform: layer_core::ImageTransform,
 }
@@ -626,28 +631,15 @@ impl TransformPreview {
     /// A linked paint/mask pair shares one world-space transform, but each has
     /// its own local origin and immutable selection. Other layer kinds have no
     /// raster pigment target to transform alongside their mask.
-    pub fn companion(&self, layers: &[Layer]) -> Option<Self> {
-        let owner = layers
-            .iter()
-            .find(|l| l.id == self.layer || l.mask.as_ref().is_some_and(|m| m.id == self.layer))?;
-        let mask = owner.mask.as_ref().filter(|m| m.linked)?;
-        if owner.kind != layer_core::LayerKind::Paint {
-            return None;
-        }
-        let target = if self.layer == owner.id {
-            mask.id
-        } else {
-            owner.id
-        };
-        let to = layer_core::target_geometry(layers, self.layer).as_affine()?
-            .then(layer_core::target_geometry(layers, target).as_affine()?.inverse()?);
-        Some(Self {
-            transaction: self.transaction,
-            moving: self.moving,
-            layer: target,
-            selection: self.selection.as_ref().map(|s| s.transformed(to)).transpose().ok()?,
-            transform: self.transform.conjugate(to)?,
-        })
+    pub fn companion(&self, scene: SceneView<'_>) -> Option<Self> {
+        let owner=scene.source_owner(self.target)?;
+        let occurrence=scene.occurrence(owner)?;
+        let mask=occurrence.mask.as_ref().filter(|m|m.linked)?;
+        let paint=match occurrence.content {layer_core::authored::OccurrenceContent::Paint(h)=>SourceTarget::Paint(h),_=>return None};
+        let target=if self.target==paint{SourceTarget::Coverage(mask.source)}else{paint};
+        let to=scene.target_geometry(self.target).as_affine()?.then(scene.target_geometry(target).as_affine()?.inverse()?);
+        Some(Self {transaction:self.transaction,moving:self.moving,target,
+            selection:self.selection.as_ref().map(|s|s.transformed(to)).transpose().ok()?,transform:self.transform.conjugate(to)?})
     }
 }
 
@@ -712,6 +704,8 @@ pub trait CanvasRenderer {
     fn max_document_dimension(&self) -> u32 {
         u32::MAX
     }
+    fn evaluation_context(&self)->EvaluationContext {EvaluationContext::default()}
+    fn seed_evaluation_context(&mut self,_context:EvaluationContext) {}
     fn poll_pending(&mut self, _view: ViewState) -> Result<(), Self::Error> { Ok(()) }
     fn has_pending_submission(&self) -> bool { false }
     /// Host frame-mailbox backpressure before consuming input.
@@ -737,11 +731,11 @@ pub trait CanvasRenderer {
     /// The layer a placement or transform that just began may move. The
     /// renderer may prepare what drawing its drag needs while idle. None
     /// when the transaction ends.
-    fn prepare_moving_layer(&mut self, _layer: Option<LayerId>) {}
+    fn prepare_moving_layer(&mut self, _layer: Option<OccurrenceHandle>) {}
     /// The layer and the selection of it, in its own pixels, whose pixels a
     /// Move drag may move next. The renderer may prepare that drag while
     /// idle. None when no such drag is expected.
-    fn prepare_moving_pixels(&mut self, _pixels: Option<(LayerId, layer_core::Selection)>) {}
+    fn prepare_moving_pixels(&mut self, _pixels: Option<(SourceTarget, layer_core::Selection)>) {}
     /// A retouching tool's target, source and focus points, or None when no
     /// retouching tool is selected. Never blocks.
     fn prepare_retouch(&mut self, _retouch: Option<&RetouchPreparation>) {}
@@ -806,7 +800,7 @@ pub trait CanvasRenderer {
     fn release_asset(&mut self, asset: &AssetId);
     fn submit(&mut self, packet: FramePacket<'_>) -> Result<(), Self::Error>;
     /// Small asynchronous UI previews, never full-resolution paint readback.
-    fn request_thumbnail(&mut self, _request_id: u64, _target: LayerId) -> Result<(), Self::Error> {
+    fn request_thumbnail(&mut self, _request_id: u64, _target: ThumbnailTarget) -> Result<(), Self::Error> {
         Ok(())
     }
     fn take_thumbnail(&mut self) -> Option<Result<ReadbackImage, Self::Error>> {
@@ -816,7 +810,7 @@ pub trait CanvasRenderer {
     fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { None }
     fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { Ok(()) }
     fn cancel_effect_analysis(&mut self) {}
-    fn retain_effect_analyses(&mut self, _layers: &[LayerId]) -> Result<(), Self::Error> { Ok(()) }
+    fn retain_effect_analyses(&mut self, _layers: &[OccurrenceHandle]) -> Result<(), Self::Error> { Ok(()) }
     fn request_snapshot(&mut self, _request: SnapshotRequest) -> Result<bool, Self::Error> { Ok(false) }
     fn take_snapshot(&mut self) -> Option<Result<SnapshotResult, Self::Error>> { None }
     fn cancel_snapshot(&mut self) {}
@@ -879,26 +873,24 @@ mod tests {
 
     #[test]
     fn linked_transform_maps_both_origins_into_the_same_world_motion() {
-        use layer_core::{Affine, ImageTransform, LayerMask, Point, Selection};
-        let mut parent = Layer::paint(LayerId(3), "parent");
-        parent.kind = layer_core::LayerKind::Group;
-        parent.properties.offset = Point { x: 19., y: -11. };
-        let mut paint = Layer::paint(LayerId(1), "paint");
-        paint.properties.parent = Some(parent.id);
-        paint.properties.offset = Point { x: 12., y: 8. };
-        paint.mask = Some(LayerMask::reveal_all(LayerId(9), Point { x: -7., y: 23. }));
-        let mut layers = vec![paint, parent];
+        use layer_core::{Affine, ImageTransform, Point, Selection, CoverageSnapshot, authored::*};
+        let mut document=layer_core::Document::new(PortableId::random(),128,96,layer_core::DocumentNames{paint:"paint".into(),paper:"Paper".into()});
+        let paint=document.scene().order()[0];let pigment=document.scene().source_target(paint).unwrap();
+        document.artwork.occurrences.get_mut(paint).unwrap().translation=Point{x:12.,y:8.};
+        let coverage=CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(),[128,96],Point{x:-7.,y:23.});let mask=document.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();document.artwork.occurrences.get_mut(paint).unwrap().mask=Some(coverage.use_);
+        let stack=document.artwork.stacks.insert(PortableId::random(),Stack{entries:vec![paint]}).unwrap();let mut parent=Occurrence::new(OccurrenceContent::Stack(stack),"parent");parent.translation=Point{x:19.,y:-11.};let parent=document.artwork.occurrences.insert(PortableId::random(),parent).unwrap();let root=document.composition().result;document.artwork.stacks.get_mut(root).unwrap().entries[0]=parent;
+        document.apply(layer_core::Edit::Stack(RecordChange::replace(&document.artwork.stacks,root,document.artwork.stacks.get(root).cloned()).unwrap())).unwrap();
         let selection = Selection::polygon(vec![
             Point { x: 0., y: 0. },
             Point { x: 12., y: 0. },
             Point { x: 6., y: 8. },
         ])
         .unwrap();
-        for primary in [LayerId(1), LayerId(9)] {
+        for primary in [pigment,SourceTarget::Coverage(mask)] {
             let request = TransformPreview {
                 transaction: 7,
                 moving: false,
-                layer: primary,
+                target: primary,
                 selection: Some(selection.clone()),
                 transform: ImageTransform::affine(Affine::around(
                     Point { x: 44., y: 12. },
@@ -907,10 +899,10 @@ mod tests {
                     Point { x: 2., y: -6. },
                 )),
             };
-            let other = request.companion(&layers).unwrap();
-            assert_ne!(other.layer, primary);
-            let a = layer_core::target_offset(&layers, primary);
-            let b = layer_core::target_offset(&layers, other.layer);
+            let other = request.companion(document.scene()).unwrap();
+            assert_ne!(other.target, primary);
+            let a = document.scene().target_offset(primary);
+            let b = document.scene().target_offset(other.target);
             let delta = Point {
                 x: a.x - b.x,
                 y: a.y - b.y,
@@ -926,15 +918,15 @@ mod tests {
                 assert!((p.y + a.y - q.y - b.y).abs() < 0.0001);
             }
         }
-        layers[0].mask.as_mut().unwrap().linked = false;
+        document.artwork.occurrences.get_mut(paint).unwrap().mask.as_mut().unwrap().linked=false;
         let request = TransformPreview {
             transaction: 1,
             moving: false,
-            layer: LayerId(1),
+            target: pigment,
             selection: None,
             transform: Default::default(),
         };
-        assert!(request.companion(&layers).is_none());
+        assert!(request.companion(document.scene()).is_none());
     }
 
     #[test]

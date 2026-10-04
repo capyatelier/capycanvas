@@ -3,44 +3,57 @@
 //! a CPU reference, and a brush blend mode equals the layer blend mode.
 use super::*;
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
-use layer_core::{BlendSpace, BrushBlendMode, LayerBlend, StrokeId};
+use layer_core::{BlendSpace, BrushBlendMode, Document, LayerBlend, StrokeId, authored::{Artwork, SourceTarget}};
 
 const EXTENT: [u32; 2] = [128, 128];
 const WHITE: [f32; 4] = [1.; 4];
 
 struct Canvas {
     r: WgpuRasterizer,
-    layers: Vec<Layer>,
+    document: Document,
+    base: SourceTarget,
+    over: Option<SourceTarget>,
     space: BlendSpace,
     strokes: u64,
 }
 
 impl Canvas {
-    fn new(color: DocumentColor, space: BlendSpace, layers: Vec<Layer>) -> Self {
+    fn new(color: DocumentColor, space: BlendSpace, blend: Option<LayerBlend>) -> Self {
+        let mut artwork = Artwork::new(EXTENT).unwrap();
+        let composition = artwork.compositions.get_mut(artwork.root).unwrap();
+        composition.color = color;
+        composition.blend = space;
+        let over = blend.map(|blend| {
+            let (owner, target) = crate::test_support::add_paint(&mut artwork, "Blend", EXTENT);
+            artwork.occurrences.get_mut(owner).unwrap().blend = blend;
+            target
+        });
+        let (_, base) = crate::test_support::add_paint(&mut artwork, "Paint", EXTENT);
+        let document = Document::from_artwork(artwork).unwrap();
         let mut r = WgpuRasterizer::new_native_headless(color).unwrap();
-        r.submit(FramePacket { reset_layers: true, blend_space: space, ..packet(&layers, EXTENT) }).unwrap();
-        Self { r, layers, space, strokes: 0 }
+        r.submit(FramePacket { reset_layers: true, blend_space: space, ..packet(document.scene(), EXTENT) }).unwrap();
+        Self { r, document, base, over, space, strokes: 0 }
     }
 
-    fn paint(&mut self, layer: u64, mut style: DabStyle, dab: Dab) {
+    fn paint(&mut self, target: SourceTarget, mut style: DabStyle, dab: Dab) {
         style.blend_space = self.space;
         self.strokes += 1;
         let damage = Rect { min: Point { x: 0., y: 0. }, max: Point { x: EXTENT[0] as f32, y: EXTENT[1] as f32 } };
-        let batch = DabBatch { stroke_id: StrokeId(self.strokes), ..crate::test_support::dab_batch(LayerId(layer), style, damage) };
+        let batch = DabBatch { stroke_id: StrokeId(self.strokes), ..crate::test_support::dab_batch(target, style, damage) };
         self.r
-            .submit(FramePacket { dabs: &[dab], dab_batches: &[batch], blend_space: self.space, ..packet(&self.layers, EXTENT) })
+            .submit(FramePacket { dabs: &[dab], dab_batches: &[batch], blend_space: self.space, ..packet(self.document.scene(), EXTENT) })
             .unwrap();
     }
 
-    fn fill(&mut self, layer: u64, color: [f32; 4]) {
+    fn fill(&mut self, target: SourceTarget, color: [f32; 4]) {
         let mut dab = test_dab([64., 64.], color, 1.);
         dab.radii = [200.; 2];
-        self.paint(layer, test_style(BrushExecution::Dry), dab);
+        self.paint(target, test_style(BrushExecution::Dry), dab);
     }
 
     /// The composite, as the document's blend space holds it.
     fn composite(&mut self) -> Vec<[f64; 4]> {
-        self.r.submit(FramePacket { blend_space: self.space, ..packet(&self.layers, EXTENT) }).unwrap();
+        self.r.submit(FramePacket { blend_space: self.space, ..packet(self.document.scene(), EXTENT) }).unwrap();
         crate::layer_tests::page_bytes(&self.r, crate::test_support::document_texture(&self.r))
             .chunks_exact(16)
             .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..][..4].try_into().unwrap()))))
@@ -78,21 +91,21 @@ fn uniform_stroke_colors_and_coverage_do_not_depend_on_contact_batching() {
                         [0.2 + if varying { i as f32 * 0.2 } else { 0. }, 0.3, 0.8, alpha], 52., 0.3)
                 }).collect();
                 let draw = |chunk: usize| {
-                    let mut canvas = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);
-                    canvas.fill(1, [0.3, 0.5, 0.1, 0.8]);
+                    let mut canvas = Canvas::new(DocumentColor::default(), space, None);
+                    canvas.fill(canvas.base, [0.3, 0.5, 0.1, 0.8]);
                     let mut style = test_style(BrushExecution::Dry);
                     style.blend_space = space;
                     style.mode = mode;
                     style.rendering.blend_mode = blend;
                     style.rendering.accumulation = BrushAccumulation::Uniform;
                     let damage = dabs.iter().fold(Rect::default(), |r, d| r.union(d.bounds()));
-                    let mut batch = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(LayerId(1), style, damage) };
+                    let mut batch = DabBatch { stroke_id: StrokeId(2), ..crate::test_support::dab_batch(canvas.base, style, damage) };
                     for (i, contacts) in dabs.chunks(chunk).enumerate() {
                         batch.dab_count = contacts.len() as u32;
                         batch.stroke_start = i == 0;
                         batch.stroke_end = (i + 1) * chunk >= dabs.len();
                         canvas.r.submit(FramePacket { dabs: contacts, dab_batches: std::slice::from_ref(&batch),
-                            blend_space: space, ..packet(&canvas.layers, EXTENT) }).unwrap();
+                            blend_space: space, ..packet(canvas.document.scene(), EXTENT) }).unwrap();
                     }
                     canvas.composite()
                 };
@@ -110,10 +123,10 @@ fn uniform_stroke_colors_and_coverage_do_not_depend_on_contact_batching() {
 #[test]
 fn a_soft_black_edge_over_white_fades_on_the_documents_values() {
     for space in BlendSpace::ALL {
-        let mut canvas = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);
-        canvas.fill(1, WHITE);
+        let mut canvas = Canvas::new(DocumentColor::default(), space, None);
+        canvas.fill(canvas.base, WHITE);
         let dab = soft([61.3, 66.7], [0., 0., 0., 1.], 50., 0.1);
-        canvas.paint(1, test_style(BrushExecution::Dry), dab);
+        canvas.paint(canvas.base, test_style(BrushExecution::Dry), dab);
         let composite = canvas.composite();
         let mut faded = 0;
         for y in 0..EXTENT[1] as usize {
@@ -134,9 +147,9 @@ fn black_at_half_opacity_over_white_paint_is_middle_gray_when_blending_perceptua
     for depth in [SampleDepth::U8, SampleDepth::U16] {
         for (space, expected) in [(BlendSpace::Perceptual, 128.), (BlendSpace::Linear, 188.)] {
             let color = DocumentColor { space: RgbSpace::Srgb, depth };
-            let mut canvas = Canvas::new(color, space, vec![Layer::paint(LayerId(1), "Paint")]);
-            canvas.fill(1, WHITE);
-            canvas.paint(1, test_style(BrushExecution::Dry), soft([64., 64.], [0., 0., 0., 0.5], 40., 1.));
+            let mut canvas = Canvas::new(color, space, None);
+            canvas.fill(canvas.base, WHITE);
+            canvas.paint(canvas.base, test_style(BrushExecution::Dry), soft([64., 64.], [0., 0., 0., 0.5], 40., 1.));
             canvas.composite();
             let image = canvas.r.readback_srgb_rgba8().unwrap();
             let center = (64 * EXTENT[0] as usize + 64) * 4;
@@ -156,16 +169,16 @@ fn a_brush_blend_mode_equals_the_layer_blend_mode_in_both_spaces() {
     let stroke = soft([70., 64.], [0.85, 0.7, 0.15, 0.75], 55., 0.2);
     for space in BlendSpace::ALL {
         for mode in [BrushBlendMode::Overlay, BrushBlendMode::Multiply, BrushBlendMode::Screen, BrushBlendMode::Darken, BrushBlendMode::Lighten] {
-            let mut brush = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);
-            base(&mut brush, 1);
+            let mut brush = Canvas::new(DocumentColor::default(), space, None);
+            let target = brush.base;
+            base(&mut brush, target);
             let mut style = test_style(BrushExecution::Dry);
             style.rendering.blend_mode = mode;
-            brush.paint(1, style, stroke);
-            let mut over = Layer::paint(LayerId(2), "Blend");
-            over.properties.blend = LayerBlend::from(mode);
-            let mut layered = Canvas::new(DocumentColor::default(), space, vec![over, Layer::paint(LayerId(1), "Paint")]);
-            base(&mut layered, 1);
-            layered.paint(2, test_style(BrushExecution::Dry), stroke);
+            brush.paint(brush.base, style, stroke);
+            let mut layered = Canvas::new(DocumentColor::default(), space, Some(LayerBlend::from(mode)));
+            let target = layered.base;
+            base(&mut layered, target);
+            layered.paint(layered.over.unwrap(), test_style(BrushExecution::Dry), stroke);
             for (i, (a, b)) in brush.composite().into_iter().zip(layered.composite()).enumerate() {
                 for c in 0..4 {
                     assert!((a[c] - b[c]).abs() < 2e-4, "{space:?} {mode:?} pixel {i} channel {c}: brush {} != layer {}", a[c], b[c]);
@@ -178,11 +191,11 @@ fn a_brush_blend_mode_equals_the_layer_blend_mode_in_both_spaces() {
 #[test]
 fn erasing_is_the_same_in_both_spaces() {
     let erased = |space| {
-        let mut canvas = Canvas::new(DocumentColor::default(), space, vec![Layer::paint(LayerId(1), "Paint")]);
-        canvas.fill(1, [0.7, 0.2, 0.4, 0.9]);
+        let mut canvas = Canvas::new(DocumentColor::default(), space, None);
+        canvas.fill(canvas.base, [0.7, 0.2, 0.4, 0.9]);
         let mut style = test_style(BrushExecution::Dry);
         style.mode = DabMode::Erase;
-        canvas.paint(1, style, soft([64., 64.], WHITE, 45., 0.1));
+        canvas.paint(canvas.base, style, soft([64., 64.], WHITE, 45., 0.1));
         canvas.r.readback_srgb_rgba8().unwrap()
     };
     assert_eq!(erased(BlendSpace::Perceptual), erased(BlendSpace::Linear));

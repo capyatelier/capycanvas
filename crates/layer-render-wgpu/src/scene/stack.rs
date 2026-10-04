@@ -1,30 +1,34 @@
 use super::*;
 
-type Checkpoint<I> = (usize, I, Option<(I, usize)>);
+type Checkpoint<I> = (OccurrenceHandle, I, Option<(I, OccurrenceHandle)>);
 
 pub(super) trait Compositor {
     type Image;
     fn clear(&mut self) -> Self::Image;
     fn discard(&mut self, image: Self::Image);
     fn duplicate(&mut self, image: &Self::Image) -> Self::Image;
-    fn fade(&mut self, front: Self::Image, back: Self::Image, index: usize) -> Result<Self::Image, GpuRasterError>;
-    fn layer(&mut self, index: usize) -> Result<Self::Image, GpuRasterError>;
-    fn blend(&mut self, front: Self::Image, back: Self::Image, index: usize, clipped: bool) -> Result<Self::Image, GpuRasterError>;
-    fn effect(&mut self, chain: &[usize], input: Self::Image) -> Result<Self::Image, GpuRasterError>;
-    fn has_content(&self, index: usize) -> bool;
-    fn draw_normal(&mut self, _index: usize, _output: &Self::Image) -> Result<bool, GpuRasterError> { Ok(false) }
-    fn checkpoint(&mut self, _parent: Option<LayerId>) -> Option<Checkpoint<Self::Image>> { None }
+    fn fade(&mut self, front: Self::Image, back: Self::Image, index: OccurrenceHandle) -> Result<Self::Image, GpuRasterError>;
+    fn layer(&mut self, index: OccurrenceHandle) -> Result<Self::Image, GpuRasterError>;
+    fn blend(&mut self, front: Self::Image, back: Self::Image, index: OccurrenceHandle, clipped: bool) -> Result<Self::Image, GpuRasterError>;
+    fn effect(&mut self, chain: &[OccurrenceHandle], input: Self::Image) -> Result<Self::Image, GpuRasterError>;
+    fn has_content(&self, index: OccurrenceHandle) -> bool;
+    fn draw_normal(&mut self, _index: OccurrenceHandle, _output: &Self::Image) -> Result<bool, GpuRasterError> { Ok(false) }
+    fn checkpoint(&mut self, _parent: Option<OccurrenceHandle>) -> Option<Checkpoint<Self::Image>> { None }
 }
 
-pub(super) fn has_content(r: &WgpuRasterizer, layer: &Layer) -> bool {
-    matches!(layer.kind, LayerKind::Group | LayerKind::Effect) || layer.source.is_some()
-        || r.native_color_coordinates(layer.id).next().is_some()
-        || r.paint_layers.iter().any(|l| l.id == layer.id && !l.pages.is_empty())
-        || r.preview_layer_id == Some(layer.id)
+pub(super) fn has_content(r: &WgpuRasterizer, scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> bool {
+    let occurrence = scene.occurrence(handle).unwrap();
+    matches!(occurrence.kind(), LayerKind::Group | LayerKind::Effect)
+        || scene.paint_source(handle).is_some_and(|paint| paint.original.is_some())
+        || scene.source_target(handle).is_some_and(|target| {
+            r.native_color_coordinates(target).next().is_some()
+                || r.paint_layers.iter().any(|stored| stored.id == target && !stored.pages.is_empty())
+                || r.preview_layer_id == Some(target)
+        })
 }
 
 pub(super) fn compose<C: Compositor>(
-    c: &mut C, layers: &[Layer], parent: Option<LayerId>, stop_before: Option<(usize, bool)>,
+    c: &mut C, scene: layer_core::SceneView<'_>, parent: Option<OccurrenceHandle>, stop_before: Option<(OccurrenceHandle, bool)>,
 ) -> Result<C::Image, GpuRasterError> {
     let checkpoint = c.checkpoint(parent);
     let cut = checkpoint.as_ref().map(|(index, ..)| *index);
@@ -32,31 +36,35 @@ pub(super) fn compose<C: Compositor>(
         || (c.clear(), None), |(_, output, stack)| (output, stack),
     );
     let (Flow::Done(output) | Flow::Stopped(output)) =
-        group_into(c, layers, parent, stop_before, cut, output, stack)?;
+        group_into(c, scene, parent, stop_before, cut, output, stack)?;
     Ok(output)
 }
 
 enum Flow<I> { Done(I), Stopped(I) }
 
-fn stop_root(layers: &[Layer], parent: Option<LayerId>, stop: Option<(usize, bool)>) -> Option<usize> {
+fn stop_root(scene: layer_core::SceneView<'_>, parent: Option<OccurrenceHandle>, stop: Option<(OccurrenceHandle, bool)>) -> Option<OccurrenceHandle> {
     let (mut root, _) = stop?;
-    for _ in 0..layers.len() {
-        let up = layers[root].properties.parent;
+    for _ in 0..scene.order().len() {
+        let up = scene.evaluation_parent(root);
         if up == parent { return Some(root); }
-        root = layers.iter().position(|l| Some(l.id) == up)?;
+        root = up?;
     }
     None
 }
 
 fn group_into<C: Compositor>(
-    c: &mut C, layers: &[Layer], parent: Option<LayerId>, stop_before: Option<(usize, bool)>,
-    cut: Option<usize>, mut output: C::Image, mut stack: Option<(C::Image, usize)>,
+    c: &mut C, scene: layer_core::SceneView<'_>, parent: Option<OccurrenceHandle>, stop_before: Option<(OccurrenceHandle, bool)>,
+    cut: Option<OccurrenceHandle>, mut output: C::Image, mut stack: Option<(C::Image, OccurrenceHandle)>,
 ) -> Result<Flow<C::Image>, GpuRasterError> {
-    let stop = stop_root(layers, parent, stop_before);
-    let mut siblings = layers.iter().enumerate().rev()
-        .filter(|(_, l)| l.properties.parent == parent && l.is_artwork())
-        .filter(|(i, _)| cut.is_none_or(|cut| *i < cut)).peekable();
-    while let Some((i, layer)) = siblings.next() {
+    let stop = stop_root(scene, parent, stop_before);
+    let mut siblings = scene.members(parent).rev()
+        .filter(|handle| {
+            let occurrence = scene.occurrence(*handle).unwrap();
+            occurrence.is_artwork() && scene.includes(*handle)
+                && cut.is_none_or(|cut| scene.position(*handle) < scene.position(cut))
+        }).peekable();
+    while let Some(i) = siblings.next() {
+        let layer = scene.occurrence(i).unwrap();
         if let Some((stop, clipped)) = stop_before && stop == i {
             if clipped {
                 c.discard(output);
@@ -65,32 +73,32 @@ fn group_into<C: Compositor>(
             if let Some((pixels, base)) = stack { output = c.blend(pixels, output, base, false)?; }
             return Ok(Flow::Stopped(output));
         }
-        if layer.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment) {
-            if !layer.properties.clipped && let Some((pixels, base)) = stack.take() {
+        if scene.effect(i).is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment) {
+            if !scene.effective_clipped(i) && let Some((pixels, base)) = stack.take() {
                 output = c.blend(pixels, output, base, false)?;
             }
-            if !layer.visible { continue; }
+            if !scene.visible(i) { continue; }
             let mut chain = vec![i];
-            if direct_effect_mask(layers, layer) && !layer.effect.as_ref().unwrap().program.fusion_boundary() {
-                while let Some((j, _)) = siblings.peek().filter(|(j, next)| {
-                    stop.is_none_or(|stop| *j > stop) && fuses_after(layers, layer, next, chain.len())
+            if direct_effect_mask(scene, i) && !scene.effect(i).unwrap().program.fusion_boundary() {
+                while let Some(j) = siblings.peek().filter(|j| {
+                    stop.is_none_or(|stop| scene.position(**j) > scene.position(stop)) && fuses_after(scene, i, **j, chain.len())
                 }) {
                     chain.push(*j);
                     siblings.next();
                 }
             }
-            if layer.properties.clipped {
+            if scene.effective_clipped(i) {
                 if let Some((pixels, base)) = stack.take() { stack = Some((c.effect(&chain, pixels)?, base)); }
             } else { output = c.effect(&chain, output)?; }
             continue;
         }
-        if !layer.properties.clipped {
+        if !scene.effective_clipped(i) {
             if let Some((pixels, base)) = stack.take() { output = c.blend(pixels, output, base, false)?; }
-            if layer.passes_through() {
-                if !layer.visible { continue; }
+            if layer.kind() == LayerKind::Group && layer.blend == layer_core::LayerBlend::PassThrough {
+                if !scene.visible(i) { continue; }
                 let fade = layer.opacity != 1. || layer.mask.as_ref().is_some_and(|m| m.enabled);
                 let (input, backdrop) = if fade { (c.duplicate(&output), Some(output)) } else { (output, None) };
-                match group_into(c, layers, Some(layer.id), stop_before, None, input, None)? {
+                match group_into(c, scene, Some(i), stop_before, None, input, None)? {
                     Flow::Done(result) => output = if let Some(backdrop) = backdrop { c.fade(result, backdrop, i)? } else { result },
                     Flow::Stopped(result) => {
                         if let Some(backdrop) = backdrop { c.discard(backdrop); }
@@ -99,11 +107,10 @@ fn group_into<C: Compositor>(
                 }
                 continue;
             }
-            let clips_above = layers[..i].iter().rev().find(|l| l.properties.parent == parent)
-                .is_some_and(|l| l.properties.clipped);
-            if layer.visible && !clips_above && c.draw_normal(i, &output)? { continue; }
-            if layer.visible && c.has_content(i) { stack = Some((c.layer(i)?, i)); }
-        } else if layer.visible && let Some((pixels, base)) = stack.take() {
+            let clips_above = siblings.peek().is_some_and(|handle| scene.effective_clipped(*handle));
+            if scene.visible(i) && !clips_above && c.draw_normal(i, &output)? { continue; }
+            if scene.visible(i) && c.has_content(i) { stack = Some((c.layer(i)?, i)); }
+        } else if scene.visible(i) && let Some((pixels, base)) = stack.take() {
             let source = c.layer(i)?;
             stack = Some((c.blend(source, pixels, i, true)?, base));
         }
@@ -113,10 +120,10 @@ fn group_into<C: Compositor>(
 }
 
 pub(super) fn tile(
-    scene: &mut Scene, r: &WgpuRasterizer, packet: FramePacket<'_>, parent: Option<LayerId>, coordinate: [u32; 2],
+    scene: &mut Scene, r: &WgpuRasterizer, packet: FramePacket<'_>, parent: Option<OccurrenceHandle>, coordinate: [u32; 2],
 ) -> Result<usize, GpuRasterError> {
     let stop = scene.stop_before;
-    compose(&mut Tile { scene, r, packet, coordinate }, packet.layers, parent, stop)
+    compose(&mut Tile { scene, r, packet, coordinate }, packet.scene, parent, stop)
 }
 
 struct Tile<'a> {
@@ -135,11 +142,11 @@ impl Compositor for Tile<'_> {
             [0., 0., 256., 256.], [1., 1., 0., 0.], false, Convert::None);
         output
     }
-    fn fade(&mut self, front: usize, back: usize, index: usize) -> Result<usize, GpuRasterError> {
-        let group = &self.packet.layers[index];
-        let output = if let Some(mask) = group.mask.as_ref().filter(|m| m.enabled) {
-            let coverage = self.scene.mask_at(self.r, mask, layer_core::target_geometry(self.packet.layers, mask.id),
-                group.local_extent(self.packet.document_extent), self.coordinate)?;
+    fn fade(&mut self, front: usize, back: usize, index: OccurrenceHandle) -> Result<usize, GpuRasterError> {
+        let group = self.packet.scene.occurrence(index).unwrap();
+        let output = if let Some((mask, source)) = self.packet.scene.mask(index).filter(|(m, _)| m.enabled) {
+            let coverage = self.scene.mask_at(self.r, mask, source, self.packet.scene.target_geometry(SourceTarget::Coverage(mask.source)),
+                source.domain, self.coordinate)?;
             let change = self.weighted_sum(front, back, [1., -1.]);
             let masked = self.scene.reserve(self.r);
             self.scene.draw(self.r, masked, self.scene.pool[change].view.clone(), Some(self.scene.pool[coverage].view.clone()),
@@ -154,35 +161,36 @@ impl Compositor for Tile<'_> {
         self.scene.free(back);
         Ok(output)
     }
-    fn layer(&mut self, index: usize) -> Result<usize, GpuRasterError> {
+    fn layer(&mut self, index: OccurrenceHandle) -> Result<usize, GpuRasterError> {
         self.scene.layer(self.r, self.packet, index, self.coordinate)
     }
-    fn blend(&mut self, front: usize, back: usize, index: usize, clipped: bool) -> Result<usize, GpuRasterError> {
-        let layer = &self.packet.layers[index];
-        Ok(self.scene.combine(self.r, front, back, layer.opacity, layer.properties.blend, clipped, self.packet.blend_space))
+    fn blend(&mut self, front: usize, back: usize, index: OccurrenceHandle, clipped: bool) -> Result<usize, GpuRasterError> {
+        let layer = self.packet.scene.occurrence(index).unwrap();
+        Ok(self.scene.combine(self.r, front, back, layer.opacity, layer.blend, clipped, self.packet.blend_space))
     }
-    fn effect(&mut self, chain: &[usize], input: usize) -> Result<usize, GpuRasterError> {
+    fn effect(&mut self, chain: &[OccurrenceHandle], input: usize) -> Result<usize, GpuRasterError> {
         self.scene.effect(self.r, self.packet, chain, self.coordinate, input)
     }
-    fn has_content(&self, index: usize) -> bool {
-        has_content(self.r, &self.packet.layers[index])
+    fn has_content(&self, index: OccurrenceHandle) -> bool {
+        has_content(self.r, self.packet.scene, index)
     }
-    fn draw_normal(&mut self, index: usize, output: &usize) -> Result<bool, GpuRasterError> {
+    fn draw_normal(&mut self, index: OccurrenceHandle, output: &usize) -> Result<bool, GpuRasterError> {
         self.scene.draw_normal_layer(self.r, self.packet, index, self.coordinate, *output)
     }
-    fn checkpoint(&mut self, parent: Option<LayerId>) -> Option<(usize, usize, Option<(usize, usize)>)> {
-        let stop = stop_root(self.packet.layers, parent, self.scene.stop_before);
-        let (i, layer) = self.packet.layers.iter().enumerate().find(|(i, l)| {
-            l.visible && l.properties.parent == parent
-                && l.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
-                && stop.is_none_or(|stop| *i > stop)
-                && self.scene.images.checkpoint(*i, l).is_some()
+    fn checkpoint(&mut self, parent: Option<OccurrenceHandle>) -> Option<(OccurrenceHandle, usize, Option<(usize, OccurrenceHandle)>)> {
+        let scene = self.packet.scene;
+        let stop = stop_root(scene, parent, self.scene.stop_before);
+        let handle = scene.members(parent).find(|handle| {
+            scene.occurrence(*handle).unwrap().visible
+                && scene.effect(*handle).is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
+                && stop.is_none_or(|stop| scene.position(*handle) > scene.position(stop))
+                && self.scene.images.checkpoint(*handle, scene).is_some()
         })?;
-        let (pixels, pending) = self.scene.images.checkpoint(i, layer)?;
+        let (pixels, pending) = self.scene.images.checkpoint(handle, scene)?;
         let bounds = self.scene.images.bounds;
         let output = self.scene.image_tile(self.r, pixels, bounds, self.coordinate);
         let pending = pending.map(|(pixels, base)| (self.scene.image_tile(self.r, pixels, bounds, self.coordinate), base));
-        Some((i, output, pending))
+        Some((handle, output, pending))
     }
 }
 

@@ -1,7 +1,8 @@
 use super::*;
 use crate::test_support::packet;
 use crate::{ViewportPresenter, WgpuRasterizer};
-use layer_core::{Layer, LayerId};
+use layer_core::authored::*;
+use std::sync::Arc;
 use layer_render::{CanvasRenderer, FramePacket, ViewState};
 
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
@@ -20,10 +21,13 @@ fn view(size: [u32; 2], x: f32) -> ViewState {
 
 fn document(size: [u32; 2]) -> WgpuRasterizer {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut artwork=Artwork::new([size[0]/2,size[1]]).unwrap();
+    crate::test_support::add_paint(&mut artwork,"backdrop",[size[0]/2,size[1]]);
+    let index=Arc::new(SceneIndex::build(&artwork).unwrap());
     r.submit(FramePacket {
         view: view(size, 0.),
         reset_layers: true,
-        ..packet(&[Layer::paint(LayerId(1), "backdrop")], [size[0] / 2, size[1]])
+        ..packet(SceneView::new(&artwork,&index),[size[0]/2,size[1]])
     })
     .unwrap();
     r
@@ -133,14 +137,16 @@ fn paint_near_glass(r: &mut WgpuRasterizer, size: [u32; 2]) {
     let mut dab = crate::layer_tests::dab([0., 0., 0., 1.]);
     dab.center = layer_core::Point { x: 110., y: 64. };
     dab.radii = [8.; 2];
-    let mut batch = crate::layer_tests::batch(1);
+    let scene=r.artwork_frame.as_ref().unwrap().scene.clone();
+    let target=scene.view().targets().find(|target|matches!(target,SourceTarget::Paint(_))).unwrap();
+    let mut batch = crate::layer_tests::batch(target);
     batch.damage = layer_core::Rect { min: layer_core::Point { x: 100., y: 54. }, max: layer_core::Point { x: 120., y: 74. } };
     r.submit(FramePacket {
         view: view(size, 0.),
         dabs: &[dab],
         dab_batches: &[batch],
         composite_all: false,
-        ..packet(&[Layer::paint(LayerId(1), "backdrop")], [size[0] / 2, size[1]])
+        ..packet(scene.view(),[size[0]/2,size[1]])
     })
     .unwrap();
 }
@@ -293,10 +299,13 @@ fn backdrop_blur_cost() {
             height_px: extent[1],
             document_to_surface: [0.8, 0.1, -0.1, 0.8, x, 100.],
             };
+        let mut artwork=Artwork::new([4096,3072]).unwrap();
+        crate::test_support::add_paint(&mut artwork,"bench",[4096,3072]);
+        let index=Arc::new(SceneIndex::build(&artwork).unwrap());
         r.submit(FramePacket {
             view: camera(200.),
             reset_layers: true,
-            ..packet(&[Layer::paint(LayerId(1), "bench")], [4096, 3072])
+            ..packet(SceneView::new(&artwork,&index),[4096,3072])
         })
         .unwrap();
         let target = texture(&r, extent).create_view(&Default::default());

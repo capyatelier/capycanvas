@@ -1,4 +1,5 @@
 import {histogramJourney} from './histogram-journey.mjs';
+import {readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 
 // Run on the real WebGPU host. More than sixteen source tiles forces a cold
@@ -51,15 +52,15 @@ export async function checkPhotoPaint({call, evaluate, settle}, photoUrl = null)
     const save = async () => {
       await invoke('save_document_as');
       await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-      return evaluate(`(()=>{const bytes=[...photoPaint.files.values()].at(-1);return JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));})()`);
+      return readPackage(evaluate, '[...photoPaint.files.values()].at(-1)');
     };
     const saved = await save();
-    assert.ok(saved.blobs.length > 0);
+    assert.ok(packageResourceIdentity(saved).length > 0);
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-paint.capy',async getFile(){return new File([[...photoPaint.files.values()].at(-1)],'photo-paint.capy')}}];`);
     await invoke('open_document'); await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.app.brush_ready()');
     assert.deepEqual(opaque(await histogram()), painted);
     const reopened = await save();
-    assert.deepEqual(reopened.blobs, saved.blobs, 'Native paint backing survives reopening exactly');
+    assert.deepEqual(packageResourceIdentity(reopened), packageResourceIdentity(saved), 'Native paint backing survives reopening exactly');
     console.log('Native save/reopen passed; replacing GPU');
     await evaluate('layerApp.restartGpu()');
     await wait('layerApp.app.brush_ready() && layerApp.startupTimes.complete!==null');

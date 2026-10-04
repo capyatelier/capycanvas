@@ -10,17 +10,26 @@ mod qualification;
 #[path = "gpu_tone_tests.rs"]
 mod gpu_tone;
 
-fn project(w: &Rc<Workspace>) -> layer_core::Project {
-    layer_core::Project::read(std::io::Cursor::new(snapshot(w)), Default::default()).unwrap()
+fn hide_paper(document: &mut layer_core::Document) {
+    let papers: Vec<_> = document.scene().constant_backdrop().to_vec();
+    for handle in papers { document.artwork.occurrences.get_mut(handle).unwrap().visible = false; }
+}
+fn set_original(document: &mut layer_core::Document, original: std::sync::Arc<layer_core::color::source::SourceImage>) {
+    let paint = active_paint_mut(document);
+    paint.domain = original.extent;
+    paint.original = Some(original);
+}
+fn project(w: &Rc<Workspace>) -> layer_core::Document {
+    open_native_document(std::io::Cursor::new(snapshot(w)))
 }
 fn pixels(w: &Rc<Workspace>) -> Vec<[f32; 4]> {
     let project = project(w);
-    let extent = [project.document.width, project.document.height];
+    let extent = [project.composition().size[0], project.composition().size[1]];
     let gpu = w.snapshot_gpu().unwrap();
     glib::MainContext::default()
         .block_on(gtk::gio::spawn_blocking(move || {
             let mut renderer = gpu
-                .capture(project, 0., Default::default())
+                .capture(layer_host::tasks::capture_document(&project), Default::default())
                 .unwrap();
             renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
         }))
@@ -136,7 +145,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     response(&w, "create");
     finish(&w);
     assert_eq!(
-        opened.borrow_mut().take().unwrap().0.document.color.depth,
+        opened.borrow_mut().take().unwrap().0.composition().color.depth,
         SampleDepth::F16
     );
     invoke(&w, CommandId::OpenDocument);
@@ -146,7 +155,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     file.response(gtk::ResponseType::Accept);
     finish(&w);
     let (p, location) = opened.borrow_mut().take().unwrap();
-    assert_eq!(p.document.color.depth, SampleDepth::F16);
+    assert_eq!(p.composition().color.depth, SampleDepth::F16);
     assert!(location.is_none());
     let photo = Workspace::with_project(&app, Some((p, None)));
     photo.window.present();
@@ -228,39 +237,39 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     ready(&photo);
     assert_eq!(pixels(&photo), painted);
     // Live Proof edits are saved immediately; Off changes viewing only.
-    let default = project(&photo).document.sdr_rendition;
+    let default = project(&photo).output().sdr;
     invoke(&photo, CommandId::SdrRendition);
     let window = appearance(&photo);
     let highlight=named::<gtk::Scale>(photo.proof_panel.root.upcast_ref(),"sdr-appearance-highlight_color");
     assert!(highlight.is_mapped());
     highlight.set_value(0.65);pump(50);
-    assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
+    assert_eq!(project(&photo).output().sdr.highlight_color,0.65);
     assert_eq!(pixels(&photo),painted);
-    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
-    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition.highlight_color,0.65);
+    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).output().sdr,default);
+    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).output().sdr.highlight_color,0.65);
     invoke(&photo,CommandId::Undo);ready(&photo);
     appearance_exposure(&window,-2.);
-    assert_eq!(project(&photo).document.sdr_rendition.exposure,-2.);
+    assert_eq!(project(&photo).output().sdr.exposure,-2.);
     let mode=named::<adw::ToggleGroup>(photo.proof_panel.root.upcast_ref(),"proof-mode");
-    let saved=project(&photo).document.sdr_rendition;
+    let saved=project(&photo).output().sdr;
     mode.set_active_name(Some("off"));pump(50);assert!(!state(&photo).preview_sdr);
-    assert_eq!(project(&photo).document.sdr_rendition,saved);
+    assert_eq!(project(&photo).output().sdr,saved);
     mode.set_active_name(Some("sdr"));pump(50);
     let field=find_named(photo.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
     let controllers=field.observe_controllers();let keys=(0..controllers.n_items()).find_map(|i|controllers.item(i).and_downcast::<gtk::EventControllerKey>()).unwrap();
     keys.emit_by_name::<bool>("key-pressed",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);keys.emit_by_name::<()>("key-released",&[&gdk::Key::Up,&0u32,&gdk::ModifierType::empty()]);pump(50);
-    assert!(project(&photo).document.sdr_rendition.contrast>default.contrast);
+    assert!(project(&photo).output().sdr.contrast>default.contrast);
     assert_eq!(pixels(&photo),painted);
-    appearance_button(&window,"reset");assert_eq!(project(&photo).document.sdr_rendition,default);
+    appearance_button(&window,"reset");assert_eq!(project(&photo).output().sdr,default);
     appearance_exposure(&window,-0.5);
     capture_ui(&photo,&directory,"sdr-appearance-canvas.png");
     crate::snapshot_window(&window,1.).save_to_png(directory.join("sdr-appearance-controls.png")).unwrap();
     let mut recipe=SdrRendition{exposure:-0.5,..default};
-    assert_eq!(project(&photo).document.sdr_rendition,recipe);assert_eq!(pixels(&photo),painted);
-    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,default);
-    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).document.sdr_rendition,recipe);
+    assert_eq!(project(&photo).output().sdr,recipe);assert_eq!(pixels(&photo),painted);
+    invoke(&photo,CommandId::Undo);ready(&photo);assert_eq!(project(&photo).output().sdr,default);
+    invoke(&photo,CommandId::Redo);ready(&photo);assert_eq!(project(&photo).output().sdr,recipe);
     highlight.set_value(0.35);highlight.emit_by_name::<()>("value-changed",&[]);pump(50);
-    recipe.highlight_color=0.35;assert_eq!(project(&photo).document.sdr_rendition,recipe);
+    recipe.highlight_color=0.35;assert_eq!(project(&photo).output().sdr,recipe);
     // The host eyedropper samples artwork, independent of mapped presentation.
     photo.dispatch(UiAction::Color {
         action: layer_ui::ColorAction::Definition {
@@ -313,9 +322,8 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     assert_eq!(pixels(&photo), painted);
     capture_ui(&photo, &directory, "hdr-sdr-preview.png");
     let reopened =
-        layer_core::Project::read(std::fs::File::open(&master).unwrap(), Default::default())
-            .unwrap();
-    assert_eq!(reopened.document.sdr_rendition, recipe);
+        open_native_document(std::fs::File::open(&master).unwrap());
+    assert_eq!(reopened.output().sdr, recipe);
     let restored = Workspace::with_project(&app, Some((reopened, None)));
     restored.window.present();
     ready(&restored);
@@ -324,7 +332,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let window = appearance(&restored);
     appearance_exposure(&window, -0.75);
     recipe.exposure = -0.75;
-    assert_eq!(project(&restored).document.sdr_rendition, recipe);
+    assert_eq!(project(&restored).output().sdr, recipe);
     invoke(&restored, CommandId::ExportDocument);
     let dialog=restored.window.visible_dialog().unwrap();
     combo(&restored, "export-output").set_selected(0);
@@ -383,14 +391,14 @@ fn native_hdr_export_preflight_rejects_range_and_allows_explicit_clipping() {
     use layer_core::color::{source::*, hdr};
     let app = native_test_app("art.capycanvas.HdrPreflight");
     let mut p = new_drawing_at(64, 64, SampleDepth::F16);
-    p.document.layers[1].visible = false;
+    hide_paper(&mut p);
     let mut source = SourceBuilder::new([64, 64], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::F16,
         profile: Default::default(), profile_assumed: false,
     }, 1024 * 1024).unwrap();
     let row: Vec<_> = (0..64).flat_map(|_| hdr::encode_pixel([100., 100., 100., 1.]).unwrap()).flat_map(u16::to_le_bytes).collect();
     for _ in 0..64 { source.push_row(&row).unwrap(); }
-    p.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    set_original(&mut p, std::sync::Arc::new(source.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((p, None)));
     w.window.present(); ready(&w);
     let original = snapshot(&w);
@@ -425,7 +433,7 @@ fn native_hdr_display_negotiation_and_export_navigation() {
     combo(&w, "document-color-depth").set_selected(2);
     apply_dialog(&w, "document-color-dialog", true);
     response(&w, "apply"); finish(&w); ready(&w);
-    assert_eq!(project(&w).document.color.depth, SampleDepth::F16);
+    assert_eq!(project(&w).composition().color.depth, SampleDepth::F16);
     let expected_hdr = std::env::var_os("LAYER_EXPECT_HDR").is_some();
     let deadline = Instant::now() + Duration::from_secs(10);
     loop {
@@ -496,8 +504,8 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
     use layer_core::color::{ColorProfile, source::*};
     let app = native_test_app("art.capycanvas.HdrExportPreview");
     let mut p = new_drawing_at(64, 64, SampleDepth::F16);
-    p.document.layers[1].visible = false;
-    p.document.sdr_rendition.exposure = -4.;
+    hide_paper(&mut p);
+    p.artwork.outputs.get_mut(p.artwork.default_output).unwrap().sdr.exposure = -4.;
     let mut source = SourceBuilder::new([64, 64], SourceInterpretation {
         channels: SourceChannels::Rgba, depth: SampleDepth::F16,
         profile: ColorProfile::Builtin(RgbSpace::Srgb), profile_assumed: false,
@@ -505,7 +513,7 @@ fn native_hdr_export_preview_preserves_master_and_tracks_display() {
     let bits = layer_core::color::hdr::encode_pixel([8., 2., 0.5, 0.5]).unwrap();
     let row = bits.into_iter().flat_map(u16::to_le_bytes).collect::<Vec<_>>().repeat(64);
     for _ in 0..64 { source.push_row(&row).unwrap(); }
-    p.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    set_original(&mut p, std::sync::Arc::new(source.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((p, None)));
     w.window.present(); ready(&w); pump(300);
     let original = snapshot(&w);
@@ -592,14 +600,14 @@ fn native_gainmap_export() {
         let path=output.join(name);if path.exists(){std::fs::remove_file(path).unwrap();}
     }
     for transparent in [false,true] {
-        let mut p=new_drawing_at(64,48,SampleDepth::F16);p.document.layers[1].visible=false;
+        let mut p=new_drawing_at(64,48,SampleDepth::F16);hide_paper(&mut p);
         let mut source=SourceBuilder::new([64,48],SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F16,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false},1024*1024).unwrap();
         for _ in 0..48{let mut row=Vec::new();for x in 0..64{let a=if transparent{x as f32/63.}else{1.};let v=layer_core::color::hdr::encode_pixel([4.,0.5,0.2,a]).unwrap();row.extend(v.into_iter().flat_map(u16::to_le_bytes));}source.push_row(&row).unwrap();}
-        p.document.layers[0].source=Some(std::sync::Arc::new(source.finish().unwrap()));
+        set_original(&mut p, std::sync::Arc::new(source.finish().unwrap()));
         let w=Workspace::with_project(&app,Some((p,None)));w.window.present();ready(&w);
-        let headroom=project(&w).document.sdr_rendition.headroom;
+        let headroom=project(&w).output().sdr.headroom;
         invoke(&w,CommandId::SdrRendition);let panel=appearance(&w);appearance_button(&panel,"reset");
-        assert_eq!(project(&w).document.sdr_rendition.headroom,headroom,"Reset preserves the source range");
+        assert_eq!(project(&w).output().sdr.headroom,headroom,"Reset preserves the source range");
         let original=snapshot(&w);
         invoke(&w,CommandId::ExportDocument);
         let wait=|| {let deadline=Instant::now()+Duration::from_secs(40);while !super::new_photo::export_enabled(&w){pump(20);assert!(Instant::now()<deadline,"encoded preview");}};
@@ -743,7 +751,7 @@ fn native_proof_dial_composited_motion() {
         let name=format!("motion-{i:02}");
         input.perform(serde_json::json!([{"point":to},{"wait_ms":24},{"capture":name}]));
         let (after,next_stride)=load(&name);assert_eq!(stride,next_stride);
-        let recipe=ui_session(&w).engine().document().sdr_rendition;
+        let recipe=ui_session(&w).engine().document().output().sdr;
         let fraction=layer_ui::proof_panel::sdr_tone_pad().fractions(layer_ui::proof_panel::sdr_pad_values(recipe));
         let marker=at(g.field.disc_marker(fraction.map(|f| f as f32)));
         let mut changed=0;
@@ -784,7 +792,7 @@ fn native_proof_dial_pointer_input() {
     let field=find_named(w.proof_panel.root.upcast_ref(),"sdr-tone-pad-surface").unwrap();
     let g=layer_ui::parameter_pad::ParameterDialGeometry::new(field.width().min(field.height()) as f32).unwrap();
     let at=|point:[f32;2]| {let p=field.compute_point(&w.window,&gtk::graphene::Point::new(point[0],point[1])).unwrap();[p.x(),p.y()]};
-    let rendition=||ui_session(&w).engine().document().sdr_rendition;
+    let rendition=||ui_session(&w).engine().document().output().sdr;
     let mut input=RemoteInput::new().settle_ms(80).timeout_secs(20);
     input.ready();
     for touch in [false,true] {
@@ -833,7 +841,7 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     invoke(&w, CommandId::NewDocument);
     combo(&w,"new-document-depth").set_selected(3);
     response(&w,"create"); finish(&w);
-    assert_eq!(opened.borrow_mut().take().unwrap().0.document.color.depth, SampleDepth::F32);
+    assert_eq!(opened.borrow_mut().take().unwrap().0.composition().color.depth, SampleDepth::F32);
     let path = directory.join("source.exr");
     layer_color::photo::write_exr_rows(std::fs::File::create(&path).unwrap(),[64,48],RgbSpace::DisplayP3,None,|_,row| {
         for (x,p) in row.iter_mut().enumerate() { *p=[70000.125+x as f32/32.,-0.125,1.0000001,1.]; } Ok(())
@@ -841,8 +849,8 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     invoke(&w,CommandId::OpenDocument);
     let file=chooser(); file.set_file(&gtk::gio::File::for_path(&path)).unwrap(); pump(100);file.response(gtk::ResponseType::Accept);finish(&w);
     let (p,_) = opened.borrow_mut().take().unwrap();
-    assert_eq!(p.document.color.depth,SampleDepth::F32);
-    assert_eq!(p.document.color.space,RgbSpace::DisplayP3);
+    assert_eq!(p.composition().color.depth,SampleDepth::F32);
+    assert_eq!(p.composition().color.space,RgbSpace::DisplayP3);
     let photo=Workspace::with_project(&app,Some((p,None)));photo.window.present();ready(&photo);
     effect(&photo,"exposure","exposure",layer_core::EffectValue::Number(-1.));
     let master=project(&photo);

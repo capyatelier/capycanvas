@@ -20,20 +20,20 @@ fn native_blending_new_drawing_edit_menu_and_properties() {
     let directory = std::path::Path::new("../../artifacts/photo-m4/blending").join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
     let directory = directory.canonicalize().unwrap();
-    assert_eq!(document(&w).blend_space, BlendSpace::Perceptual, "a new 8-bit drawing blends perceptually");
+    assert_eq!(document(&w).composition().blend, BlendSpace::Perceptual, "a new 8-bit drawing blends perceptually");
     fill_rect(&w, [0.2, 0.2, 0.8, 0.8]);
     w.dispatch(UiAction::SetLayerOpacity { id: None, opacity: 0.5 });
-    let center = [document(&w).width as f32 / 2., document(&w).height as f32 / 2.];
+    let center = [document(&w).composition().size[0] as f32 / 2., document(&w).composition().size[1] as f32 / 2.];
     pump(300);
     let perceptual = shown(&w, center);
 
     choose(&w, &mut input, "Edit", &["Blending", "Linear Light Blending"]);
-    until(|| document(&w).blend_space == BlendSpace::Linear, "Edit › Blending › Linear Light Blending");
+    until(|| document(&w).composition().blend == BlendSpace::Linear, "Edit › Blending › Linear Light Blending");
     pump(300);
     let linear = shown(&w, center);
     assert!(linear[0] > perceptual[0] + 15, "half-opacity paint over white is lighter in linear light: {perceptual:?} {linear:?}");
     w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).blend_space == BlendSpace::Perceptual, "one undo step restores Perceptual");
+    until(|| document(&w).composition().blend == BlendSpace::Perceptual, "one undo step restores Perceptual");
     pump(300);
     assert_eq!(shown(&w, center), perceptual, "undo restores the composite");
 
@@ -83,7 +83,7 @@ fn native_blending_new_drawing_edit_menu_and_properties() {
     response(&w, "create");
     finish(&w);
     let project = created.borrow_mut().take().expect("a new drawing");
-    assert_eq!(project.document.blend_space, BlendSpace::Linear);
+    assert_eq!(project.composition().blend, BlendSpace::Linear);
     input.finish();
     w.window.destroy();
     pump(100);

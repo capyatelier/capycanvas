@@ -26,9 +26,9 @@ compatibility through the content itself rather than through capability lists.
 Keep today's raster layouts in a versioned resource type, rather than building
 an arbitrary channel schema now. Use one authored graph with layers and nodes
 as views of the same representation, starting with structured stack operations.
-The [implementation plan](../development/capy-format.md) defines the staged
-file/runtime boundary and its correctness and performance gates. The byte-level
-schema remains provisional until those gates pass.
+The current [authored model](../reference/authored-model.md) defines the
+file/runtime boundary, and the [package contract](../reference/capy-package.md)
+defines the byte-level schema. This report does not establish their qualification.
 
 The lasting commitment is **new readers preserve the meaning of old files**.
 Old readers cannot edit arbitrary future features correctly. They should show a
@@ -54,13 +54,9 @@ Focused assessments cover [animation workflows](#animation-workflows-the-foundat
 
 ### What is actually on disk
 
-The authoritative implementation is
-[`project_storage.rs`](../../crates/layer-core/src/project_storage.rs), supported
-by [`project.rs`](../../crates/layer-core/src/project.rs) and the
-[source](../../crates/layer-core/src/project_storage/sources.rs),
-[selection](../../crates/layer-core/src/project_storage/selections.rs) and
-[photo-metadata](../../crates/layer-core/src/project_storage/photo_metadata.rs)
-indices. The current format is already a custom indexed container:
+The research-baseline implementation used `project_storage.rs`, supported by
+`project.rs` and source, selection and photo-metadata indices under
+`project_storage/`. That format was a custom indexed container:
 
 ```text
 12 bytes   CAPYRASTER\x0e\0
@@ -84,11 +80,12 @@ payload sequentially and decodes each tile to validate it before adoption; the
 presence of offsets does not make the current reader lazy. See
 [`raster.rs`](../../crates/layer-core/src/raster.rs).
 
-The maintained regression fixture
-[`published-v15-choice.capy`](../../crates/layer-core/tests/fixtures/published-v15-choice.capy)
-now uses the current container version; it retains the active editing state and
-ID allocator checks described here. This inspection establishes the representation, not a performance
-result or qualification of every host's save workflow.
+The pre-cutover `published-v15-choice.capy` fixture retained the active editing
+state and ID allocator checks described here. Current stable-choice and exact
+sample assertions live in [package effect records](../../crates/layer-core/src/package/effect_records.rs)
+and [semantic round trips](../../crates/layer-core/src/package/codec/roundtrip_semantics.rs).
+This inspection established the former representation, not a performance result
+or qualification of every host's save workflow.
 
 | Area | Persisted today |
 | --- | --- |
@@ -908,9 +905,9 @@ ordinary packages to private storage; only their publication and retention diffe
 ### Keep the file model small and independent
 
 The following stack types and ordering rules describe the first supported subset
-of one authored graph. The [implementation plan](../development/capy-format.md)
-defines the source/occurrence boundary, typed ports, runtime alternatives and
-qualification gates. Layers and nodes do not have separate saved authorities.
+of one authored graph. The [authored model](../reference/authored-model.md)
+defines the source/occurrence boundary and typed ports. Layers and nodes do not
+have separate saved authorities.
 
 The revised durable model needs five concepts:
 
@@ -1154,11 +1151,11 @@ sources and occurrences, and typed interfaces. This replaces both the deferred
 content split and the idea of adding a separate graph composition model later.
 
 The [node/layer assessment](authored-graph-research.md) supplies the workflow
-requirements. The [implementation plan](../development/capy-format.md) specifies
-the baseline ownership, code changes, extension cases and acceptance gates.
-The byte schema and runtime layout remain provisional until their prototypes
-pass correctness and performance qualification. Selecting the direction does
-not establish implementation or measured feasibility.
+requirements. The [authored model](../reference/authored-model.md) specifies
+baseline ownership and supported editing; the
+[package contract](../reference/capy-package.md) specifies the wire schema.
+Selecting the direction does not establish measured feasibility or runtime
+qualification.
 
 Graphite demonstrates the product direction: layers and nodes are two views of
 one document, and canvas edits modify the graph. Its developer guide describes
@@ -1293,8 +1290,8 @@ translation. A preview protects access to appearance when evaluation is
 unavailable; it does not satisfy the full old-file editing commitment.
 
 This does **not** require maintaining the pre-reset reader, currently v15. Remove
-it with the writer at the integrated application cutover in the
-[implementation plan](../development/capy-format.md#milestones-and-acceptance).
+it with the writer at the integrated application cutover. The
+[package contract](../reference/capy-package.md) defines the new baseline.
 The earlier v14 inventory is scoped to this research's original baseline. The
 maintenance commitment begins with the new baseline. Do not promise lossless
 writing to arbitrary older versions; omitting defaults already writes the
@@ -1459,9 +1456,10 @@ container must not claim guarantees a mobile provider or browser download does
 not offer.
 
 No runtime change or performance measurement accompanies this report. The
-[implementation milestones](../development/capy-format.md#milestones-and-acceptance)
-assign the following evidence to codec preparation, the qualified application
-cutover and optional lazy loading. The first cutover can use bounded eager
+[testing guide](../development/testing.md) and
+[package acceptance cases](../reference/capy-package.md#fixtures-and-acceptance-cases)
+own implementation checks. The following research requirements cover codec
+preparation, the qualified application cutover and optional lazy loading. The first cutover can use bounded eager
 preparation through the final resource interface; do not claim lazy opening until
 its demand/readiness gates pass.
 
@@ -1511,9 +1509,9 @@ CRC-32s, one output owning delivery intent, content-signalled compatibility with
 ancillary and copy-safe records, and an optional current preview at a fixed
 location. Leave reusable graph interfaces, bindings, timeline schemas, vector
 geometry, 3D scenes, rigs, linked resources, incremental archive updates and
-collaboration protocols to their features. Follow the
-[implementation plan](../development/capy-format.md) before freezing the wire
-schema. Adding those features should extend authored types without replacing
+collaboration protocols to their features. The
+[authored model](../reference/authored-model.md) and
+[package contract](../reference/capy-package.md) define the baseline contracts. Adding those features should extend authored types without replacing
 the container, maintaining a second layer document or reinterpreting artwork.
 
 ## 5. Adversarial review
@@ -1597,10 +1595,9 @@ own schema. None requires implementing its evaluator in the format rewrite.
 
 ### Why the accepted corrections matter now
 
-**Saving must not depend on successful evaluation.** The current
-[`Project::write`](../../crates/layer-core/src/project.rs) and
-[`project_storage::write`](../../crates/layer-core/src/project_storage.rs) wait
-for captured backing and encode source; they do not request a composite render.
+**Saving must not depend on successful evaluation.** At the research baseline,
+`Project::write` and `project_storage::write` waited for captured backing and
+encoded source without requesting a composite render.
 Requiring a freshly rendered PNG would add a new failure condition after source
 capture. A device loss, unavailable evaluator or expensive simulation can block
 a poster even when all authored bytes are safely writable. The accepted rule is
@@ -1643,7 +1640,7 @@ or prove their behavior.
 | Preserving unknown fields inside known records while editing | Deferred because preserving bytes does not establish edit safety. Open XML preprocessing illustrates possible loss on save, not a universal failure of unknown-field preservation. |
 | A mandatory full-resolution merged image, like Krita's `mergedimage.png` | Rejected as mandatory, since Krita's KRZ omits it to save space. Allowed as an optional saved representation. |
 | Fractional order keys on disk, as [Figma](https://www.figma.com/blog/realtime-editing-of-ordered-sequences/) and [Excalidraw](https://plus.excalidraw.com/docs/api/scene-content-schema) use for sync | Not required. A stack stores ordered occurrence references once; synchronization is a separate feature. |
-| A unified authored graph with layer and node views | Selected direction with structured stacks first. The [implementation plan](../development/capy-format.md) requires semantic prototypes and runtime qualification before schema freeze. |
+| A unified authored graph with layer and node views | Selected direction with structured stacks first; see the [authored model](../reference/authored-model.md). This research does not establish runtime qualification. |
 | Opening `.capy` files in operating-system archive tools | Not promised; their ZIP64 support is unreliable. |
 
 ### Capy Canvas's own planned features

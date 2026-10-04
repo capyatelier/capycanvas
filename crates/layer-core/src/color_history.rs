@@ -3,8 +3,7 @@ use super::*;
 
 pub enum ColorTransition {
     Apply {
-        color: color::DocumentColor,
-        layers: Vec<Layer>,
+        edit: Box<Edit>,
     },
     Undo,
     Redo,
@@ -37,11 +36,17 @@ impl Editor {
         transition: ColorTransition,
     ) -> Result<PreparedColorTransition, DocumentError> {
         let (document, inverse, direction) = match transition {
-            ColorTransition::Apply { color, layers } => {
-                let (document, inverse) = self.prepare_history_edit(
-                    Edit::SetColor { color, layers },
-                    history_budget::BYTE_BUDGET,
-                )?;
+            ColorTransition::Apply { edit } => {
+                let mut supplied=self.document.clone();
+                supplied.apply(*edit)?;
+                let paint=supplied.artwork.paint.iter().map(|(h,_,value)|RecordChange::replace(&self.document.artwork.paint,h,Some(value.clone()))).collect::<Result<Vec<_>,_>>()?;
+                let coverage=supplied.artwork.coverage.iter().map(|(h,_,value)|RecordChange::replace(&self.document.artwork.coverage,h,Some(value.clone()))).collect::<Result<Vec<_>,_>>()?;
+                let canonical=self.document.color_edit(supplied.composition().color,paint,coverage)?;
+                let mut admitted=self.document.clone();admitted.apply(canonical.clone())?;
+                if admitted.artwork!=supplied.artwork || admitted.working!=supplied.working {
+                    return Err(DocumentError::InvalidLayerOperation("Color changes must preserve authored properties and working state"));
+                }
+                let (document,inverse)=self.prepare_history_edit(canonical,history_budget::BYTE_BUDGET)?;
                 (document, inverse, Direction::Apply)
             }
             ColorTransition::Undo | ColorTransition::Redo => {
@@ -64,7 +69,7 @@ impl Editor {
                 )
             }
         };
-        if document.color == self.document.color {
+        if document.composition().color == self.document.composition().color {
             return Err(DocumentError::InvalidLayerOperation(
                 "This transition does not change document color",
             ));

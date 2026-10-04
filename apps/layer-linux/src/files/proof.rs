@@ -128,8 +128,8 @@ impl ProofPanel {
         let Some((identity, proof, mode)) = w.gpu.borrow().as_ref().map(|g| {
             let s = &g.session;
             (
-                (s.state().document_file.epoch, s.engine().document().color),
-                s.engine().document().proof.clone(),
+                (s.state().document_file.epoch, s.engine().document().composition().color),
+                s.engine().document().output().proof.clone(),
                 s.proof_panel_mode(),
             )
         }) else {
@@ -366,9 +366,9 @@ impl ProofPanel {
                 profile::preserve_replaced_proof(previous.as_ref(),&recipe).await?;
                 if cancelled.load(Ordering::Acquire)||panel.model.identity.get()!=Some(identity){return Ok(None)}
                 let change={let mut gpu=w.gpu.borrow_mut();let s=&mut gpu.as_mut().ok_or("Canvas unavailable")?.session;
-                    if (s.state().document_file.epoch,s.engine().document().color)!=identity{return Ok(None)}
+                    if (s.state().document_file.epoch,s.engine().document().composition().color)!=identity{return Ok(None)}
                     if s.proof_panel_mode()!=ProofMode::Print{return Ok(None)}
-                    if s.engine().document().proof!=previous{return Err(layer_ui::ColorFeatureError::ProofDrawingChanged)}
+                    if s.engine().document().output().proof!=previous{return Err(layer_ui::ColorFeatureError::ProofDrawingChanged)}
                     s.set_proof_recipe(Some(recipe.clone()))?};
                 w.proof.retain(identity.1.space,recipe.clone(),lut);Ok::<_,layer_ui::ColorFeatureError>(Some(change))
             }.await;
@@ -390,7 +390,7 @@ impl ProofPanel {
                             .gpu
                             .borrow()
                             .as_ref()
-                            .and_then(|g| g.session.engine().document().proof.clone());
+                            .and_then(|g| g.session.engine().document().output().proof.clone());
                         panel.restore_print(&w, saved);
                     }
                 }
@@ -411,9 +411,9 @@ impl ProofPanel {
         let Some((recipe, warning, has_proof, mode)) = w.gpu.borrow().as_ref().map(|g| {
             let s = &g.session;
             (
-                s.engine().document().sdr_rendition,
+                s.engine().document().output().sdr,
                 s.state().gamut_warning,
-                s.engine().document().proof.is_some(),
+                s.engine().document().output().proof.is_some(),
                 s.proof_panel_mode(),
             )
         }) else {

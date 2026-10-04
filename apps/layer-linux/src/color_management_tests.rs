@@ -36,7 +36,7 @@ fn native_numeric_colors_and_saved_palettes() {
     let output = std::path::Path::new("../../artifacts/color-m2/numeric-palette-ui");
     std::fs::create_dir_all(output).unwrap();
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
@@ -247,7 +247,7 @@ fn native_sdr_portable_paint_and_sampling() {
     let definition = RgbColor::new(RgbSpace::DisplayP3, [0.68, 0.23, 0.47, 1.]).unwrap();
     for space in RgbSpace::ALL {
         let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        project.document.color = DocumentColor {
+        composition_mut(&mut project).color = DocumentColor {
             space,
             depth: SampleDepth::U16,
         };
@@ -346,7 +346,7 @@ fn native_sdr_document_modes() {
         for depth in [SampleDepth::U8, SampleDepth::U16] {
             let color = DocumentColor { space, depth };
             let mut project = new_drawing(513, 257, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-            project.document.color = color;
+            composition_mut(&mut project).color = color;
             let mut builder = SourceBuilder::new(
                 [513, 257],
                 SourceInterpretation {
@@ -376,7 +376,7 @@ fn native_sdr_document_modes() {
                 builder.push_row(&row).unwrap();
             }
             let source = Arc::new(builder.finish().unwrap());
-            project.document.layers[0].source = Some(source.clone());
+            paint_at_mut(&mut project, 0).original = Some(source.clone());
             let w = Workspace::with_project(&app, Some((project, None)));
             w.window.present();
             sdr_ready(&w);
@@ -403,11 +403,9 @@ fn native_sdr_document_modes() {
                 painted, original,
                 "{color:?} brush draws over retained photo"
             );
-            let root = ui_session(&w)
+            let root = paint_at(ui_session(&w)
                 .engine()
-                .document()
-                .layers[0]
-                .raster
+                .document(), 0).raster
                 .clone();
             let backing = root.wait_data().unwrap();
             assert!(backing.tiles.len() >= 2, "stroke crosses page boundary");
@@ -427,23 +425,19 @@ fn native_sdr_document_modes() {
             });
             sdr_ready(&w);
             assert_eq!(pixels(&w, 9103), painted, "{color:?} redo");
-            let project = ui_session(&w)
-                .capture_project_recovery()
-                .unwrap();
+            let capture = ui_session(&w).capture_project_recovery().unwrap();
+            let project = capture_document(&capture);
             assert!(Arc::ptr_eq(
-                project.document.layers[0].source.as_ref().unwrap(),
+                paint_at(&project, 0).original.as_ref().unwrap(),
                 &source
             ));
             let mut bytes = Vec::new();
-            project.write(&mut bytes).unwrap();
+            write_capture(&capture, &mut bytes).unwrap();
             let reopened =
-                layer_core::Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
-            assert_eq!(reopened.document.color, color);
-            assert_eq!(
-                reopened.document.layers[0].source.as_ref().unwrap(),
-                &source
-            );
-            let restored = reopened.document.layers[0].raster.wait_data().unwrap();
+                open_native_document(std::io::Cursor::new(bytes));
+            assert_eq!(reopened.composition().color, color);
+            assert_source_samples(paint_at(&reopened, 0).original.as_ref().unwrap(), &source);
+            let restored = paint_at(&reopened, 0).raster.wait_data().unwrap();
             for (key, tile) in &backing.tiles {
                 assert_eq!(
                     tile.wait_backing().unwrap().decode().unwrap(),
@@ -479,7 +473,7 @@ fn native_sdr_bounded_canvas_startup_and_paint() {
     // Exceeds the dense Float32 display ceiling and starts zoomed out in a real
     // GTK window, including the host's initial paper presentation and warmup.
     let mut project = new_drawing(4097, 1025, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };

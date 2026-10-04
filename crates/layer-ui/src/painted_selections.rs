@@ -94,6 +94,7 @@ impl SelectionBrushOptions {
 }
 struct Gesture {
     id: u64,
+    owner: u64,
     target: SelectionTarget,
     mode: SelectionPaintMode,
     opacity: f32,
@@ -159,6 +160,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let id = self.painted_selections.next_id;
         self.painted_selections.gestures.push_back(Gesture {
             id,
+            owner:self.engine.document().owner,
             target,
             mode: SelectionPaintMode::Gray,
             opacity: self.state.brush.opacity,
@@ -240,8 +242,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             Some(SelectionTarget::Saved(id)) => self
                 .engine
                 .document()
-                .layer(id)
-                .is_some_and(|l| self.engine.document().layer_is_visible(l.id)),
+                .scene().occurrence(id)
+                .is_some_and(|_| self.engine.document().layer_is_visible(id)),
             Some(SelectionTarget::Current) => self.selection_masks.quick_visible,
             _ => true,
         };
@@ -350,7 +352,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mask = self.selection_masks.target().is_some();
             if !mask
                 && subtract
-                && self.engine.document().selection.is_none()
+                && self.engine.document().working.selection.is_none()
                 && self.painted_selections.gestures.is_empty()
             {
                 return Ok(());
@@ -372,6 +374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             );
             self.painted_selections.gestures.push_back(Gesture {
                 id,
+                owner:self.engine.document().owner,
                 target,
                 mode: if mask {
                     SelectionPaintMode::Gray
@@ -432,6 +435,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn poll_selection_paint(&mut self) -> Result<u32, String> {
         let mut changed = 0;
+        if self.painted_selections.gestures.front().is_some_and(|g|g.owner!=self.engine.document().owner) {
+            self.painted_selections.renderer_replaced();self.engine.backend_mut().cancel_selection_paint();return Ok(0);
+        }
         if let Some(job) = self
             .painted_selections
             .gestures

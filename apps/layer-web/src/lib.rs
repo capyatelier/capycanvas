@@ -14,7 +14,7 @@ mod screen;
 mod output;
 mod editor;
 mod header;
-mod raster_project;
+mod artwork_transfer;
 mod raster_worker;
 mod scopes;
 mod workspaces;
@@ -259,15 +259,19 @@ impl WebApp {
         if !self.rasterizer()?.ui_readback_ready() {
             return Ok(false);
         }
-        if !self.rasterizer()?
-            .prepare_thumbnail_batch(layer_core::LayerId(target)).map_err(js)? {
-            return Ok(false);
+        let target = if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
+            layer_render::ThumbnailTarget::Occurrence(layer_core::OccurrenceHandle::from_index(u32::try_from(target - 1).map_err(js)?))
+        };
+        match self.rasterizer()?.prepare_thumbnail_batch(target) {
+            Ok(true) => (),
+            Ok(false) | Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => return Ok(false),
+            Err(error) => return Err(js(error)),
         }
-        self.session
-            .renderer_mut()
-            .request_thumbnail(request, layer_core::LayerId(target))
-            .map_err(js)?;
-        Ok(true)
+        match self.session.renderer_mut().request_thumbnail(request, target) {
+            Ok(()) => Ok(true),
+            Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => Ok(false),
+            Err(error) => Err(js(error)),
+        }
     }
     pub fn take_layer_thumbnail(&mut self) -> Result<JsValue, JsValue> {
         let Some(result) = self.session.renderer_mut().take_thumbnail() else {
@@ -539,7 +543,7 @@ impl WebApp {
         Some(self.surface.as_ref()?.lost.clone())
     }
     fn prepare_ui_previews(&mut self) -> Result<(), JsValue> {
-        let rendition = self.session.engine().document().color.depth.is_float()
+        let rendition = self.session.engine().document().composition().color.depth.is_float()
             .then(|| self.session.effective_sdr_rendition());
         if let Some(gpu) = self.session.renderer_mut().0.as_mut() {
             gpu.set_ui_rendition(rendition).map_err(js)?;
@@ -568,7 +572,13 @@ impl WebApp {
 #[wasm_bindgen]
 impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
-        serialize(self.session.state())
+        let state=self.session.state();
+        let value=serialize(state)?;
+        for (name,view) in [("histogram",&state.histogram),("waveform",&state.waveform),("tonal_histogram",&state.tonal_histogram)] {
+            let scope=js_sys::Reflect::get(&value,&js(name))?;
+            scopes::publish_source(view,&scope)?;
+        }
+        Ok(value)
     }
     /// Search-only publications avoid serializing unchanged editor controls.
     pub fn command_search(&self) -> Result<JsValue, JsValue> {
@@ -715,7 +725,7 @@ impl WebApp {
         Ok(JsValue::NULL)
     }
     pub fn document_color(&self) -> Result<JsValue, JsValue> {
-        serialize(&self.session.engine().document().color)
+        serialize(&self.session.engine().document().composition().color)
     }
     pub fn color_ui(&self, request: JsValue) -> Result<JsValue, JsValue> {
         let request = serde_wasm_bindgen::from_value(request).map_err(js)?;
@@ -1113,7 +1123,7 @@ impl WebApp {
         // Compiler completions wake the browser explicitly. Once the brush is
         // usable, optional compilation does not require continuous redraws.
         change.canvas_wake |= !self.startup.brush_ready;
-        let rendition = self.session.engine().document().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
+        let rendition = self.session.engine().document().composition().color.depth.is_float().then(|| self.session.effective_sdr_rendition());
         let hdr_output = self.hdr_output();
         let lut = self.proof.lut(&self.session);
         let (enabled, gamut) = (self.session.state().soft_proof, self.session.state().gamut_warning);

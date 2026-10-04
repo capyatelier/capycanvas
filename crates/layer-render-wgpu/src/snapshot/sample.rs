@@ -53,65 +53,53 @@ impl SamplePipeline {
 }
 
 impl SnapshotGpu {
-    pub fn artwork_source_project(request: &layer_core::ArtworkQuery) -> Result<Project, String> {
-        let (mut document, _) = Self::artwork_document(request)?;
-        discard_hidden_backing(&mut document);
-        Ok(Project { document })
+    pub fn artwork_source_scene(request: &layer_core::ArtworkQuery) -> Result<Arc<SceneSnapshot>, String> {
+        let (snapshot, scope, _) = Self::artwork_scene(request)?;
+        Ok(Arc::new((*snapshot).clone().with_scope(scope)))
     }
-    fn artwork_document(request: &layer_core::ArtworkQuery) -> Result<(layer_core::Document, scene::Output), String> {
+    fn artwork_scene(request: &layer_core::ArtworkQuery) -> Result<(Arc<SceneSnapshot>, SceneScope, scene::Output), String> {
         request.validate()?;
-        let mut document = (*request.document).clone();
-        let output = match &request.source {
-            ArtworkSource::Visible => scene::Output::Artwork(None),
-            ArtworkSource::Reference => {document.layers = document.reference_snapshot();scene::Output::Artwork(None)}
-            ArtworkSource::EffectBaseline(original) => {
-                *document.layers.iter_mut().find(|layer| layer.id == original.id).unwrap() = original.composite_snapshot();
-                scene::Output::Artwork(None)
-            }
-            ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => {
-                let index = document.layers.iter().position(|layer| layer.id == *id).unwrap();
-                let mut included = vec![false; document.layers.len()];
-                for i in layer_core::composite_input_layers(&document.layers, index) { included[i] = true; }
-                for (i, layer) in document.layers.iter_mut().enumerate() {
-                    if !included[i] && layer.kind != LayerKind::Group { layer.visible = false; }
-                }
-                if matches!(request.source, ArtworkSource::EffectChannels(_)) { scene::Output::EffectChannels(*id) }
-                else { scene::Output::EffectInput(*id) }
-            }
-            ArtworkSource::LayerContent(id) => {
-                for layer in &mut document.layers { layer.visible = layer.id == *id || layer.kind == LayerKind::Group;layer.mask = None; }
-                scene::Output::LayerContent(*id)
-            }
+        let mut snapshot = request.snapshot.clone();
+        let view = snapshot.view();
+        let (scope, output) = match &request.source {
+            ArtworkSource::Visible => (snapshot.scope.clone(), scene::Output::Artwork(None)),
+            ArtworkSource::Reference => (SceneScope::Members(view.references().into_iter().collect::<Vec<_>>().into()), scene::Output::Artwork(None)),
+            ArtworkSource::EffectBaseline(baseline) => {
+                *Arc::make_mut(&mut snapshot).artwork.effects.get_mut(baseline.effect).ok_or("Missing effect baseline")? = baseline.application.clone();
+                (snapshot.scope.clone(), scene::Output::Artwork(None))
+            },
+            ArtworkSource::EffectInput(handle) => (SceneScope::Prefix {before:*handle,clipped:view.occurrence(*handle).unwrap().clipped}, scene::Output::EffectInput(*handle)),
+            ArtworkSource::EffectChannels(handle) => {
+                let original = view.effect_application(*handle).unwrap();
+                let definition_handle = original.definition;
+                let snapshot = Arc::make_mut(&mut snapshot);
+                let definition = snapshot.artwork.definitions.get_mut(definition_handle).unwrap();
+                let program = Arc::make_mut(&mut definition.program);
+                program.entry = format!("{}_channels", program.entry).into();
+                let occurrence = snapshot.artwork.occurrences.get_mut(*handle).unwrap();
+                occurrence.opacity = 1.; occurrence.mask = None; occurrence.blend = layer_core::LayerBlend::Normal;
+                (SceneScope::Prefix {before:*handle,clipped:occurrence.clipped}, scene::Output::EffectChannels(*handle))
+            },
+            ArtworkSource::Source(target) => {
+                view.source_owner(*target).ok_or("Missing source occurrence")?;
+                (SceneScope::Raw(*target), scene::Output::Source(*target))
+            },
         };
-        Ok((document, output))
+        Ok((snapshot, scope, output))
     }
     pub(super) async fn artwork_capture(&self, request: &layer_core::ArtworkQuery, control: CaptureControl) -> Result<(SnapshotRenderer, scene::Output), String> {
-        let (mut document, output) = Self::artwork_document(request)?;
-        let identity = Arc::new(document.clone());
-        if let ArtworkSource::EffectChannels(id) = request.source {
-            let layer = document.layers.iter_mut().find(|layer| layer.id == id).unwrap();
-            layer.opacity = 1.; layer.mask = None; layer.properties.blend = layer_core::LayerBlend::Normal;
-            let effect = Arc::make_mut(layer.effect.as_mut().unwrap());
-            let program = Arc::make_mut(&mut effect.program); program.entry = format!("{}_channels", program.entry).into();
-        }
-        discard_hidden_backing(&mut document);
+        let (scene, scope, output) = Self::artwork_scene(request)?;
         #[cfg(target_arch = "wasm32")]
-        if let Some(waiter) = &self.analysis_backing_waiter { waiter(Arc::new(document.clone()), control.clone()).await?; }
-        let mut snapshot = self.capture(Project { document }, request.time, control.clone()).map_err(|e| e.to_string())?;
-        snapshot.document = identity;
+        if let Some(waiter) = &self.analysis_backing_waiter { waiter(scene.clone(), control.clone()).await?; }
+        let mut snapshot = SnapshotRenderer::construct(scene, scope, control, self).map_err(|e| e.to_string())?;
         snapshot.planned_pixel_bytes = 256 * 1024 * 1024;
-        for (id, phase) in request.effect_times.iter().copied() {
-            if let Some(effect) = snapshot.layers.iter().find(|layer| layer.id == id).and_then(|layer| layer.effect.as_ref()) {
-                snapshot.renderer.effect_clocks.insert(id, (effect.program.id.clone(), layer_core::EffectClock::at(effect, request.time, phase)));
-            }
-        }
         Ok((snapshot, output))
     }
 
     pub async fn artwork_sample(&self, request: ArtworkSampleRequest, control: CaptureControl) -> Result<ArtworkSample, String> {
         control.check().map_err(|e| e.to_string())?;
         request.validate()?;
-        let extent = [request.document.width, request.document.height];
+        let extent = request.snapshot.view().composition().size;
         if request.position.iter().zip(extent).any(|(p, size)| *p < 0. || *p >= size as f32) { return Ok(ArtworkSample::Outside); }
         let center = request.position.map(|v| v.floor() as u32);
         let radius = request.width / 2;

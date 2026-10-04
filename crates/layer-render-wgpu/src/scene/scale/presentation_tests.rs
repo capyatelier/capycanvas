@@ -10,8 +10,8 @@ fn bounded_renderer(color: DocumentColor) -> Result<WgpuRasterizer, GpuRasterErr
 }
 
 fn document(extent: [u32; 2]) -> layer_core::Document {
-    let mut doc = layer_core::Document::new("bounded live display", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.color = DocumentColor {
+    let mut doc = layer_core::Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    composition_mut(&mut doc).color = DocumentColor {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
@@ -40,7 +40,7 @@ fn document(extent: [u32; 2]) -> layer_core::Document {
         }
         builder.push_row(&row).unwrap();
     }
-    doc.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
+    paint_mut(&mut doc,0).original = Some(Arc::new(builder.finish().unwrap()));
     doc
 }
 
@@ -54,12 +54,12 @@ fn view(matrix: [f32; 6]) -> ViewState {
 
 fn submit(r: &mut WgpuRasterizer, doc: &layer_core::Document, view: ViewState, all: bool) {
     let deadline = std::time::Instant::now() + READBACK_TIMEOUT;
-    r.submit(FramePacket { view, composite_all: all, ..packet(&doc.layers, [doc.width, doc.height]) })
+    r.submit(FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: all, ..packet(doc.scene(), doc.composition().size) })
     .unwrap();
     while r.has_pending_work() {
         assert!(std::time::Instant::now() < deadline, "display did not settle");
         r.wait_idle().unwrap();
-        r.submit(FramePacket { view, composite_all: false, ..packet(&doc.layers, [doc.width, doc.height]) }).unwrap();
+        r.submit(FramePacket { view, inspect_mask: doc.working.inspect_mask, composite_all: false, ..packet(doc.scene(), doc.composition().size) }).unwrap();
     }
 }
 
@@ -96,7 +96,7 @@ fn close(a: &[[f32; 4]], b: &[[f32; 4]]) {
 #[test]
 fn rejected_views_and_abandoned_composition_preserve_artwork() {
     let doc = document([517, 259]);
-    let mut r = bounded_renderer(doc.color).unwrap();
+    let mut r = bounded_renderer(doc.composition().color).unwrap();
     let v = view([0.125, 0., 0., 0.125, 0., 0.]);
     submit(&mut r, &doc, v, true);
     let mut presenter = crate::test_support::float_presenter(&r);
@@ -110,21 +110,19 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
             document_to_surface: [1., 0., 0., 1., 0., 0.], ..v },
     ] {
         assert!(r.submit(FramePacket { view: rejected, reset_layers: true,
-            ..packet(&doc.layers, [8192; 2]) }).is_err());
-        assert_eq!(r.document_extent, [doc.width, doc.height]);
+            ..packet(doc.scene(), [8192; 2]) }).is_err());
+        assert_eq!(r.document_extent, doc.composition().size);
         assert_eq!(r.scale_display.as_ref().unwrap().texture(), &texture);
         assert_eq!(r.metrics(), metrics);
         close(&before, &present(&r, &mut presenter, v));
     }
     let mut abandoned = doc.clone();
-    abandoned.layers[0].source = Some(layer_core::color::source::rgba8_source([doc.width, doc.height], |x, y|
+    paint_mut(&mut abandoned,0).original = Some(layer_core::color::source::rgba8_source(doc.composition().size, |x, y|
         [if (x / 3 + y / 2) % 2 == 0 { 40 } else { 220 }, 128, 70, 255]));
-    let mut overlay = abandoned.layers[0].clone();
-    overlay.id = abandoned.allocate_layer_id();
-    overlay.opacity = 0.7;
-    overlay.properties.blend = layer_core::LayerBlend::Multiply;
-    abandoned.layers.insert(0, overlay);
-    let frame = FramePacket { view: v, ..packet(&abandoned.layers, [doc.width, doc.height]) };
+    let overlay=copy_paint(&mut abandoned,0);
+    let occurrence=abandoned.artwork.occurrences.get_mut(overlay).unwrap();occurrence.opacity=0.7;occurrence.blend=layer_core::LayerBlend::Multiply;
+    insert_occurrence(&mut abandoned,overlay,0);
+    let frame = FramePacket { view: v, ..packet(abandoned.scene(), doc.composition().size) };
     r.submit(frame).unwrap();
     assert!(r.has_pending_work());
     let mut scene = r.scene.take().unwrap();
@@ -133,7 +131,7 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
     drop(encoder);
     r.scene = Some(scene);
     submit(&mut r, &abandoned, v, false);
-    let mut reference = bounded_renderer(doc.color).unwrap();
+    let mut reference = bounded_renderer(doc.composition().color).unwrap();
     reference.test.exact_display = true;
     submit(&mut reference, &abandoned, v, true);
     let mut oracle = crate::test_support::float_presenter(&reference);
@@ -145,8 +143,9 @@ fn rejected_views_and_abandoned_composition_preserve_artwork() {
 fn filter_images_share_the_display_composition_budget() {
     let mut r = bounded_renderer(DocumentColor::default()).unwrap();
     let extent = [5184, 3456];
-    let layers = [crate::tests::image_windows::effect(1, false, false)];
-    let image_bytes = scene::Scene::capture_image_bound(&layers, PixelRect::full(extent));
+    let mut document=Document::new(PortableId::random(),extent[0],extent[1],layer_core::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
+    let effect=effect_occurrence(&mut document,crate::tests::image_windows::program(false,false),"window fixture");set_root_entries(&mut document,vec![effect]);let scene=document.scene();
+    let image_bytes = scene::Scene::capture_image_bound(scene, PixelRect::full(extent));
     for allowance in [0, 512 << 20, 1536 << 20] {
         r.set_complete_display_allowance(allowance);
         let native = r.native_edit.as_ref().unwrap();
@@ -154,7 +153,7 @@ fn filter_images_share_the_display_composition_budget() {
         let images = native.image_pixel_budget(0);
         let floor = CACHE_BYTES + scene::windows::DEFAULT_IMAGE_PIXEL_BYTES;
         assert_eq!(display + images, native.composition_bytes.max(floor));
-        let plan = scene::windows::Plan::new(&layers, extent, images).unwrap();
+        let plan = scene::windows::Plan::new(scene, extent, images).unwrap();
         assert_eq!(plan.is_none(), allowance == 1536 << 20);
         if plan.is_none() { assert!(image_bytes + display <= native.composition_bytes); }
     }
@@ -163,9 +162,9 @@ fn filter_images_share_the_display_composition_budget() {
 #[test]
 fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize() {
     let doc = document([1537, 769]);
-    let mut dense = bounded_renderer(doc.color).unwrap();
+    let mut dense = bounded_renderer(doc.composition().color).unwrap();
     dense.test.exact_display = true;
-    let mut cached = bounded_renderer(doc.color).unwrap();
+    let mut cached = bounded_renderer(doc.composition().color).unwrap();
 
     let mut a = crate::test_support::float_presenter(&dense);
     let mut b = crate::test_support::float_presenter(&cached);
@@ -231,28 +230,17 @@ fn visible_detail_matches_dense_composition_through_pan_wrap_rotation_and_resize
 
 #[test]
 fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_display() {
-    use layer_core::{LayerMask, Point, Selection};
+    use layer_core::{Point, Selection};
     let mut doc = document([777, 533]);
-    let source = doc.layers[0].source.clone().unwrap();
-    let mut mask = LayerMask::reveal_all(LayerId(99), Point { x: 7., y: -9. });
-    mask.default_coverage = 0.;
-    mask.initial = Some(
-        Selection::polygon(vec![
-            Point { x: 0., y: 0. },
-            Point { x: 760., y: 99. },
-            Point { x: 440., y: 533. },
-        ])
-        .unwrap(),
-    );
-    doc.layers[0].mask = Some(mask);
-    doc.layers
-        .insert(0, crate::tests::image_windows::effect(20, false, false));
-    doc.layers
-        .insert(0, crate::tests::image_windows::effect(21, false, false));
+    let source = paint_at(&doc,0).original.clone().unwrap();
+    let owner=doc.scene().order()[0];
+    let initial=Selection::polygon(vec![Point{x:0.,y:0.},Point{x:760.,y:99.},Point{x:440.,y:533.}]).unwrap();
+    let mask=coverage_mask(&mut doc,owner,Point{x:7.,y:-9.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.;
+    for name in ["20","21"] {let effect=effect_occurrence(&mut doc,crate::tests::image_windows::program(false,false),name);insert_occurrence(&mut doc,effect,0);}
     let original = doc.clone();
-    let mut dense = bounded_renderer(doc.color).unwrap();
+    let mut dense = bounded_renderer(doc.composition().color).unwrap();
     dense.test.exact_display = true;
-    let mut r = bounded_renderer(doc.color).unwrap();
+    let mut r = bounded_renderer(doc.composition().color).unwrap();
 
     let mut a = crate::test_support::float_presenter(&dense);
     let mut b = crate::test_support::float_presenter(&r);
@@ -260,12 +248,12 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
     let mut first = Vec::new();
     for step in 0..5 {
         match step {
-            1 => doc.layers[2].properties.offset = Point { x: 17., y: -9. },
+            1 => occurrence_mut(&mut doc,2).translation = Point { x: 17., y: -9. },
             2 => {
-                doc.layers[2].mask.as_mut().unwrap().inverted = true;
-                doc.layers[0].opacity = 0.6;
+                occurrence_mut(&mut doc,2).mask.as_mut().unwrap().inverted = true;
+                occurrence_mut(&mut doc,0).opacity = 0.6;
             }
-            3 => doc.layers[2].mask.as_mut().unwrap().show_area = true,
+            3 => doc.working.inspect_mask=Some(owner),
             4 => doc = original.clone(),
             _ => {}
         }
@@ -285,10 +273,10 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
                 "step {step} must change visible artwork"
             );
         }
-        assert!(Arc::ptr_eq(doc.layers[2].source.as_ref().unwrap(), &source));
+        assert!(Arc::ptr_eq(paint_at(&doc,2).original.as_ref().unwrap(), &source));
     }
     // Recreating the GPU cache reconstructs the same pixels from retained source.
-    let mut recovered = bounded_renderer(doc.color).unwrap();
+    let mut recovered = bounded_renderer(doc.composition().color).unwrap();
 
     submit(&mut recovered, &doc, v, true);
     let mut p = crate::test_support::float_presenter(&recovered);
@@ -298,7 +286,7 @@ fn filtered_masked_source_edits_and_restoration_refresh_detail_and_coarse_displa
 #[test]
 fn in_surface_navigator_keeps_clipped_geometry() {
     let doc = document([1537, 769]);
-    let mut r = bounded_renderer(doc.color).unwrap();
+    let mut r = bounded_renderer(doc.composition().color).unwrap();
 
     submit(&mut r, &doc, view([1., 0., 0., 1., -900., -400.]), true);
     let size = [256, (256. * 769. / 1537f32).ceil() as u32];
@@ -355,8 +343,8 @@ fn large_document_waits_for_mip_compilation_before_reporting_canvas_ready() {
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
-    let mut doc = layer_core::Document::new("large staged document", 4097, 1025, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.color = color;
+    let mut doc = layer_core::Document::new(PortableId::random(), 4097, 1025, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    composition_mut(&mut doc).color = color;
     let mut r = bounded_renderer(color).unwrap();
     r.startup = Some(startup::Startup::new(&r.device).unwrap());
     let (release, wait) = mpsc::channel();
@@ -394,10 +382,10 @@ fn committed_contact_strokes_present_their_canonical_native_pixels() {
     use layer_engine::{CanvasEngine, InstantFeedbackConfig, PenEvent, PenPhase,
         SampleFlags, ViewTransform, input_queue};
     for preset in [layer_core::DefaultBrushPreset::AntiquePen, layer_core::DefaultBrushPreset::BrushedInk] {
-        let doc = layer_core::Document::new("canonical contact", 1024, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let doc = layer_core::Document::new(PortableId::random(), 1024, 512, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let v = view([0.5, 0., 0., 0.5, 0., 0.]);
         let (mut input, consumer) = input_queue(64);
-        let mut engine = CanvasEngine::new(bounded_renderer(doc.color).unwrap(), doc, consumer, v,
+        let mut engine = CanvasEngine::new(bounded_renderer(doc.composition().color).unwrap(), doc, consumer, v,
             ViewTransform { revision: 0, surface_to_document: [2., 0., 0., 2., 0., 0.] }).unwrap();
         engine.set_instant_feedback(InstantFeedbackConfig { enabled: false, ..Default::default() }).unwrap();
         let mut brush = layer_core::default_brush(preset);
@@ -441,8 +429,8 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    let mut doc = layer_core::Document::new("bounded native drawing", 1025, 513, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.color = color;
+    let mut doc = layer_core::Document::new(PortableId::random(), 1025, 513, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    composition_mut(&mut doc).color = color;
     let v = view([1., 0., 0., 1., 0., 0.]);
     let renderer = || bounded_renderer(color).unwrap();
     let (mut input, consumer) = input_queue(64);
@@ -475,7 +463,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
     }
     let painted = present(engine.backend(), &mut p, v);
     assert!(painted != blank);
-    let root = engine.document().layers[0].raster.clone();
+    let root = paint_at(engine.document(),0).raster.clone();
     let backed = root.wait_data().unwrap();
     assert!(
         backed.tiles.len() >= 2,
@@ -500,7 +488,7 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
 
     let mut p = crate::test_support::float_presenter(engine.backend());
     close(&painted, &present(engine.backend(), &mut p, v));
-    let restored = engine.document().layers[0].raster.wait_data().unwrap();
+    let restored = paint_at(engine.document(),0).raster.wait_data().unwrap();
     for (key, bytes) in exact {
         assert_eq!(
             bytes,
@@ -516,30 +504,14 @@ fn native_stroke_undo_redo_and_replaced_device_rebuild_visible_tiles_from_exact_
 #[test]
 fn pass_through_edits_and_mode_changes_match_full_recomposition() {
     let mut doc = document([777, 533]);
-    let photo = doc.layers[0].id;
-    let layer = |doc: &mut layer_core::Document, kind, filter: Option<&str>| {
-        let mut layer = Layer::paint(doc.allocate_layer_id(), "grouped");
-        layer.kind = kind;
-        layer.effect = filter.map(|id| {
-            Arc::new(layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program()))
-        });
-        layer
-    };
-    let mut group = layer(&mut doc, LayerKind::Group, None);
-    group.properties.blend = layer_core::LayerBlend::PassThrough;
-    let mut upper = layer(&mut doc, LayerKind::Paint, None);
-    upper.properties.blend = layer_core::LayerBlend::Multiply;
-    let desaturate = layer(&mut doc, LayerKind::Effect, Some("black_white"));
-    let blur = layer(&mut doc, LayerKind::Effect, Some("gaussian_blur"));
-    let lower = layer(&mut doc, LayerKind::Paint, None);
-    let (id, upper_id, lower_id) = (group.id, upper.id, lower.id);
-    for (i, mut child) in [upper, desaturate, blur, lower].into_iter().enumerate() {
-        child.properties.parent = Some(id);
-        doc.layers.insert(i, child);
-    }
-    doc.layers.insert(0, group);
-    let mut incremental = bounded_renderer(doc.color).unwrap();
-    let mut reference = bounded_renderer(doc.color).unwrap();
+    let photo = source_at(&doc,0);
+    let upper=paint_occurrence(&mut doc,"grouped",None);doc.artwork.occurrences.get_mut(upper).unwrap().blend=layer_core::LayerBlend::Multiply;
+    let make_effect=|doc:&mut Document,program:&str| {effect_occurrence(doc,layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get(program).unwrap().program()),"grouped")};
+    let desaturate=make_effect(&mut doc,"black_white");let blur=make_effect(&mut doc,"gaussian_blur");let lower=paint_occurrence(&mut doc,"grouped",None);
+    let id=stack_occurrence(&mut doc,"grouped",vec![upper,desaturate,blur,lower]);doc.artwork.occurrences.get_mut(id).unwrap().blend=layer_core::LayerBlend::PassThrough;insert_occurrence(&mut doc,id,0);
+    let upper_id=doc.scene().source_target(upper).unwrap();let lower_id=doc.scene().source_target(lower).unwrap();
+    let mut incremental = bounded_renderer(doc.composition().color).unwrap();
+    let mut reference = bounded_renderer(doc.composition().color).unwrap();
     reference.test.exact_display = true;
     for r in [&mut incremental, &mut reference] {
 
@@ -547,10 +519,8 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
     }
     let mut a = crate::test_support::float_presenter(&incremental);
     let mut b = crate::test_support::float_presenter(&reference);
-    let v = centered_view([doc.width, doc.height], [320, 240], 0.4, 0.);
-    fn find(doc: &mut layer_core::Document, id: LayerId) -> &mut Layer {
-        doc.layers.iter_mut().find(|l| l.id == id).unwrap()
-    }
+    let v = centered_view(doc.composition().size, [320, 240], 0.4, 0.);
+    fn find(doc:&mut Document,id:OccurrenceHandle)->&mut Occurrence {doc.artwork.occurrences.get_mut(id).unwrap()}
     for step in 0..8 {
         let target = match step {
             1 | 7 => Some((photo, [300., 300.])),
@@ -560,12 +530,10 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
         };
         let edited = matches!(step, 4..=6);
         match step {
-            4 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::Normal,
-            5 => find(&mut doc, id).properties.blend = layer_core::LayerBlend::PassThrough,
+            4 => find(&mut doc,id).blend = layer_core::LayerBlend::Normal,
+            5 => find(&mut doc,id).blend = layer_core::LayerBlend::PassThrough,
             6 => {
-                let mut mask = layer_core::LayerMask::reveal_all(LayerId(999), Default::default());
-                mask.default_coverage = 0.6;
-                find(&mut doc, id).mask = Some(mask);
+                let mask=coverage_mask(&mut doc,id,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.6;
                 find(&mut doc, id).opacity = 0.5;
             }
             _ => {}
@@ -585,7 +553,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
                 dabs: &dabs,
                 dab_batches: &batches,
                 composite_all: all,
-                ..packet(&doc.layers, [doc.width, doc.height])
+                ..packet(doc.scene(), doc.composition().size)
             }).unwrap();
             submit(r, &doc, v, false);
         }
@@ -594,7 +562,7 @@ fn pass_through_edits_and_mode_changes_match_full_recomposition() {
     for layer in [lower_id, photo] {
         for moving in [true, false] {
             let transform = layer_render::TransformPreview {
-                transaction: 1, layer, moving, selection: None,
+                transaction: 1, target:layer, moving, selection: None,
                 transform: layer_core::ImageTransform::affine(layer_core::Affine::translation(layer_core::Point { x: 23.5, y: -11.25 })),
             };
             reference.scene = None;

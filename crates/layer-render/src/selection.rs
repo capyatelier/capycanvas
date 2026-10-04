@@ -77,7 +77,7 @@ impl SelectionPaint {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SelectionOverlay {
     pub active: bool,
-    pub editing: Option<layer_core::LayerId>,
+    pub editing: Option<layer_core::authored::OccurrenceHandle>,
     /// Display-encoded color; independent of artwork space and mask strength.
     pub color: [f32; 4],
     pub protected: bool,

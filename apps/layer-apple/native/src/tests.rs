@@ -109,7 +109,7 @@ mod fixtures {
 
     pub(super) fn selection_bounds(app: &App) -> Option<[f32; 4]> {
         let session = &unsafe { &*app.0 }.host.session;
-        session.engine().document().selection.as_ref().map(|selection| match &selection.shape {
+        session.engine().document().working.selection.as_ref().map(|selection| match &selection.shape {
             layer_core::SelectionShape::Pixels(mask) => mask.bounds().map(|v| v as f32),
             _ => {
                 let b = selection.bounds();
@@ -156,36 +156,71 @@ fn raster_samples(revision: &layer_core::raster::RasterRevision) -> RasterSample
     (tiles, data.watercolor)
 }
 
+fn write_capture(capture: &layer_core::authored::ArtworkCapture, output: &mut impl std::io::Write) {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    layer_core::package::codec::PreparedPackage::prepare(capture, None, &cancel).unwrap().write(output, &cancel).unwrap();
+}
+fn write_document(document: &layer_core::Document, output: &mut impl std::io::Write) {
+    let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
+    write_capture(&capture, output);
+}
+fn read_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
+    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable artwork") };
+    imported.project
+}
+fn occurrence_at(document: &layer_core::Document, index: usize) -> &layer_core::authored::Occurrence {
+    document.scene().occurrence(document.scene().order()[index]).unwrap()
+}
+fn imported_occurrences(document: &layer_core::Document) -> impl Iterator<Item = layer_core::authored::OccurrenceHandle> + '_ {
+    document.scene().order().iter().copied().filter(|h| document.scene().paint_source(*h).is_some_and(|source| source.original.is_some()))
+}
+fn first_original(document: &layer_core::Document) -> &layer_core::color::source::SourceImage {
+    document.scene().paint_source(imported_occurrences(document).next().unwrap()).unwrap().original.as_deref().unwrap()
+}
+fn active_raster(document: &layer_core::Document) -> &layer_core::raster::RasterRevision {
+    document.target_raster(document.working.target.unwrap()).unwrap()
+}
+fn source_samples(source: &layer_core::color::source::SourceImage) -> Vec<Vec<u8>> {
+    source.tiles.values().map(|tile| tile.decode().unwrap()).collect()
+}
+fn assert_source_samples(actual: &layer_core::color::source::SourceImage, expected: &layer_core::color::source::SourceImage) {
+    assert_eq!((actual.kind, actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
+        (expected.kind, expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
+    assert_eq!(layer_color::profile_bytes(&actual.interpretation.profile).unwrap(), layer_color::profile_bytes(&expected.interpretation.profile).unwrap());
+    assert!(actual.tiles.keys().eq(expected.tiles.keys()));
+    assert_eq!(source_samples(actual), source_samples(expected));
+}
 fn assert_project_document(actual: &layer_core::Document, expected: &layer_core::Document) {
-    assert_eq!(
-        serde_json::to_value(actual).unwrap(),
-        serde_json::to_value(expected).unwrap(),
-        "Project metadata must round-trip exactly"
-    );
-    // Raster backing is stored separately from metadata. Its process-local
-    // publication identity changes on load; exact sample values must not.
-    for (actual, expected) in actual.layers.iter().zip(&expected.layers) {
-        for layer in [actual, expected] {
-            assert!(layer.pending_operations.is_empty());
-            assert!(layer.masks().all(|mask| mask.pending_operations.is_empty()));
-        }
-        assert_eq!(
-            raster_samples(&actual.raster),
-            raster_samples(&expected.raster)
-        );
-        assert_eq!(actual.source, expected.source);
-        if let (Some(actual), Some(expected)) = (&actual.source, &expected.source) {
-            for (key, tile) in &expected.tiles {
-                assert_eq!(actual.tiles[key].decode().unwrap(), tile.decode().unwrap());
-            }
-        }
-        for (actual, expected) in actual.masks().zip(expected.masks()) {
-            assert_eq!(
-                raster_samples(&actual.raster),
-                raster_samples(&expected.raster)
-            );
-        }
+    let prepare = |document: &layer_core::Document| {
+        let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
+        layer_core::package::codec::PreparedPackage::prepare(&capture, None, &std::sync::atomic::AtomicBool::new(false)).unwrap()
+    };
+    assert_eq!(prepare(actual).manifest(), prepare(expected).manifest(), "Authored metadata and payloads must round-trip exactly");
+    assert_eq!(actual.artwork.paint.len(), expected.artwork.paint.len());
+    for (_, id, original) in expected.artwork.paint.iter() {
+        let current = actual.artwork.paint.get(actual.artwork.paint.resolve(id).unwrap()).unwrap();
+        assert!(current.operations.is_empty() && original.operations.is_empty());
+        assert_eq!(raster_samples(&current.raster), raster_samples(&original.raster));
+        assert_eq!(current.original.is_some(), original.original.is_some());
+        if let (Some(current), Some(original)) = (&current.original, &original.original) { assert_source_samples(current, original); }
     }
+    assert_eq!(actual.artwork.coverage.len(), expected.artwork.coverage.len());
+    for (_, id, original) in expected.artwork.coverage.iter() {
+        let current = actual.artwork.coverage.get(actual.artwork.coverage.resolve(id).unwrap()).unwrap();
+        assert!(current.operations.is_empty() && original.operations.is_empty());
+        assert_eq!(raster_samples(&current.raster), raster_samples(&original.raster));
+    }
+}
+fn assert_saved_document(actual: &layer_core::Document, expected: &layer_core::Document) {
+    let mut captured = expected.clone();
+    let mut context = actual.output().context.clone();
+    for (handle, _) in std::sync::Arc::make_mut(&mut context.phases) {
+        let id = actual.artwork.effects.id(*handle).unwrap();
+        *handle = captured.artwork.effects.resolve(id).unwrap();
+    }
+    captured.artwork.outputs.get_mut(captured.artwork.default_output).unwrap().context = context;
+    assert_project_document(actual, &captured);
 }
 
 #[test]
@@ -381,17 +416,9 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
             app.stroke();
             app.draw_frame();
             if target == "paper" {
-                let id = unsafe { &*app.0 }
-                    .host
-                    .session
-                    .engine()
-                    .document()
-                    .layers
-                    .iter()
-                    .find(|layer| layer.id == layer_core::LayerId(2))
-                    .unwrap()
-                    .id
-                    .0;
+                let document = unsafe { &*app.0 }.host.session.engine().document();
+                let paper = *document.scene().order().iter().find(|handle| document.scene().effect(**handle).is_some_and(|effect| effect.program.id.as_ref() == "solid_color")).unwrap();
+                let id = layer_ui::occurrence_token(paper);
                 app.action(json!({"type":"select_layer","id":id}));
             } else if target != "paint" {
                 app.action(json!({"type":"effect","action":{"op":"insert","effect":target}}));
@@ -683,8 +710,8 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         file.rewind().unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
-        let saved = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-        assert_project_document(&saved.document, &original);
+        let saved = read_document(std::io::Cursor::new(bytes));
+        assert_saved_document(&saved, &original);
         let stale = ProjectJob::new(&app, true);
         file.rewind().unwrap();
         let pointer = stale.0 as usize;
@@ -854,7 +881,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
         let invalid = ProjectJob::new(&app, true);
         assert_eq!(invalid.create([0, 47]), -1);
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().width,
+            unsafe { &*app.0 }.host.session.engine().document().composition().size[0],
             2048
         );
         let new = ProjectJob::new(&app, true);
@@ -869,11 +896,11 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
             0
         );
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().width,
+            unsafe { &*app.0 }.host.session.engine().document().composition().size[0],
             63
         );
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().document().height,
+            unsafe { &*app.0 }.host.session.engine().document().composition().size[1],
             47
         );
         app.action(json!({"type":"set_color","rgba":[0.8,0.2,0.5,0.6]}));
@@ -943,7 +970,7 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
         app.action(json!({"type":"effect","action":{"op":"insert","effect":"unsharp_mask"}}));
         app.draw_frame();
         let before = unsafe { &*app.0 }.host.session.engine().document().clone();
-        let checkpoint = unsafe { &*app.0 }.host.session.engine().checkpoint();
+        let checkpoint = unsafe { &*app.0 }.host.session.engine().document().revision;
         let catalog = layer_core::bundled_effect_catalog();
         let mut definition = catalog.get("unsharp_mask").unwrap().clone();
         std::sync::Arc::make_mut(&mut definition.program).label = "Updated library".into();
@@ -969,7 +996,7 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
         assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 0);
         assert_eq!(unsafe { &*app.0 }.host.session.engine().document(), &before);
         assert_eq!(
-            unsafe { &*app.0 }.host.session.engine().checkpoint(),
+            unsafe { &*app.0 }.host.session.engine().document().revision,
             checkpoint
         );
     }
@@ -1206,7 +1233,6 @@ impl Drop for App {
 
 #[test]
 fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
-    use layer_core::{Project, ProjectLimits};
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
@@ -1252,27 +1278,26 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
         assert!(expected != paper, "Fixture must contain visible artwork");
         let source = unsafe { &*app.0 };
         let engine = source.host.session.engine();
-        let original = Project::snapshot(engine.document()).unwrap();
-        assert!(original.document.layers.iter().any(|layer| layer.source.is_some()),
+        let selected = layer_ui::occurrence_handle(id).unwrap();
+        let occurrence_id = engine.document().artwork.occurrences.id(selected).unwrap();
+        let mask_handle = engine.document().scene().mask(selected).unwrap().0.source;
+        let mask_id = engine.document().artwork.coverage.id(mask_handle).unwrap();
+        let original = engine.capture_artwork(0).unwrap();
+        assert!(original.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()),
             "The imported original stays retained alongside edited raster pixels");
-        let mask = engine
-            .document()
-            .layer(layer_core::LayerId(id))
-            .unwrap()
-            .mask
-            .as_ref()
-            .unwrap();
-        let coverage = raster_samples(&mask.raster).0;
-        assert!(
-            !coverage.is_empty(),
-            "Fixture must contain retained mask pixels"
-        );
+        let coverage = raster_samples(&original.artwork.coverage.get(mask_handle).unwrap().raster).0;
+        assert!(!coverage.is_empty(), "Fixture must contain retained mask pixels");
         assert!(coverage.values().all(|(descriptor, _)| *descriptor == layer_core::color::PixelDescriptor::COVERAGE8));
         let mut bytes = Vec::new();
-        original.write(&mut bytes).unwrap();
-        let Project { document } =
-            Project::read(bytes.as_slice(), ProjectLimits::default()).unwrap();
-        assert_project_document(&document, &original.document);
+        write_capture(&original, &mut bytes);
+        let document = read_document(std::io::Cursor::new(bytes));
+        assert_eq!(document.working, layer_core::authored::WorkingState::default());
+        let captured = layer_core::Document::from_artwork((*original.artwork).clone()).unwrap();
+        assert_project_document(&document, &captured);
+        let restored_occurrence = document.artwork.occurrences.resolve(occurrence_id).unwrap();
+        let restored_mask = document.artwork.coverage.resolve(mask_id).unwrap();
+        assert_eq!(document.scene().mask(restored_occurrence).unwrap().0.source, restored_mask);
+        assert_eq!(raster_samples(&document.artwork.coverage.get(restored_mask).unwrap().raster).0, coverage);
         let gpu = native_renderer();
         let restored = App::new(platform);
         let host = &mut unsafe { &mut *restored.0 }.host;
@@ -1280,7 +1305,8 @@ fn apple_raster_project_preserves_exact_pixels_in_a_fresh_gpu_session() {
             layer_ui::UiSession::new(layer_host::Renderer(Some(gpu.into())), document, [1200, 900], source.host.session.state().platform)
                 .unwrap();
         host.resize(1200, 900, 1.).unwrap();
-        restored.draw_frame();
+        restored.action(json!({"type":"select_layer","id":layer_ui::occurrence_token(restored_occurrence)}));
+        restored.draw_until_idle();
         assert!(
             restored.pixels() == expected,
             "Fresh GPU must restore every document pixel, platform {platform}"

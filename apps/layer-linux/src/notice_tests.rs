@@ -6,7 +6,7 @@ fn canvas_center(w: &Workspace) -> [f32; 2] {
     let (width, height) = {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
-        (doc.width as f32, doc.height as f32)
+        (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
     };
     let m = state(w).camera.document_to_surface();
     let scale = w.area.scale_factor() as f32;
@@ -120,8 +120,8 @@ fn native_notice_wand_offers_a_reference() {
     input.click([b.x() + b.width() * 0.5, b.y() + b.height() * 0.5]);
     until(
         || {
-            ui_session(&w).engine().document().reference_layers
-                == [layer_core::LayerId(1)].into()
+            ui_session(&w).engine().document().scene().references()
+                == [layer_core::authored::OccurrenceHandle::from_index(0)].into()
         },
         "the notice action marks the layer below as a reference",
     );

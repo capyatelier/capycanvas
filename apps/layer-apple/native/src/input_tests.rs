@@ -19,7 +19,7 @@ fn mac_manual_prediction_paints_ahead_of_pen_and_mouse_without_committing_the_ti
             let baseline = app.pixels();
             let transform = unsafe { &*app.0 }.host.session.state().camera.input_transform();
             let ahead = transform.map(layer_core::Point { x: 720., y: 450. });
-            let width = unsafe { &*app.0 }.host.session.engine().document().width as usize;
+            let width = unsafe { &*app.0 }.host.session.engine().document().composition().size[0] as usize;
             let offset = (ahead.y as usize * width + ahead.x as usize) * 4;
             let mut record = [500., 450., 0.8, 0., 0., 0., 0., 0., 1.];
             let handle = app.0;
@@ -94,7 +94,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
                 .camera
                 .input_transform();
             let ahead = transform.map(layer_core::Point { x: 720., y: 450. });
-            let width = unsafe { &*app.0 }.host.session.engine().document().width as usize;
+            let width = unsafe { &*app.0 }.host.session.engine().document().composition().size[0] as usize;
             let offset = (ahead.y as usize * width + ahead.x as usize) * 4;
             let send = |record: &[f64], predicted| {
                 assert_eq!(
@@ -180,8 +180,8 @@ fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_pla
             app.draw_until_idle();
             let baseline = app.pixels();
             let session = &unsafe { &*app.0 }.host.session;
-            let selection = session.engine().document().selection.clone();
-            let width = session.engine().document().width as usize;
+            let selection = session.engine().document().working.selection.clone();
+            let width = session.engine().document().composition().size[0] as usize;
             let transform = session.state().camera.input_transform();
             let a = transform.map(layer_core::Point { x: 500., y: 400. });
             let b = transform.map(layer_core::Point { x: 650., y: 550. });
@@ -245,7 +245,7 @@ fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_pla
             ] {
                 send(id, &points);
                 let session = &unsafe { &*app.0 }.host.session;
-                assert_eq!(session.engine().document().selection, selection);
+                assert_eq!(session.engine().document().working.selection, selection);
                 assert!(
                     session.engine().can_redo(),
                     "Empty/cancelled contacts preserve Redo"
@@ -270,7 +270,7 @@ fn lasso_pointer_contacts_preserve_history_and_paint_enclosed_pixels_on_both_pla
                         .session
                         .engine()
                         .document()
-                        .selection,
+                        .working.selection,
                     selection
                 );
                 let pixels = app.pixels();

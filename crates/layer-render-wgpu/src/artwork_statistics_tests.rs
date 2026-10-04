@@ -1,17 +1,17 @@
-use crate::artwork_sample_tests::{document_in, doubled_effect, gpu};
+use crate::artwork_sample_tests::{document_in, doubled_effect, gpu, insert_effect, paint_mut, paint_occurrence, add_group, refresh, set_effect};
 use crate::snapshot::CaptureControl;
 use layer_core::{ArtworkQuery, ArtworkSource, ArtworkStatisticsRequest, BlendSpace, Document, Selection, SelectionPixels};
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth, histogram::Histogram};
 use std::sync::Arc;
+use layer_core::authored::*;
 
 pub(super) fn generated(extent: [u32; 2], color: DocumentColor, pixels: &[[f32; 4]]) -> Document {
     let mut doc = document_in(extent, color.space, |_, _| [0.; 4]);
-    doc.color = color;
-    doc.layers[0].raster = Default::default();
-    doc.blend_space = BlendSpace::Linear;
-    let mut layer = doubled_effect(10);
-    let effect = Arc::make_mut(layer.effect.as_mut().unwrap());
-    let program = Arc::make_mut(&mut effect.program);
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color=color;
+    paint_mut(&mut doc).raster=Default::default();
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
+    let mut effect=doubled_effect();
+    let program=Arc::make_mut(&mut effect.program);
     program.kind = layer_core::EffectKind::Generator;
     program.alpha = layer_core::EffectAlpha::Filter;
     program.entry = "statistics_fixture".into();
@@ -20,7 +20,7 @@ pub(super) fn generated(extent: [u32; 2], color: DocumentColor, pixels: &[[f32; 
         format!("case {i}u:{{return bitcast<vec4<f32>>(vec4<u32>({}u,{}u,{}u,{}u));}}", bits[0], bits[1], bits[2], bits[3])
     }).collect();
     program.wgsl = format!("fn statistics_fixture(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let i=(u32(floor(p.x))+3u*u32(floor(p.y)))%{}u;switch i{{{cases}default:{{return vec4<f32>(0.);}}}}}}", pixels.len()).into();
-    doc.layers.insert(0, layer);
+    insert_effect(&mut doc,effect,0);
     doc
 }
 
@@ -31,8 +31,8 @@ fn statistics(doc: &Document, preview: bool, selection: bool) -> Result<Histogra
 }
 
 fn oracle(doc: &Document, pixels: &[[f32; 4]], preview: bool, admitted: impl Fn(u32, u32) -> bool) -> Histogram {
-    let mut result = Histogram::new(doc.color);
-    let extent = [doc.width, doc.height];
+    let mut result = Histogram::new(doc.composition().color);
+    let extent = [doc.composition().size[0], doc.composition().size[1]];
     let counts = if preview { extent.map(|v| v.min(256)) } else { extent };
     for iy in 0..counts[1] {
         for ix in 0..counts[0] {
@@ -92,15 +92,15 @@ fn coverage_selection(extent: [u32; 2]) -> Selection {
 fn statistics_selection_counts_partial_coverage_once_in_exact_and_preview() {
     let pixels = [[0.25, 0.125, 0.0625, 0.25], [0.5, 0.25, 0.125, 0.5], [0.; 4], [1.; 4]];
     let mut doc = generated([513, 273], DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &pixels);
-    doc.selection = Some(coverage_selection([doc.width, doc.height]));
+    doc.working.selection = Some(coverage_selection([doc.composition().size[0], doc.composition().size[1]]));
     for preview in [false, true] {
         same(statistics(&doc, preview, true).unwrap(), oracle(&doc, &pixels, preview, |x, y| (x + 3 * y) % 5 != 0), preview);
     }
-    doc.selection.as_mut().unwrap().inverted = true;
+    doc.working.selection.as_mut().unwrap().inverted = true;
     for preview in [false, true] {
         same(statistics(&doc, preview, true).unwrap(), oracle(&doc, &pixels, preview, |x, y| (x + 3 * y) % 5 != 4), (preview, "inverted"));
     }
-    doc.selection = None;
+    doc.working.selection = None;
     assert!(statistics(&doc, false, true).is_err());
 }
 
@@ -109,7 +109,7 @@ fn statistics_frozen_source_and_cancel_do_not_publish_changed_pixels() {
     let mut doc = generated([17, 13], DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &[[0.25, 0.5, 1., 1.]]);
     let request = ArtworkStatisticsRequest { waveform: false, query: ArtworkQuery::new(&doc, ArtworkSource::Visible), preview: false, selection: false };
     let expected = oracle(&doc, &[[0.25, 0.5, 1., 1.]], false, |_, _| true);
-    doc.layers[0] = doubled_effect(10);
+    let owner=doc.scene().children(None)[0];set_effect(&mut doc,owner,doubled_effect());
     assert!(!request.query.matches_artwork(&doc));
     assert_eq!(pollster::block_on(gpu().artwork_statistics(request.clone(), CaptureControl::default())).unwrap(), expected);
     let control = CaptureControl::default();
@@ -134,10 +134,10 @@ fn statistics_reads_real_source_codecs_at_every_profile_and_depth() {
     for space in RgbSpace::ALL {
         for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
             let mut doc = document_in([pixels.len() as u32, 1], space, |_, _| [0.; 4]);
-            doc.color = DocumentColor { space, depth };
-            doc.blend_space = BlendSpace::Linear;
-            doc.layers[0].raster = Default::default();
-            doc.layers[0].source = Some(crate::test_support::depth_source([pixels.len() as u32, 1], depth, space, 8 * 1024 * 1024, |x, _| pixels[x as usize]));
+            doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().color=DocumentColor {space,depth};
+            doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
+            paint_mut(&mut doc).raster=Default::default();
+            paint_mut(&mut doc).original=Some(crate::test_support::depth_source([pixels.len() as u32, 1], depth, space, 8 * 1024 * 1024, |x, _| pixels[x as usize]));
             same(statistics(&doc, false, false).unwrap(), oracle(&doc, &pixels, false, |_, _| true), (space, depth));
         }
     }
@@ -199,12 +199,13 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
     let pixels = [[0.;4],[-0.25,0.25,0.125,1.],[-0.25,1.,0.125,1.],[0.25,0.5,0.125,0.5],[0.,0.125,0.25,0.5],[0.1,0.2,0.3,1.],[0.5;4],[-0.5,-0.25,-0.125,0.5]];
     let extent = [8,8];
     let mut doc = generated(extent, DocumentColor { depth:SampleDepth::F32, ..Default::default() }, &pixels);
-    let mut mask=layer_core::LayerMask::reveal_all(layer_core::LayerId(65),layer_core::Point::default());
-    mask.default_coverage=0.5;doc.layers[0].mask=Some(mask);
-    let mut r = crate::WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let owner=doc.scene().children(None)[0];
+    let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point::default());
+    mask.source.default_coverage=0.5;doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(owner).unwrap().mask=Some(mask.use_);refresh(&mut doc);
+    let mut r = crate::WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let view = crate::test_support::view(extent);
-    r.submit(layer_render::FramePacket { blend_space:doc.blend_space, ..crate::test_support::packet(&doc.layers, extent) }).unwrap();
-    while r.has_pending_work() {r.wait_idle().unwrap();r.submit(layer_render::FramePacket { blend_space:doc.blend_space, composite_all:false, ..crate::test_support::packet(&doc.layers, extent) }).unwrap();}
+    r.submit(layer_render::FramePacket { blend_space:doc.composition().blend, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();
+    while r.has_pending_work() {r.wait_idle().unwrap();r.submit(layer_render::FramePacket { blend_space:doc.composition().blend, composite_all:false, ..crate::test_support::packet(doc.scene(), extent) }).unwrap();}
     let mut presenter = crate::test_support::float_presenter(&r);
     let (texture,target) = crate::create_target(&r.device,extent,wgpu::TextureFormat::Rgba32Float,"clipping regression");
     presenter.present(&r,&target,view,[0.;4]).unwrap();
@@ -236,28 +237,28 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
         assert_eq!(r.readback_srgb_rgba8().unwrap(),artwork);
         assert_eq!(pollster::block_on(r.snapshot_gpu().artwork_statistics(request.clone(),CaptureControl::default())).unwrap(),before);
     }
-    doc.layers[0].mask.as_mut().unwrap().show_area=true;
-    let masked_request=ArtworkStatisticsRequest { waveform: false,query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
+    doc.working.inspect_mask=Some(owner);
+    let masked_request=ArtworkStatisticsRequest {waveform:false,query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
     let mut attached=crate::AttachedRenderer(Some(Box::new(r)));
     attached.set_clipping_preview(false,false);
-    attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+    attached.submit(layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let r=attached.0.as_mut().unwrap();
     presenter.present(r,&target,view,[0.;4]).unwrap();
     let tinted=crate::test_support::float_pixels(r,&texture);
     assert!(tinted.iter().zip(&baseline).any(|(a,b)|a.iter().zip(b).any(|(a,b)|(a-b).abs()>0.01)));
     for ((shadows,highlights),expected) in [(true,false),(false,true),(true,true)].into_iter().zip(references) {
         attached.set_clipping_preview(shadows,highlights);
-        attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+        attached.submit(layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
         let r=attached.0.as_mut().unwrap();
         presenter.present(r,&target,view,[0.;4]).unwrap();
         let actual=crate::test_support::float_pixels(r,&texture);
         assert!(actual.iter().zip(expected).all(|(a,b)|a.iter().zip(b).all(|(a,b)|(a-b).abs()<2e-5)),"mask tint changed clipping {shadows}/{highlights}");
         assert_eq!(r.readback_srgb_rgba8().unwrap(),artwork);
         assert_eq!(pollster::block_on(r.snapshot_gpu().artwork_statistics(masked_request.clone(),CaptureControl::default())).unwrap(),before);
-        assert!(doc.layers[0].mask.as_ref().unwrap().show_area);
+        assert_eq!(doc.working.inspect_mask,Some(owner));
     }
     attached.set_clipping_preview(false,false);
-    attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
+    attached.submit(layer_render::FramePacket {blend_space:doc.composition().blend,inspect_mask:doc.working.inspect_mask,..crate::test_support::packet(doc.scene(),extent)}).unwrap();
     let r=attached.0.as_mut().unwrap();
     presenter.present(r,&target,view,[0.;4]).unwrap();
     assert_eq!(crate::test_support::float_pixels(r,&texture),tinted);
@@ -265,14 +266,14 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
 }
 
 fn dense_preview_oracle(doc: &Document) -> Histogram {
-    let mut snapshot = gpu().capture(layer_core::Project {document:doc.clone()},0.,CaptureControl::default()).unwrap();
-    let pixels = snapshot.read_region([0,0,doc.width,doc.height]).unwrap();
-    let mut result = Histogram::new(doc.color);
-    let grid = [doc.width.min(256),doc.height.min(256)];
+    let mut snapshot = gpu().capture_scene(doc.snapshot(),SceneScope::All,CaptureControl::default()).unwrap();
+    let pixels = snapshot.read_region([0,0,doc.composition().size[0],doc.composition().size[1]]).unwrap();
+    let mut result = Histogram::new(doc.composition().color);
+    let grid = [doc.composition().size[0].min(256),doc.composition().size[1].min(256)];
     for row in 0..grid[1] {for column in 0..grid[0] {
-        let x = ((2*u64::from(column)+1)*u64::from(doc.width)/(2*u64::from(grid[0]))) as usize;
-        let y = ((2*u64::from(row)+1)*u64::from(doc.height)/(2*u64::from(grid[1]))) as usize;
-        result.add(&[pixels[y*doc.width as usize+x]]).unwrap();
+        let x = ((2*u64::from(column)+1)*u64::from(doc.composition().size[0])/(2*u64::from(grid[0]))) as usize;
+        let y = ((2*u64::from(row)+1)*u64::from(doc.composition().size[1])/(2*u64::from(grid[1]))) as usize;
+        result.add(&[pixels[y*doc.composition().size[0] as usize+x]]).unwrap();
     }}
     result
 }
@@ -281,14 +282,16 @@ fn dense_preview_oracle(doc: &Document) -> Histogram {
 fn sparse_statistics_transformed_source_matches_original_dense_pixels_across_windows() {
     let extent = [1033,517];
     let mut doc = document_in(extent,RgbSpace::DisplayP3,|_,_|[0.;4]);
-    doc.blend_space = BlendSpace::Linear;
-    doc.layers[0].raster = Default::default();
+    doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().blend=BlendSpace::Linear;
+    paint_mut(&mut doc).raster=Default::default();
     let source_extent = [797,401];
-    doc.layers[0].source = Some(crate::test_support::depth_source(source_extent,SampleDepth::F32,doc.color.space,32*1024*1024,|x,y| {
+    paint_mut(&mut doc).original=Some(crate::test_support::depth_source(source_extent,SampleDepth::F32,doc.composition().color.space,32*1024*1024,|x,y| {
         let alpha = [0.,0.125,0.5,1.][((x/7+y/11)%4) as usize];
         [0.1+x as f32/397.,0.2+y as f32/199.,0.37,alpha]
     }));
-    doc.layers[0].properties.placement = layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent(source_extent),
+    paint_mut(&mut doc).domain=source_extent;
+    let owner=paint_occurrence(&doc);
+    doc.artwork.occurrences.get_mut(owner).unwrap().placement= layer_core::LayerPlacement::from_projective(layer_core::Projective::rect_to_quad(layer_core::Rect::from_extent(source_extent),
         [[7.,13.],[1021.,1.],[1000.,499.],[-12.,507.]].map(|[x,y]|layer_core::Point{x,y})).unwrap());
     same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),"transformed source");
 }
@@ -299,22 +302,15 @@ fn sparse_statistics_nested_clipped_spatial_and_document_image_match_dense_pixel
         let extent = [1033,517];
         let pixels = [[0.2,0.1,0.4,0.5],[0.75,0.25,0.5,1.],[0.;4]];
         let mut doc = generated(extent,DocumentColor {depth:SampleDepth::F32,..Default::default()},&pixels);
-        let mut base = doc.layers.remove(0);
-        doc.active_layer = base.id;
-        let mut group = layer_core::Layer::paint(layer_core::LayerId(50),"Isolated");
-        group.kind = layer_core::LayerKind::Group;
-        group.opacity = 0.79;
-        let mut spatial = crate::tests::image_windows::effect(51,false,global);
-        spatial.opacity = 0.63;
-        spatial.properties.clipped = true;
-        let mut mask = layer_core::LayerMask::reveal_all(layer_core::LayerId(52),layer_core::Point{x:7.,y:-9.});
-        mask.default_coverage = 0.;
-        mask.initial = Some(Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap());
-        spatial.mask = Some(mask);
-        spatial.properties.parent = Some(group.id);
-        base.properties.parent = Some(group.id);
-        let outside = crate::tests::image_windows::effect(53,true,false);
-        doc.layers = vec![group,spatial,base,outside];
+        let base=doc.scene().children(None)[0];
+        let spatial=insert_effect(&mut doc,crate::tests::image_windows::program(false,global),0);
+        let occurrence=doc.artwork.occurrences.get_mut(spatial).unwrap();occurrence.opacity=0.63;occurrence.clipped=true;
+        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point{x:7.,y:-9.});
+        mask.source.default_coverage=0.;mask.source.initial=Some(Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap());
+        doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(spatial).unwrap().mask=Some(mask.use_);
+        let group=add_group(&mut doc,vec![spatial,base],0);doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.79;
+        let outside=insert_effect(&mut doc,crate::tests::image_windows::program(true,false),1);
+        let root=doc.composition().result;doc.artwork.stacks.get_mut(root).unwrap().entries=vec![group,outside];refresh(&mut doc);
         same(statistics(&doc,true,false).unwrap(),dense_preview_oracle(&doc),("nested clipped image",global));
     }
 }
@@ -331,19 +327,19 @@ fn curve_linear(value:f64, space:RgbSpace, logarithmic:bool) -> f64 {
 }
 fn curve_histogram_oracle(doc:&Document,pixels:&[[f32;4]],logarithmic:bool,channels:bool) -> Histogram {
     use layer_core::color::histogram::HistogramDomain;
-    let mut result = Histogram::new(doc.color);
+    let mut result = Histogram::new(doc.composition().color);
     result.domain = if logarithmic {HistogramDomain::CurveLog{stops:4.}}else{HistogramDomain::Encoded};
     for pixel in pixels {
         if pixel[3]==0. {result.transparent+=1;continue;}
         result.pixels+=1;
         let mut rgb = [0,1,2].map(|c|f64::from(pixel[c])/f64::from(pixel[3]));
         if channels {for (value,factor) in rgb.iter_mut().zip([0.5,1.,0.75]) {
-            *value=curve_linear(curve_coordinate(*value,doc.color.space,logarithmic)*factor,doc.color.space,logarithmic);
+            *value=curve_linear(curve_coordinate(*value,doc.composition().color.space,logarithmic)*factor,doc.composition().color.space,logarithmic);
         }}
-        let weights = doc.color.space.to_xyz()[1];
+        let weights = doc.composition().color.space.to_xyz()[1];
         let y = rgb[1]+weights[0]*(rgb[0]-rgb[1])+weights[2]*(rgb[2]-rgb[1]);
         for (channel,value) in result.channels.iter_mut().zip([rgb[0],rgb[1],rgb[2],y]) {
-            let coordinate = curve_coordinate(value,doc.color.space,logarithmic);
+            let coordinate = curve_coordinate(value,doc.composition().color.space,logarithmic);
             let index = (coordinate.clamp(0.,1.)*256.).floor().min(255.) as usize;
             channel.bins[index]+=1;
             channel.below+=u64::from(value<0.);channel.above+=u64::from(value>1.);
@@ -355,13 +351,11 @@ fn curve_histogram_oracle(doc:&Document,pixels:&[[f32;4]],logarithmic:bool,chann
 
 #[test]
 fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_opacity() {
-    use layer_core::{EffectInstance,EffectValue,LayerId,LayerMask,Point};
+    use layer_core::{EffectInstance,EffectValue,Point};
     for space in RgbSpace::ALL {for logarithmic in [false,true] {for channels in [false,true] {
         let pixels = if logarithmic {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[2.3,4.7,8.9,1.],[0.;4]]}
             else {[[0.05,0.2,0.75,1.],[0.025,0.05,0.1,0.5],[0.17,0.39,0.81,1.],[0.;4]]};
         let mut doc = generated([pixels.len() as u32,1],DocumentColor {space,depth:SampleDepth::F32},&pixels);
-        let mut adjustment = layer_core::Layer::paint(LayerId(60),"Curves");
-        adjustment.kind = layer_core::LayerKind::Effect;
         let mut effect = EffectInstance::new(crate::tests::fixture("curves").program());
         effect.set("domain",EffectValue::Choice(u32::from(logarithmic))).unwrap();
         effect.set("curve_0",EffectValue::Curve(vec![[0.,0.],[1.,0.25]].into())).unwrap();
@@ -369,11 +363,10 @@ fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_o
             effect.set("curve_1",EffectValue::Curve(vec![[0.,0.],[1.,0.5]].into())).unwrap();
             effect.set("curve_3",EffectValue::Curve(vec![[0.,0.],[1.,0.75]].into())).unwrap();
         }
-        adjustment.effect = Some(Arc::new(effect));adjustment.opacity=0.;
-        let mut mask = LayerMask::reveal_all(LayerId(61),Point::default());mask.default_coverage=0.;
-        adjustment.mask=Some(mask);
-        doc.layers.insert(0,adjustment);
-        for source in [ArtworkSource::EffectInput(LayerId(60)),ArtworkSource::EffectChannels(LayerId(60))] {
+        let adjustment=insert_effect(&mut doc,effect,0);doc.artwork.occurrences.get_mut(adjustment).unwrap().opacity=0.;
+        let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,doc.composition().size,Point::default());mask.source.default_coverage=0.;
+        doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(adjustment).unwrap().mask=Some(mask.use_);
+        for source in [ArtworkSource::EffectInput(adjustment),ArtworkSource::EffectChannels(adjustment)] {
             let channel_source = matches!(source,ArtworkSource::EffectChannels(_));
             let expected = curve_histogram_oracle(&doc,&pixels,logarithmic,channels && channel_source);
             let actual = pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest { waveform: false,query:ArtworkQuery::new(&doc,source.clone()),preview:false,selection:false},CaptureControl::default())).unwrap();
@@ -403,11 +396,11 @@ mod waveform {
     }
 
     fn reference(doc: &Document, preview: bool, pixel: impl Fn(u32, u32) -> [f32; 4], admitted: impl Fn(u32, u32) -> bool) -> (Histogram, Vec<u32>) {
-        let mut histogram = Histogram::new(doc.color);
+        let mut histogram = Histogram::new(doc.composition().color);
         let mut counts = vec![0u32; 4 * 256 * 256];
-        let extent = [doc.width, doc.height];
+        let extent = doc.composition().size;
         let grid = if preview { extent.map(|n| n.min(256)) } else { extent };
-        let row = doc.color.space.to_xyz()[1];
+        let row = doc.composition().color.space.to_xyz()[1];
         let weights = [row[0], 1. - row[0] - row[2], row[2]];
         for iy in 0..grid[1] {
             for ix in 0..grid[0] {
@@ -423,11 +416,11 @@ mod waveform {
                 let luminance: f64 = if rgb[0] == rgb[1] && rgb[1] == rgb[2] { rgb[0] }
                     else { rgb.into_iter().zip(weights).map(|(value, weight)| value * weight).sum() };
                 for (channel, value) in rgb.into_iter().chain([luminance]).enumerate() {
-                    let bin = if doc.color.depth.is_float() {
-                        let (low, span) = if doc.color.depth == SampleDepth::F32 { (-149., 277.) } else { (-12., 28.) };
+                    let bin = if doc.composition().color.depth.is_float() {
+                        let (low, span) = if doc.composition().color.depth == SampleDepth::F32 { (-149., 277.) } else { (-12., 28.) };
                         if value <= 0. { 0 } else { 1 + (((value.log2() - low) / span).clamp(0., 1.) * 254.).floor() as usize }
                     } else {
-                        let coordinate = if channel < 3 { encoded(value, doc.color.space) } else { value };
+                        let coordinate = if channel < 3 { encoded(value, doc.composition().color.space) } else { value };
                         (coordinate.clamp(0., 1.) * 256.).floor().min(255.) as usize
                     };
                     let lane = &mut histogram.channels[channel];
@@ -459,7 +452,8 @@ mod waveform {
 
     fn row_document(extent: [u32; 2], color: DocumentColor, row: &[[f32; 4]]) -> Document {
         let mut doc = generated(extent, color, row);
-        let program = Arc::make_mut(&mut Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).program);
+        let handle=doc.scene().order()[0];let definition=doc.scene().effect_application(handle).unwrap().definition;
+        let program=Arc::make_mut(&mut doc.artwork.definitions.get_mut(definition).unwrap().program);
         program.wgsl = program.wgsl.sources().unwrap()[0].replace("+3u*u32(floor(p.y))", "").into();
         doc
     }
@@ -492,17 +486,17 @@ mod waveform {
             [1e-8, 2e-8, 4e-8, 8e-8], [0.25, 0.125, 0.0625, 0.25], [0.0625, 0.125, 0.25, 0.5]];
         for space in RgbSpace::ALL {
             let mut doc = generated([517, 259], DocumentColor { space, depth: SampleDepth::F32 }, &pixels);
-            doc.selection = Some(coverage_selection([doc.width, doc.height]));
+            doc.working.selection = Some(coverage_selection(doc.composition().size));
             for preview in [false, true] {
                 for selected in [false, true] {
                     let actual = inspect(&doc, preview, selected, true).unwrap();
                     matches(&actual, reference(&doc, preview, |x, y| pixels[((x + 3 * y) as usize) % pixels.len()], |x, y| !selected || (x + 3 * y) % 5 != 0), (space, preview, selected));
                     if !selected { assert_eq!(actual.pixels + actual.transparent, if preview { 256 * 256 } else { 517 * 259 }); }
                 }
-                doc.selection.as_mut().unwrap().inverted = true;
+                doc.working.selection.as_mut().unwrap().inverted = true;
                 let actual = inspect(&doc, preview, true, true).unwrap();
                 matches(&actual, reference(&doc, preview, |x, y| pixels[((x + 3 * y) as usize) % pixels.len()], |x, y| (x + 3 * y) % 5 != 4), (space, preview, "inverted"));
-                doc.selection.as_mut().unwrap().inverted = false;
+                doc.working.selection.as_mut().unwrap().inverted = false;
             }
         }
     }

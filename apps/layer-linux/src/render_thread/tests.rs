@@ -1,3 +1,30 @@
+#[test]
+fn captured_context_publication_shares_source_roots_and_preserves_authored_output() {
+    let document = layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let mut capture = layer_host::tasks::capture_document(&document);
+    let value = Arc::new(std::sync::OnceLock::new());
+    let request = ContextRequest {value:value.clone()};
+    let context = EvaluationContext {elapsed:17.,phases:Vec::new().into()};
+    request.value.set(Ok(context.clone())).unwrap();
+    drop(request);
+    ContextCapture(value).install(&mut capture).unwrap();
+    assert_eq!(capture.output().context,context);
+    assert_eq!(document.output().context.elapsed,0.);
+    assert_eq!(capture.artwork.paint,document.artwork.paint);
+    assert_eq!(capture.checkpoint.owner,document.owner);
+}
+
+#[test]
+fn retired_context_capture_resolves_failure_without_changing_sources() {
+    let document = layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    let mut capture = layer_host::tasks::capture_document(&document);
+    let original = capture.artwork.clone();
+    let value = Arc::new(std::sync::OnceLock::new());
+    drop(ContextRequest {value:value.clone()});
+    assert!(ContextCapture(value).install(&mut capture).is_err());
+    assert!(Arc::ptr_eq(&capture.artwork,&original));
+}
+
 use super::*;
 use gtk::prelude::*;
 

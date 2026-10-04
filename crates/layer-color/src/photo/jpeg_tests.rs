@@ -83,15 +83,24 @@ fn profiled_rgb_gray_jpeg_rows_preserve_interpretation_and_archive_decoded_sampl
                     max <= if quality == 100 { 3 } else { 8 },
                     "{channels:?} {space:?} q={quality}, max={max}"
                 );
-                let mut project = layer_core::Project {
-                    document: layer_core::Document::new("JPEG master", 257, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
-                };
-                project.document.layers[0].source = Some(std::sync::Arc::new(decoded));
-                let mut archive = Vec::new();
-                project.write(&mut archive).unwrap();
-                let reopened =
-                    layer_core::Project::read(Cursor::new(archive), Default::default()).unwrap();
-                assert_eq!(reopened, project);
+                use layer_core::{authored::{PortableId, SourceTarget}, package::{codec::{PreparedPackage, OpenOutcome}, ImmutableBacking}};
+                use std::sync::{Arc, atomic::AtomicBool};
+                let mut document = layer_core::Document::new(PortableId::random(), 257, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+                let SourceTarget::Paint(handle)=document.working.target.unwrap() else {unreachable!()};
+                document.artwork.paint.get_mut(handle).unwrap().original=Some(Arc::new(decoded));
+                let cancelled=AtomicBool::new(false);
+                let capture=layer_core::Editor::new(document.clone()).capture(0,Default::default()).unwrap();
+                let prepared=PreparedPackage::prepare(&capture,None,&cancelled).unwrap();
+                let mut archive=Vec::new(); prepared.write(&mut archive,&cancelled).unwrap();
+                let chunks=archive.chunks(layer_core::package::MAX_RANGE_BYTES).map(Arc::<[u8]>::from).collect();
+                let backing=ImmutableBacking::new(Arc::new(layer_core::package::transport::ChunkedBytes::new(chunks).unwrap())).unwrap();
+                let OpenOutcome::Candidate {artwork,..}=layer_core::package::codec::open(backing,Default::default(),&cancelled).unwrap() else {panic!("JPEG master must reopen as editable")};
+                let reopened=layer_core::Document::from_artwork(artwork).unwrap();
+                let source=reopened.artwork.paint.iter().find_map(|(_,_,paint)|paint.original.as_ref()).unwrap();
+                assert_eq!(source,document.artwork.paint.get(handle).unwrap().original.as_ref().unwrap());
+                let reopened_capture=layer_core::Editor::new(reopened).capture(0,Default::default()).unwrap();
+                let rewritten=PreparedPackage::prepare(&reopened_capture,None,&cancelled).unwrap();
+                assert_eq!(rewritten.manifest(),prepared.manifest());
             }
         }
     }

@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{ArtworkQuery, ArtworkSource, ArtworkStatisticsRequest, color::histogram::Histogram};
+use layer_core::{ArtworkQuery, ArtworkSource, ArtworkStatisticsRequest, color::histogram::Histogram, authored::SceneView};
 use std::sync::Arc;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -23,6 +23,7 @@ pub struct HistogramView {
     pub highlights: bool,
     pub data: Option<Arc<Histogram>>,
     pub captured_time: Option<f32>,
+    #[serde(skip)]
     pub captured_source: Option<ArtworkSource>,
     pub status: Arc<str>,
     #[serde(skip)]
@@ -169,7 +170,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn histogram_visibility_changed(&self)->bool {
         if !Panel::Histogram.available_on(self.state.platform) {return false;}
-        let tonal=self.engine.document().layer(self.engine.document().active_layer).and_then(|layer|layer.effect.as_ref())
+        let document=self.engine.document();
+        let tonal=document.working.occurrence.and_then(|handle|document.scene().effect(handle))
             .is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels"));
         let waveform=self.panel_is_presented(Panel::Waveform);
         self.histogram.demand!=(self.panel_is_presented(Panel::Histogram) || waveform) || self.histogram.waveform!=waveform
@@ -200,7 +202,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn histogram_copy(&mut self) {
         let l = &self.state.localization;
-        let float = self.engine.document().color.depth.is_float();
+        let float = self.engine.document().composition().color.depth.is_float();
         self.state.histogram.refresh_copy(&mut self.histogram_captions[0],l,float);
         self.state.tonal_histogram.refresh_copy(&mut self.histogram_captions[1],l,float);
         let waveform=&mut self.state.waveform;let histogram=&self.state.histogram;
@@ -213,10 +215,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn poll_histogram(&mut self, now:u64) -> u32 {
         let properties = &self.state.layer_properties;
-        let tonal = properties.layer.and_then(|id| self.engine.document().layer(LayerId(id))).filter(|layer|
-            layer.effect.as_ref().is_some_and(|effect| matches!(effect.program.id.as_ref(),"curves"|"levels")));
+        let tonal = properties.layer.and_then(|token|occurrence_handle(token).ok()).filter(|handle|
+            self.engine.document().scene().effect(*handle).is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels")));
         let channel = match properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
-        let source = tonal.map(|layer| if channel==0 {ArtworkSource::EffectChannels(layer.id)} else {ArtworkSource::EffectInput(layer.id)});
+        let source = tonal.map(|handle| if channel==0 {ArtworkSource::EffectChannels(handle)} else {ArtworkSource::EffectInput(handle)});
         let demand = Panel::Histogram.available_on(self.state.platform) && source.is_some() && self.panel_is_presented(Panel::Properties);
         let mut task=std::mem::take(&mut self.tonal_histogram);
         let mut view=std::mem::take(&mut self.state.tonal_histogram);
@@ -229,7 +231,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.tonal_histogram=task;self.state.tonal_histogram=view;
         let mut task=std::mem::take(&mut self.histogram);
         let mut view=std::mem::take(&mut self.state.histogram);
-        let source = match view.source {1=>ArtworkSource::LayerContent(self.engine.document().active_layer),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
+        let source = match view.source {1=>ArtworkSource::Source(self.engine.document().working.occurrence.and_then(|handle|self.engine.document().scene().source_target(handle)).unwrap_or_default()),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
         let waveform=Panel::Histogram.available_on(self.state.platform) && self.panel_is_presented(Panel::Waveform);
         let demand=Panel::Histogram.available_on(self.state.platform) && (self.panel_is_presented(Panel::Histogram) || waveform);
         let admitted=!self.tonal_histogram.active && (!self.tonal_histogram.demand || self.tonal_histogram.settled);
@@ -251,28 +253,28 @@ impl<R: CanvasRenderer> UiSession<R> {
         task.demand = true;
         let document = self.engine.document();
         let matches = |query:&ArtworkQuery, document:&Document| query.source==source && query.matches_source(document)
-            && (!selection || query.document.selection==document.selection);
+            && (!selection || query.selection==document.working.selection);
         let identity_changed = task.waveform!=waveform || task.epoch != self.state.document_file.epoch
             || task.observed.as_ref().is_some_and(|query| query.source != source || !query.matches_source_identity(document)
-                || (selection && query.document.selection != document.selection)
+                || (selection && query.selection != document.working.selection)
                 || match source {
                     ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => {
-                        let domain = |doc:&Document| doc.layer(id).and_then(|layer|layer.effect.as_ref()).map(|effect|
+                        let domain = |scene:SceneView<'_>| scene.effect(id).map(|effect|
                             (effect.value("domain").cloned(),effect.value("hdr_stops").cloned()));
-                        domain(&query.document)!=domain(document)
+                        domain(query.snapshot.view())!=domain(document.scene())
                     },
                     _ => false,
                 });
         let animated = document.has_animated_effects();
         let changed = task.observed.as_ref().is_none_or(|query| !matches(query,self.engine.document())
-            || (animated && query.time != self.engine.animation_time()));
+            || (animated && query.snapshot.context.elapsed != self.engine.animation_time()));
         if identity_changed {
             if task.active {self.engine.backend_mut().cancel_snapshot();}
             *task = Statistics::default();task.demand = true;task.waveform=waveform;view.clear();
         }
         let mut updates = 0;
         if changed || identity_changed {
-            let mut observed = ArtworkQuery::new(self.engine.document(), source.clone());observed.time = self.engine.animation_time();
+            let mut observed = ArtworkQuery::new(self.engine.document(), source.clone());Arc::make_mut(&mut observed.snapshot).context.elapsed = self.engine.animation_time();
             task.observed = Some(observed);
             task.epoch = self.state.document_file.epoch;task.changed = now;
             task.preview_ready = false;task.settled = false;
@@ -284,12 +286,12 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if task.active && let Some(result) = self.engine.backend_mut().take_snapshot() {
             task.active = false;
-            let current = task.query.as_ref().is_some_and(|query| matches(query,self.engine.document()) && (!animated || query.time == self.engine.animation_time()));
+            let current = task.query.as_ref().is_some_and(|query| matches(query,self.engine.document()) && (!animated || query.snapshot.context.elapsed == self.engine.animation_time()));
             match result {
                 Ok(layer_render::SnapshotResult::ArtworkStatistics(data)) => {
                     let empty = selection && data.pixels+data.transparent==0 && !task.preview;
                     view.data = (!empty).then(|| Arc::new(data));
-                    view.captured_time = task.query.as_ref().map(|query|query.time);
+                    view.captured_time = task.query.as_ref().map(|query|query.snapshot.context.elapsed);
                     view.captured_source = task.query.as_ref().map(|query|query.source.clone());
                     task.settled = current && !task.preview;
                     task.preview_ready = current;
@@ -306,10 +308,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if admitted && !task.active && !task.settled && now.saturating_sub(task.started) >= 100_000_000
             && (!task.preview_ready || now.saturating_sub(task.changed) >= 200_000_000)
             && !self.engine.has_pending_document_edits() {
-            let mut query = task.observed.as_ref().unwrap().clone();query.time = self.engine.animation_time();
+            let mut query = task.observed.as_ref().unwrap().clone();Arc::make_mut(&mut query.snapshot).context.elapsed = self.engine.animation_time();
             task.preview = !task.preview_ready;
             let request = ArtworkStatisticsRequest { waveform, query: query.clone(), preview: task.preview, selection };
-            if query.validate().is_err() || (request.selection && query.document.selection.is_none()) {
+            if query.validate().is_err() || (request.selection && query.selection.is_none()) {
                 task.settled = true;view.set_status(MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE,self.localization());
                 updates = regions::HISTOGRAM;
             } else { match self.engine.backend_mut().request_snapshot(layer_render::SnapshotRequest::ArtworkStatistics(request)) {

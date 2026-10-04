@@ -113,6 +113,21 @@ this is interoperability coverage, not print-proof equivalence or certification
 of arbitrary ICC profiles. Built-in RGB precision and integer round-trip tests
 retain their stricter tolerances.
 
+## Editable artwork color
+
+Color preparation borrows the authored `Document` and builds a candidate with
+replacements in its paint and coverage stores. Each source retains its own local
+pixel domain. `Document::color_edit` checks source identity, completed backing,
+raster coverage and retained originals before publishing the composition color
+and all converted backing in one edit. Imported originals and tagged effect
+colors keep their own defining color spaces.
+
+`validate_document_color` prepares every distinct retained source's transform
+into the composition's working space before editor adoption. Unsupported source
+profiles and HDR sources in SDR documents fail admission without changing the
+live artwork. Photo opening and flattened conversion create typed authored
+records directly; a flattened copy contains one paint occurrence.
+
 ## Validation
 
 ```bash

@@ -1,4 +1,4 @@
-//! Portable, renderer-agnostic document model for Layer.
+//! Portable, renderer-agnostic artwork and editor state.
 //!
 //! This crate contains no window, graphics API, inference runtime, async
 //! executor, or window types. Immutable raster revisions back committed edits,
@@ -11,6 +11,7 @@ pub use atomic_file::{atomic_write, atomic_write_checked};
 mod cancellable;
 pub use cancellable::Cancellable;
 
+use std::collections::BTreeSet;
 pub mod color;
 pub mod authored;
 pub mod package;
@@ -65,20 +66,20 @@ pub use canvas_geometry::{CanvasGeometry, CanvasGeometryError, CanvasGeometryPla
 mod content_bounds;
 pub use content_bounds::{ContentBoundsCache, ContentBoundsRequest, ContentScope};
 mod artwork_query;
-pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkQuery, ArtworkStatisticsRequest, ArtworkSource, EffectInputKey, white_balance_neutral};
+pub use artwork_query::{ARTWORK_SAMPLE_WIDTHS, ArtworkSample, ArtworkSampleRequest, ArtworkQuery, ArtworkStatisticsRequest, ArtworkSource, SnapshotSource, EffectInputKey, white_balance_neutral};
+#[cfg(test)]
+mod operation_test_support;
 #[cfg(test)]
 mod artwork_query_tests;
 mod merge;
-pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal, bake_layers};
+pub use merge::{MergeDown, MergeKind, MergePlan, MergeRefusal};
 mod retouch_layers;
-pub use retouch_layers::{RetouchLayerPlan, RetouchLayerRefusal, SEPARATION_IDS, SeparationFilters};
-mod project_storage;
-pub use project_storage::{SelectionIndex as ProjectSelections, ResourceIndex as ProjectResources};
+pub use retouch_layers::{RetouchLayerPlan, RetouchLayerRefusal, SeparationFilters};
 mod history_budget;
 mod color_edit;
 mod color_history;
 pub use color_history::{ColorTransition, PreparedColorTransition};
-pub use project::{Project, ProjectAsset, ProjectAssetFormat, ProjectLimits};
+pub use project::{ProjectAsset, ProjectAssetFormat, ProjectLimits};
 
 pub use presets::{
     CONTACT_PAPER_TEXTURE_ASSET, DefaultBrushPreset,
@@ -89,7 +90,7 @@ pub use presets::{
 };
 
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     fmt,
     sync::Arc,
 };
@@ -98,21 +99,6 @@ pub type Revision = u64;
 
 /// Largest canvas or layer extent, in pixels per side.
 pub const MAX_EXTENT: u32 = 32768;
-
-#[derive(
-    Clone,
-    Copy,
-    Debug,
-    Default,
-    Eq,
-    Hash,
-    Ord,
-    PartialEq,
-    PartialOrd,
-    serde::Serialize,
-    serde::Deserialize,
-)]
-pub struct LayerId(pub u64);
 
 #[derive(
     Clone,
@@ -266,87 +252,6 @@ pub enum LayerKind {
     Effect,
     /// Named reusable coverage; never participates in artwork composition.
     Selection,
-}
-
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
-pub struct Layer {
-    pub id: LayerId,
-    pub name: Arc<str>,
-    pub kind: LayerKind,
-    pub visible: bool,
-    pub opacity: f32,
-    /// Exact committed pixels, shared with undo and in-flight save snapshots.
-    /// The indexed project container serializes backing separately from metadata.
-    #[serde(skip)]
-    pub raster: raster::RasterRevision,
-    /// Immutable original samples and interpretation, shared by duplication,
-    /// history and save snapshots. Raster tiles override edited source regions.
-    /// The indexed project container stores source/profile payload separately.
-    #[serde(skip)]
-    pub source: Option<Arc<color::source::SourceImage>>,
-    pub properties: LayerProperties,
-    pub mask: Option<LayerMask>,
-    #[serde(skip)]
-    pub pending_operations: Vec<LayerOperation>,
-    pub effect: Option<Arc<EffectInstance>>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub selection: Option<Selection>,
-}
-
-impl Layer {
-    pub fn solid_color(id: LayerId, name: impl Into<Arc<str>>, color: color::RgbColor) -> Self {
-        let mut effect = EffectInstance::new(bundled_effect_catalog().get("solid_color").unwrap().program());
-        effect.set("color", EffectValue::Color(color)).expect("valid fill color");
-        Self { kind: LayerKind::Effect, effect: Some(Arc::new(effect)), ..Self::paint(id, name) }
-    }
-    pub fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
-        out.extend(self.effect.iter().flat_map(|effect| effect.resources()));
-        for operation in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m| m.pending_operations.iter())) { operation.resource_roots(out); }
-    }
-    fn mesh_roots<'a>(&'a self,out:&mut Vec<&'a Arc<MeshMap>>) {
-        out.extend(self.properties.placement.mesh.iter());
-        for op in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m|m.pending_operations.iter())) {op.mesh_roots(out);}
-    }
-    fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
-        out.extend(self.selection.iter());
-        for mask in self.mask.iter().chain(self.pending_operations.iter().map(|op| &op.coverage)) {
-            out.extend(mask.initial.iter());
-            for op in mask.pending_operations.iter() { out.extend(op.coverage.initial.iter()); }
-        }
-    }
-    /// Composition metadata without copying immutable paint history.
-    pub fn composite_snapshot(&self) -> Self {
-        Self {
-            id: self.id,
-            name: "".into(),
-            kind: self.kind,
-            visible: self.visible,
-            opacity: self.opacity,
-            raster: self.raster.clone(),
-            source: self.source.clone(),
-            properties: self.properties.clone(),
-            mask: self.mask.clone(),
-            pending_operations: Vec::new(),
-            effect: self.effect.clone(),
-            selection: self.selection.clone(),
-        }
-    }
-    pub fn paint(id: LayerId, name: impl Into<Arc<str>>) -> Self {
-        Self {
-            id,
-            name: name.into(),
-            kind: LayerKind::Paint,
-            visible: true,
-            opacity: 1.0,
-            raster: Default::default(),
-            source: None,
-            properties: LayerProperties::default(),
-            mask: None,
-            pending_operations: Vec::new(),
-            effect: None,
-            selection: None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -1274,7 +1179,7 @@ impl std::error::Error for BrushError {}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Stroke {
     pub id: StrokeId,
-    pub layer_id: LayerId,
+    pub target: SourceTarget,
     pub tool: StrokeTool,
     pub brush: BrushSnapshot,
     pub points: Arc<[StrokePoint]>,
@@ -1299,7 +1204,7 @@ pub struct Stroke {
 impl Stroke {
     pub fn new(
         id: StrokeId,
-        layer_id: LayerId,
+        target: SourceTarget,
         tool: StrokeTool,
         brush: BrushSnapshot,
         points: impl Into<Arc<[StrokePoint]>>,
@@ -1333,7 +1238,7 @@ impl Stroke {
         }
         Ok(Self {
             id,
-            layer_id,
+            target,
             tool,
             brush,
             points,
@@ -1348,35 +1253,22 @@ impl Stroke {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub use authored::{
+    Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
+    CoverageSource, Definition, DefinitionHandle, EffectApplication, EffectHandle,
+    EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceHandle,
+    Output, OutputHandle, PaintHandle, PaintSource, PortableId, RecordChange, SavedSelection,
+    SceneIndex, SceneScope, SceneSnapshot, SceneView, SelectionHandle, SourceTarget, Stack,
+    StackHandle, Store, WorkingState,
+};
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct Document {
-    pub id: Arc<str>,
-    pub width: u32,
-    pub height: u32,
-    pub color: color::DocumentColor,
-    /// How layers combine. Files from before this field read as Linear.
-    #[serde(default)]
-    pub blend_space: BlendSpace,
-    pub resolution: Option<ImageResolution>,
-    /// Saved independently of delivery, with binary profile bytes deduplicated
-    /// by the project source/profile index. Temporary view toggles live in UI.
-    #[serde(skip)]
-    pub proof: Option<color::ProofRecipe>,
-    /// Photo metadata of an opened photo, saved as project payloads.
-    #[serde(skip)]
-    pub metadata: PhotoMetadata,
-    /// Authored delivery mapping. Display capability and preview toggles are view state.
-    pub sdr_rendition: color::hdr::SdrRendition,
-    /// Front-to-back display order.
-    pub layers: Vec<Layer>,
-    pub active_layer: LayerId,
-    pub active_mask: bool,
-    pub selection: Option<Selection>,
-    pub reference_layers: BTreeSet<LayerId>,
-    /// Global, non-raster guides; edits are durable and share document undo.
-    pub rulers: Vec<Ruler>,
+    pub artwork: Artwork,
+    pub working: WorkingState,
     pub revision: Revision,
-    next_layer_id: u64,
+    pub owner: u64,
+    pub(crate) scene_index: Arc<SceneIndex>,
     next_stroke_id: u64,
 }
 
@@ -1387,528 +1279,771 @@ pub struct DocumentNames {
 }
 
 impl Document {
+    pub fn new(id: PortableId, width: u32, height: u32, names: DocumentNames) -> Self {
+        let mut artwork = Artwork::new([width, height]).expect("valid composition extent");
+        artwork.id = id;
+        let paint = artwork
+            .paint
+            .insert(
+                PortableId::random(),
+                PaintSource {
+                    domain: [width, height],
+                    raster: Default::default(),
+                    original: None,
+                    operations: Default::default(),
+                },
+            )
+            .expect("new paint store");
+        let ink = artwork
+            .occurrences
+            .insert(
+                PortableId::random(),
+                Occurrence::new(OccurrenceContent::Paint(paint), names.paint),
+            )
+            .expect("new occurrence store");
+        let mut fill = EffectInstance::new(bundled_effect_catalog().get("solid_color").unwrap().program());
+        fill.set("color", EffectValue::Color(color::RgbColor::WHITE)).expect("valid fill color");
+        let definition = artwork.definitions.insert(PortableId::random(), Definition {
+            program: fill.program, dimensions: Default::default(),
+        }).expect("new definition store");
+        let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
+            definition, values: fill.values, domain: [width, height],
+        }).expect("new effect store");
+        let paper = artwork
+            .occurrences
+            .insert(
+                PortableId::random(),
+                Occurrence::new(
+                    OccurrenceContent::Effect(effect),
+                    names.paper,
+                ),
+            )
+            .expect("new occurrence store");
+        let stack = artwork.compositions.get(artwork.root).unwrap().result;
+        artwork.stacks.get_mut(stack).unwrap().entries = vec![ink, paper];
+        let mut document = Self::from_artwork(artwork).expect("new artwork is editable");
+        document.working.occurrence = Some(ink);
+        document.working.target = Some(SourceTarget::Paint(paint));
+        document
+    }
+    pub fn from_artwork(artwork: Artwork) -> Result<Self, DocumentError> {
+        static OWNERS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let scene_index =
+            Arc::new(SceneIndex::build(&artwork).map_err(DocumentError::InvalidArtwork)?);
+        let owner = OWNERS
+            .try_update(
+                std::sync::atomic::Ordering::Relaxed,
+                std::sync::atomic::Ordering::Relaxed,
+                |n| n.checked_add(1),
+            )
+            .map_err(|_| DocumentError::InvalidLayerOperation("Document owner exhausted"))?;
+        let document = Self {
+            artwork,
+            working: WorkingState::default(),
+            revision: 0,
+            owner,
+            scene_index,
+            next_stroke_id: 1,
+        };
+        document.validate_payloads()?;
+        Ok(document)
+    }
+    pub fn composition(&self) -> &Composition {
+        self.artwork
+            .compositions
+            .get(self.artwork.root)
+            .expect("published composition")
+    }
+    pub fn output(&self) -> &Output {
+        self.artwork
+            .outputs
+            .get(self.artwork.default_output)
+            .expect("published output")
+    }
+    pub fn scene(&self) -> SceneView<'_> {
+        SceneView::new(&self.artwork, &self.scene_index).with_owner(self.owner, self.revision)
+    }
+    pub fn snapshot(&self) -> Arc<SceneSnapshot> {
+        self.snapshot_with_context(self.output().context.clone())
+    }
+    pub fn snapshot_with_context(&self, context: EvaluationContext) -> Arc<SceneSnapshot> {
+        Arc::new(SceneSnapshot::new(
+            self.artwork.clone(),
+            self.scene_index.clone(),
+            self.owner,
+            self.revision,
+            context,
+        ))
+    }
     pub fn has_animated_effects(&self) -> bool {
-        self.layers.iter().any(|l| {
-            if !l.visible || !l.effect.as_ref().is_some_and(|e| e.animated()) {
+        let scene = self.scene();
+        scene.order().iter().copied().any(|h| {
+            if !scene.occurrence(h).is_some_and(|o| o.visible)
+                || !scene.effect(h).is_some_and(|e| e.animated())
+            {
                 return false;
             }
-            let mut parent = l.properties.parent;
-            while let Some(id) = parent {
-                let Some(group) = self.layer(id) else {
-                    return false;
-                };
-                if !group.visible {
+            let mut parent = scene.parent(h);
+            while let Some(h) = parent {
+                if !scene.occurrence(h).is_some_and(|o| o.visible) {
                     return false;
                 }
-                parent = group.properties.parent;
+                parent = scene.parent(h);
             }
             true
         })
     }
-    pub fn new(id: impl Into<Arc<str>>, width: u32, height: u32, names: DocumentNames) -> Self {
-        let paint_id = LayerId(1);
-        Self {
-            id: id.into(),
-            width,
-            height,
-            color: color::DocumentColor::default(),
-            blend_space: BlendSpace::Linear,
-            resolution: None,
-            proof: None,
-            metadata: PhotoMetadata::default(),
-            sdr_rendition: Default::default(),
-            layers: vec![
-                Layer::paint(paint_id, names.paint),
-                Layer::solid_color(LayerId(2), names.paper, color::RgbColor::WHITE),
-            ],
-            active_layer: paint_id,
-            active_mask: false,
-            selection: None,
-            reference_layers: BTreeSet::new(),
-            rulers: Vec::new(),
-            revision: 0,
-            next_layer_id: 3,
-            next_stroke_id: 1,
-        }
-    }
-
-    pub fn layer(&self, id: LayerId) -> Option<&Layer> {
-        self.layers.iter().find(|layer| layer.id == id)
-    }
-
-    pub fn allocate_layer_id(&mut self) -> LayerId {
-        let id = LayerId(self.next_layer_id);
-        self.next_layer_id = self.next_layer_id.saturating_add(1);
-        id
-    }
-
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
         let id = StrokeId(self.next_stroke_id);
-        self.next_stroke_id = self.next_stroke_id.saturating_add(1);
+        self.next_stroke_id = self
+            .next_stroke_id
+            .checked_add(1)
+            .expect("stroke identity exhausted");
         id
     }
-
-    /// Read-only identity for planning an insertion before admission.
-    pub fn next_layer_id(&self) -> LayerId {
-        LayerId(self.next_layer_id)
-    }
-
-    /// Read-only identity for a provisional next-contact cursor.
     pub fn next_stroke_id(&self) -> StrokeId {
         StrokeId(self.next_stroke_id)
     }
-
-    /// Applies one reversible edit and returns its exact inverse.
+    pub fn allocate_coverage_handle(&mut self) -> CoverageHandle {
+        self.artwork
+            .coverage
+            .reserve(PortableId::random())
+            .expect("coverage identity exhausted")
+    }
+    pub fn target_raster(&self, target: SourceTarget) -> Option<&raster::RasterRevision> {
+        match target {
+            SourceTarget::Paint(h) => self.artwork.paint.get(h).map(|s| &s.raster),
+            SourceTarget::Coverage(h) => self.artwork.coverage.get(h).map(|s| &s.raster),
+            SourceTarget::Selection(_) => None,
+        }
+    }
+    pub fn target_raster_mut(
+        &mut self,
+        target: SourceTarget,
+    ) -> Option<&mut raster::RasterRevision> {
+        match target {
+            SourceTarget::Paint(h) => self.artwork.paint.get_mut(h).map(|s| &mut s.raster),
+            SourceTarget::Coverage(h) => self.artwork.coverage.get_mut(h).map(|s| &mut s.raster),
+            SourceTarget::Selection(_) => None,
+        }
+    }
     pub fn apply(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
-        let inverse = match edit {
-            Edit::SetColor { color, layers } => self.apply_color_edit(color, layers)?,
-            Edit::SetSdrRendition(recipe) => {
-                recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid SDR rendition"))?;
-                Edit::SetSdrRendition(std::mem::replace(&mut self.sdr_rendition, recipe))
+        let next_revision =
+            self.revision
+                .checked_add(1)
+                .ok_or(DocumentError::InvalidLayerOperation(
+                    "Document revision exhausted",
+                ))?;
+        if let Edit::SetRaster { target, revision } = &edit {
+            if let Some(Ok(data)) = revision.try_data() {
+                data.validate_index(
+                    self.scene().target_extent(*target),
+                    matches!(target, SourceTarget::Coverage(_)),
+                    self.composition().color,
+                )
+                .map_err(DocumentError::InvalidArtwork)?;
             }
-            Edit::SetBlendSpace(space) => {
-                if space == BlendSpace::Perceptual
-                    && let Some(reason) = BlendSpace::unavailable_reason(self.color.depth)
-                {
-                    return Err(DocumentError::InvalidLayerOperation(reason));
-                }
-                Edit::SetBlendSpace(std::mem::replace(&mut self.blend_space, space))
+            let raster = self
+                .target_raster_mut(*target)
+                .ok_or(DocumentError::MissingTarget(*target))?;
+            let inverse = Edit::SetRaster {
+                target: *target,
+                revision: std::mem::replace(raster, revision.clone()),
+            };
+            self.revision = next_revision;
+            return Ok(inverse);
+        }
+        let mut candidate = self.clone();
+        let relationships = edit.changes_relationships(self);
+        let before_working = self.working.clone();
+        let mut inverse = candidate.apply_records(edit)?;
+        if relationships {
+            candidate.scene_index = Arc::new(
+                SceneIndex::build(&candidate.artwork).map_err(DocumentError::InvalidArtwork)?,
+            );
+        }
+        candidate.validate_payloads()?;
+        if inverse.contains_working()
+            && let Some(h) = candidate.working.occurrence
+            && candidate.scene().occurrence(h).is_none()
+        {
+            return Err(DocumentError::MissingOccurrence(h));
+        }
+        candidate.repair_working()?;
+        if candidate.working != before_working {
+            candidate.working.generation = before_working.generation.checked_add(1).ok_or(
+                DocumentError::InvalidLayerOperation("Working state generation exhausted"),
+            )?;
+            if !inverse.contains_working() {
+                inverse = Edit::Batch(vec![inverse, Edit::Working(before_working)]);
             }
-            Edit::SetProof(recipe) => {
-                if let Some(recipe) = &recipe {
-                    recipe.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid proof recipe"))?;
-                    if let color::ColorProfile::Icc(bytes) = &recipe.profile
-                        && (bytes.is_empty() || bytes.len() > color::source::MAX_PROFILE_BYTES)
-                    {
-                        return Err(DocumentError::InvalidLayerOperation("Invalid proof profile size"));
-                    }
-                }
-                Edit::SetProof(std::mem::replace(&mut self.proof, recipe))
-            }
-            Edit::SetCanvasSize { size, origin } => {
-                if size.contains(&0)
-                    || size.iter().any(|v| *v > MAX_EXTENT)
-                    || origin.iter().any(|v| v.unsigned_abs() > 2 * MAX_EXTENT)
-                {
-                    return Err(DocumentError::InvalidLayerOperation("Invalid canvas size"));
-                }
-                let previous = [self.width, self.height];
-                [self.width, self.height] = size;
-                Edit::SetCanvasSize {
-                    size: previous,
-                    origin: origin.map(|v| -v),
-                }
-            }
-            Edit::SetResolution(resolution) => {
-                if let Some(resolution) = resolution {
-                    resolution.validate().map_err(|_| DocumentError::InvalidLayerOperation("Invalid image resolution"))?;
-                }
-                Edit::SetResolution(std::mem::replace(&mut self.resolution, resolution))
-            }
+        }
+        candidate.revision = next_revision;
+        *self = candidate;
+        Ok(inverse)
+    }
+    fn apply_records(&mut self, edit: Edit) -> Result<Edit, DocumentError> {
+        macro_rules! change {
+            ($store:ident,$variant:ident,$change:expr) => {{
+                let c = $change;
+                let value = self
+                    .artwork
+                    .$store
+                    .change(c.handle, c.id, c.value)
+                    .map_err(DocumentError::InvalidLayerOperation)?;
+                Edit::$variant(RecordChange {
+                    handle: c.handle,
+                    id: c.id,
+                    value,
+                })
+            }};
+        }
+        Ok(match edit {
+            Edit::Composition(c) => change!(compositions, Composition, c),
+            Edit::Stack(c) => change!(stacks, Stack, c),
+            Edit::Occurrence(c) => change!(occurrences, Occurrence, c),
+            Edit::Paint(c) => change!(paint, Paint, c),
+            Edit::Coverage(c) => change!(coverage, Coverage, c),
+            Edit::Effect(c) => change!(effects, Effect, c),
+            Edit::Definition(c) => change!(definitions, Definition, c),
+            Edit::SavedSelection(c) => change!(selections, SavedSelection, c),
+            Edit::Guides(c) => change!(guides, Guides, c),
+            Edit::Output(c) => change!(outputs, Output, c),
+            Edit::Working(w) => Edit::Working(std::mem::replace(&mut self.working, w)),
             Edit::SetRaster { target, revision } => {
                 let raster = self
                     .target_raster_mut(target)
-                    .ok_or(DocumentError::MissingLayer(target))?;
+                    .ok_or(DocumentError::MissingTarget(target))?;
                 Edit::SetRaster {
                     target,
                     revision: std::mem::replace(raster, revision),
                 }
             }
             Edit::Batch(edits) => {
-                let before = self.clone();
                 let mut inverses = Vec::with_capacity(edits.len());
                 for edit in edits {
-                    match self.apply(edit) {
-                        Ok(inverse) => inverses.push(inverse),
-                        Err(error) => {
-                            *self = before;
-                            return Err(error);
-                        }
-                    }
+                    inverses.push(self.apply_records(edit)?);
                 }
                 inverses.reverse();
                 Edit::Batch(inverses)
             }
-            Edit::ReplaceLayer(layer) => {
-                self.validate_layer(&layer)?;
-                let id = layer.id;
-                let restore_mask_target =
-                    self.active_mask && self.active_layer == layer.id && layer.mask.is_none();
-                let target = self
-                    .layers
-                    .iter_mut()
-                    .find(|l| l.id == layer.id)
-                    .ok_or(DocumentError::MissingLayer(layer.id))?;
-                let inverse = Edit::ReplaceLayer(Box::new(std::mem::replace(target, *layer)));
-                if restore_mask_target {
-                    self.active_mask = false;
-                    Edit::Batch(vec![
-                        inverse,
-                        Edit::SetActiveLayer { id },
-                        Edit::SetMaskTarget(true),
-                    ])
-                } else {
-                    inverse
-                }
+        })
+    }
+    pub fn effective_visibility(&self,id:OccurrenceHandle)->bool {
+        let Some(occurrence)=self.artwork.occurrences.get(id)else{return false;};
+        if matches!(occurrence.content,OccurrenceContent::Selection(_)) {
+            self.working.selection_visibility.get(&id).copied().unwrap_or(occurrence.visible)
+        }else{occurrence.visible}
+    }
+    fn repair_working(&mut self) -> Result<(), DocumentError> {
+        if let Some(selection) = &self.working.selection {
+            selection.validate()?;
+        }
+        let scene = self.scene();
+        let occurrence = self
+            .working
+            .occurrence
+            .filter(|h| scene.order().contains(h));
+        let occurrence =
+            if self.working.occurrence.is_none() {
+                None
+            } else {
+                occurrence
+                    .or_else(|| {
+                        scene.order().iter().copied().find(|h| {
+                            matches!(scene.source_target(*h), Some(SourceTarget::Paint(_)))
+                        })
+                    })
+                    .or_else(|| scene.order().first().copied())
+            };
+        let target = match (occurrence, self.working.target) {
+            (Some(h), Some(SourceTarget::Coverage(c)))
+                if scene.mask(h).is_some_and(|(m, _)| m.source == c) =>
+            {
+                Some(SourceTarget::Coverage(c))
             }
-            Edit::SetMaskTarget(active) => {
-                if active
-                    && self
-                        .layer(self.active_layer)
-                        .is_none_or(|l| l.mask.is_none())
-                {
-                    return Err(DocumentError::InvalidLayerOperation(
-                        "This layer has no mask",
-                    ));
-                }
-                if !active
-                    && let Some(mask) = self
-                        .layers
-                        .iter_mut()
-                        .find(|l| l.id == self.active_layer)
-                        .and_then(|l| l.mask.as_mut())
-                {
-                    mask.show_area = false;
-                }
-                Edit::SetMaskTarget(std::mem::replace(&mut self.active_mask, active))
-            }
-            Edit::SetSelection(selection) => {
-                if let Some(selection) = &selection { selection.validate()?; }
-                Edit::SetSelection(std::mem::replace(&mut self.selection, selection))
-            }
-            Edit::SetSavedSelection { id, selection } => {
-                selection.validate()?;
-                let layer = self.layers.iter_mut().find(|l| l.id == id)
-                    .ok_or(DocumentError::MissingLayer(id))?;
-                if layer.kind != LayerKind::Selection {
-                    return Err(DocumentError::InvalidLayerOperation("Choose a Selection Layer"));
-                }
-                let coverage = layer.selection.as_mut()
-                    .ok_or(DocumentError::InvalidLayerOperation("Selection Layer has no coverage"))?;
-                let previous = std::mem::replace(coverage, selection);
-                Edit::SetSavedSelection { id, selection: previous }
-            }
-            Edit::SetRulers(rulers) => {
-                rulers::validate_rulers(&rulers)?;
-                Edit::SetRulers(std::mem::replace(&mut self.rulers, rulers))
-            }
-            Edit::SetReferences(references) => {
-                for &id in &references {
-                    let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                    if !matches!(layer.kind, LayerKind::Paint | LayerKind::Group) {
-                        return Err(DocumentError::NotDrawable(id));
-                    }
-                }
-                Edit::SetReferences(std::mem::replace(&mut self.reference_layers, references))
-            }
-            Edit::InsertLayer { index, layer } => {
-                if self.layer(layer.id).is_some() {
-                    return Err(DocumentError::DuplicateLayer(layer.id));
-                }
-                let id = layer.id;
-                self.validate_layer(&layer)?;
-                if self.layers.is_empty() { self.active_layer = id; self.active_mask = false; }
-                self.layers.insert(index.min(self.layers.len()), *layer);
-                Edit::RemoveLayer { id }
-            }
-            Edit::RemoveLayer { id } => {
-                let index = self
-                    .layers
-                    .iter()
-                    .position(|layer| layer.id == id)
-                    .ok_or(DocumentError::MissingLayer(id))?;
-                let removed = self.layers.remove(index);
-                let selected = self.active_layer == id;
-                let mask_selected = self.active_mask;
-                let references = self.reference_layers.clone();
-                let reference = self.reference_layers.remove(&id);
-                if self.active_layer == id {
-                    self.active_mask = false;
-                    self.active_layer = self
-                        .layers
-                        .iter()
-                        .find(|layer| layer.kind == LayerKind::Paint)
-                        .map(|layer| layer.id)
-                        .or_else(|| self.layers.first().map(|layer| layer.id))
-                        .unwrap_or(LayerId(0));
-                }
-                let mut inverse = vec![Edit::InsertLayer {
-                    index,
-                    layer: Box::new(removed),
-                }];
-                if selected {
-                    inverse.extend([
-                        Edit::SetActiveLayer { id },
-                        Edit::SetMaskTarget(mask_selected),
-                    ]);
-                }
-                if reference {
-                    inverse.push(Edit::SetReferences(references));
-                }
-                Edit::Batch(inverse)
-            }
-            Edit::MoveLayer { id, to } => {
-                let from = self
-                    .layers
-                    .iter()
-                    .position(|layer| layer.id == id)
-                    .ok_or(DocumentError::MissingLayer(id))?;
-                let layer = self.layers.remove(from);
-                self.layers.insert(to.min(self.layers.len()), layer);
-                Edit::MoveLayer { id, to: from }
-            }
-            Edit::SetLayerOpacity { id, opacity } => {
-                if !opacity.is_finite() {
-                    return Err(DocumentError::InvalidLayerOperation("Invalid opacity"));
-                }
-                let layer = self
-                    .layers
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                    .ok_or(DocumentError::MissingLayer(id))?;
-                let previous = layer.opacity;
-                if layer.kind == LayerKind::Selection {
-                    return Err(DocumentError::InvalidLayerOperation("Selection Layers have no artwork opacity"));
-                }
-                layer.opacity = opacity.clamp(0.0, 1.0);
-                Edit::SetLayerOpacity {
-                    id,
-                    opacity: previous,
-                }
-            }
-            Edit::SetLayerVisibility { id, visible } => {
-                let layer = self
-                    .layers
-                    .iter_mut()
-                    .find(|layer| layer.id == id)
-                    .ok_or(DocumentError::MissingLayer(id))?;
-                let previous = layer.visible;
-                layer.visible = visible;
-                Edit::SetLayerVisibility {
-                    id,
-                    visible: previous,
-                }
-            }
-            Edit::SetActiveLayer { id } => {
-                self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-                let previous = self.active_layer;
-                let mask = self.active_mask;
-                self.active_mask = false;
-                self.active_layer = id;
-                for layer in &mut self.layers {
-                    // Selection overlays follow the drawing target, like the
-                    // visibility-mask preview below. Navigation has no undo step.
-                    if layer.kind == LayerKind::Selection {
-                        if layer.id == id {
-                            layer.visible = true;
-                        } else if layer.id == previous {
-                            layer.visible = false;
-                        }
-                    }
-                    if layer.id != id
-                        && let Some(mask) = &mut layer.mask
-                    {
-                        mask.show_area = false;
-                    }
-                }
-                Edit::Batch(vec![
-                    Edit::SetActiveLayer { id: previous },
-                    Edit::SetMaskTarget(mask),
-                ])
+            (Some(h), _) => scene.source_target(h),
+            _ => None,
+        };
+        let inspect = self.working.inspect_mask.filter(|h| {
+            Some(*h) == occurrence
+                && scene.mask(*h).is_some()
+                && matches!(target, Some(SourceTarget::Coverage(_)))
+        });
+        self.working.occurrence = occurrence;
+        self.working.target = target;
+        self.working.inspect_mask = inspect;
+        self.working.selection_visibility.retain(|h,_|self.artwork.occurrences.get(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Selection(_))));
+        Ok(())
+    }
+    fn validate_payloads(&self) -> Result<(), DocumentError> {
+        let invalid = DocumentError::InvalidLayerOperation;
+        let extent = |size: [u32; 2]| {
+            if size.contains(&0) || size.iter().any(|n| *n > MAX_EXTENT) {
+                Err(invalid("Invalid source extent"))
+            } else {
+                Ok(())
             }
         };
-        self.revision = self.revision.saturating_add(1);
-        Ok(inverse)
+        for (_, _, c) in self.artwork.compositions.iter() {
+            extent(c.size)?;
+            if !c.origin.x.is_finite() || !c.origin.y.is_finite() {
+                return Err(invalid("Invalid composition origin"));
+            }
+            if c.blend == BlendSpace::Perceptual
+                && let Some(reason) = BlendSpace::unavailable_reason(c.color.depth)
+            {
+                return Err(invalid(reason));
+            }
+            if let Some(r) = c.resolution {
+                r.validate().map_err(DocumentError::InvalidArtwork)?;
+            }
+        }
+        self.artwork
+            .metadata
+            .validate()
+            .map_err(DocumentError::InvalidArtwork)?;
+        let color = self.composition().color;
+        for (_, _, s) in self.artwork.paint.iter() {
+            extent(s.domain)?;
+            if let Some(original) = &s.original {
+                original.validate().map_err(DocumentError::InvalidArtwork)?;
+                if !original.is_original()
+                    && (original.interpretation.profile_assumed
+                        || original.interpretation.depth != color.depth
+                        || original.interpretation.profile
+                            != color::ColorProfile::Builtin(color.space))
+                {
+                    return Err(invalid(
+                        "Rasterized image interpretation differs from the document",
+                    ));
+                }
+            }
+            if let Some(Ok(data)) = s.raster.try_data() {
+                data.validate_index(s.domain, false, color)
+                    .map_err(DocumentError::InvalidArtwork)?;
+            }
+            for operation in s.operations.iter() {
+                operation.validate()?;
+            }
+        }
+        for (_, _, s) in self.artwork.coverage.iter() {
+            extent(s.domain)?;
+            s.validate()?;
+            if !s.default_coverage.is_finite() || !(0.0..=1.).contains(&s.default_coverage) {
+                return Err(invalid("Invalid default coverage"));
+            }
+            if let Some(initial) = &s.initial {
+                initial.validate()?;
+            }
+            if let Some(Ok(data)) = s.raster.try_data() {
+                data.validate_index(s.domain, true, color)
+                    .map_err(DocumentError::InvalidArtwork)?;
+            }
+            for operation in s.operations.iter() {
+                operation.validate()?;
+            }
+        }
+        for (h, _, o) in self.artwork.occurrences.iter() {
+            if !o.opacity.is_finite()
+                || !(0.0..=1.).contains(&o.opacity)
+                || !o.translation.x.is_finite()
+                || !o.translation.y.is_finite()
+            {
+                return Err(invalid("Invalid occurrence value"));
+            }
+            o.placement
+                .validate_for(Rect::from_extent(self.scene().local_extent(h)))?;
+            if o.blend == LayerBlend::PassThrough
+                && !matches!(o.content, OccurrenceContent::Stack(_))
+            {
+                return Err(invalid("Only groups can use Pass Through"));
+            }
+            if let OccurrenceContent::Selection(_) = o.content
+                && (o.mask.is_some() || o.clipped || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.)
+            {
+                return Err(invalid("Selection Layers cannot contain artwork"));
+            }
+            if let Some(mask) = &o.mask {
+                let source =
+                    self.artwork
+                        .coverage
+                        .get(mask.source)
+                        .ok_or(DocumentError::MissingTarget(SourceTarget::Coverage(
+                            mask.source,
+                        )))?;
+                if !mask.translation.x.is_finite()
+                    || !mask.translation.y.is_finite()
+                    || mask.placement.inverse().is_none()
+                    || !mask.placement.covers(Rect::from_extent(source.domain))
+                {
+                    return Err(invalid("Invalid mask placement"));
+                }
+            }
+        }
+        for (_, _, e) in self.artwork.effects.iter() {
+            extent(e.domain)?;
+            let definition = self
+                .artwork
+                .definitions
+                .get(e.definition)
+                .ok_or(invalid("Missing effect definition"))?;
+            EffectView::new(&definition.program, &e.values)
+                .validate()
+                .map_err(invalid)?;
+        }
+        for (_, _, d) in self.artwork.definitions.iter() {
+            EffectInstance::new(d.program.clone())
+                .validate()
+                .map_err(invalid)?;
+        }
+        for (_, _, s) in self.artwork.selections.iter() {
+            s.selection.validate()?;
+            s.display.validate()?;
+        }
+        crate::rulers::validate_rulers(&self.rulers().collect::<Vec<_>>())?;
+        for (_, _, o) in self.artwork.outputs.iter() {
+            o.sdr
+                .validate()
+                .map_err(|_| invalid("Invalid SDR rendition"))?;
+            if o.scale.iter().any(|v| !v.is_finite() || *v <= 0.)
+                || !o.context.elapsed.is_finite()
+                || o.context
+                    .phases
+                    .iter()
+                    .any(|(h, p)| self.artwork.effects.get(*h).is_none() || !p.is_finite())
+            {
+                return Err(invalid("Invalid output context"));
+            }
+            if let Some(p) = &o.proof {
+                p.validate().map_err(|_| invalid("Invalid proof recipe"))?;
+            }
+        }
+        Ok(())
     }
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Edit {
-    /// Metadata only; no raster conversion or composite invalidation.
-    SetProof(Option<color::ProofRecipe>),
-    SetSdrRendition(color::hdr::SdrRendition),
-    /// How layers combine; Perceptual only at 8 and 16 bits. Pixels keep
-    /// their values.
-    SetBlendSpace(BlendSpace),
-    /// One atomic interpretation/backing change. Structure and properties stay
-    /// intact; all native color and scalar replacements must be host-backed.
-    SetColor {
-        color: color::DocumentColor,
-        layers: Vec<Layer>,
-    },
+    Composition(RecordChange<Composition>),
+    Stack(RecordChange<Stack>),
+    Occurrence(RecordChange<Occurrence>),
+    Paint(RecordChange<PaintSource>),
+    Coverage(RecordChange<CoverageSource>),
+    Effect(RecordChange<EffectApplication>),
+    Definition(RecordChange<Definition>),
+    SavedSelection(RecordChange<SavedSelection>),
+    Guides(RecordChange<Guides>),
+    Output(RecordChange<Output>),
+    Working(WorkingState),
+    Batch(Vec<Edit>),
     SetRaster {
-        target: LayerId,
+        target: SourceTarget,
         revision: raster::RasterRevision,
     },
-    /// Pixels per unit for print and export; no pixels change.
-    SetResolution(Option<ImageResolution>),
-    /// The canvas becomes `size` pixels, and the point `origin` of the old
-    /// canvas becomes the new top-left. Layers move in the same batch.
-    SetCanvasSize {
-        size: [u32; 2],
-        origin: [i32; 2],
-    },
-    Batch(Vec<Edit>),
-    ReplaceLayer(Box<Layer>),
-    SetMaskTarget(bool),
-    SetSelection(Option<Selection>),
-    SetSavedSelection { id: LayerId, selection: Selection },
-    SetReferences(BTreeSet<LayerId>),
-    SetRulers(Vec<Ruler>),
-    InsertLayer {
-        index: usize,
-        layer: Box<Layer>,
-    },
-    RemoveLayer {
-        id: LayerId,
-    },
-    MoveLayer {
-        id: LayerId,
-        to: usize,
-    },
-    SetLayerOpacity {
-        id: LayerId,
-        opacity: f32,
-    },
-    SetLayerVisibility {
-        id: LayerId,
-        visible: bool,
-    },
-    SetActiveLayer {
-        id: LayerId,
-    },
 }
-
 impl Edit {
-    /// Final interpretation after this transaction, including ordered batches.
-    /// Hosts prepare the matching renderer before publishing color history.
     pub fn resulting_color(&self, current: color::DocumentColor) -> color::DocumentColor {
         match self {
-            Self::SetColor { color, .. } => *color,
-            Self::Batch(edits) => edits.iter().fold(current, |color, edit| edit.resulting_color(color)),
+            Self::Composition(c) => c.value.as_ref().map_or(current, |v| v.color),
+            Self::Batch(es) => es.iter().fold(current, |c, e| e.resulting_color(c)),
             _ => current,
         }
     }
-
-    fn requires_history_admission(&self, document: &Document) -> bool {
-        let resources = |layer: &Layer| {
-            let mut roots = Vec::new(); layer.resource_roots(&mut roots);
-            roots.into_iter().filter_map(|r| r.storage().map(|p| p.as_ptr() as usize)).collect::<Vec<_>>()
-        };
+    pub fn canvas_origin_from(&self, current: Point) -> Option<[i32; 2]> {
+        let origin = self.resulting_origin(current);
+        (origin != current)
+            .then_some([(origin.x - current.x) as i32, (origin.y - current.y) as i32])
+    }
+    fn resulting_origin(&self, current: Point) -> Point {
         match self {
-            Self::SetColor { .. } | Self::SetProof(_) | Self::SetSdrRendition(_) => true,
-            Self::SetSavedSelection { .. } => true,
-            Self::Batch(edits) => edits.iter().any(|e| e.requires_history_admission(document)),
-            // A copy that shares an existing layer's original adds no ownership.
-            // A merge's result must leave room to undo it.
-            Self::InsertLayer { layer, .. } => {
-                !resources(layer).is_empty() || layer.selection.is_some()
-                    || layer.pending_operations.iter().any(|op| matches!(op.kind,
-                        LayerOperationKind::Bake { .. } | LayerOperationKind::FrequencyDetail { .. }))
-                    || layer.source.as_ref().is_some_and(|source| {
-                        !document.layers.iter().any(|l| l.source.as_ref().is_some_and(|s| Arc::ptr_eq(s, source)))
-                    })
-            }
-            Self::RemoveLayer { id } => document.layer(*id).is_some_and(|l| !resources(l).is_empty() || l.source.is_some() || l.selection.is_some()),
-            Self::ReplaceLayer(layer) => {
-                if resources(layer) != document.layer(layer.id).map_or_else(Vec::new, resources) { return true; }
-                if layer.selection.is_some() || document.layer(layer.id).is_some_and(|l| l.selection.is_some()) { return true; }
-                match (document.layer(layer.id).and_then(|l| l.source.as_ref()), &layer.source) {
-                    (None, None) => false,
-                    (Some(a), Some(b)) => !Arc::ptr_eq(a, b),
-                    _ => true,
-                }
-            }
-            _ => false,
+            Self::Composition(c) => c.value.as_ref().map_or(current, |c| c.origin),
+            Self::Batch(es) => es
+                .iter()
+                .fold(current, |origin, e| e.resulting_origin(origin)),
+            _ => current,
         }
     }
-
-    /// Where the new canvas's top-left lies in the old canvas, when this edit
-    /// moves the canvas. Views shift by it so the image stays in place.
-    pub fn canvas_origin(&self) -> Option<[i32; 2]> {
-        match self {
-            Self::SetCanvasSize { origin, .. } => Some(*origin),
-            Self::Batch(edits) => edits.iter().find_map(Self::canvas_origin),
-            _ => None,
-        }
-    }
-
     pub fn only_raster_updates(&self) -> bool {
         match self {
             Self::SetRaster { .. } => true,
-            Self::Batch(edits) => !edits.is_empty() && edits.iter().all(Self::only_raster_updates),
+            Self::Batch(es) => !es.is_empty() && es.iter().all(Self::only_raster_updates),
             _ => false,
         }
     }
-    fn source_roots<'a>(&'a self, out: &mut Vec<&'a Arc<color::source::SourceImage>>) {
+    fn changes_project(&self) -> bool {
         match self {
-            Self::SetColor { layers, .. } => out.extend(layers.iter().filter_map(|l| l.source.as_ref())),
-            Self::Batch(edits) => edits.iter().for_each(|edit| edit.source_roots(out)),
-            Self::ReplaceLayer(layer) => out.extend(layer.source.as_ref()),
-            Self::InsertLayer { layer, .. } => out.extend(layer.source.as_ref()),
-            _ => (),
+            Self::Working(_) => false,
+            Self::Batch(es) => es.iter().any(Self::changes_project),
+            _ => true,
         }
     }
-    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
+    pub fn changes_image(&self,document:&Document)->bool {
         match self {
-            Self::Batch(edits) => edits.iter().for_each(|edit| edit.resource_roots(out)),
-            Self::ReplaceLayer(layer) => layer.resource_roots(out),
-            Self::InsertLayer {layer, ..} => layer.resource_roots(out),
-            Self::SetColor {layers, ..} => layers.iter().for_each(|layer| layer.resource_roots(out)),
-            _ => (),
+            Self::Guides(_)|Self::Output(_)|Self::SavedSelection(_)|Self::Working(_)=>false,
+            Self::Composition(c)=>c.value.as_ref().zip(document.artwork.compositions.get(c.handle)).is_none_or(|(a,b)|a.size!=b.size||a.origin!=b.origin||a.color!=b.color||a.blend!=b.blend||a.result!=b.result),
+            Self::Occurrence(c)=>c.value.as_ref().zip(document.artwork.occurrences.get(c.handle)).is_none_or(|(a,b)|a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.clipped!=b.clipped||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask),
+            Self::Batch(es)=>{
+                let mut current=document.clone();
+                for edit in es {
+                    if edit.changes_image(&current) || current.apply_records(edit.clone()).is_err() {return true;}
+                }
+                false
+            },
+            _=>true,
         }
     }
-    fn mesh_roots<'a>(&'a self,out:&mut Vec<&'a Arc<MeshMap>>) {
-        match self {Self::Batch(es)=>es.iter().for_each(|e|e.mesh_roots(out)),Self::ReplaceLayer(l)=>l.mesh_roots(out),Self::InsertLayer{layer:l,..}=>l.mesh_roots(out),Self::SetColor{layers,..}=>layers.iter().for_each(|l|l.mesh_roots(out)),_=>()}
-    }
-    fn selection_roots<'a>(&'a self, out: &mut Vec<&'a Selection>) {
+    fn contains_working(&self) -> bool {
         match self {
-            Self::SetSelection(selection) => out.extend(selection.iter()),
-            Self::SetSavedSelection { selection, .. } => out.push(selection),
-            Self::ReplaceLayer(layer) => layer.selection_roots(out),
-            Self::InsertLayer { layer, .. } => layer.selection_roots(out),
-            Self::SetColor { layers, .. } => layers.iter().for_each(|l| l.selection_roots(out)),
-            Self::Batch(edits) => edits.iter().for_each(|edit| edit.selection_roots(out)),
+            Self::Working(_) => true,
+            Self::Batch(es) => es.iter().any(Self::contains_working),
+            _ => false,
+        }
+    }
+    fn navigation(&self, document: &Document) -> bool {
+        match self {
+            Self::Working(w) => w.selection == document.working.selection,
+            Self::Batch(es) => !es.is_empty() && es.iter().all(|e| e.navigation(document)),
+            _ => false,
+        }
+    }
+    fn changes_relationships(&self, document: &Document) -> bool {
+        match self {
+            Self::Stack(_) => true,
+            Self::Composition(c) => c
+                .value
+                .as_ref()
+                .zip(document.artwork.compositions.get(c.handle))
+                .is_none_or(|(a, b)| a.result != b.result),
+            Self::Occurrence(c) => c
+                .value
+                .as_ref()
+                .zip(document.artwork.occurrences.get(c.handle))
+                .is_none_or(|(a, b)| {
+                    a.content != b.content
+                        || a.mask.as_ref().map(|m| m.source) != b.mask.as_ref().map(|m| m.source)
+                }),
+            Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none(),
+            Self::Coverage(c) => {
+                c.value.is_none() || document.artwork.coverage.get(c.handle).is_none()
+            }
+            Self::Effect(c) => c
+                .value
+                .as_ref()
+                .zip(document.artwork.effects.get(c.handle))
+                .is_none_or(|(a, b)| a.definition != b.definition),
+            Self::Definition(c) => {
+                c.value.is_none() || document.artwork.definitions.get(c.handle).is_none()
+            }
+            Self::SavedSelection(c) => {
+                c.value.is_none() || document.artwork.selections.get(c.handle).is_none()
+            }
+            Self::Guides(c) => c.value.is_none() || document.artwork.guides.get(c.handle).is_none(),
+            Self::Output(c) => c
+                .value
+                .as_ref()
+                .zip(document.artwork.outputs.get(c.handle))
+                .is_none_or(|(a, b)| a.composition != b.composition),
+            Self::Batch(es) => es.iter().any(|e| e.changes_relationships(document)),
+            _ => false,
+        }
+    }
+    fn requires_history_admission(&self, document: &Document) -> bool {
+        macro_rules! previous {
+            ($store:ident,$variant:ident,$change:expr) => {{
+                let c=$change;
+                Edit::$variant(RecordChange {handle:c.handle,id:c.id,value:document.artwork.$store.get(c.handle).cloned()})
+            }};
+        }
+        let previous=match self {
+            Self::SetRaster {..}=>return false,
+            Self::Batch(edits)=>{
+                let mut candidate=document.clone();
+                for edit in edits {
+                    if edit.requires_history_admission(&candidate){return true;}
+                    if candidate.apply_records(edit.clone()).is_err(){return true;}
+                }
+                return false;
+            },
+            Self::Paint(c)=>previous!(paint,Paint,c),
+            Self::Coverage(c)=>previous!(coverage,Coverage,c),
+            Self::Effect(c)=>previous!(effects,Effect,c),
+            Self::Definition(c)=>previous!(definitions,Definition,c),
+            Self::Occurrence(c)=>previous!(occurrences,Occurrence,c),
+            Self::SavedSelection(c)=>previous!(selections,SavedSelection,c),
+            Self::Output(c)=>previous!(outputs,Output,c),
+            Self::Working(_)=>Self::Working(document.working.clone()),
+            Self::Composition(_)|Self::Stack(_)|Self::Guides(_)=>return false,
+        };
+        let mut before=RootInventory::default();previous.roots(&mut before);
+        let mut after=RootInventory::default();self.roots(&mut after);
+        before.ownership()!=after.ownership()
+    }
+    pub(crate) fn roots<'a>(&'a self, out: &mut RootInventory<'a>) {
+        match self {
+            Self::Paint(c) => {
+                if let Some(s) = &c.value {
+                    out.paint(s);
+                }
+            }
+            Self::Coverage(c) => {
+                if let Some(s) = &c.value {
+                    out.coverage(s);
+                }
+            }
+            Self::Effect(c) => {
+                if let Some(e) = &c.value {
+                    out.values(&e.values);
+                }
+            }
+            Self::Definition(c) => {
+                if let Some(d) = &c.value {
+                    out.program(&d.program);
+                }
+            }
+            Self::Occurrence(c) => {
+                if let Some(o) = &c.value {
+                    out.meshes.extend(o.placement.mesh.iter());
+                }
+            }
+            Self::SavedSelection(c) => {
+                if let Some(s) = &c.value {
+                    out.selections.push(&s.selection);
+                }
+            }
+            Self::Working(w) => out.selections.extend(w.selection.iter()),
+            Self::SetRaster { revision, .. } => out.rasters.push(revision),
+            Self::Output(c) => {
+                if let Some(o) = &c.value {
+                    out.proof(o.proof.as_ref());
+                }
+            }
+            Self::Batch(es) => {
+                for e in es {
+                    e.roots(out);
+                }
+            }
             _ => (),
         }
     }
     fn raster_roots<'a>(&'a self, out: &mut Vec<&'a raster::RasterRevision>) {
-        match self {
-            Self::SetColor { layers, .. } => {
-                for layer in layers {
-                    out.push(&layer.raster);
-                    out.extend(layer.masks().map(|m| &m.raster));
-                }
+        let mut roots = RootInventory::default();
+        self.roots(&mut roots);
+        out.extend(roots.rasters);
+    }
+    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
+        let mut roots = RootInventory::default();
+        self.roots(&mut roots);
+        out.extend(roots.resources);
+    }
+
+}
+
+#[derive(Default)]
+pub(crate) struct RootInventory<'a> {
+    pub rasters: Vec<&'a raster::RasterRevision>,
+    pub sources: Vec<&'a Arc<color::source::SourceImage>>,
+    pub selections: Vec<&'a Selection>,
+    pub resources: Vec<&'a Arc<Lut3d>>,
+    pub meshes: Vec<&'a Arc<MeshMap>>,
+    pub profiles: Vec<&'a color::ColorProfile>,
+    pub programs: Vec<&'a Arc<EffectProgram>>,
+    pub extensions: Vec<&'a Arc<authored::Extensions>>,
+    operations: Vec<&'a Arc<Vec<RasterOperation>>>,
+    authored_only: bool,
+}
+impl<'a> RootInventory<'a> {
+    fn ownership(&self)->std::collections::BTreeSet<(u8,u64)> {
+        let mut owners=std::collections::BTreeSet::new();
+        owners.extend(self.rasters.iter().filter(|r|!r.is_empty()).map(|r|(0,r.identity())));
+        owners.extend(self.extensions.iter().map(|e|(9,Arc::as_ptr(e) as usize as u64)));
+        owners.extend(self.operations.iter().map(|ops|(8,Arc::as_ptr(ops) as usize as u64)));
+        owners.extend(self.sources.iter().map(|s|(1,Arc::as_ptr(s) as usize as u64)));
+        owners.extend(self.resources.iter().filter_map(|r|r.storage().map(|s|(2,s.as_ptr() as usize as u64))));
+        owners.extend(self.meshes.iter().map(|m|(3,Arc::as_ptr(m) as usize as u64)));
+        owners.extend(self.programs.iter().map(|p|(4,Arc::as_ptr(p) as usize as u64)));
+        owners.extend(self.profiles.iter().filter_map(|p|if let color::ColorProfile::Icc(s)=p{Some((5,s.as_ptr() as usize as u64))}else{None}));
+        for selection in &self.selections {
+            match &selection.shape {
+                SelectionShape::Pixels(p)=>{owners.insert((6,p.words().as_ptr() as usize as u64));},
+                SelectionShape::Contours(paths)=>owners.extend(paths.iter().map(|p|(7,p.as_ptr() as usize as u64))),
             }
-            Self::SetRaster { revision, .. } => out.push(revision),
-            Self::Batch(edits) => edits.iter().for_each(|edit| edit.raster_roots(out)),
-            Self::ReplaceLayer(layer) => {
-                out.push(&layer.raster);
-                out.extend(layer.masks().map(|m| &m.raster));
+        }
+        owners
+    }
+
+    pub fn document(&mut self, document: &'a Document) {
+        self.artwork(&document.artwork);
+        self.selections.extend(document.working.selection.iter());
+    }
+    pub fn artwork(&mut self, artwork: &'a Artwork) {
+        if !artwork.extensions.records.is_empty() || !artwork.extensions.resources.is_empty() { self.extensions.push(&artwork.extensions); }
+        for (_, _, s) in artwork.paint.iter() {
+            self.paint(s);
+        }
+        for (_, _, s) in artwork.coverage.iter() {
+            self.coverage(s);
+        }
+        for (_, _, o) in artwork.occurrences.iter() {
+            self.meshes.extend(o.placement.mesh.iter());
+        }
+        for (_, _, e) in artwork.effects.iter() {
+            self.values(&e.values);
+        }
+        for (_, _, d) in artwork.definitions.iter() {
+            self.program(&d.program);
+        }
+        for (_, _, s) in artwork.selections.iter() {
+            self.selections.push(&s.selection);
+        }
+        for (_, _, o) in artwork.outputs.iter() {
+            self.proof(o.proof.as_ref());
+        }
+    }
+    fn paint(&mut self, s: &'a PaintSource) {
+        self.rasters.push(&s.raster);
+        self.sources.extend(s.original.iter());
+        if !s.operations.is_empty() {self.operations.push(&s.operations);}
+        for op in s.operations.iter() {
+            self.operation(op);
+        }
+    }
+    fn coverage(&mut self, s: &'a CoverageSource) {
+        self.rasters.push(&s.raster);
+        self.selections.extend(s.initial.iter());
+        if !s.operations.is_empty() {self.operations.push(&s.operations);}
+        for op in s.operations.iter() {
+            self.operation(op);
+        }
+    }
+    fn values(&mut self, values: &'a [EffectValue]) {
+        self.resources.extend(values.iter().filter_map(|v| {
+            if let EffectValue::Lut3d(Some(r)) = v {
+                Some(r)
+            } else {
+                None
             }
-            Self::InsertLayer { layer, .. } => {
-                out.push(&layer.raster);
-                out.extend(layer.masks().map(|m| &m.raster));
-            }
+        }));
+    }
+    fn program(&mut self, program: &'a Arc<EffectProgram>) {
+        self.programs.push(program);
+        for p in program.parameters.iter() {
+            self.values(std::slice::from_ref(&p.default));
+        }
+    }
+    fn proof(&mut self, proof: Option<&'a color::ProofRecipe>) {
+        if let Some(p) = proof {
+            self.profiles.push(&p.profile);
+        }
+    }
+    fn operation(&mut self, operation: &'a RasterOperation) {
+        if self.authored_only {return;}
+        self.coverage(&operation.coverage.source);
+        match &operation.kind {
+            RasterOperationKind::Transform(t) => self.meshes.extend(t.placement.mesh.iter()),
+            RasterOperationKind::Bake { scene, .. }
+            | RasterOperationKind::FrequencyDetail { scene, .. } => self.artwork(&scene.artwork),
             _ => (),
-        }
-    }
-    /// Navigation and selection are retained by a project snapshot, but do not
-    /// themselves make artwork unsaved. Rulers and references are document edits.
-    fn changes_project(&self) -> bool {
-        match self {
-            Self::SetActiveLayer { .. } | Self::SetMaskTarget(_) | Self::SetSelection(_) => false,
-            Self::Batch(edits) => edits.iter().any(Self::changes_project),
-            _ => true,
-        }
-    }
-    /// Guide-only edits affect presentation, never committed raster pixels.
-    pub fn changes_image(&self) -> bool {
-        match self {
-            Self::SetRulers(_) | Self::SetProof(_) | Self::SetSdrRendition(_) | Self::SetResolution(_)
-                | Self::SetSavedSelection { .. } => false,
-            Self::Batch(edits) => edits.iter().any(Self::changes_image),
-            _ => true,
         }
     }
 }
@@ -1921,7 +2056,6 @@ pub struct Editor {
     checkpoint: u64,
     next_checkpoint: u64,
 }
-
 pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
     struct Count(usize);
     impl std::io::Write for Count {
@@ -1939,50 +2073,6 @@ pub(crate) fn json_len(value: &impl serde::Serialize) -> usize {
         Err(_) => usize::MAX,
     }
 }
-
-impl LayerOperation {
-    fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
-        if let LayerOperationKind::Bake {members, ..} | LayerOperationKind::FrequencyDetail {members, ..} = &self.kind {
-            for layer in members.iter() { layer.resource_roots(out); }
-        }
-        for operation in self.coverage.pending_operations.iter() { operation.resource_roots(out); }
-    }
-    fn mesh_roots<'a>(&'a self, out: &mut Vec<&'a Arc<MeshMap>>) {
-        match &self.kind {
-            LayerOperationKind::Transform(transform) => out.extend(transform.placement.mesh.iter()),
-            LayerOperationKind::Bake { members, .. } | LayerOperationKind::FrequencyDetail { members, .. } => {
-                for layer in members.iter() { layer.mesh_roots(out); }
-            }
-            _ => (),
-        }
-        for operation in self.coverage.pending_operations.iter() { operation.mesh_roots(out); }
-    }
-    fn without_shared_payloads(&mut self) {
-        match &mut self.kind {
-            LayerOperationKind::Transform(transform) => transform.placement.mesh = None,
-            LayerOperationKind::Bake { members, .. } | LayerOperationKind::FrequencyDetail { members, .. } => {
-                for layer in Arc::make_mut(members) { without_shared_payloads(layer); }
-            }
-            _ => (),
-        }
-        if !self.coverage.pending_operations.is_empty() {
-            for operation in Arc::make_mut(&mut self.coverage.pending_operations) { operation.without_shared_payloads(); }
-        }
-    }
-}
-
-pub(crate) fn without_shared_payloads(layer: &mut Layer) {
-    layer.selection = None;
-    layer.properties.placement.mesh = None;
-    for operation in &mut layer.pending_operations { operation.without_shared_payloads(); }
-    if let Some(mask) = &mut layer.mask {
-        mask.initial = None;
-        if !mask.pending_operations.is_empty() {
-            for operation in Arc::make_mut(&mut mask.pending_operations) { operation.without_shared_payloads(); }
-        }
-    }
-}
-
 #[derive(Debug)]
 struct HistoryEntry {
     edit: Edit,
@@ -1991,35 +2081,7 @@ struct HistoryEntry {
 }
 impl HistoryEntry {
     fn new(edit: Edit, checkpoint: u64) -> Self {
-        fn serialized(value: &impl serde::Serialize) -> usize {
-            // Conservative allowance for allocations/nodes and binary scalars;
-            // shared metadata is charged repeatedly rather than undercounted.
-            json_len(value).saturating_mul(4)
-        }
-        fn layer_metadata(layer: &Layer) -> usize {
-            let mut metadata = layer.clone();
-            without_shared_payloads(&mut metadata);
-            serialized(&metadata)
-        }
-        fn size(edit: &Edit) -> usize {
-            std::mem::size_of::<Edit>().saturating_add(match edit {
-                Edit::Batch(edits) => edits.iter().map(size).fold(0usize, usize::saturating_add),
-                Edit::SetColor { layers, .. } => layers.iter().map(layer_metadata).fold(0usize, usize::saturating_add),
-                Edit::ReplaceLayer(layer) => layer_metadata(layer),
-                Edit::InsertLayer { layer, .. } => layer_metadata(layer),
-                Edit::SetSelection(_) | Edit::SetSavedSelection { .. } => std::mem::size_of::<Selection>(),
-                Edit::SetRulers(rulers) => serialized(rulers),
-                Edit::SetReferences(ids) => serialized(ids),
-                Edit::SetProof(recipe) => recipe.as_ref().map_or(0, |recipe| {
-                    recipe.name.len().saturating_add(match &recipe.profile {
-                        color::ColorProfile::Builtin(_) => 0,
-                        color::ColorProfile::Icc(bytes) => bytes.len(),
-                    })
-                }),
-                _ => 0,
-            })
-        }
-        let metadata_bytes = size(&edit);
+        let metadata_bytes = edit_metadata(&edit);
         Self {
             edit,
             checkpoint,
@@ -2027,7 +2089,36 @@ impl HistoryEntry {
         }
     }
 }
-
+fn edit_metadata(edit: &Edit) -> usize {
+    let extra = match edit {
+        Edit::Batch(es) => es
+            .iter()
+            .map(edit_metadata)
+            .fold(0usize, usize::saturating_add),
+        Edit::Working(w)=>w.selection_visibility.len().saturating_mul(64),
+        Edit::Stack(c) => c.value.as_ref().map_or(0, |s| {
+            s.entries.len() * std::mem::size_of::<OccurrenceHandle>()
+        }),
+        Edit::Occurrence(c) => c.value.as_ref().map_or(0, |o| o.name.len()),
+        Edit::Effect(c) => c
+            .value
+            .as_ref()
+            .map_or(0, |e| json_len(&e.values).saturating_mul(4)),
+        Edit::Guides(c) => c.value.as_ref().map_or(0, |g| {
+            g.rulers
+                .iter()
+                .map(|(_, g)| json_len(g).saturating_mul(4))
+                .sum()
+        }),
+        Edit::Output(c) => c.value.as_ref().map_or(0, |o| {
+            o.name.len()
+                + o.proof.as_ref().map_or(0, |p| p.name.len())
+                + o.context.phases.len() * 16
+        }),
+        _ => 0,
+    };
+    std::mem::size_of::<Edit>().saturating_add(extra)
+}
 impl Editor {
     pub fn new(document: Document) -> Self {
         Self {
@@ -2038,111 +2129,106 @@ impl Editor {
             next_checkpoint: 1,
         }
     }
-
     pub fn document(&self) -> &Document {
         &self.document
     }
-
-    /// Identity of the current persistent undo state, not a monotonic revision.
-    /// A host can save this token with a snapshot while later edits continue.
     pub fn checkpoint(&self) -> u64 {
         self.checkpoint
     }
-
-    pub fn allocate_layer_id(&mut self) -> LayerId {
-        self.document.allocate_layer_id()
-    }
-
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }
-
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
     }
-
-    /// The edit the next undo, or redo, would apply.
     pub fn next_history_edit(&self, redo: bool) -> Option<&Edit> {
-        (if redo { &self.redo } else { &self.undo }).last().map(|entry| &entry.edit)
+        (if redo { &self.redo } else { &self.undo })
+            .last()
+            .map(|e| &e.edit)
     }
-
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
         self.document.allocate_stroke_id()
     }
-
+    pub fn allocate_coverage_handle(&mut self) -> CoverageHandle {
+        self.document.allocate_coverage_handle()
+    }
+    pub fn capture(
+        &self,
+        session_generation: u64,
+        mut context: EvaluationContext,
+    ) -> Result<ArtworkCapture, DocumentError> {
+        context.retain_effects(&self.document.artwork);
+        if !context.elapsed.is_finite()
+            || context
+                .phases
+                .iter()
+                .any(|(_, p)| !p.is_finite())
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "Invalid capture context",
+            ));
+        }
+        let mut artwork = self.document.artwork.clone();
+        artwork
+            .outputs
+            .get_mut(artwork.default_output)
+            .expect("published output")
+            .context = context;
+        artwork
+            .capture(CaptureCheckpoint {
+                document: artwork.id,
+                owner: self.document.owner,
+                session_generation,
+                artwork_generation: self.document.revision,
+                working_generation: self.document.working.generation,
+                edit_checkpoint: self.checkpoint,
+            })
+            .map_err(DocumentError::InvalidLayerOperation)
+    }
     pub fn perform(&mut self, edit: Edit) -> Result<(), DocumentError> {
         self.perform_with_history_budget(edit, history_budget::BYTE_BUDGET)
     }
-
-    /// Admit a worker-prepared edit without changing document or history.
     pub fn validate_edit(&self, edit: &Edit) -> Result<(), DocumentError> {
-        self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET).map(|_| ())
+        self.prepare_history_edit(edit.clone(), history_budget::BYTE_BUDGET)
+            .map(|_| ())
     }
-
-    /// Refine the last selection operation without accumulating slider steps.
-    /// The exact document revision and target guard against unrelated edits,
-    /// navigation, and Undo/Redo. Retain the original inverse and admit both
-    /// directions before publishing the replacement.
-    pub fn refine_selection(&mut self, target: SelectionTarget, coverage: Selection, revision: u64) -> Result<(), DocumentError> {
-        let previous = self.last_selection_operation(target, revision)?;
-        let edit = self.document.selection_edit(target, coverage)?;
-        let (candidate, _) = self.prepare_history_edit(edit, history_budget::BYTE_BUDGET)?;
-        if history_budget::Accounting::new(&candidate).charge(previous) > history_budget::BYTE_BUDGET {
-            return Err(DocumentError::InvalidLayerOperation("This edit exceeds the Undo/Redo memory limit"));
-        }
-        self.document = candidate;
-        if matches!(target, SelectionTarget::Saved(_)) {
-            self.checkpoint = self.next_checkpoint;
-            self.next_checkpoint = self.next_checkpoint.checked_add(1).expect("document history exhausted");
-        }
-        self.trim_history(history_budget::BYTE_BUDGET);
-        Ok(())
-    }
-
-    /// Withdraw the last selection operation under the guard of
-    /// `refine_selection`: the document returns to its state before that
-    /// operation, and neither Undo nor Redo keeps it.
-    pub fn withdraw_selection(&mut self, target: SelectionTarget, revision: u64) -> Result<(), DocumentError> {
-        let edit = self.last_selection_operation(target, revision)?.edit.clone();
-        self.document.apply(edit)?;
-        self.checkpoint = self.undo.pop().expect("guarded selection operation").checkpoint;
-        Ok(())
-    }
-
-    fn last_selection_operation(&self, target: SelectionTarget, revision: u64) -> Result<&HistoryEntry, DocumentError> {
-        let changed = DocumentError::InvalidLayerOperation("The selection operation has changed");
-        let entry = self.undo.last().filter(|entry| match (&entry.edit, target) {
-            (Edit::SetSelection(_), SelectionTarget::Current) => true,
-            (Edit::SetSavedSelection { id, .. }, SelectionTarget::Saved(target)) => *id == target,
-            _ => false,
-        }).ok_or(changed.clone())?;
-        if self.document.revision != revision || !self.redo.is_empty() {
-            return Err(changed);
-        }
-        Ok(entry)
-    }
-
-    fn prepare_history_edit(&self, edit: Edit, budget: usize) -> Result<(Document, HistoryEntry), DocumentError> {
+    fn prepare_history_edit(
+        &self,
+        edit: Edit,
+        budget: usize,
+    ) -> Result<(Document, HistoryEntry), DocumentError> {
         let mut candidate = self.document.clone();
         let inverse = HistoryEntry::new(candidate.apply(edit)?, self.checkpoint);
-        // The actual inverse can restore targets/references in addition to the
-        // requested edit. Account the canonical Redo produced by Undo, too.
         let mut restored = candidate.clone();
         let forward = HistoryEntry::new(restored.apply(inverse.edit.clone())?, self.checkpoint);
-        let mut resources = Vec::new(); forward.edit.resource_roots(&mut resources);
-        if !resources.is_empty() {
+        let mut current = RootInventory::default();
+        current.document(&self.document);
+        let mut resources = Vec::new();
+        forward.edit.resource_roots(&mut resources);
+        let mut accounting = history_budget::Accounting::default();
+        for r in current.resources {
+            accounting.charge_resource(r);
+        }
+        if resources
+            .into_iter()
+            .any(|r| accounting.charge_resource(r) != 0)
+        {
+            let mut roots = RootInventory::default();
+            roots.document(&candidate);
             let mut accounting = history_budget::Accounting::default();
-            for layer in &self.document.layers {
-                let mut current = Vec::new(); layer.resource_roots(&mut current);
-                for resource in current { accounting.charge_resource(resource); }
-            }
-            if resources.into_iter().any(|resource| accounting.charge_resource(resource) != 0)
-                && project::asset_bytes(&candidate) > ProjectLimits::default().asset_bytes {
-                return Err(DocumentError::InvalidLayerOperation("Effect resources exceed the project memory limit"));
+            let bytes = roots
+                .resources
+                .into_iter()
+                .map(|r| accounting.charge_resource(r))
+                .fold(0usize, usize::saturating_add);
+            if bytes as u64 > ProjectLimits::default().asset_bytes {
+                return Err(DocumentError::InvalidLayerOperation(
+                    "Effect resources exceed the project memory limit",
+                ));
             }
         }
-        if history_budget::Accounting::new(&self.document).charge(&forward) > budget
-            || history_budget::Accounting::new(&candidate).charge(&inverse) > budget
+        if history_budget::Accounting::for_admission(&self.document).charge(&forward) > budget
+            || history_budget::Accounting::for_admission(&candidate).charge(&inverse) > budget
         {
             return Err(DocumentError::InvalidLayerOperation(
                 "This edit exceeds the Undo/Redo memory limit",
@@ -2150,26 +2236,30 @@ impl Editor {
         }
         Ok((candidate, inverse))
     }
-
-    fn perform_with_history_budget(&mut self, edit: Edit, budget: usize) -> Result<(), DocumentError> {
-        fn empty_batch(edit: &Edit) -> bool {
-            matches!(edit, Edit::Batch(edits) if edits.iter().all(empty_batch))
+    fn perform_with_history_budget(
+        &mut self,
+        edit: Edit,
+        budget: usize,
+    ) -> Result<(), DocumentError> {
+        fn empty(e: &Edit) -> bool {
+            matches!(e,Edit::Batch(es) if es.iter().all(empty))
         }
-        if empty_batch(&edit) { return Ok(()); }
-        // Selecting the drawing target is navigation. It must neither consume
-        // an undo step nor discard redoable painting work.
-        if matches!(&edit, Edit::SetActiveLayer { .. } | Edit::SetMaskTarget(_)) {
+        if empty(&edit) {
+            return Ok(());
+        }
+        if edit.navigation(&self.document) {
             self.document.apply(edit)?;
             return Ok(());
         }
-        let changes_project = edit.changes_project();
-        // Source and color jobs publish completed ownership. Check both directions before
-        // publication. Live raster transactions retain the existing capture
-        // reservation path: their pending roots do not yet identify shared tiles.
-        // Standalone selection publication has completed backing. A selection
-        // inside an artwork transform batch still uses that raster transaction's
-        // pending capture reservation; it must not force eager raster admission.
-        let inverse = if matches!(edit, Edit::SetSelection(_)) || edit.requires_history_admission(&self.document) {
+        let changes = edit.changes_project();
+        let next = if changes {
+            Some(self.next_checkpoint.checked_add(1).ok_or(
+                DocumentError::InvalidLayerOperation("Document history exhausted"),
+            )?)
+        } else {
+            None
+        };
+        let inverse = if edit.requires_history_admission(&self.document) {
             let (candidate, inverse) = self.prepare_history_edit(edit, budget)?;
             self.document = candidate;
             inverse
@@ -2178,17 +2268,13 @@ impl Editor {
         };
         self.undo.push(inverse);
         self.redo.clear();
-        if changes_project {
+        if let Some(next) = next {
             self.checkpoint = self.next_checkpoint;
-            self.next_checkpoint = self
-                .next_checkpoint
-                .checked_add(1)
-                .expect("document history exhausted");
+            self.next_checkpoint = next;
         }
         self.trim_history(budget);
         Ok(())
     }
-
     fn trim_history(&mut self, budget: usize) {
         let mut accounting = history_budget::Accounting::new(&self.document);
         let mut bytes = 0usize;
@@ -2204,15 +2290,12 @@ impl Editor {
             history.drain(..history.len().saturating_sub(keep));
         }
     }
-
     pub fn undo(&mut self) -> Result<bool, DocumentError> {
         self.step(false)
     }
-
     pub fn redo(&mut self) -> Result<bool, DocumentError> {
         self.step(true)
     }
-
     fn step(&mut self, redo: bool) -> Result<bool, DocumentError> {
         let Some(edit) = self.next_history_edit(redo).cloned() else {
             return Ok(false);
@@ -2228,18 +2311,78 @@ impl Editor {
         self.checkpoint = entry.checkpoint;
         Ok(true)
     }
-
-    /// Roll back the suffix whose raster producers failed. Run after the host
-    /// retires those producers; pending captures are not evidence of failure.
-    /// Validate a candidate first so a missing recovery boundary cannot partly
-    /// mutate the document. Earlier undo remains available; failed redo does not.
-    pub fn recover_failed_rasters(&mut self) -> Result<usize, DocumentError> {
-        fn failed(document: &Document) -> bool {
-            document.layers.iter().any(|layer| {
-                std::iter::once(&layer.raster)
-                    .chain(layer.masks().map(|m| &m.raster))
-                    .any(|r| r.failed())
+    pub fn refine_selection(
+        &mut self,
+        target: SelectionTarget,
+        coverage: Selection,
+        revision: u64,
+    ) -> Result<(), DocumentError> {
+        let previous = self.last_selection_operation(target, revision)?;
+        let edit = self.document.selection_edit(target, coverage)?;
+        let (candidate, _) = self.prepare_history_edit(edit, history_budget::BYTE_BUDGET)?;
+        if history_budget::Accounting::for_admission(&candidate).charge(previous)
+            > history_budget::BYTE_BUDGET
+        {
+            return Err(DocumentError::InvalidLayerOperation(
+                "This edit exceeds the Undo/Redo memory limit",
+            ));
+        }
+        let next = if matches!(target, SelectionTarget::Saved(_)) {
+            Some(self.next_checkpoint.checked_add(1).ok_or(
+                DocumentError::InvalidLayerOperation("Document history exhausted"),
+            )?)
+        } else {
+            None
+        };
+        self.document = candidate;
+        if let Some(next) = next {
+            self.checkpoint = self.next_checkpoint;
+            self.next_checkpoint = next;
+        }
+        self.trim_history(history_budget::BYTE_BUDGET);
+        Ok(())
+    }
+    pub fn withdraw_selection(
+        &mut self,
+        target: SelectionTarget,
+        revision: u64,
+    ) -> Result<(), DocumentError> {
+        let edit = self
+            .last_selection_operation(target, revision)?
+            .edit
+            .clone();
+        self.document.apply(edit)?;
+        self.checkpoint = self.undo.pop().unwrap().checkpoint;
+        Ok(())
+    }
+    fn last_selection_operation(
+        &self,
+        target: SelectionTarget,
+        revision: u64,
+    ) -> Result<&HistoryEntry, DocumentError> {
+        let changed = DocumentError::InvalidLayerOperation("The selection operation has changed");
+        let entry = self
+            .undo
+            .last()
+            .filter(|e| match (&e.edit, target) {
+                (Edit::Working(_), SelectionTarget::Current) => true,
+                (Edit::SavedSelection(c), SelectionTarget::Saved(h)) => {
+                    self.document.scene().source_target(h)
+                        == Some(SourceTarget::Selection(c.handle))
+                }
+                _ => false,
             })
+            .ok_or(changed.clone())?;
+        if self.document.revision != revision || !self.redo.is_empty() {
+            return Err(changed);
+        }
+        Ok(entry)
+    }
+    pub fn recover_failed_rasters(&mut self) -> Result<usize, DocumentError> {
+        fn failed(d: &Document) -> bool {
+            let mut roots = RootInventory::default();
+            roots.document(d);
+            roots.rasters.iter().any(|r| r.failed())
         }
         if !failed(&self.document) {
             self.prune_failed_raster_history();
@@ -2269,103 +2412,458 @@ impl Editor {
         Ok(count)
     }
     fn prune_failed_raster_history(&mut self) {
-        // An undone capture can fail after Undo. Keep the reachable safe part
-        // of each branch, so recovery cannot expose failed pixels through Redo.
         for history in [&mut self.undo, &mut self.redo] {
-            if let Some(index) = history.iter().rposition(|entry| {
+            if let Some(index) = history.iter().rposition(|e| {
                 let mut roots = Vec::new();
-                entry.edit.raster_roots(&mut roots);
-                roots.into_iter().any(|r| r.failed())
+                e.edit.raster_roots(&mut roots);
+                roots.iter().any(|r| r.failed())
             }) {
                 history.drain(..=index);
             }
         }
     }
-    /// Raster operation recipes live only until their queue-ordered submission.
-    /// Undo entries retain pixel revisions and pre-operation metadata.
     pub fn finish_raster_submission(&mut self) {
-        for layer in &mut self.document.layers {
-            layer.pending_operations.clear();
-            if let Some(mask) = &mut layer.mask {
-                mask.pending_operations = Default::default();
-            }
+        let paint: Vec<_> = self
+            .document
+            .artwork
+            .paint
+            .iter()
+            .filter(|(_, _, s)| !s.operations.is_empty())
+            .map(|(h, _, _)| h)
+            .collect();
+        for h in paint {
+            self.document.artwork.paint.get_mut(h).unwrap().operations = Default::default();
+        }
+        let coverage: Vec<_> = self
+            .document
+            .artwork
+            .coverage
+            .iter()
+            .filter(|(_, _, s)| !s.operations.is_empty())
+            .map(|(h, _, _)| h)
+            .collect();
+        for h in coverage {
+            self.document
+                .artwork
+                .coverage
+                .get_mut(h)
+                .unwrap()
+                .operations = Default::default();
         }
     }
-
-    /// Amend only the latest contact, before another document edit or history
-    /// navigation. The existing inverse remains its original pre-contact state.
     pub fn amend_raster(
         &mut self,
-        target: LayerId,
+        target: SourceTarget,
         revision: raster::RasterRevision,
     ) -> Result<(), DocumentError> {
+        let next =
+            self.next_checkpoint
+                .checked_add(1)
+                .ok_or(DocumentError::InvalidLayerOperation(
+                    "Document history exhausted",
+                ))?;
         self.document.apply(Edit::SetRaster { target, revision })?;
         self.checkpoint = self.next_checkpoint;
-        self.next_checkpoint = self
-            .next_checkpoint
-            .checked_add(1)
-            .expect("document history exhausted");
+        self.next_checkpoint = next;
         Ok(())
     }
-
-    /// Gesture preview, followed by restoration + one committed edit at release.
     pub fn preview(&mut self, edit: Edit) -> Result<(), DocumentError> {
         self.document.apply(edit).map(|_| ())
     }
 }
-
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DocumentError {
     InvalidRuler(&'static str),
     InvalidLayerOperation(&'static str),
-    MissingLayer(LayerId),
-    DuplicateLayer(LayerId),
-    ProtectedLayer(LayerId),
-    NotDrawable(LayerId),
+    InvalidArtwork(String),
+    MissingOccurrence(OccurrenceHandle),
+    MissingTarget(SourceTarget),
+    ProtectedOccurrence(OccurrenceHandle),
+    NotDrawable(OccurrenceHandle),
     EmptyStroke,
     NonFiniteStroke,
     InvalidBrush(BrushError),
 }
-
 impl fmt::Display for DocumentError {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::InvalidRuler(message) => formatter.write_str(message),
-            Self::InvalidLayerOperation(message) => formatter.write_str(message),
-            Self::MissingLayer(id) => write!(formatter, "layer {} does not exist", id.0),
-            Self::DuplicateLayer(id) => write!(formatter, "layer {} already exists", id.0),
-            Self::ProtectedLayer(id) => write!(formatter, "layer {} is protected", id.0),
-            Self::NotDrawable(id) => write!(formatter, "layer {} cannot receive strokes", id.0),
-            Self::EmptyStroke => write!(formatter, "a stroke needs at least one point"),
-            Self::NonFiniteStroke => write!(formatter, "stroke contains non-finite input"),
-            Self::InvalidBrush(error) => write!(formatter, "invalid stroke brush: {error}"),
+            Self::InvalidRuler(m) | Self::InvalidLayerOperation(m) => f.write_str(m),
+            Self::InvalidArtwork(m) => f.write_str(m),
+            Self::MissingOccurrence(h) => write!(f, "occurrence {} does not exist", h.index()),
+            Self::MissingTarget(t) => write!(f, "source target {t:?} does not exist"),
+            Self::ProtectedOccurrence(h) => write!(f, "occurrence {} is protected", h.index()),
+            Self::NotDrawable(h) => write!(f, "occurrence {} cannot receive strokes", h.index()),
+            Self::EmptyStroke => f.write_str("a stroke needs at least one point"),
+            Self::NonFiniteStroke => f.write_str("stroke contains non-finite input"),
+            Self::InvalidBrush(e) => write!(f, "invalid stroke brush: {e}"),
         }
     }
 }
-
 impl std::error::Error for DocumentError {}
 
+impl From<&'static str> for DocumentError {
+    fn from(value: &'static str) -> Self {
+        Self::InvalidLayerOperation(value)
+    }
+}
+
+fn artwork_metadata(artwork: &Artwork) -> usize {
+    let fixed = std::mem::size_of::<Artwork>()
+        .saturating_add(artwork.compositions.len() * std::mem::size_of::<Composition>())
+        .saturating_add(artwork.paint.len() * std::mem::size_of::<PaintSource>())
+        .saturating_add(artwork.coverage.len() * std::mem::size_of::<CoverageSource>())
+        .saturating_add(artwork.selections.len() * std::mem::size_of::<SavedSelection>());
+    let extra = artwork
+        .stacks
+        .iter()
+        .map(|(_, _, v)| v.entries.len() * std::mem::size_of::<OccurrenceHandle>())
+        .chain(
+            artwork
+                .occurrences
+                .iter()
+                .map(|(_, _, v)| std::mem::size_of::<Occurrence>() + v.name.len()),
+        )
+        .chain(
+            artwork
+                .effects
+                .iter()
+                .map(|(_, _, v)| json_len(&v.values).saturating_mul(4)),
+        )
+        .chain(artwork.guides.iter().map(|(_, _, v)| {
+            v.rulers
+                .iter()
+                .map(|(_, g)| json_len(g).saturating_mul(4))
+                .sum()
+        }))
+        .chain(artwork.outputs.iter().map(|(_, _, v)| {
+            std::mem::size_of::<Output>() + v.name.len() + v.context.phases.len() * 16
+        }))
+        .fold(0usize, usize::saturating_add);
+    fixed.saturating_add(extra).saturating_add(extension_metadata(&artwork.extensions))
+}
+fn extension_record_metadata(extensions:&authored::Extensions)->usize {
+    extensions.records.values().map(|record|json_len(record).saturating_mul(4)).fold(0usize,usize::saturating_add)
+}
+fn opaque_resource_metadata(resource:&authored::OpaqueResource)->usize {
+    std::mem::size_of::<authored::OpaqueResource>().saturating_add(resource.kind.len()).saturating_add(resource.encoding.len())
+        .saturating_add(json_len(&resource.data).saturating_mul(4)).saturating_add(json_len(&resource.extra_fields).saturating_mul(4))
+}
+fn extension_metadata(extensions:&authored::Extensions)->usize {
+    extensions.resources.values().fold(extension_record_metadata(extensions),|bytes,resource|bytes.saturating_add(opaque_resource_metadata(resource)))
+}
 #[cfg(test)]
 mod tests {
     use super::*;
-
+    fn document(size: [u32; 2]) -> Document {
+        Document::new(
+            PortableId::random(),
+            size[0],
+            size[1],
+            DocumentNames {
+                paint: "Current ink".into(),
+                paper: "Paper".into(),
+            },
+        )
+    }
+    fn opacity(document: &Document, h: OccurrenceHandle, value: f32) -> Edit {
+        let mut o = document.artwork.occurrences.get(h).unwrap().clone();
+        o.opacity = value;
+        Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences, h, Some(o)).unwrap())
+    }
+    fn blend(document: &Document, value: BlendSpace) -> Edit {
+        let mut c = document.composition().clone();
+        c.blend = value;
+        Edit::Composition(
+            RecordChange::replace(
+                &document.artwork.compositions,
+                document.artwork.root,
+                Some(c),
+            )
+            .unwrap(),
+        )
+    }
     #[test]
     fn changing_the_blend_space_is_one_undo_step_that_keeps_every_pixel() {
-        let document = Document::new("Blend", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let mut editor = Editor::new(document.clone());
-        let edit = Edit::SetBlendSpace(BlendSpace::Perceptual);
-        assert!(edit.changes_image());
+        let d = document([64; 2]);
+        let mut editor = Editor::new(d.clone());
+        let edit = blend(&d, BlendSpace::Perceptual);
+        assert!(edit.changes_image(&d));
         editor.perform(edit).unwrap();
-        assert_eq!(editor.document().blend_space, BlendSpace::Perceptual);
-        assert_eq!(editor.document().layers, document.layers);
-        assert!(editor.undo().unwrap());
-        assert_eq!(editor.document(), &Document { revision: editor.document().revision, ..document });
+        assert_eq!(
+            editor.document().composition().blend,
+            BlendSpace::Perceptual
+        );
+        assert_eq!(editor.document().artwork.paint, d.artwork.paint);
+        editor.undo().unwrap();
+        assert_eq!(editor.document().artwork, d.artwork);
         assert!(!editor.can_undo());
-        let mut float = Document::new("Float", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        float.color.depth = color::SampleDepth::F16;
-        assert!(Editor::new(float).perform(Edit::SetBlendSpace(BlendSpace::Perceptual)).is_err());
+        let mut float = document([64; 2]);
+        float
+            .artwork
+            .compositions
+            .get_mut(float.artwork.root)
+            .unwrap()
+            .color
+            .depth = color::SampleDepth::F16;
+        let edit = blend(&float, BlendSpace::Perceptual);
+        assert!(Editor::new(float).perform(edit).is_err());
     }
-
+    fn point(pressure: f32) -> StrokePoint {
+        StrokePoint {
+            position: Point { x: 12., y: 14. },
+            pressure,
+            tilt: [0.; 2],
+            twist: 0.,
+            elapsed_micros: 0,
+        }
+    }
+    #[test]
+    fn stroke_clamps_pressure_and_precomputes_bounds() {
+        let stroke = Stroke::new(
+            StrokeId(1),
+            SourceTarget::Paint(Handle::from_index(0)),
+            StrokeTool::Brush,
+            BrushSnapshot::default(),
+            vec![point(2.)],
+        )
+        .unwrap();
+        assert_eq!(stroke.points[0].pressure, 1.);
+        assert!(!stroke.bounds.is_empty());
+    }
+    #[test]
+    fn edit_history_restores_exact_revision_identity() {
+        let mut editor = Editor::new(document([1024, 1536]));
+        let target = editor.document().working.target.unwrap();
+        let before = editor.document().target_raster(target).unwrap().clone();
+        let after = raster::RasterRevision::pending();
+        editor
+            .perform(Edit::SetRaster {
+                target,
+                revision: after.clone(),
+            })
+            .unwrap();
+        editor.undo().unwrap();
+        assert_eq!(editor.document().target_raster(target), Some(&before));
+        editor.redo().unwrap();
+        assert_eq!(editor.document().target_raster(target), Some(&after));
+        let snapshot = editor.document().clone();
+        editor
+            .amend_raster(target, raster::RasterRevision::pending())
+            .unwrap();
+        assert_eq!(snapshot.target_raster(target), Some(&after));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().target_raster(target), Some(&before));
+    }
+    #[test]
+    fn history_is_bounded_and_keeps_the_newest_exact_states() {
+        let mut editor = Editor::new(document([256; 2]));
+        let h = editor.document().working.occurrence.unwrap();
+        for i in 0..400 {
+            editor
+                .perform(opacity(editor.document(), h, i as f32 / 400.))
+                .unwrap();
+        }
+        assert_eq!(editor.undo.len(), 256);
+        assert_eq!(
+            editor
+                .document()
+                .artwork
+                .occurrences
+                .get(h)
+                .unwrap()
+                .opacity,
+            399. / 400.
+        );
+        for _ in 0..256 {
+            assert!(editor.undo().unwrap());
+        }
+        assert!(!editor.undo().unwrap());
+        assert_eq!(
+            editor
+                .document()
+                .artwork
+                .occurrences
+                .get(h)
+                .unwrap()
+                .opacity,
+            143. / 400.
+        );
+        for _ in 0..256 {
+            assert!(editor.redo().unwrap());
+        }
+        assert_eq!(
+            editor
+                .document()
+                .artwork
+                .occurrences
+                .get(h)
+                .unwrap()
+                .opacity,
+            399. / 400.
+        );
+        let target = editor.document().working.target.unwrap();
+        for _ in 0..8 {
+            editor
+                .perform(Edit::SetRaster {
+                    target,
+                    revision: raster::RasterRevision::pending(),
+                })
+                .unwrap();
+        }
+        assert!(editor.undo.len() <= 2);
+    }
+    #[test]
+    fn project_checkpoint_tracks_undo_branches_not_navigation() {
+        let mut editor = Editor::new(document([64; 2]));
+        let initial = editor.checkpoint();
+        let target = editor.document().working.target.unwrap();
+        editor
+            .perform(Edit::SetRaster {
+                target,
+                revision: raster::RasterRevision::pending(),
+            })
+            .unwrap();
+        let saved = editor.checkpoint();
+        assert_ne!(initial, saved);
+        let mut working = editor.document().working.clone();
+        working.occurrence = Some(editor.document().scene().order()[1]);
+        working.target = None;
+        editor.perform(Edit::Working(working)).unwrap();
+        let mut working = editor.document().working.clone();
+        working.selection = Some(Selection::full());
+        editor.perform(Edit::Working(working)).unwrap();
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap();
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap();
+        assert_eq!(editor.checkpoint(), initial);
+        editor.redo().unwrap();
+        assert_eq!(editor.checkpoint(), saved);
+        editor.undo().unwrap();
+        let h = editor.document().scene().order()[0];
+        let mut occurrence = editor
+            .document()
+            .artwork
+            .occurrences
+            .get(h)
+            .unwrap()
+            .clone();
+        occurrence.reference = true;
+        editor
+            .perform(Edit::Occurrence(
+                RecordChange::replace(&editor.document().artwork.occurrences, h, Some(occurrence))
+                    .unwrap(),
+            ))
+            .unwrap();
+        assert_ne!(editor.checkpoint(), saved);
+        assert_ne!(editor.checkpoint(), initial);
+    }
+    #[test]
+    fn saved_selection_navigation_keeps_authored_visibility_and_restores_working_overrides() {
+        let mut d=document([64;2]);let paint=d.working.occurrence.unwrap();
+        let saved=RecordChange::insert(&d.artwork.selections,SavedSelection {selection:Selection::full(),display:Default::default()});
+        let mut value=Occurrence::new(OccurrenceContent::Selection(saved.handle),"Saved coverage");value.visible=false;
+        let occurrence=RecordChange::insert(&d.artwork.occurrences,value);let handle=occurrence.handle;
+        let stack=d.composition().result;let mut membership=d.artwork.stacks.get(stack).unwrap().clone();membership.entries.insert(0,handle);
+        let membership=RecordChange::replace(&d.artwork.stacks,stack,Some(membership)).unwrap();
+        d.apply(Edit::Batch(vec![Edit::SavedSelection(saved),Edit::Occurrence(occurrence),Edit::Stack(membership)])).unwrap();
+        let mut editor=Editor::new(d);editor.perform(opacity(editor.document(),paint,0.7)).unwrap();editor.undo().unwrap();
+        let authored=editor.document().artwork.clone();let checkpoint=editor.checkpoint();
+        editor.perform(editor.document().select_occurrence_edit(handle).unwrap()).unwrap();
+        assert!(editor.document().effective_visibility(handle));
+        assert!(!editor.document().artwork.occurrences.get(handle).unwrap().visible);
+        assert_eq!(editor.document().artwork,authored);assert_eq!(editor.checkpoint(),checkpoint);assert!(editor.can_redo());assert!(!editor.can_undo());
+        assert_eq!(*editor.capture(0,EvaluationContext::default()).unwrap().artwork,authored);
+        let mut working=editor.document().working.clone();working.selection_visibility.insert(paint,false);
+        editor.perform(Edit::Working(working)).unwrap();assert!(!editor.document().working.selection_visibility.contains_key(&paint));
+        editor.perform(editor.document().select_occurrence_edit(paint).unwrap()).unwrap();
+        assert!(!editor.document().effective_visibility(handle));assert_eq!(editor.document().artwork,authored);assert_eq!(editor.checkpoint(),checkpoint);assert!(editor.can_redo());
+        editor.perform(editor.document().delete_layers_edit(&[handle]).unwrap()).unwrap();
+        assert!(!editor.document().working.selection_visibility.contains_key(&handle));
+        editor.undo().unwrap();
+        assert_eq!(editor.document().working.selection_visibility.get(&handle),Some(&false));
+        assert_eq!(editor.document().artwork,authored);
+    }
+    #[test]
+    fn every_occurrence_can_be_deleted_and_restored() {
+        let mut d = document([800; 2]);
+        let initial = d.artwork.clone();
+        let active = d.working.clone();
+        let occurrences = d.scene().order().to_vec();
+        let paint = d.apply(d.delete_layers_edit(&[occurrences[0]]).unwrap()).unwrap();
+        assert_eq!(d.working.occurrence,Some(occurrences[1]));
+        let paper = d.apply(d.delete_layers_edit(&[occurrences[1]]).unwrap()).unwrap();
+        assert!(d.scene().order().is_empty());
+        assert_eq!(d.working.occurrence,None);
+        assert_eq!(d.working.target,None);
+        d.apply(paper).unwrap();
+        d.apply(paint).unwrap();
+        assert_eq!(d.artwork,initial);
+        assert_eq!(d.working.occurrence,active.occurrence);
+        assert_eq!(d.working.target,active.target);
+    }
+    #[test]
+    fn batch_admission_is_atomic_and_rebuilds_scene_once() {
+        let mut d = document([64; 2]);
+        let before = d.clone();
+        let h = d.scene().order()[0];
+        let invalid = RecordChange {
+            handle: h,
+            id: PortableId::random(),
+            value: None,
+        };
+        assert!(
+            d.apply(Edit::Batch(vec![
+                opacity(&d, h, 0.3),
+                Edit::Occurrence(invalid)
+            ]))
+            .is_err()
+        );
+        assert_eq!(d, before);
+        let index = d.scene_index.clone();
+        d.apply(opacity(&d, h, 0.3)).unwrap();
+        assert!(Arc::ptr_eq(&d.scene_index, &index));
+    }
+    #[test]
+    fn foreign_same_identity_documents_have_distinct_runtime_owners_and_capture_roots() {
+        let mut editor = Editor::new(document([64; 2]));
+        let first = editor.capture(7, EvaluationContext::default()).unwrap();
+        assert!(first.artwork.paint.same_root(&editor.document().artwork.paint));
+        assert_eq!(first.checkpoint.owner,editor.document().owner);
+        let other = Document::from_artwork(editor.document().artwork.clone()).unwrap();
+        assert_eq!(editor.document().artwork.id, other.artwork.id);
+        assert_ne!(editor.document().owner, other.owner);
+        let target = editor.document().working.target.unwrap();
+        editor
+            .perform(Edit::SetRaster {
+                target,
+                revision: raster::RasterRevision::pending(),
+            })
+            .unwrap();
+        let SourceTarget::Paint(h) = target else {
+            panic!()
+        };
+        assert_ne!(
+            first.artwork.paint.get(h).unwrap().raster,
+            *editor.document().target_raster(target).unwrap()
+        );
+        assert_ne!(first.checkpoint.edit_checkpoint, editor.checkpoint());
+        assert!(other.working.selection.is_none());
+    }
+    #[test]
+    fn canvas_origin_history_uses_relative_signed_displacements() {
+        let mut d=document([64;2]);
+        for shift in [[11.,-5.],[7.,3.]] {
+            let before=d.composition().origin;
+            let mut composition=d.composition().clone();
+            composition.origin=Point{x:before.x+shift[0],y:before.y+shift[1]};
+            let edit=Edit::Composition(RecordChange::replace(&d.artwork.compositions,d.artwork.root,Some(composition)).unwrap());
+            assert_eq!(edit.canvas_origin_from(before),Some(shift.map(|v|v as i32)));
+            let inverse=d.apply(edit).unwrap();
+            assert_eq!(inverse.canvas_origin_from(d.composition().origin),Some(shift.map(|v|-v as i32)));
+        }
+        assert_eq!(blend(&d,BlendSpace::Perceptual).canvas_origin_from(d.composition().origin),None);
+    }
     #[test]
     fn brush_colors_preserve_finite_extended_rgb_and_validate_coverage_separately() {
         let mut brush = BrushSnapshot { color_rgba_linear: [-0.3, 1.4, 0.7, 0.37], ..Default::default() };
@@ -2392,145 +2890,6 @@ mod tests {
             }
         }
     }
-
-    fn point(pressure: f32) -> StrokePoint {
-        StrokePoint {
-            position: Point { x: 12.0, y: 14.0 },
-            pressure,
-            tilt: [0.0; 2],
-            twist: 0.0,
-            elapsed_micros: 0,
-        }
-    }
-
-    fn dot(id: StrokeId, layer_id: LayerId) -> Stroke {
-        Stroke::new(
-            id,
-            layer_id,
-            StrokeTool::Brush,
-            BrushSnapshot::default(),
-            vec![point(2.0)],
-        )
-        .unwrap()
-    }
-
-    #[test]
-    fn stroke_clamps_pressure_and_precomputes_bounds() {
-        let stroke = dot(StrokeId(1), LayerId(1));
-        assert_eq!(stroke.points[0].pressure, 1.0);
-        assert!(!stroke.bounds.is_empty());
-    }
-
-    #[test]
-    fn edit_history_restores_exact_revision_identity() {
-        let mut editor = Editor::new(Document::new("study", 1024, 1536, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        let before = editor.document().layers[0].raster.clone();
-        let after = raster::RasterRevision::pending();
-        editor
-            .perform(Edit::SetRaster {
-                target: LayerId(1),
-                revision: after.clone(),
-            })
-            .unwrap();
-        editor.undo().unwrap();
-        assert_eq!(editor.document().layers[0].raster, before);
-        editor.redo().unwrap();
-        assert_eq!(editor.document().layers[0].raster, after);
-        let snapshot = editor.document().clone();
-        editor
-            .amend_raster(LayerId(1), raster::RasterRevision::pending())
-            .unwrap();
-        assert_eq!(snapshot.layers[0].raster, after);
-        editor.undo().unwrap();
-        assert_eq!(editor.document().layers[0].raster, before);
-    }
-
-    #[test]
-    fn history_is_bounded_and_keeps_the_newest_exact_states() {
-        let mut editor = Editor::new(Document::new("bounded", 256, 256, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        for i in 0..400 {
-            editor
-                .perform(Edit::SetLayerOpacity {
-                    id: LayerId(1),
-                    opacity: i as f32 / 400.,
-                })
-                .unwrap();
-        }
-        assert_eq!(editor.undo.len(), 256);
-        assert_eq!(editor.document().layers[0].opacity, 399. / 400.);
-        for _ in 0..256 {
-            assert!(editor.undo().unwrap());
-        }
-        assert!(!editor.undo().unwrap());
-        assert_eq!(editor.document().layers[0].opacity, 143. / 400.);
-        for _ in 0..256 {
-            assert!(editor.redo().unwrap());
-        }
-        assert_eq!(editor.document().layers[0].opacity, 399. / 400.);
-        // Unpublished GPU work is reserved at its full allowed staging size.
-        for _ in 0..8 {
-            editor
-                .perform(Edit::SetRaster {
-                    target: LayerId(1),
-                    revision: raster::RasterRevision::pending(),
-                })
-                .unwrap();
-        }
-        assert!(editor.undo.len() <= 2);
-    }
-
-    #[test]
-    fn project_checkpoint_tracks_undo_branches_not_navigation() {
-        let mut editor = Editor::new(Document::new("checkpoint", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        let initial = editor.checkpoint();
-        editor
-            .perform(Edit::SetRaster {
-                target: LayerId(1),
-                revision: raster::RasterRevision::pending(),
-            })
-            .unwrap();
-        let saved = editor.checkpoint();
-        assert_ne!(initial, saved);
-        editor
-            .perform(Edit::SetActiveLayer { id: LayerId(2) })
-            .unwrap();
-        editor.perform(Edit::SetSelection(None)).unwrap();
-        assert_eq!(editor.checkpoint(), saved);
-        editor.undo().unwrap(); // selection is undoable, but not a persistent edit
-        assert_eq!(editor.checkpoint(), saved);
-        editor.undo().unwrap();
-        assert_eq!(editor.checkpoint(), initial);
-        editor.redo().unwrap();
-        assert_eq!(editor.checkpoint(), saved);
-        editor.undo().unwrap();
-        editor
-            .perform(Edit::SetReferences(BTreeSet::from([LayerId(1)])))
-            .unwrap();
-        assert_ne!(editor.checkpoint(), saved); // a same-depth branch is not saved
-        assert_ne!(editor.checkpoint(), initial);
-        let branch = editor.checkpoint();
-        assert!(
-            editor
-                .perform(Edit::SetActiveLayer { id: LayerId(999) })
-                .is_err()
-        );
-        assert_eq!(editor.checkpoint(), branch);
-    }
-
-    #[test]
-    fn every_layer_can_be_deleted_and_restored() {
-        let mut document = Document::new("study", 800, 800, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let paint = document.apply(document.delete_layers_edit(&[LayerId(1)]).unwrap()).unwrap();
-        assert_eq!(document.active_layer, LayerId(2));
-        let paper = document.apply(document.delete_layers_edit(&[LayerId(2)]).unwrap()).unwrap();
-        assert!(document.layers.is_empty());
-        assert_eq!(document.active_layer, LayerId(0));
-        document.apply(paper).unwrap();
-        document.apply(paint).unwrap();
-        assert_eq!(document.layers.len(), 2);
-        assert_eq!(document.active_layer, LayerId(1));
-    }
 }
-
 #[cfg(test)]
 mod retained_geometry_tests;

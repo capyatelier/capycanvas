@@ -144,7 +144,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .into_iter()
                         .map(|id| {
                             ContextMenuItem::submenu(&id.localized_label(self.localization()), if id == M::Layer && self.selection_masks.quick() { self.quick_mask_menu().sections } else if id == M::Layer {
-                                self.layer_menu_sections(self.engine.document().active_layer.0, self.engine.document().active_mask).unwrap_or_default()
+                                self.layer_menu_sections(self.engine.document().working.occurrence.map(super::occurrence_token).unwrap_or(0), self.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage)).unwrap_or_default()
                             } else { self.application_menu(id).sections })
                         })
                         .collect(),
@@ -193,8 +193,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             ] },
             M::Layer => self
                 .layer_menu(
-                    self.engine.document().active_layer.0,
-                    self.engine.document().active_mask,
+                    self.engine.document().working.occurrence.map(super::occurrence_token).unwrap_or(0),
+                    self.engine.document().working.target.is_some_and(layer_core::SourceTarget::is_coverage),
                 )
                 .unwrap_or(ContextMenu {
                     title: menu.localized_label(self.localization()).to_string(),
@@ -234,7 +234,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 .filter(|id| !(menu == M::View && self.proof_panel_command(*id)))
                                 .filter(|id| !(menu == M::View && self.state.platform == Platform::Windows
                                     && *id == CommandId::SdrRendition))
-                                .filter(|id| !matches!(id, CommandId::SdrRendition | CommandId::PreviewSdr) || self.engine.document().color.depth.is_float())
+                                .filter(|id| !matches!(id, CommandId::SdrRendition | CommandId::PreviewSdr) || self.engine.document().composition().color.depth.is_float())
                                 .filter(|id| {
                                     !(menu == M::View
                                         && *id == CommandId::ResetLayout

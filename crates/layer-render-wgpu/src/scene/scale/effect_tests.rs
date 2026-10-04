@@ -1,11 +1,19 @@
 use super::*;
 use layer_core::{EffectInstance, EffectResolution, EffectValue};
 
-fn effect(id: u64, name: &str) -> Layer {
-    let mut layer = Layer::paint(LayerId(id), name);
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture(name).program())));
-    layer
+fn effect(doc: &mut Document, name: &str) -> OccurrenceHandle {
+    effect_occurrence(doc,EffectInstance::new(crate::tests::fixture(name).program()),name)
+}
+
+fn effect_program_mut(doc: &mut Document, handle: OccurrenceHandle) -> &mut layer_core::EffectProgram {
+    let application=effect_handle(doc,handle);let definition=doc.artwork.effects.get(application).unwrap().definition;
+    Arc::make_mut(&mut doc.artwork.definitions.get_mut(definition).unwrap().program)
+}
+fn effect_program_at_mut(doc: &mut Document,index:usize)->&mut layer_core::EffectProgram {
+    let handle=doc.scene().order()[index];effect_program_mut(doc,handle)
+}
+fn set_effect_at(doc: &mut Document,index:usize,key:&str,value:EffectValue){
+    let handle=doc.scene().order()[index];set_effect_value(doc,handle,key,value);
 }
 
 fn exact_pixels(r: &mut WgpuRasterizer) -> Vec<u8> {
@@ -13,10 +21,10 @@ fn exact_pixels(r: &mut WgpuRasterizer) -> Vec<u8> {
 }
 
 fn blur_chain(doc: &mut layer_core::Document) {
-    for (id, sigma) in [(80, 9.), (81, 21.), (82, 13.)] {
-        let mut blur = effect(id, "gaussian_blur");
-        Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
-        doc.layers.insert(0, blur);
+    for (_, sigma) in [(80, 9.), (81, 21.), (82, 13.)] {
+        let blur = effect(doc,"gaussian_blur");
+        set_effect_value(doc,blur,"sigma", EffectValue::Number(sigma));
+        insert_occurrence(doc,blur,0);
     }
 }
 
@@ -39,7 +47,7 @@ fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer) {
 
 fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
     let cache = r.scale_display.as_ref().unwrap();
-    let input = input_plan(cache.plan, frame.layers);
+    let input = input_plan(cache.plan, frame.scene);
     let images = graph::scratch_images(frame, cache.plan.level, r.device.working_space()).unwrap();
     let reserved = input.level_bytes(input.level) * (images - 1);
     let actual = cache.output.iter().map(|image| texture_bytes(&image.texture)).sum::<u64>();
@@ -51,13 +59,13 @@ fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
 #[test]
 fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_scratch() {
     let mut doc = document_at([6000, 4000]);
-    doc.layers.insert(0, Layer::paint(LayerId(90), "empty ink"));
-    let mut blur = effect(80, "gaussian_blur");
-    Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(3.)).unwrap();
-    doc.layers.insert(0, blur);
-    assert_eq!(doc.layers.len(), 3);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    let ink=paint_occurrence(&mut doc,"empty ink",None);insert_occurrence(&mut doc,ink,0);
+    let blur = effect(&mut doc,"gaussian_blur");
+    set_effect_value(&mut doc,blur,"sigma", EffectValue::Number(3.));
+    insert_occurrence(&mut doc,blur,0);
+    assert_eq!(doc.scene().order().len(), 3);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.width_px = 2200;
     frame.view.height_px = 1440;
     frame.view.document_to_surface = [0.5, 0., 0., 0.5, -341., -207.];
@@ -73,11 +81,10 @@ fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_sc
 fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_full_bounds() {
     let mut doc = document_at([65, 33]);
     blur_chain(&mut doc);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     for extent in [[6000, 4000], [9504, 6336]] {
-        doc.width = extent[0];
-        doc.height = extent[1];
-        let mut frame = packet(&doc.layers, extent);
+        composition_mut(&mut doc).size=extent;
+        let mut frame = packet(doc.scene(), extent);
         frame.view.width_px = 960;
         frame.view.height_px = 640;
         frame.view.document_to_surface = [0.5, 0., 0., 0.5, -1200., -800.];
@@ -94,7 +101,7 @@ fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_ful
         assert!(bytes <= CACHE_BYTES, "{extent:?} resident storage={bytes}");
         assert_spatial_storage_reserved(&r, frame);
     }
-    let mut frame = packet(&doc.layers, [doc.width, doc.height]);
+    let mut frame = packet(doc.scene(), doc.composition().size);
     frame.view.width_px = 512;
     frame.view.height_px = 384;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, -1200., -800.];
@@ -106,14 +113,14 @@ fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_ful
     assert!(allocation(&r, plan, frame, None).into_iter().sum::<u64>() <= CACHE_BYTES);
     let view = frame.view;
 
-    let program = Arc::make_mut(&mut Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).program);
+    let program = effect_program_at_mut(&mut doc,0);
     program.passes = vec![layer_core::EffectPass {
         entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document,
     }].into();
-    let frame = FramePacket { view, ..packet(&doc.layers, [doc.width, doc.height]) };
+    let frame = FramePacket { view, ..packet(doc.scene(), doc.composition().size) };
     assert_eq!(view_plan(frame, 2, Evaluation::Display).unwrap().bounds, PixelRect::full(plan.extent));
-    doc.layers[0].visible = false;
-    let frame = FramePacket { view, ..packet(&doc.layers, [doc.width, doc.height]) };
+    occurrence_mut(&mut doc,0).visible = false;
+    let frame = FramePacket { view, ..packet(doc.scene(), doc.composition().size) };
     assert!(view_plan(frame, 2, Evaluation::Display).unwrap().bounds.area() < PixelRect::full(plan.extent).area() / 8);
 }
 
@@ -121,26 +128,25 @@ fn finite_radius_effects_admit_large_reduced_windows_and_global_effects_keep_ful
 fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support_changes() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc = document_at([2053, 1541]);
-        let extent = [doc.width, doc.height];
-        let paint = doc.layers[0].id;
+        let extent = doc.composition().size;
+        let paint = source_at(&doc, 0);
         blur_chain(&mut doc);
-        let mut mask = layer_core::LayerMask::reveal_all(LayerId(83), layer_core::Point { x: 17., y: -9. });
-        mask.initial = Some(layer_core::Selection::polygon(vec![
+        let masked=doc.scene().order()[1];
+        coverage_mask(&mut doc,masked,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 270., y: 170. }, layer_core::Point { x: 1700., y: 270. },
             layer_core::Point { x: 1600., y: 1290. }, layer_core::Point { x: 310., y: 1250. },
-        ]).unwrap());
-        doc.layers[1].mask = Some(mask);
-        doc.layers[1].opacity = 0.7;
-        doc.layers[1].properties.clipped = true;
-        let mut window = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut full = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        ]).unwrap()));
+        occurrence_mut(&mut doc,1).opacity = 0.7;
+        occurrence_mut(&mut doc,1).clipped = true;
+        let mut window = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut full = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         for (step, (level, origin, sigma)) in [
             (1, [610., 610.], 13.), (1, [1110., 790.], 13.), (1, [610., 610.], 13.),
             (2, [610., 610.], 21.), (2, [810., 690.], 0.), (2, [610., 610.], 7.),
         ].into_iter().enumerate() {
-            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
+            set_effect_at(&mut doc,0,"sigma", EffectValue::Number(sigma));
             let scale = 1. / (1 << level) as f32;
-            let mut frame = packet(&doc.layers, extent);
+            let mut frame = packet(doc.scene(), extent);
             frame.blend_space = space;
             frame.composite_all = false;
             frame.view.width_px = 192;
@@ -172,9 +178,9 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
         }
         assert_eq!(exact_pixels(&mut window), exact_pixels(&mut full));
         full.test.reference = true;
-        full.submit(FramePacket { blend_space: space, ..packet(&doc.layers, extent) }).unwrap();
+        full.submit(FramePacket { blend_space: space, ..packet(doc.scene(), extent) }).unwrap();
         let reference = pixels(&full, crate::test_support::document_texture(&full));
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         frame.view.width_px = 192;
         frame.view.height_px = 128;
@@ -195,34 +201,32 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
 fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries() {
     for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
-    let paint = doc.layers[0].id;
-    let mut adjustment = effect(80, "exposure");
-    let program = Arc::make_mut(&mut Arc::make_mut(adjustment.effect.as_mut().unwrap()).program);
+    let extent = doc.composition().size;
+    let paint = source_at(&doc, 0);
+    let adjustment = effect(&mut doc,"exposure");
+    let program = effect_program_mut(&mut doc,adjustment);
     program.id = "position_adjustment".into();
     program.entry = "position_adjustment".into();
     program.wgsl = "fn position_adjustment(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*.7+vec3(p/fx_extent(),0.)*.1*c.a,c.a);}".into();
-    let mut mask = layer_core::LayerMask::reveal_all(LayerId(81), Default::default());
-    mask.initial = Some(layer_core::Selection::polygon(vec![
+    coverage_mask(&mut doc,adjustment,Default::default(),Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 63., y: 37. }, layer_core::Point { x: 410., y: 37. },
         layer_core::Point { x: 410., y: 206. }, layer_core::Point { x: 63., y: 206. },
-    ]).unwrap());
-    adjustment.mask = Some(mask);
-    let mut next = effect(82, "exposure");
-    Arc::make_mut(next.effect.as_mut().unwrap()).set("exposure", EffectValue::Number(0.3)).unwrap();
-    doc.layers.insert(0, adjustment);
-    doc.layers.insert(0, next);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    ]).unwrap()));
+    let next = effect(&mut doc,"exposure");
+    set_effect_value(&mut doc,next,"exposure", EffectValue::Number(0.3));
+    insert_occurrence(&mut doc,adjustment,0);
+    insert_occurrence(&mut doc,next,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for level in [0, 1, 2, 3] {
         let mut updates = None;
         for state in 0..4 {
-            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("exposure", EffectValue::Number(state as f32 * 0.1)).unwrap();
-            doc.layers[1].properties.clipped = state % 2 == 0;
-            doc.layers[1].mask.as_mut().unwrap().inverted = state >= 2;
-            doc.layers[1].mask.as_mut().unwrap().offset.x = if state == 3 { 17. } else { 0. };
-            let mut frame = packet(&doc.layers, extent);
+            set_effect_at(&mut doc,0,"exposure", EffectValue::Number(state as f32 * 0.1));
+            occurrence_mut(&mut doc,1).clipped = state % 2 == 0;
+            occurrence_mut(&mut doc,1).mask.as_mut().unwrap().inverted = state >= 2;
+            occurrence_mut(&mut doc,1).mask.as_mut().unwrap().translation.x = if state == 3 { 17. } else { 0. };
+            let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
             let scale = 1. / (1 << level) as f32;
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
@@ -244,7 +248,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
     }
     let dab = crate::tests::test_dab([400., 210.], [0.8, 0.2, 0.1, 1.], 0.6);
     let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
     frame.composite_all = false;
@@ -261,24 +265,22 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
 #[test]
 fn window_effects_preserve_document_coordinates_and_shifted_masks() {
     let mut doc = document_at([1541, 1027]);
-    let extent = [doc.width, doc.height];
-    let mut adjustment = effect(80, "exposure");
-    let program = Arc::make_mut(&mut Arc::make_mut(adjustment.effect.as_mut().unwrap()).program);
+    let extent = doc.composition().size;
+    let adjustment = effect(&mut doc,"exposure");
+    let program = effect_program_mut(&mut doc,adjustment);
     program.id = "window_position".into();
     program.entry = "window_position".into();
     program.wgsl = "fn window_position(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4(c.rgb*.7+vec3(p/fx_extent(),0.)*.1*c.a,c.a);}".into();
-    let mut mask = layer_core::LayerMask::reveal_all(LayerId(81), layer_core::Point { x: 17., y: -9. });
-    mask.initial = Some(layer_core::Selection::polygon(vec![
+    coverage_mask(&mut doc,adjustment,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
         layer_core::Point { x: 260., y: 130. }, layer_core::Point { x: 1300., y: 170. },
         layer_core::Point { x: 1100., y: 920. }, layer_core::Point { x: 310., y: 850. },
-    ]).unwrap());
-    adjustment.mask = Some(mask);
-    doc.layers.insert(0, adjustment);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    ]).unwrap()));
+    insert_occurrence(&mut doc,adjustment,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut whole = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame = packet(&doc.layers, extent);
+    let mut whole = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame = packet(doc.scene(), extent);
     exact.submit(frame).unwrap();
     let oracle = pixels(&exact, crate::test_support::document_texture(&exact));
     frame.view.width_px = 192;
@@ -286,7 +288,7 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
     frame.composite_all = false;
     for level in [0, 1, 2, 4] {
         let scale = 1. / (1 << level) as f32;
-        let mut full = packet(&doc.layers, extent);
+        let mut full = packet(doc.scene(), extent);
         full.view.width_px = extent[0];
         full.view.height_px = extent[1];
         full.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
@@ -322,16 +324,17 @@ fn window_effects_preserve_document_coordinates_and_shifted_masks() {
 #[test]
 fn qualified_pointwise_catalog_uses_display_graph_and_keeps_native_output() {
     let mut doc = document_at([65, 33]);
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
+    let base_entries=doc.scene().order().to_vec();
     for fixture in crate::tests::fixtures().iter().filter(|f| {
         f.program().resolution == EffectResolution::Display && !f.program().image_boundary()
     }) {
-        doc.layers.retain(|l| l.id != LayerId(99));
-        doc.layers.insert(0, effect(99, &fixture.program().id));
-        let mut frame = packet(&doc.layers, extent);
+        set_root_entries(&mut doc,base_entries.clone());
+        let current=effect(&mut doc,&fixture.program().id);insert_occurrence(&mut doc,current,0);
+        let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         assert_eq!(r.scale_display.as_ref().unwrap().plan.level, 3, "{}", fixture.program().id);
@@ -344,26 +347,22 @@ fn qualified_pointwise_catalog_uses_display_graph_and_keeps_native_output() {
 fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
     for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
-    let mut group = Layer::paint(LayerId(90), "pass through");
-    group.kind = LayerKind::Group;
-    group.properties.blend = layer_core::LayerBlend::PassThrough;
-    let mut nested = group.clone();
-    nested.id = LayerId(91);
-    nested.properties.parent = Some(group.id);
-    let mut adjustment = effect(92, "exposure");
-    Arc::make_mut(adjustment.effect.as_mut().unwrap()).set("exposure", EffectValue::Number(-1.)).unwrap();
-    adjustment.properties.parent = Some(nested.id);
-    let mut paint = doc.layers[0].clone();
-    paint.id = LayerId(93);
-    paint.opacity = 0.6;
-    paint.properties.blend = layer_core::LayerBlend::Multiply;
-    paint.properties.parent = Some(nested.id);
-    doc.layers.splice(0..0, [group, nested, adjustment, paint]);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let backdrop=doc.scene().order().to_vec();
+    let adjustment=effect(&mut doc,"exposure");
+    set_effect_value(&mut doc,adjustment,"exposure",EffectValue::Number(-1.));
+    let paint=copy_paint(&mut doc,0);
+    doc.artwork.occurrences.get_mut(paint).unwrap().opacity=0.6;
+    doc.artwork.occurrences.get_mut(paint).unwrap().blend=layer_core::LayerBlend::Multiply;
+    let nested=stack_occurrence(&mut doc,"nested",vec![adjustment,paint]);
+    doc.artwork.occurrences.get_mut(nested).unwrap().blend=layer_core::LayerBlend::PassThrough;
+    let group=stack_occurrence(&mut doc,"pass through",vec![nested]);
+    doc.artwork.occurrences.get_mut(group).unwrap().blend=layer_core::LayerBlend::PassThrough;
+    set_root_entries(&mut doc,[vec![group],backdrop.clone()].concat());
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     for level in [1, 2, 3] {
-        let mut draw = |layers: &[Layer]| {
-            let mut frame = packet(layers, extent);
+        let mut draw = |doc: &Document| {
+            let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
             let scale = 1. / (1 << level) as f32;
             frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
@@ -372,31 +371,32 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
 
             display_pixels(&r)
         };
-        let mut flat = doc.layers.clone();
-        flat.retain(|l| l.kind != LayerKind::Group);
-        for layer in &mut flat { layer.properties.parent = None; }
+        let mut flat=doc.clone();
+        for handle in [group,nested] {
+            let OccurrenceContent::Stack(stack)=flat.artwork.occurrences.remove(handle).unwrap().content else {unreachable!()};
+            flat.artwork.stacks.remove(stack);
+        }
+        set_root_entries(&mut flat,[vec![adjustment,paint],backdrop.clone()].concat());
         let expected = draw(&flat);
-        let full = draw(&doc.layers);
+        let full = draw(&doc);
         let error = crate::test_support::max_error;
         assert!(error(&full, &expected) < 2e-5, "nested pass through equals ungrouping");
-        let mut hidden = doc.layers.clone(); hidden[0].visible = false;
+        let mut hidden=doc.clone();occurrence_mut(&mut hidden,0).visible=false;
         let backdrop = draw(&hidden);
         for masked in [false, true] {
-            let mut faded = doc.layers.clone();
-            faded[0].opacity = 0.4;
+            let mut faded=doc.clone();occurrence_mut(&mut faded,0).opacity=0.4;
             if masked {
-                let mut mask = layer_core::LayerMask::reveal_all(LayerId(94), Default::default());
-                mask.default_coverage = 0.3;
-                faded[0].mask = Some(mask);
+                let mask=coverage_mask(&mut faded,group,Default::default(),None);
+                faded.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.3;
             }
             let amount = if masked { 0.12 } else { 0.4 };
             let expected: Vec<[f32; 4]> = backdrop.iter().zip(&full)
                 .map(|(back, front)| std::array::from_fn(|i| back[i] + (front[i] - back[i]) * amount)).collect();
             assert!(error(&draw(&faded), &expected) < 2e-5, "level={level} masked={masked}");
         }
-        let mut clipped = doc.layers.clone(); clipped[0].properties.clipped = true;
+        let mut clipped=doc.clone();occurrence_mut(&mut clipped,0).clipped=true;
         let passing = draw(&clipped);
-        clipped[0].properties.blend = layer_core::LayerBlend::Normal;
+        occurrence_mut(&mut clipped,0).blend = layer_core::LayerBlend::Normal;
         assert!(error(&passing, &draw(&clipped)) < 2e-5, "clipped groups remain isolated");
     }
     }
@@ -406,20 +406,19 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
 fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
     for space in layer_core::BlendSpace::ALL {
     let mut doc = document_at([1027, 773]);
-    let extent = [doc.width, doc.height];
-    let paint = doc.layers[0].id;
-    for (id, sigma) in [(80, 9.), (81, 15.)] {
-        let mut blur = effect(id, "gaussian_blur");
-        let instance = Arc::make_mut(blur.effect.as_mut().unwrap());
-        Arc::make_mut(&mut instance.program).resolution = EffectResolution::Display;
-        instance.set("sigma", EffectValue::Number(sigma)).unwrap();
-        doc.layers.insert(0, blur);
+    let extent = doc.composition().size;
+    let paint = source_at(&doc, 0);
+    for (_, sigma) in [(80, 9.), (81, 15.)] {
+        let blur = effect(&mut doc,"gaussian_blur");
+        effect_program_mut(&mut doc,blur).resolution=EffectResolution::Display;
+        set_effect_value(&mut doc,blur,"sigma",EffectValue::Number(sigma));
+        insert_occurrence(&mut doc,blur,0);
     }
-    doc.layers.insert(0, effect(82, "exposure"));
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let exposure=effect(&mut doc,"exposure");insert_occurrence(&mut doc,exposure,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
@@ -450,20 +449,19 @@ fn spatial_graph_updates_dependency_halos_and_preserves_exact_output() {
 fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation() {
     for space in layer_core::BlendSpace::ALL {
     let mut doc = document();
-    let extent = [doc.width, doc.height];
-    let mut blur = effect(80, "gaussian_blur");
-    let mut mask = layer_core::LayerMask::reveal_all(LayerId(81), Default::default());
-    mask.default_coverage = 0.4;
-    blur.mask = Some(mask);
-    blur.opacity = 0.7;
-    doc.layers.insert(0, blur);
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let blur = effect(&mut doc,"gaussian_blur");
+    let mask=coverage_mask(&mut doc,blur,Default::default(),None);
+    doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.4;
+    doc.artwork.occurrences.get_mut(blur).unwrap().opacity=0.7;
+    insert_occurrence(&mut doc,blur,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     exact.test.reference = true;
     for (level, sigma, clipped) in [(1, 0., false), (2, 0.5, false), (3, 3., true), (4, 21., false), (1, 21., true)] {
-        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("sigma", EffectValue::Number(sigma)).unwrap();
-        doc.layers[0].properties.clipped = clipped;
-        let mut frame = packet(&doc.layers, extent);
+        set_effect_at(&mut doc,0,"sigma", EffectValue::Number(sigma));
+        occurrence_mut(&mut doc,0).clipped = clipped;
+        let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
@@ -479,19 +477,18 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
         assert_eq!(preparations, r.scene.as_ref().unwrap().effects.preparation_count());
         assert_eq!(work, r.metrics.composited_pixels);
     }
-    let instance = Arc::make_mut(doc.layers[0].effect.as_mut().unwrap());
-    let program = Arc::make_mut(&mut instance.program);
+    let program=effect_program_at_mut(&mut doc,0);
     program.id = "global_probe".into();
     program.wgsl = "fn global_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_sample(fx_extent()-p)*.6+fx_original(p)*.4;}".into();
     program.entry = "global_probe".into();
     program.lookups = Arc::new([]);
     program.passes = vec![layer_core::EffectPass { entry: program.entry.clone(), sampling: layer_core::EffectSampling::Document }].into();
-    let mut frame = packet(&doc.layers, extent);
+    let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
     frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
     for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
     let dab = crate::tests::test_dab([73., 81.], [0.8, 0.1, 0.2, 1.], 1.);
-    let batch = dab_batch(doc.layers[1].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    let batch = dab_batch(source_at(&doc, 1), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
     r.submit(FramePacket { composite_all: false, dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
     let incremental = display_pixels(&r);
     r.scale_display.as_mut().unwrap().graph = Default::default();
@@ -504,22 +501,20 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
 fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coordinates() {
     for space in layer_core::BlendSpace::ALL {
         let mut doc=document_at([2053,1541]);
-        let paint=doc.layers[0].id;
-        let mut curves=effect(97,"curves");
-        curves.opacity=0.7;
-        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),layer_core::Point{x:17.,y:-9.});
-        mask.initial=Some(layer_core::Selection::polygon(vec![
+        let paint=source_at(&doc, 0);
+        let curves=effect(&mut doc,"curves");
+        doc.artwork.occurrences.get_mut(curves).unwrap().opacity=0.7;
+        coverage_mask(&mut doc,curves,layer_core::Point{x:17.,y:-9.},Some(layer_core::Selection::polygon(vec![
             layer_core::Point{x:230.,y:140.},layer_core::Point{x:1750.,y:220.},
             layer_core::Point{x:1680.,y:1310.},layer_core::Point{x:270.,y:1240.},
-        ]).unwrap());
-        curves.mask=Some(mask);
-        doc.layers.insert(0,curves);
-        let mut window=WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut full=WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let extent=[doc.width,doc.height];
+        ]).unwrap()));
+        insert_occurrence(&mut doc,curves,0);
+        let mut window=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut full=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let extent=doc.composition().size;
         for (step,y) in [0.2,0.7,0.4].into_iter().enumerate() {
-            Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("curve_0",EffectValue::Curve(vec![[0.,0.],[0.4,y],[1.,1.]])).unwrap();
-            let mut frame=packet(&doc.layers,extent);frame.blend_space=space;frame.composite_all=false;
+            set_effect_at(&mut doc,0,"curve_0",EffectValue::Curve(vec![[0.,0.],[0.4,y],[1.,1.]]));
+            let mut frame=packet(doc.scene(),extent);frame.blend_space=space;frame.composite_all=false;
             frame.view.width_px=640;frame.view.height_px=480;
             frame.view.document_to_surface=[0.5,0.,0.,0.5,-190.,-130.];
             let whole=FramePacket{view:layer_render::ViewState{width_px:extent[0],height_px:extent[1],document_to_surface:[0.5,0.,0.,0.5,0.,0.],..frame.view},..frame};
@@ -535,7 +530,7 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
             }
         }
         full.test.reference=true;
-        full.submit(FramePacket{blend_space:space,..packet(&doc.layers,extent)}).unwrap();
+        full.submit(FramePacket{blend_space:space,..packet(doc.scene(),extent)}).unwrap();
         assert_eq!(exact_pixels(&mut window),exact_pixels(&mut full),"masked coordinates preserve the independent native reference");
     }
 }
@@ -543,11 +538,11 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
 #[test]
 fn pointwise_large_window_keeps_tiled_scratch_admission() {
     let mut doc=document_at([64,64]);
-    doc.width=8192;doc.height=8192;
-    doc.layers[0].properties.extent=Some([64,64]);
-    doc.layers.insert(0,effect(97,"curves"));
-    let r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut frame=packet(&doc.layers,[doc.width,doc.height]);
+    composition_mut(&mut doc).size=[8192;2];
+    paint_mut(&mut doc,0).domain=[64;2];
+    let curves=effect(&mut doc,"curves");insert_occurrence(&mut doc,curves,0);
+    let r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut frame=packet(doc.scene(),doc.composition().size);
     frame.view.width_px=4096;frame.view.height_px=4096;
     frame.view.document_to_surface=[0.5,0.,0.,0.5,0.,0.];
     let plan=view_plan(frame,1,Evaluation::Display).unwrap();
@@ -559,19 +554,19 @@ fn pointwise_large_window_keeps_tiled_scratch_admission() {
 fn decoded_gaussian_display_refinement_finishes_with_bounded_chunks() {
     let extent=[2049,1281];
     let mut doc=document_at(extent);
-    doc.layers[0].source=Some(crate::test_support::depth_source(extent,SampleDepth::U8,
+    paint_mut(&mut doc,0).original=Some(crate::test_support::depth_source(extent,SampleDepth::U8,
         layer_core::color::RgbSpace::Srgb,16<<20,|x,y| {
             if x<1024 {[0.08,0.4,0.9,1.]}else{[0.8,0.12+0.2*(y%257) as f32/256.,0.25,1.]}
         }));
-    let mut blur=effect(80,"gaussian_blur");
-    Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma",EffectValue::Number(85.)).unwrap();
-    doc.layers.insert(0,blur);
+    let blur=effect(&mut doc,"gaussian_blur");
+    set_effect_value(&mut doc,blur,"sigma",EffectValue::Number(85.));
+    insert_occurrence(&mut doc,blur,0);
     for cap in [256u64<<20,96<<20] {
-    let mut r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let mut r=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     r.set_complete_display_allowance(1024<<20);
     r.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);
     r.source_tiles.get_mut().admit(0);
-    let mut frame=packet(&doc.layers,extent);frame.composite_all=false;
+    let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
     frame.view.width_px=512;frame.view.height_px=320;
     frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
     r.submit(frame).unwrap();
@@ -599,14 +594,14 @@ fn decoded_gaussian_display_refinement_finishes_with_bounded_chunks() {
     let image_pixels=records.iter().map(|r|r.3).sum::<u64>();
     let single_page_pixels=page_coordinates(PixelRect::full(extent)).map(|c| {
         let page=page_rect(c).intersect(PixelRect::full(extent));
-        Scene::capture_window(&doc.layers,page,extent).area()*2
+        Scene::capture_window(doc.scene(),page,extent).area()*2
     }).sum::<u64>();
     println!("decoded Gaussian sigma85 cap={cap} refinement image_pixels={image_pixels} single_page_pixels={single_page_pixels} chunks={records:?}");
     assert!(image_pixels*4<=single_page_pixels*3,"batched refinement must avoid rebuilding each page's complete blur halo");
     let native=pixels(&r,&r.scale_display.as_ref().unwrap().hierarchy.as_ref().unwrap().root().texture);
     assert_presentation_mip(&r);
-    let mut exact=WgpuRasterizer::new_native_headless(doc.color).unwrap();exact.test.reference=true;
-    exact.submit(packet(&doc.layers,extent)).unwrap();
+    let mut exact=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();exact.test.reference=true;
+    exact.submit(packet(doc.scene(),extent)).unwrap();
     let reference=pixels(&exact,crate::test_support::document_texture(&exact));
     assert_eq!(native.len(),reference.len());
     let maximum=crate::test_support::max_error(&native,&reference);
@@ -624,23 +619,30 @@ use std::sync::Arc;
 const SIGMAS:[f32;8]=[0.,0.1,1.,3.,21.,21.1,64.,85.];
 const CONSUMERS:[&str;6]=["gaussian_blur","unsharp_mask","high_pass","bloom","soft_focus","pencil"];
 
-fn gaussian_fixture(id:&str,sigma:f32,resolution:EffectResolution)->Layer {
+fn gaussian_fixture(id:&str,sigma:f32,resolution:EffectResolution)->EffectInstance {
     let mut program=(*crate::tests::fixture(id).program()).clone();
     program.resolution=resolution;
-    let mut layer=Layer::paint(LayerId(80),id);layer.kind=LayerKind::Effect;
-    layer.effect=Some(Arc::new(EffectInstance::new(Arc::new(program).for_depth(SampleDepth::F32))));
-    set(&mut layer,"sigma",sigma);
-    layer
+    let mut effect=EffectInstance::new(Arc::new(program).for_depth(SampleDepth::F32));
+    set(&mut effect,"sigma",sigma);
+    effect
 }
 
-fn set(layer:&mut Layer,key:&str,value:f32) {
-    Arc::make_mut(layer.effect.as_mut().unwrap()).set(key,EffectValue::Number(value)).unwrap();
+fn set(effect:&mut EffectInstance,key:&str,value:f32) {
+    effect.set(key,EffectValue::Number(value)).unwrap();
+}
+
+fn gaussian_document(extent:[u32;2],color:layer_core::color::DocumentColor,effects:impl IntoIterator<Item=EffectInstance>)->Document {
+    let mut artwork=Artwork::new(extent).unwrap();
+    artwork.compositions.get_mut(artwork.root).unwrap().color=color;
+    let mut doc=Document::from_artwork(artwork).unwrap();
+    let entries=effects.into_iter().map(|effect|effect_occurrence(&mut doc,effect,"Gaussian fixture")).collect();
+    set_root_entries(&mut doc,entries);doc
 }
 
 #[derive(Clone,Copy,Debug)]
 enum Field { Constant([f32;4]), Impulse([i32;2],[f32;4]), Step(i32,[f32;4],[f32;4]) }
 
-fn original(field:Field)->Layer {
+fn original(field:Field)->EffectInstance {
     let literal=|c:[f32;4]|format!("vec4<f32>({:?},{:?},{:?},{:?})",c[0],c[1],c[2],c[3]);
     let expression=match field {
         Field::Constant(c)=>literal(c),
@@ -651,8 +653,7 @@ fn original(field:Field)->Layer {
     program.kind=EffectKind::Generator;program.space=EffectSpace::Linear;
     program.entry="gaussian_original_field".into();
     program.wgsl=format!("fn gaussian_original_field(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return {expression};}}").into();
-    let mut layer=Layer::paint(LayerId(1),"Gaussian analytic source");layer.kind=LayerKind::Effect;
-    layer.effect=Some(Arc::new(EffectInstance::new(Arc::new(program))));layer
+    EffectInstance::new(Arc::new(program))
 }
 
 fn kernel(sigma:f32)->Vec<f64> {
@@ -703,8 +704,8 @@ fn gaussian_support_edges_and_seams_match_unpaired_f64_kernel() {
     let fields=[Field::Constant([1.5,-0.25,2.,0.5]),Field::Impulse(center,[0.25,0.5,1.,1.]),Field::Step(1024,[0.1,0.2,0.3,0.5],[0.8,0.4,0.2,1.])];
     for field in fields {
         for sigma in SIGMAS {
-            let layers=[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)];
-            r.submit(packet(&layers,extent)).unwrap();
+            let doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)]);
+            r.submit(packet(doc.scene(),extent)).unwrap();
             let image=pixels(&r,crate::test_support::document_texture(&r));
             let mut points=vec![[0,0],[0,258],[255,258],[256,258],[257,258],[1023,258],[1024,258],[1028,516]];
             points.extend([0,1,63,64,127,128,200,254,255,256].into_iter().map(|d|[center[0]+d,center[1]]));
@@ -722,23 +723,23 @@ fn gaussian_consumers_share_preparation_and_reuse_it_for_amount_changes() {
     let field=Field::Constant([0.1,0.4,0.9,1.]);
     for id in CONSUMERS {
         let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
-        let mut layers=[gaussian_fixture(id,85.,EffectResolution::Native),original(field)];
-        if id=="bloom" {set(&mut layers[0],"threshold",0.);}
-        r.submit(packet(&layers,extent)).unwrap();
+        let mut doc=gaussian_document(extent,color,[gaussian_fixture(id,85.,EffectResolution::Native),original(field)]);
+        if id=="bloom" {set_effect_at(&mut doc,0,"threshold",EffectValue::Number(0.));}
+        r.submit(packet(doc.scene(),extent)).unwrap();
         let count=r.scene.as_ref().unwrap().effects.preparation_count();assert_eq!(count,1,"{id}");
         let image=pixels(&r,crate::test_support::document_texture(&r));let actual=image[(258*extent[0]+258) as usize];
         let target=match id {
             "gaussian_blur"|"unsharp_mask"|"soft_focus"=>[0.1,0.4,0.9,1.],
             "high_pass"=>{let v=layer_core::color::RgbSpace::Srgb.decode(0.5);[v,v,v,1.]},
-            "bloom"=>{let amount=match layers[0].effect.as_ref().unwrap().value("amount").unwrap(){EffectValue::Number(v)=>f64::from(*v)/100.,_=>panic!("amount")};[0.1*(1.+amount),0.4*(1.+amount),0.9*(1.+amount),1.]},
+            "bloom"=>{let amount=match doc.scene().effect(doc.scene().order()[0]).unwrap().value("amount").unwrap(){EffectValue::Number(v)=>f64::from(*v)/100.,_=>panic!("amount")};[0.1*(1.+amount),0.4*(1.+amount),0.9*(1.+amount),1.]},
             "pencil"=>{let c=[0.97,0.95,0.9].map(|v|layer_core::color::RgbSpace::Srgb.decode(v));[c[0],c[1],c[2],1.]},_=>unreachable!(),
         };
         for i in 0..4 {assert!((f64::from(actual[i])-target[i]).abs()<2e-5,"{id} constant actual={actual:?} expected={target:?}");}
         let independent_key=if id=="pencil"{"contrast"}else{"amount"};
-        if layers[0].effect.as_ref().unwrap().value(independent_key).is_some(){set(&mut layers[0],independent_key,61.);}else{layers[0].opacity=0.61;}
-        r.submit(packet(&layers,extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count,"{id} amount-only");
-        set(&mut layers[0],"sigma",64.);r.submit(packet(&layers,extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} sigma edit");
-        r.submit(FramePacket{composite_all:false,..packet(&layers,extent)}).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} frozen");
+        if doc.scene().effect(doc.scene().order()[0]).unwrap().value(independent_key).is_some(){set_effect_at(&mut doc,0,independent_key,EffectValue::Number(61.));}else{occurrence_mut(&mut doc,0).opacity=0.61;}
+        r.submit(packet(doc.scene(),extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count,"{id} amount-only");
+        set_effect_at(&mut doc,0,"sigma",EffectValue::Number(64.));r.submit(packet(doc.scene(),extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} sigma edit");
+        r.submit(FramePacket{composite_all:false,..packet(doc.scene(),extent)}).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} frozen");
     }
 }
 
@@ -747,8 +748,8 @@ fn sigma_zero_preserves_tiny_alpha_signed_hdr_and_transparent_pixels_exactly() {
     let extent=[259,257];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
     for c in [[2e-7,-8e-8,4e-7,8e-8],[4.,-2.,8.,1.],[0.;4]] {
-        let layers=[gaussian_fixture("gaussian_blur",0.,EffectResolution::Native),original(Field::Constant(c))];
-        r.submit(packet(&layers,extent)).unwrap();
+        let doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",0.,EffectResolution::Native),original(Field::Constant(c))]);
+        r.submit(packet(doc.scene(),extent)).unwrap();
         let image=pixels(&r,crate::test_support::document_texture(&r));
         assert!(image.iter().all(|actual|*actual==c),"sigma zero must preserve original {c:?}");
     }
@@ -764,9 +765,11 @@ fn gaussian_normalized_fields_have_valid_coverage_before_output_encoding() {
             [2e-7,-8e-8,4e-7,8e-8]] {
             let source=original(Field::Constant(c));
             let unfiltered=if sigma<=0.1 {
-                r.submit(packet(&[source.clone()],extent)).unwrap();Some(pixels(&r,crate::test_support::document_texture(&r)))
+                let doc=gaussian_document(extent,color,[source.clone()]);
+                r.submit(packet(doc.scene(),extent)).unwrap();Some(pixels(&r,crate::test_support::document_texture(&r)))
             }else{None};
-            r.submit(packet(&[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),source],extent)).unwrap();
+            let doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),source]);
+            r.submit(packet(doc.scene(),extent)).unwrap();
             let image=pixels(&r,crate::test_support::document_texture(&r));
             for actual in &image {
                 assert!(actual.iter().all(|v|v.is_finite())&&(0. ..=1.).contains(&actual[3]),"sigma={sigma} original={c:?} normalized={actual:?}");
@@ -790,7 +793,8 @@ fn gaussian_convex_filter_preserves_finite_extreme_and_opposite_signed_fields() 
         for field in [Field::Constant([limit,-limit,limit,1.]),
             Field::Step(64,[limit,-limit,limit,1.],[-limit,limit,-limit,1.])] {
             for sigma in SIGMAS {
-                r.submit(packet(&[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)],extent)).unwrap();
+                let doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)]);
+                r.submit(packet(doc.scene(),extent)).unwrap();
                 let image=pixels(&r,crate::test_support::document_texture(&r));let weights=kernel(sigma);
                 for x in [0,1,32,63,64,96,128] {
                     let target=expected(field,[x,32],extent,&weights);let actual=image[(32*extent[0]+x as u32) as usize];
@@ -808,15 +812,16 @@ fn native_bilinear_sampling_is_convex_at_finite_rgb_extremes_on_both_axes() {
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
     for limit in [32.,f32::MAX*0.75,f32::MAX] {
         let mut source=original(Field::Constant([limit,-limit,limit,1.]));
-        Arc::make_mut(&mut Arc::make_mut(source.effect.as_mut().unwrap()).program).wgsl=format!(
+        Arc::make_mut(&mut source.program).wgsl=format!(
             "fn gaussian_original_field(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let sign=select(-1.,1.,(u32(floor(p.x))+u32(floor(p.y)))%2u==0u);return vec4<f32>(sign*{limit:?},-sign*{limit:?},sign*{limit:?},1.);}}").into();
         for [dx,dy] in [[0.,0.],[-0.25,0.],[0.,-0.25],[-0.25,-0.25],[0.5,0.5]] {
             let mut sampled=gaussian_fixture("gaussian_blur",0.,EffectResolution::Native);
-            let effect=Arc::make_mut(sampled.effect.as_mut().unwrap());let program=Arc::make_mut(&mut effect.program);
+            let program=Arc::make_mut(&mut sampled.program);
             program.entry="bilinear_probe".into();
             program.wgsl=format!("fn bilinear_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return fx_sample(p+vec2<f32>({dx:?},{dy:?}));}}").into();
             program.passes=vec![layer_core::EffectPass {entry:program.entry.clone(),sampling:layer_core::EffectSampling::Document}].into();
-            r.submit(packet(&[sampled,source.clone()],extent)).unwrap();
+            let doc=gaussian_document(extent,color,[sampled,source.clone()]);
+            r.submit(packet(doc.scene(),extent)).unwrap();
             let actual=pixels(&r,crate::test_support::document_texture(&r))[3*8+3];
             let x=3.+f64::from(dx);let y=3.+f64::from(dy);let fx=x-x.floor();let fy=y-y.floor();
             let mut expected=0.;for j in 0..2 {for i in 0..2 {
@@ -836,13 +841,14 @@ fn native_bilinear_sampling_is_convex_at_finite_rgb_extremes_on_both_axes() {
 fn native_gaussian_windows_masks_and_clipping_match_full_rebuild() {
     let extent=[1541,771];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
     let field=Field::Step(1024,[0.1,0.4,0.9,1.],[0.8,0.2,0.3,1.]);
-    let mut layers=[gaussian_fixture("gaussian_blur",85.,EffectResolution::Native),original(field)];
+    let mut doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",85.,EffectResolution::Native),original(field)]);
     let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(128*1024*1024);
     let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
     for (step,(zoom,x,clipped)) in [(0.5,-384.,false),(1.,-1000.,false),(0.125,0.,true)].into_iter().enumerate() {
-        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());mask.default_coverage=0.25;
-        layers[0].mask=Some(mask);layers[0].opacity=0.6;layers[0].properties.clipped=clipped;
-        let mut frame=packet(&layers,extent);frame.view.width_px=96;frame.view.height_px=64;frame.view.document_to_surface=[zoom,0.,0.,zoom,x,-32.];
+        let handle=doc.scene().order()[0];
+        let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
+        occurrence_mut(&mut doc,0).opacity=0.6;occurrence_mut(&mut doc,0).clipped=clipped;
+        let mut frame=packet(doc.scene(),extent);frame.view.width_px=96;frame.view.height_px=64;frame.view.document_to_surface=[zoom,0.,0.,zoom,x,-32.];
         window.submit(frame).unwrap();exact.submit(frame).unwrap();
         assert!(window.scale_display.as_ref().unwrap().evaluation==Evaluation::Native);
         assert!(!window.scale_display.as_ref().unwrap().has_pending_work(&window));
@@ -856,19 +862,21 @@ fn native_gaussian_windows_masks_and_clipping_match_full_rebuild() {
 fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_changes() {
     let extent=[4101,1029];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
     let codes=[[26u8,102,230,255],[204,51,77,255]];
-    let mut source=Layer::paint(LayerId(90),"immutable step source");
-    source.source=Some(crate::test_support::depth_source(extent,SampleDepth::U8,layer_core::color::RgbSpace::Srgb,
-        32<<20,|x,_|codes[usize::from(x>=2048)].map(|v|f32::from(v)/255.)));
+    let source=crate::test_support::depth_source(extent,SampleDepth::U8,layer_core::color::RgbSpace::Srgb,
+        32<<20,|x,_|codes[usize::from(x>=2048)].map(|v|f32::from(v)/255.));
+    let mut base=gaussian_document(extent,color,[]);
+    let paint=paint_occurrence(&mut base,"immutable step source",Some(source));set_root_entries(&mut base,vec![paint]);
     let decoded=codes.map(|c|[0,1,2,3].map(|i|if i==3 {1.}else{layer_core::color::RgbSpace::Srgb.decode(f64::from(c[i])/255.) as f32}));
     let field=Field::Step(2048,decoded[0],decoded[1]);
     for id in ["gaussian_blur"] {for sigma in [21.,85.] {
         let mut adjustment=gaussian_fixture(id,sigma,EffectResolution::Native);
-        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());mask.default_coverage=0.25;
-        adjustment.mask=Some(mask);adjustment.opacity=0.6;adjustment.properties.clipped=true;
-        if adjustment.effect.as_ref().unwrap().value("amount").is_some() {set(&mut adjustment,"amount",61.);}
-        let layers=[adjustment,source.clone()];
+        if adjustment.value("amount").is_some() {set(&mut adjustment,"amount",61.);}
+        let mut doc=base.clone();
+        let handle=effect_occurrence(&mut doc,adjustment,id);insert_occurrence(&mut doc,handle,0);
+        let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
+        let occurrence=doc.artwork.occurrences.get_mut(handle).unwrap();occurrence.opacity=0.6;occurrence.clipped=true;
         let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
-        let mut frame=packet(&layers,extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
+        let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
         exact.submit(frame).unwrap();let reference=pixels(&exact,crate::test_support::document_texture(&exact));
         let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
         let [resident,uploads]=window.source_tiles.borrow().admitted_bytes();
@@ -899,9 +907,9 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
             }}
         }
     }}
-    let mut layers=vec![source];
-    for i in 0..3 {let mut layer=gaussian_fixture("gaussian_blur",85.,EffectResolution::Native);layer.id=LayerId(80+i);layers.insert(0,layer);}
-    let mut frame=packet(&layers,extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
+    let mut doc=base;
+    for _ in 0..3 {let effect=gaussian_fixture("gaussian_blur",85.,EffectResolution::Native);let handle=effect_occurrence(&mut doc,effect,"gaussian_blur");insert_occurrence(&mut doc,handle,0);}
+    let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
     let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;exact.submit(frame).unwrap();
     let reference=pixels(&exact,crate::test_support::document_texture(&exact));
     let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
@@ -915,12 +923,12 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
 #[test]
 fn native_and_reduced_gaussian_preparation_variants_do_not_overwrite_each_other() {
     let extent=[1029,517];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
-    let mut layers=[gaussian_fixture("gaussian_blur",85.,EffectResolution::Display),original(Field::Step(256,[0.1,0.2,0.3,1.],[0.8,0.4,0.2,1.]))];
+    let mut doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",85.,EffectResolution::Display),original(Field::Step(256,[0.1,0.2,0.3,1.],[0.8,0.4,0.2,1.]))]);
     let mut reused=WgpuRasterizer::new_native_headless(color).unwrap();
     for (sigma,level) in [(85.,0),(85.,1),(85.,2),(85.,3),(64.,3),(64.,0),(85.,2),(85.,0)] {
-        set(&mut layers[0],"sigma",sigma);let side=(1<<level) as f32;
+        set_effect_at(&mut doc,0,"sigma",EffectValue::Number(sigma));let side=(1<<level) as f32;
         reused.scale_display=None;
-        let mut frame=packet(&layers,extent);frame.composite_all=false;frame.view.document_to_surface=[1./side,0.,0.,1./side,0.,0.];
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view.document_to_surface=[1./side,0.,0.,1./side,0.,0.];
         reused.submit(frame).unwrap();let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();fresh.submit(frame).unwrap();
         let error=crate::test_support::max_error(&display_pixels(&reused),&display_pixels(&fresh));
         assert!(error<2e-5,"Gaussian prepared variant sigma={sigma} level={level} differs from fresh {error}");
@@ -942,11 +950,11 @@ fn every_gaussian_consumer_matches_discrete_step_reference_across_the_admitted_r
     for id in CONSUMERS {
         let mut maximum=0_f64;
         for sigma in SIGMAS {
-            let mut layers=[gaussian_fixture(id,sigma,EffectResolution::Native),original(field)];
-            if id!="gaussian_blur" && id!="pencil" {set(&mut layers[0],"amount",61.);}
-            if id=="bloom" || id=="unsharp_mask" {set(&mut layers[0],"threshold",0.);}
-            if id=="pencil" {set(&mut layers[0],"contrast",23.);}
-            r.submit(packet(&layers,extent)).unwrap();
+            let mut doc=gaussian_document(extent,color,[gaussian_fixture(id,sigma,EffectResolution::Native),original(field)]);
+            if id!="gaussian_blur" && id!="pencil" {set_effect_at(&mut doc,0,"amount",EffectValue::Number(61.));}
+            if id=="bloom" || id=="unsharp_mask" {set_effect_at(&mut doc,0,"threshold",EffectValue::Number(0.));}
+            if id=="pencil" {set_effect_at(&mut doc,0,"contrast",EffectValue::Number(23.));}
+            r.submit(packet(doc.scene(),extent)).unwrap();
             let image=pixels(&r,crate::test_support::document_texture(&r));
             let weights=kernel(sigma);
             for x in [1,128,255,256,384,515] {

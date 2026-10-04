@@ -46,63 +46,26 @@ impl SelectionMaskProperties {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum SelectionTarget {
     Current,
-    Saved(LayerId),
-}
-
-impl Layer {
-    pub fn selection(id: LayerId, name: impl Into<Arc<str>>, coverage: Selection) -> Self {
-        let mut layer = Self::paint(id, name);
-        layer.kind = LayerKind::Selection;
-        layer.selection = Some(coverage);
-        layer
-    }
-    pub fn is_artwork(&self) -> bool {
-        self.kind != LayerKind::Selection
-    }
+    Saved(crate::authored::OccurrenceHandle),
 }
 
 impl Document {
-    /// Visibility through groups, also used for display-only selection previews.
-    pub fn layer_is_visible(&self, id: LayerId) -> bool {
-        crate::layer_is_visible(&self.layers, id)
+    pub fn saved_selection(&self,id:crate::authored::OccurrenceHandle)->Result<Selection,DocumentError> {
+        let scene=self.scene();let o=scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
+        let crate::authored::OccurrenceContent::Selection(handle)=o.content else{return Err(DocumentError::InvalidLayerOperation("Choose a Selection Layer"));};
+        let selection=&self.artwork.selections.get(handle).ok_or(DocumentError::MissingTarget(crate::authored::SourceTarget::Selection(handle)))?.selection;
+        selection.mapped(&scene.target_geometry(crate::authored::SourceTarget::Selection(handle)).placement)
     }
-
-    /// Resolve stored placement into a working snapshot without copying pixels.
-    pub fn saved_selection(&self, id: LayerId) -> Result<Selection, DocumentError> {
-        let layer = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-        layer
-            .selection
-            .as_ref()
-            .filter(|_| layer.kind == LayerKind::Selection)
-            .ok_or(DocumentError::InvalidLayerOperation(
-                "Choose a Selection Layer",
-            ))?
-            .mapped(&self.layer_geometry(id).placement)
-    }
-
-    /// Construct a validated edit from document-space coverage. Loading/painting
-    /// the current selection never overwrites a saved source. History replay uses
-    /// the resulting edit directly, so a later lock cannot prevent undo.
-    pub fn selection_edit(
-        &self,
-        target: SelectionTarget,
-        coverage: Selection,
-    ) -> Result<Edit, DocumentError> {
-        coverage.validate()?;
+    pub fn selection_edit(&self,target:SelectionTarget,coverage:Selection)->Result<Edit,DocumentError> {
+        use crate::authored::*;coverage.validate()?;
         match target {
-            SelectionTarget::Current => Ok(Edit::SetSelection(Some(coverage))),
-            SelectionTarget::Saved(id) => {
-                self.saved_selection(id)?;
-                if self.is_locked(id) {
-                    return Err(DocumentError::ProtectedLayer(id));
-                }
-                let inverse = self.affine_edit_transform(id).and_then(crate::Affine::inverse).ok_or(
-                    DocumentError::InvalidLayerOperation("Invalid selection placement"),
-                )?;
-                Ok(Edit::SetSavedSelection {
-                    id,
-                    selection: coverage.transformed(inverse)?,
-                })
+            SelectionTarget::Current=>{let mut working=self.working.clone();working.selection=Some(coverage);Ok(Edit::Working(working))},
+            SelectionTarget::Saved(id)=>{
+                self.saved_selection(id)?;if self.is_locked(id){return Err(DocumentError::ProtectedOccurrence(id));}
+                let OccurrenceContent::Selection(handle)=self.scene().occurrence(id).unwrap().content else{unreachable!()};
+                let inverse=self.affine_edit_transform(SourceTarget::Selection(handle)).and_then(Affine::inverse).ok_or(DocumentError::InvalidLayerOperation("Invalid selection placement"))?;
+                let mut value=self.artwork.selections.get(handle).unwrap().clone();value.selection=coverage.transformed(inverse)?;
+                Ok(Edit::SavedSelection(RecordChange::replace(&self.artwork.selections,handle,Some(value))?))
             }
         }
     }
@@ -118,6 +81,8 @@ pub enum SelectionMode {
     Intersect,
 }
 
+type SelectionChunks = Arc<[Resource<[u8]>]>;
+
 /// Immutable coverage survives subsequent edits, undo and renderer recreation.
 /// Nibble masks pack eight 0..4 coverage samples per word; refined masks pack
 /// four 0..255 coverage bytes. Rows pad their final word with zero coverage.
@@ -130,7 +95,13 @@ pub struct SelectionPixels {
     bounds: [u32; 4],
     words: Arc<[u32]>,
     #[serde(skip)]
-    package_chunks: Arc<OnceLock<Arc<[Resource<[u8]>]>>>,
+    package_chunks: Arc<OnceLock<SelectionChunks>>,
+    #[serde(skip)]
+    package_chunk_ids: Arc<OnceLock<Arc<[crate::authored::PortableId]>>>,
+    #[serde(skip)]
+    words_validated: Arc<OnceLock<()>>,
+    #[serde(skip)]
+    package_validated: Arc<OnceLock<()>>,
 }
 impl PartialEq for SelectionPixels {
     fn eq(&self, other: &Self) -> bool {
@@ -166,6 +137,9 @@ impl SelectionPixels {
             words,
             byte_coverage,
             package_chunks: Arc::default(),
+            package_chunk_ids: Arc::default(),
+            words_validated: Arc::default(),
+            package_validated: Arc::default(),
         };
         value.validate()?;
         Ok(value)
@@ -177,15 +151,17 @@ impl SelectionPixels {
         if w == 0 || h == 0 || x0 > x1 || y0 > y1 || x1 > w || y1 > h
             || u64::from(w.div_ceil(self.pixels_per_word())) * u64::from(h) != words.len() as u64
             // Reject values >4 with eight parallel nibble comparisons.
-            || (!self.byte_coverage && words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0))
+            || (!self.byte_coverage && self.words_validated.get().is_none() && words.iter().any(|v| v & 0x88888888 != 0 || ((v >> 2) & (v | (v >> 1)) & 0x11111111) != 0))
         {
             return Err(DocumentError::InvalidLayerOperation(
                 "Invalid selection coverage",
             ));
         }
+        self.words_validated.get_or_init(|| ());
         Ok(())
     }
     pub(crate) fn validate_package(&self) -> Result<(), String> {
+        if self.package_validated.get().is_some() { return Ok(()); }
         self.validate().map_err(|e| e.to_string())?;
         if self.extent.iter().any(|v| *v > crate::MAX_EXTENT) { return Err("Oversized selection coverage".into()); }
         let count = self.pixels_per_word();
@@ -205,18 +181,20 @@ impl SelectionPixels {
                 }
             }
         }
+        self.package_validated.get_or_init(|| ());
         Ok(())
     }
     pub(crate) fn package_chunks(&self) -> Result<&[Resource<[u8]>], String> {
         if let Some(chunks) = self.package_chunks.get() { return Ok(chunks); }
         self.validate_package()?;
         Ok(self.package_chunks.get_or_init(|| {
-            self.words.chunks(SELECTION_CHUNK_BYTES / 4).map(|words| {
+            let ids = self.transfer_chunk_ids();
+            self.words.chunks(SELECTION_CHUNK_BYTES / 4).enumerate().map(|(index, words)| {
                 let mut bytes = vec![0; SELECTION_CHUNK_BYTES];
-                for (word, dest) in words.iter().zip(bytes.chunks_exact_mut(4)) {
+                for (word, dest) in words.iter().zip(bytes.as_chunks_mut::<4>().0) {
                     dest.copy_from_slice(&word.to_le_bytes());
                 }
-                Resource::from(lz4_flex::block::compress(&bytes))
+                Resource::with_id(ids[index], lz4_flex::block::compress(&bytes).into())
             }).collect::<Vec<_>>().into()
         }))
     }
@@ -244,11 +222,39 @@ impl SelectionPixels {
             if length != SELECTION_CHUNK_BYTES { return Err("Invalid selection chunk length".into()); }
             let used = (count - words.len()).min(SELECTION_CHUNK_BYTES / 4) * 4;
             if decoded[used..].iter().any(|v| *v != 0) { return Err("Nonzero selection chunk padding".into()); }
-            words.extend(decoded[..used].chunks_exact(4).map(|b| u32::from_le_bytes(b.try_into().unwrap())));
+            words.extend(decoded[..used].as_chunks::<4>().0.iter().map(|b| u32::from_le_bytes(*b)));
         }
         let value = Self::with_coverage(extent, bounds, words.into(), byte_coverage).map_err(|e| e.to_string())?;
         value.validate_package()?;
         value.package_chunks.set(chunks.into()).map_err(|_| "Selection chunk cache already initialized")?;
+        Ok(value)
+    }
+    pub(crate) fn transfer_words(&self) -> &Arc<[u32]> { &self.words }
+    pub(crate) fn transfer_chunks(&self) -> Option<&[Resource<[u8]>]> { self.package_chunks.get().map(|chunks| chunks.as_ref()) }
+    pub(crate) fn transfer_chunk_ids(&self) -> &[crate::authored::PortableId] {
+        self.package_chunk_ids.get_or_init(|| {
+            if let Some(chunks) = self.package_chunks.get() { return chunks.iter().map(Resource::id).collect::<Vec<_>>().into(); }
+            (0..(self.words.len() * 4).div_ceil(SELECTION_CHUNK_BYTES)).map(|_| crate::authored::PortableId::random()).collect::<Vec<_>>().into()
+        })
+    }
+    pub(crate) fn from_verified_words(
+        extent: [u32; 2], bounds: [u32; 4], byte_coverage: bool, words: Arc<[u32]>,
+        ids: Vec<crate::authored::PortableId>, chunks: Option<Vec<Resource<[u8]>>>,
+    ) -> Result<Self, String> {
+        let count = u64::from(extent[0].div_ceil(if byte_coverage { 4 } else { 8 })) * u64::from(extent[1]);
+        let [x0, y0, x1, y1] = bounds;
+        if extent.contains(&0) || extent.iter().any(|v| *v > crate::MAX_EXTENT)
+            || x0 > x1 || y0 > y1 || x1 > extent[0] || y1 > extent[1] || count != words.len() as u64
+            || (count * 4).div_ceil(SELECTION_CHUNK_BYTES as u64) != ids.len() as u64
+            || ids.iter().copied().collect::<std::collections::BTreeSet<_>>().len() != ids.len()
+            || chunks.as_ref().is_some_and(|chunks| chunks.len() != ids.len() || chunks.iter().zip(&ids).any(|(chunk, id)| chunk.id() != *id)) {
+            return Err("Invalid verified selection descriptor".into());
+        }
+        let value = Self { extent, bounds, words, byte_coverage, package_chunks: Arc::default(), package_chunk_ids: Arc::new(OnceLock::from(Arc::<[crate::authored::PortableId]>::from(ids))), words_validated: Arc::new(OnceLock::from(())), package_validated: Arc::default() };
+        if let Some(chunks) = chunks {
+            value.package_chunks.set(chunks.into()).map_err(|_| "Selection chunk cache already initialized")?;
+            value.package_validated.get_or_init(|| ());
+        }
         Ok(value)
     }
     pub fn pixels_per_word(&self) -> u32 {
@@ -465,177 +471,31 @@ mod selection_tests {
         ))
     }
 
+    use crate::operation_test_support as fixture;
+    use fixture::*;
     #[test]
     fn saved_selection_roundtrip_and_working_copy_are_independent() {
-        let mut editor = Editor::new(Document::new("saved coverage", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        let id = editor.allocate_layer_id();
-        let original = soft_mask();
-        let mut layer = Layer::selection(id, "Hair", original.clone());
-        let properties = SelectionMaskProperties {
-            opacity: 0.35,
-            ..Default::default()
-        };
-        layer.properties.selection_mask = Some(properties.clone());
-        editor
-            .perform(Edit::InsertLayer { index: 0, layer: Box::new(layer) })
-            .unwrap();
-        let saved_checkpoint = editor.checkpoint();
-        let loaded = editor.document().saved_selection(id).unwrap();
-        let (SelectionShape::Pixels(saved), SelectionShape::Pixels(copy)) =
-            (&original.shape, &loaded.shape)
-        else {
-            panic!("pixels")
-        };
-        assert!(Arc::ptr_eq(saved, copy));
-        editor
-            .perform(Edit::SetSelection(Some(loaded.clone())))
-            .unwrap();
-        assert_eq!(editor.checkpoint(), saved_checkpoint);
-        let edit = editor
-            .document()
-            .selection_edit(SelectionTarget::Saved(id), Selection::full())
-            .unwrap();
-        assert!(!edit.changes_image());
-        editor.perform(edit).unwrap();
-        assert_ne!(editor.checkpoint(), saved_checkpoint);
-        assert_eq!(editor.document().selection, Some(loaded));
-        editor.undo().unwrap();
-        assert_eq!(editor.document().saved_selection(id).unwrap(), original);
-        editor.redo().unwrap();
-        let mut bytes = Vec::new();
-        Project::snapshot(editor.document())
-            .unwrap()
-            .write(&mut bytes)
-            .unwrap();
-        let restored = Project::read(bytes.as_slice(), ProjectLimits::default())
-            .unwrap()
-            .document;
-        assert_eq!(
-            restored.layer(id).unwrap().selection,
-            Some(Selection::full())
-        );
-        assert_eq!(restored.layer(id).unwrap().name.as_ref(), "Hair");
-        assert_eq!(
-            restored.layer(id).unwrap().properties.selection_mask,
-            Some(properties)
-        );
-        assert_eq!(restored.selection, Some(original.clone()));
-        editor.perform(Edit::RemoveLayer { id }).unwrap();
-        assert_eq!(editor.document().selection, Some(original));
-        editor.undo().unwrap();
-        assert!(editor.document().layer(id).is_some());
+        let mut doc=fixture::document([64,64],&["Ink","Hair"]);let original=soft_mask();saved(&mut doc,"Hair",original.clone());let id=id(&doc,"Hair");let OccurrenceContent::Selection(handle)=occurrence(&doc,"Hair").content else{panic!("selection")};
+        let properties=SelectionMaskProperties {opacity:0.35,..Default::default()};doc.artwork.selections.get_mut(handle).unwrap().display=properties.clone();let mut editor=Editor::new(doc);let saved_checkpoint=editor.checkpoint();let loaded=editor.document().saved_selection(id).unwrap();let (SelectionShape::Pixels(saved),SelectionShape::Pixels(copy))=(&original.shape,&loaded.shape) else{panic!("pixels")};assert!(Arc::ptr_eq(saved,copy));
+        editor.perform(editor.document().selection_edit(SelectionTarget::Current,loaded.clone()).unwrap()).unwrap();assert_eq!(editor.checkpoint(),saved_checkpoint);let edit=editor.document().selection_edit(SelectionTarget::Saved(id),Selection::full()).unwrap();assert!(!edit.changes_image(editor.document()));editor.perform(edit).unwrap();assert_ne!(editor.checkpoint(),saved_checkpoint);assert_eq!(editor.document().working.selection,Some(loaded));editor.undo().unwrap();assert_eq!(editor.document().saved_selection(id).unwrap(),original);editor.redo().unwrap();
+        let restored=roundtrip(editor.document());let restored_id=fixture::id(&restored,"Hair");let OccurrenceContent::Selection(restored_handle)=occurrence(&restored,"Hair").content else{panic!("selection")};assert_eq!(restored.saved_selection(restored_id).unwrap(),Selection::full());assert_eq!(occurrence(&restored,"Hair").name.as_ref(),"Hair");assert_eq!(restored.artwork.selections.get(restored_handle).unwrap().display,properties);assert!(restored.working.selection.is_none());
+        editor.perform(editor.document().delete_layers_edit(&[id]).unwrap()).unwrap();assert_eq!(editor.document().working.selection,Some(original));editor.undo().unwrap();assert!(editor.document().scene().occurrence(id).is_some());
     }
-
     #[test]
     fn saved_selection_resolves_group_placement_and_checks_ancestor_locks() {
-        let mut doc = Document::new("group coverage", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let group_id = doc.allocate_layer_id();
-        let mut group = Layer::paint(group_id, "Character");
-        group.kind = LayerKind::Group;
-        group.properties.offset = Point { x: 12., y: 8. };
-        doc.apply(Edit::InsertLayer {
-            index: 0,
-            layer: Box::new(group.clone()),
-        })
-        .unwrap();
-        let id = doc.allocate_layer_id();
-        let mut layer = Layer::selection(id, "Hair", soft_mask());
-        layer.properties.parent = Some(group_id);
-        layer.properties.placement =
-            LayerPlacement::from_affine(Affine::around(Point::default(), [2., 2.], 0., Point::default()));
-        doc.apply(Edit::InsertLayer { index: 1, layer: Box::new(layer) }).unwrap();
-        let world = doc.saved_selection(id).unwrap();
-        assert_eq!(world.affine, doc.affine_edit_transform(id).unwrap());
-        let replacement = world.translated(Point { x: 2., y: 4. });
-        doc.apply(
-            doc.selection_edit(SelectionTarget::Saved(id), replacement.clone())
-                .unwrap(),
-        )
-        .unwrap();
-        assert_eq!(doc.saved_selection(id).unwrap(), replacement);
-        group.properties.locked = true;
-        doc.apply(Edit::ReplaceLayer(Box::new(group))).unwrap();
-        assert!(
-            doc.selection_edit(SelectionTarget::Saved(id), Selection::empty())
-                .is_err()
-        );
-        assert!(
-            doc.selection_edit(SelectionTarget::Current, Selection::empty())
-                .is_ok()
-        );
-        assert!(
-            doc.saved_selection(id).is_ok(),
-            "locked masks remain loadable"
-        );
-        assert!(doc.saved_selection(LayerId(1)).is_err());
+        let mut doc=fixture::document([64,64],&["Ink","Character","Hair"]);let group=nest(&mut doc,"Character",&["Hair"]);occurrence_mut(&mut doc,"Character").translation=Point{x:12.,y:8.};saved(&mut doc,"Hair",soft_mask());let id=fixture::id(&doc,"Hair");occurrence_mut(&mut doc,"Hair").placement=LayerPlacement::from_affine(Affine::around(Point::default(),[2.,2.],0.,Point::default()));let target=fixture::target(&doc,"Hair");let world=doc.saved_selection(id).unwrap();assert_eq!(world.affine,doc.affine_edit_transform(target).unwrap());let replacement=world.translated(Point{x:2.,y:4.});doc.apply(doc.selection_edit(SelectionTarget::Saved(id),replacement.clone()).unwrap()).unwrap();assert_eq!(doc.saved_selection(id).unwrap(),replacement);
+        let mut locked=doc.scene().occurrence(group).unwrap().clone();locked.locked=true;doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,group,Some(locked)).unwrap())).unwrap();assert!(doc.selection_edit(SelectionTarget::Saved(id),Selection::empty()).is_err());assert!(doc.selection_edit(SelectionTarget::Current,Selection::empty()).is_ok());assert!(doc.saved_selection(id).is_ok());assert!(doc.saved_selection(fixture::id(&doc,"Ink")).is_err());
     }
-
     #[test]
     fn selection_nodes_reject_artwork_and_project_limits_include_saved_coverage() {
-        let mut doc = Document::new("validation", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let id = doc.allocate_layer_id();
-        let layer = Layer::selection(id, "Region", soft_mask());
-        for mutate in [
-            |l: &mut Layer| l.opacity = 0.5,
-            |l: &mut Layer| l.properties.clipped = true,
-            |l: &mut Layer| l.properties.alpha_locked = true,
-            |l: &mut Layer| l.mask = Some(LayerMask::reveal_all(LayerId(99), Point::default())),
-            |l: &mut Layer| l.selection = None,
-        ] {
-            let mut invalid = layer.clone();
-            mutate(&mut invalid);
-            assert!(doc.validate_layer(&invalid).is_err());
-        }
-        doc.apply(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
-        let project = Project::snapshot(&doc).unwrap();
-        assert!(
-            project
-                .validate(ProjectLimits {
-                    raster_bytes: 3,
-                    ..Default::default()
-                })
-                .is_err()
-        );
-        let mut old = serde_json::to_value(Document::new("old", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() })).unwrap();
-        for layer in old["layers"].as_array_mut().unwrap() {
-            layer.as_object_mut().unwrap().remove("selection");
-        }
-        let old: Document = serde_json::from_value(old).unwrap();
-        assert!(old.layers.iter().all(|l| l.selection.is_none()));
-        assert_ne!(Selection::empty(), Selection::full());
-        assert!(Selection::empty().validate().is_ok());
+        let mut doc=fixture::document([64,64],&["Ink","Region"]);saved(&mut doc,"Region",soft_mask());let id=fixture::id(&doc,"Region");let region=occurrence(&doc,"Region").clone();let mask=doc.artwork.coverage.next_handle();let coverage=CoverageSnapshot::reveal_all(mask,[64;2],Point::default());doc.artwork.coverage.insert(PortableId::random(),coverage.source).unwrap();
+        for mutate in [|o:&mut Occurrence|o.opacity=0.5,|o:&mut Occurrence|o.clipped=true,|o:&mut Occurrence|o.alpha_locked=true] {let mut invalid=region.clone();mutate(&mut invalid);assert!(doc.clone().apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,id,Some(invalid)).unwrap())).is_err());}
+        let mut invalid=region.clone();invalid.mask=Some(coverage.use_);assert!(doc.clone().apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,id,Some(invalid)).unwrap())).is_err());let mut missing=doc.artwork.clone();let OccurrenceContent::Selection(handle)=region.content else{panic!("selection")};missing.selections.remove(handle);assert!(Document::from_artwork(missing).is_err());
+        let bytes=encoded(&doc);let source=crate::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();let outcome=crate::package::codec::open(source,ProjectLimits {raster_bytes:3,..Default::default()},&std::sync::atomic::AtomicBool::new(false)).unwrap();assert!(!matches!(outcome,crate::package::codec::OpenOutcome::Candidate {..}));let restored=roundtrip(&fixture::document([64,64],&["Ink"]));assert!(restored.artwork.selections.is_empty());assert_ne!(Selection::empty(),Selection::full());assert!(Selection::empty().validate().is_ok());
     }
-
     #[test]
     fn saved_rows_do_not_interrupt_artwork_clipping_or_accept_raster_edits() {
-        let mut doc = Document::new("clipping", 64, 64, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        let saved = doc.allocate_layer_id();
-        doc.apply(Edit::InsertLayer {
-            index: 0,
-            layer: Box::new(Layer::selection(saved, "Region", Selection::empty())),
-        })
-        .unwrap();
-        let clip = doc.allocate_layer_id();
-        let mut layer = Layer::paint(clip, "Highlights");
-        layer.properties.clipped = true;
-        doc.apply(Edit::InsertLayer { index: 0, layer: Box::new(layer) }).unwrap();
-        assert_eq!(doc.clipping_base(clip), Some(LayerId(1)));
-        assert_eq!(doc.clipping_stack_top(LayerId(1)), Some(clip));
-        assert!(doc.target_raster(saved).is_none());
-        assert!(
-            doc.apply(Edit::SetRaster {
-                target: saved,
-                revision: Default::default()
-            })
-            .is_err()
-        );
-        assert!(
-            doc.apply(Edit::SetLayerOpacity {
-                id: saved,
-                opacity: 0.5
-            })
-            .is_err()
-        );
+        let mut doc=fixture::document([64,64],&["Highlights","Region","Ink"]);saved(&mut doc,"Region",Selection::empty());occurrence_mut(&mut doc,"Highlights").clipped=true;let saved_id=fixture::id(&doc,"Region");let clip=fixture::id(&doc,"Highlights");let base=fixture::id(&doc,"Ink");let target=fixture::target(&doc,"Region");assert_eq!(doc.clipping_base(clip),Some(base));assert_eq!(doc.clipping_stack_top(base),Some(clip));assert!(doc.target_raster(target).is_none());assert!(doc.apply(Edit::SetRaster {target,revision:Default::default()}).is_err());let mut invalid=doc.scene().occurrence(saved_id).unwrap().clone();invalid.opacity=0.5;assert!(doc.apply(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,saved_id,Some(invalid)).unwrap())).is_err());
     }
     #[test]
     fn affine_placement_keeps_source_and_composes_with_local_offsets() {
@@ -762,62 +622,20 @@ mod selection_tests {
 #[cfg(test)]
 mod refinement_tests {
     use super::*;
-    fn mask(word:u32)->Selection {
-        Selection::pixels(Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![word]).unwrap()))
-    }
+    use crate::operation_test_support as fixture;
+    use fixture::*;
+    fn mask(word:u32)->Selection {Selection::pixels(Arc::new(SelectionPixels::bytes([4,1],[0,0,4,1],vec![word]).unwrap()))}
+    fn document()->Document {let mut doc=fixture::document([4,1],&["Ink","Mask"]);saved(&mut doc,"Mask",Selection::empty());doc}
     #[test]
     fn refined_selections_keep_original_undo_and_final_redo() {
-        for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
-            let mut doc=Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            doc.layers.push(Layer::selection(LayerId(3),"Mask",Selection::empty()));
-            let original=doc.clone();let mut editor=Editor::new(doc);
-            editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();
-            let checkpoint=editor.checkpoint();
-            for word in [0xff800000,0xff808000] {
-                editor.refine_selection(target,mask(word),editor.document().revision).unwrap();
-            }
-            assert_eq!(editor.checkpoint()==checkpoint,target==SelectionTarget::Current);
-            editor.undo().unwrap();
-            assert_eq!(editor.document().selection,original.selection);
-            assert_eq!(editor.document().saved_selection(LayerId(3)).unwrap(),Selection::empty());
-            assert!(!editor.can_undo());
-            editor.redo().unwrap();
-            let coverage=match target {SelectionTarget::Current=>editor.document().selection.clone().unwrap(),SelectionTarget::Saved(id)=>editor.document().saved_selection(id).unwrap()};
-            assert_eq!(coverage,mask(0xff808000));
-        }
+        for current in [false,true] {let doc=document();let saved=id(&doc,"Mask");let target=if current{SelectionTarget::Current}else{SelectionTarget::Saved(saved)};let original=doc.clone();let mut editor=Editor::new(doc);editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();let checkpoint=editor.checkpoint();for word in [0xff800000,0xff808000]{editor.refine_selection(target,mask(word),editor.document().revision).unwrap();}assert_eq!(editor.checkpoint()==checkpoint,current);editor.undo().unwrap();assert_eq!(editor.document().working.selection,original.working.selection);assert_eq!(editor.document().saved_selection(saved).unwrap(),Selection::empty());assert!(!editor.can_undo());editor.redo().unwrap();let coverage=match target{SelectionTarget::Current=>editor.document().working.selection.clone().unwrap(),SelectionTarget::Saved(id)=>editor.document().saved_selection(id).unwrap()};assert_eq!(coverage,mask(0xff808000));}
     }
     #[test]
     fn refinement_rejects_stale_revision_and_undo_branches() {
-        let mut editor=Editor::new(Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }));
-        editor.perform(Edit::SetSelection(Some(mask(0xff)))).unwrap();
-        let revision=editor.document().revision;
-        editor.perform(Edit::SetSelection(None)).unwrap();
-        assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),revision).is_err());
-        assert!(editor.document().selection.is_none());
-        editor.undo().unwrap();
-        assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),editor.document().revision).is_err());
-        assert!(editor.can_redo());
+        let mut editor=Editor::new(document());editor.perform(editor.document().selection_edit(SelectionTarget::Current,mask(0xff)).unwrap()).unwrap();let revision=editor.document().revision;let mut working=editor.document().working.clone();working.selection=None;editor.perform(Edit::Working(working)).unwrap();assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),revision).is_err());assert!(editor.document().working.selection.is_none());editor.undo().unwrap();assert!(editor.refine_selection(SelectionTarget::Current,mask(0xff00),editor.document().revision).is_err());assert!(editor.can_redo());
     }
     #[test]
     fn withdrawn_refinements_leave_no_history() {
-        for target in [SelectionTarget::Current,SelectionTarget::Saved(LayerId(3))] {
-            let mut doc=Document::new("refine",4,1, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-            doc.layers.push(Layer::selection(LayerId(3),"Mask",mask(0xff)));
-            doc.selection=Some(mask(0xff00));
-            let mut editor=Editor::new(doc);
-            editor.perform(Edit::SetRulers(Vec::new())).unwrap();
-            let (original,checkpoint)=(editor.document().clone(),editor.checkpoint());
-            editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();
-            editor.refine_selection(target,mask(0xff800000),editor.document().revision).unwrap();
-            assert!(editor.withdraw_selection(target,editor.document().revision-1).is_err());
-            editor.withdraw_selection(target,editor.document().revision).unwrap();
-            assert_eq!(editor.document().selection,original.selection);
-            assert_eq!(editor.document().saved_selection(LayerId(3)),original.saved_selection(LayerId(3)));
-            assert_eq!(editor.checkpoint(),checkpoint);
-            assert!(!editor.can_redo());
-            editor.undo().unwrap();
-            assert!(!editor.can_undo(),"only the unrelated step remains");
-            assert!(editor.withdraw_selection(target,editor.document().revision).is_err());
-        }
+        for current in [false,true] {let mut doc=document();let saved_id=id(&doc,"Mask");let OccurrenceContent::Selection(h)=occurrence(&doc,"Mask").content else{panic!("selection")};doc.artwork.selections.get_mut(h).unwrap().selection=mask(0xff);doc.working.selection=Some(mask(0xff00));let target=if current{SelectionTarget::Current}else{SelectionTarget::Saved(saved_id)};let mut editor=Editor::new(doc);editor.perform(editor.document().ruler_edit(Vec::new()).unwrap()).unwrap();let (original,checkpoint)=(editor.document().clone(),editor.checkpoint());editor.perform(editor.document().selection_edit(target,mask(0xff000000)).unwrap()).unwrap();editor.refine_selection(target,mask(0xff800000),editor.document().revision).unwrap();assert!(editor.withdraw_selection(target,editor.document().revision-1).is_err());editor.withdraw_selection(target,editor.document().revision).unwrap();assert_eq!(editor.document().working.selection,original.working.selection);assert_eq!(editor.document().saved_selection(saved_id),original.saved_selection(saved_id));assert_eq!(editor.checkpoint(),checkpoint);assert!(!editor.can_redo());editor.undo().unwrap();assert!(!editor.can_undo());assert!(editor.withdraw_selection(target,editor.document().revision).is_err());}
     }
 }

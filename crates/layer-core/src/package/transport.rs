@@ -13,7 +13,7 @@ impl<'a> BackingReader<'a> {
 }
 impl Read for BackingReader<'_> {
     fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-        if self.cancelled.load(Ordering::Relaxed) { return Err(io::Error::new(io::ErrorKind::Other, "Package operation cancelled")); }
+        if self.cancelled.load(Ordering::Relaxed) { return Err(io::Error::other("Package operation cancelled")); }
         let length = buffer.len().min(MAX_RANGE_BYTES).min(self.backing.byte_len().saturating_sub(self.position).min(usize::MAX as u64) as usize);
         if length == 0 { return Ok(0); }
         match self.backing.poll(self.position, length).map_err(io::Error::other)? {
@@ -82,6 +82,7 @@ mod native {
     }
     impl ByteSource for PrivateFile {
         fn byte_len(&self) -> u64 { self.length }
+        fn resident_bytes(&self) -> usize { 0 }
         fn poll(&self, offset: u64, length: usize) -> Result<RangeState, String> {
             if length > MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end| end > self.length) {
                 return Err("Package file range exceeds backing".into());

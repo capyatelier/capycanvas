@@ -1,8 +1,7 @@
-use crate::{artwork_sample_tests::{doubled_effect, gpu}, artwork_statistics_tests::generated, snapshot::CaptureControl};
-use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, EffectInstance, EffectValue, Layer, LayerId, LayerKind};
+use crate::{artwork_sample_tests::{doubled_effect, gpu, insert_effect, effect_draft, set_effect}, artwork_statistics_tests::generated, snapshot::CaptureControl};
+use layer_core::{ArtworkSample, ArtworkSampleRequest, ArtworkSource, Document, EffectInstance, EffectValue};
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
 use layer_core::{curves::calibrate_curves, levels::CalibrationRole};
-use std::sync::Arc;
 
 fn close(actual: f64, expected: f64, tolerance: f64) {
     assert!((actual-expected).abs()<=tolerance,"{actual} != {expected}, tolerance {tolerance}");
@@ -51,30 +50,30 @@ fn processed(effect: &EffectInstance, space: RgbSpace, sample: [f32;3]) -> [f64;
 fn fixture(space: RgbSpace, depth: SampleDepth, rgb: [f32;3], alpha: f32, master: &[[f32;2]], log: bool) -> Document {
     let pixels=[[rgb[0]*alpha*0.5,rgb[1]*alpha*0.5,rgb[2]*alpha*0.5,alpha]];
     let mut doc=generated([1,1],DocumentColor {space,depth},&pixels);
-    doc.layers.insert(0,doubled_effect(89));
+    insert_effect(&mut doc,doubled_effect(),0);
     let mut effect=EffectInstance::new(crate::tests::fixture("curves").program().for_depth(depth));
     if log {effect.set("domain",EffectValue::Choice(1)).unwrap();effect.set("hdr_stops",EffectValue::Number(4.)).unwrap();}
     set_curve(&mut effect,0,master);
     for (page,points) in [(1,[[0.,0.],[1.,0.7]]),(2,[[0.,0.1],[1.,0.9]]),(3,[[0.,0.25],[1.,1.]])] {set_curve(&mut effect,page,&points);}
-    let mut layer=Layer::paint(LayerId(90),"Curves"); layer.kind=LayerKind::Effect;layer.effect=Some(Arc::new(effect));
-    doc.layers.insert(0,layer);doc.layers.insert(0,doubled_effect(91));doc
+    insert_effect(&mut doc,effect,0);insert_effect(&mut doc,doubled_effect(),0);doc
 }
 fn calibrate_and_render(mut doc: Document, expected_input: [f32;3], alpha: f32) {
-    let sampled=sample(&doc,ArtworkSource::EffectInput(LayerId(90)));
+    let sampled=sample(&doc,ArtworkSource::EffectInput(doc.scene().children(None)[1]));
     for c in 0..3 {close(f64::from(sampled[c]),f64::from(expected_input[c]),3e-6*f64::from(expected_input[c]).abs().max(1.));}
     close(f64::from(sampled[3]),f64::from(alpha),2e-5*f64::from(alpha));
     let rgb=[sampled[0],sampled[1],sampled[2]];
-    doc.layers[0].visible=false;
-    let original=doc.layers[1].effect.as_ref().unwrap().as_ref().clone();
-    let oracle=processed(&original,doc.color.space,rgb);
+    let upper=doc.scene().children(None)[0];let curves=doc.scene().children(None)[1];
+    doc.artwork.occurrences.get_mut(upper).unwrap().visible=false;
+    let original=effect_draft(&doc,curves);
+    let oracle=processed(&original,doc.composition().color.space,rgb);
     let before=sample(&doc,ArtworkSource::Visible);
     for c in 0..3 {close(f64::from(before[c]),oracle[c],2e-5*oracle[c].abs().max(1.));}
-    let w=doc.color.space.to_xyz()[1]; let gray=oracle[1]+w[0]*(oracle[0]-oracle[1])+w[2]*(oracle[2]-oracle[1]);
+    let w=doc.composition().color.space.to_xyz()[1]; let gray=oracle[1]+w[0]*(oracle[0]-oracle[1])+w[2]*(oracle[2]-oracle[1]);
     for role in [CalibrationRole::Black,CalibrationRole::White,CalibrationRole::Gray] {
         let target=match role {CalibrationRole::Black=>0.,CalibrationRole::White=>1.,CalibrationRole::Gray=>gray};
-        let candidate=calibrate_curves(&original,rgb,doc.color.space,0,role).unwrap();
+        let candidate=calibrate_curves(&original,rgb,doc.composition().color.space,0,role).unwrap();
         assert_eq!(curve(&candidate,0),curve(&original,0));
-        doc.layers[1].effect=Some(Arc::new(candidate));
+        set_effect(&mut doc,curves,candidate);
         let actual=sample(&doc,ArtworkSource::Visible);
         for c in 0..3 {close(f64::from(actual[c]),target,2e-6f64.max(2e-4*target.abs()));}
         close(f64::from(actual[3]),f64::from(alpha),2e-5*f64::from(alpha));
@@ -102,12 +101,13 @@ fn curves_gpu_log_calibration_preserves_linear_brightness_and_tiny_covered_alpha
 fn curves_gpu_individual_calibration_changes_only_selected_channel() {
     for space in RgbSpace::ALL {
         let mut doc=fixture(space,SampleDepth::F32,[0.15,0.35,0.65],0.5,&[[0.,1.],[1.,0.]],false);
-        let source=sample(&doc,ArtworkSource::EffectInput(LayerId(90)));let rgb=[source[0],source[1],source[2]];
-        doc.layers[0].visible=false;
-        let original=doc.layers[1].effect.as_ref().unwrap().as_ref().clone(); let before=processed(&original,space,rgb);
+        let source=sample(&doc,ArtworkSource::EffectInput(doc.scene().children(None)[1]));let rgb=[source[0],source[1],source[2]];
+        let upper=doc.scene().children(None)[0];let curves=doc.scene().children(None)[1];
+        doc.artwork.occurrences.get_mut(upper).unwrap().visible=false;
+        let original=effect_draft(&doc,curves);let before=processed(&original,space,rgb);
         let candidate=calibrate_curves(&original,rgb,space,2,CalibrationRole::White).unwrap();
         for page in [0,1,3] {assert_eq!(curve(&candidate,page),curve(&original,page));}
-        doc.layers[1].effect=Some(Arc::new(candidate));let actual=sample(&doc,ArtworkSource::Visible);
+        set_effect(&mut doc,curves,candidate);let actual=sample(&doc,ArtworkSource::Visible);
         for c in 0..3 {let expected=if c==1 {1.} else {before[c]};close(f64::from(actual[c]),expected,2e-6f64.max(2e-4*expected.abs()));}
         close(f64::from(actual[3]),0.5,1e-6);
     }

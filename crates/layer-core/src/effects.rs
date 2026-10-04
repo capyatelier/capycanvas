@@ -170,7 +170,7 @@ pub enum EffectSampling {
 }
 
 impl EffectSampling {
-    pub fn radius(&self, effect: &EffectInstance) -> Option<u32> {
+    pub fn radius(&self, effect: EffectView<'_>) -> Option<u32> {
         match self {
             Self::Neighborhood { radius } => Some(*radius),
             Self::Parameter {
@@ -326,10 +326,10 @@ pub struct EffectClock {
     phase: f32,
 }
 impl EffectClock {
-    pub fn at(effect: &EffectInstance, elapsed: f32, phase: f32) -> Self {
+    pub fn at(effect: EffectView<'_>, elapsed: f32, phase: f32) -> Self {
         Self { previous: Some((elapsed, effect.playback_rate(), effect.animated())), phase }
     }
-    pub fn advance(&mut self, effect: &EffectInstance, elapsed: f32) -> f32 {
+    pub fn advance(&mut self, effect: EffectView<'_>, elapsed: f32) -> f32 {
         let animated = effect.animated();
         let rate = effect.playback_rate();
         match self.previous {
@@ -341,18 +341,26 @@ impl EffectClock {
         self.phase
     }
 }
-impl EffectInstance {
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectView<'a> {
+    pub program: &'a EffectProgram,
+    pub values: &'a [EffectValue],
+}
+impl<'a> EffectView<'a> {
+    pub fn new(program: &'a EffectProgram, values: &'a [EffectValue]) -> Self {
+        Self { program, values }
+    }
     pub fn constant_color(&self) -> Option<RgbColor> {
         match self.value(self.program.constant_color.as_deref()?) {
             Some(EffectValue::Color(color)) => Some(*color),
             _ => None,
         }
     }
-    pub fn lut3d(&self) -> Option<&Arc<crate::Lut3d>> {
+    pub fn lut3d(&self) -> Option<&'a Arc<crate::Lut3d>> {
         let EffectAuxiliary::Lut3d { resource, .. } = self.program.auxiliary.as_ref()? else { return None; };
         match self.value(resource) { Some(EffectValue::Lut3d(resource)) => resource.as_ref(), _ => None }
     }
-    pub fn resources(&self) -> impl Iterator<Item = &Arc<crate::Lut3d>> {
+    pub fn resources(self) -> impl Iterator<Item = &'a Arc<crate::Lut3d>> {
         self.values.iter().chain(self.program.parameters.iter().map(|p| &p.default))
             .filter_map(|v| match v { EffectValue::Lut3d(Some(r)) => Some(r), _ => None })
     }
@@ -374,7 +382,7 @@ impl EffectInstance {
         }
         Ok(Some((parameter,space)))
     }
-    fn validate_resource<'a>(&self, value: impl Fn(usize) -> &'a EffectValue) -> Result<(), &'static str> {
+    fn validate_resource<'v>(&self, value: impl Fn(usize) -> &'v EffectValue) -> Result<(), &'static str> {
         let Some((resource,space)) = self.auxiliary_indices()? else { return Ok(()); };
         let (EffectValue::Lut3d(resource),EffectValue::Choice(space)) = (value(resource),value(space)) else {
             return Err("Invalid color lookup resource values");
@@ -388,7 +396,7 @@ impl EffectInstance {
     }
     pub fn damage_radius(&self) -> Option<u32> {
         self.program.passes.iter().try_fold(0u32, |radius, pass| {
-            radius.checked_add(pass.sampling.radius(self)?)
+            radius.checked_add(pass.sampling.radius(*self)?)
         })
     }
     pub fn animated(&self) -> bool {
@@ -404,53 +412,21 @@ impl EffectInstance {
         };
         seconds * self.playback_rate()
     }
-    pub fn value(&self, key: &str) -> Option<&EffectValue> {
+    pub fn value(&self, key: &str) -> Option<&'a EffectValue> {
         self.program
             .parameters
             .iter()
             .position(|p| &*p.key == key)
-            .map(|i| &self.values[i])
+            .and_then(|i| self.values.get(i))
     }
-    pub fn choice(&self, key: &str) -> Option<&str> {
+    pub fn choice(&self, key: &str) -> Option<&'a str> {
         let i = self.program.parameters.iter().position(|p| &*p.key == key)?;
-        match (&self.program.parameters[i].kind, &self.values[i]) {
+        match (&self.program.parameters[i].kind, self.values.get(i)?) {
             (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
                 options.get(*v as usize).map(EffectOption::value)
             }
             _ => None,
         }
-    }
-    pub fn new(program: Arc<EffectProgram>) -> Self {
-        Self {
-            values: program
-                .parameters
-                .iter()
-                .map(|p| p.default.clone())
-                .collect(),
-            program,
-        }
-    }
-    /// Runtime schema replacement preserves parameters by key and choices by
-    /// stable value. New or individually incompatible fields use their defaults.
-    /// Conflicting joint constraints reject publication instead of silently
-    /// changing otherwise valid user values.
-    pub fn rebind(&self, program: Arc<EffectProgram>) -> Result<Self, &'static str> {
-        let mut next = Self::new(program);
-        for (parameter, value) in next.program.parameters.iter().zip(&mut next.values) {
-            if let EffectParameterKind::Choice { options } = &parameter.kind {
-                if let Some(index) = self.choice(&parameter.key)
-                    .and_then(|selected| options.iter().position(|option| option.value() == selected))
-                {
-                    *value = EffectValue::Choice(index as u32);
-                }
-            } else if let Some(old) = self.value(&parameter.key)
-                && parameter.validate(old).is_ok()
-            {
-                *value = old.clone();
-            }
-        }
-        next.validate()?;
-        Ok(next)
     }
     pub fn validate(&self) -> Result<(), &'static str> {
         if let Some(key) = &self.program.constant_color
@@ -601,6 +577,96 @@ impl EffectInstance {
         }
         Ok((a, b))
     }
+    /// Small parameter upload, never image processing. Curves/gradients retain
+    /// exact control data; shaders find the segment with a bounded binary search.
+    pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> {
+        self.validate()?;
+        let mut data = vec![[0.; 4]];
+        for value in self.values {
+            match value {
+                EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
+                EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
+                EffectValue::Choice(v) => data.push([*v as f32, 0., 0., 0.]),
+                EffectValue::Color(v) => data.push(v.encoded_in(space)?),
+                EffectValue::Curve(points) => data.extend(curve_parameters(points)),
+                EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops, space)?),
+                EffectValue::Lut3d(resource) => data.push([f32::from(resource.is_some()),0.,0.,0.]),
+            }
+        }
+        let directory = data.len();
+        data[0] = [directory as f32, self.program.lookups.len() as f32, 0., 0.];
+        data.resize(directory + self.program.lookups.len(), [0.; 4]);
+        for (i, lookup) in self.program.lookups.iter().enumerate() {
+            data[directory + i] = [data.len() as f32, lookup.values as f32, 0., 0.];
+            // Reserve GPU-owned output. Upload only the prefix before these
+            // tables on edits, preserving previously prepared results.
+            data.resize(data.len() + lookup.values as usize, [0.; 4]);
+        }
+        Ok(data)
+    }
+    pub fn scaled_values(&self, factor: f32) -> Option<Vec<EffectValue>> {
+        let mut values = self.values.to_vec();
+        for (parameter, value) in self.program.parameters.iter().zip(&mut values) {
+            if let (EffectParameterKind::Number { min, max, decimals, unit, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
+                && &**unit == "px"
+            {
+                let places = 10f32.powi(i32::from(*decimals));
+                *v = ((*v * factor * places).round() / places).clamp(*min, *max);
+            }
+        }
+        (values != self.values && EffectView::new(self.program, &values).validate().is_ok()).then_some(values)
+    }
+}
+impl<'a> From<&'a EffectInstance> for EffectView<'a> {
+    fn from(effect: &'a EffectInstance) -> Self {
+        Self::new(&effect.program, &effect.values)
+    }
+}
+impl EffectInstance {
+    pub fn view(&self) -> EffectView<'_> { self.into() }
+    pub fn lut3d(&self) -> Option<&Arc<crate::Lut3d>> { self.view().lut3d() }
+    pub fn resources(&self) -> impl Iterator<Item = &Arc<crate::Lut3d>> { self.view().resources() }
+    pub fn playback_rate(&self) -> f32 { self.view().playback_rate() }
+    pub fn damage_radius(&self) -> Option<u32> { self.view().damage_radius() }
+    pub fn animated(&self) -> bool { self.view().animated() }
+    pub fn time_seconds(&self, elapsed: f32) -> f32 { self.view().time_seconds(elapsed) }
+    pub fn value(&self, key: &str) -> Option<&EffectValue> { self.view().value(key) }
+    pub fn choice(&self, key: &str) -> Option<&str> { self.view().choice(key) }
+    pub fn constant_color(&self) -> Option<RgbColor> { self.view().constant_color() }
+    pub fn validate(&self) -> Result<(), &'static str> { self.view().validate() }
+    pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> { self.view().gpu_parameters(space) }
+    pub fn new(program: Arc<EffectProgram>) -> Self {
+        Self {
+            values: program
+                .parameters
+                .iter()
+                .map(|p| p.default.clone())
+                .collect(),
+            program,
+        }
+    }
+    /// Runtime schema replacement preserves parameters by key and choices by
+    /// stable value. New or individually incompatible fields use their defaults.
+    /// Conflicting joint constraints reject publication instead of silently
+    /// changing otherwise valid user values.
+    pub fn rebind(&self, program: Arc<EffectProgram>) -> Result<Self, &'static str> {
+        let mut next = Self::new(program);
+        for (parameter, value) in next.program.parameters.iter().zip(&mut next.values) {
+            if let EffectParameterKind::Choice { options } = &parameter.kind {
+                if let Some(index) = self.choice(&parameter.key)
+                    .and_then(|selected| options.iter().position(|option| option.value() == selected))
+                {
+                    *value = EffectValue::Choice(index as u32);
+                }
+            } else if let Some(old) = self.value(&parameter.key)
+                && parameter.validate(old).is_ok()
+            {
+                *value = old.clone();
+            }
+        }
+        next.validate()?;
+        Ok(next)
+    }
     pub fn set(&mut self, key: &str, mut value: EffectValue) -> Result<(), &'static str> {
         let i = self
             .program
@@ -614,7 +680,7 @@ impl EffectInstance {
             let mut high = f32::INFINITY;
             for constraint in self.program.constraints.iter() {
                 let EffectConstraint::OrderedNumbers { lower, upper, gap } = constraint;
-                let (a, b) = self.ordered_indices(lower, upper)?;
+                let (a, b) = self.view().ordered_indices(lower, upper)?;
                 match (&self.values[a], &self.values[b]) {
                     (EffectValue::Number(x), EffectValue::Number(y)) => {
                         if i == a {
@@ -637,7 +703,7 @@ impl EffectInstance {
             *v = v.clamp(low, high);
         }
         self.program.parameters[i].validate(&value)?;
-        self.validate_resource(|index| if index == i { &value } else { &self.values[index] })?;
+        self.view().validate_resource(|index| if index == i { &value } else { &self.values[index] })?;
         self.values[i] = value;
         Ok(())
     }
@@ -645,43 +711,7 @@ impl EffectInstance {
     /// decimals and clamped to their range; None when nothing changes or the
     /// scaled values would break the effect's constraints.
     pub fn scaled_px(&self, factor: f32) -> Option<Self> {
-        let mut scaled = self.clone();
-        for (parameter, value) in self.program.parameters.iter().zip(&mut scaled.values) {
-            if let (EffectParameterKind::Number { min, max, decimals, unit, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
-                && &**unit == "px"
-            {
-                let places = 10f32.powi(i32::from(*decimals));
-                *v = ((*v * factor * places).round() / places).clamp(*min, *max);
-            }
-        }
-        (scaled.values != self.values && scaled.validate().is_ok()).then_some(scaled)
-    }
-    /// Small parameter upload, never image processing. Curves/gradients retain
-    /// exact control data; shaders find the segment with a bounded binary search.
-    pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> {
-        self.validate()?;
-        let mut data = vec![[0.; 4]];
-        for value in &self.values {
-            match value {
-                EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
-                EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
-                EffectValue::Choice(v) => data.push([*v as f32, 0., 0., 0.]),
-                EffectValue::Color(v) => data.push(v.encoded_in(space)?),
-                EffectValue::Curve(points) => data.extend(curve_parameters(points)),
-                EffectValue::Gradient(stops) => data.extend(gradient_parameters(stops, space)?),
-                EffectValue::Lut3d(resource) => data.push([f32::from(resource.is_some()),0.,0.,0.]),
-            }
-        }
-        let directory = data.len();
-        data[0] = [directory as f32, self.program.lookups.len() as f32, 0., 0.];
-        data.resize(directory + self.program.lookups.len(), [0.; 4]);
-        for (i, lookup) in self.program.lookups.iter().enumerate() {
-            data[directory + i] = [data.len() as f32, lookup.values as f32, 0., 0.];
-            // Reserve GPU-owned output. Upload only the prefix before these
-            // tables on edits, preserving previously prepared results.
-            data.resize(data.len() + lookup.values as usize, [0.; 4]);
-        }
-        Ok(data)
+        self.view().scaled_values(factor).map(|values| Self { program: self.program.clone(), values })
     }
 }
 
@@ -1041,6 +1071,59 @@ mod tests {
             preview.validate().unwrap();
             assert_eq!(original, EffectInstance::new(id.program()));
             assert!(!preview.animated());
+        }
+    }
+    #[test]
+    fn borrowed_effect_reads_use_the_authored_values_and_definition() {
+        let program = fixture("gaussian_blur").program();
+        let mut values: Vec<_> = program.parameters.iter().map(|p| p.default.clone()).collect();
+        let sigma = program.parameters.iter().position(|p| &*p.key == "sigma").unwrap();
+        values[sigma] = EffectValue::Number(1.);
+        let owners = Arc::strong_count(&program);
+        let value = EffectView::new(&program, &values).value("sigma").unwrap();
+        assert!(std::ptr::eq(value, &values[sigma]));
+        let view = fixture("gaussian_blur").view(&values);
+        view.validate().unwrap();
+        assert_eq!(view.damage_radius(), Some(6));
+        assert_eq!(program.passes[0].sampling.radius(view), Some(3));
+        assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1], [1.,0.,0.,0.]);
+        let scaled = view.scaled_values(2.).unwrap();
+        assert_eq!(scaled[sigma], EffectValue::Number(2.));
+        assert_eq!(values[sigma], EffectValue::Number(1.));
+        assert_eq!(Arc::strong_count(&program), owners);
+        assert_eq!(view.scaled_values(1.), None);
+    }
+    #[test]
+    fn borrowed_effect_validation_rejects_incomplete_and_constrained_values() {
+        let program = fixture("levels").program();
+        let mut values: Vec<_> = program.parameters.iter().map(|p| p.default.clone()).collect();
+        let black = program.parameters.iter().position(|p| &*p.key == "black").unwrap();
+        let white = program.parameters.iter().position(|p| &*p.key == "white").unwrap();
+        values[black] = EffectValue::Number(0.8);
+        values[white] = EffectValue::Number(0.2);
+        assert_eq!(EffectView::new(&program, &values).validate(), Err("Invalid ordered parameter range"));
+        let incomplete = EffectView::new(&program, &[]);
+        assert_eq!(incomplete.value("black"), None);
+        assert_eq!(incomplete.choice("black"), None);
+        assert_eq!(incomplete.validate(), Err("Unsupported or invalid effect program"));
+        assert!(incomplete.gpu_parameters(RgbSpace::Srgb).is_err());
+    }
+    #[test]
+    fn borrowed_clock_preserves_captured_phase_and_integrates_the_previous_rate() {
+        let program = fixture("domain_warp").program();
+        let mut values: Vec<_> = program.parameters.iter().map(|p| p.default.clone()).collect();
+        let animate = program.parameters.iter().position(|p| &*p.key == "animate").unwrap();
+        let speed = program.parameters.iter().position(|p| &*p.key == "speed").unwrap();
+        values[animate] = EffectValue::Toggle(true);
+        values[speed] = EffectValue::Number(1.);
+        let mut clock = EffectClock::at(EffectView::new(&program, &values), 0., 5.);
+        for (elapsed, rate, phase) in [(1.,2.,6.), (2.,0.,8.), (9.,2.,8.), (10.,2.,10.)] {
+            values[speed] = EffectValue::Number(rate);
+            let effect = EffectView::new(&program, &values);
+            assert_eq!(clock.advance(effect, elapsed), phase);
+            let mut captured = EffectClock::at(effect, 0., phase);
+            assert_eq!(captured.advance(effect, 0.), phase);
+            assert_eq!(captured.advance(effect, 0.5), phase + rate * 0.5);
         }
     }
     #[test]

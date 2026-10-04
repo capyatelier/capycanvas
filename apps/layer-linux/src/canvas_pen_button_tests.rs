@@ -35,13 +35,7 @@ fn native_canvas_pen_buttons() {
     let raster = |w: &Workspace| {
         let gpu = w.gpu.borrow();
         let document = gpu.as_ref().unwrap().session.engine().document();
-        document
-            .layers
-            .iter()
-            .find(|l| l.id == document.active_layer)
-            .unwrap()
-            .raster
-            .clone()
+        active_raster(document).clone()
     };
     let paper = raster(&d.w);
     let mut expected = initial;

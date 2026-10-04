@@ -11,7 +11,7 @@ pub(super) struct DocumentGpu {
 }
 
 #[wasm_bindgen]
-pub struct WebRecoveryCapture(Option<layer_core::Project>);
+pub struct WebRecoveryCapture(Option<layer_core::ArtworkCapture>);
 #[wasm_bindgen]
 impl WebRecoveryCapture {
     pub fn write(&mut self, key: String) -> Result<js_sys::Promise, JsValue> {
@@ -20,7 +20,7 @@ impl WebRecoveryCapture {
             .take()
             .ok_or_else(|| js("Recovery capture already written"))?;
         Ok(wasm_bindgen_futures::future_to_promise(async move {
-            raster_project::save_recovery(project, key).await
+            artwork_transfer::save_recovery(project, key).await
         }))
     }
 }
@@ -39,7 +39,7 @@ impl WebApp {
             context.adapter.clone(),
             context.device.clone(),
             context.queue.clone(),
-            self.session.engine().document().color,
+            self.session.engine().document().composition().color,
         )
         .map_err(js)?;
         raster_worker::install(&mut renderer);

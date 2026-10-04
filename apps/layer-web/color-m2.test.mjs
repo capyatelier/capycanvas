@@ -1,5 +1,12 @@
 import {histogramJourney} from './histogram-journey.mjs';
 import assert from 'node:assert/strict';
+import {authoredIdentity,readPackage,packageObject,packageComposition,packageOccurrences,packageResources,packageResourceIdentity,resourceIdentity,sourceIdentity,rasterIdentity,sourceContent,sourceSamples} from './package-fixture.test.mjs';
+const rasterResources=m=>packageResources(m,'capy.raster-tile/1').map(resource=>resourceIdentity(m,{ref:resource.id}));
+const compositionColor=m=>({space:'srgb',depth:'u8',...packageComposition(m).data.color});
+const wireColor=c=>({space:{Srgb:'srgb',DisplayP3:'display_p3',AdobeRgb:'adobe_rgb',ProPhoto:'pro_photo'}[c.space],depth:c.depth.toLowerCase()});
+const activeOccurrence=async(evaluate,m)=>packageOccurrences(m)[await evaluate('layerApp.state().layers.findIndex(l=>l.editing)')];
+const runtimeId=async(evaluate,m,portable)=>evaluate(`Number(layerApp.state().layers[${packageOccurrences(m).findIndex(o=>o.id===portable)}].id)`);
+
 
 const helpers=(evaluate,{timeout=60000,enabled=false}={})=>{
   const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const start=performance.now();function poll(){try{if(${condition})resolve(true);else if(performance.now()-start>${timeout})reject(Error(${JSON.stringify(condition)}+': '+document.body.innerText.slice(-1400)));else setTimeout(poll,30);}catch(e){reject(e)}}poll();})`);
@@ -14,8 +21,7 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const {wait,click,invoke}=helpers(evaluate);
   await wait('window.layerApp && layerApp.startupTimes.complete!==null');
   await wait('JSON.parse(layerApp.app.workspace_view())?.ready && !JSON.parse(layerApp.app.workspace_view()).busy');
-  await evaluate(`window.sdrFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){sdrFiles.set(options.suggestedName,bytes)},async abort(){}}}});
-    window.sdrManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));`);
+  await evaluate(`window.sdrFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){sdrFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
   await invoke('new_document');await wait('!!document.querySelector(\"dialog[open]\")');
   if(await evaluate('!![...document.querySelectorAll("dialog[open] button")].find(b=>b.textContent==="Discard Changes")'))await click('Discard Changes');
   await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
@@ -33,16 +39,16 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',45,1],['mouseReleased',45,0]]) {await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   await wait('layerApp.state().document_file.modified');await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-  const paint=await evaluate('sdrManifest([...sdrFiles.values()].at(-1))');assert.equal(paint.document.color.depth,'U16');assert.equal(paint.document.color.space,'DisplayP3');assert.ok(paint.blobs.length>0);assert.ok(paint.blobs.every(b=>b.descriptor.bits_per_channel===16));
+  const paint=await readPackage(evaluate,'[...sdrFiles.values()].at(-1)');assert.equal(compositionColor(paint).depth,'u16');assert.equal(compositionColor(paint).space,'display_p3');assert.ok(packageResources(paint,'capy.raster-tile/1').length>0);assert.ok(packageResources(paint,'capy.raster-tile/1').every(b=>b.data.depth==='u16'));
   await evaluate(`(async()=>{window.sdrPhotoBytes=new Uint8Array(await (await fetch(${JSON.stringify(photoUrl)})).arrayBuffer());window.showOpenFilePicker=async()=>[{name:'prophoto16.png',async getFile(){return new File([sdrPhotoBytes],'prophoto16.png')}}];})()`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.document_color().space==="ProPhoto" && layerApp.app.brush_ready()');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'ProPhoto',depth:'U16'});assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
-  const source=await evaluate('sdrManifest([...sdrFiles.values()].at(-1))');assert.equal(source.tiled_sources.images.length,1);assert.equal(source.tiled_sources.images[0].depth,'U16');assert.ok(source.tiled_sources.images[0].tiles.length>0);assert.equal(source.tiled_sources.profiles.length,1);
+  const source=await readPackage(evaluate,'[...sdrFiles.values()].at(-1)');assert.equal(sourceIdentity(source).length,1);assert.equal(sourceIdentity(source)[0].interpretation.depth,'u16');assert.ok(sourceIdentity(source)[0].tiles.length>0);assert.equal(packageResources(source,'capy.icc/1').length,1);
   await evaluate(`window.sdrPhotoMaster=[...sdrFiles.values()].at(-1).slice();window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="photo-master.capy" && layerApp.app.brush_ready()');
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
-  const restored=await evaluate('sdrManifest(sdrFiles.get("photo-master.capy"))');assert.deepEqual(restored.tiled_sources,source.tiled_sources);assert.deepEqual(restored.blobs,source.blobs);assert.deepEqual(restored.document.color,source.document.color);
+  const restored=await readPackage(evaluate,'sdrFiles.get("photo-master.capy")');assert.deepEqual(sourceIdentity(restored),sourceIdentity(source));assert.deepEqual(packageResourceIdentity(restored),packageResourceIdentity(source));assert.deepEqual(compositionColor(restored),compositionColor(source));
   const exported = async(format,profile,depth='U16',resize=false)=>{
     await invoke('export_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Format"]')`);
     await evaluate(`(()=>{const d=document.querySelector('dialog[open]');const set=(label,value)=>{const s=d.querySelector('select[aria-label="'+label+'"]');s.value=value;s.dispatchEvent(new Event('change'));};
@@ -60,9 +66,9 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
     await evaluate(`window.sdrOutput=sdrFiles.get('photo-master.${extension}').slice();window.showOpenFilePicker=async()=>[{name:'identity.${extension}',async getFile(){return new File([sdrOutput],'identity.${extension}')}}];`);
     await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
     await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
-    const output=await evaluate('sdrManifest(sdrFiles.get("identity.capy"))');
-    assert.deepEqual(output.tiled_sources.images[0].tiles,source.tiled_sources.images[0].tiles,format+' retains every original sample');
-    assert.deepEqual(output.tiled_sources.profiles.map(({offset,...profile})=>profile),source.tiled_sources.profiles.map(({offset,...profile})=>profile),format+' retains original ICC content digests and lengths independently of archive placement');
+    const output=await readPackage(evaluate,'sdrFiles.get("identity.capy")');
+    assert.deepEqual(sourceSamples(output)[0],sourceSamples(source)[0],format+' retains every original sample');
+    assert.deepEqual(sourceContent(output).map(o=>o.interpretation.profile),sourceContent(source).map(o=>o.interpretation.profile),format+' retains original ICC content digests and lengths independently of archive placement');
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}];`);
     await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="photo-master.capy" && layerApp.app.brush_ready()');
   }
@@ -72,8 +78,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'DisplayP3',depth:'U8'});
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
-  const reduced=await evaluate('sdrManifest(sdrFiles.get("resized.capy"))');
-  assert.deepEqual([reduced.document.width,reduced.document.height],[257,129]);assert.ok(reduced.document.resolution);
+  const reduced=await readPackage(evaluate,'sdrFiles.get("resized.capy")');
+  assert.deepEqual(packageComposition(reduced).data.frame.size,[257,129]);assert.ok(packageComposition(reduced).data.resolution);
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   await exported('Jpeg','0','U8');
@@ -90,8 +96,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   await evaluate(`document.querySelector('select[aria-label="Interpret as"]').value='2'`);await click('Use Profile');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');
   assert.deepEqual(await evaluate('layerApp.app.document_color()'),{space:'AdobeRgb',depth:'U16'});
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
-  const assumed=await evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');
-  assert.deepEqual(assumed.tiled_sources.images[0].tiles,source.tiled_sources.images[0].tiles);
+  const assumed=await readPackage(evaluate,'sdrFiles.get("untagged.capy")');
+  assert.deepEqual(sourceSamples(assumed)[0],sourceSamples(source)[0]);
   await evaluate(`layerApp.dispatch({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}})`);
   const scope=histogramJourney({evaluate,settle});
   const inspection={histogram:await scope.exact()};
@@ -118,8 +124,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
 
 export async function checkColorEdits({call,evaluate,settle}) {
   const {wait,click,invoke}=helpers(evaluate,{timeout:120000,enabled:true});
-  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return evaluate('sdrManifest(sdrFiles.get("untagged.capy"))');};
-  const backing=value=>({blobs:value.blobs,sources:value.tiled_sources,color:value.document.color});
+  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');return readPackage(evaluate,'sdrFiles.get("untagged.capy")');};
+  const backing=value=>({resources:packageResourceIdentity(value),rasters:rasterIdentity(value),sources:sourceIdentity(value),color:compositionColor(value)});
   await invoke('fit_canvas');
   await evaluate("layerApp.dispatch({type:'select_brush',id:1})");
   await settle();
@@ -141,13 +147,13 @@ export async function checkColorEdits({call,evaluate,settle}) {
   assert.equal(paintedHistogram.histogram.pixels+paintedHistogram.histogram.transparent,513*257);
   await change('assign_profile','Color space','ProPhoto',false);assert.deepEqual(backing(await save()),backing(original));
   await change('assign_profile','Color space','ProPhoto');const assigned=await save();
-  assert.equal(assigned.document.color.space,'ProPhoto');assert.deepEqual(assigned.blobs,original.blobs);assert.deepEqual(assigned.tiled_sources,original.tiled_sources);
+  assert.equal(compositionColor(assigned).space,'pro_photo');assert.deepEqual(packageResourceIdentity(assigned),packageResourceIdentity(original));assert.deepEqual(sourceIdentity(assigned),sourceIdentity(original));
   async function history(command,expected){await invoke(command);await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(expected));}
   await history('undo',original);await history('redo',assigned);
   await change('convert_color_space','Color space','DisplayP3');const converted=await save();
-  assert.equal(converted.document.color.space,'DisplayP3');assert.notDeepEqual(converted.blobs,assigned.blobs);assert.deepEqual(converted.tiled_sources,original.tiled_sources);
+  assert.equal(compositionColor(converted).space,'display_p3');assert.notDeepEqual(packageResourceIdentity(converted),packageResourceIdentity(assigned));assert.deepEqual(sourceIdentity(converted),sourceIdentity(original));
   await change('change_bit_depth','Bit depth','U8');const reduced=await save();
-  assert.equal(reduced.document.color.depth,'U8');assert.ok(reduced.blobs.some(b=>b.descriptor.bits_per_channel===8));assert.deepEqual(reduced.tiled_sources.images,original.tiled_sources.images);
+  assert.equal(compositionColor(reduced).depth,'u8');assert.ok(packageResources(reduced,'capy.raster-tile/1').some(b=>b.data.depth==='u8'));assert.deepEqual(sourceIdentity(reduced),sourceIdentity(original));
   await history('undo',converted);await history('redo',reduced);
   await evaluate(`window.sdrColorMaster=sdrFiles.get('untagged.capy').slice();window.showOpenFilePicker=async()=>[{name:'untagged.capy',async getFile(){return new File([sdrColorMaster],'untagged.capy')}}];`);
   await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.app.brush_ready()');assert.deepEqual(backing(await save()),backing(reduced));
@@ -158,8 +164,8 @@ export async function checkColorEdits({call,evaluate,settle}) {
 
 export async function checkSourceImports({call,evaluate}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
-  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
-  const original=await evaluate('sdrManifest(sdrPhotoMaster).tiled_sources');
+  const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'sdrFiles.get(layerApp.state().document_file.location.name)');};
+  const original=await readPackage(evaluate,'sdrPhotoMaster');
   await invoke('new_document');await wait(`!!document.querySelector('dialog[open] select[aria-label="Color space"]')`);
   await evaluate(`(()=>{const d=document.querySelector('dialog[open]');for(const [field,value] of [['width','513'],['height','257']]){const input=d.querySelector('[data-document-field='+field+']');input.value=value;input.dispatchEvent(new Event('input',{bubbles:true}));}d.querySelector('select[aria-label="Color space"]').value='DisplayP3';d.querySelector('select[aria-label="Bit depth"]').value='U8';})()`);
   await click('Create');await idle();const before=await save();
@@ -170,13 +176,13 @@ export async function checkSourceImports({call,evaluate}) {
   assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),await evaluate('JSON.parse(sdrPlaceFile).epoch'));
   assert.deepEqual(await evaluate('layerApp.state().document_file.location'),await evaluate('JSON.parse(sdrPlaceFile).location'));
   await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
-  const placed=await save();assert.deepEqual(placed.document.color,{space:'DisplayP3',depth:'U8'});assert.deepEqual(placed.tiled_sources.images,original.images);assert.deepEqual(placed.tiled_sources.profiles,original.profiles);
-  await invoke('undo');await idle();assert.deepEqual((await save()).tiled_sources,before.tiled_sources);
-  await invoke('redo');await idle();assert.deepEqual((await save()).tiled_sources,placed.tiled_sources);
+  const placed=await save();assert.deepEqual(compositionColor(placed),{space:'display_p3',depth:'u8'});assert.deepEqual(sourceContent(placed),sourceContent(original));
+  await invoke('undo');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(before));
+  await invoke('redo');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(placed));
   await invoke('document_properties');await wait(`document.querySelector('dialog[open]')?.textContent.includes('embedded ICC retained')`);
   const details=await evaluate('document.querySelector("dialog[open]").textContent');assert.match(details,/Display P3/);assert.match(details,/16-bit RGB/);await click('Done');await idle();
   await evaluate(`window.sdrPlacedMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'placed.capy',async getFile(){return new File([sdrPlacedMaster],'placed.capy')}}];`);
-  await invoke('open_document');await idle();assert.deepEqual((await save()).tiled_sources,placed.tiled_sources);
+  await invoke('open_document');await idle();assert.deepEqual(sourceIdentity(await save()),sourceIdentity(placed));
   // Chromium custom image formats preserve the original bytes. Ordinary image/png
   // may have been sanitized by the clipboard producer/browser before we read it.
   const focus=await evaluate('({x:innerWidth/2,y:3})');
@@ -188,17 +194,17 @@ export async function checkSourceImports({call,evaluate}) {
   await call('Runtime.evaluate',{expression:"layerApp.dispatch({type:'invoke',command:'paste_image'})",userGesture:true});
   await idle();assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   await wait('layerApp.state().commands.find(c=>c.id==="apply_transform")?.enabled');await invoke('apply_transform');await idle();
-  const copy=await save();assert.equal(copy.document.layers.length,placed.document.layers.length+1);
-  assert.deepEqual(copy.document.color,placed.document.color);assert.deepEqual(copy.tiled_sources.profiles,original.profiles);
-  for(const image of copy.tiled_sources.images){assert.equal(image.depth,'U16');assert.deepEqual(image.tiles,original.images[0].tiles);}
+  const copy=await save();assert.equal(packageOccurrences(copy).length,packageOccurrences(placed).length+1);
+  assert.deepEqual(compositionColor(copy),compositionColor(placed));assert.deepEqual(sourceContent(copy).map(o=>o.interpretation.profile),Array(sourceContent(copy).length).fill(sourceContent(original)[0].interpretation.profile));
+  for(const image of sourceContent(copy)){assert.equal(image.interpretation.depth,'u16');assert.deepEqual(image.tiles,sourceContent(original)[0].tiles);}
   console.log('Layer-panel import and real custom-format clipboard paste preserve every ProPhoto16 sample/ICC in a P3 U8 master; undo/redo, reopen and document details passed');
 }
 
 export async function checkSourceEdits({call,evaluate,settle}) {
   const {wait,invoke,click,idle}=helpers(evaluate);
-  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
-  const backing=m=>({blobs:m.blobs,rasters:m.rasters,sources:m.tiled_sources});
-  const source=m=>m.tiled_sources.images[m.tiled_sources.layers.find(l=>l.target===m.document.active_layer).image];
+  const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'sdrFiles.get(layerApp.state().document_file.location.name)');};
+  const backing=m=>({resources:packageResourceIdentity(m),rasters:rasterIdentity(m),sources:sourceIdentity(m)});
+  const source=async m=>packageObject(m,(await activeOccurrence(evaluate,m)).data.content.paint).data.original;
   async function change(command,profile,apply=true){
     await invoke(command);await wait('!!document.querySelector("dialog[open]")');
     if(profile!==null)await evaluate(`(()=>{const select=document.querySelector('select[aria-label="Correct source profile"]');select.value=${JSON.stringify(profile)};select.dispatchEvent(new Event('change'));})()`);
@@ -209,18 +215,18 @@ export async function checkSourceEdits({call,evaluate,settle}) {
   }
   const before=await save();await change('repair_source_profile','2',false);assert.deepEqual(backing(await save()),backing(before));
   assert.equal(await change('repair_source_profile','2'),false);const repaired=await save();
-  assert.deepEqual(repaired.blobs,before.blobs);assert.deepEqual(source(repaired).profile,{Builtin:'AdobeRgb'});
+  assert.deepEqual(rasterResources(repaired),rasterResources(before));assert.deepEqual((await source(repaired)).interpretation.profile,{builtin:'adobe_rgb'});
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(before));
   await invoke('redo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await change('rasterize_source',null);const rasterized=await save();
-  assert.equal(source(rasterized).kind,'Rasterized');assert.equal(source(rasterized).depth,'U8');assert.deepEqual(source(rasterized).profile,{Builtin:'DisplayP3'});assert.deepEqual(source(rasterized).extent,source(repaired).extent);
+  assert.equal((await source(rasterized)).role,'rasterized');assert.equal((await source(rasterized)).interpretation.depth,'u8');assert.deepEqual((await source(rasterized)).interpretation.profile,{builtin:'display_p3'});assert.deepEqual((await source(rasterized)).extent,(await source(repaired)).extent);
   await invoke('undo');await idle();assert.deepEqual(backing(await save()),backing(repaired));
   await invoke('fit_canvas');await invoke('pen');await settle();
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons]of[['mousePressed',0,1],['mouseMoved',40,1],['mouseReleased',40,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
-  const painted=await save(),old=painted.document.layers.find(l=>l.id===painted.document.active_layer);
+  const painted=await save(),old=await activeOccurrence(evaluate,painted),oldPaint=packageObject(painted,old.data.content.paint);
   assert.equal(await change('repair_source_profile','3'),true);const added=await save();
-  assert.equal(added.document.layers.length,painted.document.layers.length+1);assert.deepEqual(added.document.layers.find(l=>l.id===old.id),old);assert.deepEqual(added.blobs,painted.blobs);
+  assert.equal(packageOccurrences(added).length,packageOccurrences(painted).length+1);assert.deepEqual(packageObject(added,old.id),old);assert.deepEqual(packageObject(added,old.data.content.paint),oldPaint);assert.deepEqual(rasterResources(added),rasterResources(painted));
   await evaluate(`window.sdrSourceMaster=sdrFiles.get(layerApp.state().document_file.location.name).slice();window.showOpenFilePicker=async()=>[{name:'source-edited.capy',async getFile(){return new File([sdrSourceMaster],'source-edited.capy')}}];`);
   await invoke('open_document');await idle();assert.deepEqual(backing(await save()),backing(added));
   await invoke('rasterize_source');await click('Preview Complete Result');await click('Cancel');await idle();assert.deepEqual(backing(await save()),backing(added));
@@ -316,48 +322,53 @@ export async function checkFlattenedCopy({evaluate}) {
   await evaluate('window.showSaveFilePicker=sdrCopyPicker');
   await prepare();await click('Save Copy…');await idle();
   const copyName=saved.file.location.name.replace(/\.[^.]+$/,'')+' converted.capy';
-  const copied=await evaluate(`sdrManifest(sdrFiles.get(${JSON.stringify(copyName)}))`);
-  assert.deepEqual(copied.document.color,{space:'Srgb',depth:saved.color.depth});
-  assert.equal(copied.document.layers.length,1);assert.equal(copied.tiled_sources.images[0].kind,'Rasterized');
+  const copied=await readPackage(evaluate,`sdrFiles.get(${JSON.stringify(copyName)})`);
+  assert.deepEqual(compositionColor(copied),{space:'srgb',depth:saved.color.depth.toLowerCase()});
+  assert.equal(packageOccurrences(copied).length,1);assert.equal(sourceIdentity(copied)[0].role,'rasterized');
   const current=await evaluate('JSON.parse(JSON.stringify(layerApp.state().document_file,(_,v)=>typeof v==="bigint"?Number(v):v))');
   for(const key of ['epoch','revision','modified','location'])assert.deepEqual(current[key],saved.file[key]);
   await invoke('save_document_as');await idle();
-  const master=await evaluate(`sdrManifest(sdrFiles.get(${JSON.stringify(saved.file.location.name)}))`);
-  assert.deepEqual(master.document.color,saved.color);
-  assert.deepEqual([copied.document.width,copied.document.height],[master.document.width,master.document.height]);
-  assert.deepEqual(copied.document.resolution,master.document.resolution);
+  const master=await readPackage(evaluate,`sdrFiles.get(${JSON.stringify(saved.file.location.name)})`);
+  assert.deepEqual(compositionColor(master),wireColor(saved.color));
+  assert.deepEqual(packageComposition(copied).data.frame.size,packageComposition(master).data.frame.size);
+  assert.deepEqual(packageComposition(copied).data.resolution,packageComposition(master).data.resolution);
   await evaluate(`window.sdrCopy=sdrFiles.get(${JSON.stringify(copyName)});window.showOpenFilePicker=async()=>[{name:'converted.capy',async getFile(){return new File([sdrCopy],'converted.capy')}}]`);
   await invoke('open_document');await idle();await invoke('save_document_as');await idle();
-  const reopened=await evaluate('sdrManifest(sdrFiles.get("converted.capy"))');assert.deepEqual(reopened.tiled_sources,copied.tiled_sources);assert.deepEqual(reopened.blobs,copied.blobs);
+  const reopened=await readPackage(evaluate,'sdrFiles.get("converted.capy")');assert.deepEqual(sourceIdentity(reopened),sourceIdentity(copied));assert.deepEqual(packageResourceIdentity(reopened),packageResourceIdentity(copied));
   console.log('Flattened full-composition conversion, preview/copy-picker cancellation, native copy reopen, preserved extent/precision and unchanged master checkpoints passed');
 }
 
 
 export async function checkPhotoCorrections({evaluate,settle}) {
   const {wait,invoke,idle}=helpers(evaluate);
-  const save=async()=>{await invoke('save_document_as');await idle();return evaluate('sdrManifest(sdrFiles.get(layerApp.state().document_file.location.name))');};
+  const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'sdrFiles.get(layerApp.state().document_file.location.name)');};
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
-  const source=(await save()).tiled_sources;
+  const source=sourceIdentity(await save());
   const controls=[['exposure','exposure',.75],['white_balance','temperature',25],['levels','gamma',.9],['curves','curve_0',[[0,0],[.213,.13],[.79,.9],[1,1]]],['hue_saturation','hue',10],['color_balance','midtones_red',12]];
   const ids=[];
   for(const [name,key,value] of controls){
     const id=await evaluate(`(()=>{layerApp.dispatch({type:'effect',action:{op:'insert',effect:${JSON.stringify(name)}}});const layer=Number(layerApp.state().layer_properties.layer);layerApp.dispatch({type:'effect',action:{op:'set',layer,key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}});layerApp.dispatch({type:'layer',action:{op:'add_mask',id:layer,replace:false}});return layer})()`);ids.push(id);await settle();
   }
-  const edited=await save();assert.deepEqual(edited.tiled_sources,source);assert.equal(edited.document.layers.filter(l=>l.effect&&l.mask).length,6);
+  const edited=await save(),portableIds=await Promise.all(ids.map(async id=>packageOccurrences(edited)[await evaluate(`layerApp.state().layers.findIndex(l=>Number(l.id)===${id})`)].id));assert.deepEqual(sourceIdentity(edited),source);assert.equal(packageOccurrences(edited).filter(l=>l.data.content.effect&&l.data.mask).length,6);
   const histogram=histogramJourney({evaluate,settle}).exact;
   const before=await histogram();
   await evaluate(`window.sdrAdjusted=sdrFiles.get('photo-master.capy');window.showOpenFilePicker=async()=>[{name:'adjusted.capy',async getFile(){return new File([sdrAdjusted],'adjusted.capy')}}]`);await invoke('open_document');await idle();
-  const reopened=await save();assert.deepEqual(reopened.document.layers,edited.document.layers);assert.deepEqual(reopened.tiled_sources,source);assert.deepEqual(await histogram(),before);
+  const reopened=await save();
+  for(const output of reopened.objects.filter(object=>object.type==='capy.output/1')) {
+    assert.ok(output.data.context.elapsed>=packageObject(edited,output.id).data.context.elapsed,'Reopened output capture time advances');
+  }
+  assert.deepEqual(authoredIdentity(reopened),authoredIdentity(edited));assert.deepEqual(sourceIdentity(reopened),source);assert.deepEqual(await histogram(),before);
+  const reopenedIds=await Promise.all(portableIds.map(id=>runtimeId(evaluate,reopened,id)));
   for(const [i,[name,key,value]]of controls.entries()) {
     const alternate=Array.isArray(value)?[[0,0],[1,1]]:name==='levels'?1.2:-value;
-    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${ids[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(alternate)}}}})`);
+    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${reopenedIds[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(alternate)}}}})`);
     await settle();assert.notDeepEqual(await histogram(),before,name+' changes the full composition after reopening');
-    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${ids[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}})`);
+    await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:${reopenedIds[i]},key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}})`);
     await settle();assert.deepEqual(await histogram(),before,name+' reevaluates retained input exactly');
   }
-  await evaluate(`layerApp.dispatch({type:'layer',action:{op:'invert_mask',id:${ids[0]}}})`);await settle();assert.notDeepEqual(await histogram(),before);
+  await evaluate(`layerApp.dispatch({type:'layer',action:{op:'invert_mask',id:${reopenedIds[0]}}})`);await settle();assert.notDeepEqual(await histogram(),before);
   await invoke('undo');await idle();assert.deepEqual(await histogram(),before);
-  const final=await save();assert.deepEqual(final.tiled_sources,source);
+  const final=await save();assert.deepEqual(sourceIdentity(final),source);
   assert.equal(await evaluate('layerApp.state().host_error??null'),null);
   console.log('All six ProPhoto U16 correction layers and masks remain revisable after reopen; full-resolution histograms change and restore exactly; original source bytes/profile retained');
 }

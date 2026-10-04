@@ -1,5 +1,6 @@
 //! Cropped file-worker capture must restore source-local backing off the canvas.
 use super::*;
+use layer_core::CoverageSnapshot;
 
 #[test]
 fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
@@ -8,9 +9,11 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
         depth: SampleDepth::U16,
     };
     let extent = [1025, 769];
-    let mut project = source_project(color, extent);
-    let interpretation = project.document.layers[0]
-        .source
+    let mut document = source_document(color, extent);
+    let paint_id = paint_id(&document);
+    let owner = paint_occurrence(&document);
+    let interpretation = document.artwork.paint.get(paint_id).unwrap()
+        .original
         .as_ref()
         .unwrap()
         .interpretation
@@ -21,17 +24,9 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
             .push_row(&vec![255; extent[0] as usize * 8])
             .unwrap();
     }
-    project.document.layers[0].source = Some(Arc::new(builder.finish().unwrap()));
-    project.document.width = 321;
-    project.document.height = 257;
-    let group_id = project.document.allocate_layer_id();
-    let mask_id = project.document.allocate_layer_id();
-    let mut group = Layer::paint(group_id, "translated group");
-    group.kind = LayerKind::Group;
-    group.properties.offset = Point { x: 15., y: -9. };
-    let layer = &mut project.document.layers[0];
-    layer.properties.parent = Some(group_id);
-    layer.properties.offset = Point { x: -5., y: 11. };
+    document.artwork.paint.get_mut(paint_id).unwrap().original = Some(Arc::new(builder.finish().unwrap()));
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [321, 257];
+    document.artwork.occurrences.get_mut(owner).unwrap().translation = Point { x: -5., y: 11. };
     let mut paint = RasterData::default();
     let codes: Vec<_> = [32768u16, 0, 0, 65535]
         .into_iter()
@@ -46,8 +41,8 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
             TileBlob::encode(color.paint_descriptor(), &codes.repeat(65536)).unwrap(),
         ),
     );
-    layer.raster = RasterRevision::backed(paint);
-    let mut mask = LayerMask::reveal_all(mask_id, layer.properties.offset);
+    document.artwork.paint.get_mut(paint_id).unwrap().raster = RasterRevision::backed(paint);
+    let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, document.artwork.occurrences.get(owner).unwrap().translation);
     let mut coverage = RasterData::default();
     coverage.tiles.insert(
         TileKey {
@@ -62,24 +57,26 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
             .unwrap(),
         ),
     );
-    mask.raster = RasterRevision::backed(coverage);
-    layer.mask = Some(mask);
-    project.document.layers.insert(0, group);
+    mask.source.raster = RasterRevision::backed(coverage);
+    document.artwork.coverage.insert(PortableId::random(), mask.source).unwrap();
+    document.artwork.occurrences.get_mut(owner).unwrap().mask = Some(mask.use_);
+    let group = add_group(&mut document, vec![owner], 0);
+    document.artwork.occurrences.get_mut(group).unwrap().translation = Point { x: 15., y: -9. };
 
     for pose in [
         Affine([0.25, 0., 0., 0.25, 30., 4.]),
         Affine([0.27, 0.04, -0.03, 0.24, 30., 4.]),
         Affine([-0.25, 0., 0., 0.25, 290., 4.]),
     ] {
-        project.document.layers[1].properties.placement = layer_core::LayerPlacement::from_affine(pose);
-        project.validate(Default::default()).unwrap();
-        let source = project.document.layers[1].source.clone();
+        document.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(pose);
+        document.validate(Default::default()).unwrap();
+        let source = document.artwork.paint.get(paint_id).unwrap().original.clone();
         let inverse = pose
             .then(Affine::translation(Point { x: 10., y: 2. }))
             .inverse()
             .unwrap();
         let mut capture =
-            capture(project.clone()).unwrap();
+            capture(document.clone()).unwrap();
         let mut painted = 0;
         // Visit distant windows and then return to force retirement/restoration.
         for rect in [
@@ -138,10 +135,10 @@ fn snapshot_placed_photo_crops_restore_off_canvas_paint_and_linked_mask() {
             }
         }
         assert!(painted > 100);
-        assert_eq!(project.document.layers[1].source, source);
+        assert_eq!(document.artwork.paint.get(paint_id).unwrap().original, source);
         assert!(capture.renderer.scale_display.is_none());
         assert!(capture.renderer.scene.as_ref().unwrap()
-            .placement_cache(project.document.layers[1].id).is_none());
+            .placement_cache(SourceTarget::Paint(paint_id)).is_none());
     }
 }
 
@@ -151,15 +148,16 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
         space: RgbSpace::DisplayP3,
         depth: SampleDepth::U16,
     };
-    let mut project = source_project(color, [33, 17]);
-    let target = project.document.layers[0]
-        .source
+    let mut document = source_document(color, [33, 17]);
+    let owner = paint_occurrence(&document);
+    let target = document.artwork.paint.get(paint_id(&document)).unwrap()
+        .original
         .as_ref()
         .unwrap()
         .interpretation
         .clone();
-    project.document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: 7., y: -3. }));
-    let mut capture = capture(project).unwrap();
+    document.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x: 7., y: -3. }));
+    let mut capture = capture(document).unwrap();
     assert!(
         capture.identity_source(&target).is_none(),
         "source passthrough must honor placement"

@@ -2,15 +2,39 @@
 use super::*;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
+fn readiness_facts(w: &Rc<Workspace>) -> String {
+    let gpu = w.gpu.borrow();
+    let session = gpu.as_ref().map(|g| serde_json::json!({
+        "file": g.session.state().document_file,
+        "requests": g.session.state().requests,
+        "error": g.session.state().host_error,
+        "startup": format!("{:?}", g.session.engine().backend().startup),
+        "frames": g.session.engine().metrics().frames,
+        "frames_idle": g.session.engine().backend().frames_idle(),
+        "suspended": g.session.rendering_suspended(),
+        "paint_ready": g.session.engine().backend().paint_ready(g.session.engine().document(), g.session.engine().configured_brush(), false),
+        "filter_pending": g.session.state().filter_load.pending,
+        "pending_edits": g.session.engine().has_pending_document_edits(),
+    }));
+    format!("workspace_ready={} busy={} accepts_input={} gpu={} servicing={} pending_open={} changing={} paused={} dialog={:?} status={:?} session={session:?}",
+        w.workspaces.ready(), w.workspaces.busy(), w.workspaces.accepts_input(w), gpu.is_some(), w.servicing.get(), w.documents.has_pending_open(), w.documents.changing.get(),
+        w.documents.paused.get(), w.window.visible_dialog().map(|dialog| dialog.widget_name()), w.status.text())
+}
+#[track_caller]
 pub(crate) fn ready(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
     loop {
         pump(20);
-        if w.workspaces.ready()
+        if !w.documents.has_pending_open()
+            && !w.documents.changing.get()
+            && !w.documents.paused.get()
+            && w.workspaces.ready()
             && !w.workspaces.busy()
             && w.workspaces.accepts_input(w)
             && w.gpu.borrow().as_ref().is_some_and(|g| {
-                g.session.engine().backend().startup.complete
+                g.session.engine().metrics().frames > 0
+                    && g.session.engine().backend().frames_idle()
+                    && g.session.engine().backend().startup.complete
                     && g.session.engine().backend().paint_ready(
                         g.session.engine().document(),
                         g.session.engine().configured_brush(),
@@ -22,21 +46,27 @@ pub(crate) fn ready(w: &Rc<Workspace>) {
         {
             return;
         }
-        assert!(Instant::now() < deadline, "ready: {} workspace_ready={} busy={} accepts_input={} canvas={:?}", w.status.text(), w.workspaces.ready(), w.workspaces.busy(), w.workspaces.accepts_input(w), w.gpu.borrow().as_ref().map(|g| (g.session.rendering_suspended(), g.session.state().host_error.clone(), g.session.engine().backend().startup.complete, g.session.engine().backend().paint_ready(g.session.engine().document(), g.session.engine().configured_brush(), false), g.session.state().filter_load.pending, g.session.engine().has_pending_document_edits())));
+        assert!(Instant::now() < deadline, "ready: {}", readiness_facts(w));
     }
 }
+#[track_caller]
 pub(super) fn finish(w: &Rc<Workspace>) {
     let deadline = Instant::now() + Duration::from_secs(30);
-    while state(w).document_file.busy || !state(w).requests.is_empty() {
-        pump(20);
-        assert!(
-            Instant::now() < deadline,
-            "file completion: {}",
-            w.status.text()
-        );
+    loop {
+        let complete = !w.servicing.get()
+            && !w.documents.has_pending_open()
+            && !w.documents.changing.get()
+            && !w.documents.paused.get()
+            && w.gpu.borrow().as_ref().is_some_and(|g| {
+                !g.session.state().document_file.busy && g.session.state().requests.is_empty()
+            });
+        if complete { break; }
+        assert!(Instant::now() < deadline, "file completion and drawing adoption: {}", readiness_facts(w));
+        pump(10);
     }
     assert!(state(w).host_error.is_none(), "{:?}", state(w).host_error);
 }
+
 #[allow(deprecated)]
 pub(super) fn chooser() -> gtk::FileChooserDialog {
     let deadline = Instant::now() + Duration::from_secs(5);
@@ -196,13 +226,9 @@ pub(super) fn capture_ui(w: &Rc<Workspace>, directory: &std::path::Path, name: &
 fn native_open_cancellation_releases_request_and_preserves_current_document() {
     let app = native_test_app("art.capycanvas.CancelOpen");
     let w = Workspace::with_project(&app, Some((new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
-    let created = Rc::new(RefCell::new(None));
-    let result = created.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
-        result.replace(Some((project, location)));
-    }));
     w.window.present();
     ready(&w);
+    let incumbent = w.documents.selected();
     let original = super::place_source::snapshot(&w);
     let directory = std::env::temp_dir().join(format!("capy-cancel-open-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
@@ -250,10 +276,8 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
         pump(150);
         file.response(gtk::ResponseType::Accept);
         finish(&w);
-        assert!(
-            created.borrow().is_none(),
-            "cancelled Open published a window"
-        );
+        assert_eq!(w.documents.len(), 1, "cancelled Open published a drawing");
+        assert_eq!(w.documents.selected(), incumbent);
         assert_eq!(super::place_source::snapshot(&w), original);
         assert!(
             !w.servicing.get(),
@@ -269,12 +293,13 @@ fn native_open_cancellation_releases_request_and_preserves_current_document() {
     pump(150);
     file.response(gtk::ResponseType::Accept);
     finish(&w);
-    let (project, location) = created.borrow_mut().take().unwrap();
-    assert!(location.is_none());
-    assert_eq!(
-        project.document.layers[0].source.as_deref(),
-        Some(&super::place_source::source())
-    );
+    ready(&w);
+    assert_eq!(w.documents.len(), 2);
+    assert_ne!(w.documents.selected(), incumbent);
+    assert!(state(&w).document_file.location.is_none());
+    assert_source_samples(paint_at(ui_session(&w).engine().document(), 0).original.as_deref().unwrap(), &super::place_source::source());
+    glib::MainContext::default().block_on(w.documents.activate(&w, incumbent)).unwrap();
+    ready(&w);
     assert_eq!(super::place_source::snapshot(&w), original);
     w.window.destroy();
     pump(100);
@@ -337,8 +362,8 @@ fn native_new_presets_and_profiled_photo_master() {
         state(&w).settings.new_document
     );
     let (painting, location) = created.borrow_mut().take().unwrap();
-    assert_eq!(painting.document.color, options.color);
-    assert!(!painting.document.layers[1].visible);
+    assert_eq!(painting.composition().color, options.color);
+    assert!(!occurrence_at(&painting, 1).visible);
     assert!(location.is_none());
     invoke(&w, CommandId::NewDocument);
     assert_eq!(combo(&w, "new-document-preset").selected(), 5);
@@ -373,25 +398,21 @@ fn native_new_presets_and_profiled_photo_master() {
     assert_eq!(
         ui_session(&fresh)
             .engine()
-            .document()
-            .color,
+            .document().composition().color,
         options.color
     );
     assert_eq!(
         ui_session(&fresh)
             .engine()
-            .document()
-            .width,
+            .document().composition().size[0],
         256
     );
     native_pen_path(&fresh, &[[80., 120.], [130., 120.], [180., 120.]]);
     ready(&fresh);
     assert!(
-        !ui_session(&fresh)
+        !paint_at(ui_session(&fresh)
             .engine()
-            .document()
-            .layers[0]
-            .raster
+            .document(), 0).raster
             .wait_data()
             .unwrap()
             .tiles
@@ -440,6 +461,8 @@ fn native_new_presets_and_profiled_photo_master() {
     let source_path = output.join(format!("Developed photo-{}.tif", std::process::id()));
     layer_color::photo::write_tiff(std::fs::File::create(&source_path).unwrap(), &source).unwrap();
     let original_bytes = std::fs::read(&source_path).unwrap();
+    let incumbent = w.documents.selected();
+    let original = super::place_source::snapshot(&w);
     invoke(&w, CommandId::OpenDocument);
     let open = chooser();
     open.set_file(&gtk::gio::File::for_path(&source_path))
@@ -447,20 +470,28 @@ fn native_new_presets_and_profiled_photo_master() {
     pump(200);
     open.response(gtk::ResponseType::Accept);
     finish(&w);
-    let (project, location) = created.borrow_mut().take().unwrap();
-    assert!(location.is_none());
+    ready(&w);
+    assert_eq!(w.documents.len(), 2);
+    let opened = w.documents.selected();
+    assert_ne!(opened, incumbent);
+    assert!(created.borrow().is_none());
+    assert!(state(&w).document_file.location.is_none());
+    let project = ui_session(&w).engine().document().clone();
     assert_eq!(
-        project.document.color,
+        project.composition().color,
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16
         }
     );
-    assert_eq!(project.document.layers[0].source.as_deref(), Some(&source));
-    assert_eq!(project.document.resolution, source.resolution);
-    let photo = Workspace::with_project(&app, Some((project, None)));
-    photo.window.present();
-    ready(&photo);
+    assert_source_samples(paint_at(&project, 0).original.as_deref().unwrap(), &source);
+    assert_eq!(project.composition().resolution, source.resolution);
+    glib::MainContext::default().block_on(w.documents.activate(&w, incumbent)).unwrap();
+    ready(&w);
+    assert_eq!(super::place_source::snapshot(&w), original);
+    glib::MainContext::default().block_on(w.documents.activate(&w, opened)).unwrap();
+    ready(&w);
+    let photo = w.clone();
     assert!(state(&photo).document_file.modified);
     assert_eq!(
         state(&photo).document_file.title(),
@@ -479,19 +510,17 @@ fn native_new_presets_and_profiled_photo_master() {
     ready(&photo);
     native_pen_path(&photo, &[[200., 120.], [230., 120.], [270., 120.]]);
     ready(&photo);
-    let edited = ui_session(&photo)
-        .capture_project_recovery()
-        .unwrap();
+    let edited_capture = ui_session(&photo).capture_project_recovery().unwrap();
+    let edited = capture_document(&edited_capture);
     assert!(
-        !edited.document.layers[0]
-            .raster
+        !paint_at(&edited, 0).raster
             .wait_data()
             .unwrap()
             .tiles
             .is_empty()
     );
-    assert_eq!(edited.document.layers[0].source.as_deref(), Some(&source));
-    assert_eq!(edited.document.resolution, source.resolution);
+    assert_source_samples(paint_at(&edited, 0).original.as_deref().unwrap(), &source);
+    assert_eq!(edited.composition().resolution, source.resolution);
     let master_path = output.join(format!("Photo master-{}.capy", std::process::id()));
     invoke(&photo, CommandId::SaveDocument);
     let save = chooser();
@@ -510,17 +539,15 @@ fn native_new_presets_and_profiled_photo_master() {
     finish(&photo);
     assert!(!state(&photo).document_file.modified);
     assert_eq!(std::fs::read(&source_path).unwrap(), original_bytes);
-    let reopened = layer_core::Project::read(
-        std::fs::File::open(&master_path).unwrap(),
-        Default::default(),
-    )
-    .unwrap();
+    let reopened = open_native_document(std::fs::File::open(&master_path).unwrap());
     // RasterRevision equality is publication identity. Compare the complete
     // canonical archive for byte/content equality across a fresh publication.
     let mut reopened_bytes = Vec::new();
     let mut edited_bytes = Vec::new();
-    reopened.write(&mut reopened_bytes).unwrap();
-    edited.write(&mut edited_bytes).unwrap();
+    write_document(&reopened, &mut reopened_bytes).unwrap();
+    let mut saved_artwork = edited;
+    saved_artwork.artwork.outputs.get_mut(saved_artwork.artwork.default_output).unwrap().context = reopened.output().context.clone();
+    write_document(&saved_artwork, &mut edited_bytes).unwrap();
     assert_eq!(reopened_bytes, edited_bytes);
     let restored = Workspace::with_project(
         &app,
@@ -566,7 +593,7 @@ fn native_new_presets_and_profiled_photo_master() {
     );
     assert_eq!(std::fs::read(source_path).unwrap(), original_bytes);
     assert!(!state(&restored).document_file.modified);
-    for window in [&restored, &photo, &w] {
+    for window in [&restored, &photo] {
         window.window.destroy();
     }
     pump(100);

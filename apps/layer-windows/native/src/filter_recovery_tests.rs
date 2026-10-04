@@ -54,7 +54,7 @@ impl Fixture {
                 },
             })
             .unwrap();
-        let layer = native.session.engine().document().active_layer.0;
+        let layer = native.session.engine().document().working.occurrence.map(layer_ui::occurrence_token).unwrap();
         native
             .dispatch(UiAction::Effect {
                 action: EffectAction::Set {

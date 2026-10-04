@@ -75,7 +75,7 @@ fn restored_damage(
 
 #[derive(Default)]
 pub(super) struct RasterRuntime {
-    targets: BTreeMap<LayerId, Target>,
+    targets: BTreeMap<SourceTarget, Target>,
     worker: Option<CaptureWorker>,
     #[cfg(target_arch = "wasm32")]
     encoder: Option<BrowserRasterEncoder>,
@@ -561,12 +561,11 @@ impl WgpuRasterizer {
                 _ => {}
             }
         }
-        for layer in packet.layers {
-            if layer.source.as_ref().is_some_and(|source| source.tiles.values().any(|tile| !tile.compressed_ready().unwrap_or(true))) {
+        for target in source_access::placed_targets(packet.scene).filter(|t| packet.scene.raster(*t).is_some()) {
+            if packet.scene.original(target).is_some_and(|source| source.tiles.values().any(|tile| !tile.compressed_ready().unwrap_or(true))) {
                 return false;
             }
-            for (id, root) in std::iter::once((layer.id, &layer.raster))
-                .chain(layer.mask.iter().map(|m| (m.id, &m.raster)))
+            for (id, root) in std::iter::once((target, packet.scene.raster(target).unwrap()))
             {
                 let current = runtime.and_then(|r| r.targets.get(&id));
                 match root.try_data() {
@@ -615,11 +614,11 @@ impl WgpuRasterizer {
 
     fn restore_target(
         &mut self,
-        id: LayerId,
+        id: SourceTarget,
         current: &mut Target,
         data: Arc<RasterData>,
         reset: bool,
-        damage: &mut Vec<(LayerId, PixelRect)>,
+        damage: &mut Vec<(SourceTarget, PixelRect)>,
     ) -> Result<(), GpuRasterError> {
         let extent = self.target_extent(id);
         damage.extend(restored_damage(&current.data, &data, &current.changed, extent).into_iter().map(|rect| (id, rect)));
@@ -636,7 +635,7 @@ impl WgpuRasterizer {
         packet: FramePacket<'_>,
         reset: bool,
         tiles: &[Vec<BrushTile>],
-    ) -> Result<Vec<(LayerId, PixelRect)>, GpuRasterError> {
+    ) -> Result<Vec<(SourceTarget, PixelRect)>, GpuRasterError> {
         let mut runtime = self.raster.take().unwrap_or_default();
         let result = (|| {
             let mut damage = Vec::new();
@@ -648,10 +647,7 @@ impl WgpuRasterizer {
                 return Err(GpuRasterError::Effect(error));
             }
             runtime.targets.retain(|id, _| {
-                packet
-                    .layers
-                    .iter()
-                    .any(|l| l.id == *id || l.masks().any(|m| m.id == *id))
+                source_access::placed_targets(packet.scene).any(|target| target == *id)
             });
             for (id, revision) in packet.restore_rasters {
                 if let Some(current) = runtime.targets.get_mut(id) {
@@ -660,12 +656,11 @@ impl WgpuRasterizer {
                     current.revision = revision.clone();
                 }
             }
-            for layer in packet.layers {
-                for (id, revision) in std::iter::once((layer.id, &layer.raster))
-                    .chain(layer.masks().map(|m| (m.id, &m.raster)))
+            for target in source_access::placed_targets(packet.scene).filter(|t| packet.scene.raster(*t).is_some()) {
+                for (id, revision) in std::iter::once((target, packet.scene.raster(target).unwrap()))
                 {
                     // Backgrounds, groups and generators have no editable color pages.
-                    if id == layer.id && !self.paint_layers.iter().any(|l| l.id == id) {
+                    if matches!(id, SourceTarget::Paint(_)) && !self.paint_layers.iter().any(|l| l.id == id) {
                         continue;
                     }
                     let wanted = match revision.try_data() {
@@ -721,7 +716,7 @@ impl WgpuRasterizer {
                 .zip(tiles)
                 .filter(|(b, _)| b.kind != DabBatchKind::Preview)
             {
-                if let Some(target) = runtime.targets.get_mut(&batch.layer_id) {
+                if let Some(target) = runtime.targets.get_mut(&batch.target) {
                     // Transport is included in batch damage. Terminal edge work
                     // touches only this contact's coverage; earlier batches have
                     // already accumulated their changed pages in this target.
@@ -730,13 +725,13 @@ impl WgpuRasterizer {
                     if batch.kind == DabBatchKind::Persistent {
                         target.changed.extend(tiles.iter().map(|tile| tile.coordinate));
                     } else {
-                        let damage = batch_pixel_rect(batch, self.target_extent(batch.layer_id));
+                        let damage = batch_pixel_rect(batch, self.target_extent(batch.target));
                         target.changed.extend(page_coordinates(damage));
                     }
                     if batch.stroke_end
                         && revisits_stroke(&batch.style)
                         && let Some(layer) =
-                            self.paint_layers.iter().find(|l| l.id == batch.layer_id)
+                            self.paint_layers.iter().find(|l| l.id == batch.target)
                     {
                         target.changed.extend(
                             layer
@@ -767,7 +762,7 @@ impl WgpuRasterizer {
 
     fn raster_textures(
         &self,
-        target: LayerId,
+        target: SourceTarget,
     ) -> (BTreeMap<TileKey, &wgpu::Texture>, Option<RasterWatercolor>) {
         let mut textures = BTreeMap::new();
         let mut watercolor = None;
@@ -885,7 +880,7 @@ impl WgpuRasterizer {
     /// after backing is ready; no historical dabs are generated.
     pub fn restore_raster(
         &mut self,
-        target: LayerId,
+        target: SourceTarget,
         previous: &RasterData,
         data: &RasterData,
     ) -> Result<(), GpuRasterError> {

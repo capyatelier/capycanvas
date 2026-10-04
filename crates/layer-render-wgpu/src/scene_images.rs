@@ -2,6 +2,8 @@
 //! Tiled captures feed the same filter and composition operations at any origin.
 use super::metadata::{Metadata, mask_metadata};
 use super::*;
+use crate::effects::Gpu;
+use layer_core::{SceneView,SourceTarget};
 use wgpu::util::DeviceExt;
 
 #[cfg(test)]
@@ -9,7 +11,7 @@ use wgpu::util::DeviceExt;
 mod grid_tests;
 
 struct CachedStage {
-    id: LayerId,
+    id: OccurrenceHandle,
     input: Image,
     input_owned: bool,
     output: Image,
@@ -21,7 +23,7 @@ struct CachedStage {
 }
 struct ClipInput {
     base: usize,
-    base_id: LayerId,
+    base_id: OccurrenceHandle,
     dependencies: Vec<usize>,
     terminal: bool,
 }
@@ -84,14 +86,14 @@ impl ImageComposition {
         &mut self,
         scene: &Scene,
         r: &WgpuRasterizer,
-        base: &Layer,
+        base: &layer_core::Occurrence,
         region: PixelRect,
         space: layer_core::BlendSpace,
         encoder: &mut crate::submission::CommandEncoder,
     ) {
         let properties = [
             if base.visible { base.opacity } else { 0. },
-            crate::blend_code(base.properties.blend, &r.device, space) as f32,
+            crate::blend_code(base.blend, &r.device, space) as f32,
         ];
         if properties != self.properties {
             r.queue.write_buffer(
@@ -129,8 +131,8 @@ pub(super) struct ImageStages {
     metadata: Vec<Metadata>,
     inputs: Vec<Vec<usize>>,
     clips: Vec<Option<ClipInput>>,
-    backdrops: std::collections::HashMap<LayerId, Backdrop>,
-    preview_layer: Option<LayerId>,
+    backdrops: std::collections::HashMap<OccurrenceHandle, Backdrop>,
+    preview_layer: Option<SourceTarget>,
     blend_space: layer_core::BlendSpace,
     pub input_updates: u64,
     pub pass_updates: u64,
@@ -145,28 +147,15 @@ impl ImageStages {
         self.scratch.clear();
         self.backdrops.clear();
     }
-    pub fn checkpoint(
-        &self,
-        index: usize,
-        layer: &Layer,
-    ) -> Option<(wgpu::TextureView, Option<(wgpu::TextureView, usize)>)> {
-        let stage = self.stages.iter().find(|s| s.id == layer.id && s.valid)?;
-        if !layer.properties.clipped {
-            return Some((stage.output.view.clone(), None));
-        }
-        if let Some(c) = &stage.composition
-            && c.valid
-        {
-            return Some((c.output.view.clone(), None));
-        }
-        let clip = self.clips.get(index)?.as_ref()?;
-        let back = self.backdrops.get(&clip.base_id).filter(|b| b.valid)?;
-        Some((
-            back.image.view.clone(),
-            Some((stage.output.view.clone(), clip.base)),
-        ))
+    pub fn checkpoint(&self,handle:OccurrenceHandle,scene:SceneView<'_>)->Option<(wgpu::TextureView,Option<(wgpu::TextureView,OccurrenceHandle)>)>{
+        let stage=self.stages.iter().find(|s|s.id==handle&&s.valid)?;
+        if !scene.effective_clipped(handle){return Some((stage.output.view.clone(),None));}
+        if let Some(c)=&stage.composition && c.valid{return Some((c.output.view.clone(),None));}
+        let clip=self.clips.get(scene.position(handle)?)?.as_ref()?;
+        let back=self.backdrops.get(&clip.base_id).filter(|b|b.valid)?;
+        Some((back.image.view.clone(),Some((stage.output.view.clone(),clip.base_id))))
     }
-    pub fn output(&self, id: LayerId) -> Option<wgpu::TextureView> {
+    pub fn output(&self, id: OccurrenceHandle) -> Option<wgpu::TextureView> {
         self.stages
             .iter()
             .find(|s| s.id == id && s.valid)
@@ -200,62 +189,19 @@ impl ImageStages {
     }
 }
 
-pub(super) fn visible(layers: &[Layer], layer: &Layer) -> bool {
-    if !layer.visible {
-        return false;
-    }
-    let mut parent = layer.properties.parent;
-    while let Some(id) = parent {
-        let Some(l) = layers.iter().find(|l| l.id == id) else {
-            return false;
-        };
-        if !l.visible {
-            return false;
-        }
-        parent = l.properties.parent;
-    }
-    true
+pub(super) fn visible(scene:SceneView<'_>,handle:OccurrenceHandle)->bool{scene.visible(handle)}
+pub(super) fn capture_window(scene:SceneView<'_>,region:PixelRect,extent:[u32;2])->PixelRect{
+    if matches!(scene.scope(),Some(layer_core::SceneScope::Raw(_))) {return region;}
+    scene.order().iter().copied().filter(|h|visible(scene,*h)).filter_map(|h|scene.effect(h))
+        .try_fold(region,|bounds,e|Some(bounds.expand(e.damage_radius()?,extent))).unwrap_or(PixelRect::full(extent))
 }
-
-/// A conservative dependency closure across isolated groups and clipping
-/// stacks. Summing support may include unrelated branches but cannot omit a
-/// preceding filter's halo. Document samplers require the entire input.
-pub(super) fn capture_window(layers: &[Layer], region: PixelRect, extent: [u32; 2]) -> PixelRect {
-    layers
-        .iter()
-        .filter(|l| visible(layers, l))
-        .filter_map(|l| l.effect.as_ref())
-        .try_fold(region, |bounds, e| {
-            Some(bounds.expand(e.damage_radius()?, extent))
-        })
-        .unwrap_or(PixelRect::full(extent))
-}
-
-fn clip_input(layers: &[Layer], index: usize) -> Option<ClipInput> {
-    let layer = &layers[index];
-    if !visible(layers, layer)
-        || !layer.properties.clipped
-        || !layer.effect.as_ref().is_some_and(|e| {
-            e.program.image_boundary() && e.program.kind == layer_core::EffectKind::Adjustment
-        })
-    {
-        return None;
-    }
-    let parent = layer.properties.parent;
-    let base = (index + 1..layers.len())
-        .find(|&i| layers[i].properties.parent == parent && !layers[i].properties.clipped)?;
-    let terminal = !layers[..index]
-        .iter()
-        .rev()
-        .filter(|l| l.properties.parent == parent)
-        .take_while(|l| l.properties.clipped)
-        .any(|l| l.visible);
-    Some(ClipInput {
-        base,
-        base_id: layers[base].id,
-        dependencies: layer_core::backdrop_layers(layers, base),
-        terminal,
-    })
+fn clip_input(scene:SceneView<'_>,index:usize)->Option<ClipInput>{
+    let handle=scene.order()[index];
+    if !visible(scene,handle)||!scene.effective_clipped(handle)||!scene.effect(handle).is_some_and(|e|e.program.image_boundary()&&e.program.kind==layer_core::EffectKind::Adjustment){return None;}
+    let parent=scene.evaluation_parent(handle);
+    let base=(index+1..scene.order().len()).find(|&i|{let h=scene.order()[i];scene.includes(h)&&scene.evaluation_parent(h)==parent&&!scene.effective_clipped(h)})?;
+    let terminal=!scene.order()[..index].iter().rev().copied().filter(|h|scene.includes(*h)&&scene.evaluation_parent(*h)==parent).take_while(|h|scene.effective_clipped(*h)).any(|h|scene.visible(h));
+    Some(ClipInput{base,base_id:scene.order()[base],dependencies:layer_core::backdrop_layers(scene,scene.order()[base]).into_iter().filter_map(|h|scene.position(h)).collect(),terminal})
 }
 
 impl Scene {
@@ -274,7 +220,8 @@ impl Scene {
             return Ok(output_dirty);
         };
         let base_index = plan.base;
-        let base = &packet.layers[base_index];
+        let base_id=packet.scene.order()[base_index];
+        let base=packet.scene.occurrence(base_id).unwrap();
         let terminal = plan.terminal;
         let dirty = plan
             .dependencies
@@ -284,7 +231,7 @@ impl Scene {
         let mut backdrop = self
             .images
             .backdrops
-            .remove(&base.id)
+            .remove(&base_id)
             .unwrap_or_else(|| Backdrop {
                 image: Image::new(r, display_mips::Plan::window(self.images.extent, 0, bounds), "clipping backdrop cache"),
                 valid: false,
@@ -300,9 +247,9 @@ impl Scene {
             if !backdrop.damage.is_empty() {
                 self.jobs.clear();
                 self.used.fill(false);
-                self.stop_before = Some((base_index, false));
+                self.stop_before = Some((base_id, false));
                 for tile in page_coordinates(backdrop.damage) {
-                    let pixels = self.group(r, packet, layer_core::composite_input_scope(packet.layers, base), tile)?;
+                    let pixels = self.group(r, packet, layer_core::composite_input_scope(packet.scene, base_id), tile)?;
                     self.capture_tile(r, pixels, &backdrop.image, tile, Convert::None);
                 }
                 self.stop_before = None;
@@ -337,7 +284,7 @@ impl Scene {
             // do not invalidate the isolated input of those filters.
             output_dirty
         };
-        self.images.backdrops.insert(base.id, backdrop);
+        self.images.backdrops.insert(base_id, backdrop);
         Ok(damage)
     }
     // A write-only tile suffix can draw straight into the image cache. Adjacent
@@ -526,87 +473,25 @@ impl Scene {
             };
         }
         let dirty = dirty.intersect(bounds);
-        if self.images.stages.is_empty()
-            && !packet.layers.iter().any(|l| {
-                l.visible
-                    && l.effect
-                        .as_ref()
-                        .is_some_and(|e| e.program.image_boundary())
-            })
-        {
-            return Ok(dirty);
-        }
-        self.images.stages.retain(|s| {
-            packet.layers.iter().any(|l| {
-                l.id == s.id
-                    && visible(packet.layers, l)
-                    && l.effect
-                        .as_ref()
-                        .is_some_and(|e| e.program.image_boundary())
-            })
+        let scene=packet.scene;let order=scene.order();
+        if self.images.stages.is_empty() && !order.iter().any(|h|visible(scene,*h)&&scene.effect(*h).is_some_and(|e|e.program.image_boundary())){return Ok(dirty);}
+        self.images.stages.retain(|s|visible(scene,s.id)&&scene.effect(s.id).is_some_and(|e|e.program.image_boundary()));
+        let metadata:Vec<_>=order.iter().map(|&h|Metadata::new(scene,h)).collect();
+        let changed:Vec<bool>=metadata.iter().enumerate().map(|(i,current)|self.images.metadata.get(i).is_none_or(|old|old!=current)).collect();
+        let structure=self.images.metadata.len()!=order.len()||self.images.metadata.iter().zip(&metadata).any(|(old,current)|{
+            old.id!=current.id||old.occurrence.kind()!=current.occurrence.kind()||old.occurrence.clipped!=current.occurrence.clipped||old.parent!=current.parent
+                ||old.occurrence.passes_through()!=current.occurrence.passes_through()||old.effect_contract.map(|v|v.0)!=current.effect_contract.map(|v|v.0)
+                ||(current.occurrence.kind()==LayerKind::Group&&(old.evaluation_offset!=current.evaluation_offset||old.occurrence.visible!=current.occurrence.visible))
         });
-        let changed: Vec<bool> = packet
-            .layers
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                self.images
-                    .metadata
-                    .get(i)
-                    .is_none_or(|old| *old != Metadata::new(l))
-            })
-            .collect();
-        let structure = self.images.metadata.len() != packet.layers.len()
-            || self
-                .images
-                .metadata
-                .iter()
-                .zip(packet.layers)
-                .any(|(a, b)| {
-                    a.id != b.id
-                        || a.kind != b.kind
-                        || a.properties.clipped != b.properties.clipped
-                        || a.effect.as_ref().map(|e| e.program.kind)
-                            != b.effect.as_ref().map(|e| e.program.kind)
-                        || a.properties.parent != b.properties.parent
-                        || a.passes_through() != b.passes_through()
-                        || (a.kind == LayerKind::Group
-                            && (a.properties.offset != b.properties.offset
-                                || a.visible != b.visible))
-                });
-        let reset = packet.reset_layers
-            || structure
-            || self.images.blend_space != packet.blend_space;
-        if structure
-            || self.images.inputs.len() != packet.layers.len()
-            || self
-                .images
-                .metadata
-                .iter()
-                .zip(packet.layers)
-                .any(|(a, b)| {
-                    a.properties.clipped != b.properties.clipped
-                        || a.visible != b.visible
-                        || a.kind != b.kind
-                        || a.effect.as_ref().map(|e| e.program.image_boundary())
-                            != b.effect.as_ref().map(|e| e.program.image_boundary())
-                        || a.effect.as_ref().map(|e| e.program.kind)
-                            != b.effect.as_ref().map(|e| e.program.kind)
-                })
-        {
-            self.images.inputs = (0..packet.layers.len())
-                .map(|i| layer_core::composite_input_layers(packet.layers, i))
-                .collect();
-            self.images.clips = (0..packet.layers.len())
-                .map(|i| clip_input(packet.layers, i))
-                .collect();
-            self.images
-                .backdrops
-                .retain(|id, _| self.images.clips.iter().flatten().any(|c| c.base_id == *id));
-            // Rebuilt dependencies can point at a different base/backdrop.
-            for stage in &mut self.images.stages {
-                stage.composition = None;
-            }
+        let reset=packet.reset_layers||structure||self.images.blend_space!=packet.blend_space;
+        if structure||self.images.inputs.len()!=order.len()||self.images.metadata.iter().zip(&metadata).any(|(old,current)|{
+            old.occurrence.clipped!=current.occurrence.clipped||old.occurrence.visible!=current.occurrence.visible||old.occurrence.kind()!=current.occurrence.kind()
+                ||old.effect_contract.map(|v|(v.0,v.2))!=current.effect_contract.map(|v|(v.0,v.2))
+        }){
+            self.images.inputs=order.iter().map(|&h|layer_core::composite_input_layers(scene,h).into_iter().filter_map(|h|scene.position(h)).collect()).collect();
+            self.images.clips=(0..order.len()).map(|i|clip_input(scene,i)).collect();
+            self.images.backdrops.retain(|id,_|self.images.clips.iter().flatten().any(|c|c.base_id==*id));
+            for stage in &mut self.images.stages{stage.composition=None;}
         }
         for backdrop in self.images.backdrops.values_mut() {
             backdrop.updated = false;
@@ -630,82 +515,33 @@ impl Scene {
             && r.transform_damage.is_empty()
             && self.images.preview_layer.is_none()
             && r.preview_layer_id.is_none();
-        let mut changes: Vec<PixelRect> = packet
-            .layers
-            .iter()
-            .enumerate()
-            .map(|(i, l)| {
-                if reset || changed[i] {
-                    bounds
-                } else if painting
-                    && (unidentified_paint
-                        || self.images.preview_layer == Some(l.id)
-                        || r.preview_layer_id == Some(l.id)
-                        || r.transform_damage.iter().any(|(id, _)| {
-                            *id == l.id || l.mask.as_ref().is_some_and(|m| m.id == *id)
-                        })
-                        || packet.dab_batches.iter().any(|b| {
-                            b.layer_id == l.id
-                                || l.mask.as_ref().is_some_and(|m| m.id == b.layer_id)
-                        }))
-                {
-                    dirty
-                } else {
-                    PixelRect::EMPTY
-                }
-            })
-            .collect();
+        let mut changes:Vec<PixelRect>=order.iter().copied().enumerate().map(|(i,h)|{
+            let target=scene.source_target(h);let mask=scene.mask(h).map(|(m,_)|SourceTarget::Coverage(m.source));
+            let changed_target=|t:SourceTarget|Some(t)==target||Some(t)==mask;
+            if reset||changed[i]{bounds}else if painting&&(unidentified_paint
+                ||self.images.preview_layer.is_some_and(changed_target)||r.preview_layer_id.is_some_and(changed_target)
+                ||r.transform_damage.iter().any(|(t,_)|changed_target(*t))||packet.dab_batches.iter().any(|b|changed_target(b.target))){dirty}else{PixelRect::EMPTY}
+        }).collect();
         let mut damage = dirty;
-        for index in (0..packet.layers.len()).rev() {
-            let layer = &packet.layers[index];
+        for index in (0..order.len()).rev() {
+            let handle=order[index];
             let source_damage = self.images.inputs[index]
                 .iter()
                 .fold(PixelRect::EMPTY, |rect, &i| rect.union(changes[i]));
-            let Some(effect) = layer
-                .effect
-                .as_ref()
-                .filter(|e| e.program.image_boundary() && visible(packet.layers, layer))
-            else {
-                changes[index] = changes[index].union(source_damage);
-                continue;
-            };
-            // Adjacent compatible boundaries consume the same GPU image. No
-            // allocation, intermediate composition, or image copy is needed.
-            let input = Convert::filter_input(packet, effect.program.space);
-            let alias = packet.layers[index + 1..]
-                .iter()
-                .find(|l| l.properties.parent == layer.properties.parent)
-                .filter(|l| {
-                    input == Convert::None
-                        && l.visible
-                        && (!layer.properties.clipped || l.properties.clipped)
-                        && effect.program.kind == layer_core::EffectKind::Adjustment
-                        && l.effect
-                            .as_ref()
-                            .is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment)
-                })
-                .and_then(|l| {
-                    let stage = self
-                        .images
-                        .stages
-                        .iter()
-                        .find(|s| s.id == l.id && s.valid)?;
-                    if !layer.properties.clipped && l.properties.clipped {
-                        stage
-                            .composition
-                            .as_ref()
-                            .filter(|c| c.valid)
-                            .map(|c| c.output.clone())
-                    } else {
-                        Some(stage.output.clone())
-                    }
-                });
+            let Some(effect)=scene.effect(handle).filter(|e|e.program.image_boundary()&&visible(scene,handle))else{changes[index]=changes[index].union(source_damage);continue;};
+            let input=Convert::filter_input(packet,effect.program.space);
+            let alias=order[index+1..].iter().copied().find(|h|scene.includes(*h)&&scene.evaluation_parent(*h)==scene.evaluation_parent(handle)).filter(|h|{
+                input==Convert::None&&scene.visible(*h)&&(!scene.effective_clipped(handle)||scene.effective_clipped(*h))
+                    &&effect.program.kind==layer_core::EffectKind::Adjustment&&scene.effect(*h).is_some_and(|e|e.program.kind==layer_core::EffectKind::Adjustment)
+            }).and_then(|h|{let stage=self.images.stages.iter().find(|s|s.id==h&&s.valid)?;
+                if !scene.effective_clipped(handle)&&scene.effective_clipped(h){stage.composition.as_ref().filter(|c|c.valid).map(|c|c.output.clone())}else{Some(stage.output.clone())}
+            });
             let mut cached =
-                if let Some(i) = self.images.stages.iter().position(|s| s.id == layer.id) {
+                if let Some(i) = self.images.stages.iter().position(|s| s.id == handle) {
                     self.images.stages.swap_remove(i)
                 } else {
                     CachedStage {
-                        id: layer.id,
+                        id: handle,
                         input: alias
                             .clone()
                             .unwrap_or_else(|| Image::new(r, grid, "effect source cache")),
@@ -729,10 +565,10 @@ impl Scene {
                 cached.input_owned = true;
                 cached.valid = false;
             }
-            let time = effect.time_seconds(packet.time_seconds);
+            let time=r.effect_time(scene,handle,packet.time_seconds);
             let input_scope_changed = self.images.metadata.get(index).is_none_or(|old| {
-                old.properties.clipped != layer.properties.clipped
-                    || old.effect.as_ref().map(|e| (e.program.kind, e.program.space))
+                old.occurrence.clipped != scene.effective_clipped(handle)
+                    || old.effect_contract.map(|v|(v.0,v.1))
                         != Some((effect.program.kind, effect.program.space))
             });
             let input_dirty = if !cached.valid || reset || input_scope_changed {
@@ -758,7 +594,7 @@ impl Scene {
             if cached.input_owned && !input_dirty.is_empty() {
                 self.jobs.clear();
                 self.used.fill(false);
-                self.stop_before = Some((index, layer.properties.clipped));
+                self.stop_before = Some((handle, scene.effective_clipped(handle)));
                 if effect.program.kind == layer_core::EffectKind::Generator {
                     self.jobs.push(Job::Clear(
                         cached.input.view.clone(),
@@ -766,7 +602,7 @@ impl Scene {
                     ));
                 } else {
                     for tile in page_coordinates(input_dirty) {
-                        let pixels = self.group(r, packet, layer_core::composite_input_scope(packet.layers, layer), tile)?;
+                        let pixels = self.group(r, packet, layer_core::composite_input_scope(scene, handle), tile)?;
                         self.capture_tile(r, pixels, &cached.input, tile, input);
                     }
                 }
@@ -777,8 +613,8 @@ impl Scene {
             if !output_dirty.is_empty() {
                 self.jobs.clear();
                 self.used.fill(false);
-                if let Some(mask) = layer.mask.as_ref().filter(|m| m.enabled) {
-                    let mask_offset = world_offset(packet.layers, layer.id, true);
+                if let Some((mask,coverage)) = scene.mask(handle).filter(|(m,_)| m.enabled) {
+                    let mask_offset = world_offset(scene, handle, true);
                     let mask_reset = !cached.valid
                         || cached.mask.is_none()
                         || cached.mask_offset != mask_offset
@@ -787,14 +623,14 @@ impl Scene {
                             .images
                             .metadata
                             .get(index)
-                            .is_none_or(|old| old.mask != mask_metadata(&layer.mask));
+                            .is_none_or(|old| old.mask != mask_metadata(scene,handle));
                     let mask_dirty = if mask_reset {
                         bounds
                     } else if unidentified_paint
-                        || self.images.preview_layer == Some(mask.id)
-                        || r.preview_layer_id == Some(mask.id)
-                        || r.transform_damage.iter().any(|(id, _)| *id == mask.id)
-                        || packet.dab_batches.iter().any(|b| b.layer_id == mask.id)
+                        || self.images.preview_layer == Some(SourceTarget::Coverage(mask.source))
+                        || r.preview_layer_id == Some(SourceTarget::Coverage(mask.source))
+                        || r.transform_damage.iter().any(|(id, _)| *id == SourceTarget::Coverage(mask.source))
+                        || packet.dab_batches.iter().any(|b| b.target == SourceTarget::Coverage(mask.source))
                     {
                         dirty
                     } else {
@@ -805,7 +641,7 @@ impl Scene {
                         .get_or_insert_with(|| Image::new(r, grid, "effect mask cache"));
                     if !mask_dirty.is_empty() {
                         for tile in page_coordinates(mask_dirty) {
-                            let m = self.mask_tile(r, mask, mask_offset, tile);
+                            let m = self.mask_tile(r, mask,coverage, mask_offset, tile);
                             self.copy_window_tile(m, image, tile);
                         }
                         self.encode_jobs(r, encoder)?;
@@ -839,7 +675,7 @@ impl Scene {
                         local.width() as f32,
                         local.height() as f32,
                     ]);
-                    data[9] = f32::from(layer.properties.clipped);
+                    data[9] = f32::from(scene.effective_clipped(handle));
                     let mut masks = Box::new(std::array::from_fn(|_| r.empty_view.clone()));
                     if last && let Some(mask) = &cached.mask {
                         masks[0] = mask.view.clone();
@@ -851,7 +687,8 @@ impl Scene {
                         data,
                         prepared: self.effects.prepare(
                             r,
-                            &[layer],
+                            scene,
+                            &[handle],
                             effects::Execution::Image(pass),
                             packet.time_seconds,
                             grid.level,
@@ -879,7 +716,7 @@ impl Scene {
             self.images.scratch.clear();
             self.images.backdrops.clear();
         }
-        self.images.metadata = packet.layers.iter().map(Metadata::new).collect();
+        self.images.metadata = metadata;
         self.images.blend_space = packet.blend_space;
         self.images.preview_layer = r.preview_layer_id;
         Ok(damage)

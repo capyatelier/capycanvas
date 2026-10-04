@@ -1,6 +1,45 @@
 use super::*;
 use layer_render::{DabBatchKind, DabStyle, FramePacket, ViewState};
 
+pub(crate) fn add_paint(artwork: &mut layer_core::authored::Artwork, name: impl Into<Arc<str>>, domain: [u32; 2]) -> (OccurrenceHandle, SourceTarget) {
+    use layer_core::authored::*;
+    let source = artwork.paint.insert(PortableId::random(), PaintSource {
+        domain, raster: Default::default(), original: None, operations: Arc::default(),
+    }).unwrap();
+    let occurrence = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(source), name)).unwrap();
+    let stack = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    (occurrence, SourceTarget::Paint(source))
+}
+
+pub(crate) fn corrupt_tile(blob: layer_core::raster::TileBlob) -> layer_core::raster::RasterTile {
+    use layer_core::{authored::*, raster::*, raster_storage::*};
+    struct Chunk(Arc<[u8]>);
+    impl TileChunk for Chunk {
+        fn len(&self) -> usize { self.0.len() }
+        fn poll(&self) -> Result<Option<Arc<[u8]>>, String> { Ok(Some(self.0.clone())) }
+        fn resident_bytes(&self) -> usize { self.0.len() }
+        fn evict(&self) {}
+    }
+    let tile=RasterTile::backed(blob);let mut artwork=Artwork::new([256;2]).unwrap();
+    let (_, SourceTarget::Paint(source))=add_paint(&mut artwork,"Corrupt backing",[256;2]) else {unreachable!()};
+    let scalar=tile.descriptor().channels==1;
+    use layer_core::color::{SampleDepth,SampleType};
+    artwork.compositions.get_mut(artwork.root).unwrap().color.depth=match (tile.descriptor().sample,tile.descriptor().bits_per_channel) {
+        (SampleType::Unsigned,8)=>SampleDepth::U8,(SampleType::Unsigned,16)=>SampleDepth::U16,
+        (SampleType::Float,16)=>SampleDepth::F16,(SampleType::Float,32)=>SampleDepth::F32,_=>panic!("fixture depth"),
+    };
+    let raster=RasterRevision::backed(RasterData {tiles:[(TileKey {plane:if scalar {RasterPlane::Mask}else{RasterPlane::Color},coordinate:[0;2]},tile.clone())].into(),watercolor:None});
+    if scalar {
+        let coverage=artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,[256;2],Default::default());mask.source.raster=raster;
+        artwork.coverage.insert(PortableId::random(),mask.source).unwrap();let owner=artwork.occurrences.iter().next().unwrap().0;artwork.occurrences.get_mut(owner).unwrap().mask=Some(mask.use_);
+    } else {artwork.paint.get_mut(source).unwrap().raster=raster;}
+
+    let editor=layer_core::Editor::new(layer_core::Document::from_artwork(artwork).unwrap());
+    let mut spill=prepare_external_spill(&editor.retained_tiles()).unwrap().unwrap();spill.bytes[0]^=1;
+    let bytes=Arc::from(spill.bytes.clone());spill.commit(Arc::new(Chunk(bytes))).unwrap();tile
+}
+
 pub(crate) fn view(extent: [u32; 2]) -> ViewState {
     ViewState {
         width_px: extent[0],
@@ -9,14 +48,16 @@ pub(crate) fn view(extent: [u32; 2]) -> ViewState {
     }
 }
 
-pub(crate) fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
+pub(crate) fn packet(scene: SceneView<'_>, extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
         commit_rasters: true,
         restore_rasters: &[],
         time_seconds: 0.,
         view: view(extent),
         document_extent: extent,
-        layers,
+        scene,
+        selection_visibility: None,
+        inspect_mask: None,
         dabs: &[],
         dab_batches: &[],
         reset_layers: false,
@@ -25,11 +66,11 @@ pub(crate) fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     }
 }
 
-pub(crate) fn dab_batch(layer_id: LayerId, style: DabStyle, damage: layer_core::Rect) -> DabBatch {
+pub(crate) fn dab_batch(target: SourceTarget, style: DabStyle, damage: layer_core::Rect) -> DabBatch {
     DabBatch {
         material_update: 0,
         stroke_id: layer_core::StrokeId(1),
-        layer_id,
+        target,
         kind: DabBatchKind::Persistent,
         stroke_start: true,
         stroke_end: true,

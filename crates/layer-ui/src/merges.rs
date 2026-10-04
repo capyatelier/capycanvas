@@ -79,23 +79,23 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub(super) fn bake(&mut self, kind: MergeKind) -> Result<(), String> {
         refused(self.merge_refusal(kind))?;
-        let result = self.engine.allocate_layer_id();
-        let coverage = self.engine.allocate_layer_id();
-        let plan = self.engine.document().merge_plan(kind, result, coverage).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
+        let plan = self.engine.document().merge_plan(kind).map_err(|refusal| refusal_text(refusal, self.localization()).to_string())?;
         self.engine
-            .insert_with_operations(plan.edits, vec![(result, plan.operation)], None)
+            .insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None)
             .map_err(error)?;
-        self.layer_interaction.editing = Some(result);
-        self.layer_interaction.selected = BTreeSet::from([result]);
+        self.layer_interaction.editing = Some(plan.result);
+        self.layer_interaction.selected = BTreeSet::from([plan.result]);
         self.layer_interaction.changed = true;
         Ok(())
     }
 
     /// Merge commands for a layer's menu: Merge Down, or Merge Group for a
     /// group, on the active layer, then the whole-image merges.
-    pub(super) fn merge_menu_items(&self, layer: &layer_core::Layer) -> Vec<ContextMenuItem> {
-        let active = [if layer.kind == LayerKind::Group { CommandId::MergeGroup } else { CommandId::MergeDown }];
-        let own = layer.id == self.engine.document().active_layer;
+    pub(super) fn merge_menu_items(&self, handle: layer_core::authored::OccurrenceHandle) -> Vec<ContextMenuItem> {
+        let doc = self.engine.document();
+        let Some(layer) = doc.scene().occurrence(handle) else { return Vec::new(); };
+        let active = [if layer.kind() == LayerKind::Group { CommandId::MergeGroup } else { CommandId::MergeDown }];
+        let own = Some(handle) == doc.working.occurrence;
         let active = if own { &active[..] } else { &[] };
         active
             .iter()

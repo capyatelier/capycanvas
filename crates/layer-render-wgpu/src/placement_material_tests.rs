@@ -1,4 +1,6 @@
 use super::*;
+use super::placement::{paint_document, occurrence, occurrence_mut, occurrence_id, paint, paint_mut, target, set_source, set_mask, mask_snapshot, reveal_all, append_paint};
+use layer_core::{Document, RasterOperation, RasterOperationKind, authored::*};
 use layer_core::{Affine, ImageTransform, Interpolation, MeshMap, Projective, LayerPlacement, raster::*};
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -42,18 +44,18 @@ fn fixture(map: Affine, width: f32) -> RasterData {
     data
 }
 
-fn layer(data: RasterData, map: Affine) -> Layer {
-    let mut layer = Layer::paint(LayerId(1), "independent wet rectangle");
-    layer.raster = RasterRevision::backed(data);
-    layer.properties.placement = layer_core::LayerPlacement::from_affine(map);
+fn layer(data: RasterData, map: Affine) -> Document {
+    let mut layer = paint_document(EXTENT, "independent wet rectangle");
+    paint_mut(&mut layer).raster = RasterRevision::backed(data);
+    occurrence_mut(&mut layer).placement = layer_core::LayerPlacement::from_affine(map);
     layer
 }
 
-fn render(r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset: bool) -> Vec<u8> {
+fn render(r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset: bool) -> Vec<u8> {
     r.submit(FramePacket {
         dab_batches: batches,
         reset_layers: reset,
-        ..packet(std::slice::from_ref(layer), EXTENT)
+        ..packet(layer.scene(), EXTENT)
     }).unwrap();
     r.readback_srgb_rgba8().unwrap()
 }
@@ -90,29 +92,29 @@ fn affine_material_transform_maps_raw_planes_before_edges_and_keeps_tile_neighbo
             render(&mut transformed, &source, &[], true);
             let destination = layer(fixture(map, width), Affine::IDENTITY);
             let expected_pixels = render(&mut expected, &destination, &[], true);
-            let mut coverage = LayerMask::reveal_all(LayerId(9), Point::default());
-            coverage.default_coverage = 1.;
-            let operation = LayerOperation {
+            let mut coverage = reveal_all(EXTENT, Point::default());
+            coverage.source.default_coverage = 1.;
+            let operation = RasterOperation {
                 placement: Affine::IDENTITY,
                 coverage,
-                kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) },
+                kind: RasterOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) },
                     ..Default::default()
                 }),
             };
             let operation_batch = DabBatch {
-                kind: DabBatchKind::LayerOperation(0),
+                kind: DabBatchKind::RasterOperation(0),
                 dab_count: 0,
                 damage: operation.bounds(EXTENT),
-                ..batch(1)
+                ..crate::test_support::dab_batch(target(&source), crate::tests::test_style(BrushExecution::Dry), Rect::from_extent(EXTENT))
             };
-            source.pending_operations.push(operation);
+            Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
             let actual = render(&mut transformed, &source, &[operation_batch], false);
             let actual_planes = live_planes(&transformed);
             for (key, bytes) in live_planes(&expected) {
                 assert!(actual_planes.get(&key) == Some(&bytes), "{map:?} width={width} {key:?}: mapped raw plane differs");
             }
             for (key, bytes) in &actual_planes {
-                if !destination.raster.wait_data().unwrap().tiles.contains_key(key) {
+                if !paint(&destination).raster.wait_data().unwrap().tiles.contains_key(key) {
                     assert!(bytes.iter().all(|v| *v == 0), "unmapped {map:?} width={width} {key:?}");
                 }
             }
@@ -129,12 +131,12 @@ fn retained_affine_material_evaluates_mapped_raw_planes_in_document_coordinates(
     for map in maps() {
         for width in [1., 4., 16.] {
             let source = fixture(Affine::IDENTITY, width);
-            let digests: Vec<_> = source.tiles.values().map(|tile| tile.wait_backing().unwrap().digest).collect();
+            let digests: Vec<_> = source.tiles.values().map(|tile| tile.wait_backing().unwrap().content_digest().unwrap()).collect();
             let mut placed = layer(source.clone(), map);
-            placed.properties.extent = Some([280, 168]);
-            let identity = placed.raster.identity();
+            paint_mut(&mut placed).domain = [280, 168];
+            let identity = paint(&placed).raster.identity();
             let mut original = placed.clone();
-            original.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
+            occurrence_mut(&mut original).placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
             render(&mut expected, &original, &[], true);
             let original_planes = live_planes(&expected);
             let actual = render(&mut retained, &placed, &[], true);
@@ -149,8 +151,8 @@ fn retained_affine_material_evaluates_mapped_raw_planes_in_document_coordinates(
                 assert_eq!(at(&expected_pixels, 273, 250), 0, "halo stops outside two style widths");
                 assert_eq!(at(&actual, 273, 250), 0);
             }
-            assert_eq!(source.tiles.values().map(|tile| tile.wait_backing().unwrap().digest).collect::<Vec<_>>(), digests);
-            assert_eq!(placed.raster.identity(), identity);
+            assert_eq!(source.tiles.values().map(|tile| tile.wait_backing().unwrap().content_digest().unwrap()).collect::<Vec<_>>(), digests);
+            assert_eq!(paint(&placed).raster.identity(), identity);
         }
     }
 }
@@ -185,26 +187,26 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
     let mut expected = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let map = maps()[1];
     let mut source = layer(fixture(Affine::IDENTITY, 4.), Affine::IDENTITY);
-    let immutable = source.raster.clone();
+    let immutable = paint(&source).raster.clone();
     render(&mut transformed, &source, &[], true);
     assert!(!transformed.paint_layers[0].material_pages.is_empty());
     assert!(!transformed.paint_layers[0].watercolor_wetness_pages.is_empty());
     transformed.paint_layers[0].material_pages.clear();
     transformed.paint_layers[0].watercolor_wetness_pages.clear();
     for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
-        assert!(transformed.native_plane_tile(source.id, plane, [1, 0]).unwrap().is_some());
+        assert!(transformed.native_plane_tile(target(&source), plane, [1, 0]).unwrap().is_some());
     }
     let destination = layer(fixture(map, 4.), Affine::IDENTITY);
     let expected_pixels = render(&mut expected, &destination, &[], true);
-    let operation = LayerOperation {
+    let operation = RasterOperation {
         placement: Affine::IDENTITY,
-        coverage: LayerMask::reveal_all(LayerId(9), Point::default()),
-        kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) }, ..Default::default()
+        coverage: reveal_all(EXTENT, Point::default()),
+        kind: RasterOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(map) }, ..Default::default()
         }),
     };
-    let operation_batch = DabBatch { kind: DabBatchKind::LayerOperation(0), dab_count: 0,
-        damage: operation.bounds(EXTENT), ..batch(1) };
-    source.pending_operations.push(operation);
+    let operation_batch = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+        damage: operation.bounds(EXTENT), ..crate::test_support::dab_batch(target(&source), crate::tests::test_style(BrushExecution::Dry), Rect::from_extent(EXTENT)) };
+    Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
     let actual = render(&mut transformed, &source, &[operation_batch], false);
     let actual_planes = live_planes(&transformed);
     for (key, bytes) in live_planes(&expected) {
@@ -221,7 +223,7 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
         }
     }
     assert_pixels(&actual, &expected_pixels, "cold scalar destination material parity");
-    assert_eq!(source.raster.identity(), immutable.identity());
+    assert_eq!(paint(&source).raster.identity(), immutable.identity());
 }
 
 #[test]
@@ -231,9 +233,9 @@ fn retained_affine_material_low_zoom_matches_independently_mapped_destination_pl
     for map in maps() {
         for width in [4., 16.] {
             let mut placed = layer(fixture(Affine::IDENTITY, width), map);
-            placed.properties.extent = Some([280, 168]);
+            paint_mut(&mut placed).domain = [280, 168];
             let mut destination = layer(fixture(map, width), Affine::IDENTITY);
-            let identity = placed.raster.identity();
+            let identity = paint(&placed).raster.identity();
             for (zoom, blend, masked) in [
                 (0.5, layer_core::BlendSpace::Linear, false),
                 (0.5, layer_core::BlendSpace::Perceptual, false),
@@ -243,14 +245,14 @@ fn retained_affine_material_low_zoom_matches_independently_mapped_destination_pl
             ] {
                 if masked {
                     for source in [&mut placed, &mut destination] {
-                        source.opacity = 0.65;
-                        let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-                        mask.default_coverage = 0.63;
-                        source.mask = Some(mask);
+                        occurrence_mut(source).opacity = 0.65;
+                        let mut mask = reveal_all(EXTENT, Point::default());
+                        mask.source.default_coverage = 0.63;
+                        set_mask(source, mask);
                     }
                 }
                 for (r, source) in [(&mut retained, &placed), (&mut expected, &destination)] {
-                    let mut frame = packet(std::slice::from_ref(source), EXTENT);
+                    let mut frame = packet(source.scene(), EXTENT);
                     frame.view.document_to_surface = [zoom, 0., 0., zoom, 0., 0.];
                     frame.blend_space = blend;
                     frame.reset_layers = true;
@@ -267,7 +269,7 @@ fn retained_affine_material_low_zoom_matches_independently_mapped_destination_pl
                     a.iter().zip(b.iter()).map(|(a, b)| (a - b).abs().to_bits()).max().unwrap()).unwrap();
                 let coordinate = [witness.0 as u32 % a.plan.size[0], witness.0 as u32 / a.plan.size[0]];
                 assert!(error < 1e-6, "{map:?} width={width} zoom={zoom} blend={blend:?} masked={masked}: display material maximum error {error}, texel={coordinate:?}, actual={:?}, expected={:?}", witness.1.0, witness.1.1);
-                assert_eq!(placed.raster.identity(), identity);
+                assert_eq!(paint(&placed).raster.identity(), identity);
             }
         }
     }
@@ -302,10 +304,10 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
         data
     };
     let mut source = layer(data(false), Affine([0.125, 0., 0., 0.125, 0., 0.]));
-    source.properties.extent = Some([8192; 2]);
+    paint_mut(&mut source).domain = [8192; 2];
     let mut destination = layer(data(true), Affine::IDENTITY);
     for (layer, mapped) in [(&mut source, false), (&mut destination, true)] {
-        let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
+        let mut mask = reveal_all(paint(layer).domain, Point::default());
         let bytes = if mapped {
             (0..PAGE_SIZE * PAGE_SIZE).map(|i| {
                 let x = PAGE_SIZE + i % PAGE_SIZE;
@@ -313,16 +315,16 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
                 if (256..288).contains(&x) && (128..160).contains(&y) { 0 } else { 255 }
             }).collect()
         } else { vec![0; (PAGE_SIZE * PAGE_SIZE) as usize] };
-        mask.raster = RasterRevision::backed(RasterData {
+        mask.source.raster = RasterRevision::backed(RasterData {
             tiles: [(TileKey { plane: RasterPlane::Mask, coordinate: if mapped { [1, 0] } else { [8, 4] } },
                 RasterTile::backed(TileBlob::encode(RasterPlane::Mask.descriptor(Default::default()), &bytes).unwrap()))].into(),
             ..Default::default()
         });
-        layer.mask = Some(mask);
+        set_mask(layer, mask);
     }
     let mut pieces = Vec::new();
     crate::paint_transform::snapshot::Splitter::new(PixelRect::full([8192; 2]),
-        &ImageTransform { placement: source.properties.placement.clone(), ..Default::default() }, None, |_| true).unwrap()
+        &ImageTransform { placement: occurrence(&source).placement.clone(), ..Default::default() }, None, |_| true).unwrap()
         .split(PixelRect::full([PAGE_SIZE; 2]), &mut pieces).unwrap();
     assert!(pieces.len() > 1, "the compute clear must survive several clipped pieces");
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -338,22 +340,23 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
 fn mapped_semitransparent_material_over_nontransparent_backdrop_matches_premultiplied_over() {
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut front = layer(fixture(Affine::IDENTITY, 16.), maps()[1]);
-    front.opacity = 0.65;
-    let mut background = Layer::paint(LayerId(2), "semitransparent backdrop");
+    occurrence_mut(&mut front).opacity = 0.65;
+    let mut background = paint_document(EXTENT, "semitransparent backdrop");
     let mut data = RasterData::default();
     let bytes: Vec<_> = [20, 70, 130, 128].into_iter().cycle().take((PAGE_SIZE * PAGE_SIZE * 4) as usize).collect();
     for coordinate in [[0, 0], [1, 0], [0, 1], [1, 1]] {
         data.tiles.insert(TileKey { plane: RasterPlane::Color, coordinate }, RasterTile::backed(
             TileBlob::encode(RasterPlane::Color.descriptor(Default::default()), &bytes).unwrap()));
     }
-    background.raster = RasterRevision::backed(data);
-    let mut pixels = |layers: &[Layer]| {
-        renderer.submit(FramePacket { reset_layers: true, ..packet(layers, EXTENT) }).unwrap();
+    paint_mut(&mut background).raster = RasterRevision::backed(data);
+    let mut pixels = |doc: &Document| {
+        renderer.submit(FramePacket { reset_layers: true, ..packet(doc.scene(), EXTENT) }).unwrap();
         crate::scene::scale::tests::display_pixels(&renderer)
     };
-    let source = pixels(std::slice::from_ref(&front));
-    let base = pixels(std::slice::from_ref(&background));
-    let actual = pixels(&[front, background]);
+    let source = pixels(&front);
+    let base = pixels(&background);
+    append_paint(&mut front, "semitransparent backdrop", paint(&background).clone());
+    let actual = pixels(&front);
     let expected: Vec<[f32; 4]> = source.iter().zip(&base)
         .map(|(front, back)| std::array::from_fn(|channel| front[channel] + back[channel] * (1. - front[3])))
         .collect();
@@ -372,12 +375,12 @@ fn dry_anisotropic_low_zoom_matches_independently_mapped_pigment_edges() {
         data
     };
     let mut placed = layer(pigment(Affine::IDENTITY), map);
-    placed.properties.extent = Some([280, 168]);
+    paint_mut(&mut placed).domain = [280, 168];
     let destination = layer(pigment(map), Affine::IDENTITY);
     let mut retained = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut expected = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     for (r, source) in [(&mut retained, &placed), (&mut expected, &destination)] {
-        let mut frame = packet(std::slice::from_ref(source), EXTENT);
+        let mut frame = packet(source.scene(), EXTENT);
         frame.view.document_to_surface = [0.5, 0., 0., 0.5, 0., 0.];
         frame.blend_space = layer_core::BlendSpace::Linear;
         frame.reset_layers = true;
@@ -398,14 +401,14 @@ fn perceptual_low_zoom_sparse_material_keeps_dry_photo_pixels_across_halo_page_e
     let mut data = fixture(Affine::IDENTITY, 16.);
     data.tiles.retain(|key, _| key.plane != RasterPlane::Color);
     let mut wet = layer(data.clone(), map);
-    wet.source = Some(photo);
+    set_source(&mut wet, photo);
     data.watercolor = None;
     let mut dry = wet.clone();
-    dry.raster = RasterRevision::backed(data);
+    paint_mut(&mut dry).raster = RasterRevision::backed(data);
     let mut actual = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut expected = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     for (r, source) in [(&mut actual, &wet), (&mut expected, &dry)] {
-        let mut frame = packet(std::slice::from_ref(source), extent);
+        let mut frame = packet(source.scene(), extent);
         frame.reset_layers = true;
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.view.width_px = 512;
@@ -441,8 +444,8 @@ fn perceptual_low_zoom_sparse_material_keeps_dry_photo_pixels_across_halo_page_e
 
 type Planes = BTreeMap<TileKey, Vec<u8>>;
 
-fn assert_baked_codes(layer: &Layer, nonzero_planes: &[RasterPlane], expected: impl Fn(RasterPlane, Point) -> Vec<u8>) {
-    let data = layer.raster.wait_data().unwrap();
+fn assert_baked_codes(layer: &Document, nonzero_planes: &[RasterPlane], expected: impl Fn(RasterPlane, Point) -> Vec<u8>) {
+    let data = paint(&layer).raster.wait_data().unwrap();
     let mut planes = std::collections::BTreeSet::new();
     for (key, tile) in &data.tiles {
         if key.plane == RasterPlane::Mask { continue; }
@@ -453,8 +456,8 @@ fn assert_baked_codes(layer: &Layer, nonzero_planes: &[RasterPlane], expected: i
         let size = blob.descriptor.bytes_per_pixel().unwrap();
         for (i, actual) in bytes.chunks_exact(size).enumerate() {
             let point = Point {
-                x: (key.coordinate[0] * PAGE_SIZE + i as u32 % PAGE_SIZE) as f32 + 0.5 + layer.properties.offset.x,
-                y: (key.coordinate[1] * PAGE_SIZE + i as u32 / PAGE_SIZE) as f32 + 0.5 + layer.properties.offset.y,
+                x: (key.coordinate[0] * PAGE_SIZE + i as u32 % PAGE_SIZE) as f32 + 0.5 + occurrence(&layer).translation.x,
+                y: (key.coordinate[1] * PAGE_SIZE + i as u32 / PAGE_SIZE) as f32 + 0.5 + occurrence(&layer).translation.y,
             };
             assert!(actual == expected(key.plane, point), "baked raw {:?} at {point:?}", key.plane);
         }
@@ -467,51 +470,50 @@ fn snapshot_affine_material_bake_preserves_raw_codes_masks_and_world_registratio
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let map = Affine([0.5, 0., 0., 1., -80., -40.]);
     for linked in [true, false] {
-        let mut document = layer_core::Document::new("material bake", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.layers = vec![layer(fixture(Affine::IDENTITY, 4.), map)];
-        document.active_layer = document.layers[0].id;
-        let mut mask = LayerMask::reveal_all(document.allocate_layer_id(), Point { x: 24., y: 6. });
-        mask.linked = linked;
-        mask.inverted = true;
-        mask.default_coverage = 0.;
+        let mut document = layer(fixture(Affine::IDENTITY, 4.), map);
+        let mut mask = reveal_all(EXTENT, Point { x: 24., y: 6. });
+        mask.use_.linked = linked;
+        mask.use_.inverted = true;
+        mask.source.default_coverage = 0.;
         let [x, y] = if linked { [208., 114.] } else { [16., 80.] };
-        mask.initial = Some(Selection::polygon(vec![Point { x, y }, Point { x: x + 16., y },
+        mask.source.initial = Some(Selection::polygon(vec![Point { x, y }, Point { x: x + 16., y },
             Point { x: x + 16., y: y + 24. }, Point { x, y: y + 24. }]).unwrap());
-        document.layers[0].mask = Some(mask.clone());
-        document.layers[0].opacity = 0.7;
+        set_mask(&mut document, mask.clone());
+        occurrence_mut(&mut document).opacity = 0.7;
         let before = document.clone();
-        let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
-        assert_eq!(plan.output.properties.offset, Point { x: -80., y: -40. });
-        assert_eq!(plan.output.properties.extent, Some([592, 552]));
+        let plan = document.transform_pixels_plan(target(&document), Interpolation::Nearest, Default::default()).unwrap();
+        assert_eq!(plan.origin, Point { x: -80., y: -40. });
+        assert_eq!(plan.extent, [592, 552]);
         let cancelled = crate::snapshot::CaptureControl::default();
         cancelled.cancel();
         let cancellation = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan.clone(), cancelled)).unwrap_err();
         assert!(cancellation.contains("cancel"), "{cancellation}");
         assert_eq!(document, before);
         let control = crate::snapshot::CaptureControl::with_allocation_tracking();
-        let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, control.clone())).unwrap();
+        let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, control.clone())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
         assert!(control.allocation_peaks().unwrap().observations > 0);
-        assert_eq!(baked.id, document.active_layer);
-        assert_eq!(baked.properties.placement, layer_core::LayerPlacement::IDENTITY);
-        assert_eq!(baked.opacity, before.layers[0].opacity);
-        assert!(baked.source.is_none());
-        assert_eq!(baked.raster.wait_data().unwrap().watercolor, before.layers[0].raster.wait_data().unwrap().watercolor);
+        assert_eq!(target(&baked), target(&document));
+        assert_eq!(occurrence(&baked).placement, layer_core::LayerPlacement::IDENTITY);
+        assert_eq!(occurrence(&baked).opacity, occurrence(&before).opacity);
+        assert!(paint(&baked).original.is_none());
+        assert_eq!(paint(&baked).raster.wait_data().unwrap().watercolor, paint(&before).raster.wait_data().unwrap().watercolor);
         let inverse = map.inverse().unwrap();
         assert_baked_codes(&baked, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], |plane, point| {
             let source = inverse.map(point);
             field(plane, source.x.floor() + 0.5, source.y.floor() + 0.5)
         });
         if linked {
-            let baked_mask = baked.mask.as_ref().unwrap();
-            assert!(baked_mask.initial.is_none());
-            assert_eq!(baked_mask.placement, layer_core::Projective::IDENTITY);
-            assert_eq!(baked_mask.offset, baked.properties.offset);
-            assert_eq!(baked_mask.inverted, mask.inverted);
-            assert!(!baked_mask.raster.is_empty());
+            let baked_mask = mask_snapshot(&baked);
+            assert!(baked_mask.source.initial.is_none());
+            assert_eq!(baked_mask.use_.placement, layer_core::Projective::IDENTITY);
+            assert_eq!(baked_mask.use_.translation, occurrence(&baked).translation);
+            assert_eq!(baked_mask.use_.inverted, mask.use_.inverted);
+            assert!(!baked_mask.source.raster.is_empty());
         } else {
-            assert_eq!(baked.mask, Some(mask));
+            assert_eq!(mask_snapshot(&baked), mask);
         }
-        let preview = render(&mut renderer, &before.layers[0], &[], true);
+        let preview = render(&mut renderer, &before, &[], true);
         let actual = render(&mut renderer, &baked, &[], true);
         assert_pixels(&actual, &preview, "raw material bake appearance and mask parity");
         assert_eq!(document, before);
@@ -548,32 +550,29 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
             data.tiles.insert(TileKey { plane, coordinate }, RasterTile::backed(
                 TileBlob::encode(plane.descriptor(Default::default()), &bytes).unwrap()));
         }
-        let mut document = layer_core::Document::new("boundary watercolor", size, size,
-            layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.layers = vec![layer(data, map)];
-        document.active_layer = document.layers[0].id;
-        let request = layer_core::ContentBoundsRequest::new(&document, layer_core::ContentScope::Target(document.active_layer));
+        let mut document = layer(data, map);
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [size; 2];
+        paint_mut(&mut document).domain = [size; 2];
+        let request = layer_core::ContentBoundsRequest::new(&document, layer_core::ContentScope::Target(target(&document)));
         let raw = pollster::block_on(renderer.snapshot_gpu().content_bounds(request, Default::default())).unwrap();
         assert_eq!(raw, Rect { min: Point { x: (size - 16) as f32, y: 40. }, max: Point { x: size as f32, y: 56. } },
             "material appearance support must not change raw Target bounds");
-        let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
+        let plan = document.transform_pixels_plan(target(&document), Interpolation::Nearest, Default::default()).unwrap();
         if size == 128 {
-            assert_eq!(plan.output.properties.offset, Point::default());
-            assert_eq!(plan.output.properties.extent, Some([256, 128]));
+            assert_eq!(plan.origin, Point::default());
+            assert_eq!(plan.extent, [256, 128]);
         }
-        let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
-        let capture = |layer: &Layer| {
-            let mut expanded = document.clone();
-            expanded.width = 640;
-            expanded.height = 640;
-            let mut shifted = layer.clone();
-            shifted.properties.offset.x += 64.;
-            shifted.properties.offset.y += 64.;
-            expanded.layers = vec![shifted];
-            let mut snapshot = renderer.snapshot_gpu().capture(layer_core::Project { document: expanded }, 0., Default::default()).unwrap();
+        let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+        let mut baked = document.clone(); baked.apply(edit).unwrap();
+        let capture = |layer: &Document| {
+            let mut expanded = layer.clone();
+            expanded.artwork.compositions.get_mut(expanded.artwork.root).unwrap().size = [640; 2];
+            occurrence_mut(&mut expanded).translation.x += 64.;
+            occurrence_mut(&mut expanded).translation.y += 64.;
+            let mut snapshot = renderer.snapshot_gpu().capture_scene(expanded.snapshot(), SceneScope::All, Default::default()).unwrap();
             snapshot.read_region([0, 0, 640, 640]).unwrap()
         };
-        let original = capture(&document.layers[0]);
+        let original = capture(&document);
         let actual = capture(&baked);
         let error = original.iter().zip(&actual).flat_map(|(a, b)| a.iter().zip(b).map(|(a, b)| (a - b).abs()))
             .fold(0f32, f32::max);
@@ -585,9 +584,8 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
                 bounds.union(Rect { min: Point { x, y }, max: Point { x: x + 1., y: y + 1. } })
             });
         assert!(alpha_bounds.max.x > 256., "independent capture must include a destination halo: {alpha_bounds:?}");
-        for (name, target) in [("retained", document.layers[0].clone()), ("baked", baked)] {
-            let mut measured = document.clone();
-            measured.layers = vec![target];
+        for (name, target) in [("retained", document.clone()), ("baked", baked)] {
+            let measured = target;
             for scope in [layer_core::ContentScope::Visible, layer_core::ContentScope::All] {
                 let request = layer_core::ContentBoundsRequest::new(&measured, scope);
                 let bounds = pollster::block_on(renderer.snapshot_gpu().content_bounds(request, Default::default())).unwrap();
@@ -601,72 +599,69 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
 #[test]
 fn snapshot_photo_bake_keeps_original_source_and_honors_erased_base_overrides() {
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut document = layer_core::Document::new("erased photo bake", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.layers.retain(|layer| layer.kind == layer_core::LayerKind::Paint);
+    let mut document = paint_document(EXTENT, "material bake");
     let source = layer_core::color::source::rgba8_source([512, 256], |_, _| [20, 180, 80, 255]);
-    let original = &mut document.layers[0];
-    original.source = Some(source.clone());
-    original.properties.placement = layer_core::LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, -20., 30.]));
-    original.raster = RasterRevision::backed(RasterData {
+    set_source(&mut document, source.clone());
+    occurrence_mut(&mut document).placement = layer_core::LayerPlacement::from_affine(Affine([0.5, 0., 0., 0.5, -20., 30.]));
+    paint_mut(&mut document).raster = RasterRevision::backed(RasterData {
         tiles: [(TileKey { plane: RasterPlane::Color, coordinate: [0, 0] },
-            RasterTile::backed(TileBlob::encode(document.color.paint_descriptor(), &vec![0; 256 * 256 * 4]).unwrap()))].into(),
+            RasterTile::backed(TileBlob::encode(document.composition().color.paint_descriptor(), &vec![0; 256 * 256 * 4]).unwrap()))].into(),
         ..Default::default()
     });
     let before = document.clone();
-    let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
-    let inverse = before.layers[0].properties.placement.as_affine().unwrap().inverse().unwrap();
-    let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    let plan = document.transform_pixels_plan(target(&document), Interpolation::Nearest, Default::default()).unwrap();
+    let inverse = occurrence(&before).placement.as_affine().unwrap().inverse().unwrap();
+    let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
     assert_baked_codes(&baked, &[RasterPlane::Color], |plane, point| {
         let local = inverse.map(point);
         if plane == RasterPlane::Color && (256. ..512.).contains(&local.x) && (0. ..256.).contains(&local.y) {
             vec![20, 180, 80, 255]
         } else { vec![0; if plane == RasterPlane::Color { 4 } else { 1 }] }
     });
-    let preview = render(&mut renderer, &before.layers[0], &[], true);
+    let preview = render(&mut renderer, &before, &[], true);
     let actual = render(&mut renderer, &baked, &[], true);
     assert_pixels(&actual, &preview, "source plus erased override bake parity");
-    assert!(baked.source.is_none());
+    assert!(paint(&baked).original.is_none());
     assert_eq!(document, before);
-    assert!(Arc::ptr_eq(document.layers[0].source.as_ref().unwrap(), &source));
+    assert!(Arc::ptr_eq(paint(&document).original.as_ref().unwrap(), &source));
 }
 
 #[test]
 fn snapshot_magnified_nonuniform_photo_bake_matches_retained_bicubic_edges() {
-    let mut document = layer_core::Document::new("magnified checker", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = layer_core::color::SampleDepth::F32;
-    document.layers.retain(|layer| layer.kind == layer_core::LayerKind::Paint);
-    let original = &mut document.layers[0];
-    original.source = Some(layer_core::color::source::rgba8_source([128; 2], |x, y| {
+    let mut document = paint_document(EXTENT, "material bake");
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = layer_core::color::SampleDepth::F32;
+    set_source(&mut document, layer_core::color::source::rgba8_source([128; 2], |x, y| {
         if x < 3 || y < 3 || x >= 125 || y >= 125 { [0; 4] }
         else if (x / 4 + y / 4) % 2 == 0 { [220, 28, 90, 255] }
         else { [24, 170, 210, 128] }
     }));
-    original.properties.placement = layer_core::LayerPlacement { interpolation:Interpolation::Bicubic, ..LayerPlacement::from_affine(Affine([1.6, 0.1, 0., 0.8, 19.2, 23.4])) };
-    let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Bicubic, Default::default()).unwrap();
-    let mut renderer = WgpuRasterizer::new_native_headless(document.color).unwrap();
+    occurrence_mut(&mut document).placement = layer_core::LayerPlacement { interpolation:Interpolation::Bicubic, ..LayerPlacement::from_affine(Affine([1.6, 0.1, 0., 0.8, 19.2, 23.4])) };
+    let plan = document.transform_pixels_plan(target(&document), Interpolation::Bicubic, Default::default()).unwrap();
+    let mut renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     renderer.test.reference = true;
-    let expected = render(&mut renderer, &document.layers[0], &[], true);
-    let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    let expected = render(&mut renderer, &document, &[], true);
+    let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
     let actual = render(&mut renderer, &baked, &[], true);
     assert_pixels(&actual, &expected, "magnified nonuniform checker: retained and baked Bicubic appearance");
-    assert!(baked.source.is_none());
+    assert!(paint(&baked).original.is_none());
 }
 
 #[test]
 fn snapshot_bake_rejects_corrupt_native_tile_after_metadata_admission() {
-    let mut document = layer_core::Document::new("corrupt backing", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.layers.retain(|layer| layer.kind == layer_core::LayerKind::Paint);
+    let mut document = paint_document(EXTENT, "material bake");
     let mut data = fixture(Affine::IDENTITY, 4.);
     let key = TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [1, 0] };
-    let mut blob = TileBlob::encode(key.plane.descriptor(document.color), &vec![180; 256 * 256]).unwrap();
-    blob.digest[0] ^= 1;
-    data.tiles.insert(key, RasterTile::backed(blob));
-    document.layers[0].raster = RasterRevision::backed(data);
-    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(maps()[0]);
+    let blob = TileBlob::encode(key.plane.descriptor(document.composition().color), &vec![180; 256 * 256]).unwrap();
+    let blob=crate::test_support::corrupt_tile(blob);
+    data.tiles.insert(key, blob);
+    paint_mut(&mut document).raster = RasterRevision::backed(data);
+    occurrence_mut(&mut document).placement = layer_core::LayerPlacement::from_affine(maps()[0]);
     let before = document.clone();
-    let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
-    plan.input.validate(Default::default()).unwrap();
-    let renderer = WgpuRasterizer::new_native_headless(document.color).unwrap();
+    let plan = document.transform_pixels_plan(target(&document), Interpolation::Nearest, Default::default()).unwrap();
+    Document::from_artwork(plan.scene.artwork.clone()).unwrap().validate(Default::default()).unwrap();
+    let renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
     let result = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default()));
     assert!(result.is_err(), "native decode must reject corrupted backing admitted by metadata validation");
     assert_eq!(document, before);
@@ -674,28 +669,27 @@ fn snapshot_bake_rejects_corrupt_native_tile_after_metadata_admission() {
 
 #[test]
 fn snapshot_bake_enlargement_preserves_mask_defaults_and_finite_native_overrides() {
-    let mut document = layer_core::Document::new("finite mask domain", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.layers.retain(|layer| layer.kind == layer_core::LayerKind::Paint);
-    let mask_id = document.allocate_layer_id();
+    let mut document = paint_document(EXTENT, "material bake");
     let map = Affine([0.5, 0., 0., 1., -80., -40.]);
-    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(map);
-    document.layers[0].source = Some(layer_core::color::source::rgba8_source(EXTENT, |_, _| [80, 120, 160, 255]));
-    let mut mask = LayerMask::reveal_all(mask_id, Point::default());
-    mask.initial = Some(Selection::polygon(vec![
+    occurrence_mut(&mut document).placement = layer_core::LayerPlacement::from_affine(map);
+    set_source(&mut document, layer_core::color::source::rgba8_source(EXTENT, |_, _| [80, 120, 160, 255]));
+    let mut mask = reveal_all(EXTENT, Point::default());
+    mask.source.initial = Some(Selection::polygon(vec![
         Point { x: 0., y: 500. }, Point { x: 512., y: 500. },
         Point { x: 512., y: 550. }, Point { x: 0., y: 550. },
     ]).unwrap());
-    mask.raster = RasterRevision::backed(RasterData { tiles: [[0, 1], [1, 1]].map(|coordinate|
+    mask.source.raster = RasterRevision::backed(RasterData { tiles: [[0, 1], [1, 1]].map(|coordinate|
         (TileKey { plane: RasterPlane::Mask, coordinate }, RasterTile::backed(
-            TileBlob::encode(RasterPlane::Mask.descriptor(document.color), &vec![0; 256 * 256]).unwrap()))).into(),
+            TileBlob::encode(RasterPlane::Mask.descriptor(document.composition().color), &vec![0; 256 * 256]).unwrap()))).into(),
         ..Default::default() });
-    document.layers[0].mask = Some(mask);
-    let plan = document.transform_pixels_plan(document.active_layer, Interpolation::Nearest, Default::default()).unwrap();
-    assert_eq!(plan.input.document.layers[0].properties.extent, Some(EXTENT));
-    assert_eq!([plan.input.document.width, plan.input.document.height], [592, 552]);
-    let renderer = WgpuRasterizer::new_native_headless(document.color).unwrap();
-    let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
-    let mask = baked.mask.as_ref().unwrap();
+    set_mask(&mut document, mask);
+    let plan = document.transform_pixels_plan(target(&document), Interpolation::Nearest, Default::default()).unwrap();
+    assert_eq!(plan.scene.view().target_extent(plan.target), EXTENT);
+    assert_eq!(plan.extent, [592, 552]);
+    let renderer = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+    let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan, Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
+    let mask = mask_snapshot(&baked);
     let inverse = map.inverse().unwrap();
     assert_baked_codes(&baked, &[RasterPlane::Color], |plane, world| {
         assert_eq!(plane, RasterPlane::Color);
@@ -705,14 +699,14 @@ fn snapshot_bake_enlargement_preserves_mask_defaults_and_finite_native_overrides
     });
     let mut covered = 0;
     let mut zero_overrides = 0;
-    for (key, tile) in &mask.raster.wait_data().unwrap().tiles {
+    for (key, tile) in &mask.source.raster.wait_data().unwrap().tiles {
         assert_eq!(key.plane, RasterPlane::Mask);
         let bytes = tile.wait_backing().unwrap().decode().unwrap();
         zero_overrides += usize::from(bytes.iter().all(|value| *value == 0));
         for (i, value) in bytes.into_iter().enumerate() {
             let world = Point {
-                x: (key.coordinate[0] * PAGE_SIZE + i as u32 % PAGE_SIZE) as f32 + 0.5 + mask.offset.x,
-                y: (key.coordinate[1] * PAGE_SIZE + i as u32 / PAGE_SIZE) as f32 + 0.5 + mask.offset.y,
+                x: (key.coordinate[0] * PAGE_SIZE + i as u32 % PAGE_SIZE) as f32 + 0.5 + mask.use_.translation.x,
+                y: (key.coordinate[1] * PAGE_SIZE + i as u32 / PAGE_SIZE) as f32 + 0.5 + mask.use_.translation.y,
             };
             let local = inverse.map(world);
             let expected = if (0. ..512.).contains(&local.x) && (256. ..512.).contains(&local.y) { 0 } else { 255 };
@@ -729,30 +723,30 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
     let extent = [2048; 2];
     let photo_pixel = |x: u32, y: u32| [40 + (x % 160) as u8, 30 + (y % 180) as u8, 80, 255];
     let mut original = layer(fixture(Affine::IDENTITY, 16.), Affine::IDENTITY);
-    original.source = Some(layer_core::color::source::rgba8_source(extent, photo_pixel));
-    let overrides: Vec<_> = original.raster.wait_data().unwrap().tiles.keys()
+    set_source(&mut original, layer_core::color::source::rgba8_source(extent, photo_pixel));
+    let overrides: Vec<_> = paint(&original).raster.wait_data().unwrap().tiles.keys()
         .filter(|key| key.plane == RasterPlane::Color).map(|key| key.coordinate).collect();
     let mut moving = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut oracle = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    moving.prepare_moving_layer(Some(original.id));
-    oracle.prepare_moving_layer(Some(original.id));
+    moving.prepare_moving_layer(Some(occurrence_id(&original)));
+    oracle.prepare_moving_layer(Some(occurrence_id(&original)));
     let mut prepared = None;
     for x in [0., 16., 0.] {
-        original.properties.placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x, y: 0. }));
-        let mut expected = layer(fixture(original.properties.placement.as_affine().unwrap(), 16.), Affine::IDENTITY);
-        expected.source = Some(layer_core::color::source::rgba8_source(extent, |px, py| {
+        occurrence_mut(&mut original).placement = layer_core::LayerPlacement::from_affine(Affine::translation(Point { x, y: 0. }));
+        let mut expected = layer(fixture(occurrence(&original).placement.as_affine().unwrap(), 16.), Affine::IDENTITY);
+        set_source(&mut expected, layer_core::color::source::rgba8_source(extent, |px, py| {
             if px < x as u32 { return [0; 4]; }
             let px = px - x as u32;
             if overrides.contains(&[px / PAGE_SIZE, py / PAGE_SIZE]) { [0; 4] } else { photo_pixel(px, py) }
         }));
-        let frame = |layers| FramePacket {
+        let frame = |scene| FramePacket {
             blend_space: layer_core::BlendSpace::Perceptual,
             view: ViewState { width_px: 640, height_px: 480,
-                document_to_surface: [0.125, 0., 0., 0.125, 64., 48.], ..packet(layers, extent).view },
-            ..packet(layers, extent)
+                document_to_surface: [0.125, 0., 0., 0.125, 64., 48.], ..packet(scene, extent).view },
+            ..packet(scene, extent)
         };
-        moving.submit(frame(std::slice::from_ref(&original))).unwrap();
-        let (texture, updates, level) = moving.scene.as_ref().unwrap().placement_cache(original.id).unwrap();
+        moving.submit(frame(original.scene())).unwrap();
+        let (texture, updates, level) = moving.scene.as_ref().unwrap().placement_cache(target(&original)).unwrap();
         if let Some((first_texture, previous_updates, first_level)) = &mut prepared {
             assert_eq!(&texture, first_texture, "crossing identity keeps the raw photo LOD allocation");
             assert_eq!(level, *first_level);
@@ -763,7 +757,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
             assert!(updates >= 64, "the fixture must prepare a complete 64-page photo source");
             prepared = Some((texture, updates, level));
         }
-        oracle.submit(FramePacket { reset_layers: true, ..frame(std::slice::from_ref(&expected)) }).unwrap();
+        oracle.submit(FramePacket { reset_layers: true, ..frame(expected.scene()) }).unwrap();
         let actual = crate::scene::scale::tests::display_pixels(&moving);
         let expected = crate::scene::scale::tests::display_pixels(&oracle);
         assert_eq!(actual.len(), expected.len());
@@ -775,7 +769,7 @@ fn moving_watercolor_crosses_identity_without_rebuilding_the_photo_source() {
     }
     moving.prepare_moving_layer(None);
     oracle.prepare_moving_layer(None);
-    let mut frame = packet(std::slice::from_ref(&original), extent);
+    let mut frame = packet(original.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Perceptual;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
     moving.submit(frame).unwrap();
@@ -789,20 +783,20 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     for initial in [Affine::IDENTITY, Affine([0.5, 0., 0., 0.5, 0., 0.])] {
     let extent = [2048; 2];
     let mut photo = layer(RasterData::default(), initial);
-    photo.source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+    set_source(&mut photo, layer_core::color::source::rgba8_source(extent, |x, y|
         [40 + (x % 160) as u8, 30 + (y % 180) as u8, 80, 255]));
     let mut cached = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let submit = |r: &mut WgpuRasterizer, layer: &Layer| {
-        let mut frame = packet(std::slice::from_ref(layer), extent);
+    let submit = |r: &mut WgpuRasterizer, layer: &Document| {
+        let mut frame = packet(layer.scene(), extent);
         frame.blend_space = layer_core::BlendSpace::Perceptual;
         frame.view.width_px = 640;
         frame.view.height_px = 480;
         frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
         r.submit(frame).unwrap();
     };
-    let parity = |r: &WgpuRasterizer, layer: &Layer, moving: bool| {
+    let parity = |r: &WgpuRasterizer, layer: &Document, moving: bool| {
         let mut fresh = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        fresh.prepare_moving_layer(moving.then_some(layer.id));
+        fresh.prepare_moving_layer(moving.then_some(occurrence_id(&layer)));
         submit(&mut fresh, layer);
         let actual = crate::scene::scale::tests::display_pixels(r);
         let expected = crate::scene::scale::tests::display_pixels(&fresh);
@@ -811,32 +805,32 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
             .fold(0f32, f32::max);
         assert!(error < 1e-6, "cached versus fresh photo/material appearance: {error}");
     };
-    cached.prepare_moving_layer(Some(photo.id));
+    cached.prepare_moving_layer(Some(occurrence_id(&photo)));
     submit(&mut cached, &photo);
     let raw_level = if initial == Affine::IDENTITY { 2 } else {
-        cached.scene.as_ref().unwrap().placement_cache(photo.id).unwrap().2
+        cached.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap().2
     };
-    let (raw_texture, _, _) = cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap();
-    eprintln!("{initial:?} initial updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
+    let (raw_texture, _, _) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    eprintln!("{initial:?} initial updates {}", cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap().1);
     let raw_pixels = crate::test_support::float_pixels(&cached, &raw_texture);
     cached.prepare_moving_layer(None);
-    photo.properties.placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
+    occurrence_mut(&mut photo).placement = layer_core::LayerPlacement::from_affine(Affine::IDENTITY);
     submit(&mut cached, &photo);
-    let (accepted_texture, _, accepted_level) = cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap();
+    let (accepted_texture, _, accepted_level) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
     assert_eq!(accepted_level, raw_level);
     assert_eq!(accepted_texture, raw_texture);
     assert_eq!(crate::test_support::float_pixels(&cached, &raw_texture), raw_pixels,
         "accepting a photo must preserve its prepared raw finer pixels");
     parity(&cached, &photo, false);
-    photo.raster = RasterRevision::backed(fixture(Affine::IDENTITY, 16.));
+    paint_mut(&mut photo).raster = RasterRevision::backed(fixture(Affine::IDENTITY, 16.));
     submit(&mut cached, &photo);
     parity(&cached, &photo, false);
-    eprintln!("{initial:?} wet restored updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
-    let (_, before_reopen, _) = cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap();
-    cached.prepare_moving_layer(Some(photo.id));
+    eprintln!("{initial:?} wet restored updates {}", cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap().1);
+    let (_, before_reopen, _) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    cached.prepare_moving_layer(Some(occurrence_id(&photo)));
     submit(&mut cached, &photo);
-    let (reopened_texture, updates, level) = cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap();
-    eprintln!("{initial:?} reopened updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
+    let (reopened_texture, updates, level) = cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap();
+    eprintln!("{initial:?} reopened updates {}", cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap().1);
     assert_eq!(reopened_texture, raw_texture);
     assert_eq!(level, raw_level);
     assert!(updates - before_reopen <= 16,
@@ -845,8 +839,8 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     cached.prepare_moving_layer(None);
     submit(&mut cached, &photo);
     parity(&cached, &photo, false);
-    eprintln!("{initial:?} wet accepted updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
-    let wet = photo.raster.clone();
+    eprintln!("{initial:?} wet accepted updates {}", cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap().1);
+    let wet = paint(&photo).raster.clone();
     let mut dry = (*wet.wait_data().unwrap()).clone();
     for (key, tile) in &mut dry.tiles {
         if key.plane != RasterPlane::WatercolorWetness { continue; }
@@ -855,19 +849,19 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
         bytes.fill(0);
         *tile = RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap());
     }
-    photo.raster = RasterRevision::backed(dry);
+    paint_mut(&mut photo).raster = RasterRevision::backed(dry);
     submit(&mut cached, &photo);
     eprintln!("accepted {initial:?}: isolated cold WatercolorWetness removal with unchanged pigment/style");
     parity(&cached, &photo, false);
-    eprintln!("{initial:?} dry accepted updates {}", cached.scene.as_ref().unwrap().placement_cache_at(photo.id, raw_level).unwrap().1);
-    photo.raster = wet;
+    eprintln!("{initial:?} dry accepted updates {}", cached.scene.as_ref().unwrap().placement_cache_at(target(&photo), raw_level).unwrap().1);
+    paint_mut(&mut photo).raster = wet;
     submit(&mut cached, &photo);
     parity(&cached, &photo, false);
-    cached.prepare_moving_layer(Some(photo.id));
+    cached.prepare_moving_layer(Some(occurrence_id(&photo)));
     submit(&mut cached, &photo);
     parity(&cached, &photo, true);
     let mut changed_style = fixture(Affine::IDENTITY, 4.);
-    photo.raster = RasterRevision::backed(changed_style.clone());
+    paint_mut(&mut photo).raster = RasterRevision::backed(changed_style.clone());
     submit(&mut cached, &photo);
     parity(&cached, &photo, true);
     let key = TileKey { plane: RasterPlane::Color, coordinate: [0, 0] };
@@ -875,25 +869,25 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
     let mut bytes = blob.decode().unwrap();
     for pixel in bytes.chunks_exact_mut(4).filter(|pixel| pixel[3] != 0) { pixel[..3].copy_from_slice(&[20, 60, 100]); }
     changed_style.tiles.insert(key, RasterTile::backed(TileBlob::encode(blob.descriptor, &bytes).unwrap()));
-    photo.raster = RasterRevision::backed(changed_style);
+    paint_mut(&mut photo).raster = RasterRevision::backed(changed_style);
     submit(&mut cached, &photo);
     parity(&cached, &photo, true);
-    photo.source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
+    set_source(&mut photo, layer_core::color::source::rgba8_source(extent, |x, y|
         [80, 50 + (x % 100) as u8, 30 + (y % 120) as u8, 255]));
     submit(&mut cached, &photo);
     parity(&cached, &photo, true);
     let mut appearance = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut frame = packet(std::slice::from_ref(&photo), extent);
+    let mut frame = packet(photo.scene(), extent);
     frame.blend_space = layer_core::BlendSpace::Linear;
     frame.view.document_to_surface = [0.125, 0., 0., 0.125, 64., 48.];
     appearance.submit(frame).unwrap();
-    let (_, _, appearance_level) = appearance.scene.as_ref().unwrap().placement_cache(photo.id).unwrap();
-    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, &photo, extent, appearance_level).is_none(),
+    let (_, _, appearance_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
+    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, appearance_level).is_none(),
         "linear watercolor appearance must never become the transform's original raw pigment");
-    appearance.prepare_moving_layer(Some(photo.id));
+    appearance.prepare_moving_layer(Some(occurrence_id(&photo)));
     appearance.submit(frame).unwrap();
-    let (_, _, pigment_level) = appearance.scene.as_ref().unwrap().placement_cache(photo.id).unwrap();
-    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, &photo, extent, pigment_level).is_some(),
+    let (_, _, pigment_level) = appearance.scene.as_ref().unwrap().placement_cache(target(&photo)).unwrap();
+    assert!(appearance.scene.as_ref().unwrap().reduced_layer(&appearance, photo.scene(), target(&photo), extent, pigment_level).is_some(),
         "a complete raw pigment LOD remains eligible for reduced transforms");
     }
 }
@@ -1073,28 +1067,28 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
             if let Some(plane) = missing { data.tiles.remove(&TileKey { plane, coordinate: [1, 0] }); }
             let context = format!("{label} width={width} missing={missing:?}");
             let mut source = layer(data.clone(), Affine::IDENTITY);
-            let immutable = source.raster.clone();
-            let digests: Vec<_> = immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().digest).collect();
+            let immutable = paint(&source).raster.clone();
+            let digests: Vec<_> = immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().content_digest().unwrap()).collect();
             render(&mut transformed, &source, &[], true);
             let source_planes = live_planes(&transformed);
             let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..map.clone() }, ..Default::default() };
             transformed.set_transform_preview(Some(&layer_render::TransformPreview {
-                transaction: 1, layer: source.id, moving: false, selection: None, transform: transform.clone(),
+                transaction: 1, target: target(&source), moving: false, selection: None, transform: transform.clone(),
             })).unwrap();
             let preview = render(&mut transformed, &source, &[], false);
             let mut retained = source.clone();
-            retained.properties.placement = transform.placement.clone();
+            occurrence_mut(&mut retained).placement = transform.placement.clone();
             let retained_pixels = render(&mut expected, &retained, &[], true);
             assert_pixels(&retained_pixels, &preview, &format!("retained {context}"));
             transformed.set_transform_preview(None).unwrap();
             render(&mut transformed, &source, &[], false);
-            let mut coverage = LayerMask::reveal_all(LayerId(9), Point::default());
-            coverage.default_coverage = 1.;
-            let operation = LayerOperation { placement: Affine::IDENTITY, coverage,
-                kind: LayerOperationKind::Transform(transform) };
-            let operation_batch = DabBatch { kind: DabBatchKind::LayerOperation(0), dab_count: 0,
-                damage: operation.bounds(EXTENT), ..batch(1) };
-            source.pending_operations.push(operation);
+            let mut coverage = reveal_all(EXTENT, Point::default());
+            coverage.source.default_coverage = 1.;
+            let operation = RasterOperation { placement: Affine::IDENTITY, coverage,
+                kind: RasterOperationKind::Transform(transform) };
+            let operation_batch = DabBatch { kind: DabBatchKind::RasterOperation(0), dab_count: 0,
+                damage: operation.bounds(EXTENT), ..crate::test_support::dab_batch(target(&source), crate::tests::test_style(BrushExecution::Dry), Rect::from_extent(EXTENT)) };
+            Arc::make_mut(&mut paint_mut(&mut source).operations).push(operation);
             let actual = render(&mut transformed, &source, &[operation_batch], false);
             let samples = check_raw_mapping(&source_planes, &live_planes(&transformed), &positions, &context);
             let destination = layer(destination_fixture(&samples, width, &data), Affine::IDENTITY);
@@ -1103,8 +1097,8 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
             assert_pixels(&actual, &expected_pixels, &format!("{label} width={width}: map raw planes, then evaluate style once"));
             assert_pixels(&preview, &actual, &format!("{label} width={width}: still preview and commit agree"));
             assert_destination_halo(&actual, &samples, width, &context);
-            assert_eq!(source.raster.identity(), immutable.identity());
-            assert_eq!(immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().digest).collect::<Vec<_>>(), digests);
+            assert_eq!(paint(&source).raster.identity(), immutable.identity());
+            assert_eq!(immutable.wait_data().unwrap().tiles.values().map(|t| t.wait_backing().unwrap().content_digest().unwrap()).collect::<Vec<_>>(), digests);
         }
     }
 }
@@ -1164,56 +1158,58 @@ fn nonlinear_material_source_footprints_cover_destination_neighbors_with_portabl
 #[test]
 fn independent_projective_group_mask_bake_preserves_owner_and_default_domain() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut document = layer_core::Document::new("independent mask", 512,512,
-        layer_core::DocumentNames { paint:"Ink".into(),paper:"Paper".into() });
-    let mut owner = Layer::paint(LayerId(1),"group");
-    owner.kind = LayerKind::Group;
-    owner.properties.offset = Point { x:17.,y:23. };
-    owner.opacity = 0.4;
-    let mut mask = LayerMask::reveal_all(LayerId(2),Point { x:-32.,y:-14. });
-    mask.extent = Some([256;2]);
-    mask.linked = false;
-    mask.enabled = false;
-    mask.inverted = true;
-    mask.default_coverage = 0.63;
-    mask.placement = Projective([0.9,0.07,0.,-0.03,1.1,0.,0.0003,0.0001,1.]);
-    mask.initial = Some(Selection::polygon(vec![Point {x:300.,y:300.},Point {x:340.,y:300.},
+    let mut artwork = Artwork::new(EXTENT).unwrap();
+    let (child, _) = crate::test_support::add_paint(&mut artwork, "child", EXTENT);
+    let stack = artwork.stacks.insert(PortableId::random(), Stack { entries: vec![child] }).unwrap();
+    let group = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Stack(stack), "group")).unwrap();
+    let root = artwork.compositions.get(artwork.root).unwrap().result;
+    artwork.stacks.get_mut(root).unwrap().entries = vec![group];
+    let mut owner = Document::from_artwork(artwork).unwrap();
+    occurrence_mut(&mut owner).translation = Point { x:17.,y:23. };
+    occurrence_mut(&mut owner).opacity = 0.4;
+    let mut mask = reveal_all(EXTENT, Point { x:-32.,y:-14. });
+    mask.source.domain = [256;2];
+    mask.use_.linked = false;
+    mask.use_.enabled = false;
+    mask.use_.inverted = true;
+    mask.source.default_coverage = 0.63;
+    mask.use_.placement = Projective([0.9,0.07,0.,-0.03,1.1,0.,0.0003,0.0001,1.]);
+    mask.source.initial = Some(Selection::polygon(vec![Point {x:300.,y:300.},Point {x:340.,y:300.},
         Point {x:340.,y:340.},Point {x:300.,y:340.}]).unwrap());
     let mut bytes = Vec::new();
     for y in 0..PAGE_SIZE { for x in 0..PAGE_SIZE { bytes.push(if (80..160).contains(&x) && (90..190).contains(&y) { 51 } else { 204 }); }}
     let mut data = RasterData::default();
     data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
-        TileBlob::encode(RasterPlane::Mask.descriptor(document.color),&bytes).unwrap()));
-    mask.raster = RasterRevision::backed(data);
+        TileBlob::encode(RasterPlane::Mask.descriptor(owner.composition().color),&bytes).unwrap()));
+    mask.source.raster = RasterRevision::backed(data);
     let source_mask = mask.clone();
-    owner.mask = Some(mask);
-    let mut child = Layer::paint(LayerId(3),"child");
-    child.properties.parent = Some(owner.id);
-    document.layers = vec![child,owner.clone()];
-    document.active_layer = owner.id;
-    document.active_mask = true;
-    let geometry = document.layer_geometry(source_mask.id).projective().unwrap().0.map(f64::from);
-    let plan = document.transform_pixels_plan(source_mask.id,Interpolation::Nearest,Default::default()).unwrap();
+    set_mask(&mut owner, mask);
+    let document = owner.clone();
+    let geometry = document.target_geometry(SourceTarget::Coverage(source_mask.target)).projective().unwrap().0.map(f64::from);
+    let plan = document.transform_pixels_plan(SourceTarget::Coverage(source_mask.target),Interpolation::Nearest,Default::default()).unwrap();
     assert_eq!(plan.scope,layer_core::TransformPixelsScope::Mask);
-    let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
-    assert_eq!(baked.properties,owner.properties);
-    assert_eq!(baked.raster,owner.raster);
-    assert_eq!(baked.source,owner.source);
-    assert_eq!(baked.opacity,owner.opacity);
-    let mask = baked.mask.as_ref().unwrap();
-    assert_eq!(mask.inverted,source_mask.inverted);
-    assert_eq!(mask.enabled,source_mask.enabled);
-    assert_eq!(mask.default_coverage,source_mask.default_coverage);
-    assert_eq!(mask.placement,Projective::IDENTITY);
-    assert!(mask.initial.is_none());
+    let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
+    let mut before_owner = occurrence(&owner).clone(); before_owner.mask = None;
+    let mut baked_owner = occurrence(&baked).clone(); baked_owner.mask = None;
+    assert_eq!(baked_owner, before_owner);
+    assert_eq!(baked.artwork.stacks, owner.artwork.stacks);
+    assert_eq!(baked.artwork.paint, owner.artwork.paint);
+    assert_eq!(occurrence(&baked).opacity,occurrence(&owner).opacity);
+    let mask = mask_snapshot(&baked);
+    assert_eq!(mask.use_.inverted,source_mask.use_.inverted);
+    assert_eq!(mask.use_.enabled,source_mask.use_.enabled);
+    assert_eq!(mask.source.default_coverage,source_mask.source.default_coverage);
+    assert_eq!(mask.use_.placement,Projective::IDENTITY);
+    assert!(mask.source.initial.is_none());
     let mut checked = 0;
     let mut defaults = 0;
-    for (key,tile) in &mask.raster.wait_data().unwrap().tiles {
+    for (key,tile) in &mask.source.raster.wait_data().unwrap().tiles {
         assert_eq!(key.plane,RasterPlane::Mask);
         let bytes = tile.wait_backing().unwrap().decode().unwrap();
         for (i,actual) in bytes.into_iter().enumerate() {
-            let world = [mask.offset.x as f64+(key.coordinate[0]*PAGE_SIZE+i as u32%PAGE_SIZE) as f64+0.5,
-                mask.offset.y as f64+(key.coordinate[1]*PAGE_SIZE+i as u32/PAGE_SIZE) as f64+0.5];
+            let world = [mask.use_.translation.x as f64+(key.coordinate[0]*PAGE_SIZE+i as u32%PAGE_SIZE) as f64+0.5,
+                mask.use_.translation.y as f64+(key.coordinate[1]*PAGE_SIZE+i as u32/PAGE_SIZE) as f64+0.5];
             let expected = crate::test_support::preimage(geometry,world).filter(|p| p.iter().all(|v| *v>=0. && *v<256.)).map_or_else(
                 || {defaults+=1;161}, |p| if (80. ..160.).contains(&p[0].floor()) && (90. ..190.).contains(&p[1].floor()) {51}else{204});
             assert_eq!(actual,expected,"mask raw sample at {world:?}");
@@ -1232,38 +1228,35 @@ fn linked_outer_mesh_mask_bake_uses_winning_owner_uv_and_preserves_no_hit_defaul
     for mask_placement in [Projective([1.,0.03,0.,-0.02,1.,0.,0.0001,0.00005,1.]),
         Projective([1.,0.,0.,0.,1.,0.,0.004,0.,1.])] {
     for inverted in [false,true] {
-        let mut document = layer_core::Document::new("linked folded mask",512,512,
-            layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
         let mut owner = layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
-        owner.properties.placement = placement.clone();
-        let mut mask = LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
-        mask.extent = Some([256;2]);
-        mask.default_coverage = 161./255.;
-        mask.inverted = inverted;
-        mask.placement = mask_placement;
+        occurrence_mut(&mut owner).placement = placement.clone();
+        let mut mask = reveal_all(EXTENT, Point {x:7.,y:-3.});
+        mask.source.domain = [256;2];
+        mask.source.default_coverage = 161./255.;
+        mask.use_.inverted = inverted;
+        mask.use_.placement = mask_placement;
         let mut data = RasterData::default();
         let bytes: Vec<_> = (0..PAGE_SIZE*PAGE_SIZE).map(|i| if i%PAGE_SIZE>220 && i/PAGE_SIZE>100 {51}else{204}).collect();
         data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
-            TileBlob::encode(RasterPlane::Mask.descriptor(document.color),&bytes).unwrap()));
-        mask.raster = RasterRevision::backed(data);
-        let adapter = mask.placement.then(Projective::from_affine(Affine::translation(mask.offset))).unwrap().inverse().unwrap();
-        owner.mask = Some(mask.clone());
-        document.layers = vec![owner.clone()];
-        document.active_layer = owner.id;
-        document.active_mask = true;
+            TileBlob::encode(RasterPlane::Mask.descriptor(owner.composition().color),&bytes).unwrap()));
+        mask.source.raster = RasterRevision::backed(data);
+        let adapter = mask.use_.placement.then(Projective::from_affine(Affine::translation(mask.use_.translation))).unwrap().inverse().unwrap();
+        set_mask(&mut owner, mask.clone());
+        let document = owner.clone();
         let original = render(&mut renderer,&owner,&[],true);
-        let source: Planes = owner.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+        let source: Planes = paint(&owner).raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
             (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
-        let plan = document.transform_pixels_plan(mask.id,Interpolation::Nearest,Default::default()).unwrap();
-        assert_eq!(plan.target,mask.id);
+        let plan = document.transform_pixels_plan(SourceTarget::Coverage(mask.target),Interpolation::Nearest,Default::default()).unwrap();
+        assert_eq!(plan.target,SourceTarget::Coverage(mask.target));
         assert_eq!(plan.scope,layer_core::TransformPixelsScope::Paint {linked_mask:true});
-        let baked = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
-        let actual: Planes = baked.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+        let edit = pollster::block_on(renderer.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
+        let actual: Planes = paint(&baked).raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
             (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
         check_raw_mapping(&source,&actual,&positions,"linked outer mesh bake");
-        let baked_mask = baked.mask.as_ref().unwrap();
-        assert_eq!(baked_mask.inverted,inverted);
-        let masks: Planes = baked_mask.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
+        let baked_mask = mask_snapshot(&baked);
+        assert_eq!(baked_mask.use_.inverted,inverted);
+        let masks: Planes = baked_mask.source.raster.wait_data().unwrap().tiles.iter().map(|(key,tile)|
             (*key,tile.wait_backing().unwrap().decode().unwrap())).collect();
         let mut no_hit = 0;
         for (i,sources) in positions.iter().enumerate() {
@@ -1289,21 +1282,20 @@ fn retained_outer_mesh_document_reads_and_linked_mask_thumbnail_match_independen
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let (_,mut placement)=nonlinear_maps().pop().unwrap();
     placement.interpolation=Interpolation::Nearest;
-    let mut doc=layer_core::Document::new("placed reads",512,512,
-        layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
     let mut owner=layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
-    owner.properties.placement=placement;
-    let mut mask=LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
-    mask.extent=Some([256;2]);mask.default_coverage=161./255.;
-    mask.placement=Projective([1.,0.03,0.,-0.02,1.,0.,0.0001,0.00005,1.]);
+    occurrence_mut(&mut owner).placement =placement;
+    let mut mask=reveal_all(EXTENT, Point {x:7.,y:-3.});
+    mask.source.domain=[256;2];mask.source.default_coverage=161./255.;
+    mask.use_.placement=Projective([1.,0.03,0.,-0.02,1.,0.,0.0001,0.00005,1.]);
     let mut data=RasterData::default();
     let bytes:Vec<_>=(0..PAGE_SIZE*PAGE_SIZE).map(|i| if i%PAGE_SIZE>110 && i/PAGE_SIZE>100 {51}else{204}).collect();
     data.tiles.insert(TileKey {plane:RasterPlane::Mask,coordinate:[0;2]},RasterTile::backed(
-        TileBlob::encode(RasterPlane::Mask.descriptor(doc.color),&bytes).unwrap()));
-    mask.raster=RasterRevision::backed(data);owner.mask=Some(mask);
-    doc.layers=vec![owner.clone()];
-    let plan=doc.transform_pixels_plan(owner.id,Interpolation::Nearest,Default::default()).unwrap();
-    let baked=pollster::block_on(r.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+        TileBlob::encode(RasterPlane::Mask.descriptor(owner.composition().color),&bytes).unwrap()));
+    mask.source.raster =RasterRevision::backed(data);set_mask(&mut owner, mask);
+    let document = owner.clone();
+    let plan=document.transform_pixels_plan(target(&owner),Interpolation::Nearest,Default::default()).unwrap();
+    let edit = pollster::block_on(r.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
+    let mut baked = document.clone(); baked.apply(edit).unwrap();
     let coverage=|r:&mut WgpuRasterizer,id| crate::test_support::receive_request(r,RegionRequest {
         request_id:1,source:RegionSource::Coverage(id),position:[0;2],contiguous:false,
         tolerance:0.,refinement:Default::default(),selection:Some(layer_render::SelectionRefinement {
@@ -1314,23 +1306,24 @@ fn retained_outer_mesh_document_reads_and_linked_mask_thumbnail_match_independen
     let points=|r:&mut WgpuRasterizer,id| {
         [[0,0],[60,60],[170,120],[240,130],[270,150],[255,255],[320,280],[511,511]]
             .into_iter().flat_map(|position| [ColorSampleArea::Point,ColorSampleArea::Circle5].map(|area| {
-                assert!(r.request_color_sample(ColorSampleRequest {request_id:1,source:ColorSampleSource::Layer(id),position,area}).unwrap());
+                assert!(r.request_color_sample(ColorSampleRequest {request_id:1,source:ColorSampleSource::Source(id),position,area}).unwrap());
                 crate::test_support::complete(r);r.take_color_sample().unwrap().unwrap().rgba
             })).collect::<Vec<_>>()
     };
+    let mask_target = SourceTarget::Coverage(mask_snapshot(&owner).target);
     for inverted in [false,true] {
-        owner.mask.as_mut().unwrap().inverted=inverted;
-        let mut reference=baked.clone();reference.mask.as_mut().unwrap().inverted=inverted;
+        occurrence_mut(&mut owner).mask.as_mut().unwrap().inverted=inverted;
+        let mut reference=baked.clone();occurrence_mut(&mut reference).mask.as_mut().unwrap().inverted=inverted;
         render(&mut r,&owner,&[],true);
-        let color=points(&mut r,owner.id);
-        let alpha=coverage(&mut r,owner.id);
-        let mask=coverage(&mut r,LayerId(2));
-        let thumb=crate::source_thumbnails::tests::thumbnail(&mut r,LayerId(2));
+        let color=points(&mut r,target(&owner));
+        let alpha=coverage(&mut r,target(&owner));
+        let mask=coverage(&mut r,mask_target);
+        let thumb=crate::source_thumbnails::tests::thumbnail(&mut r,layer_render::ThumbnailTarget::Source(mask_target));
         render(&mut r,&reference,&[],true);
-        assert_eq!(color,points(&mut r,owner.id));
-        assert_eq!(alpha.words(),coverage(&mut r,owner.id).words());
-        assert_eq!(mask.words(),coverage(&mut r,LayerId(2)).words());
-        assert_pixels(&thumb,&crate::source_thumbnails::tests::thumbnail(&mut r,LayerId(2)),"placed linked mask thumbnail");
+        assert_eq!(color,points(&mut r,target(&owner)));
+        assert_eq!(alpha.words(),coverage(&mut r,target(&owner)).words());
+        assert_eq!(mask.words(),coverage(&mut r,mask_target).words());
+        assert_pixels(&thumb,&crate::source_thumbnails::tests::thumbnail(&mut r,layer_render::ThumbnailTarget::Source(mask_target)),"placed linked mask thumbnail");
     }
 }
 
@@ -1339,11 +1332,11 @@ fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let (_,mut placement)=nonlinear_maps().pop().unwrap();placement.interpolation=Interpolation::Nearest;
     let mut owner=layer(fixture(Affine::IDENTITY,4.),Affine::IDENTITY);
-    owner.properties.placement=placement;
-    let mut mask=LayerMask::reveal_all(LayerId(2),Point {x:7.,y:-3.});
-    mask.default_coverage=0.63;
-    mask.initial=Some(layer_core::Selection::polygon(vec![Point {x:160.,y:80.},Point {x:290.,y:80.},
-        Point {x:280.,y:180.},Point {x:170.,y:180.}]).unwrap());owner.mask=Some(mask);
+    occurrence_mut(&mut owner).placement =placement;
+    let mut mask=reveal_all(EXTENT, Point {x:7.,y:-3.});
+    mask.source.default_coverage=0.63;
+    mask.source.initial=Some(layer_core::Selection::polygon(vec![Point {x:160.,y:80.},Point {x:290.,y:80.},
+        Point {x:280.,y:180.},Point {x:170.,y:180.}]).unwrap());set_mask(&mut owner, mask);
     render(&mut r,&owner,&[],true);
     let original=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
     let occupied:Vec<_>=original.iter().enumerate().filter(|(_,p)|p[3]>0.).map(|(i,_)|[i%512,i/512]).collect();
@@ -1352,16 +1345,25 @@ fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
     let [left,top,right,bottom]=[(bounds[0]+bounds[2])/2,bounds[1],bounds[2],bounds[3]];
     let mut words=vec![0u32;512*128];
     for y in top..bottom {for x in left..right {words[y*128+x/4]|=127u32<<((x%4)*8);}}
-    let mut coverage=LayerMask::reveal_all(LayerId(4),Point::default());coverage.default_coverage=0.;
-    coverage.initial=Some(layer_core::Selection::pixels(Arc::new(layer_core::SelectionPixels::bytes(
+    let mut coverage=CoverageSnapshot::reveal_all(owner.artwork.coverage.next_handle(), EXTENT, Point::default());coverage.source.default_coverage=0.;
+    coverage.source.initial=Some(layer_core::Selection::pixels(Arc::new(layer_core::SelectionPixels::bytes(
         EXTENT,[left as u32,top as u32,right as u32,bottom as u32],words).unwrap())));
-    let operation=LayerOperation {placement:Affine::IDENTITY,coverage,
-        kind:LayerOperationKind::Bake {members:vec![owner.clone()].into(),offset:Point::default()}};
-    let mut copied=Layer::paint(LayerId(3),"selection copy");copied.properties.extent=Some(EXTENT);
-    let damage=operation.bounds(EXTENT);copied.pending_operations.push(operation);
-    let batch=DabBatch {layer_id:copied.id,kind:DabBatchKind::LayerOperation(0),dab_count:0,damage,..batch(3)};
-    owner.visible=false;
-    r.submit(FramePacket {dab_batches:&[batch],..packet(&[copied.clone(),owner],EXTENT)}).unwrap();
+    let operation=RasterOperation {placement:Affine::IDENTITY,coverage,
+        kind:RasterOperationKind::Bake {scene:owner.snapshot(),scope:SceneScope::All,offset:Point::default()}};
+    let damage=operation.bounds(EXTENT);
+    let (_, copied) = append_paint(&mut owner, "selection copy", PaintSource {
+        domain: EXTENT, raster: Default::default(), original: None, operations: Arc::new(vec![operation]),
+    });
+    let batch=DabBatch {kind:DabBatchKind::RasterOperation(0),dab_count:0,damage,
+        ..crate::test_support::dab_batch(copied,crate::tests::test_style(BrushExecution::Dry),damage)};
+    occurrence_mut(&mut owner).visible =false;
+    let packet=FramePacket {dab_batches:std::slice::from_ref(&batch),..packet(owner.scene(),EXTENT)};
+    let deadline=std::time::Instant::now()+READBACK_TIMEOUT;
+    while !r.raster_dependencies_ready(packet) {
+        assert!(std::time::Instant::now()<deadline,"folded selection bake dependencies did not settle");
+        std::thread::yield_now();
+    }
+    r.submit(packet).unwrap();
     let actual=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
     let mut occupied=0;
     for (i,(actual,source)) in actual.iter().zip(&original).enumerate() {
@@ -1372,6 +1374,6 @@ fn folded_selection_copy_bake_applies_soft_coverage_after_the_source_mask() {
             "copy {x},{y} channel{c}: {actual:?}, source {source:?}, coverage{coverage}");}
     }
     assert!(occupied>100,"folded soft selection must retain actual paint");
-    assert!(r.paint_layers.iter().find(|layer|layer.id==copied.id).unwrap().pages.iter()
+    assert!(r.paint_layers.iter().find(|layer|layer.id==copied).unwrap().pages.iter()
         .all(|page|!page_rect(page.coordinate).intersect(pixel_rect(damage,EXTENT)).is_empty()),"copy must allocate only selection pages");
 }

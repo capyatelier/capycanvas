@@ -24,6 +24,7 @@ import {checkExportMetadata} from "./export-metadata-journey.test.mjs";
 import {checkSdrColor,checkColorEdits,checkSourceImports,checkSourceEdits,checkExportPresets,checkProfileLibrary,checkFlattenedCopy,checkPhotoCorrections} from "./color-m2.test.mjs";
 import {checkHdr} from "./hdr.test.mjs";
 import {checkProof} from "./proof.test.mjs";
+import {checkPackageView} from "./package-view.test.mjs";
 import {checkColorPanel} from "./color-panel.test.mjs";
 import {checkDragPickup} from "./drag-pickup.test.mjs";
 import {checkZen} from "./zen.test.mjs";
@@ -111,7 +112,7 @@ const cdp = await launchChrome(
     "--window-size=1440,1000",
   ],
   {
-    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls'].includes(x))?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
+    timeout: process.argv.some(x=>['--drawing-tabs-recovery','--scopes','--tonal-controls'].includes(x))?300000:process.argv.some(x=>["--selection-tools","--color-mixing","--contact-brushes","--filter-drawer","--spatial-filter-windows","--lookup-transport","--local-adjustments","--drawing-tabs","--shared-workflows","--live-language-color","--live-language-proof","--live-language-delivery","--live-language-surfaces","--live-language-toolbar","--live-language-effects","--hdr","--hdr-performance","--proof","--portable-photo","--package-view","--export-metadata","--filter-investigation","--pipeline-takeover","--blending"].includes(x)) ? 180000 : 30000,
     onEvent: (event) => {
       if (
         event.method === "Runtime.consoleAPICalled" &&
@@ -205,6 +206,7 @@ try {
     [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--portable-photo"), () => checkPortablePhoto({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--package-view"), () => checkPackageView({evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--export-metadata"), () => checkExportMetadata({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--hdr-performance"), () => measureHdr({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--hdr"), () => checkHdr({call,evaluate,settle}), checkRasterErrors],

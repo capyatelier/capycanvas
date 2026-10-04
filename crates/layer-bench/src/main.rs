@@ -1,6 +1,6 @@
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
 use layer_core::{
-    BrushStabilization, DefaultBrushPreset as Preset, Document, Edit, Layer, LayerId, Point,
+    BrushStabilization, DefaultBrushPreset as Preset, Document, Edit, Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, PortableId, RecordChange, Point,
     StrokeTool, default_brush,
 };
 use layer_engine::{
@@ -237,7 +237,7 @@ struct Brush {
 }
 
 struct StrokeSpec {
-    layer: u64,
+    layer: OccurrenceHandle,
     brush: Brush,
     samples: Vec<Sample>,
 }
@@ -279,6 +279,7 @@ struct BenchResult {
 
 struct Canvas {
     producer: InputProducer<PenEvent>,
+    primary: OccurrenceHandle,
     engine: CanvasEngine<WgpuRasterizer>,
     sequence: u64,
     real_timestamp_ns: u64,
@@ -292,10 +293,22 @@ impl Canvas {
 
     fn configured(extent: [u32; 2], backdrop: [f32; 4]) -> Result<Self, String> {
         let color = document_color();
-        let mut document = Document::new("untitled", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color = color;
-        document.layers[1] = layer_core::Layer::solid_color(document.layers[1].id, "Paper", layer_core::color::RgbColor::from_linear(color.space, backdrop).unwrap());
-        document.blend_space = document_blending();
+        let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let composition = document.artwork.compositions.get_mut(document.artwork.root).unwrap();
+        composition.color = color;
+        composition.blend = document_blending();
+        let scene = document.scene();
+        let backdrop_handle = *scene.constant_backdrop().first().unwrap();
+        let effect = scene.effect(backdrop_handle).unwrap();
+        let key = effect.program.constant_color.as_deref().unwrap();
+        let color_index = effect.program.parameters.iter().position(|parameter| parameter.key.as_ref() == key).unwrap();
+        let effect_handle = match scene.occurrence(backdrop_handle).unwrap().content {
+            OccurrenceContent::Effect(handle) => handle,
+            _ => unreachable!(),
+        };
+        document.artwork.effects.get_mut(effect_handle).unwrap().values[color_index] =
+            layer_core::EffectValue::Color(layer_core::color::RgbColor::from_linear(color.space, backdrop).unwrap());
+        let primary = document.working.occurrence.unwrap();
         let (producer, consumer) = input_queue(16_384);
         let view = ViewState {
             width_px: extent[0],
@@ -314,6 +327,7 @@ impl Canvas {
             .map_err(|e| e.to_string())?;
         let mut canvas = Self {
             producer,
+            primary,
             engine,
             sequence: 0,
             real_timestamp_ns: 0,
@@ -395,26 +409,28 @@ impl Canvas {
         Ok(())
     }
 
-    fn set_active_layer(&mut self, layer: u64) -> Result<(), String> {
+    fn set_active_layer(&mut self, layer: OccurrenceHandle) -> Result<(), String> {
         self.engine
-            .set_active_layer(LayerId(layer))
+            .set_active_layer(layer)
             .map_err(|e| e.to_string())
     }
 
-    fn add_layer(&mut self, name: &str, index: usize) -> Result<u64, String> {
-        let id = self.engine.allocate_layer_id();
-        self.engine
-            .apply_edit(Edit::InsertLayer {
-                index,
-                layer: Box::new(Layer::paint(id, name)),
-            })
-            .map_err(|e| e.to_string())?;
-        Ok(id.0)
+    fn add_layer(&mut self, name: &str, index: usize) -> Result<OccurrenceHandle, String> {
+        let document=self.engine.document();
+        let paint=RecordChange::insert(&document.artwork.paint,PaintSource {domain:document.composition().size,raster:Default::default(),original:None,operations:Default::default()});
+        let occurrence=RecordChange::insert(&document.artwork.occurrences,Occurrence::new(OccurrenceContent::Paint(paint.handle),name));
+        let id=occurrence.handle;
+        let stack=document.composition().result;
+        let mut value=document.artwork.stacks.get(stack).unwrap().clone();
+        value.entries.insert(index,id);
+        let membership=RecordChange::replace(&document.artwork.stacks,stack,Some(value)).map_err(str::to_string)?;
+        self.engine.apply_edit(Edit::Batch(vec![Edit::Paint(paint),Edit::Occurrence(occurrence),Edit::Stack(membership)])).map_err(|e|e.to_string())?;
+        Ok(id)
     }
 
-    fn set_layer_opacity(&mut self, layer: u64, opacity: f32) -> Result<(), String> {
+    fn set_layer_opacity(&mut self, layer: OccurrenceHandle, opacity: f32) -> Result<(), String> {
         self.engine
-            .set_layer_opacity(LayerId(layer), opacity)
+            .set_layer_opacity(layer, opacity)
             .map_err(|e| e.to_string())
     }
 
@@ -693,17 +709,17 @@ fn merge_metrics_delta(
         .max(after.composite_storage_bytes);
 }
 
-fn specs(strokes: &[Stroke], layer: u64) -> Vec<StrokeSpec> {
+fn specs(strokes: &[Stroke], layer: OccurrenceHandle) -> Vec<StrokeSpec> {
     strokes.iter().map(|Stroke(brush, path)| StrokeSpec { layer, brush: *brush, samples: path.samples() }).collect()
 }
 fn prepare_scenario(kind: &Scenario, canvas: &mut Canvas) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
-    if !kind.base.is_empty() { run_strokes(canvas, &specs(kind.base, 1), None)?; }
+    if !kind.base.is_empty() { run_strokes(canvas, &specs(kind.base, canvas.primary), None)?; }
     Ok(match kind.workload {
-        Workload::Strokes(strokes) => specs(strokes, 1),
-        Workload::Pencil => pencil_hatching(1),
+        Workload::Strokes(strokes) => specs(strokes, canvas.primary),
+        Workload::Pencil => pencil_hatching(canvas.primary),
         Workload::Layers => return layers(canvas),
         Workload::Painter(preset, diameter, opacity) => PAINTER_PATTERNS.iter().map(|(d, o, color, path)|
-            StrokeSpec { layer: 1, brush: brush(preset, diameter * d, opacity * o, *color), samples: path.samples() }).collect(),
+            StrokeSpec { layer: canvas.primary, brush: brush(preset, diameter * d, opacity * o, *color), samples: path.samples() }).collect(),
     })
 }
 fn layers(canvas: &mut Canvas) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
@@ -719,7 +735,7 @@ fn layers(canvas: &mut Canvas) -> Result<Vec<StrokeSpec>, Box<dyn Error>> {
             samples: lissajous(520, 1440.0, 1160.0, 0.8, 0.0),
         },
         StrokeSpec {
-            layer: 1,
+            layer: canvas.primary,
             brush: brush(Preset::GPen, 21.0, 0.95, [0.008, 0.008, 0.012, 1.0]),
             samples: lissajous(1000, 1660.0, 1320.0, 0.0, 0.7),
         },
@@ -1005,7 +1021,7 @@ fn bezier(count: usize, control: [(f32, f32); 4]) -> Vec<Sample> {
         .collect()
 }
 
-fn pencil_hatching(layer: u64) -> Vec<StrokeSpec> {
+fn pencil_hatching(layer: OccurrenceHandle) -> Vec<StrokeSpec> {
     let mut strokes = Vec::with_capacity(12);
     for line in 0..12 {
         let offset = 320.0 + line as f32 * 285.0;

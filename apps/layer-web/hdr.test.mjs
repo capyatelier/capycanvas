@@ -1,4 +1,5 @@
 import {histogramJourney} from './histogram-journey.mjs';
+import {packageManifest,packageObjects,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 import {checkGpuTone} from './gpu-tone.test.mjs';
 import {checkProofStartingLayout,checkProofKeys,checkProofPattern} from './proof-parity.test.mjs';
@@ -17,11 +18,11 @@ export async function checkHdr({call,evaluate,settle}) {
   const set=(label,value,root='dialog[open]')=>evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(root+' [aria-label="'+label+'"]')});if(!n)throw Error('Missing '+${JSON.stringify(label)});n.value=${JSON.stringify(value)};n.dispatchEvent(new Event('change',{bubbles:true}))})()`);
   const invoke=async command=>{await wait(`!layerApp.documents.busy()&&layerApp.state().commands.find(c=>c.id===${JSON.stringify(command)})?.enabled`);await evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);};
   const hist=histogramJourney({evaluate,settle}).exact;
-  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');return evaluate('hdrTest.manifest(hdrTest.last)');};
+  const save=async()=>{await invoke('save_document_as');await wait('!layerApp.state().document_file.busy&&!layerApp.state().document_file.modified');return readPackage(evaluate, 'hdrTest.last');};
   const open=async name=>{const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');await evaluate(`hdrTest.openName=${JSON.stringify(name)}`);await invoke('open_document');await wait(`Number(layerApp.state().document_file.epoch)!==${epoch}&&!layerApp.state().document_file.busy&&layerApp.app.brush_ready()`);};
   await wait('layerApp.startupTimes.complete!==null && layerApp.app.brush_ready()');
   await evaluate(`window.hdrTest={files:new Map(),open:showOpenFilePicker,save:showSaveFilePicker};
-    hdrTest.manifest=b=>JSON.parse(new TextDecoder().decode(b.slice(52,52+Number(new DataView(b.buffer,b.byteOffset).getBigUint64(12,true)))));
+    hdrTest.manifest=${packageManifest.toString()};
     hdrTest.dismiss=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>['Keep for Later','Discard Changes'].includes(b.textContent))?.click(),50);
     window.showSaveFilePicker=async o=>({name:o.suggestedName,async createWritable(){let b;return{async write(v){b=new Uint8Array(v instanceof Blob?await v.arrayBuffer():v)},async close(){hdrTest.last=b;hdrTest.files.set(o.suggestedName,b)},async abort(){}}}});
     window.showOpenFilePicker=async()=>[{name:hdrTest.openName,async getFile(){const b=hdrTest.files.get(hdrTest.openName)??await(await fetch('/pkg/'+hdrTest.openName)).arrayBuffer();return new File([b],hdrTest.openName)}}];`);
@@ -172,7 +173,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await checkProofKeys({call,evaluate,settle,invoke});
     assert.deepEqual(await hist(),original,'SDR appearance does not change HDR artwork');
     await writeFile(`${directory}/sdr-rendition.json`,JSON.stringify(await evaluate('layerApp.app.proof_form().rendition'))+'\n');
-    const master=await save();assert.deepEqual(master.blobs,master0.blobs);assert.deepEqual(master.document.layers,master0.document.layers);
+    const master=await save();assert.deepEqual(packageResourceIdentity(master),packageResourceIdentity(master0));assert.deepEqual(packageObjects(master,'capy.occurrence/1'),packageObjects(master0,'capy.occurrence/1'));
     mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
     await settle();await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     results.proofPattern=await checkProofPattern({evaluate});

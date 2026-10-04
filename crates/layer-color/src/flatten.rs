@@ -1,6 +1,6 @@
 //! A flattened conversion is a separate native document, never a replacement edit.
 use layer_core::{
-    BlendSpace, Document, ImageResolution, Project,
+    BlendSpace, Document, ImageResolution, authored::{Artwork,PortableId,PaintSource,Occurrence,OccurrenceContent,SourceTarget},
     color::{
         ColorProfile, DocumentColor,
         source::{SourceBuilder, SourceChannels, SourceInterpretation, SourceKind},
@@ -17,7 +17,7 @@ pub fn flattened_document(
     actual: &SourceInterpretation,
     limit: usize,
     mut read: impl FnMut(u32, &mut [u8]) -> Result<(), String>,
-) -> Result<Project, String> {
+) -> Result<Document, String> {
     if actual.channels != SourceChannels::Rgba
         || actual.depth != color.depth
         || actual.profile != ColorProfile::Builtin(color.space)
@@ -33,13 +33,19 @@ pub fn flattened_document(
     let mut source = builder.finish()?;
     source.kind = SourceKind::Rasterized;
     source.resolution = resolution;
-    let mut document = Document::new("Converted copy", extent[0], extent[1], layer_core::DocumentNames { paint: "Converted image".into(), paper: "".into() });
-    document.color = color;
-    document.blend_space = BlendSpace::Perceptual.for_depth(color.depth);
-    document.resolution = resolution;
-    document.layers.truncate(1);
-    document.layers[0].source = Some(Arc::new(source));
-    let project = Project { document };
-    project.validate(Default::default())?;
-    Ok(project)
+    let mut artwork = Artwork::new(extent)?;
+    let composition = artwork.compositions.get_mut(artwork.root).unwrap();
+    composition.color = color;
+    composition.blend = BlendSpace::Perceptual.for_depth(color.depth);
+    composition.resolution = resolution;
+    let stack = composition.result;
+    let paint = artwork.paint.insert(PortableId::random(), PaintSource {domain:extent, raster:Default::default(), original:Some(Arc::new(source)), operations:Default::default()})?;
+    let occurrence = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Paint(paint), "Converted image"))?;
+    artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+    let mut document = Document::from_artwork(artwork).map_err(|error| error.to_string())?;
+    document.working.occurrence = Some(occurrence);
+    document.working.target = Some(SourceTarget::Paint(paint));
+    document.validate(Default::default())?;
+    crate::validate_document_color(&document)?;
+    Ok(document)
 }

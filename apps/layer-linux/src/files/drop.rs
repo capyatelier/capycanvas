@@ -12,7 +12,7 @@ pub(crate) struct Incoming {
     pub destination: Option<ImageLayerDestination>,
     pub epoch: u64,
     pub revision: u64,
-    pub target: layer_core::LayerId,
+    pub target: Option<layer_core::authored::SourceTarget>,
 }
 fn project(file: &gio::File) -> bool {
     file.path()
@@ -265,12 +265,13 @@ pub(crate) fn install_row(
             let Some(position) = position else {
                 return false;
             };
+            let Ok(target) = layer_ui::occurrence_handle(id) else { return false; };
             receive(
                 &w,
                 files.files(),
                 None,
                 Some(ImageLayerDestination {
-                    target: layer_core::LayerId(id),
+                    target,
                     position,
                 }),
             )

@@ -79,26 +79,19 @@ fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
         switch(&app, 1, false);
         assert_eq!(tabs(&app)["resident_bytes"], 0);
         assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &first);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().working, first.working);
         app.invoke("undo");
         app.draw_until_idle();
         assert_ne!(
             raster_samples(
-                &unsafe { &*app.0 }
-                    .host
-                    .session
-                    .engine()
-                    .document()
-                    .layer(first.active_layer)
-                    .unwrap()
-                    .raster
+                unsafe { &*app.0 }.host.session.engine().document().target_raster(first.working.target.unwrap()).unwrap()
             ),
-            raster_samples(&first.layer(first.active_layer).unwrap().raster)
+            raster_samples(active_raster(&first))
         );
         app.invoke("redo");
         app.draw_until_idle();
-        let mut redone = first.clone();
-        redone.revision = unsafe { &*app.0 }.host.session.engine().document().revision;
-        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &redone);
+        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &first);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().working, first.working);
         // Recovery of an inactive drawing uses its own document and history.
         let job = ProjectJob(unsafe { capy_apple_document_recovery(app.0, 2) });
         assert!(!job.0.is_null());
@@ -110,8 +103,8 @@ fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
             job.error()
         );
         file.rewind().unwrap();
-        let restored = layer_core::Project::read(&mut file, Default::default()).unwrap();
-        assert_project_document(&restored.document, &second);
+        let restored = read_document(&mut file);
+        assert_saved_document(&restored, &second);
         app.request(
             2,
             json!({"type":"document_tabs","op":"reorder","id":2,"before":1}),
@@ -160,5 +153,6 @@ fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
         assert_eq!(tabs(&app)["tabs"].as_array().unwrap().len(), 1);
         assert_eq!(tabs(&app)["can_undo"], false);
         assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &second);
+        assert_eq!(unsafe { &*app.0 }.host.session.engine().document().working, second.working);
     }
 }

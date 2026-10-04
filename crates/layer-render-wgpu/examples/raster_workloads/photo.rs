@@ -54,6 +54,7 @@ impl Observations {
         kind: &'static str,
         edit: impl FnOnce(&mut Engine) -> Result<()>,
     ) -> Result<()> {
+        canvas.settle()?;
         let before = canvas.engine.backend().metrics();
         let start = Instant::now();
         edit(&mut canvas.engine)?;
@@ -67,11 +68,40 @@ impl Observations {
         Ok(())
     }
 }
-fn change(layer: &mut Layer, key: &str, value: f32) -> Result<()> {
-    Arc::make_mut(layer.effect.as_mut().unwrap()).set(key, EffectValue::Number(value))?;
+fn change(effect: &mut EffectInstance, key: &str, value: f32) -> Result<()> {
+    effect.set(key, EffectValue::Number(value))?;
     Ok(())
 }
-fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<LayerId> {
+fn insert_effect(doc: &Document, name: &str, draft: EffectInstance, mask: Option<CoverageSnapshot>) -> (EffectHandle, Edit) {
+    let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
+        program: draft.program, dimensions: Default::default(),
+    });
+    let effect = RecordChange::insert(&doc.artwork.effects, EffectApplication {
+        definition: definition.handle, values: draft.values, domain: doc.composition().size,
+    });
+    let handle = effect.handle;
+    let mut edits = vec![Edit::Definition(definition), Edit::Effect(effect)];
+    let mut occurrence = Occurrence::new(OccurrenceContent::Effect(handle), name);
+    if let Some(mut mask) = mask {
+        let coverage = RecordChange::insert(&doc.artwork.coverage, mask.source);
+        mask.use_.source = coverage.handle;
+        occurrence.mask = Some(mask.use_);
+        edits.push(Edit::Coverage(coverage));
+    }
+    let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
+    let root = doc.composition().result;
+    let mut stack = doc.artwork.stacks.get(root).unwrap().clone();
+    stack.entries.insert(0, occurrence.handle);
+    edits.extend([Edit::Occurrence(occurrence),
+        Edit::Stack(RecordChange::replace(&doc.artwork.stacks, root, Some(stack)).unwrap())]);
+    (handle, Edit::Batch(edits))
+}
+fn effect_edit(doc: &Document, handle: EffectHandle, values: Vec<EffectValue>) -> Edit {
+    let mut effect = doc.artwork.effects.get(handle).unwrap().clone();
+    effect.values = values;
+    Edit::Effect(RecordChange::replace(&doc.artwork.effects, handle, Some(effect)).unwrap())
+}
+fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<EffectHandle> {
     let mut exposure = None;
     for (name, key, value) in [
         ("exposure", "exposure", 0.25),
@@ -80,22 +110,17 @@ fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<L
         ("hue_saturation", "saturation", 5.),
         ("color_balance", "midtones_red", 2.),
     ] {
-        let id = canvas.engine.allocate_layer_id();
-        let mut layer = Layer::paint(id, name);
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(Arc::new(EffectInstance::new(
-            bundled_effect_catalog().get(name).unwrap().program(),
-        )));
-        change(&mut layer, key, value)?;
+        let mut effect = EffectInstance::new(bundled_effect_catalog().get(name).unwrap().program());
+        change(&mut effect, key, value)?;
+        let mut coverage = None;
         if name == "exposure" {
-            exposure = Some(id);
             // A real native scalar mask crossing page boundaries. Outside this
             // central band the adjustment is fully enabled. No display mip is
             // used as mask data.
             let doc = canvas.engine.document();
-            let color = doc.color;
-            let columns = doc.width.div_ceil(256);
-            let row = doc.height / 512;
+            let color = doc.composition().color;
+            let columns = doc.composition().size[0].div_ceil(256);
+            let row = doc.composition().size[1] / 512;
             let bytes: Vec<_> = (0..65536)
                 .flat_map(|i| {
                     let code = ((i % 256) * 257) as u16;
@@ -121,13 +146,14 @@ fn adjustments(canvas: &mut Canvas, observations: &mut Observations) -> Result<L
                     .collect(),
                 ..Default::default()
             };
-            let mut mask =
-                LayerMask::reveal_all(canvas.engine.allocate_layer_id(), Point::default());
-            mask.raster = RasterRevision::backed(data);
-            layer.mask = Some(mask);
+            let mut mask = CoverageSnapshot::reveal_all(doc.artwork.coverage.next_handle(), doc.composition().size, Point::default());
+            mask.source.raster = RasterRevision::backed(data);
+            coverage = Some(mask);
         }
+        let (handle, edit) = insert_effect(canvas.engine.document(), name, effect, coverage);
+        if name == "exposure" { exposure = Some(handle); }
         observations.render(canvas, "adjustment-first", |engine| {
-            engine.apply_edit(Edit::InsertLayer { index: 0, layer: Box::new(layer) })?;
+            engine.apply_edit(edit)?;
             Ok(())
         })?;
     }
@@ -140,8 +166,8 @@ fn navigate(
     paced: bool,
 ) -> Result<()> {
     let extent = [
-        canvas.engine.document().width as f32,
-        canvas.engine.document().height as f32,
+        canvas.engine.document().composition().size[0] as f32,
+        canvas.engine.document().composition().size[1] as f32,
     ];
     for i in 0..frames {
         let start = Instant::now();
@@ -175,40 +201,33 @@ fn pace(start: Instant) {
         std::thread::sleep(delay);
     }
 }
-fn sliders(canvas: &mut Canvas, observations: &mut Observations, exposure: LayerId) -> Result<()> {
-    let original = canvas.engine.document().layer(exposure).unwrap().clone();
+fn sliders(canvas: &mut Canvas, observations: &mut Observations, exposure: EffectHandle) -> Result<()> {
+    let original = canvas.engine.document().artwork.effects.get(exposure).unwrap().clone();
+    let program = canvas.engine.document().artwork.definitions.get(original.definition).unwrap().program.clone();
     for i in 0..64 {
-        let mut layer = original.clone();
-        change(&mut layer, "exposure", i as f32 / 64. - 0.5)?;
+        let mut draft = EffectInstance { program: program.clone(), values: original.values.clone() };
+        change(&mut draft, "exposure", i as f32 / 64. - 0.5)?;
         observations.render(canvas, "slider", |engine| {
-            engine.preview_edit(Edit::ReplaceLayer(Box::new(layer)))?;
+            engine.preview_edit(effect_edit(engine.document(), exposure, draft.values))?;
             Ok(())
         })?;
     }
-    // Preview cancellation restores retained state, without an adjustment chain
-    // accumulating on each slider movement.
-    canvas
-        .engine
-        .preview_edit(Edit::ReplaceLayer(Box::new(original)))?;
+    canvas.engine.preview_edit(effect_edit(canvas.engine.document(), exposure, original.values))?;
     canvas.engine.render_frame()?;
     canvas.engine.backend_mut().wait_idle()?;
     Ok(())
 }
-fn native_roots(canvas: &Canvas) -> Result<Vec<(LayerId, Vec<([u8; 32], TileKey)>)>> {
-    let mut roots = Vec::new();
-    for layer in &canvas.engine.document().layers {
-        for (id, revision) in std::iter::once((layer.id, &layer.raster))
-            .chain(layer.masks().map(|m| (m.id, &m.raster)))
-        {
-            let data = revision.wait_data()?;
+fn native_roots(canvas: &Canvas) -> Result<Vec<(SourceTarget, Vec<([u8; 32], TileKey)>)>> {
+    let scene = canvas.engine.document().scene();
+    scene.targets().filter_map(|target| scene.raster(target).map(|raster| (target, raster)))
+        .map(|(target, raster)| {
+            let data = raster.wait_data()?;
             let mut tiles = Vec::new();
             for (key, tile) in &data.tiles {
-                tiles.push((tile.wait_backing()?.digest, *key));
+                tiles.push((tile.wait_backing()?.content_digest()?, *key));
             }
-            roots.push((id, tiles));
-        }
-    }
-    Ok(roots)
+            Ok((target, tiles))
+        }).collect()
 }
 fn history(canvas: &mut Canvas, observations: &mut Observations) -> Result<()> {
     canvas.settle()?;
@@ -250,7 +269,7 @@ fn concurrent(
         let start = Instant::now();
         let file = std::fs::File::create(save_path).map_err(|e| e.to_string())?;
         let mut out = BufWriter::new(file);
-        snapshot.write(&mut out)?;
+        write_capture(&snapshot, &mut out)?;
         out.flush()
             .and_then(|_| out.get_ref().sync_all())
             .map_err(|e| e.to_string())?;
@@ -274,7 +293,6 @@ fn concurrent(
         let mut renderer = export_gpu
             .capture(
                 export_snapshot,
-                0.,
                 export_control,
             )
             .map_err(|e| e.to_string())?;
@@ -329,7 +347,7 @@ fn concurrent(
         saved.map_err(|_| "save panicked")??,
         exported.map_err(|_| "export panicked")??,
     ];
-    assert_eq!(control.output_rows(), canvas.engine.document().height);
+    assert_eq!(control.output_rows(), canvas.engine.document().composition().size[1]);
     let peaks = control.allocation_peaks().unwrap();
     assert!(peaks.observations > 0);
     println!(
@@ -523,7 +541,6 @@ pub(super) fn run(
         let start = Instant::now();
         let mut capture = canvas.engine.backend().snapshot_gpu().capture(
             canvas.snapshot()?,
-            0.,
             control.clone(),
         )?;
         println!("Histogram worker setup {:.3} ms", ms(start));
@@ -574,26 +591,16 @@ pub(super) fn run(
         println!("Histogram GPU allocator peaks {histogram_gpu:?}");
         drop(capture);
         if !capture_only {
-            let id = canvas.engine.allocate_layer_id();
-            let mut blur = Layer::paint(id, "Gaussian blur");
-            blur.kind = LayerKind::Effect;
-            blur.effect = Some(Arc::new(EffectInstance::new(
-                bundled_effect_catalog()
-                    .get("gaussian_blur")
-                    .unwrap()
-                    .program(),
-            )));
+            let mut blur = EffectInstance::new(bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+            let (handle, edit) = insert_effect(canvas.engine.document(), "Gaussian blur", blur.clone(), None);
             observations.render(&mut canvas, "blur-first", |engine| {
-                engine.apply_edit(Edit::InsertLayer {
-                    index: 0,
-                    layer: Box::new(blur.clone()),
-                })?;
+                engine.apply_edit(edit)?;
                 Ok(())
             })?;
             for i in 0..16 {
                 change(&mut blur, "sigma", 1. + i as f32)?;
                 observations.render(&mut canvas, "blur-warm", |engine| {
-                    engine.preview_edit(Edit::ReplaceLayer(Box::new(blur.clone())))?;
+                    engine.preview_edit(effect_edit(engine.document(), handle, blur.values.clone()))?;
                     Ok(())
                 })?;
             }

@@ -66,8 +66,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             Some(layer_core::SelectionTarget::Saved(id)) => self
                 .engine
                 .document()
-                .layer(id)
-                .and_then(|l| l.properties.selection_mask.clone())
+                .scene().source_target(id)
+                .and_then(|target| match target { layer_core::authored::SourceTarget::Selection(h) => self.engine.document().artwork.selections.get(h).map(|s| s.display.clone()), _ => None })
                 .unwrap_or_default(),
             _ => self.selection_masks.quick_properties.clone(),
         }
@@ -105,9 +105,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             } else {
                 self.engine
                     .document()
-                    .saved_selection(LayerId(id))
+                    .saved_selection(super::session::occurrence_handle(id)?)
                     .map_err(error)?;
-                layer_core::SelectionTarget::Saved(LayerId(id))
+                layer_core::SelectionTarget::Saved(super::session::occurrence_handle(id)?)
             };
             if self.selection_masks.target() != Some(target) {
                 return Err(self.localization().text(MessageId::RESOURCES_MASK_SELECT_BEFORE_EDIT).to_string());
@@ -134,12 +134,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.selection_masks.quick_properties = p;
             } else {
                 let doc = self.engine.document();
-                if doc.is_locked(LayerId(id)) {
+                if doc.is_locked(super::session::occurrence_handle(id)?) {
                     return Err(self.localization().text(MessageId::COMMANDS_THIS_SELECTION_LAYER_IS_LOCKED).to_string());
                 }
-                let mut layer = doc.layer(LayerId(id)).unwrap().clone();
-                layer.properties.selection_mask = Some(p);
-                let edit = Edit::ReplaceLayer(Box::new(layer));
+                let occurrence = super::session::occurrence_handle(id)?;
+                let Some(layer_core::authored::SourceTarget::Selection(handle))=doc.scene().source_target(occurrence) else {return Err("Choose a Selection Layer".into());};
+                let mut selection=doc.artwork.selections.get(handle).ok_or("Missing saved selection")?.clone();
+                selection.display=p;
+                let edit=Edit::SavedSelection(layer_core::authored::RecordChange::replace(&doc.artwork.selections,handle,Some(selection)).map_err(error)?);
                 if self.effect_gesture.is_some() {
                     self.engine.preview_edit(edit).map_err(error)?;
                 } else {

@@ -2,38 +2,42 @@
 
 [Package overview](../../README.md#package-layout) · [Architecture](../../docs/architecture.md)
 
-`layer-core` describes the drawing independently of its renderer or user interface.
-It owns document data, reversible edits, brush definitions and the editable project
-format. The engine uses these types while drawing, and the renderer reads them to
-reconstruct the image.
+`layer-core` owns authored artwork, working state, reversible edits, brushes and
+the `.capy` package codec. The engine edits these records; renderers borrow typed
+scene views to reconstruct the image.
 
 ## Document and history
 
-`Document` contains layers, strokes and ordered drawing operations. `Editor`
-applies `Edit` values and retains the reverse operations for undo/redo. A stroke
-stores real pen samples and the `BrushSnapshot` used to draw it, so later brush
-changes do not change the meaning of an existing stroke.
+`Document` owns `Artwork` and `WorkingState`. Typed stores separate ordered
+stacks and placed occurrences from paint, coverage, effects, saved selections,
+guides and outputs. Working selection and editing targets stay outside the
+portable artwork. `SceneView` borrows records; `SceneSnapshot` retains immutable
+roots and evaluation context for queries, previews and pixel operations.
 
-Committed samples and tiled sources use shared storage. History can retain them
-without copying all their data, and corrections to estimated pen samples can
-replace storage without modifying an earlier snapshot.
+`Editor` applies typed `Edit` values and retains inverse changes for undo/redo.
+Strokes retain pen samples and their `BrushSnapshot`. Immutable raster revisions
+and resources share storage across artwork, history and accepted captures.
 
-`Project` serializes the editable document and its reachable tiled sources into a
-`.capy` file. It validates the data without requiring a GPU. Native file access and
-the decision to replace an open document belong to the host and shared UI session.
+`Editor::capture` produces an `ArtworkCapture` with an owner-bound checkpoint.
+`PreparedPackage` enumerates authored records and resources, then writes the
+package without exporting working state or history. Shared open outcomes separate
+editable artwork from preserved or recovered package views. Hosts execute file
+transport; shared UI policy handles admission, replacement and save acknowledgement.
 
 ## Where to start
 
 | Source | Contents |
 | --- | --- |
-| [lib.rs](src/lib.rs) | `Document`, `Editor`, `Edit`, `Stroke`, brush settings and shared geometry. |
-| [layers.rs](src/layers.rs) | Layer properties, selections, masks and ordered layer operations. |
-| [effects.rs](src/effects.rs) and [effect_catalog.rs](src/effect_catalog.rs) | Filter definitions, parameters, instances and catalog validation. |
+| [lib.rs](src/lib.rs) | `Document`, `Editor`, typed `Edit`, strokes and brushes. |
+| [authored/](src/authored/mod.rs) | Artwork, working state, typed stores, identities and scene access. |
+| [layers.rs](src/layers.rs) | Blending, command coverage, raster operations and geometry planners. |
+| [effects.rs](src/effects.rs) and [effect_catalog.rs](src/effect_catalog.rs) | Filter programs, values and catalog validation. |
 | [presets.rs](src/presets.rs) | Built-in brush definitions. |
-| [project.rs](src/project.rs) | Project encoding, decoding, validation and limits. |
+| [package/](src/package/mod.rs) | Record adapters, resources, capture transport and package codec. |
+| [project.rs](src/project.rs) | Brush assets and artwork admission limits. |
 
-Changes to these types can affect undo, renderer replay and project compatibility.
-Start with [documents and edits](../../docs/internals/documents.md), then the
-[project format](../../docs/reference/project-format.md) for persistence details.
-The [testing guide](../../docs/development/testing.md#checks-by-change-type) covers the
-shared model tests.
+Read [documents and edits](../../docs/internals/documents.md), the
+[authored model](../../docs/reference/authored-model.md) and the
+[package format](../../docs/reference/capy-package.md) before changing ownership
+or persistence. The [testing guide](../../docs/development/testing.md#checks-by-change-type)
+covers shared model checks.

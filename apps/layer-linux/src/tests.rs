@@ -105,7 +105,7 @@ use layer_ui::FloatingToolbarLayout;
 use std::time::{Duration, Instant};
 
 /// A new drawing at `depth`, as New drawing makes it.
-pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Project {
+pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::SampleDepth) -> layer_core::Document {
     NewDocumentOptions {
         extent: [width, height],
         color: layer_core::color::DocumentColor { depth, ..Default::default() },
@@ -113,6 +113,77 @@ pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::
     }
     .project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
     .unwrap()
+}
+
+fn open_native_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
+    let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
+    let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable drawing") };
+    imported.project
+}
+fn active_raster(document: &layer_core::Document) -> &layer_core::raster::RasterRevision {
+    document.target_raster(document.working.target.unwrap()).unwrap()
+}
+fn active_raster_operations(document: &layer_core::Document) -> &[layer_core::RasterOperation] {
+    document.target_operations(document.working.target.unwrap()).unwrap()
+}
+fn composition_mut(document: &mut layer_core::Document) -> &mut layer_core::authored::Composition {
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap()
+}
+fn write_capture(capture: &layer_core::authored::ArtworkCapture, output: &mut impl std::io::Write) -> Result<(), String> {
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    layer_core::package::codec::PreparedPackage::prepare(capture, None, &cancel)?.write(output, &cancel)
+}
+
+fn occurrence_at(document: &layer_core::Document, index: usize) -> &layer_core::authored::Occurrence {
+    document.scene().occurrence(document.scene().order()[index]).unwrap()
+}
+fn paint_at(document: &layer_core::Document, index: usize) -> &layer_core::authored::PaintSource {
+    document.scene().paint_source(document.scene().order()[index]).unwrap()
+}
+fn paint_at_mut(document: &mut layer_core::Document, index: usize) -> &mut layer_core::authored::PaintSource {
+    let handle = match occurrence_at(document, index).content { layer_core::authored::OccurrenceContent::Paint(handle) => handle, _ => panic!("paint occurrence") };
+    document.artwork.paint.get_mut(handle).unwrap()
+}
+fn active_occurrence(document: &layer_core::Document) -> &layer_core::authored::Occurrence {
+    document.scene().occurrence(document.working.occurrence.unwrap()).unwrap()
+}
+fn active_paint(document: &layer_core::Document) -> &layer_core::authored::PaintSource {
+    document.scene().paint_source(document.working.occurrence.unwrap()).unwrap()
+}
+fn active_paint_mut(document: &mut layer_core::Document) -> &mut layer_core::authored::PaintSource {
+    let handle = match active_occurrence(document).content { layer_core::authored::OccurrenceContent::Paint(handle) => handle, _ => panic!("paint occurrence") };
+    document.artwork.paint.get_mut(handle).unwrap()
+}
+fn capture_document(capture: &layer_core::authored::ArtworkCapture) -> layer_core::Document {
+    layer_core::Document::from_artwork((*capture.artwork).clone()).unwrap()
+}
+fn write_document(document: &layer_core::Document, output: &mut impl std::io::Write) -> Result<(), String> {
+    write_capture(&layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).map_err(|e|e.to_string())?, output)
+}
+fn active_effect(document: &layer_core::Document) -> layer_core::EffectView<'_> {
+    document.scene().effect(document.working.occurrence.unwrap()).unwrap()
+}
+fn artwork_manifest(document: &layer_core::Document) -> Vec<u8> {
+    let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
+    layer_core::package::codec::PreparedPackage::prepare(&capture, None, &std::sync::atomic::AtomicBool::new(false)).unwrap().manifest().to_vec()
+}
+fn assert_live_artwork_eq(actual: &layer_core::Document, expected: &layer_core::Document) {
+    assert_eq!(artwork_manifest(actual), artwork_manifest(expected));
+}
+
+fn assert_source_samples(actual: &layer_core::color::source::SourceImage, expected: &layer_core::color::source::SourceImage) {
+    assert_eq!((actual.kind, actual.extent, actual.resolution, actual.interpretation.channels, actual.interpretation.depth, actual.interpretation.profile_assumed),
+        (expected.kind, expected.extent, expected.resolution, expected.interpretation.channels, expected.interpretation.depth, expected.interpretation.profile_assumed));
+    assert_eq!(layer_color::profile_bytes(&actual.interpretation.profile).unwrap(), layer_color::profile_bytes(&expected.interpretation.profile).unwrap());
+    let mut actual_rows = actual.rows();
+    let mut expected_rows = expected.rows();
+    let mut actual_bytes = vec![0; actual.row_bytes()];
+    let mut expected_bytes = vec![0; expected.row_bytes()];
+    for y in 0..actual.extent[1] {
+        actual_rows.read(y, &mut actual_bytes).unwrap();
+        expected_rows.read(y, &mut expected_bytes).unwrap();
+        assert_eq!(actual_bytes, expected_bytes);
+    }
 }
 
 pub(crate) fn pump(ms: u64) {
@@ -212,8 +283,7 @@ fn drag_divider(w: &Rc<Workspace>, id: u32, to: [f32; 2]) {
 // Dock/gesture regressions exercise a stable, deliberately customized workspace
 // (including its tab IDs and eight-tile ribbon), not the evolving shipped preset.
 // The default-workspace integration test uses the actual startup path.
-fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
-    let w = Workspace::new(app);
+fn apply_fixture_theme(w: &Rc<Workspace>) {
     if let Ok(theme) = std::env::var("CAPY_NATIVE_TEST_THEME") {
         let theme = match theme.as_str() {
             "light" => layer_ui::Theme::Light,
@@ -222,6 +292,10 @@ fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
         };
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
     }
+}
+fn fixture_workspace(app: &adw::Application) -> Rc<Workspace> {
+    let w = Workspace::new(app);
+    apply_fixture_theme(&w);
     w.area.connect_realize(glib::clone!(
         #[weak]
         w,
@@ -604,6 +678,7 @@ fn native_document_files() {
         &app,
         Some((new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), Some(location.clone()))),
     );
+    apply_fixture_theme(&w);
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
     *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _recovered| {
@@ -655,12 +730,8 @@ fn native_document_files() {
         }
         assert!(Instant::now() < deadline, "autosave did not publish");
     };
-    let recovery = layer_core::Project::read(
-        std::fs::File::open(&recovery_path).unwrap(),
-        Default::default(),
-    )
-    .unwrap();
-    let sources = |p: &layer_core::Project| p.document.layers.iter().filter(|l| l.source.is_some()).count();
+    let recovery = open_native_document(std::fs::File::open(&recovery_path).unwrap());
+    let sources = |p: &layer_core::Document| p.artwork.paint.iter().filter(|(_, _, source)| source.original.is_some()).count();
     assert_eq!(sources(&recovery), 1);
     assert!(state(&w).document_file.modified);
     w.dispatch(UiAction::Invoke {
@@ -682,7 +753,7 @@ fn native_document_files() {
         "saved recovery copy was not removed",
     );
     let project =
-        layer_core::Project::read(std::fs::File::open(&path).unwrap(), Default::default()).unwrap();
+        open_native_document(std::fs::File::open(&path).unwrap());
     assert_eq!(sources(&project), 1);
     let before = glib::MainContext::default()
         .block_on(read_canvas_pixels(&w, 900))
@@ -750,20 +821,30 @@ fn native_document_files() {
     };
     let finish = || {
         let deadline = Instant::now() + Duration::from_secs(10);
-        while state(&w).document_file.busy && Instant::now() < deadline {
+        loop {
+            let complete = !w.servicing.get()
+                && !w.documents.has_pending_open()
+                && !w.documents.changing.get()
+                && !w.documents.paused.get()
+                && w.gpu.borrow().as_ref().is_some_and(|g| !g.session.state().document_file.busy);
+            if complete { break; }
+            assert!(Instant::now() < deadline,
+                "file operation did not finish: servicing={} pending_open={} changing={} paused={} renderer={}",
+                w.servicing.get(), w.documents.has_pending_open(), w.documents.changing.get(),
+                w.documents.paused.get(), w.gpu.borrow().is_some());
             pump(30);
         }
-        assert!(
-            !state(&w).document_file.busy,
-            "file operation did not finish"
-        );
     };
+    let original_tab = w.documents.selected();
+    let original_count = w.documents.len();
     w.dispatch(UiAction::Invoke {
         command: CommandId::OpenDocument,
     });
     chooser().response(gtk::ResponseType::Cancel);
     finish();
     assert!(created.borrow().is_none());
+    assert_eq!(w.documents.len(), original_count);
+    assert_eq!(w.documents.selected(), original_tab);
     assert!(state(&w).host_error.is_none());
     w.dispatch(UiAction::Invoke {
         command: CommandId::OpenDocument,
@@ -773,13 +854,27 @@ fn native_document_files() {
     pump(250);
     open.response(gtk::ResponseType::Accept);
     finish();
-    let (opened, origin) = created.borrow_mut().take().unwrap();
+    new_photo::ready(&w);
+    assert_eq!(w.documents.len(), original_count + 1);
+    assert_ne!(w.documents.selected(), original_tab);
+    assert!(created.borrow().is_none());
+    let opened_tab = w.documents.selected();
+    let opened = ui_session(&w).engine().document().clone();
+    let origin = state(&w).document_file.location;
     let mut opened_bytes = Vec::new();
     let mut project_bytes = Vec::new();
-    opened.write(&mut opened_bytes).unwrap();
-    project.write(&mut project_bytes).unwrap();
+    write_capture(&layer_host::tasks::capture_document(&opened), &mut opened_bytes).unwrap();
+    write_capture(&layer_host::tasks::capture_document(&project), &mut project_bytes).unwrap();
     assert_eq!(opened_bytes, project_bytes);
     assert_eq!(origin, Some(location.clone()));
+    assert!(!state(&w).document_file.modified);
+    w.documents.select(&w, opened_tab, true);
+    until(|| w.documents.len() == original_count && w.documents.selected() == original_tab
+        && !w.documents.changing.get(), "opened drawing closes and restores original tab");
+    new_photo::ready(&w);
+    assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
+    assert_eq!(state(&w).document_file.location, Some(location.clone()));
+    assert!(!state(&w).document_file.modified);
     let invalid = output.join("invalid.capy");
     std::fs::write(&invalid, b"not a project").unwrap();
     w.dispatch(UiAction::Invoke {
@@ -791,6 +886,8 @@ fn native_document_files() {
     open.response(gtk::ResponseType::Accept);
     finish();
     assert!(created.borrow().is_none());
+    assert_eq!(w.documents.len(), original_count);
+    assert_eq!(w.documents.selected(), original_tab);
     assert!(state(&w).host_error.is_some());
     w.wake();
     pump(80);
@@ -861,9 +958,12 @@ fn native_document_files() {
                 background.set_selected(1);
                 assert!(new_photo::export_enabled(&w));
                 new_photo::profile_action(&w, "export", "builtin-1");
-                let quality = named::<adw::SpinRow>(options.upcast_ref(), "export-jpeg-quality");
+                let quality = named::<crate::number_control::NumberControl>(options.upcast_ref(), "export-jpeg-quality");
                 assert!(quality.is_visible());
-                quality.set_value(95.);
+                descendant::<gtk::Stack>(&quality).unwrap().set_visible_child_name("entry");
+                descendant::<gtk::Entry>(&quality).unwrap().set_text("95");
+                assert!(quality.commit_text());
+                assert_eq!(quality.value(), 95.);
                 let advanced = named::<adw::ExpanderRow>(options.upcast_ref(), "export-advanced");
                 assert!(!advanced.is_expanded());
                 advanced.set_expanded(true);
@@ -1000,7 +1100,7 @@ fn native_document_files() {
         click(&find_button(w.window.upcast_ref(), "Create").unwrap());
         pump(220);
         let (project, location) = created.borrow_mut().take().unwrap();
-        assert_eq!(project.document.width, 512);
+        assert_eq!(project.composition().size[0], 512);
         assert!(location.is_none());
         assert!(!state(&w).document_file.busy);
         assert_eq!(state(&w).tabs[0].width, 384);
@@ -1062,9 +1162,8 @@ fn native_document_files() {
     }
     assert!(!w.window.is_visible());
     let saved =
-        layer_core::Project::read(std::fs::File::open(save_path).unwrap(), Default::default())
-            .unwrap();
-    assert_eq!(saved.document.layers.len(), 4);
+        open_native_document(std::fs::File::open(save_path).unwrap());
+    assert_eq!(saved.scene().order().len(), 4);
 }
 
 #[test]
@@ -2011,7 +2110,7 @@ fn native_connected_tools() {
             .session
             .engine()
             .document()
-            .selection
+            .working.selection
             .as_ref()
             .unwrap();
         let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
@@ -2034,7 +2133,7 @@ fn native_connected_tools() {
     let selection = ui_session(&w)
         .engine()
         .document()
-        .selection
+        .working.selection
         .clone()
         .expect("connected selection");
     let layer_core::SelectionShape::Pixels(pixels) = &selection.shape else {
@@ -2071,7 +2170,7 @@ fn native_connected_tools() {
     let fill_raster = || {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
-        doc.layer(doc.active_layer).unwrap().raster.clone()
+        active_raster(doc).clone()
     };
     let before_fill = fill_raster();
     assert!(before_fill.is_empty());
@@ -2131,9 +2230,7 @@ fn native_ruler_tools() {
     let ruler_count = || {
         ui_session(&w)
             .engine()
-            .document()
-            .rulers
-            .len()
+            .document().rulers().count()
     };
     let dir = artifact_dir("../../artifacts/familiar-workspace");
     for index in 0..3 {
@@ -2390,8 +2487,8 @@ fn native_operation_tool() {
     .downcast()
     .unwrap();
     click(&cancel);
-    assert_eq!(document().layers, original.layers);
-    assert_eq!(document().selection, original.selection);
+    assert_eq!(document().artwork, original.artwork);
+    assert_eq!(document().working.selection, original.working.selection);
     assert_eq!(state(&w).layer_tools.tool, LayerCanvasTool::Move);
     let transform = w.tool_set.group_buttons.borrow()[1].clone();
     click(&transform);
@@ -2406,17 +2503,11 @@ fn native_operation_tool() {
     click(&apply);
     pump(150);
     assert_ne!(
-        document()
-            .layer(original.active_layer)
-            .unwrap()
-            .raster,
-        original
-            .layer(original.active_layer)
-            .unwrap()
-            .raster,
+        document().target_raster(original.working.target.unwrap()).unwrap(),
+        active_raster(&original),
         "applying a transform publishes a new raster root"
     );
-    assert_ne!(document().selection, original.selection);
+    assert_ne!(document().working.selection, original.working.selection);
     // Sample real GPU pixels after Apply, then undo; the displaced left edge
     // becomes paper and returns to blue. This is not only a model assertion.
     w.dispatch(UiAction::Layer {
@@ -2446,8 +2537,8 @@ fn native_operation_tool() {
         command: CommandId::Undo,
     }); // transform + selection
     pump(200);
-    assert_eq!(document().layers, original.layers);
-    assert_eq!(document().selection, original.selection);
+    assert_eq!(document().artwork, original.artwork);
+    assert_eq!(document().working.selection, original.working.selection);
     let c = sample([700., 750.]);
     assert!(c[2] > 0.6 && c[0] < 0.2, "restored ink: {c:?}");
     assert!(!w.status.is_visible(), "{}", w.status.text());
@@ -2540,7 +2631,7 @@ fn native_figure_tools() {
         pump(40);
         let start = [830. + (index - 1) as f32 * 390., 300.];
         let end = [start[0] + 200., start[1] + 80.];
-        let before = ui_session(&w).engine().document().layers[0].raster.clone();
+        let before = active_raster(ui_session(&w).engine().document()).clone();
         send(PenPhase::Down, start);
         send(PenPhase::Move, end);
         keys.emit_by_name::<bool>(
@@ -2579,7 +2670,7 @@ fn native_figure_tools() {
             &[&gdk::Key::Shift_L, &0u32, &gdk::ModifierType::SHIFT_MASK],
         );
         new_photo::ready(&w);
-        let after = ui_session(&w).engine().document().layers[0].raster.clone();
+        let after = active_raster(ui_session(&w).engine().document()).clone();
         assert_ne!(after, before);
         assert!(after.host_backed());
         assert!(!w.status.is_visible(), "{}", w.status.text());
@@ -7030,8 +7121,8 @@ fn native_menu_sections() {
         let gpu = w.gpu.borrow();
         let doc = gpu.as_ref().unwrap().session.engine().document();
         assert_eq!(
-            doc.layer(doc.active_layer).unwrap().kind,
-            layer_core::LayerKind::Effect
+            doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().content,
+            layer_core::authored::OccurrenceContent::Effect(doc.artwork.effects.iter().next_back().unwrap().0)
         );
     }
     // Reopening must refresh removed shortcuts in every menu using the command.
@@ -7595,10 +7686,12 @@ fn native_window_lifecycle() {
     let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
     crate::install_actions(&app, &windows);
     app.activate_action("new-window", None);
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "first lifecycle window mapped");
     let first = windows.borrow()[0].clone();
     pump(200);
     for _ in 0..12 {
         app.activate_action("new-window", None);
+        until(|| windows.borrow().len() == 2 && windows.borrow()[1].window.is_mapped(), "next lifecycle window mapped");
         pump(100);
         let next = windows.borrow().last().unwrap().clone();
         next.window.destroy();
@@ -7691,6 +7784,7 @@ fn native_preferences_and_shortcuts() {
     let windows: Rc<RefCell<Vec<Rc<Workspace>>>> = Rc::default();
     crate::install_actions(&app, &windows);
     app.activate_action("new-window", None);
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "preferences window mapped");
     let w = windows.borrow()[0].clone();
     pump(300);
     assert_eq!(
@@ -7698,6 +7792,7 @@ fn native_preferences_and_shortcuts() {
         Some(format!("Untitled — {APP_NAME}").as_str())
     );
     click(&command(&w, CommandId::NewWindow));
+    until(|| windows.borrow().len() == 2 && windows.borrow()[1].window.is_mapped(), "second preferences window mapped");
     assert_eq!(windows.borrow().len(), 2);
     let second = windows.borrow()[1].clone();
     w.dispatch(UiAction::SetTheme {
@@ -8157,6 +8252,7 @@ fn native_preferences_and_shortcuts() {
             state(&w).settings
         );
         click(&command(&w, CommandId::NewWindow));
+        until(|| windows.borrow().len() == 2 && windows.borrow()[1].window.is_mapped(), "persisted preferences window mapped");
         let next = windows.borrow().last().unwrap().clone();
         assert_eq!(state(&next).settings, state(&w).settings);
         next.window.destroy();
@@ -8610,6 +8706,7 @@ fn native_backdrop_blur_capture() {
     let app = NativeTestApp(app);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
     crate::open_workspace(&app, &windows, None, None);
+    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "backdrop window mapped");
     let w = windows.borrow()[0].clone();
     w.window.maximize();
     w.window.present();
@@ -8861,7 +8958,11 @@ fn native_frame_pacing() {
         Ok("photo24") => {
             let mut project = native_navigation::photo([6000, 4000]);
             match std::env::var("LAYER_PACING_PHOTO_LAYERS").as_deref() {
-                Ok("photo") => project.document.layers.retain(|layer| layer.source.is_some()),
+                Ok("photo") => {
+                    let members = project.scene().order().iter().copied().filter(|h| project.scene().paint_source(*h).is_some_and(|p| p.original.is_some())).collect();
+                    let stack = project.composition().result;
+                    project.apply(layer_core::Edit::Stack(layer_core::authored::RecordChange::replace(&project.artwork.stacks, stack, Some(layer_core::authored::Stack { entries: members })).unwrap())).unwrap();
+                },
                 Ok("layered") => native_navigation::layered(&mut project),
                 Ok("blended") => native_navigation::blended(&mut project),
                 Ok("pass_through") => native_navigation::pass_through(&mut project),
@@ -8910,12 +9011,7 @@ fn native_frame_pacing() {
         native_pen_path(&w, &[[160., 128.], [1888., 1408.]]);
         pump(150);
         assert_eq!(
-            ui_session(&w)
-                .engine()
-                .document()
-                .layers[0]
-                .pending_operations
-                .len(),
+            active_raster_operations(ui_session(&w).engine().document()).len(),
             1
         );
     }
@@ -8951,7 +9047,7 @@ fn native_frame_pacing() {
                 ui_session(&w)
                     .engine()
                     .document()
-                    .selection
+                    .working.selection
                     .as_ref()
                     .unwrap()
                     .shape,
@@ -9067,11 +9163,7 @@ fn native_frame_pacing() {
                         [160., 128.],
                     ],
                 );
-                let id = ui_session(&w)
-                    .engine()
-                    .document()
-                    .active_layer
-                    .0;
+                let id = layer_ui::occurrence_token(ui_session(&w).engine().document().working.occurrence.unwrap());
                 w.dispatch(UiAction::Layer {
                     action: LayerAction::AddMask { id, replace: false },
                 });
@@ -9100,7 +9192,7 @@ fn native_frame_pacing() {
             let (width, height) = {
                 let gpu = w.gpu.borrow();
                 let doc = gpu.as_ref().unwrap().session.engine().document();
-                (doc.width as f32, doc.height as f32)
+                (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
             };
             if !photo {
                 w.dispatch(UiAction::Layer {
@@ -9129,7 +9221,7 @@ fn native_frame_pacing() {
             let (width, height) = {
                 let gpu = w.gpu.borrow();
                 let doc = gpu.as_ref().unwrap().session.engine().document();
-                (doc.width as f32, doc.height as f32)
+                (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
             };
             let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.75, height * 0.75];
             w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
@@ -9211,7 +9303,7 @@ fn native_frame_pacing() {
             .committed_strokes;
         *worker_stats.lock().unwrap() = Default::default();
         let camera = state(&w).camera;
-        let selection_before = ui_session(&w).engine().document().selection.clone();
+        let selection_before = ui_session(&w).engine().document().working.selection.clone();
         let transform_path = match name {
             "Transform" | "Move" => {
                 let [x0, y0, x1, y1] = state(&w).canvas_bar.and_then(|b| b.anchor).expect("transform box or selection");
@@ -9220,7 +9312,7 @@ fn native_frame_pacing() {
             }
             "Crop" => {
                 let document = ui_session(&w).engine().document().clone();
-                let [width, height] = [document.width as f32, document.height as f32];
+                let [width, height] = [document.composition().size[0] as f32, document.composition().size[1] as f32];
                 Some(([width, height], [width * 0.17, height * 0.13]))
             }
             _ => None,
@@ -9375,7 +9467,7 @@ fn native_frame_pacing() {
         pump(150);
         if name == "Move" {
             assert_ne!(
-                ui_session(&w).engine().document().selection,
+                ui_session(&w).engine().document().working.selection,
                 selection_before,
                 "pacing must move the selected pixels: {:?}",
                 state(&w).notice
@@ -9462,7 +9554,7 @@ fn native_frame_pacing() {
         let extent = {
             let gpu = w.gpu.borrow();
             let doc = gpu.as_ref().unwrap().session.engine().document();
-            [doc.width, doc.height]
+            [doc.composition().size[0], doc.composition().size[1]]
         };
         let mut report = report;
         report["document"] = serde_json::json!(extent);
@@ -13260,7 +13352,7 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
                 assert_eq!(spin.text(), literal);
                 assert_eq!(number.value(), old_value);
                 let current = ui_session(&w).engine().document().clone();
-                assert_eq!((current.width, current.height, current.revision), (before.width, before.height, before.revision));
+                assert_eq!((current.composition().size, current.revision), (before.composition().size, before.revision));
                 assert!(if image { state(&w).layer_tools.image_size.is_some() } else { state(&w).layer_tools.canvas_size.is_some() });
             }
             spin.set_text(if image { "256" } else { "512" });
@@ -13269,7 +13361,7 @@ fn native_numeric_size_apply_refuses_uncommitted_text() {
             assert!(dialog.is_response_enabled("apply"));
             find_button(dialog.upcast_ref(), "Apply").unwrap().emit_clicked();
             pump(180);
-            assert_eq!(ui_session(&w).engine().document().width, if image { 256 } else { 512 });
+            assert_eq!(ui_session(&w).engine().document().composition().size[0], if image { 256 } else { 512 });
             assert!(if image { state(&w).layer_tools.image_size.is_none() } else { state(&w).layer_tools.canvas_size.is_none() });
         }
         w.window.close();
@@ -13332,14 +13424,14 @@ fn native_localized_nested_menus() {
             if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
                 input.perform(serde_json::json!([{"wait_ms":200},{"capture":format!("organize-{}-{}", language.tag().to_lowercase(), format!("{theme:?}").to_lowercase())}]));
             }
-            let count = ui_session(&w).engine().document().layers.len();
+            let count = ui_session(&w).engine().document().scene().order().len();
             let checkpoint = ui_session(&w).engine().checkpoint();
             input.click(screen_point(&button(&organize, &w.localization().text(MessageId::RESOURCES_LAYER_MENU_DUPLICATE)), &w.window, [0.5, 0.5]));
-            until(|| ui_session(&w).engine().document().layers.len() == count + 1, "native localized Organize Duplicate action");
+            until(|| ui_session(&w).engine().document().scene().order().len() == count + 1, "native localized Organize Duplicate action");
             new_photo::ready(&w);
             w.dispatch(UiAction::Invoke { command: CommandId::Undo });
             new_photo::ready(&w);
-            assert_eq!(ui_session(&w).engine().document().layers.len(), count);
+            assert_eq!(ui_session(&w).engine().document().scene().order().len(), count);
             assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
         }
     }
@@ -13462,13 +13554,13 @@ fn native_live_language_switching() {
             (panel, button, label)
         });
 
-        assert!(ui_session(&w).engine().document().selection.is_none());
+        assert!(ui_session(&w).engine().document().working.selection.is_none());
         w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
         new_photo::ready(&w);
-        let canvas_selection = ui_session(&w).engine().document().selection.clone().unwrap();
+        let canvas_selection = ui_session(&w).engine().document().working.selection.clone().unwrap();
         let canvas_bounds = canvas_selection.coverage_bounds();
         assert_eq!(canvas_bounds.min, layer_core::Point { x: 0., y: 0. });
-        assert_eq!(canvas_bounds.max, layer_core::Point { x: ui_session(&w).engine().document().width as f32, y: ui_session(&w).engine().document().height as f32 });
+        assert_eq!(canvas_bounds.max, layer_core::Point { x: ui_session(&w).engine().document().composition().size[0] as f32, y: ui_session(&w).engine().document().composition().size[1] as f32 });
         assert_eq!(canvas_selection.contours()[0].len(), 4);
         assert!(!canvas_selection.inverted);
         let history_availability = (ui_session(&w).engine().can_undo(), ui_session(&w).engine().can_redo());
@@ -13515,9 +13607,9 @@ fn native_live_language_switching() {
             }
             assert_eq!(ui_session(&w).engine() as *const _ as usize, session);
             assert_eq!(ui_session(&w).engine().document().revision, document_revision);
-            assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+            assert_eq!(ui_session(&w).engine().document().working.selection.as_ref(), Some(&canvas_selection));
             assert_eq!(ui_session(&w).engine().display_selection().as_deref(), Some(&canvas_selection));
-            assert_eq!(ui_session(&w).engine().document().selection.as_ref().unwrap().coverage_bounds(), canvas_bounds);
+            assert_eq!(ui_session(&w).engine().document().working.selection.as_ref().unwrap().coverage_bounds(), canvas_bounds);
             assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
             assert_eq!((ui_session(&w).engine().can_undo(), ui_session(&w).engine().can_redo()), history_availability);
             let pango_language = choice.pango_context().language().unwrap().to_string();
@@ -13826,13 +13918,13 @@ fn native_live_language_switching() {
         assert_eq!(ui_session(&other).localization().language(), UiLanguage::Japanese);
         other.window.close();
         pump(100);
-        assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+        assert_eq!(ui_session(&w).engine().document().working.selection.as_ref(), Some(&canvas_selection));
         w.dispatch(UiAction::Invoke { command: CommandId::Undo });
         new_photo::ready(&w);
-        assert!(ui_session(&w).engine().document().selection.is_none());
+        assert!(ui_session(&w).engine().document().working.selection.is_none());
         w.dispatch(UiAction::Invoke { command: CommandId::Redo });
         new_photo::ready(&w);
-        assert_eq!(ui_session(&w).engine().document().selection.as_ref(), Some(&canvas_selection));
+        assert_eq!(ui_session(&w).engine().document().working.selection.as_ref(), Some(&canvas_selection));
         assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint);
         w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
         new_photo::ready(&w);
@@ -13874,7 +13966,9 @@ fn live_language_documents(theme: Theme) {
             until(|| w.localization().language() == language && existing.localization().language() == language, "existing windows adopt language");
             assert_eq!(ui_session(&existing).engine() as *const _ as usize, existing_engine);
             let literal = format!("{} {theme:?} İı Tiếng Việt Tiếng Việt ไทย 日本語 🎨 {{draft}}", language.tag());
-            let layer = ui_session(&w).engine().document().active_layer.0;
+            let occurrence = ui_session(&w).engine().document().working.occurrence.unwrap();
+            let occurrence_id = ui_session(&w).engine().document().artwork.occurrences.id(occurrence).unwrap();
+            let layer = layer_ui::occurrence_token(occurrence);
             w.dispatch(UiAction::Layer { action: LayerAction::BeginRename { id: layer } });
             let row = named::<gtk::Widget>(w.window.upcast_ref(), &format!("art-layer-{layer}"));
             let entry = find_css(&row, "layer-name-entry").unwrap().downcast::<gtk::Entry>().unwrap();
@@ -13889,7 +13983,7 @@ fn live_language_documents(theme: Theme) {
             assert_eq!(entry.selection_bounds(), selection);
             assert_eq!(find_css(&row, "layer-name-entry").unwrap().downcast::<gtk::Entry>().unwrap(), entry);
             entry.emit_activate();
-            until(|| ui_session(&w).engine().document().layer(layer_core::LayerId(layer)).unwrap().name.as_ref() == literal.as_str(), "Unicode layer name committed");
+            until(|| ui_session(&w).engine().document().scene().occurrence(occurrence).unwrap().name.as_ref() == literal.as_str(), "Unicode layer name committed");
             w.dispatch(UiAction::Invoke { command: CommandId::Pen });
             w.dispatch(UiAction::SetBrushSize { value: 17. });
             w.dispatch(UiAction::SetColor { rgba: [0.12, 0.38, 0.72, 1.] });
@@ -13928,7 +14022,8 @@ fn live_language_documents(theme: Theme) {
             until(|| w.documents.len() == count + 1 && w.documents.selected() != original, "saved Unicode drawing reopened in new tab");
             new_photo::ready(&w);
             assert_eq!(ui_session(&w).localization().language(), language);
-            assert_eq!(ui_session(&w).engine().document().layer(layer_core::LayerId(layer)).unwrap().name.as_ref(), literal.as_str());
+            let restored = ui_session(&w).engine().document().artwork.occurrences.resolve(occurrence_id).unwrap();
+            assert_eq!(ui_session(&w).engine().document().scene().occurrence(restored).unwrap().name.as_ref(), literal.as_str());
             assert_eq!(glib::MainContext::default().block_on(read_canvas_pixels(&w, 9914)).unwrap().bytes, painted);
             let reopened = w.documents.selected();
             new_photo::invoke(&w, CommandId::ExportDocument);
@@ -13941,7 +14036,7 @@ fn live_language_documents(theme: Theme) {
             save.response(gtk::ResponseType::Accept);
             new_photo::finish(&w);
             let image = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(output.join(export_name)).unwrap()), Default::default()).unwrap();
-            assert_eq!(image.extent, [ui_session(&w).engine().document().width, ui_session(&w).engine().document().height]);
+            assert_eq!(image.extent, [ui_session(&w).engine().document().composition().size[0], ui_session(&w).engine().document().composition().size[1]]);
             w.documents.select(&w, reopened, true);
             until(|| w.documents.len() == count && w.documents.selected() == original, "return to existing drawing tab");
             new_photo::ready(&w);
@@ -13994,7 +14089,7 @@ fn native_genuine_language_composition() {
                 let spin = descendant::<gtk::SpinButton>(&number).unwrap();
                 let text = spin.delegate().and_downcast::<gtk::Text>().unwrap();
                 let document = ui_session(w).engine().document().clone();
-                serde_json::json!({"dialog_visible":true,"language":w.localization().language().tag(),"draft":spin.text().to_string(),"selection":spin.selection_bounds(),"value":number.value(),"input_valid":number.input_valid(),"error_reason":number.imp().error.borrow().clone(),"error_caption":number.tooltip_text().map(|caption|caption.to_string()),"composing":number.composing(),"editor_size":[text.width(),text.height()],"editor_identity":format!("{:p}",text.as_ptr()),"control_identity":format!("{:p}",number.as_ptr()),"focused":text.has_focus(),"point":screen_point(text.upcast_ref(),&w.window,[0.5,0.5]),"apply_enabled":dialog.is_response_enabled("apply"),"document":[document.width,document.height,document.revision]})
+                serde_json::json!({"dialog_visible":true,"language":w.localization().language().tag(),"draft":spin.text().to_string(),"selection":spin.selection_bounds(),"value":number.value(),"input_valid":number.input_valid(),"error_reason":number.imp().error.borrow().clone(),"error_caption":number.tooltip_text().map(|caption|caption.to_string()),"composing":number.composing(),"editor_size":[text.width(),text.height()],"editor_identity":format!("{:p}",text.as_ptr()),"control_identity":format!("{:p}",number.as_ptr()),"focused":text.has_focus(),"point":screen_point(text.upcast_ref(),&w.window,[0.5,0.5]),"apply_enabled":dialog.is_response_enabled("apply"),"document":[document.composition().size[0],document.composition().size[1],document.revision]})
             } else { serde_json::json!({"dialog_visible":false}) };
             if numeric_snapshot.as_ref() != Some(&snapshot) {
                 let state = result.with_file_name("numeric-state.json");

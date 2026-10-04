@@ -34,7 +34,8 @@ pub struct WebProject {
     source: layer_ui::ImportSource,
     placed: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
     source_name: String,
-    target: layer_core::LayerId,
+    target: Option<layer_core::SourceTarget>,
+    package: Option<(layer_ui::PackagePresentation,Option<js_sys::Uint8Array>)>,
     lost: std::sync::Arc<std::sync::Mutex<Option<String>>>,
 }
 
@@ -67,6 +68,8 @@ impl WebApp {
     pub fn document_request_title(&self, id: u32) -> Option<String> {
         self.session.document_request(id).ok().map(|request|request.title(self.session.localization()).to_string())
     }
+    pub fn package_view(&self,candidate:&WebProject)->Result<JsValue,JsValue>{candidate.package.as_ref().map_or(Ok(JsValue::NULL),|(data,_)|serialize(&data.summary(self.session.localization())))}
+    pub fn package_preview(&self,candidate:&WebProject)->Option<js_sys::Uint8Array>{candidate.package.as_ref().and_then(|(_,preview)|preview.clone())}
     pub fn document_properties(&self) -> Result<js_sys::Promise, JsValue> {
         let info = layer_color::DocumentInfo::capture(self.session.engine().document());
         Ok(future_to_promise(async move {
@@ -111,7 +114,7 @@ impl WebApp {
         let recipe: layer_ui::ExportRecipe = serde_wasm_bindgen::from_value(recipe).map_err(js)?;
         let document = self.session.engine().document();
         recipe.validate().map_err(color_preferences::color_feature_rejection)?;
-        recipe.output_extent([document.width, document.height]).map_err(color_preferences::color_feature_rejection)?;
+        recipe.output_extent(document.composition().size).map_err(color_preferences::color_feature_rejection)?;
         serialize(&recipe)
     }
 
@@ -155,7 +158,7 @@ impl WebApp {
             .capture_project_save(id, location)
             .map_err(js)?;
         Ok(future_to_promise(async move {
-            raster_project::save(project).await
+            artwork_transfer::save(project).await
         }))
     }
     pub fn recovery_update(&self, state: &str, event: JsValue) -> Result<JsValue, JsValue> {
@@ -165,7 +168,7 @@ impl WebApp {
     pub fn save_recovery(&self, key: String) -> Result<js_sys::Promise, JsValue> {
         let project = self.session.capture_project_recovery().map_err(js)?;
         Ok(future_to_promise(async move {
-            raster_project::save_recovery(project, key).await
+            artwork_transfer::save_recovery(project, key).await
         }))
     }
     pub fn prepare_document(
@@ -268,11 +271,11 @@ impl WebApp {
                 ..Default::default()
             };
             let source_name = source_name.unwrap_or_default();
-            let mut imported = match bytes {
+            let imported = match bytes {
                 Some(bytes) => {
-                    raster_project::open(
+                    artwork_transfer::open(
                         bytes,
-                        raster_project::OpenOptions {
+                        artwork_transfer::OpenOptions {
                             dimension: limits.dimension,
                             photo_policy,
                             names: layer_ui::photo_document_names(&source_name, &localization),
@@ -282,7 +285,12 @@ impl WebApp {
                     )
                     .await?
                 }
-                None => layer_ui::ImportedDocument { project: new_options.project(&localization).map_err(js)?, source: layer_ui::ImportSource::Master },
+                None => artwork_transfer::Opened::Editable {document:layer_ui::ImportedDocument::new(new_options.project(&localization).map_err(js)?,layer_ui::ImportSource::Master),fallback:None},
+            };
+            check_cancelled()?;
+            let (mut imported,fallback)=match imported {
+                artwork_transfer::Opened::Editable {document,fallback}=>(document,fallback),
+                artwork_transfer::Opened::Package {presentation,preview}=>return Ok(WebProject{session:None,request:id,epoch,revision,recovered:false,source:layer_ui::ImportSource::Master,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into()),
             };
             check_cancelled()?;
             if let Some(source) = imported.interpretation_required(photo_policy) {
@@ -302,15 +310,9 @@ impl WebApp {
             }
             let source_kind = imported.source;
             let project = imported.project;
-            hdr::admit_document(&project.document)?;
-            if !placing { admission.admit(&project).map_err(|reason| js(reason.message(&localization)))?; }
             if placing {
-                let source = project
-                    .document
-                    .layers
-                    .iter()
-                    .find_map(|l| l.source.clone())
-                    .ok_or_else(|| js("The selected file is not a photo"))?;
+                hdr::admit_document(&project)?;
+                let source=project.artwork.paint.iter().find_map(|(_,_,p)|p.original.clone()).ok_or_else(||js("The selected file is not a photo"))?;
                 return Ok(WebProject {
                     session: None,
                     request: id,
@@ -319,31 +321,25 @@ impl WebApp {
                     recovered: false,
                     source: source_kind,
                     placed: Some(source),
-                    source_name: project.document.layers[0].name.to_string(),
+                    source_name: project.scene().order().first().and_then(|h|project.scene().occurrence(*h)).map(|o|o.name.to_string()).unwrap_or_default(),
                     target,
                     lost,
+                    package:None,
                 }
                 .into());
             }
+            let prepared:Result<_,JsValue>=async {
+            hdr::admit_document(&project)?;
+            admission.admit(&project).map_err(|reason|js(reason.message(&localization)))?;
             let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
                 adapter,
                 device,
                 queue,
-                project.document.color,
+                project.composition().color,
             )
             .map_err(js)?;
             raster_worker::install(&mut renderer);
-            let mut programs = Vec::new();
-            for effect in project
-                .document
-                .layers
-                .iter()
-                .filter_map(|l| l.effect.as_ref())
-            {
-                if !programs.contains(&effect.program) {
-                    programs.push(effect.program.clone());
-                }
-            }
+            let programs=project.artwork.definitions.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
             let mut validating = !programs.is_empty();
             if validating {
                 renderer
@@ -355,7 +351,7 @@ impl WebApp {
                     .map_err(js)?;
             }
             renderer
-                .prepare_startup(&project.document, &brush, false)
+                .prepare_startup(&project, &brush, false)
                 .map_err(js)?;
             let start = js_sys::Date::now();
             loop {
@@ -374,18 +370,6 @@ impl WebApp {
                 }
                 yield_browser().await?;
             }
-            // Finite-range and digest validation of cold HDR samples can take
-            // seconds at photo sizes. Yield in bounded batches before rendering.
-            if project.document.color.depth.is_float() {
-                let mut batch=0;
-                for source in project.document.layers.iter().filter_map(|layer| layer.source.as_ref()) {
-                    for tile in source.tiles.values() {
-                        renderer.prepare_source_sample(tile).map_err(js)?;
-                        batch+=1;
-                        if batch==4 {batch=0;yield_browser().await?;check_cancelled()?;}
-                    }
-                }
-            }
             let mut candidate = UiSession::from_project_localized(
                 AttachedRenderer(Some(Box::new(renderer))),
                 project,
@@ -396,6 +380,20 @@ impl WebApp {
             )
             .map_err(js)?;
             candidate.frame(0, 0).map_err(js)?;
+            Ok(candidate)
+            }.await;
+            let candidate=match prepared {
+                Ok(candidate)=>candidate,
+                Err(error)=>{
+                    check_cancelled()?;
+                    if lost.lock().unwrap().is_some(){return Err(error);}
+                    if let Some((mut presentation,preview))=fallback {
+                        presentation.reason=error.as_string().unwrap_or_else(||format!("{error:?}"));
+                        return Ok(WebProject {session:None,request:id,epoch,revision,recovered:false,source:source_kind,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into());
+                    }
+                    return Err(error);
+                }
+            };
             Ok(WebProject {
                 session: Some(Box::new(candidate)),
                 request: id,
@@ -407,6 +405,7 @@ impl WebApp {
                 source_name,
                 target,
                 lost,
+                package:None,
             }
             .into())
         }))
@@ -469,7 +468,7 @@ impl WebApp {
         candidate.inherit_window_state(&self.session).map_err(js)?;
         candidate.inherit_initial_drawing_tools(&self.session).map_err(js)?;
         let active = self.session.retained_document_tiles();
-        self.documents.admit(&active, &candidate.capture_project_recovery().map_err(js)?).map_err(|reason| js(reason.message(self.session.localization())))?;
+        self.documents.admit(&active, candidate.engine().document()).map_err(|reason| js(reason.message(self.session.localization())))?;
         let config = &self.surface.as_ref().ok_or_else(|| js("Canvas unavailable"))?.config;
         candidate.renderer_mut().resize_surface(config.width, config.height).map_err(js)?;
         // All fallible candidate preparation precedes retiring the live editor.

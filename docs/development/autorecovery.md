@@ -3,11 +3,12 @@
 [Developer guide](README.md)
 
 **Status: deferred until the qualified `.capy` cutover lands.**
-[M3 of the file format and authored graph plan](capy-format.md#m3-switch-the-application-once-and-remove-superseded-paths)
-is the prerequisite. Its [recovery extension boundary](capy-format.md#recovery-extension-boundary)
-defines the shared capture, resource and checkpoint interfaces to recheck in code.
-Optional M4 lazy-loading or execution-plan work is not a prerequisite. This plan
-does not start recovery implementation alongside the format cutover.
+The qualified application cutover is the prerequisite. The
+[authored capture and recovery boundary](../reference/authored-model.md#capture-phases-and-recovery-extension)
+and [package backing/publication contract](../reference/capy-package.md#immutable-backing-capture-and-publication)
+define the shared interfaces to recheck in code. Optional lazy-loading or
+execution-plan work is not a prerequisite. This plan does not start recovery
+implementation alongside the format cutover.
 
 ## Intended behavior
 
@@ -43,6 +44,17 @@ checkpoint handling in [document_files.rs](../../crates/layer-ui/src/document_fi
 and tab ownership in [document_sessions.rs](../../crates/layer-ui/src/document_sessions.rs).
 Recheck each host's recovery, close and background flows against those contracts.
 Update these pointers if the format work moves their responsibilities.
+
+The integrated format also exposes [`Editor::capture`](../../crates/layer-core/src/lib.rs),
+[`CanvasEngine::capture_artwork`](../../crates/layer-engine/src/canvas.rs) and
+[`ArtworkCapture`/`CaptureCheckpoint`](../../crates/layer-core/src/authored/artwork.rs).
+[`ResourceInventory`/`PreparedResources`](../../crates/layer-core/src/package/resources.rs)
+and [`PreparedTransfer`](../../crates/layer-core/src/package/transfer.rs) enumerate
+portable metadata and resource payloads independently of ZIP assembly.
+[`Editor::retained_tiles`/`RetainedTiles`](../../crates/layer-core/src/raster_storage.rs)
+and [`history_budget`](../../crates/layer-core/src/history_budget.rs) cover retained
+owners and accounting. Recheck these interfaces after M3 qualification; they do
+not yet persist private session/history records or establish incremental writes.
 
 Measure the landed implementation before selecting storage changes. Include a
 metadata-only edit, a small stroke, an operation that changes most pixels, several

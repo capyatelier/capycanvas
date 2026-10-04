@@ -18,6 +18,12 @@ impl CanvasRenderer for AttachedRenderer {
     fn shaders_need_update(&self, document: &layer_core::Document, brush: &layer_core::BrushSnapshot, transform: bool) -> bool {
         self.0.as_ref().is_some_and(|gpu| gpu.startup_needs_update(document, brush, transform))
     }
+    fn evaluation_context(&self) -> layer_core::authored::EvaluationContext {
+        self.0.as_deref().map(CanvasRenderer::evaluation_context).unwrap_or_default()
+    }
+    fn seed_evaluation_context(&mut self, context: layer_core::authored::EvaluationContext) {
+        if let Some(gpu) = self.0.as_deref_mut() { gpu.seed_evaluation_context(context); }
+    }
     fn document_color(&self) -> layer_core::color::DocumentColor {
         self.0.as_deref().map(CanvasRenderer::document_color).unwrap_or_default()
     }
@@ -52,12 +58,12 @@ impl CanvasRenderer for AttachedRenderer {
     fn has_pending_work(&self) -> bool {
         self.0.as_ref().is_some_and(|gpu| gpu.has_pending_work())
     }
-    fn prepare_moving_layer(&mut self, layer: Option<layer_core::LayerId>) {
+    fn prepare_moving_layer(&mut self, layer: Option<layer_core::authored::OccurrenceHandle>) {
         if let Some(gpu) = self.0.as_mut() {
             gpu.prepare_moving_layer(layer);
         }
     }
-    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::LayerId, layer_core::Selection)>) {
+    fn prepare_moving_pixels(&mut self, pixels: Option<(layer_core::authored::SourceTarget, layer_core::Selection)>) {
         if let Some(gpu) = self.0.as_mut() {
             gpu.prepare_moving_pixels(pixels);
         }
@@ -86,7 +92,7 @@ impl CanvasRenderer for AttachedRenderer {
     fn take_effect_analysis(&mut self) -> Option<Result<(), Self::Error>> { self.0.as_mut()?.take_effect_analysis() }
     fn accept_effect_analysis(&mut self) -> Result<(), Self::Error> { self.gpu()?.accept_effect_analysis() }
     fn cancel_effect_analysis(&mut self) { if let Some(gpu) = self.0.as_mut() { gpu.cancel_effect_analysis(); } }
-    fn retain_effect_analyses(&mut self, layers: &[layer_core::LayerId]) -> Result<(), Self::Error> {
+    fn retain_effect_analyses(&mut self, layers: &[layer_core::authored::OccurrenceHandle]) -> Result<(), Self::Error> {
         self.0.as_mut().map_or(Ok(()), |gpu| gpu.retain_effect_analyses(layers))
     }
     fn request_snapshot(&mut self, request: layer_render::SnapshotRequest) -> Result<bool, Self::Error> {
@@ -183,7 +189,7 @@ impl CanvasRenderer for AttachedRenderer {
     fn request_thumbnail(
         &mut self,
         id: u64,
-        target: layer_core::LayerId,
+        target: layer_render::ThumbnailTarget,
     ) -> Result<(), Self::Error> {
         self.gpu()?.request_thumbnail(id, target)
     }
@@ -223,7 +229,7 @@ fn renderer_replacement_keeps_native_stack_usage_bounded() {
 #[test]
 fn analysis_retention_before_device_attachment_needs_no_gpu() {
     let mut renderer=AttachedRenderer::default();
-    renderer.retain_effect_analyses(&[layer_core::LayerId(3),layer_core::LayerId(7)]).unwrap();
+    renderer.retain_effect_analyses(&[layer_core::OccurrenceHandle::from_index(3),layer_core::OccurrenceHandle::from_index(7)]).unwrap();
     renderer.retain_effect_analyses(&[]).unwrap();
     assert!(renderer.0.is_none());
 }

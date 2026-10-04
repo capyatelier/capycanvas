@@ -35,13 +35,8 @@ fn source() -> SourceImage {
     }
     builder.finish().unwrap()
 }
-fn current(w: &Rc<Workspace>, id: layer_core::LayerId) -> layer_core::Layer {
-    ui_session(&w)
-        .engine()
-        .document()
-        .layer(id)
-        .unwrap()
-        .clone()
+fn current(w: &Rc<Workspace>, id: layer_core::OccurrenceHandle) -> layer_core::PaintSource {
+    ui_session(w).engine().document().scene().paint_source(id).unwrap().clone()
 }
 
 #[test]
@@ -50,22 +45,22 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     glib::set_prgname(Some("capy-canvas-test"));
     let app = native_test_app("art.capycanvas.SourceRasterize");
     let mut project = new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    let id = project.document.active_layer;
+    let id = project.working.occurrence.unwrap();
     let source = std::sync::Arc::new(source());
-    let mask_id = project.document.allocate_layer_id();
-    let layer = project
-        .document
-        .layers
-        .iter_mut()
-        .find(|l| l.id == id)
-        .unwrap();
-    layer.source = Some(source.clone());
-    layer.mask = Some(layer_core::LayerMask::reveal_all(
-        mask_id,
-        layer_core::Point { x: 11., y: -5. },
-    ));
+    let layer_core::SourceTarget::Paint(handle) = project.working.target.unwrap() else { panic!("Paint source") };
+    let paint = project.artwork.paint.get_mut(handle).unwrap();
+    paint.domain = source.extent;
+    paint.original = Some(source.clone());
+    let mask = project.allocate_coverage_handle();
+    let coverage = layer_core::CoverageSnapshot::reveal_all(mask, source.extent, layer_core::Point { x: 11., y: -5. });
+    project.artwork.coverage.install(mask, coverage.source).unwrap();
+    let mut occurrence = project.scene().occurrence(id).unwrap().clone();
+    occurrence.mask = Some(coverage.use_);
+    project.apply(layer_core::Edit::Occurrence(layer_core::RecordChange::replace(&project.artwork.occurrences, id, Some(occurrence)).unwrap())).unwrap();
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
+    ready(&w);
+    apply_fixture_theme(&w);
     ready(&w);
     invoke(&w, CommandId::Pen);
     w.dispatch(UiAction::SetBrushSize { value: 17. });
@@ -77,7 +72,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [-160., 19.5], [-160., 19.5]]);
     ready(&w);
-    let offset = current(&w, id).properties.offset;
+    let offset = ui_session(&w).engine().document().scene().occurrence(id).unwrap().translation;
     assert!(
         (offset.x + 260.).abs() < 0.01 && (offset.y + 60.5).abs() < 0.01,
         "{offset:?}"
@@ -95,13 +90,12 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     let overlay = ui_session(&w)
         .engine()
-        .document()
-        .active_layer;
+        .document().working.occurrence.unwrap();
     let paint = current(&w, overlay);
     assert!(!paint.raster.wait_data().unwrap().tiles.is_empty());
     w.dispatch(UiAction::Layer {
         action: LayerAction::Select {
-            id: id.0,
+            id: layer_ui::occurrence_token(id),
             mask: false,
         },
     });
@@ -120,7 +114,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     );
     let before = snapshot(&w);
     w.dispatch(UiAction::Layer {
-        action: LayerAction::RasterizeSource { id: id.0 },
+        action: LayerAction::RasterizeSource { id: layer_ui::occurrence_token(id) },
     });
     apply_dialog(&w, "rasterize-source-dialog", false);
     response(&w, "cancel");
@@ -147,9 +141,11 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
             .0;
     let saved = snapshot(&w);
     let project =
-        layer_core::Project::read(std::io::Cursor::new(saved.clone()), Default::default()).unwrap();
+        open_native_document(std::io::Cursor::new(saved.clone()));
     let restored = Workspace::with_project(&app, Some((project, None)));
     restored.window.present();
+    ready(&restored);
+    apply_fixture_theme(&restored);
     ready(&restored);
     assert_eq!(snapshot(&restored), saved);
     assert_eq!(
@@ -169,7 +165,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     // image. The source-layer paint bytes survived conversion/reopen unchanged.
     w.dispatch(UiAction::Layer {
         action: LayerAction::Select {
-            id: id.0,
+            id: layer_ui::occurrence_token(id),
             mask: false,
         },
     });
@@ -177,7 +173,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     ready(&w);
     native_pen_path(&w, &[[100., 80.], [360., 140.5], [360., 140.5]]);
     ready(&w);
-    let restored_offset = current(&w, id).properties.offset;
+    let restored_offset = ui_session(&w).engine().document().scene().occurrence(id).unwrap().translation;
     assert!(
         restored_offset.x.abs() < 0.01 && restored_offset.y.abs() < 0.01,
         "{restored_offset:?}"
@@ -187,7 +183,7 @@ fn native_rasterization_keeps_off_canvas_source_paint_mask_and_reopen() {
     native_pen_path(&w, &[[35., 70.], [65., 70.], [100., 70.]]);
     ready(&w);
     assert_ne!(current(&w, id).raster, original.raster);
-    assert_eq!(current(&w, id).source.as_deref(), Some(&expected));
+    assert_source_samples(current(&w, id).original.as_ref().unwrap(), &expected);
     w.window.destroy();
     pump(100);
 }

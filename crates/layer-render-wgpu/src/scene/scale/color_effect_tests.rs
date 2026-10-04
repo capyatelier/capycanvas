@@ -1,11 +1,10 @@
 use super::*;
 use layer_core::{EffectInstance, EffectResolution, EffectValue};
 
-fn hue(values: &[(&str, f32)]) -> Layer {
+fn hue(values: &[(&str, f32)]) -> EffectInstance {
     let mut effect = EffectInstance::new(crate::tests::fixture("hue_saturation").program());
     for (key, value) in values { effect.set(key, EffectValue::Number(*value)).unwrap(); }
-    let mut layer = Layer::paint(LayerId(99), "Hue qualification");
-    layer.kind = LayerKind::Effect; layer.effect = Some(Arc::new(effect)); layer
+    effect
 }
 
 #[test]
@@ -22,24 +21,27 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
     ];
     let extent = [1033, 517];
     let mut doc = document_at(extent);
-    let paint = doc.layers[0].id;
-    let mut window = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap(); exact.test.reference = true;
+    let paint = primary_target(&doc);
+    let mut adjustment_handle = None;
+    let mut window = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
     for (state, values) in cases.iter().enumerate() {
-        doc.layers.retain(|layer| layer.id != LayerId(99));
+        if let Some(handle) = adjustment_handle.take() { remove_occurrence(&mut doc, handle); }
         let mut adjustment = hue(values);
-        if state == 3 { Arc::make_mut(adjustment.effect.as_mut().unwrap()).set("colorize", EffectValue::Toggle(true)).unwrap(); }
-        let resolution = adjustment.effect.as_ref().unwrap().program.resolution;
-        let mut mask = layer_core::LayerMask::reveal_all(LayerId(98), Default::default());
-        mask.initial = Some(layer_core::Selection::polygon(vec![
+        if state == 3 { adjustment.set("colorize", EffectValue::Toggle(true)).unwrap(); }
+        let resolution = adjustment.program.resolution;
+        let handle = effect_occurrence(&mut doc, adjustment, "Hue qualification");
+        coverage_mask(&mut doc, handle, Default::default(), Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 573., y: 237. }, layer_core::Point { x: 1001., y: 257. },
             layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
-        ]).unwrap());
-        adjustment.mask = Some(mask); adjustment.opacity = 0.7; adjustment.properties.clipped = state % 2 == 0;
-        doc.layers.insert(0, adjustment);
+        ]).unwrap()));
+        let occurrence = doc.artwork.occurrences.get_mut(handle).unwrap();
+        occurrence.opacity = 0.7; occurrence.clipped = state % 2 == 0;
+        insert_occurrence(&mut doc, handle, 0);
+        adjustment_handle = Some(handle);
         for level in [1, 2, 3] {
             let scale = 1. / (1 << level) as f32;
-            let mut frame = packet(&doc.layers, extent);
+            let mut frame = packet(doc.scene(), extent);
             frame.view.width_px = 43; frame.view.height_px = 25;
             frame.view.document_to_surface = [scale, 0., 0., scale, -610. * scale, -270. * scale];
             window.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -92,18 +94,23 @@ fn candidate_errors(name: &str) -> [f32; 2] {
     let mut worst = [0_f32; 2];
     for space in RgbSpace::ALL {
         let mut doc = document_at(extent);
-        doc.color.space = space; doc.color.depth = SampleDepth::F32;
-        let mut window = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap(); exact.test.reference = true;
+        let mut adjustment_handle = None;
+        let root = doc.artwork.root;
+        doc.artwork.compositions.get_mut(root).unwrap().color.space = space;
+        doc.artwork.compositions.get_mut(root).unwrap().color.depth = SampleDepth::F32;
+        let mut window = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
         for source in 0..2 {
-            doc.layers.retain(|layer| layer.id != LayerId(99));
-            doc.layers[0].source = Some(if source == 1 { hdr.clone() }
+            if let Some(handle) = adjustment_handle.take() { remove_occurrence(&mut doc, handle); }
+            let paint = primary_paint(&doc);
+            let original = if source == 1 { hdr.clone() }
                 else if name == "threshold" { layer_core::color::source::rgba8_source(extent, |x, y| {
                     let gray = if (x / 3 + y / 2) % 2 == 0 { 126 } else { 130 }; [gray, gray, gray, 255]
-                }) } else { document_at(extent).layers[0].source.as_ref().unwrap().clone() });
+                }) } else { let base = document_at(extent); base.artwork.paint.get(primary_paint(&base)).unwrap().original.as_ref().unwrap().clone() };
+            doc.artwork.paint.get_mut(paint).unwrap().original = Some(original);
             let states = match name { "photo_filter" => 3, "selective_color" | "channel_mixer" => 5, _ => 1 };
             for state in 0..states {
-                doc.layers.retain(|layer| layer.id != LayerId(99));
+                if let Some(handle) = adjustment_handle.take() { remove_occurrence(&mut doc, handle); }
                 let program = crate::tests::fixture(name).program().for_depth(SampleDepth::F32);
                 let mut program = (*program).clone(); program.resolution = EffectResolution::Display;
                 let mut effect = EffectInstance::new(Arc::new(program));
@@ -117,20 +124,20 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                     effect.set("color", EffectValue::Color(RgbColor::new(RgbSpace::DisplayP3, [0.9, 0.2, 0.15, 1.]).unwrap())).unwrap();
                 }
                 if matches!(name, "selective_color" | "channel_mixer") { mixing_state(&mut effect, name, state); }
-                let mut adjustment = Layer::paint(LayerId(99), "Display candidate");
-                adjustment.kind = LayerKind::Effect; adjustment.effect = Some(Arc::new(effect));
+                let handle = effect_occurrence(&mut doc, effect, "Display candidate");
                 if source == 0 {
-                    let mut mask = layer_core::LayerMask::reveal_all(LayerId(98), Default::default());
-                    mask.initial = Some(layer_core::Selection::polygon(vec![
+                    coverage_mask(&mut doc, handle, Default::default(), Some(layer_core::Selection::polygon(vec![
                         layer_core::Point { x: 573., y: 237. }, layer_core::Point { x: 1001., y: 257. },
                         layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
-                    ]).unwrap());
-                    adjustment.mask = Some(mask); adjustment.opacity = 0.7; adjustment.properties.clipped = true;
+                    ]).unwrap()));
+                    let occurrence = doc.artwork.occurrences.get_mut(handle).unwrap();
+                    occurrence.opacity = 0.7; occurrence.clipped = true;
                 }
-                doc.layers.insert(0, adjustment);
+                insert_occurrence(&mut doc, handle, 0);
+                adjustment_handle = Some(handle);
                 for level in [1, 2, 3] {
                     let scale = 1. / (1 << level) as f32;
-                    let mut frame = packet(&doc.layers, extent);
+                    let mut frame = packet(doc.scene(), extent);
                     frame.view.width_px = 43; frame.view.height_px = 25;
                     frame.view.document_to_surface = [scale, 0., 0., scale, -610. * scale, -270. * scale];
                     window.submit(frame).unwrap(); exact.submit(frame).unwrap();
@@ -233,19 +240,19 @@ fn resident_native_pointwise_batches_preserve_odd_edges_masks_clipping_and_windo
 fn native_pointwise_batches(preload: bool, admitted: bool) {
     let extent = [if admitted {1795} else {4355}, 773];
     let mut doc = document_at(extent);
-    doc.layers.truncate(1);
-    doc.layers[0].source = Some(rgba8_source(extent, |x, y| [
+    let paint = primary_paint(&doc);
+    let stack = doc.composition().result;
+    doc.artwork.stacks.get_mut(stack).unwrap().entries.truncate(1); reindex(&mut doc);
+    doc.artwork.paint.get_mut(paint).unwrap().original = Some(rgba8_source(extent, |x, y| [
         ((x * 3 + y * 7) % 256) as u8, ((y * 5 + x / 17) % 256) as u8,
         ((x / 5 + y / 3) % 256) as u8, 255,
     ]));
-    let mut effect = Layer::paint(LayerId(99), "Resident native Threshold");
-    effect.kind = LayerKind::Effect;
-    effect.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture("threshold").program())));
-    let mut cached = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap(); exact.test.reference = true;
+    let effect = effect_occurrence(&mut doc, EffectInstance::new(crate::tests::fixture("threshold").program()), "Resident native Threshold");
+    let mut cached = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap(); exact.test.reference = true;
     cached.native_edit.as_mut().unwrap().display_complete_bytes = if admitted { u64::MAX } else { 0 };
     if preload {
-        let mut loaded = packet(&doc.layers, extent);
+        let mut loaded = packet(doc.scene(), extent);
         loaded.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         cached.submit(loaded).unwrap();
         for _ in 0..32 {
@@ -255,19 +262,19 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         }
         assert!(cached.scale_display.as_ref().unwrap().hierarchy.is_some(), "the loaded source must earn resident hierarchy admission");
     }
-    doc.layers.insert(0, effect);
+    insert_occurrence(&mut doc, effect, 0);
     let mut source_bytes = None;
     for (state, threshold) in [0.31, 0.47, 0.63, 0.38].into_iter().enumerate() {
-        Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("threshold", EffectValue::Number(threshold)).unwrap();
+        set_effect_value(&mut doc, effect, "threshold", EffectValue::Number(threshold));
         if state == 2 {
-            let mut mask = layer_core::LayerMask::reveal_all(LayerId(98), layer_core::Point { x: 11., y: -7. });
-            mask.initial = Some(layer_core::Selection::polygon(vec![
+            coverage_mask(&mut doc, effect, layer_core::Point { x: 11., y: -7. }, Some(layer_core::Selection::polygon(vec![
                 layer_core::Point { x: 109., y: 37. }, layer_core::Point { x: (extent[0]-14) as f32, y: 91. },
                 layer_core::Point { x: (extent[0]-206) as f32, y: 767. }, layer_core::Point { x: 7., y: 599. },
-            ]).unwrap());
-            doc.layers[0].mask = Some(mask); doc.layers[0].opacity = 0.61; doc.layers[0].properties.clipped = true;
+            ]).unwrap()));
+            let occurrence = doc.artwork.occurrences.get_mut(effect).unwrap();
+            occurrence.opacity = 0.61; occurrence.clipped = true;
         }
-        let mut frame = packet(&doc.layers, extent);
+        let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
         if state == 3 {
             frame.view.width_px = 43; frame.view.height_px = 25;
@@ -276,7 +283,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         let command_passes = cached.metrics.command_passes;
         cached.submit(frame).unwrap();
         let command_passes = cached.metrics.command_passes - command_passes;
-        exact.submit(packet(&doc.layers, extent)).unwrap();
+        exact.submit(packet(doc.scene(), extent)).unwrap();
         let cache = cached.scale_display.as_ref().unwrap();
         assert_eq!(cache.hierarchy.is_some(), admitted);
         assert_eq!(matches!(cache.pixels, hierarchy::Pixels::Resident { .. }), admitted);
@@ -292,7 +299,7 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
             let independent: Vec<_> = (0..extent[0] * extent[1]).map(|i| {
                 let x = i as u32 % extent[0]; let y = i as u32 / extent[0];
                 let codes = [(x * 3 + y * 7) % 256, (y * 5 + x / 17) % 256, (x / 5 + y / 3) % 256];
-                let luminance: f64 = codes.into_iter().zip(doc.color.space.to_xyz()[1])
+                let luminance: f64 = codes.into_iter().zip(doc.composition().color.space.to_xyz()[1])
                     .map(|(code, weight)| f64::from(code) / 255. * weight).sum();
                 let value = if luminance >= f64::from(threshold) { 1. } else { 0. };
                 [value, value, value, 1.]
@@ -324,13 +331,13 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
         if let Some(expected) = source_bytes { assert_eq!(bytes, expected); } else { source_bytes = Some(bytes); }
     }
     if !admitted {
-        let mut frame=packet(&doc.layers,extent);frame.composite_all=false;
+        let mut frame=packet(doc.scene(),extent);frame.composite_all=false;
         frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
         cached.submit(frame).unwrap();exact.submit(frame).unwrap();
         let strip=cached.scale_display.as_ref().unwrap().exact_tile.as_ref().unwrap().texture.clone();
         for positions in [[[73.,67.],[4117.,613.]],[[4117.,613.],[73.,67.]]] {
             let dabs=positions.map(|point|crate::tests::test_dab(point,[0.91,0.12,0.67,1.],0.8));
-            let mut batch=dab_batch(doc.layers[1].id,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dabs[0].bounds().union(dabs[1].bounds()));
+            let mut batch=dab_batch(SourceTarget::Paint(paint),crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dabs[0].bounds().union(dabs[1].bounds()));
             batch.dab_count=2;
             let stroke=FramePacket{dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
             let work=cached.metrics.composited_pixels;

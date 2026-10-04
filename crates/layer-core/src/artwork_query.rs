@@ -1,91 +1,64 @@
-use crate::{Document, Layer, LayerId, LayerKind};
-use serde::{Deserialize, Serialize};
-use std::sync::Arc;
+use crate::{Document,Selection,authored::*};
+use serde::{Deserialize,Serialize};
+use std::{sync::Arc,borrow::Cow};
 
-pub const ARTWORK_SAMPLE_WIDTHS: [u32; 5] = [1, 5, 15, 51, 101];
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub enum ArtworkSource {
+#[derive(Serialize, Deserialize)]
+pub enum SnapshotSource {
     Visible,
-    LayerContent(LayerId),
-    Reference,
-    EffectInput(LayerId),
-    EffectChannels(LayerId),
-    EffectBaseline(Box<Layer>),
+    Source(crate::SourceTarget),
+    EffectInput(crate::OccurrenceHandle),
+    EffectChannels(crate::OccurrenceHandle),
+}
+impl SnapshotSource {
+    pub fn artwork_source(self) -> crate::ArtworkSource {
+        match self {
+            Self::Visible => crate::ArtworkSource::Visible,
+            Self::Source(target) => crate::ArtworkSource::Source(target),
+            Self::EffectInput(target) => crate::ArtworkSource::EffectInput(target),
+            Self::EffectChannels(target) => crate::ArtworkSource::EffectChannels(target),
+        }
+    }
 }
 
-#[derive(Clone, Debug)]
+pub const ARTWORK_SAMPLE_WIDTHS:[u32;5]=[1,5,15,51,101];
+#[derive(Clone,Debug,PartialEq)]
+pub enum ArtworkSource {Visible,Source(SourceTarget),Reference,EffectInput(OccurrenceHandle),EffectChannels(OccurrenceHandle),EffectBaseline(EffectBaseline)}
+#[derive(Clone,Debug)]
 pub struct ArtworkQuery {
-    pub document: Arc<Document>,
-    pub source: ArtworkSource,
-    pub time: f32,
-    pub effect_times: Vec<(LayerId, f32)>,
-    input: Option<EffectInputKey>,
+    pub snapshot:Arc<SceneSnapshot>,
+    pub source:ArtworkSource,
+    pub selection:Option<Selection>,
+    input:Option<EffectInputKey>,
 }
-
-#[derive(Clone, Debug)]
-pub struct EffectInputKey {
-    document: Arc<Document>,
-    target: usize,
-    input: Vec<usize>,
-    ancestors: Vec<usize>,
-}
+#[derive(Clone,Debug)]
+pub struct EffectInputKey {snapshot:Arc<SceneSnapshot>,target:OccurrenceHandle,input:Vec<OccurrenceHandle>,ancestors:Vec<OccurrenceHandle>}
 impl EffectInputKey {
-    pub fn new(document: Arc<Document>, id: LayerId) -> Option<Self> {
-        let target = document.layers.iter().position(|l| l.id == id)?;
-        let input = crate::composite_input_layers(&document.layers, target);
-        let ancestors = Self::ancestors(&document.layers, target);
-        Some(Self { document, target, input, ancestors })
+    pub fn new(snapshot:Arc<SceneSnapshot>,target:OccurrenceHandle)->Option<Self>{
+        let scene=snapshot.view();scene.effect(target)?;
+        let input=Self::ordered_input(scene,target);let ancestors=Self::ancestors(scene,target);
+        Some(Self{snapshot,target,input,ancestors})
     }
-    pub fn layer(&self) -> LayerId { self.document.layers[self.target].id }
-    pub fn contributors(&self) -> impl Iterator<Item = &Layer> { self.input.iter().map(|&i| &self.document.layers[i]) }
-    fn ancestors(layers: &[Layer], index: usize) -> Vec<usize> {
-        let mut result = Vec::new();
-        let mut parent = layers[index].properties.parent;
-        while let Some(i) = parent.and_then(|id| layers.iter().position(|l| l.id == id)) {
-            if result.len() >= layers.len() { break; }
-            result.push(i); parent = layers[i].properties.parent;
-        }
-        result
-    }
-    pub fn matches_source(&self, document: &Document) -> bool { self.matches(document, true, false) }
-    pub fn matches_identity(&self, document: &Document) -> bool { self.matches(document, false, false) }
-    fn matches(&self, document: &Document, values: bool, channels: bool) -> bool {
-        let old = &self.document;
-        if old.id != document.id || old.width != document.width || old.height != document.height
-            || old.color != document.color || old.blend_space != document.blend_space { return false; }
-        let Some(target) = document.layers.iter().position(|l| l.id == self.layer()) else { return false; };
-        let (a, b) = (&old.layers[self.target], &document.layers[target]);
-        if a.kind != b.kind || a.properties.parent != b.properties.parent || a.properties.clipped != b.properties.clipped { return false; }
-        match (&a.effect, &b.effect) {
-            (Some(a), Some(b)) if a.program == b.program => {
-                if channels && values && !a.program.parameters.iter().zip(a.values.iter().zip(&b.values))
-                    .all(|(p, (a, b))| p.page.as_deref() == Some("rgb") || a == b) { return false; }
-            }
-            _ => return false,
-        }
-        let same_structure = old.layers.len() == document.layers.len() && old.layers.iter().zip(&document.layers).all(|(a, b)|
-            a.id == b.id && a.kind == b.kind && a.properties.parent == b.properties.parent
-                && a.properties.clipped == b.properties.clipped && a.passes_through() == b.passes_through());
-        let input;
-        let ancestors;
-        let (current_input, current_ancestors) = if same_structure { (&self.input, &self.ancestors) } else {
-            input = crate::composite_input_layers(&document.layers, target);
-            ancestors = Self::ancestors(&document.layers, target);
-            (&input, &ancestors)
-        };
-        self.input.len() == current_input.len() && self.ancestors.len() == current_ancestors.len()
-            && self.input.iter().zip(current_input).all(|(&a, &b)| {
-                let (a, b) = (&old.layers[a], &document.layers[b]);
-                a.same_backing(b) && if values { a.effect == b.effect }
-                    else { a.effect.as_ref().map(|e| &e.program) == b.effect.as_ref().map(|e| &e.program) }
-            })
-            && self.ancestors.iter().zip(current_ancestors).all(|(&a, &b)| {
-                let (a, b) = (&old.layers[a], &document.layers[b]);
-                a.id == b.id && a.kind == b.kind && a.visible == b.visible
-                    && a.properties.parent == b.properties.parent && a.properties.clipped == b.properties.clipped
-                    && a.passes_through() == b.passes_through() && a.properties.offset == b.properties.offset
-                    && a.properties.placement == b.properties.placement && a.properties.extent == b.properties.extent
+    fn ordered_input(scene:SceneView<'_>,target:OccurrenceHandle)->Vec<OccurrenceHandle>{let mut input=crate::composite_input_layers(scene,target);input.sort_by_key(|h|scene.position(*h));input}
+    pub fn occurrence(&self)->OccurrenceHandle{self.target}
+    pub fn scene(&self)->SceneView<'_>{self.snapshot.view()}
+    pub fn contributors(&self)->impl Iterator<Item=OccurrenceHandle>+'_ {self.input.iter().copied()}
+    fn ancestors(scene:SceneView<'_>,h:OccurrenceHandle)->Vec<OccurrenceHandle>{let mut result=Vec::new();let mut parent=scene.parent(h);while let Some(h)=parent{result.push(h);parent=scene.parent(h);}result}
+    pub fn matches_source(&self,document:&Document)->bool{self.matches(document.scene(),true,false)}
+    pub fn matches_identity(&self,document:&Document)->bool{self.matches(document.scene(),false,false)}
+    fn matches(&self,scene:SceneView<'_>,values:bool,channels:bool)->bool {
+        let old=self.scene();
+        if self.snapshot.owner!=scene.owner() || !old.same_composition(scene){return false;}
+        let (Some(a),Some(b))=(old.occurrence(self.target),scene.occurrence(self.target)) else{return false;};
+        if a.kind()!=b.kind() || old.parent(self.target)!=scene.parent(self.target) || a.clipped!=b.clipped{return false;}
+        let (Some(a),Some(b))=(old.effect(self.target),scene.effect(self.target)) else{return false;};
+        if a.program!=b.program{return false;}
+        if channels && values && !a.program.parameters.iter().zip(a.values.iter().zip(b.values)).all(|(p,(a,b))|p.page.as_deref()==Some("rgb")||a==b){return false;}
+        let input=Self::ordered_input(scene,self.target);let ancestors=Self::ancestors(scene,self.target);
+        self.input==input && self.ancestors==ancestors && input.iter().all(|h|old.same_occurrence(scene,*h,values))
+            && ancestors.iter().all(|h|{
+                let (Some(a),Some(b))=(old.occurrence(*h),scene.occurrence(*h)) else{return false;};
+                a.kind()==b.kind() && a.visible==b.visible && a.clipped==b.clipped && a.passes_through()==b.passes_through()
+                    && a.translation==b.translation && a.placement==b.placement && old.local_extent(*h)==scene.local_extent(*h)
             })
     }
 }
@@ -120,98 +93,79 @@ pub enum ArtworkSample {
 }
 
 impl ArtworkSampleRequest {
-    pub fn new(document: &Document, source: ArtworkSource, position: [f32; 2], width: u32) -> Self {
-        Self { query: ArtworkQuery::new(document, source), position, width }
-    }
-    pub fn validate(&self) -> Result<(), String> {
-        if !ARTWORK_SAMPLE_WIDTHS.contains(&self.width) || !self.position.into_iter().all(f32::is_finite) {
-            return Err("Invalid artwork sample".into());
-        }
-        self.query.validate()
-    }
+    pub fn new(document:&Document,source:ArtworkSource,position:[f32;2],width:u32)->Self{Self{query:ArtworkQuery::new(document,source),position,width}}
+    pub fn validate(&self)->Result<(),String>{if !ARTWORK_SAMPLE_WIDTHS.contains(&self.width)||!self.position.into_iter().all(f32::is_finite){return Err("Invalid artwork sample".into());}self.query.validate()}
 }
-
 impl ArtworkQuery {
-    pub fn new(document: &Document, source: ArtworkSource) -> Self {
-        let mut document = document.clone();
-        document.layers = document.layers.iter().map(|layer| {
-            let mut snapshot = layer.composite_snapshot();
-            snapshot.pending_operations = layer.pending_operations.clone();
-            snapshot
-        }).collect();
-        Self::from_snapshot(Arc::new(document), source, 0., Vec::new())
+    pub fn new(document:&Document,source:ArtworkSource)->Self{Self::from_snapshot(document.snapshot(),source,document.working.selection.clone())}
+    pub fn from_snapshot(snapshot:Arc<SceneSnapshot>,source:ArtworkSource,selection:Option<Selection>)->Self {
+        let input=match source {ArtworkSource::EffectInput(h)|ArtworkSource::EffectChannels(h)=>EffectInputKey::new(snapshot.clone(),h),_=>None};
+        Self{snapshot,source,selection,input}
     }
-
-    pub fn from_snapshot(document: Arc<Document>, source: ArtworkSource, time: f32, effect_times: Vec<(LayerId, f32)>) -> Self {
-        let input = match source {
-            ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) => EffectInputKey::new(document.clone(), id),
-            _ => None,
-        };
-        Self { document, source, time, effect_times, input }
+    fn input_key(&self,target:OccurrenceHandle)->Option<Cow<'_,EffectInputKey>> {
+        if let Some(key)=&self.input && key.target==target && Arc::ptr_eq(&key.snapshot,&self.snapshot) {return Some(Cow::Borrowed(key));}
+        EffectInputKey::new(self.snapshot.clone(),target).map(Cow::Owned)
     }
-
-    pub fn validate(&self) -> Result<(), String> {
-        if !self.time.is_finite() || self.effect_times.iter().any(|(_, time)| !time.is_finite())
-            || self.document.width > 32768 || self.document.height > 32768
-        { return Err("Invalid artwork sample".into()); }
-        if self.document.layers.iter().any(|layer| !layer.pending_operations.is_empty()
-            || layer.masks().any(|mask| !mask.pending_operations.is_empty())) {
-            return Err("Wait for the current edit before sampling".into());
-        }
+    pub fn set_context(&mut self,context:EvaluationContext){Arc::make_mut(&mut self.snapshot).context=context;}
+    pub fn validate(&self)->Result<(),String>{
+        let scene=self.snapshot.view();let context=&self.snapshot.context;
+        if !context.elapsed.is_finite()||context.phases.iter().any(|(_,v)|!v.is_finite())||scene.composition().size.iter().any(|v|*v>crate::MAX_EXTENT){return Err("Invalid artwork sample".into());}
+        if scene.targets().any(|t|scene.operations(t).is_some_and(|ops|!ops.is_empty())){return Err("Wait for the current edit before sampling".into());}
         match &self.source {
-            ArtworkSource::LayerContent(id) if self.document.layer(*id).is_none_or(|layer| layer.kind != LayerKind::Paint) =>
-                Err("This layer has no color content to sample".into()),
-            ArtworkSource::EffectChannels(id) if self.document.layer(*id).and_then(|layer|layer.effect.as_ref()).is_none_or(|effect|
-                !matches!(effect.program.id.as_ref(),"curves"|"levels") || effect.program.kind!=crate::EffectKind::Adjustment) =>
-                Err("This adjustment has no channel statistics".into()),
-            ArtworkSource::EffectInput(id) if self.document.layer(*id).and_then(|layer| layer.effect.as_ref())
-                .is_none_or(|effect| effect.program.kind != crate::EffectKind::Adjustment) =>
-                Err("The adjustment to sample was removed".into()),
-            ArtworkSource::EffectBaseline(original) if self.document.layer(original.id).is_none()
-                || original.kind != LayerKind::Effect => Err("The adjustment to compare was removed".into()),
-            _ => Ok(()),
+            ArtworkSource::Source(t) if !matches!(t,SourceTarget::Paint(_))||scene.original(*t).is_none()&&scene.raster(*t).is_none()=>Err("This source has no color content to sample".into()),
+            ArtworkSource::EffectChannels(h) if scene.effect(*h).is_none_or(|e|!matches!(e.program.id.as_ref(),"curves"|"levels")||e.program.kind!=crate::EffectKind::Adjustment)=>Err("This adjustment has no channel statistics".into()),
+            ArtworkSource::EffectInput(h) if scene.effect(*h).is_none_or(|e|e.program.kind!=crate::EffectKind::Adjustment)=>Err("The adjustment to sample was removed".into()),
+            ArtworkSource::EffectBaseline(b) if scene.effect_handle(b.occurrence)!=Some(b.effect)=>Err("The adjustment to compare was removed".into()),_=>Ok(())
         }
     }
-
-    pub fn matches_artwork(&self, document: &Document) -> bool {self.matches(document,false,true)}
-
-    pub fn matches_source(&self, document:&Document)->bool {self.matches(document,true,true)}
-
-    pub fn matches_source_identity(&self, document:&Document)->bool {self.matches(document,true,false)}
-
-    fn matches(&self, document:&Document,source_only:bool,values:bool)->bool {
-        let old = &self.document;
-        if source_only && let ArtworkSource::EffectInput(id) | ArtworkSource::EffectChannels(id) = self.source {
-            let channels = matches!(self.source, ArtworkSource::EffectChannels(_));
-            return self.input.as_ref().filter(|key| Arc::ptr_eq(&key.document, old) && key.layer() == id)
-                .map_or_else(|| EffectInputKey::new(old.clone(), id).is_some_and(|key| key.matches(document, values, channels)),
-                    |key| key.matches(document, values, channels));
+    pub fn matches_snapshot(&self,snapshot:&SceneSnapshot)->bool {
+        if self.snapshot.owner!=snapshot.owner{return false;}
+        let phase=|s:&SceneSnapshot,h:EffectHandle|{
+            let effect=s.view().effect_by_handle(h)?;
+            effect.program.time.then(||s.context.phases.iter().find(|(id,_)|*id==h).map_or_else(||effect.time_seconds(s.context.elapsed),|(_,v)|*v).to_bits())
+        };
+        if let ArtworkSource::EffectInput(h)|ArtworkSource::EffectChannels(h)=self.source {
+            let Some(key)=self.input_key(h) else{return false;};
+            return key.matches(snapshot.view(),true,matches!(self.source,ArtworkSource::EffectChannels(_)))
+                && key.contributors().filter_map(|h|self.snapshot.view().effect_handle(h)).all(|h|phase(&self.snapshot,h)==phase(snapshot,h));
         }
-        old.id == document.id && old.color == document.color && old.width == document.width
-            && old.height == document.height && old.blend_space == document.blend_space
-            && (!matches!(self.source, ArtworkSource::Reference) || old.reference_layers == document.reference_layers)
-            && old.layers.len() == document.layers.len()
-            && old.layers.iter().zip(&document.layers).all(|(a,b)| {
-                if !source_only {return a.same_artwork(b);}
-                a.same_backing(b) && if values {a.effect==b.effect}
-                    else {a.effect.as_ref().map(|e|&e.program)==b.effect.as_ref().map(|e|&e.program)}
-            })
+        self.snapshot.view().same_artwork(snapshot.view())
+            && (matches!(self.source,ArtworkSource::Source(_))
+                || self.snapshot.view().order().iter().filter_map(|h|self.snapshot.view().effect_handle(*h)).all(|h|phase(&self.snapshot,h)==phase(snapshot,h)))
+    }
+    pub fn matches_artwork(&self,document:&Document)->bool{self.matches(document,false,true)}
+    pub fn matches_source(&self,document:&Document)->bool{self.matches(document,true,true)}
+    pub fn matches_source_identity(&self,document:&Document)->bool{self.matches(document,true,false)}
+    fn matches(&self,document:&Document,source_only:bool,values:bool)->bool {
+        if self.snapshot.owner!=document.owner{return false;}
+        if source_only && let ArtworkSource::EffectInput(h)|ArtworkSource::EffectChannels(h)=self.source {
+            let channels=matches!(self.source,ArtworkSource::EffectChannels(_));
+            return self.input_key(h).is_some_and(|k|k.matches(document.scene(),values,channels));
+        }
+        let old=self.snapshot.view();let scene=document.scene();
+        old.same_composition(scene) && old.order()==scene.order()
+            && (!matches!(self.source,ArtworkSource::Reference)||old.references()==scene.references())
+            && old.order().iter().all(|h|old.same_occurrence(scene,*h,values||!source_only))
     }
 }
-
-impl Layer {
-    pub fn same_artwork(&self, other: &Self) -> bool {self.same_backing(other) && self.effect==other.effect}
-
-    fn same_backing(&self,other:&Self)->bool {
-        self.id == other.id && self.kind == other.kind && self.visible == other.visible
-            && self.opacity == other.opacity && self.raster == other.raster
-            && self.properties == other.properties && self.mask == other.mask
-            && self.pending_operations == other.pending_operations
-            && match (&self.source, &other.source) {
-                (Some(a), Some(b)) => Arc::ptr_eq(a, b),
-                (None, None) => true,
-                _ => false,
-            }
+impl SceneView<'_> {
+    pub fn same_composition(self,other:SceneView<'_>)->bool {
+        let a=self.composition();let b=other.composition();
+        a.size==b.size && a.origin==b.origin && a.color==b.color && a.blend==b.blend && a.result==b.result
+    }
+    pub fn same_artwork(self,other:SceneView<'_>)->bool {
+        self.artwork().id==other.artwork().id && self.same_composition(other) && self.order()==other.order()
+            && self.order().iter().all(|h|self.same_occurrence(other,*h,true))
+    }
+    pub fn same_occurrence(self,other:SceneView<'_>,h:OccurrenceHandle,values:bool)->bool {
+        let (Some(a),Some(b))=(self.occurrence(h),other.occurrence(h)) else{return false;};
+        if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.clipped!=b.clipped||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
+        if let Some(target)=self.source_target(h) {
+            if self.raster(target)!=other.raster(target)||self.operations(target)!=other.operations(target)||self.target_extent(target)!=other.target_extent(target){return false;}
+            if match (self.original(target),other.original(target)){(Some(a),Some(b))=>!Arc::ptr_eq(a,b),(None,None)=>false,_=>true}{return false;}
+        }
+        if let Some(mask)=&a.mask && self.coverage(mask.source)!=other.coverage(mask.source){return false;}
+        match (self.effect(h),other.effect(h)){(Some(a),Some(b))=>a.program==b.program&&(!values||a.values==b.values),(None,None)=>true,_=>false}
     }
 }
 

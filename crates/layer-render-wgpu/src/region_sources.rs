@@ -270,36 +270,22 @@ impl RawRegions {
     ) -> Result<wgpu::Buffer, GpuRasterError> {
         let [w,h] = r.document_extent;
         let mut layer = match request.source.raw_source() {
-            layer_render::RegionSource::Layer(id) | layer_render::RegionSource::Coverage(id) => {
+            layer_render::RegionSource::Source(id) | layer_render::RegionSource::Coverage(id) => {
                 Some(*id)
             }
             _ => None,
         };
         let placed = layer.is_some_and(|id| r.artwork_frame.as_ref().is_none_or(|frame|
-            !layer_core::target_geometry(&frame.layers,id).is_identity()
-                || frame.layers.iter().any(|l| l.mask.as_ref().is_some_and(|m| m.id == id))));
+            !frame.scene.view().target_geometry(id).is_identity() || id.is_coverage()));
         let frame = match request.source.raw_source() {
-            layer_render::RegionSource::Composite => Some(
-                r.artwork_frame
-                    .clone()
-                    .ok_or(GpuRasterError::InvalidExtent)?,
-            ),
-            layer_render::RegionSource::Layers(layers) => {
-                let mut frame = (**r
-                    .artwork_frame
-                    .as_ref()
-                    .ok_or(GpuRasterError::InvalidExtent)?)
-                .clone();
-                frame.layers = layers.clone();
+            layer_render::RegionSource::Composite => Some(r.artwork_frame.clone().ok_or(GpuRasterError::InvalidExtent)?),
+            layer_render::RegionSource::Scene {snapshot, scope} => {
+                let mut frame = (**r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?).clone();
+                frame.scene = snapshot.clone(); frame.scope = scope.clone();
                 Some(Arc::new(frame))
-            }
-            layer_render::RegionSource::Layer(_) | layer_render::RegionSource::Coverage(_) => None,
-            layer_render::RegionSource::Selection(_)
-            | layer_render::RegionSource::Modify(_)
-            | layer_render::RegionSource::Tonal(_)
-            | layer_render::RegionSource::TransformedSelection { .. } => {
-                return Err(GpuRasterError::InvalidExtent);
-            }
+            },
+            layer_render::RegionSource::Source(_) | layer_render::RegionSource::Coverage(_) => None,
+            _ => return Err(GpuRasterError::InvalidExtent),
         };
         let tone = if let layer_render::RegionSource::Tonal(t) = &request.source {
             Some(t.as_ref())
@@ -409,7 +395,6 @@ impl RawRegions {
             r.queue.write_buffer(&self.tonal_parameters, 0, &bytes);
             encoder.clear_buffer(&self.tonal_statistics, 0, None);
         }
-        let stored_mask: Option<layer_core::LayerMask> = None;
         let limit = r.device.limits();
         // Preflight the subsequent connected-component allocation before any
         // source decoding/submission. Classification does not relax its limit.
@@ -459,16 +444,7 @@ impl RawRegions {
             self.encode_cached(&r.device, encoder, &mask, [w, h]);
             return Ok(mask);
         }
-        let fallback = if let Some(mask) = &stored_mask {
-            [mask.default_coverage; 4]
-        } else {
-            layer.and_then(|id| r.artwork_frame.as_ref()?.layers.iter().find(|owner| owner.id == id))
-                .and_then(|owner| owner.effect.as_ref()).and_then(|effect| effect.constant_color())
-                .map_or([0.; 4], |color| {
-                    let [red, green, blue, alpha] = color.linear_in(r.device.working_space()).expect("validated fill color");
-                    [red * alpha, green * alpha, blue * alpha, alpha]
-                })
-        };
+        let fallback = layer.and_then(|target| r.layer_masks.definitions.get(&target)).map_or([0.;4], |mask| [mask.default_coverage;4]);
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
         let tiles: Vec<_> = page_coordinates(PixelRect::full([w, h])).collect();
         let batches: Vec<_> = (tone.is_none())
@@ -503,12 +479,8 @@ impl RawRegions {
                     fallback[3].to_bits(),
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
-                    if stored_mask.is_some() {
-                        2_f32.to_bits()
-                    } else {
-                        f32::from(coverage).to_bits()
-                    },
-                    f32::from(stored_mask.as_ref().is_some_and(|m| m.inverted)).to_bits(),
+                    f32::from(coverage).to_bits(),
+                    0,
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
                     .chunks_exact_mut(4)
@@ -568,13 +540,6 @@ impl RawRegions {
                             .cloned()
                             .ok_or(GpuRasterError::InvalidExtent)?;
                         Some(self.capture.source_tile(r, &source, *coordinate, encoder)?)
-                    } else if stored_mask.is_some() {
-                        r.layer_masks.pages.get(&(layer, *coordinate)).map(|p| {
-                            source_access::RawTile {
-                                texture: p.texture.clone(),
-                                view: p.view.clone(),
-                            }
-                        })
                     } else {
                         if placed { Some(self.capture.layer_tile(r,layer,*coordinate,encoder)?) } else { r.raw_layer_tile(layer,*coordinate,encoder)? }
                     }
@@ -703,35 +668,98 @@ fn cache_texture(device: &wgpu::Device, pixels: u32) -> wgpu::Texture {
 // An unedited, untransformed opaque RGB photograph covering the document is
 // already its composite. Feed the existing batched raw-source path; all other
 // artwork keeps the exact compositor, including alpha, masks and HDR effects.
-fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) -> Option<LayerId> {
+fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) -> Option<SourceTarget> {
     if !frame.previews.is_empty() {
         return None;
     }
-    let mut layers = frame
-        .layers
-        .iter()
-        .filter(|l| l.visible && !matches!(l.kind, LayerKind::Selection));
-    let layer = layers.next()?;
-    let source = layer.source.as_ref()?;
-    if layers.next().is_some()
-        || layer.opacity != 1.
-        || layer.mask.is_some()
-        || layer.effect.is_some()
-        || layer.properties.parent.is_some()
-        || layer.properties.offset != layer_core::Point::default()
-        || layer.properties.placement != layer_core::LayerPlacement::IDENTITY
-        || layer.properties.clipped
-        || layer.properties.blend != layer_core::LayerBlend::Normal
+    let scene = frame.scene.view().with_scope(&frame.scope);
+    let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h)
+        && scene.occurrence(h).is_some_and(|o| !matches!(o.content, OccurrenceContent::Selection(_))));
+    let handle = visible.next()?; let occurrence = scene.occurrence(handle)?; let target = scene.source_target(handle)?;
+    let source = scene.original(target)?;
+    if visible.next().is_some() || occurrence.opacity != 1. || occurrence.mask.is_some() || scene.parent(handle).is_some()
+        || occurrence.translation != layer_core::Point::default() || occurrence.placement != layer_core::LayerPlacement::IDENTITY
+        || occurrence.clipped || occurrence.blend != layer_core::LayerBlend::Normal
         || source.interpretation.channels != layer_core::color::source::SourceChannels::Rgb
-        || source.extent[0] < extent[0]
-        || source.extent[1] < extent[1]
-        || r.native_backing(layer.id)
-            .is_some_and(|d| !d.tiles.is_empty())
-        || r.paint_layers
-            .iter()
-            .any(|l| l.id == layer.id && !l.pages.is_empty())
-    {
-        return None;
+        || source.extent[0] < extent[0] || source.extent[1] < extent[1]
+        || r.native_backing(target).is_some_and(|d| !d.tiles.is_empty())
+        || r.paint_layers.iter().any(|l| l.id == target && !l.pages.is_empty()) { return None; }
+    Some(target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::artwork_sample_tests::{add_group, effect_draft, set_effect};
+    use layer_core::authored::{CoverageSource, MaskUse, PortableId};
+    use layer_core::{BlendSpace, Document, DocumentNames, EffectValue, LayerBlend, Point, Projective, Rect, Selection};
+    use layer_render::{RegionRequest, RegionSource};
+
+    #[test]
+    fn scoped_raw_constant_fill_ignores_nested_appearance_and_preserves_artwork() {
+        let extent = [64;2];
+        let mut document = Document::new(PortableId::random(), extent[0], extent[1], DocumentNames {paint:"Ink".into(),paper:"Fill".into()});
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend = BlendSpace::Linear;
+        let fill = document.scene().children(None)[1];
+        let color = layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb, [0.5,0.25,0.75,0.5]).unwrap();
+        let mut effect = effect_draft(&document, fill);
+        effect.set("color", EffectValue::Color(color)).unwrap();
+        set_effect(&mut document, fill, effect);
+        let inner = add_group(&mut document, vec![fill], 1);
+        let outer = add_group(&mut document, vec![inner], 1);
+        let coverage = document.artwork.coverage.insert(PortableId::random(), CoverageSource {
+            domain:extent, raster:Default::default(), initial:Some(Selection::polygon(Rect::from_extent([32,64]).corners().to_vec()).unwrap()),
+            default_coverage:0., operations:Arc::default(),
+        }).unwrap();
+        let mask = MaskUse {source:coverage,linked:false,enabled:true,inverted:true,translation:Point::default(),placement:Projective::IDENTITY};
+        for handle in [fill,inner,outer] {
+            let occurrence = document.artwork.occurrences.get_mut(handle).unwrap();
+            occurrence.visible = false;
+            occurrence.opacity = 0.;
+            occurrence.blend = LayerBlend::Multiply;
+            occurrence.mask = Some(mask.clone());
+            occurrence.translation = Point {x:901.,y:-777.};
+        }
+        document.artwork.occurrences.get_mut(fill).unwrap().clipped = true;
+        let authored = document.snapshot();
+        let mut normalized = authored.as_ref().clone();
+        let occurrence = normalized.artwork.occurrences.get_mut(fill).unwrap();
+        occurrence.visible = true;
+        occurrence.opacity = 1.;
+        occurrence.blend = LayerBlend::Normal;
+        occurrence.clipped = false;
+        occurrence.mask = None;
+        let normalized = Arc::new(normalized);
+        let scope = SceneScope::Members(vec![fill].into());
+        assert_eq!(normalized.view().with_scope(&scope).evaluation_parent(fill), None);
+        assert!(normalized.view().with_scope(&scope).visible(fill));
+        assert_eq!(normalized.view().occurrence(fill).unwrap().translation, authored.view().occurrence(fill).unwrap().translation);
+        let mut r = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
+        r.submit(FramePacket {blend_space:BlendSpace::Linear,..crate::test_support::packet(document.scene(),extent)}).unwrap();
+        let mut capture = r.snapshot_gpu().capture_scene(normalized.clone(), scope.clone(), Default::default()).unwrap();
+        let expected = [0.25,0.125,0.375,0.5];
+        for pixel in capture.read_region([0,0,extent[0],extent[1]]).unwrap() {
+            for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
+        }
+        let result = crate::test_support::receive_request(&mut r, RegionRequest {
+            request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
+            contiguous:true,selection:None,refinement:Default::default(),limit:None,
+        });
+        assert_eq!(result.pixels.extent(),extent);
+        assert_eq!(result.pixels.coverage_format(),1);
+        assert_eq!(result.pixels.coverage_bounds(),[0,0,extent[0],extent[1]]);
+        let count = result.pixels.pixels_per_word();
+        let stride = extent[0].div_ceil(count);
+        for y in 0..extent[1] {
+            for x in 0..extent[0] {
+                let word = result.pixels.words()[(y*stride+x/count) as usize];
+                assert_eq!((word >> ((x%count)*4)) & 15,4,"coverage at {x},{y}");
+            }
+        }
+        for handle in [fill,inner,outer] {
+            assert_eq!(document.scene().occurrence(handle),authored.view().occurrence(handle));
+            assert!(!document.scene().occurrence(handle).unwrap().visible);
+        }
+        assert_eq!(document.scene().effect(fill).unwrap().constant_color(),Some(color));
     }
-    Some(layer.id)
 }

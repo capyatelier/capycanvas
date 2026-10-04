@@ -2,13 +2,11 @@ use super::*;
 
 impl Evaluator<'_> {
     pub(super) fn effect(
-        &mut self, input: &graph::Node, chain: &[(LayerId, u64, u32)], masks: &[Option<graph::Node>],
+        &mut self, input: &graph::Node, chain: &[(OccurrenceHandle, u64, u32)], masks: &[Option<graph::Node>],
         output: Option<Target>,
     ) -> Result<Value, GpuRasterError> {
-        let layers: Vec<_> = chain.iter().map(|(id, _, _)| {
-            self.packet.layers.iter().find(|l| l.id == *id).unwrap()
-        }).collect();
-        let effect = layers[0].effect.as_ref().unwrap();
+        let handles: Vec<_> = chain.iter().map(|(handle, _, _)| *handle).collect();
+        let effect = self.packet.scene.effect(handles[0]).unwrap();
         let boundary = effect.program.image_boundary();
         let plan = self.working_plan();
         let region = self.region;
@@ -44,14 +42,14 @@ impl Evaluator<'_> {
             let mut data = crate::effects::image_grid(plan, plan, plan);
             data[..4].copy_from_slice(&[x as f32, y as f32, width as f32, height as f32]);
             if boundary {
-                data[9] = f32::from(layers[0].properties.clipped);
+                data[9] = f32::from(self.packet.scene.effective_clipped(handles[0]));
                 data[11] = f32::from(last && present != 0);
             } else {
                 data[6] = present as f32;
                 data[16..24].fill(0.);
             }
             let stage = if boundary { crate::effects::Execution::Image(pass) } else { crate::effects::Execution::Fused };
-            let prepared = self.scene.effects.prepare(self.r, &layers, stage, self.packet.time_seconds, plan.level, self.packet.blend_space)?;
+            let prepared = self.scene.effects.prepare(self.r, self.packet.scene, &handles, stage, self.packet.time_seconds, plan.level, self.packet.blend_space)?;
             self.scene.jobs.push(Job::Effect {
                 target: target.clone(), sources: [previous, input.view().unwrap().clone(), self.r.empty_view.clone()],
                 data, prepared, masks: views.clone(),

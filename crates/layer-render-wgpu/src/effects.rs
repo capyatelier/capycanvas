@@ -1,7 +1,7 @@
 //! Validated WGSL execution for built-ins and programmable effects. Compatible
 //! pointwise chains are fused; declared image passes share the same ABI helpers.
 use super::*;
-use layer_core::{EffectInstance, EffectKind, EffectProgram};
+use layer_core::{EffectInstance, EffectKind, EffectProgram, EffectView};
 use std::{collections::HashMap, sync::Arc};
 #[path = "effect_preparation.rs"]
 mod preparation;
@@ -12,27 +12,28 @@ pub(crate) mod resources;
 pub(super) trait Gpu {
     fn device(&self) -> &PipelineDevice;
     fn queue(&self) -> &wgpu::Queue;
-    fn analysis_resource(&self, _layer: LayerId) -> Option<Arc<resources::Resource>> { None }
-    fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
-        layer.effect.as_ref().unwrap().time_seconds(elapsed)
+    fn analysis_resource(&self, _occurrence: OccurrenceHandle) -> Option<Arc<resources::Resource>> { None }
+    fn effect_time(&self, scene: SceneView<'_>, occurrence: OccurrenceHandle, elapsed: f32) -> f32 {
+        captured_phase(scene,occurrence).unwrap_or_else(|| scene.effect(occurrence).unwrap().time_seconds(elapsed))
     }
 }
-pub(super) type Clocks = HashMap<LayerId, (Arc<str>, layer_core::EffectClock)>;
+fn captured_phase(scene: SceneView<'_>, occurrence: OccurrenceHandle) -> Option<f32> {
+    let target=scene.effect_handle(occurrence)?;
+    scene.evaluation_context()?.phases.iter().find(|(h,_)|*h==target).map(|(_,phase)|*phase)
+}
+pub(super) type Clocks = HashMap<OccurrenceHandle, (Arc<str>, layer_core::EffectClock)>;
 impl Gpu for WgpuRasterizer {
-    fn analysis_resource(&self, layer: LayerId) -> Option<Arc<resources::Resource>> {
-        self.effect_analyses.iter().find(|analysis| analysis.layer() == layer).map(|analysis| analysis.resource.clone())
+    fn analysis_resource(&self, occurrence: OccurrenceHandle) -> Option<Arc<resources::Resource>> {
+        self.effect_analyses.iter().find(|analysis| analysis.layer() == occurrence).map(|analysis| analysis.resource.clone())
     }
-    fn effect_time(&self, layer: &Layer, elapsed: f32) -> f32 {
-        let effect = layer.effect.as_ref().unwrap();
-        self.effect_clocks.get(&layer.id).filter(|(id, _)| *id == effect.program.id)
+    fn effect_time(&self, scene: SceneView<'_>, occurrence: OccurrenceHandle, elapsed: f32) -> f32 {
+        if let Some(phase)=captured_phase(scene,occurrence) { return phase; }
+        let effect = scene.effect(occurrence).unwrap();
+        self.effect_clocks.get(&occurrence).filter(|(id, _)| id.as_ref() == effect.program.id.as_ref())
             .map_or_else(|| effect.time_seconds(elapsed), |(_, clock)| clock.clone().advance(effect, elapsed))
     }
-    fn device(&self) -> &PipelineDevice {
-        &self.device
-    }
-    fn queue(&self) -> &wgpu::Queue {
-        &self.queue
-    }
+    fn device(&self) -> &PipelineDevice { &self.device }
+    fn queue(&self) -> &wgpu::Queue { &self.queue }
 }
 pub(super) struct Context {
     pub device: PipelineDevice,
@@ -76,11 +77,11 @@ pub(super) fn image_grid(output: display_mips::Plan, front: display_mips::Plan, 
     data
 }
 
-pub(super) fn pass_radius(pass: &layer_core::EffectPass, effect: &EffectInstance, level: u32) -> Option<u32> {
+pub(super) fn pass_radius(pass: &layer_core::EffectPass, effect: EffectView<'_>, level: u32) -> Option<u32> {
     pass.sampling.radius(effect)?.checked_add((1 << level) - 1)
 }
 
-pub(super) fn damage_radius(effect: &EffectInstance, level: u32) -> Option<u32> {
+pub(super) fn damage_radius(effect: EffectView<'_>, level: u32) -> Option<u32> {
     effect.program.passes.iter().try_fold(0u32, |radius, pass| radius.checked_add(pass_radius(pass, effect, level)?))
 }
 
@@ -89,7 +90,7 @@ pub(super) fn dependency(region: PixelRect, radius: Option<u32>, plan: display_m
     radius.map_or(plan.bounds, |radius| region.expand(radius, plan.extent).intersect(plan.bounds))
 }
 
-pub(super) fn pass_regions(effect: &EffectInstance, output: PixelRect, plan: display_mips::Plan) -> Vec<PixelRect> {
+pub(super) fn pass_regions(effect: EffectView<'_>, output: PixelRect, plan: display_mips::Plan) -> Vec<PixelRect> {
     let mut regions = vec![output; effect.program.passes.len().max(1) + 1];
     for (i, pass) in effect.program.passes.iter().enumerate().rev() {
         regions[i] = dependency(regions[i + 1], pass_radius(pass, effect, plan.level), plan);
@@ -104,8 +105,19 @@ pub(super) struct PreparedEffect {
     pub pointwise: bool,
     pub _resource: Arc<resources::Resource>,
 }
+struct CachedEffect {
+    program: Arc<EffectProgram>,
+    values: Vec<layer_core::EffectValue>,
+}
+impl CachedEffect {
+    fn view(&self) -> EffectView<'_> { EffectView::new(&self.program, &self.values) }
+    fn lut3d(&self) -> Option<&Arc<layer_core::Lut3d>> { self.view().lut3d() }
+    fn gpu_parameters(&self, space: layer_core::color::RgbSpace) -> Result<Vec<[f32;4]>, String> {
+        self.view().gpu_parameters(space)
+    }
+}
 struct Instance {
-    effects: Vec<Arc<EffectInstance>>,
+    effects: Vec<CachedEffect>,
     properties: Vec<[f32; 4]>,
     buffer: wgpu::Buffer,
     binding: wgpu::BindGroup,
@@ -125,17 +137,17 @@ pub(super) struct Effects {
         Deferred<wgpu::RenderPipeline>,
     )>,
     // Parameters and GPU tables are shared by every pass of the same chain.
-    instances: HashMap<(Vec<LayerId>, u32), Instance>,
+    instances: HashMap<(Vec<OccurrenceHandle>, u32), Instance>,
     // Reuse the lookup key; ordinary painting/animation does not repack inputs.
-    ids: (Vec<LayerId>, u32),
+    ids: (Vec<OccurrenceHandle>, u32),
     preparation: preparation::Preparation,
     pub compilations: u64,
 }
 impl Effects {
-    pub(super) fn chain_ready(&self, layers: &[&Layer], execution: Execution, space: layer_core::BlendSpace) -> bool {
-        let programs: Vec<_> = layers.iter().filter_map(|l| l.effect.as_ref().map(|e| &e.program)).collect();
+    pub(super) fn chain_ready(&self, scene: SceneView<'_>, layers: &[OccurrenceHandle], execution: Execution, space: layer_core::BlendSpace) -> bool {
+        let programs: Vec<_> = layers.iter().filter_map(|&h| scene.effect(h).map(|e| e.program)).collect();
         self.pipelines.iter().any(|(chain, stage, pipeline)| *stage == (execution, space)
-            && chain.iter().eq(programs.iter().copied()) && pipeline.ready())
+            && chain.iter().map(Arc::as_ref).eq(programs.iter().copied()) && pipeline.ready())
             && self.preparation.pipelines.iter().all(|(_, p)| p.ready())
     }
     /// Queue missing variants without starting compilation on the render path.
@@ -269,15 +281,17 @@ impl Effects {
             compilations: 0,
         }
     }
-    pub fn retain(&mut self, layers: &[Layer]) {
-        let current: HashMap<_, _> = layers.iter().filter_map(|layer| layer.effect.as_ref().map(|effect| (layer.id, effect))).collect();
+    pub fn retain(&mut self, scene: SceneView<'_>) {
         self.instances.retain(|(ids, _), instance| ids.iter().zip(&instance.effects).all(|(id, old)|
-            current.get(id).is_some_and(|effect| old.program == effect.program && old.lut3d() == effect.lut3d())));
+            scene.position(*id).is_some() && scene.includes(*id) && scene.effect(*id).is_some_and(|effect|
+                old.program.as_ref() == effect.program && old.lut3d().map(|resource|resource.digest()) == effect.lut3d().map(|resource|resource.digest()))));
     }
+    #[expect(clippy::too_many_arguments, reason = "Effect evaluation keeps scene, occurrence, phase, inputs and output space explicit")]
     pub fn prepare(
         &mut self,
         r: &impl Gpu,
-        layers: &[&Layer],
+        scene: SceneView<'_>,
+        layers: &[OccurrenceHandle],
         stage: Execution,
         time: f32,
         level: u32,
@@ -286,10 +300,10 @@ impl Effects {
         let execution = stage;
         let stage = (execution, space);
         self.ids.0.clear();
-        self.ids.0.extend(layers.iter().map(|l| l.id));
+        self.ids.0.extend_from_slice(layers);
         self.ids.1 = level;
-        let analysis = if let Some(layer) = layers.first().filter(|layer| layer.effect.as_ref().unwrap().program.analysis().is_some()) {
-            Some(match r.analysis_resource(layer.id) {
+        let analysis = if let Some(layer) = layers.first().filter(|&&h| scene.effect(h).unwrap().program.analysis().is_some()) {
+            Some(match r.analysis_resource(*layer) {
                 Some(resource) => resource,
                 None => r.device().effect_resources.lock().unwrap().get(r.device(), r.queue(), None)?,
             })
@@ -300,17 +314,17 @@ impl Effects {
                 .effects
                 .iter()
                 .zip(layers)
-                .all(|(effect, layer)| Arc::ptr_eq(effect, layer.effect.as_ref().unwrap()))
+                .all(|(effect, layer)| scene.effect(*layer).is_some_and(|current| effect.program.as_ref() == current.program && effect.values == current.values))
             && old
                 .properties
                 .iter()
                 .zip(layers)
-                .all(|(a, layer)| a[..3] == effect_properties(r.device(), layer, time, space)[..3])
+                .all(|(a, layer)| a[..3] == effect_properties(r.device(), scene, *layer, time, space)[..3])
             && let Some(pipeline) = old.pipelines.get(&stage)
         {
             // Animation updates only one scalar per instance, never its LUTs.
             for (i, (properties, layer)) in old.properties.iter_mut().zip(layers).enumerate() {
-                let seconds = r.effect_time(layer, time);
+                let seconds = r.effect_time(scene, *layer, time);
                 if properties[3] != seconds {
                     r.queue().write_buffer(
                         &old.buffer,
@@ -330,9 +344,15 @@ impl Effects {
         let ids = self.ids.clone();
         let effects: Vec<_> = layers
             .iter()
-            .map(|l| l.effect.as_ref().unwrap().clone())
+            .map(|&h| {
+                let occurrence = scene.occurrence(h).unwrap();
+                let OccurrenceContent::Effect(handle) = occurrence.content else { unreachable!() };
+                let application = scene.artwork().effects.get(handle).unwrap();
+                let definition = scene.artwork().definitions.get(application.definition).unwrap();
+                CachedEffect {program: definition.program.clone(), values: application.values.clone()}
+            })
             .collect();
-        let properties: Vec<_> = layers.iter().map(|l| effect_properties(r.device(), l, r.effect_time(l, time), space)).collect();
+        let properties: Vec<_> = layers.iter().map(|l| effect_properties(r.device(), scene, *l, r.effect_time(scene, *l, time), space)).collect();
         let mut data = Vec::new();
         let mut offsets = Vec::new();
         for (effect, properties) in effects.iter().zip(&properties) {
@@ -529,19 +549,12 @@ impl Effects {
     }
 }
 
-fn effect_properties(device: &PipelineDevice, layer: &Layer, time: f32, space: layer_core::BlendSpace) -> [f32; 4] {
-    [
-        layer.opacity,
-        crate::blend_code(layer.properties.blend, device, space) as f32,
-        layer.mask.as_ref().filter(|m| m.enabled).map_or(1., |m| {
-            if m.inverted {
-                1. - m.default_coverage
-            } else {
-                m.default_coverage
-            }
-        }),
-        time,
-    ]
+fn effect_properties(device: &PipelineDevice, scene: SceneView<'_>, handle: OccurrenceHandle, time: f32, space: layer_core::BlendSpace) -> [f32; 4] {
+    let occurrence = scene.occurrence(handle).unwrap();
+    [occurrence.opacity, crate::blend_code(occurrence.blend, device, space) as f32,
+        scene.mask(handle).filter(|(use_, _)| use_.enabled).map_or(1., |(use_, coverage)| {
+            if use_.inverted { 1. - coverage.default_coverage } else { coverage.default_coverage }
+        }), time]
 }
 
 pub(super) fn parse_validated(source: &str) -> Result<naga::Module, GpuRasterError> {

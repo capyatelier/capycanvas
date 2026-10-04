@@ -275,9 +275,9 @@ fn filter_microbench() {
 #[ignore = "physical GPU investigation; requires CAPY_FILTER_PHOTO_RGBA"]
 fn photo_filter_frame_time() {
     let project = std::env::var("CAPY_FILTER_PROJECT").ok().map(|path| {
-        layer_core::Project::read(std::fs::File::open(path).unwrap(), Default::default()).unwrap()
+        super::super::native_effects::read_document(std::fs::File::open(path).unwrap())
     });
-    let extent = project.as_ref().map_or([5184, 3456], |p| [p.document.width, p.document.height]);
+    let extent = project.as_ref().map_or([5184, 3456], |p| p.composition().size);
     let mut view = ViewState { width_px: extent[0], height_px: extent[1],
         ..test_view() };
     if project.is_some() {
@@ -288,13 +288,14 @@ fn photo_filter_frame_time() {
         view.height_px = 1000;
         view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
     }
-    let submit_frame = |r: &mut WgpuRasterizer, layers: &[Layer], time, reset, all| {
+    let submit_frame = |r: &mut WgpuRasterizer, document: &Document, time, reset, all| {
+        let context=layer_core::EvaluationContext {elapsed:time,phases:Vec::new().into()};
         r.submit(FramePacket {
             view,
             time_seconds: time,
             reset_layers: reset,
             composite_all: all,
-            ..packet(layers, extent)
+            ..packet(document.scene().with_context(&context), extent)
         }).unwrap();
     };
     let bytes = if project.is_some() { Vec::new() } else {
@@ -317,51 +318,36 @@ fn photo_filter_frame_time() {
         r.adapter.get_info(),
         start.elapsed().as_secs_f64() * 1000.
     );
-    let mut base = Layer::paint(LayerId(1), "Water photo");
-    if let Some(project) = project {
-        base = project.document.layers.into_iter().find(|layer| layer.source.is_some()).unwrap();
-    } else {
-        let mut builder = SourceBuilder::new(
-            extent,
-            SourceInterpretation {
-                channels: SourceChannels::Rgba,
-                depth: SampleDepth::U8,
-                profile: Default::default(),
-                profile_assumed: true,
-            },
-            256 * 1024 * 1024,
-        )
-        .unwrap();
-        for row in bytes.chunks_exact(extent[0] as usize * 4) {
-            builder.push_row(row).unwrap();
+    let mut base = if let Some(project) = project {
+        let h=project.scene().order().iter().copied().find(|h|project.scene().paint_source(*h).is_some_and(|p|p.original.is_some())).unwrap();
+        let source=project.scene().paint_source(h).unwrap().clone();let mut occurrence=project.scene().occurrence(h).unwrap().clone();
+        let mut document=empty_document(extent,Default::default());
+        let paint=document.artwork.paint.insert(layer_core::PortableId::random(),source).unwrap();occurrence.content=layer_core::OccurrenceContent::Paint(paint);
+        if let Some((use_,source))=project.scene().mask(h) {
+            let coverage=document.artwork.coverage.insert(layer_core::PortableId::random(),source.clone()).unwrap();
+            let mut use_=use_.clone();use_.source=coverage;occurrence.mask=Some(use_);
         }
-        base.source = Some(Arc::new(builder.finish().unwrap()));
-    }
-    if let Ok(path) = std::env::var("CAPY_FILTER_SOURCE_JPEG") {
-        let source = layer_color::photo::read_photo(
-            std::io::BufReader::new(std::fs::File::open(path).unwrap()),
-            Default::default(),
-        )
-        .unwrap();
-        let project = layer_color::photo_project(source, Default::default(), layer_core::DocumentNames { paint: "Water".into(), paper: "Paper".into() }, SampleDepth::U8).unwrap();
-        base = project.document.layers[0].clone();
-        eprintln!(
-            "decoded_source_channels={:?} embedded_icc={} pose={:?}",
-            base.source.as_ref().unwrap().interpretation.channels,
-            matches!(
-                base.source.as_ref().unwrap().interpretation.profile,
-                layer_core::color::ColorProfile::Icc(_)
-            ),
-            base.properties.placement
-        );
+        let h=document.artwork.occurrences.insert(layer_core::PortableId::random(),occurrence).unwrap();
+        document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(h);refresh(&mut document);document
+    } else {
+        let mut builder=SourceBuilder::new(extent,SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::U8,profile:Default::default(),profile_assumed:true},256*1024*1024).unwrap();
+        for row in bytes.chunks_exact(extent[0] as usize*4) {builder.push_row(row).unwrap();}
+        let mut document=empty_document(extent,Default::default());insert_source(&mut document,"Water photo",Arc::new(builder.finish().unwrap()));document
+    };
+    if let Ok(path)=std::env::var("CAPY_FILTER_SOURCE_JPEG") {
+        let source=layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(path).unwrap()),Default::default()).unwrap();
+        let imported=layer_color::photo_project(source,Default::default(),layer_core::DocumentNames {paint:"Water".into(),paper:"Paper".into()},SampleDepth::U8).unwrap();
+        let h=imported.working.occurrence.unwrap();let paint=imported.scene().paint_source(h).unwrap();let original=paint.original.as_ref().unwrap();
+        eprintln!("decoded_source_channels={:?} embedded_icc={} pose={:?}",original.interpretation.channels,matches!(original.interpretation.profile,layer_core::color::ColorProfile::Icc(_)),imported.scene().occurrence(h).unwrap().placement);
+        base=empty_document(extent,Default::default());let target=insert_source(&mut base,"Water",original.clone());
+        base.artwork.occurrences.get_mut(target).unwrap().placement=imported.scene().occurrence(h).unwrap().placement.clone();
         if std::env::var_os("CAPY_FILTER_ASSUME_SRGB").is_some() {
-            Arc::make_mut(base.source.as_mut().unwrap())
-                .interpretation
-                .profile = Default::default();
+            let layer_core::OccurrenceContent::Paint(p)=base.scene().occurrence(target).unwrap().content else {unreachable!()};
+            Arc::make_mut(base.artwork.paint.get_mut(p).unwrap().original.as_mut().unwrap()).interpretation.profile=Default::default();
         }
     }
     let start = Instant::now();
-    submit_frame(&mut r, &[base.clone()], 0., true, true);
+    submit_frame(&mut r, &base, 0., true, true);
     r.wait_idle().unwrap();
     eprintln!(
         "photo_loaded_ms={:.3}",
@@ -373,19 +359,10 @@ fn photo_filter_frame_time() {
     );
     r.set_telemetry_enabled(true);
     let name = std::env::var("CAPY_FILTER_NAME").unwrap_or_else(|_| "gaussian_blur".into());
-    let mut layers = if name == "baseline" {
-        vec![base]
-    } else {
-        vec![filter(fixture(&name)), base]
-    };
-    if name == "gaussian_blur" {
-        let sigma = std::env::var("CAPY_FILTER_SIGMA")
-            .ok()
-            .map(|s| s.parse().unwrap())
-            .unwrap_or(3.);
-        Arc::make_mut(layers[0].effect.as_mut().unwrap())
-            .set("sigma", EffectValue::Number(sigma))
-            .unwrap();
+    let (mut document,target) = if name=="baseline" {(base,None)} else {let (document,target)=filtered(&base,filter(fixture(&name)));(document,Some(target))};
+    if name=="gaussian_blur" {
+        let sigma=std::env::var("CAPY_FILTER_SIGMA").ok().map(|s|s.parse().unwrap()).unwrap_or(3.);
+        set_effect(&mut document,target.unwrap(),"sigma",EffectValue::Number(sigma));
     }
     let count = std::env::var("CAPY_FILTER_FRAMES")
         .ok()
@@ -399,20 +376,18 @@ fn photo_filter_frame_time() {
             continue;
         }
         if name == "domain_warp" {
-            Arc::make_mut(layers[0].effect.as_mut().unwrap())
-                .set("animate", EffectValue::Toggle(case == "animation"))
-                .unwrap();
+            set_effect(&mut document,target.unwrap(),"animate",EffectValue::Toggle(case=="animation"));
         }
         for i in 0..if case == "cold" { 1 } else { count } {
             if case == "parameter" && name != "baseline" {
-                layers[0].opacity = if i % 2 == 0 { 0.99 } else { 1. };
+                document.artwork.occurrences.get_mut(target.unwrap()).unwrap().opacity = if i % 2 == 0 { 0.99 } else { 1. };
             }
             let before = r.metrics();
             let pixels = r.scene.as_ref().map_or(0, |s| s.image_pass_pixels());
             let start = Instant::now();
             submit_frame(
                 &mut r,
-                &layers,
+                &document,
                 i as f32 / 60.,
                 false,
                 case == "cold" || case == "parameter",

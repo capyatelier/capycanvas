@@ -326,7 +326,7 @@ mod tests {
         .unwrap();
         let color = layer_core::color::DocumentColor::default();
         let mut reference = WgpuRasterizer::new_native_headless(color).unwrap();
-        let doc = layer_core::Document::new("cached", 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let doc = layer_core::Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let brush = layer_core::default_brush(layer_core::DefaultBrushPreset::GPen);
         let dabs = [layer_render::Dab {
             center: layer_core::Point { x: 32., y: 32. },
@@ -343,7 +343,7 @@ mod tests {
             previous_contact: [0.0; 4],
         }];
         let batches = [crate::test_support::dab_batch(
-            doc.active_layer,
+            doc.working.target.unwrap(),
             layer_render::DabStyle::for_brush(&brush, layer_core::StrokeTool::Brush),
             layer_core::Rect { min: layer_core::Point { x: 16., y: 16. }, max: layer_core::Point { x: 48., y: 48. } },
         )];
@@ -352,7 +352,7 @@ mod tests {
             dabs: &dabs,
             dab_batches: &batches,
             reset_layers: true,
-            ..crate::test_support::packet(&doc.layers, [64; 2])
+            ..crate::test_support::packet(doc.scene(), [64; 2])
         };
         reference.submit(packet).unwrap();
         let expected = reference.readback_srgb_rgba8().unwrap();

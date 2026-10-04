@@ -58,7 +58,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     // An in-sRGB patch cannot detect an accidental sRGB8 intermediate in GSK.
     let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.1, 0.02, 1.]).unwrap();
     let mut project = new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: color.space,
         depth: SampleDepth::U16,
     };
@@ -80,14 +80,14 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     for _ in 0..64 {
         source.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(source.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(source.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
     assert_eq!(w.window.renderer().unwrap().type_().name(), "GskVulkanRenderer");
     let view = w.view_color();
     assert_eq!(view, ViewColor::DisplayP3);
-    let original = super::place_source::snapshot(&w);
+    let original = super::place_source::authored_snapshot(&w);
     w.dispatch(UiAction::Color {
         action: ColorAction::SetSlot {
             slot: ColorSlot::Foreground,
@@ -148,7 +148,7 @@ fn native_managed_canvas_and_gtk_artwork_agree() {
     ));
     std::fs::create_dir_all(&output).unwrap();
     capture_ui(&w, &output, "p3-canvas-and-picker.png");
-    assert_eq!(super::place_source::snapshot(&w), original);
+    assert_eq!(super::place_source::authored_snapshot(&w), original);
     w.window.destroy();
     pump(100);
 }

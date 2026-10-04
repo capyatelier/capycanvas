@@ -318,7 +318,7 @@ impl WgpuRasterizer {
             pass.set_bind_group(
                 1,
                 self.paint_target_binding(&batch.style),
-                &[self.layer_target_offset(batch.layer_id, *coordinate)],
+                &[self.layer_target_offset(batch.target, *coordinate)],
             );
             pass.set_bind_group(2, source, &[*record_offset]);
             let side = PAGE_SIZE.div_ceil(self.dry_material_block(batch));

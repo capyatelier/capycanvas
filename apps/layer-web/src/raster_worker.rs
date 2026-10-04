@@ -62,40 +62,51 @@ pub(super) async fn call_cancellable(
 }
 
 pub(super) fn install(renderer: &mut WgpuRasterizer) {
-    // Browser capacity-based admission is documented separately from native
-    // measured headroom. Filters and display share this bounded allowance.
-    renderer.set_complete_display_allowance(raster_project::photo_memory_budget().encode_bytes as u64);
-    renderer.set_analysis_backing_waiter(Rc::new(|document, control| Box::pin(async move {
+    renderer.set_complete_display_allowance(artwork_transfer::photo_memory_budget().encode_bytes as u64);
+    renderer.set_analysis_backing_waiter(Rc::new(|scene, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Analysis cancelled".into()); }
-        raster_project::wait_backing_cancellable(&layer_core::Project {document: (*document).clone()}, Some(&control)).await.map_err(|e| format!("{e:?}"))?;
+        artwork_transfer::wait_backing_cancellable(&layer_render_wgpu::snapshot::SnapshotGpu::scoped_transfer_artwork(&scene,&[]), Some(&control)).await.map_err(|e| format!("{e:?}"))?;
         if control.is_cancelled() { return Err("Analysis cancelled".into()); }
         Ok(())
     })));
     renderer.set_snapshot_worker(Rc::new(|request, control| Box::pin(async move {
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
-        let (project, task) = match request {
-            layer_render::SnapshotRequest::LevelsStatistics(query)=>(layer_render_wgpu::snapshot::SnapshotGpu::artwork_source_project(&query)?,SnapshotTask::LevelsStatistics {source:query.source,time:query.time,effect_times:query.effect_times}),
-            layer_render::SnapshotRequest::ArtworkStatistics(request) => (layer_render_wgpu::snapshot::SnapshotGpu::artwork_source_project(&request.query)?,
-                SnapshotTask::ArtworkStatistics { source: request.query.source, time: request.query.time, effect_times: request.query.effect_times, preview: request.preview, selection: request.selection, waveform: request.waveform }),
-            layer_render::SnapshotRequest::ArtworkSample(request) => (layer_render_wgpu::snapshot::SnapshotGpu::artwork_source_project(&request.query)?,
-                SnapshotTask::ArtworkSample { source: request.source.clone(), position: request.position, width: request.width,
-                    time: request.time, effect_times: request.effect_times.clone() }),
-            layer_render::SnapshotRequest::Bounds(request) => (layer_core::Project { document: (*request.document).clone() },
-                SnapshotTask::Bounds(request.scope, request.time, request.effect_times)),
-            layer_render::SnapshotRequest::TransformPixels(plan) => (plan.input,
-                SnapshotTask::TransformPixels { output: plan.output, target: plan.target, scope: plan.scope, geometry: plan.geometry }),
+        let mut transform = None;
+        let (scene, selection, task) = match request {
+            layer_render::SnapshotRequest::LevelsStatistics(query) => {
+                let (scene, source) = query_scene(&query)?;
+                (scene, query.selection, SnapshotTask::LevelsStatistics(source))
+            }
+            layer_render::SnapshotRequest::ArtworkStatistics(request) => {
+                let (scene, source) = query_scene(&request.query)?;
+                (scene, request.query.selection, SnapshotTask::ArtworkStatistics {source, preview:request.preview, selection:request.selection,waveform:request.waveform})
+            }
+            layer_render::SnapshotRequest::ArtworkSample(request) => {
+                let (scene, source) = query_scene(&request.query)?;
+                (scene, request.query.selection, SnapshotTask::ArtworkSample {source, position:request.position, width:request.width})
+            }
+            layer_render::SnapshotRequest::Bounds(request) => (layer_render_wgpu::snapshot::SnapshotGpu::bounds_source_scene(&request)?,request.selection,SnapshotTask::Bounds(request.scope)),
+            layer_render::SnapshotRequest::TransformPixels(plan) => {
+                let task = SnapshotTask::TransformPixels {target:plan.target, interpolation:plan.geometry.placement.interpolation};
+                transform = Some((plan.output, plan.paint, plan.coverage));
+                let scene=std::sync::Arc::new((*plan.scene).clone().with_scope(layer_core::SceneScope::Raw(plan.target)));
+                (scene, None, task)
+            }
         };
-        let mut packing = std::pin::pin!(raster_project::pack(project));
+        let frozen = FrozenScene::new(&scene);
+        let additional:Vec<_>=transform.as_ref().into_iter().flat_map(|(_,paint,coverage)|paint.map(layer_core::SourceTarget::Paint).into_iter().chain(coverage.map(layer_core::SourceTarget::Coverage))).collect();
+        let artwork=layer_render_wgpu::snapshot::SnapshotGpu::scoped_transfer_artwork(&scene,&additional);
+        let mut packing = std::pin::pin!(artwork_transfer::pack_scene(artwork, selection));
         let packed = std::future::poll_fn(|cx| {
             if control.is_cancelled() { return std::task::Poll::Ready(Err(js("Operation cancelled"))); }
             std::future::Future::poll(packing.as_mut(), cx)
         }).await.map_err(|e| format!("{e:?}"))?;
         let (metadata, buffers) = packed_parts(&packed).map_err(|e| format!("{e:?}"))?;
-        let metadata = serde_json::to_string(&(metadata, &task)).map_err(|e| e.to_string())?;
+        let metadata = serde_json::to_string(&(metadata, frozen, &task)).map_err(|e| e.to_string())?;
         let result = call_cancellable("snapshot", &metadata, &buffers, control.clone()).await.map_err(|e| format!("{e:?}"))?;
         if control.is_cancelled() { return Err("Operation cancelled".into()); }
         match task {
-            SnapshotTask::LevelsStatistics {..}=>serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::LevelsStatistics).map_err(|e|e.to_string()),
+            SnapshotTask::LevelsStatistics(..)=>serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::LevelsStatistics).map_err(|e|e.to_string()),
             SnapshotTask::ArtworkStatistics { waveform, .. } => {
                 let mut histogram: layer_core::color::histogram::Histogram=serde_wasm_bindgen::from_value(result.clone()).map_err(|e|e.to_string())?;
                 if waveform {
@@ -108,15 +119,12 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
             },
             SnapshotTask::ArtworkSample { .. } => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::ArtworkSample).map_err(|e| e.to_string()),
             SnapshotTask::Bounds(..) => serde_wasm_bindgen::from_value(result).map(layer_render::SnapshotResult::Bounds).map_err(|e| e.to_string()),
-            SnapshotTask::TransformPixels { mut output, scope, .. } => {
+            SnapshotTask::TransformPixels {..} => {
                 let (metadata, buffers) = packed_parts(&result).map_err(|e| format!("{e:?}"))?;
-                let project = raster_project::unpack(&metadata, buffers, true).await.map_err(|e| format!("{e:?}"))?;
-                let layer = project.document.layer(output.id).ok_or("Missing transformed layer")?;
-                if scope != layer_core::TransformPixelsScope::Mask { output.raster = layer.raster.clone(); }
-                if scope != (layer_core::TransformPixelsScope::Paint { linked_mask: false }) {
-                    output.mask.as_mut().ok_or("Missing original mask")?.raster = layer.mask.as_ref().ok_or("Missing transformed mask")?.raster.clone();
-                }
-                Ok(layer_render::SnapshotResult::TransformPixels(Box::new(output)))
+                let artwork = artwork_transfer::unpack(&metadata, buffers).await.map_err(|e| format!("{e:?}"))?;
+                let (mut output, paint, coverage) = transform.ok_or("Missing transform output")?;
+                install_transformed_rasters(&mut output, &artwork, paint, coverage)?;
+                Ok(layer_render::SnapshotResult::TransformPixels(output))
             }
         }
     })));
@@ -135,20 +143,18 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
             let mut blobs = Vec::with_capacity(descriptors.len());
             for descriptor in descriptors {
                 let header = bytes
-                    .get(offset..offset + 36)
+                    .get(offset..offset + 4)
                     .ok_or("Incomplete raster worker result")?;
-                let digest = header[..32].try_into().unwrap();
-                let size = u32::from_le_bytes(header[32..].try_into().unwrap()) as usize;
-                offset += 36;
+                let size = u32::from_le_bytes(header.try_into().unwrap()) as usize;
+                offset += 4;
+                let end = offset.checked_add(size).ok_or("Raster worker size overflow")?;
                 let encoded = bytes
-                    .get(offset..offset + size)
+                    .get(offset..end)
                     .ok_or("Incomplete raster worker tile")?;
-                blobs.push(TileBlob::from_verified_worker(
-                    descriptor,
-                    digest,
-                    encoded.into(),
+                blobs.push(TileBlob::from_verified_resource(
+                    layer_core::PortableId::random(), descriptor, encoded.into(), None,
                 )?);
-                offset += size;
+                offset = end;
             }
             if offset != bytes.len() {
                 return Err("Trailing raster worker data".into());
@@ -163,7 +169,6 @@ pub fn raster_worker_encode(metadata: &str, bytes: &[u8]) -> Result<Vec<u8>, JsV
     let descriptors: Vec<PixelDescriptor> = serde_json::from_str(metadata).map_err(js)?;
     let mut result = Vec::new();
     for tile in encode_tiles(bytes, descriptors).map_err(js)? {
-        result.extend_from_slice(&tile.digest);
         result.extend_from_slice(&(tile.compressed_len() as u32).to_le_bytes());
         result.extend_from_slice(&tile.compressed().map_err(js)?);
     }
@@ -186,15 +191,83 @@ fn encode_tiles(bytes: &[u8], descriptors: Vec<PixelDescriptor>) -> Result<Vec<T
     Ok(result)
 }
 
+use layer_core::SnapshotSource;
+fn query_scene(query: &layer_core::ArtworkQuery) -> Result<(std::sync::Arc<layer_core::SceneSnapshot>, SnapshotSource), String> {
+    use layer_core::ArtworkSource::*;
+    query.validate()?;
+    let normalized=layer_render_wgpu::snapshot::SnapshotGpu::artwork_source_scene(query)?;
+    Ok(match query.source {
+        Visible => (normalized,SnapshotSource::Visible),
+        Source(target) => (normalized,SnapshotSource::Source(target)),
+        EffectInput(target) => (normalized,SnapshotSource::EffectInput(target)),
+        EffectChannels(target) => (std::sync::Arc::new((*query.snapshot).clone().with_scope(normalized.scope.clone())),SnapshotSource::EffectChannels(target)),
+        Reference | EffectBaseline(_) => (normalized,SnapshotSource::Visible),
+    })
+}
+#[derive(Serialize, Deserialize)]
+enum SnapshotScope {
+    All,
+    Members(Vec<layer_core::OccurrenceHandle>),
+    Raw(layer_core::SourceTarget),
+    Prefix {before:layer_core::OccurrenceHandle, clipped:bool},
+}
+#[derive(Serialize, Deserialize)]
+struct FrozenScene {
+    owner:u64,
+    revision:u64,
+    elapsed:f32,
+    phases:Vec<(layer_core::EffectHandle,f32)>,
+    scope:SnapshotScope,
+    offset:layer_core::Point,
+}
+impl FrozenScene {
+    fn new(scene:&layer_core::SceneSnapshot) -> Self {
+        use layer_core::SceneScope::*;
+        let scope = match &scene.scope {
+            All => SnapshotScope::All,
+            Members(handles) => SnapshotScope::Members(handles.to_vec()),
+            Raw(target) => SnapshotScope::Raw(*target),
+            Prefix {before,clipped} => SnapshotScope::Prefix {before:*before,clipped:*clipped},
+        };
+        Self {owner:scene.owner,revision:scene.revision,elapsed:scene.context.elapsed,phases:scene.context.phases.as_ref().clone(),scope,offset:scene.offset}
+    }
+    fn snapshot(self, artwork:layer_core::Artwork) -> Result<std::sync::Arc<layer_core::SceneSnapshot>, String> {
+        use layer_core::SceneScope::*;
+        let scope = match self.scope {
+            SnapshotScope::All => All,
+            SnapshotScope::Members(handles) => Members(handles.into()),
+            SnapshotScope::Raw(target) => Raw(target),
+            SnapshotScope::Prefix {before,clipped} => Prefix {before,clipped},
+        };
+        let index = std::sync::Arc::new(layer_core::SceneIndex::build(&artwork)?);
+        let mut snapshot = layer_core::SceneSnapshot::new(artwork,index,self.owner,self.revision,
+            layer_core::EvaluationContext {elapsed:self.elapsed,phases:self.phases.into()});
+        snapshot.scope = scope;
+        snapshot.offset = self.offset;
+        Ok(std::sync::Arc::new(snapshot))
+    }
+}
 #[derive(Serialize, Deserialize)]
 enum SnapshotTask {
-    LevelsStatistics {source:layer_core::ArtworkSource,time:f32,effect_times:Vec<(layer_core::LayerId,f32)>},
-    ArtworkStatistics { source: layer_core::ArtworkSource, time: f32, effect_times: Vec<(layer_core::LayerId, f32)>, preview: bool, selection: bool, waveform: bool },
-    ArtworkSample { source: layer_core::ArtworkSource, position: [f32; 2], width: u32, time: f32,
-        effect_times: Vec<(layer_core::LayerId, f32)> },
-    Bounds(layer_core::ContentScope, f32, Vec<(layer_core::LayerId, f32)>),
-    TransformPixels { output: layer_core::Layer, target: layer_core::LayerId,
-        scope: layer_core::TransformPixelsScope, geometry: layer_core::ImageTransform },
+    LevelsStatistics(SnapshotSource),
+    ArtworkStatistics {source:SnapshotSource, preview:bool, selection:bool, waveform:bool},
+    ArtworkSample {source:SnapshotSource, position:[f32;2], width:u32},
+    Bounds(layer_core::ContentScope),
+    TransformPixels {target:layer_core::SourceTarget, interpolation:layer_core::Interpolation},
+}
+fn install_transformed_rasters(edit:&mut layer_core::Edit, artwork:&layer_core::Artwork,
+    paint:Option<layer_core::PaintHandle>, coverage:Option<layer_core::CoverageHandle>) -> Result<(), String> {
+    match edit {
+        layer_core::Edit::Paint(change) if Some(change.handle) == paint => {
+            change.value.as_mut().ok_or("Missing transform paint output")?.raster = artwork.paint.get(change.handle).ok_or("Missing transformed paint")?.raster.clone();
+        }
+        layer_core::Edit::Coverage(change) if Some(change.handle) == coverage => {
+            change.value.as_mut().ok_or("Missing transform coverage output")?.raster = artwork.coverage.get(change.handle).ok_or("Missing transformed coverage")?.raster.clone();
+        }
+        layer_core::Edit::Batch(edits) => for edit in edits { install_transformed_rasters(edit,artwork,paint,coverage)?; },
+        _ => {}
+    }
+    Ok(())
 }
 
 fn packed_parts(packed: &JsValue) -> Result<(String, js_sys::Array), JsValue> {
@@ -222,49 +295,41 @@ async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Result<layer_re
 
 #[wasm_bindgen]
 pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> Result<JsValue, JsValue> {
-    let (metadata, task): (String, SnapshotTask) = serde_json::from_str(metadata).map_err(js)?;
-    let mut project = raster_project::unpack(&metadata, buffers, true).await?;
-    let gpu=snapshot_gpu(project.document.color).await?;
+    let (metadata, frozen, task): (String, FrozenScene, SnapshotTask) = serde_json::from_str(metadata).map_err(js)?;
+    let (artwork, selection) = artwork_transfer::unpack_scene(&metadata, buffers).await?;
+    let scene = frozen.snapshot(artwork).map_err(js)?;
+    let gpu=snapshot_gpu(scene.view().composition().color).await?;
     match task {
-        SnapshotTask::LevelsStatistics {source,time,effect_times}=> {
-            let query=layer_core::ArtworkQuery::from_snapshot(std::sync::Arc::new(project.document),source,time,effect_times);
-            let result=gpu.levels_statistics(query,Default::default()).await.map_err(js)?;serialize(&result)
+        SnapshotTask::LevelsStatistics(source) => {
+            let query = layer_core::ArtworkQuery::from_snapshot(scene,source.artwork_source(),selection);
+            let result = gpu.levels_statistics(query,Default::default()).await.map_err(js)?;
+            serialize(&result)
         }
-        SnapshotTask::ArtworkStatistics { source, time, effect_times, preview, selection, waveform } => {
-            let query = layer_core::ArtworkQuery::from_snapshot(std::sync::Arc::new(project.document), source, time, effect_times);
-            let histogram = gpu.artwork_statistics(layer_core::ArtworkStatisticsRequest { query, preview, selection, waveform }, Default::default()).await.map_err(js)?;
+        SnapshotTask::ArtworkStatistics {source,preview,selection:restrict_selection,waveform} => {
+            let query = layer_core::ArtworkQuery::from_snapshot(scene,source.artwork_source(),selection);
+            let histogram = gpu.artwork_statistics(layer_core::ArtworkStatisticsRequest {query,preview,selection:restrict_selection,waveform},Default::default()).await.map_err(js)?;
             let result=serialize(&histogram)?;
             if let Some(waveform)=&histogram.waveform {
                 js_sys::Reflect::set(&result,&js("waveform_counts"),&js_sys::Uint32Array::from(waveform.counts.as_slice()))?;
             }
             Ok(result)
         }
-        SnapshotTask::ArtworkSample { source, position, width, time, effect_times } => {
-            let request = layer_core::ArtworkSampleRequest { query: layer_core::ArtworkQuery::from_snapshot(std::sync::Arc::new(project.document), source, time, effect_times), position, width };
-            let sample = gpu.artwork_sample(request, Default::default()).await.map_err(js)?;
-            serialize(&sample)
+        SnapshotTask::ArtworkSample {source,position,width} => {
+            let query = layer_core::ArtworkQuery::from_snapshot(scene,source.artwork_source(),selection);
+            let result = gpu.artwork_sample(layer_core::ArtworkSampleRequest {query,position,width},Default::default()).await.map_err(js)?;
+            serialize(&result)
         }
-        SnapshotTask::Bounds(scope, time, effect_times) => {
-            let mut request = layer_core::ContentBoundsRequest::new(&project.document, scope);
-            request.time = time;
-            request.effect_times = effect_times;
-            let bounds = gpu.content_bounds(request, Default::default()).await.map_err(js)?;
-            serialize(&bounds)
+        SnapshotTask::Bounds(scope) => {
+            let result = gpu.content_bounds(layer_core::ContentBoundsRequest {snapshot:scene,scope,selection},Default::default()).await.map_err(js)?;
+            serialize(&result)
         }
-        SnapshotTask::TransformPixels { output, target, scope, geometry } => {
-            let plan = layer_core::TransformPixelsPlan { input: project.clone(), output, target, scope, geometry };
-            let output = gpu.transform_pixels(plan, Default::default()).await.map_err(js)?;
-            let mut transfer = layer_core::Layer::paint(output.id, "");
-            if scope != layer_core::TransformPixelsScope::Mask { transfer.raster = output.raster; }
-            if scope != (layer_core::TransformPixelsScope::Paint { linked_mask: false }) {
-                let output = output.mask.ok_or(js("Missing transformed mask"))?;
-                let mut mask = layer_core::LayerMask::reveal_all(output.id, layer_core::Point::default());
-                mask.raster = output.raster;
-                transfer.mask = Some(mask);
-            }
-            project.document.layers = vec![transfer];
-            project.document.active_mask = false;
-            raster_project::pack(project).await
+        SnapshotTask::TransformPixels {target,interpolation} => {
+            let mut document = layer_core::Document::from_artwork(scene.artwork.clone()).map_err(js)?;
+            let mut plan = document.transform_pixels_plan(target,interpolation,Default::default()).map_err(js)?;
+            plan.scene = scene;
+            let output = gpu.transform_pixels(plan,Default::default()).await.map_err(js)?;
+            document.apply(output).map_err(js)?;
+            artwork_transfer::pack(document.artwork).await
         }
     }
 }

@@ -11,7 +11,7 @@ mod selection_tools_checks {
         send(s, PenPhase::Up, p);
     }
     fn bounds(s: &UiSession<Recorder>) -> [f32; 4] {
-        let selection = s.engine.document().selection.as_ref().unwrap();
+        let selection = s.engine.document().working.selection.as_ref().unwrap();
         let points = selection.contours()[0].iter();
         points.fold(
             [
@@ -41,23 +41,23 @@ mod selection_tools_checks {
                 s.sync_camera();
                 send(&mut s, PenPhase::Down, [180., 140.]);
                 send(&mut s, PenPhase::Move, [60., 40.]);
-                assert!(s.engine.document().selection.is_none());
+                assert!(s.engine.document().working.selection.is_none());
                 assert!(!s.selection_outline().is_empty());
                 send(&mut s, PenPhase::Up, [60., 40.]);
                 let b = bounds(&s);
                 for (actual, expected) in b.into_iter().zip([60., 40., 180., 140.]) {
                     assert!((actual - expected).abs() < 0.3, "{b:?}");
                 }
-                let selection = s.engine.document().selection.clone();
+                let selection = s.engine.document().working.selection.clone();
                 invoke(&mut s, CommandId::Undo);
-                assert!(s.engine.document().selection.is_none());
+                assert!(s.engine.document().working.selection.is_none());
                 invoke(&mut s, CommandId::Redo);
-                assert_eq!(s.engine.document().selection, selection);
+                assert_eq!(s.engine.document().working.selection, selection);
                 send(&mut s, PenPhase::Down, [0., 0.]);
                 send(&mut s, PenPhase::Cancel, [20., 20.]);
-                assert_eq!(s.engine.document().selection, selection);
+                assert_eq!(s.engine.document().working.selection, selection);
                 click(&mut s, [80., 80.]);
-                assert_eq!(s.engine.document().selection, selection);
+                assert_eq!(s.engine.document().working.selection, selection);
                 invoke(&mut s, CommandId::SelectionFixedSize);
                 for (id, value) in [("selection_width", 80.), ("selection_height", 40.)] {
                     s.dispatch(UiAction::SetToolSetting {
@@ -120,7 +120,7 @@ mod selection_tools_checks {
         click(&mut s, [20., 20.]);
         click(&mut s, [150., 20.]);
         click(&mut s, [150., 160.]);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         assert!(s.command(CommandId::CompleteSelection).enabled);
         s.selection_key("backspace").unwrap();
         assert_eq!(s.layer_interaction.path.len(), 2);
@@ -132,23 +132,23 @@ mod selection_tools_checks {
         assert_eq!(s.layer_interaction.path.len(), 3);
         s.selection_key("enter").unwrap();
         s.frame(2, 2).unwrap();
-        let selection = s.engine.document().selection.clone();
+        let selection = s.engine.document().working.selection.clone();
         assert_eq!(selection.as_ref().unwrap().contours()[0].len(), 3);
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().selection, selection);
+        assert_eq!(s.engine.document().working.selection, selection);
         click(&mut s, [40., 40.]);
         click(&mut s, [100., 40.]);
         s.input(UiInput::Blur).unwrap();
         assert!(s.layer_interaction.path.is_empty());
-        assert_eq!(s.engine.document().selection, selection);
+        assert_eq!(s.engine.document().working.selection, selection);
         click(&mut s, [60., 60.]);
         click(&mut s, [200., 60.]);
         click(&mut s, [200., 200.]);
         click(&mut s, [60., 60.]);
         assert!(s.layer_interaction.path.is_empty());
-        assert_ne!(s.engine.document().selection, selection);
+        assert_ne!(s.engine.document().working.selection, selection);
         click(&mut s, [20., 20.]);
         invoke(&mut s, CommandId::Brush);
         assert!(s.layer_interaction.path.is_empty());
@@ -186,7 +186,7 @@ mod selection_tools_checks {
         click(&mut s, [120., 140.]);
         s.dispatch(edit(CommandId::CompleteSelection)).unwrap();
         s.frame(2, 2).unwrap();
-        assert_eq!(s.engine.document().selection.as_ref().unwrap().contours()[0].len(), 3);
+        assert_eq!(s.engine.document().working.selection.as_ref().unwrap().contours()[0].len(), 3);
         assert!(s.state.canvas_bar.is_none() || s.state.canvas_bar.as_ref().unwrap().context.kind != CanvasBarKind::Polygon);
         click(&mut s, [40., 40.]);
         let next = s.state.canvas_bar.clone().unwrap();
@@ -201,13 +201,13 @@ mod selection_tools_checks {
             invoke(&mut s, CommandId::RectangleSelect);
             send(&mut s, PenPhase::Down, [20., 20.]);
             send(&mut s, PenPhase::Up, [80., 80.]);
-            let rectangle = s.engine.document().selection.clone();
+            let rectangle = s.engine.document().working.selection.clone();
             invoke(&mut s, CommandId::SelectionSubtract);
             send(&mut s, PenPhase::Down, [40., 40.]);
             send(&mut s, PenPhase::Up, [60., 60.]);
             let request = s.renderer_mut().region_requests.last().unwrap().clone();
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().selection, rectangle);
+            assert_eq!(s.engine.document().working.selection, rectangle);
             let pixels = std::sync::Arc::new(
                 layer_core::SelectionPixels::bytes([4, 1], [0, 0, 4, 1], vec![0xff0000ff]).unwrap(),
             );
@@ -218,12 +218,12 @@ mod selection_tools_checks {
             });
             s.frame(2, 2).unwrap();
             s.frame(3, 3).unwrap();
-            assert_eq!(s.engine.document().selection, rectangle);
+            assert_eq!(s.engine.document().working.selection, rectangle);
             invoke(&mut s, CommandId::Redo);
-            assert_eq!(s.engine.document().selection, subtracted);
+            assert_eq!(s.engine.document().working.selection, subtracted);
             invoke(&mut s, CommandId::Undo);
             invoke(&mut s, CommandId::Undo);
-            assert!(s.engine.document().selection.is_none());
+            assert!(s.engine.document().working.selection.is_none());
         }
     }
     #[test]
@@ -258,7 +258,7 @@ mod selection_tools_checks {
                 ),
             });
             s.frame(4, 4).unwrap();
-            assert!(s.engine.document().selection.is_none());
+            assert!(s.engine.document().working.selection.is_none());
             invoke(&mut s, CommandId::ColorSelect);
         }
         invoke(&mut s, CommandId::AutoSelect);
@@ -294,7 +294,7 @@ mod selection_tools_checks {
             s.pen(up).unwrap();
             let change = s.frame(100, 100).unwrap();
             assert_ne!(change.regions & regions::DOCUMENT, 0, "{command:?} publishes its selection");
-            assert!(s.engine.document().selection.is_some(), "{command:?}");
+            assert!(s.engine.document().working.selection.is_some(), "{command:?}");
         }
     }
     #[test]
@@ -378,7 +378,7 @@ mod selection_tools_checks {
                 tool == SelectionTool::Wand
             );
             invoke(&mut s, CommandId::SelectAll);
-            let original = s.engine.document().selection.clone();
+            let original = s.engine.document().working.selection.clone();
             invoke(&mut s, CommandId::SelectionAdd);
             invoke(&mut s, CommandId::SelectionAntialias);
             assert!(!s.command(CommandId::SelectionAntialias).selected);
@@ -424,7 +424,7 @@ mod selection_tools_checks {
             assert!(!options.antialias);
             assert_eq!(options.previous.as_deref(), original.as_ref());
             assert_eq!(
-                s.engine.document().selection,
+                s.engine.document().working.selection,
                 original,
                 "no partial history entry"
             );
@@ -438,12 +438,12 @@ mod selection_tools_checks {
                 ),
             });
             s.frame(1, 1).unwrap();
-            let result = s.engine.document().selection.clone();
+            let result = s.engine.document().working.selection.clone();
             assert_ne!(result, original);
             invoke(&mut s, CommandId::Undo);
-            assert_eq!(s.engine.document().selection, original);
+            assert_eq!(s.engine.document().working.selection, original);
             invoke(&mut s, CommandId::Redo);
-            assert_eq!(s.engine.document().selection, result);
+            assert_eq!(s.engine.document().working.selection, result);
             let working = s.editing_state();
             let restored: EditingState =
                 serde_json::from_str(&serde_json::to_string(&working).unwrap()).unwrap();
@@ -469,7 +469,7 @@ mod selection_tools_checks {
             s.layer_interaction.path.is_empty(),
             "first vertex closes even when the closing edge is not at 45 degrees"
         );
-        assert!(s.engine.document().selection.is_some());
+        assert!(s.engine.document().working.selection.is_some());
         invoke(&mut s, CommandId::Deselect);
         invoke(&mut s, CommandId::RectangleSelect);
         invoke(&mut s, CommandId::SelectionAdd);
@@ -486,7 +486,7 @@ mod selection_tools_checks {
             ),
         });
         s.frame(1, 1).unwrap();
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
     fn held_selection_modifiers_latch_per_contact_and_preserve_configured_mode() {
@@ -518,7 +518,7 @@ mod selection_tools_checks {
     fn wand_without_a_reference_offers_the_layer_below_in_one_step() {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
-        let top = s.engine.document().active_layer;
+        let top = s.engine.document().working.occurrence.unwrap();
         invoke(&mut s, CommandId::AutoSelect);
         invoke(&mut s, CommandId::SelectionReference);
         send(&mut s, PenPhase::Down, [48., 72.]);
@@ -539,20 +539,20 @@ mod selection_tools_checks {
         let change = s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
         assert_ne!(change.regions & regions::HOST, 0);
         assert_eq!(s.state.notice, None);
-        assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
-        assert_eq!(s.engine.document().active_layer, top);
+        assert_eq!(s.engine.document().scene().references(), [layer_core::authored::OccurrenceHandle::from_index(0)].into());
+        assert_eq!(s.engine.document().working.occurrence.unwrap(), top);
         assert_eq!(
             s.command_disabled_reason(CommandId::UseReferenceBelow).as_deref(),
             Some("The layer below is already a reference")
         );
         invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.engine.document().reference_layers, before.reference_layers);
-        assert!(s.engine.document().layer(top).is_some());
+        assert_eq!(s.engine.document().scene().references(), before.scene().references());
+        assert!(s.engine.document().scene().occurrence(top).is_some());
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().layer(top).is_none(), "accepting was one undo step");
+        assert!(s.engine.document().scene().occurrence(top).is_none(), "accepting was one undo step");
         invoke(&mut s, CommandId::Redo);
         invoke(&mut s, CommandId::Redo);
-        assert_eq!(s.engine.document().reference_layers, [LayerId(1)].into());
+        assert_eq!(s.engine.document().scene().references(), [layer_core::authored::OccurrenceHandle::from_index(0)].into());
 
         click(&mut s, [48., 72.]);
         assert_eq!(s.state.notice, None);

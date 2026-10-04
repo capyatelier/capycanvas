@@ -14,6 +14,7 @@ use std::{
     io::{BufReader, BufWriter, Write},
     path::{Path, PathBuf},
     time::{Duration, Instant},
+    sync::{Arc, atomic::AtomicBool},
 };
 
 type Engine = CanvasEngine<WgpuRasterizer>;
@@ -23,6 +24,7 @@ mod photo;
 #[path = "raster_workloads/calibration.rs"]
 mod calibration;
 struct Canvas {
+    name: String,
     engine: Engine,
     input: InputProducer<PenEvent>,
     sequence: u64,
@@ -57,8 +59,8 @@ fn quantiles(values: &mut [f64]) -> [f64; 3] {
 impl Canvas {
     fn new(extent: [u32; 2], name: &str, color: DocumentColor) -> Result<Self> {
         let start = Instant::now();
-        let mut document = Document::new(name, extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color = color;
+        let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = color;
         let mut builder = SourceBuilder::new(
             extent,
             SourceInterpretation {
@@ -95,11 +97,20 @@ impl Canvas {
             }
             builder.push_row(&row)?;
         }
-        document.layers[0].source = Some(std::sync::Arc::new(builder.finish()?));
+        let SourceTarget::Paint(paint) = document.working.target.unwrap() else { unreachable!() };
+        document.artwork.paint.get_mut(paint).unwrap().original = Some(Arc::new(builder.finish()?));
         for _ in 0..31 {
-            let id = document.allocate_layer_id();
-            document.layers.insert(1, Layer::paint(id, "empty"));
+            let source = document.artwork.paint.insert(PortableId::random(), PaintSource {
+                domain: extent, raster: Default::default(), original: None, operations: Default::default(),
+            })?;
+            let occurrence = document.artwork.occurrences.insert(PortableId::random(),
+                Occurrence::new(OccurrenceContent::Paint(source), "empty"))?;
+            let root = document.composition().result;
+            document.artwork.stacks.get_mut(root).unwrap().entries.insert(1, occurrence);
         }
+        let working = document.working.clone();
+        let mut document = Document::from_artwork(document.artwork)?;
+        document.working = working;
         let mut gpu = WgpuRasterizer::new_native_headless(color)?;
         if std::env::args().any(|arg| arg == "--bounded-display") {
             gpu.set_complete_display_allowance(0);
@@ -125,6 +136,7 @@ impl Canvas {
         engine.backend_mut().wait_idle()?;
         let submitted = ms(start);
         let mut canvas = Self {
+            name: name.into(),
             engine,
             input,
             sequence: 0,
@@ -139,23 +151,32 @@ impl Canvas {
     }
     fn settle(&mut self) -> Result<()> {
         let until = Instant::now() + Duration::from_secs(30);
-        while !self.engine.backend().raster_ready() {
+        loop {
+            self.engine.backend_mut().wait_idle()?;
+            if self.engine.has_pending_document_edits() || self.engine.has_pending_input() {
+                self.engine.render_frame()?;
+            }
+            if self.engine.backend().raster_ready()
+                && !self.engine.has_pending_document_edits()
+                && !self.engine.has_pending_input()
+            {
+                break;
+            }
             if Instant::now() >= until {
                 return Err("Raster backing deadline exceeded".into());
             }
             std::thread::sleep(Duration::from_millis(1));
         }
-        for layer in &self.engine.document().layers {
-            layer.raster.wait_data()?.validate(
-                [self.engine.document().width, self.engine.document().height],
-                false,
-                self.engine.document().color,
-            )?;
+        let scene = self.engine.document().scene();
+        for target in scene.targets() {
+            if let Some(raster) = scene.raster(target) {
+                raster.wait_data()?.validate(scene.target_extent(target), target.is_coverage(), scene.composition().color)?;
+            }
         }
         Ok(())
     }
-    fn snapshot(&self) -> Result<Project> {
-        Ok(Project::snapshot(self.engine.document())?)
+    fn snapshot(&self) -> Result<ArtworkCapture> {
+        Ok(self.engine.capture_artwork(0)?)
     }
     fn stroke(&mut self, ordinal: u64) -> Result<(Vec<f64>, Vec<f64>)> {
         self.stroke_observed(ordinal, |_, _, _, _, _| {})
@@ -232,7 +253,7 @@ impl Canvas {
             if frame_cpu > 8.33 || completed > 8.33 {
                 println!(
                     "outlier {:?} stroke={ordinal} frame={frame} CPU-wall={frame_cpu:.3} thread-CPU={frame_thread_cpu:.3} completed={completed:.3} ms misses={misses} capacity-waits={} capture-reserved={} bytes",
-                    self.engine.document().id,
+                    self.name,
                     after.source_upload_submissions - before.source_upload_submissions,
                     after.raster_backing_reserved_bytes
                 );
@@ -314,19 +335,15 @@ impl Canvas {
             ),
             None => println!("GPU allocator report unavailable on this backend"),
         }
-        let backed: usize = self
-            .engine
-            .document()
-            .layers
-            .iter()
-            .map(|l| l.raster.wait_data().unwrap().resident_bytes())
-            .sum();
+        let scene = self.engine.document().scene();
+        let backed: usize = scene.targets().filter_map(|target| scene.raster(target))
+            .map(|raster| raster.wait_data().unwrap().resident_bytes()).sum();
         println!(
             "renderer allocated/reserved {:.2} MiB; current compressed tiles {:.2} MiB; source {:.2} MiB",
             self.engine.backend().telemetry().resident_bytes as f64 / 1048576.,
             backed as f64 / 1048576.,
-            self.engine.document().layers.iter()
-                .filter_map(|l| l.source.as_ref())
+            self.engine.document().artwork.paint.iter()
+                .filter_map(|(_, _, source)| source.original.as_ref())
                 .map(|s| s.resident_bytes()).sum::<usize>() as f64
                 / 1048576.
         );
@@ -341,14 +358,14 @@ impl Canvas {
     }
 }
 fn save(
-    project: Project,
+    project: ArtworkCapture,
     path: PathBuf,
 ) -> std::thread::JoinHandle<std::result::Result<(f64, u64), String>> {
     std::thread::spawn(move || {
         let start = Instant::now();
         let file = std::fs::File::create(&path).map_err(|e| e.to_string())?;
         let mut out = BufWriter::new(file);
-        project.write(&mut out)?;
+        write_capture(&project, &mut out)?;
         out.flush().map_err(|e| e.to_string())?;
         out.get_ref().sync_all().map_err(|e| e.to_string())?;
         Ok((
@@ -357,41 +374,53 @@ fn save(
         ))
     })
 }
-fn compare_saved(path: &Path, snapshot: &Project) -> Result<()> {
+fn write_capture(capture: &ArtworkCapture, out: &mut impl Write) -> std::result::Result<(), String> {
+    let cancel = AtomicBool::new(false);
+    package::codec::PreparedPackage::prepare(capture, None, &cancel)?.write(out, &cancel)
+}
+fn open_package(path: &Path) -> Result<Document> {
+    let cancel = AtomicBool::new(false);
+    let limits = ProjectLimits::default();
+    let backing = package::transport::spool(&mut BufReader::new(std::fs::File::open(path)?),
+        &std::env::temp_dir(), limits.metadata_bytes + limits.asset_bytes + limits.raster_bytes, &cancel)?;
+    let package::codec::OpenOutcome::Candidate { artwork, .. } = package::codec::open(backing, limits, &cancel)?
+        else { return Err("Package is not editable".into()); };
+    Ok(Document::from_artwork(artwork)?)
+}
+fn compare_saved(path: &Path, snapshot: &ArtworkCapture) -> Result<()> {
     let start = Instant::now();
-    let reopened = Project::read(
-        BufReader::new(std::fs::File::open(path)?),
-        ProjectLimits::default(),
-    )?;
-    assert_eq!(reopened.document.color, snapshot.document.color);
-    assert_eq!(reopened.document.layers.len(), snapshot.document.layers.len());
-    for (before, after) in snapshot
-        .document
-        .layers
-        .iter()
-        .zip(&reopened.document.layers)
-    {
-        assert!(
-            before.source == after.source,
-            "Original source samples/profile changed"
-        );
-        assert_eq!(before.effect, after.effect);
-        assert_eq!(before.masks().count(), after.masks().count());
-        for (a, b) in std::iter::once((&before.raster, &after.raster))
-            .chain(before.masks().zip(after.masks()).map(|(a, b)| (&a.raster, &b.raster)))
-        {
+    let reopened = open_package(path)?;
+    let before = Document::from_artwork((*snapshot.artwork).clone())?;
+    assert_eq!(reopened.composition().color, before.composition().color);
+    assert_eq!(reopened.scene().order().len(), before.scene().order().len());
+    for (&a, &b) in before.scene().order().iter().zip(reopened.scene().order()) {
+        let original = before.scene().paint_source(a).and_then(|p| p.original.as_ref());
+        let saved = reopened.scene().paint_source(b).and_then(|p| p.original.as_ref());
+        assert!(original == saved, "Original source samples/profile changed");
+        if let (Some(original), Some(saved)) = (original, saved) {
+            assert_eq!(original.interpretation, saved.interpretation);
+            for (key, tile) in &original.tiles {
+                assert_eq!(tile.content_digest()?, saved.tiles[key].content_digest()?);
+            }
+        }
+        let effect = |doc: &Document, h| doc.scene().effect(h).map(|e| (e.program.clone(), e.values.to_vec()));
+        assert_eq!(effect(&before, a), effect(&reopened, b));
+        assert_eq!(before.scene().mask(a).is_some(), reopened.scene().mask(b).is_some());
+        let raster = |doc: &Document, h| {
+            let scene = doc.scene();
+            scene.source_target(h).and_then(|t| scene.raster(t)).into_iter()
+                .chain(scene.mask(h).map(|(_, m)| &m.raster)).cloned().collect::<Vec<_>>()
+        };
+        for (a, b) in raster(&before, a).iter().zip(raster(&reopened, b)) {
             let before = a.wait_data()?;
             let after = b.wait_data()?;
             assert_eq!(before.tiles.len(), after.tiles.len());
             for (key, tile) in &before.tiles {
-                assert_eq!(tile.wait_backing()?.digest, after.tiles[key].wait_backing()?.digest);
+                assert_eq!(tile.wait_backing()?.content_digest()?, after.tiles[key].wait_backing()?.content_digest()?);
             }
         }
     }
-    println!(
-        "archive reopen + exact tile digest comparison {:.2} ms",
-        ms(start)
-    );
+    println!("archive reopen + exact tile digest comparison {:.2} ms", ms(start));
     Ok(())
 }
 fn main() -> Result<()> {

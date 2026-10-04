@@ -3,14 +3,14 @@ use layer_core::{Ruler, RulerConstraint, RulerGeometry};
 
 #[derive(Clone)]
 pub(super) struct Snapping {
-    targets: Arc<[(LayerId, Rect)]>,
+    targets: Arc<[(Option<OccurrenceHandle>, Rect)]>,
     rulers: Arc<[Ruler]>,
     axes: [Option<(usize, usize, usize)>; 2],
     ruler: Option<RulerConstraint>,
     pub guides: Vec<[Point; 2]>,
 }
 impl Snapping {
-    pub fn new(mut targets: Vec<(LayerId, Rect)>, mut rulers: Vec<Ruler>) -> Self {
+    pub fn new(mut targets: Vec<(Option<OccurrenceHandle>, Rect)>, mut rulers: Vec<Ruler>) -> Self {
         targets.sort_unstable_by_key(|(id, _)| *id);
         rulers.sort_unstable_by_key(|ruler| ruler.id);
         Self { targets: targets.into(), rulers: rulers.into(), axes: [None; 2], ruler: None, guides: Vec::new() }
@@ -113,9 +113,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn transform_snapping(&self) -> Option<Snapping> {
         if !self.operation.snapping { return None; }
         let doc = self.engine.document();
-        let mut targets = vec![(LayerId(0), Rect::from_extent([doc.width, doc.height]))];
-        targets.extend(self.measured_snap_bounds());
-        Some(Snapping::new(targets, if self.rulers.visible { doc.rulers.clone() } else { Vec::new() }))
+        let mut targets = vec![(None, Rect::from_extent(doc.composition().size))];
+        targets.extend(self.measured_snap_bounds().into_iter().map(|(h, b)| (Some(h), b)));
+        Some(Snapping::new(targets, if self.rulers.visible { doc.rulers().collect() } else { Vec::new() }))
     }
 }
 
@@ -124,7 +124,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn rect(x:f32,y:f32)->Rect {Rect {min:Point{x,y},max:Point{x:x+20.,y:y+20.}}}
     #[test] fn constrained_axis_snap_keeps_direction_and_uses_logical_distance() {
         for units in [0.25,1.,4.] {
-            let mut snap=Snapping::new(vec![(LayerId(1),Rect{min:Point{x:0.,y:1000.},max:Point{x:1000.,y:2000.}})],vec![]);
+            let mut snap=Snapping::new(vec![(Some(OccurrenceHandle::from_index(1)),Rect{min:Point{x:0.,y:1000.},max:Point{x:1000.,y:2000.}})],vec![]);
             let offset=snap.correction(rect(4.*units,100.),Point::default(),Some(Point{x:1.,y:1.}),units);
             assert!((offset.x-offset.y).abs()<1e-5);
             assert!((offset.x+4.*units).abs()<1e-5);
@@ -132,14 +132,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     #[test] fn snap_capture_and_release_have_six_and_ten_pixel_hysteresis() {
-        let mut snap=Snapping::new(vec![(LayerId(1),Rect{min:Point{x:0.,y:1000.},max:Point{x:1000.,y:2000.}})],vec![]);
+        let mut snap=Snapping::new(vec![(Some(OccurrenceHandle::from_index(1)),Rect{min:Point{x:0.,y:1000.},max:Point{x:1000.,y:2000.}})],vec![]);
         assert_eq!(snap.correction(rect(5.,100.),Point::default(),Some(Point{x:1.,y:0.}),1.).x,-5.);
         assert_eq!(snap.correction(rect(9.,100.),Point::default(),Some(Point{x:1.,y:0.}),1.).x,-9.);
         assert_eq!(snap.correction(rect(11.,100.),Point::default(),Some(Point{x:1.,y:0.}),1.),Point::default());
         assert!(snap.guides.is_empty());
     }
     #[test] fn ruler_intersection_respects_the_motion_constraint() {
-        let ruler=Ruler{id:1,geometry:RulerGeometry::Straight{start:Point{x:0.,y:0.},end:Point{x:0.,y:100.}}};
+        let ruler=Ruler{id:layer_core::authored::PortableId::random(),geometry:RulerGeometry::Straight{start:Point{x:0.,y:0.},end:Point{x:0.,y:100.}}};
         let mut snap=Snapping::new(vec![],vec![ruler]);
         let bounds=Rect{min:Point{x:-8.,y:30.},max:Point{x:12.,y:50.}};
         let offset=snap.correction(bounds,Point::default(),Some(Point{x:1.,y:1.}),1.);

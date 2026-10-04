@@ -25,20 +25,11 @@ fn grey(v: f32) -> [u8; 4] {
     [c, c, c, 255]
 }
 
-/// Layer 1, empty, over a photo marked as a reference.
-fn photo(pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document {
-    let mut doc = Document::new("heal", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    assert_eq!(doc.allocate_layer_id(), PHOTO);
-    let mut layer = Layer::paint(PHOTO, "Photo");
-    layer.source = Some(rgba8_source(EXTENT, pixel));
-    doc.layers.insert(1, layer);
-    doc.reference_layers = [PHOTO].into();
-    doc
-}
+fn photo(pixel: impl Fn(u32, u32) -> [u8; 4]) -> Document { photo_document(EXTENT, pixel) }
 
 fn healer(doc: Document, preset: DefaultBrushPreset, diameter: f32, feedback: bool) -> (InputProducer<PenEvent>, CanvasEngine<WgpuRasterizer>) {
-    let extent = [doc.width, doc.height];
-    let r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    let extent = doc.composition().size;
+    let r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
     let (input, consumer) = input_queue(256);
     let mut engine = CanvasEngine::new(r, doc, consumer, view(extent), ViewTransform::IDENTITY).unwrap();
     engine
@@ -55,7 +46,7 @@ fn healer(doc: Document, preset: DefaultBrushPreset, diameter: f32, feedback: bo
 fn broad_spot_healing_has_bounded_memory() {
     let extent = [6000, 4000];
     let mut doc = document(extent);
-    doc.blend_space = layer_core::BlendSpace::Perceptual;
+    set_blend(&mut doc, layer_core::BlendSpace::Perceptual);
     let (mut input, mut engine) = healer(doc, DefaultBrushPreset::SpotHealingBrush, 512., false);
     let mut fit = view(extent);
     fit.width_px = 1500;
@@ -174,7 +165,7 @@ fn healing_keeps_the_source_texture_and_takes_the_destination_tone() {
 
 fn heals_texture_and_tone(blend_space: layer_core::BlendSpace) {
     let mut doc = photo(|x, y| grey(texture_and_gradient(x, y)));
-    doc.blend_space = blend_space;
+    set_blend(&mut doc, blend_space);
     let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
     source_at(&mut engine, 150., 256.);
     stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);
@@ -239,7 +230,7 @@ fn abandoning_a_heal_resolves_its_pending_revision() {
     source_at(&mut engine, 150., 256.);
     draw(&mut engine, &mut input, pen(1, PenPhase::Down, [600., 256.], SampleFlags::PRIMARY));
     draw(&mut engine, &mut input, pen(2, PenPhase::Up, [620., 256.], SampleFlags::PRIMARY));
-    let root = engine.document().layers[0].raster.clone();
+    let root = engine.document().target_raster(TARGET).unwrap().clone();
     assert!(root.try_data().is_none());
     drop(engine);
     assert!(root.try_data().is_some_and(|data| data.is_err()));
@@ -258,7 +249,7 @@ fn settling_preserves_sources_while_navigation_and_queued_paint_wait_for_publica
         assert!(engine.backend().has_pending_submission());
         assert!(!engine.backend().can_submit());
         assert!(!engine.can_undo());
-        let root = engine.document().layers[0].raster.clone();
+        let root = engine.document().target_raster(TARGET).unwrap().clone();
         assert!(root.try_data().is_none());
         engine.set_brush(BrushSnapshot { diameter: 8., ..default_brush(DefaultBrushPreset::GPen) }).unwrap();
         engine.set_retouch(None);
@@ -296,7 +287,7 @@ fn with_matching_surroundings_healing_is_the_clone() {
         let mut pages = Vec::new();
         for preset in [DefaultBrushPreset::CloneStamp, DefaultBrushPreset::HealingBrush] {
             let mut doc = photo(periodic);
-            doc.blend_space = blend_space;
+            set_blend(&mut doc, blend_space);
             let (mut input, mut engine) = healer(doc, preset, 48., false);
             source_at(&mut engine, 216., 144.);
             stroke(&mut engine, &mut input, 1, [600., 144.], [860., 300.]);
@@ -313,7 +304,7 @@ fn spot_healing_replaces_a_dot_with_texture_like_its_surroundings() {
     let texture = |x: u32, y: u32| if dot(x, y) { 0.05 } else { 0.5 + 0.1 * noise(x, y) };
     for blend_space in layer_core::BlendSpace::ALL {
         let mut doc = photo(|x, y| grey(texture(x, y)));
-        doc.blend_space = blend_space;
+        set_blend(&mut doc, blend_space);
         let (mut input, mut engine) = healer(doc, DefaultBrushPreset::SpotHealingBrush, 40., false);
         stroke(&mut engine, &mut input, 1, [516., 250.], [524., 250.]);
         let healed = target(engine.backend());
@@ -339,7 +330,7 @@ fn healing_matches_tone_on_the_documents_values() {
     let destination = f32::from(code(0.4)) / 255.;
     let healed_tone = |blend_space| {
         let mut doc = photo(texture);
-        doc.blend_space = blend_space;
+        set_blend(&mut doc, blend_space);
         let (mut input, mut engine) = healer(doc, DefaultBrushPreset::HealingBrush, 64., false);
         source_at(&mut engine, 150., 256.);
         stroke(&mut engine, &mut input, 1, [600., 256.], [880., 256.]);

@@ -80,7 +80,6 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
         .snapshot_gpu()
         .capture(
             s.capture_project_recovery().unwrap(),
-            0.,
             Default::default(),
         )
         .unwrap();
@@ -136,7 +135,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         for _ in 0..24 {
             source.push_row(&sample.repeat(32)).unwrap();
         }
-        project.document.layers[0].source = Some(Arc::new(source.finish().unwrap()));
+        paint_mut(&mut project,0).original = Some(Arc::new(source.finish().unwrap()));
         let (gpu, mut state) = hdr_renderer(color);
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session = UiSession::from_project(gpu, project, None, [128, 96], Platform::Windows).unwrap();
@@ -146,7 +145,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         let master = hdr_linear(&host);
         assert!(master.iter().any(|p| p[0] > 1.));
         let checkpoint = host.session.engine().checkpoint();
-        let original = host.session.engine().document().sdr_rendition;
+        let original = host.session.engine().document().output().sdr;
         let epoch = host.session.state().document_file.epoch;
         let panel_recipe = hdr::SdrRendition {
             exposure: -0.5,
@@ -163,29 +162,29 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         };
         panel_edit(&mut host, epoch + 1, "down");
         panel_edit(&mut host, epoch + 1, "up");
-        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        assert_eq!(host.session.engine().document().output().sdr, original);
         panel_edit(&mut host, epoch, "down");
         assert!(host.session.require_document_snapshot_idle().is_err());
         panel_edit(&mut host, epoch, "cancel");
-        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        assert_eq!(host.session.engine().document().output().sdr, original);
         panel_edit(&mut host, epoch, "down");
         panel_edit(&mut host, epoch, "up");
-        assert_eq!(host.session.engine().document().sdr_rendition, panel_recipe);
+        assert_eq!(host.session.engine().document().output().sdr, panel_recipe);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        assert_eq!(host.session.engine().document().output().sdr, original);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Redo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().sdr_rendition, panel_recipe);
+        assert_eq!(host.session.engine().document().output().sdr, panel_recipe);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        assert_eq!(host.session.engine().document().output().sdr, original);
         host.dispatch(UiAction::Invoke { command: CommandId::SdrRendition }).unwrap();
         assert!(host.session.state().requests.is_empty());
         assert_eq!(host.session.engine().checkpoint(), checkpoint);
@@ -196,18 +195,18 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             let change = layer_ui::proof_panel::apply(&mut host.session, layer_ui::proof_panel::ProofAction::Rendition { phase, recipe: adjusted }).unwrap();
             host.apply_change(host.session.state().revision, change);
         }
-        let recipe = host.session.engine().document().sdr_rendition;
+        let recipe = host.session.engine().document().output().sdr;
         assert_ne!(recipe, original);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().sdr_rendition, original);
+        assert_eq!(host.session.engine().document().output().sdr, original);
         host.dispatch(UiAction::Invoke {
             command: CommandId::Redo,
         })
         .unwrap();
-        assert_eq!(host.session.engine().document().sdr_rendition, recipe);
+        assert_eq!(host.session.engine().document().output().sdr, recipe);
         assert_eq!(hdr_linear(&host), master);
         assert_ne!(
             hdr_delivery(&mut host, layer_ui::ExportRecipe::web_share(), &png_path),
@@ -241,7 +240,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             pq_recipe.clone(),
             &directory.join(format!("{depth:?}-PQ.png")),
         );
-        let photo = layer_ui::read_import(
+        let photo = editable(layer_ui::read_import(
             Cursor::new(pq),
             layer_ui::ImportIntent::Open,
             Default::default(),
@@ -250,8 +249,8 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             Default::default(),
             &Default::default(),
         )
-        .unwrap();
-        assert_eq!(photo.project.document.color.depth, SampleDepth::F16);
+        .unwrap());
+        assert_eq!(photo.project.composition().color.depth, SampleDepth::F16);
         for format in [
             layer_ui::ExportFormat::JpegHdr,
             layer_ui::ExportFormat::JpegHdrMapped,
@@ -271,7 +270,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
             }
             let path = directory.join(format!("{depth:?}-{format:?}.{}", format.extension()));
             let bytes = hdr_delivery(&mut host, recipe.clone(), &path);
-            let imported = layer_ui::read_import(
+            let imported = editable(layer_ui::read_import(
                 Cursor::new(bytes.clone()),
                 layer_ui::ImportIntent::Open,
                 Default::default(),
@@ -280,22 +279,16 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
                 Default::default(),
                 &Default::default(),
             )
-            .unwrap();
-            assert!(imported.project.document.color.depth.is_float());
+            .unwrap());
+            assert!(imported.project.composition().color.depth.is_float());
             assert_eq!(
                 [
-                    imported.project.document.width,
-                    imported.project.document.height
+                    imported.project.composition().size[0],
+                    imported.project.composition().size[1]
                 ],
                 [32, 24]
             );
-            let source = imported
-                .project
-                .document
-                .layers
-                .iter()
-                .find_map(|l| l.source.as_ref())
-                .unwrap();
+            let source=imported.project.artwork.paint.iter().find_map(|(_,_,p)|p.original.as_ref()).unwrap();
             let mut row = vec![0; source.row_bytes()];
             source.rows().read(0, &mut row).unwrap();
             assert!(
@@ -363,7 +356,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         raster.commit(&mut host).unwrap();
         drop(raster);
         settle(&mut host);
-        let layers = host.session.engine().document().layers.clone();
+        let layers = host.session.engine().document().clone();
         host.dispatch(UiAction::Invoke {
             command: CommandId::Undo,
         })
@@ -374,20 +367,19 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         })
         .unwrap();
         settle(&mut host);
-        assert_eq!(host.session.engine().document().layers, layers);
+        assert_authored_eq(host.session.engine().document(),&layers);
         assert_eq!(hdr_linear(&host), master);
         let file = directory.join(format!("HDR 日本語 {depth:?}.capy"));
         let saved = host.session.capture_project_recovery().unwrap();
-        crate::document_io::atomic_write(&file, &Default::default(), |f| saved.write(f)).unwrap();
+        crate::document_io::atomic_write(&file, &Default::default(), |f| write_capture(&saved,f)).unwrap();
         let reopened =
-            Project::read(std::fs::File::open(&file).unwrap(), Default::default()).unwrap();
-        assert_eq!(reopened.document.layers, saved.document.layers);
-        assert_eq!(reopened.document.color, color);
-        assert_eq!(reopened.document.sdr_rendition, recipe);
+            read_document(std::fs::File::open(&file).unwrap(), Default::default()).unwrap();
+        assert_capture_eq(&reopened,&saved);
+        assert_eq!(reopened.composition().color, color);
+        assert_eq!(reopened.output().sdr, recipe);
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        let restored =
-            crate::documents::prepare_recovery(environment, file, &Default::default()).unwrap();
-        assert_eq!(restored.engine().document().layers, layers);
+        let crate::documents::RecoveryPrepared::Editable(restored)=crate::documents::prepare_recovery(environment, file, &Default::default()).unwrap() else{panic!("HDR package must admit an editable session")};
+        assert_authored_eq(restored.engine().document(),&layers);
         assert!(!restored.state().soft_proof);
         drop(restored);
         // A canceled export must leave an existing destination byte-for-byte intact.
@@ -417,7 +409,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         drop(old);
         host.startup = Default::default();
         settle(&mut host);
-        assert_eq!(host.session.engine().document().layers, layers);
+        assert_authored_eq(host.session.engine().document(),&layers);
         assert_eq!(hdr_linear(&host), master);
         state.check().unwrap();
         assert_eq!(
@@ -445,14 +437,14 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         change.commit(&mut host).unwrap();
         drop(change);
         settle(&mut host);
-        assert_eq!(host.session.engine().document().color.depth, target);
+        assert_eq!(host.session.engine().document().composition().color.depth, target);
         let mut undo = begin(&mut host, CommandId::Undo);
         ready(&mut undo, Action::Describe);
         undo.commit(&mut host).unwrap();
         drop(undo);
         settle(&mut host);
-        assert_eq!(host.session.engine().document().color, color);
-        assert_eq!(host.session.engine().document().layers, layers);
+        assert_eq!(host.session.engine().document().composition().color, color);
+        assert_authored_eq(host.session.engine().document(),&layers);
         state.check().unwrap();
     }
 }

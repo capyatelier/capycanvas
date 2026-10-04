@@ -9,6 +9,17 @@ Metal renders the canvas through a `CAMetalLayer` behind native controls. The
 and the [Apple porting guide](../APPLE_PORTING_GUIDE.md) holds the porting rules
 and XCTest pitfalls. Features usually land on GTK, Web and Android first.
 
+Artwork tasks retain shared authored roots and captured effect phases. Native
+saves write source-only packages through coordinated atomic replacement. A
+package the shared reader cannot admit for editing stays in the shared read-only
+`PackageView` without replacing the editable document. Imported native backing
+stays alive through renderer admission so unavailable execution capabilities can
+present the original package; cancellation remains a cancelled request. Copy Original File preserves its complete
+backing; Export Preview Image writes the verified PNG through the existing
+coordinated destination or private export-as-copy staging flow. Direct writes
+compare the retained security-scoped source URL and filesystem identity before
+replacement to keep the original package intact.
+
 ## Prerequisites
 
 Everything except the Rust bridge tests needs an Apple Silicon Mac with Xcode,

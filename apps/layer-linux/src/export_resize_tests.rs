@@ -26,12 +26,12 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
     std::fs::create_dir_all(&output).unwrap();
     let output = output.canonicalize().unwrap();
     let mut project = new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = DocumentColor {
+    composition_mut(&mut project).color = DocumentColor {
         space: RgbSpace::ProPhoto,
         depth: SampleDepth::U16,
     };
-    project.document.resolution = Some(layer_core::ImageResolution::ppi(600));
-    project.document.layers[1].visible = false;
+    composition_mut(&mut project).resolution = Some(layer_core::ImageResolution::ppi(600));
+    let paper = project.scene().order()[1]; project.artwork.occurrences.get_mut(paper).unwrap().visible = false;
     let interpretation = SourceInterpretation {
         channels: SourceChannels::Rgba,
         depth: SampleDepth::U16,
@@ -54,9 +54,11 @@ fn native_export_sizes_preserve_master_and_release_cancelled_dialogs() {
             .collect();
         builder.push_row(&row).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
+    ready(&w);
+    apply_fixture_theme(&w);
     ready(&w);
     // An actual edit makes dirty-state preservation observable.
     ui_session_mut(&w)
@@ -361,6 +363,8 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
     let w = Workspace::with_project(&app, Some((new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     w.window.present();
     ready(&w);
+    apply_fixture_theme(&w);
+    ready(&w);
     let master = snapshot(&w);
     let settings = state(&w).settings.clone();
     let widget =
@@ -532,10 +536,9 @@ fn native_export_webp_to_a_prechosen_file() {
     std::fs::create_dir_all(&output).unwrap();
     let output = output.canonicalize().unwrap();
     let mut project = new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.resolution = Some(layer_core::ImageResolution::ppi(144));
-    for paper in project.document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
-        paper.visible = false;
-    }
+    composition_mut(&mut project).resolution = Some(layer_core::ImageResolution::ppi(144));
+    let papers: Vec<_> = project.scene().constant_backdrop().to_vec();
+    for h in papers { project.artwork.occurrences.get_mut(h).unwrap().visible = false; }
     let pixel = |x: u32, y: u32| [(x * 5 % 256) as u8, (y * 7 % 256) as u8, 180, if x < 96 { 255 } else { 0 }];
     let mut builder = SourceBuilder::new(
         [192, 128],
@@ -551,7 +554,7 @@ fn native_export_webp_to_a_prechosen_file() {
     for y in 0..128 {
         builder.push_row(&(0..192).flat_map(|x| pixel(x, y)).collect::<Vec<_>>()).unwrap();
     }
-    project.document.layers[0].source = Some(std::sync::Arc::new(builder.finish().unwrap()));
+    paint_at_mut(&mut project, 0).original = Some(std::sync::Arc::new(builder.finish().unwrap()));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.present();
     ready(&w);
@@ -710,7 +713,9 @@ fn native_export_keeps_camera_lens_and_copyright_without_location() {
         Default::default(),
     )
     .unwrap();
-    assert!(project.document.metadata.exif.is_some() && project.document.metadata.xmp.is_some());
+    let layer_ui::ImportOutcome::Editable(imported) = project else { panic!("editable photo") };
+    let project = imported.project;
+    assert!(project.artwork.metadata.exif.is_some() && project.artwork.metadata.xmp.is_some());
     let w = Workspace::with_project(&app, Some((project, location)));
     w.window.present();
     ready(&w);

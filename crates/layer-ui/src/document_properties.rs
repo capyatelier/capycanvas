@@ -55,7 +55,7 @@ mod tests {
     #[test]
     fn properties_preserve_literals_and_all_retention_branches() {
         let context = Localizer::shared(crate::UiLanguage::English);
-        let document = layer_core::Document::new("Properties", 64, 48, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+        let document = layer_core::Document::new(layer_core::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
         let mut info = layer_color::DocumentInfo::capture(&document).inspect().unwrap();
         for (kind, embedded, retained) in [(SourceKind::Original, true, "Original samples and embedded ICC retained."), (SourceKind::Original, false, "Original samples and color interpretation retained."), (SourceKind::Rasterized, true, "Rasterized in document coordinates.")] {
             info.sources = vec![layer_color::InspectedSourceInfo { name: "私の写真 · 내 사진".into(), extent: [10,20], kind, channels: SourceChannels::Gray, bits: 16, profile_description: Some("Embedded ICC profile".into()), profile_assumed: true, embedded }];
@@ -71,10 +71,10 @@ mod tests {
     #[test]
     fn properties_show_blending_and_preserve_literal_source_names() {
         let context = Localizer::shared(crate::UiLanguage::English);
-        let mut document = layer_core::Document::new("Properties", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        let mut document = layer_core::Document::new(layer_core::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         let rows = |document: &layer_core::Document| document_properties(&layer_color::DocumentInfo::capture(document).inspect().unwrap(), &context).rows;
         assert!(rows(&document).contains(&("Blending".into(), "Linear Light Blending".into())));
-        document.blend_space = BlendSpace::Perceptual;
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().blend = BlendSpace::Perceptual;
         let described = rows(&document);
         let position = |label: &str| described.iter().position(|(l,_)| l == label).unwrap();
         assert_eq!(described[position("Blending")].1, "Perceptual Blending");

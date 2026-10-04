@@ -20,6 +20,9 @@ import UIKit
     @Published var creationSaving = false
     @Published var colorEditor: DocumentColorController?
     @Published var exportEditor: ExportController?
+    @Published var packageSummary: JSON?
+    @Published var packageImage: CGImage?
+    @Published var packageCopying = false
     @Published var pendingProfile: JSON?
     @Published var profileError: String?
     @Published var interpreting = false
@@ -45,6 +48,7 @@ import UIKit
     var closeWindow: (() -> Void)?
     private var handledClose = false
     private var activeTask: NativeProjectTask?
+    private var packageSource: URL?
     private var pickerCompletion: (([URL]) -> Void)?
     private var cancelled = false
     private var finishing = false
@@ -356,12 +360,14 @@ import UIKit
         #endif
     }
     /// Share destination and staging behavior for projects and profiled images.
-    private func deliver(_ task: NativeProjectTask, name: String, type: UTType, completion: @escaping (URL?) -> Void) {
+    private func deliver(_ task: NativeProjectTask, name: String, type: UTType, previewOnly: Bool = false, completion: @escaping (URL?) -> Void) {
+        let original = previewOnly ? packageSource : nil
+        let destinationError = packageSummary?["destination_error"].string ?? ""
         if !usesExportPicker {
             chooseSave(name: name, type: type) { [weak self] url in
                 guard let self, let url else { completion(nil); return }
                 NativeProjectTask.io.async {
-                    do { try task.write(to: url); DispatchQueue.main.async { completion(url) } }
+                    do { try task.write(to: url, previewOnly: previewOnly, original: original, destinationError: destinationError); DispatchQueue.main.async { completion(url) } }
                     catch { let message = error.localizedDescription
                         DispatchQueue.main.async { self.report(message); completion(nil) }
                     }
@@ -372,7 +378,7 @@ import UIKit
                 do {
                     let suffix = URL(fileURLWithPath: name).pathExtension
                     let staging = try ProjectFileIO.stagingURL(title: name, extension: type == .capyProject ? "capy" : suffix.isEmpty ? type.preferredFilenameExtension ?? "png" : suffix)
-                    do { try task.write(to: staging) }
+                    do { try task.write(to: staging, previewOnly: previewOnly, original: original, destinationError: destinationError) }
                     catch { try? FileManager.default.removeItem(at: staging.deletingLastPathComponent()); throw error }
                     DispatchQueue.main.async {
                         guard let self else { Self.removeStaging(staging); return }
@@ -483,6 +489,17 @@ import UIKit
         NativeProjectTask.io.async { [weak self] in
             do {
                 try work()
+                let package = try task.packageSummary()
+                if !package.isNull {
+                    let image = try task.packagePreview()
+                    DispatchQueue.main.async {
+                        guard let self else { return }
+                        if self.cancelled { self.finish(); return }
+                        self.interpreting = false
+                        self.packageSummary = package; self.packageImage = image; self.packageSource = url
+                    }
+                    return
+                }
                 let profile = try task.pendingProfile()
                 DispatchQueue.main.async {
                     guard let self else { return }
@@ -526,6 +543,29 @@ import UIKit
             }
         }
     }
+    func closePackage() {
+        guard !packageCopying else { return }
+        packageSummary = nil; packageImage = nil; packageSource = nil; recovering = nil
+        finish()
+    }
+    func copyPackage() {
+        guard !packageCopying, let task = activeTask else { return }
+        packageCopying = true
+        deliver(task, name: "Copy.capy", type: .capyProject) { [weak self] _ in
+            guard let self else { return }
+            self.packageCopying = false
+            self.closePackage()
+        }
+    }
+    func exportPackagePreview() {
+        guard !packageCopying, let task = activeTask else { return }
+        packageCopying = true
+        deliver(task, name: "Preview.png", type: .png, previewOnly: true) { [weak self] _ in
+            guard let self else { return }
+            self.packageCopying = false
+            self.closePackage()
+        }
+    }
     func chooseProfile(_ profile: JSON?) {
         guard !interpreting else { return }
         profileCompletion?(profile)
@@ -551,6 +591,7 @@ import UIKit
     private func released() {
         requestID = nil; approved = nil; busy = false; blocksEditor = false; finishing = false
         profileCompletion = nil; pendingProfile = nil; profileError = nil; interpreting = false
+        packageSummary = nil; packageImage = nil; packageSource = nil; packageCopying = false
         activeTask = nil; cancelling = false; exportDelivery = nil; exportEditor = nil
         loadingPhoto = false; copying = false; copyProgress = nil
         if let state = store?.state.json {
@@ -640,6 +681,29 @@ struct ProjectFilesModifier: ViewModifier {
                     Button(common["cancel"].string, role: .cancel) { files.choose("cancel") }
                 }
             } message: { if let error = files.error { Text(error) } }
+            .sheet(isPresented: Binding(get: { files.packageSummary != nil }, set: { if !$0 { files.closePackage() } })) {
+                if let summary = files.packageSummary {
+                    VStack(alignment: .leading, spacing: 16) {
+                        Text(summary["status"].string).font(.headline)
+                        if let image = files.packageImage {
+                            Image(decorative: image, scale: 1).resizable().aspectRatio(contentMode: .fit).frame(maxHeight: 420)
+                        }
+                        Text(summary["reason"].string)
+                        HStack {
+                            Button(summary["close"].string) { files.closePackage() }.disabled(files.packageCopying)
+                            Spacer()
+                            if summary["capabilities"]["export"].bool {
+                                Button(summary["export_preview"].string) { files.exportPackagePreview() }.disabled(files.packageCopying)
+                                    .accessibilityIdentifier("export-package-preview")
+                            }
+                            Button(summary["copy_original"].string) { files.copyPackage() }.disabled(files.packageCopying)
+                                .accessibilityIdentifier("copy-original-package")
+                        }
+                    }.padding(24).frame(minWidth: 320, idealWidth: 560)
+                        .accessibilityIdentifier("preserved-package-preview")
+                        .interactiveDismissDisabled(files.packageCopying).modifier(EditorPopupPresentation())
+                }
+            }
             .sheet(isPresented: $files.creating, onDismiss: { files.created(nil) }) {
                 NewDrawingForm(spec: files.newDocumentSpec, error: files.creationError, busy: files.creationSaving) {
                     files.created($0)
@@ -671,7 +735,7 @@ struct ProjectFilesModifier: ViewModifier {
     }
 }
 private extension ProjectFiles {
-    var activeOperationVisible: Bool { (!copying || copyProgress != nil) && !confirming && picker == nil && !creating && pendingProfile == nil && colorEditor == nil && exportEditor == nil }
+    var activeOperationVisible: Bool { (!copying || copyProgress != nil) && !confirming && picker == nil && !creating && pendingProfile == nil && packageSummary == nil && colorEditor == nil && exportEditor == nil }
 }
 
 #if os(iOS)

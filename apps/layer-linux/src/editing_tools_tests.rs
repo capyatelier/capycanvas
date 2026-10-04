@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 fn raster(w: &Workspace) -> RasterRevision {
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
-    document.layer(document.active_layer).unwrap().raster.clone()
+    active_raster(document).clone()
 }
 fn pixels(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
     root.wait_data().unwrap().tiles.iter().map(|(key, tile)| {
@@ -65,8 +65,8 @@ fn native_portable_paint_pointer_workflow() {
         (RgbSpace::DisplayP3, SampleDepth::F16),
     ] {
         let mut project = new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-        project.document.color = DocumentColor { space, depth };
-        project.document.blend_space = project.document.blend_space.for_depth(depth);
+        composition_mut(&mut project).color = DocumentColor { space, depth };
+        composition_mut(&mut project).blend = project.composition().blend.for_depth(depth);
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.maximize(); w.window.present(); ready(&w);
         invoke(&w, CommandId::FitCanvas);
@@ -123,8 +123,8 @@ fn native_portable_paint_pointer_workflow() {
         let open = chooser(); open.set_file(&gtk::gio::File::for_path(&path)).unwrap();
         pump(150); open.response(gtk::ResponseType::Accept); finish(&w);
         let (project, location) = opened.borrow_mut().take().expect("Open published a document");
-        assert_eq!(project.document.color, DocumentColor { space, depth });
-        assert_eq!(pixels(&project.document.layer(project.document.active_layer).unwrap().raster), edited);
+        assert_eq!(project.composition().color, DocumentColor { space, depth });
+        assert_eq!(pixels(&paint_at(&project, 0).raster), edited);
         w.window.destroy(); pump(100);
         let restored = Workspace::with_project(&app, Some((project, location)));
         restored.window.maximize(); restored.window.present(); ready(&restored);

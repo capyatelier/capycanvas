@@ -2289,7 +2289,7 @@ fn native_tonal_toolbar_input() {
             d.click_name("tool-choice-tonal-tones-4");ready(&d);
         }
         assert!(state(&d.w).tool_extra.iter().any(|o|matches!(o,layer_ui::ToolOption::Choice {id:"tonal-tones",items,..} if items[4].selected)));
-        assert!(ui_session(&d.w).engine().document().selection.is_some());
+        assert!(ui_session(&d.w).engine().document().working.selection.is_some());
         save_snapshot(&d.w, 120, || d.input.dir.join(format!("tonal-toolbar-{edge:?}.png")));
         if edge==Edge::Left {d.click_name(&format!("tile-{options}"));pump(100);}
     }

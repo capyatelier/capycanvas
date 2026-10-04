@@ -1,10 +1,23 @@
+import {readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   // Exercise natural startup discovery, with independent recovery owners.
   // Ordinary tab switches are covered separately without a browser reload.
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+240000;function poll(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}));else setTimeout(poll,30);}poll();})`);
+  const wait=(condition,recovering=false)=>evaluate(`new Promise((resolve,reject)=>{
+    const end=performance.now()+240000;
+    const details=()=>{const app=window.layerApp,state=app?.state();return JSON.stringify({status:document.querySelector('#status')?.textContent,dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>({title:dialog.querySelector('h2')?.textContent,reason:[...dialog.querySelectorAll('p')].map(p=>p.textContent),actions:[...dialog.querySelectorAll('button')].map(b=>b.textContent)})),progress:[...document.querySelectorAll('.file-progress')].map(n=>n.textContent),tabs:app?.app.document_tabs(0),file:state?.document_file,requests:state?.requests,busy:app?.documents.busy()},(_,v)=>typeof v==='bigint'?String(v):v);};
+    function poll(){
+      const status=document.querySelector('#status')?.textContent??'';
+      const packageView=[...document.querySelectorAll('dialog[open] button')].some(b=>b.textContent.startsWith('Copy Original'));
+      if(${recovering}&&(/Recovery (?:operation|capture) failed|Recovery unavailable/.test(status)||packageView))reject(Error('Recovery did not adopt the saved drawing: '+details()));
+      else if(${condition})resolve();
+      else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+details()));
+      else setTimeout(poll,30);
+    }
+    poll();
+  })`);
   const ready=()=>wait('window.layerApp?.app.brush_ready()&&!layerApp.documents.busy()&&layerApp.app.document_park_ready()');
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
   await ready();
@@ -27,7 +40,7 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   for(const count of [2,3]){
     await wait(`!![...document.querySelectorAll('dialog[open] h2')].find(n=>n.textContent==='Recover drawing?')`);
     await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Recover').click()`);
-    await wait(`layerApp.app.document_tabs(0).tabs.length===${count}`);
+    await wait(`layerApp.app.document_tabs(0).tabs.length===${count}`,true);
   }
   await evaluate('layerApp.documents.startRecovery()');await ready();
   const tabs=await evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==='bigint'?Number(v):v))`);
@@ -45,7 +58,12 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
 }
 
 export async function checkDrawingTabs({call,evaluate,settle}) {
-  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+60000;function poll(){if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+' '+document.querySelector('#status').textContent));else setTimeout(poll,30);}poll();})`);
+  const wait=condition=>evaluate(`new Promise((resolve,reject)=>{
+    const end=performance.now()+60000;
+    const details=()=>{const safe=read=>{try{return read()}catch(error){return String(error)}};return JSON.stringify({status:document.querySelector('#status')?.textContent,gpuNotice:document.querySelector('#gpu-notice')?.textContent,busy:layerApp.documents.busy(),brushReady:layerApp.app.brush_ready(),parkReady:safe(()=>layerApp.app.document_park_ready()),gpuReady:layerApp.app.gpu_ready(),file:layerApp.state().document_file,requests:layerApp.state().requests,tabs:layerApp.app.document_tabs(1000),startup:layerApp.startupTimes,stats:safe(()=>layerApp.app.renderer_stats()),dialogs:[...document.querySelectorAll('dialog[open]')].map(n=>n.textContent)},(_,v)=>typeof v==='bigint'?String(v):v);};
+    function poll(){try{if(${condition})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+details()));else setTimeout(poll,30);}catch(error){reject(Error(String(error)+': '+details()));}}
+    poll();
+  })`);
   const tabs=()=>evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(1000),(_,v)=>typeof v==='bigint'?Number(v):v))`);
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
   const ready=()=>wait(`!layerApp.documents.busy()&&layerApp.app.brush_ready()&&!layerApp.state().document_file.busy&&layerApp.app.document_park_ready()`);
@@ -182,15 +200,15 @@ export async function checkDrawingTabs({call,evaluate,settle}) {
   for(const[type,dx,buttons]of[['mousePressed',0,1],['mouseMoved',75,1],['mouseReleased',75,0]]){await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   await wait('layerApp.state().document_file.modified');await ready();
   await invoke('save_document_as');await ready();
-  await evaluate(`window.tabManifest=bytes=>JSON.parse(new TextDecoder().decode(bytes.slice(52,52+Number(new DataView(bytes.buffer,bytes.byteOffset).getBigUint64(12,true)))));window.tabExpected=tabManifest([...tabFiles.values()][0]).blobs;`);
-  assert.ok(await evaluate('tabExpected.length>0'));
+  const tabExpected = packageResourceIdentity(await readPackage(evaluate, '[...tabFiles.values()][0]'));
+  assert.ok(tabExpected.length>0);
   await invoke('undo');await ready();
   const neighbor=await create();
   assert.equal((await tabs()).resident_bytes,0,'Inactive redo payloads leave RAM after successful OPFS write');
   assert.ok(await evaluate(`(async()=>{let n=0;const root=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-live-tiles');for await(const dir of root.values())for await(const file of dir.values())if(file.kind==='file')n++;return n;})()`),'Private immutable chunks exist');
   await select(painted);await invoke('redo');await ready();
   await invoke('save_document_as');await ready();
-  assert.deepEqual(await evaluate('tabManifest([...tabFiles.values()].at(-1)).blobs'),await evaluate('tabExpected'),'Redo from disk retains exact compressed tile identity');
+  assert.deepEqual(packageResourceIdentity(await readPackage(evaluate, '[...tabFiles.values()].at(-1)')),tabExpected,'Redo from disk retains exact compressed tile identity');
   await select(neighbor);
   assert.equal((await tabs()).resident_bytes,0,'A reread cache is evicted on the next switch');
   const beforeCorrupt=(await tabs()).tabs.map(t=>t.id);

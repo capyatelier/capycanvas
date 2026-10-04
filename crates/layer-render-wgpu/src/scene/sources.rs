@@ -18,8 +18,8 @@ use std::{
 
 pub(super) const FLOAT_TILE_BYTES: u64 = PAGE_SIZE as u64 * PAGE_SIZE as u64 * 16;
 // Resident decoded pixels and in-flight uploads have different lifetimes.
-// Retain neighboring layer tiles independently of staging memory. Equal native
-// tile contents share decoded pixels even across distinct document revisions.
+// Retain neighboring source tiles independently of staging memory. Immutable
+// owners and equal generated tile contents share decoded pixels across revisions.
 const DECODED_SLOTS: usize = 64;
 const DECODERS: usize = 4;
 use crate::native_tiles::transfer;
@@ -47,11 +47,21 @@ impl SourceLimits {
     }
 }
 
+#[derive(PartialEq, Eq)]
+enum RasterIdentity {
+    Encoded([u8; 32]),
+    Owner(u64),
+}
 enum Key {
     Image(Weak<SourceImage>, [u32; 2]),
-    Raster([u8; 32], RgbSpace, RgbSpace),
+    Raster(RasterIdentity, RgbSpace, RgbSpace),
 }
 impl Key {
+    fn raster(blob: &TileBlob, space: RgbSpace, destination: RgbSpace) -> Self {
+        Self::Raster(blob.encoded_fingerprint().map_or_else(
+            || RasterIdentity::Owner(blob.owner_identity()), RasterIdentity::Encoded,
+        ), space, destination)
+    }
     fn matches(&self, other: &Self) -> bool {
         match (self, other) {
             (Self::Image(a, x), Self::Image(b, y)) => a.ptr_eq(b) && x == y,
@@ -190,7 +200,7 @@ impl DecodedTiles {
             > self.limits.upload_bytes - FLOAT_TILE_BYTES
     }
     pub fn prepared_raster_view(&self, blob: &Arc<TileBlob>, space: RgbSpace) -> Option<&wgpu::TextureView> {
-        let key = Key::Raster(blob.digest, space, self.destination);
+        let key = Key::raster(blob, space, self.destination);
         self.slots.iter().find(|s| s.key.as_ref().is_some_and(|k| k.matches(&key)) && s.valid.load(Ordering::Acquire))
             .map(|s| &s.view)
     }
@@ -248,7 +258,7 @@ impl DecodedTiles {
         let mut data = rgb_settings(space, destination, depth, [PAGE_SIZE; 2], d.alpha);
         data[18] = f32::from(d.channels == 1);
         let (tile, write) =
-            self.plan_key(r, Key::Raster(blob.digest, space, destination))?;
+            self.plan_key(r, Key::raster(blob, space, destination))?;
         let pending = write.map(|write| PendingTile {
             pixels: Pixels::Raster(blob.clone(), space),
             texture: tile.texture.clone(),

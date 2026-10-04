@@ -243,8 +243,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           const progress=element("aside","file-progress");progress.setAttribute("role","status");
           let cancelled=false,phase="preparing_converted_copy";const caption=()=>delivery[phase],label=element("span","",caption);
           progress.append(label,button(()=>common.cancel,()=>{cancelled=true;phase="cancelling";bindCopy(label,caption);candidate.cancel();}));document.body.append(progress);
+          let output;
           try {
-            const bytes=await app.save_color_copy(candidate);
+            output=await app.save_color_copy(candidate);const bytes=output.blob;
             if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");
             phase="writing_converted_copy";bindCopy(label,caption);progress.querySelector("button").disabled=true;
             let success;
@@ -252,7 +253,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             else success=!!await download(bytes,target.location.name,"application/octet-stream");
             applyChange(app.finish_document(id,success));
           } catch(error){if(cancelled)throw new DOMException("Converted copy cancelled","AbortError");throw error;}
-          finally{progress.remove();}
+          finally{progress.remove();if(output)await rasterWorker({operation:"output-close",metadata:output.token,buffers:[]}).catch(error=>message(String(error)));}
         } else if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
       } else if(r.type==="import_lookup") {
@@ -308,7 +309,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
             progressLabel=element("span","",progressCaption);progress.append(progressLabel,button(()=>common.cancel,()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}));document.body.append(progress);
           }
-          const bytes=r.type==="save"?await app.save_project(id,target.location):(output=await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
+          const bytes=(output=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
           if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.querySelector('button').disabled=true;}
 
           let success;
@@ -395,15 +396,49 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     const progress=element('aside','file-progress');progress.setAttribute('role','status');let cancelled=false,candidate;
     progress.append(element('span','',()=>bootstrap.preparing_document),button(()=>common.cancel,()=>{cancelled=true;rasterWorker({operation:'cancel-read',metadata:'',buffers:[]}).catch(()=>{});}));document.body.append(progress);
     try{
+      const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
+      else if(bytes instanceof Blob)bytes=new Uint8Array(await bytes.arrayBuffer());
       candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
       if(cancelled)throw new DOMException('Opening cancelled','AbortError');
+      if(app.package_view(candidate)){
+        progress.remove();
+        await showPackage(candidate,original,target?.name??"drawing.capy",file?.handle);
+        if(request!==null)applyChange(app.finish_document(request,false));
+        return false;
+      }
       if(request!==null)applyChange(app.finish_document(request,true));
       await transition(()=>{const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,target));});
+      return true;
     }catch(error){
       if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:error));
       throw error;
     }finally{candidate?.free();progress.remove();if(request!==null)active.delete(request);}
+  }
+  async function showPackage(candidate,original,name,originalHandle) {
+    const model=app.package_view(candidate),preview=app.package_preview(candidate);
+    const url=preview?URL.createObjectURL(new Blob([preview],{type:"image/png"})):null;
+    try {
+      await dialog(()=>model.status,(form,finish)=>{
+        form.append(element("p","",model.reason));
+        for(const output of model.outputs)form.append(element("p","",output.name));
+        if(url){const image=element("img");image.src=url;image.style.maxWidth="100%";image.style.maxHeight="60vh";image.alt=model.status;form.append(image);}
+        const footer=element("footer");
+        const savePart=async(bytes,filename,mime,previewOnly)=>{
+          try {
+            if(window.showSaveFilePicker){
+              const handle=await window.showSaveFilePicker({suggestedName:filename});
+              if(previewOnly&&originalHandle&&await originalHandle.isSameEntry(handle))throw new Error(model.destination_error);
+              const stream=await handle.createWritable();
+              try{await stream.write(bytes);await stream.close();}catch(error){await stream.abort();throw error;}
+            }else await download(bytes,filename,mime);
+          }catch(error){if(error?.name!=="AbortError")message(String(error));}
+        };
+        if(model.capabilities.copy_original)footer.append(button(()=>model.copy_original,()=>savePart(original,name,"application/x-capy-canvas",false)));
+        if(model.capabilities.export&&preview)footer.append(button(()=>model.export_preview,()=>savePart(new Blob([preview],{type:"image/png"}),name.replace(/\.[^.]+$/,"")+".png","image/png",true)));
+        footer.append(button(()=>model.close,()=>finish(null)));form.append(footer);
+      });
+    } finally {if(url)URL.revokeObjectURL(url);}
   }
   async function openBatch(files,request=null){
     if(batching)throw transportFailure("batch_opening");

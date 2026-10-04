@@ -1,34 +1,36 @@
 use super::*;
+use super::placement::{paint_document, occurrence_id, occurrence_mut, paint_mut, target, set_source, set_mask, mask_snapshot, reveal_all, append_paint};
+use layer_core::{Document, RasterOperation, RasterOperationKind, authored::*};
 use crate::test_support::{preimage, receive_request};
 use layer_core::{Affine, ImageTransform, Interpolation, LayerPlacement};
 
-fn operation(id: u64, affine: Affine, selection: Option<Selection>) -> LayerOperation {
-    let mut coverage = LayerMask::reveal_all(LayerId(id), Point::default());
-    coverage.default_coverage = if selection.is_some() { 0. } else { 1. };
-    coverage.initial = selection;
-    LayerOperation {
+fn operation(extent: [u32; 2], affine: Affine, selection: Option<Selection>) -> RasterOperation {
+    let mut coverage = reveal_all(extent, Point::default());
+    coverage.source.default_coverage = if selection.is_some() { 0. } else { 1. };
+    coverage.source.initial = selection;
+    RasterOperation {
         placement: layer_core::Affine::IDENTITY,
         coverage,
-        kind: LayerOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(affine) },
+        kind: RasterOperationKind::Transform(ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Nearest, ..LayerPlacement::from_affine(affine) },
             ..Default::default()
         }),
     }
 }
-fn op_batch(index: u32, operation: &LayerOperation) -> DabBatch {
+fn op_batch(target: SourceTarget, index: u32, operation: &RasterOperation) -> DabBatch {
     DabBatch {
-        kind: DabBatchKind::LayerOperation(index),
+        kind: DabBatchKind::RasterOperation(index),
         dab_count: 0,
         damage: operation.bounds([128; 2]),
-        ..batch(1)
+        ..batch(target)
     }
 }
-fn frame(r: &mut WgpuRasterizer, layers: &[Layer], extent: [u32; 2], dabs: &[Dab], batches: &[DabBatch], reset: bool) {
+fn frame(r: &mut WgpuRasterizer, scene: SceneView<'_>, extent: [u32; 2], dabs: &[Dab], batches: &[DabBatch], reset: bool) {
     r.submit(FramePacket {
         dabs,
         dab_batches: batches,
         reset_layers: reset,
         composite_all: false,
-        ..packet(layers, extent)
+        ..packet(scene, extent)
     })
     .unwrap();
 }
@@ -43,21 +45,22 @@ pub(super) fn packed(extent: [u32; 2], count: u32, value: impl Fn(u32, u32) -> u
     }
     words
 }
-/// A layer whose mask, LayerId(9), reveals only the polygon `corners`.
-pub(super) fn masked(corners: [[f32; 2]; 4]) -> Layer {
-    let mut layer = Layer::paint(LayerId(1), "masked");
-    let mut mask = LayerMask::reveal_all(LayerId(9), Point::default());
-    mask.default_coverage = 0.;
-    mask.initial = Some(Selection::polygon(corners.map(|[x, y]| Point { x, y }).to_vec()).unwrap());
-    layer.mask = Some(mask);
+/// Paint with coverage confined to `corners`.
+pub(super) fn masked(extent: [u32; 2], corners: [[f32; 2]; 4]) -> Document {
+    let mut layer = paint_document(extent, "masked");
+    let mut mask = reveal_all(extent, Point::default());
+    mask.source.default_coverage = 0.;
+    mask.source.initial = Some(Selection::polygon(corners.map(|[x, y]| Point { x, y }).to_vec()).unwrap());
+    set_mask(&mut layer, mask);
     layer
 }
-/// The coverage of each page of the mask LayerId(9).
-pub(super) fn mask_values(r: &WgpuRasterizer) -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
+pub(super) fn mask_target(doc: &Document) -> SourceTarget { SourceTarget::Coverage(mask_snapshot(doc).target) }
+/// Each resident coverage page for a source.
+pub(super) fn mask_values(r: &WgpuRasterizer, target: SourceTarget) -> std::collections::BTreeMap<[u32; 2], Vec<f32>> {
     r.layer_masks
         .pages
         .iter()
-        .filter(|((owner, _), _)| *owner == LayerId(9))
+        .filter(|((owner, _), _)| *owner == target)
         .map(|((_, c), page)| {
             let values = page_bytes(r, &page.texture).chunks_exact(4).map(|v| f32::from_le_bytes(v.try_into().unwrap())).collect();
             (*c, values)
@@ -68,33 +71,38 @@ pub(super) fn mask_values(r: &WgpuRasterizer) -> std::collections::BTreeMap<[u32
 #[test]
 fn deleting_a_transform_preview_target_discards_it_without_restoring_missing_pixels() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layer = Layer::paint(LayerId(1), "remove preview target");
+    let extent = [128; 2];
+    let mut layer = paint_document(extent, "remove preview target");
     submit(
         &mut r,
-        &[layer],
+        layer.scene(),
         &[dab([1., 0., 0., 1.])],
-        &[batch(1)],
+        &[batch(target(&layer))],
         true,
     );
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1,
         moving: false,
-        layer: LayerId(1),
+        target: target(&layer),
         selection: None,
         transform: ImageTransform::affine(Affine::translation(Point { x: 20., y: 0. })),
     }))
     .unwrap();
+    paint_mut(&mut layer).raster = Default::default();
     submit(
         &mut r,
-        &[Layer::paint(LayerId(1), "remove preview target")],
+        layer.scene(),
         &[],
         &[],
         false,
     );
     r.set_transform_preview(None).unwrap();
+    let removed = occurrence_id(&layer);
+    append_paint(&mut layer, "empty remaining", PaintSource { domain: extent, raster: Default::default(), original: None, operations: Arc::default() });
+    let edit = layer.delete_layers_edit(&[removed]).unwrap(); layer.apply(edit).unwrap();
     submit(
         &mut r,
-        &[Layer::paint(LayerId(2), "empty remaining")],
+        layer.scene(),
         &[],
         &[],
         false,
@@ -119,12 +127,13 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
                 _ => [0.; 4],
             }
         });
-        let mut layer = Layer::paint(LayerId(1), "overshoot");
-        layer.source = Some(source);
+        let mut layer = paint_document(extent, "overshoot");
+        set_source(&mut layer, source);
+        layer.artwork.compositions.get_mut(layer.artwork.root).unwrap().color = DocumentColor { space: RgbSpace::Srgb, depth };
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         let frame = |r: &mut WgpuRasterizer| {
             r.submit(FramePacket {
-                ..packet(std::slice::from_ref(&layer), extent)
+                ..packet(layer.scene(), extent)
             })
             .unwrap();
         };
@@ -132,7 +141,7 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: layer.id,
+            target: target(&layer),
             selection: None,
             transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])) },
                 ..Default::default()
@@ -159,16 +168,16 @@ fn bicubic_and_lanczos_transforms_clamp_overshoot_at_every_sample_depth() {
 fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_place() {
     let extent = [512, 384];
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layer = Layer::paint(LayerId(1), "moving preview");
+    let layer = paint_document(extent, "moving preview");
     let mut d = dab([0.9, 0.2, 0.1, 1.]);
     d.center = Point { x: 150., y: 140. };
     d.radii = [70.; 2];
-    frame(&mut r, std::slice::from_ref(&layer), extent, &[d], &[batch(1)], false);
+    frame(&mut r, layer.scene(), extent, &[d], &[batch(target(&layer))], false);
     let affine = Affine::around(d.center, [2.3, 1.7], 0.4, Point { x: 60., y: 30. });
     let preview = |interpolation, moving, transaction| layer_render::TransformPreview {
         transaction,
         moving,
-        layer: layer.id,
+        target: target(&layer),
         selection: None,
         transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(affine) },
             ..Default::default()
@@ -181,7 +190,7 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         (Interpolation::Bicubic, false),
     ] {
         r.set_transform_preview(Some(&preview(interpolation, moving, 1))).unwrap();
-        frame(&mut r, std::slice::from_ref(&layer), extent, &[], &[], false);
+        frame(&mut r, layer.scene(), extent, &[], &[], false);
         shown.push(r.readback_srgb_rgba8().unwrap());
     }
     assert_eq!(shown[0], shown[1], "a moving bicubic preview draws bilinearly");
@@ -189,18 +198,18 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
     for moving in [true, false] {
         let preview = preview(Interpolation::Bicubic, moving, if moving { 2 } else { 3 });
         r.set_transform_preview(Some(&preview)).unwrap();
-        frame(&mut r, std::slice::from_ref(&layer), extent, &[], &[], false);
+        frame(&mut r, layer.scene(), extent, &[], &[], false);
         let captures = r.test.source_captures.get();
-        let mut op = operation(30, Affine::IDENTITY, None);
-        op.kind = LayerOperationKind::Transform(preview.transform.clone());
+        let mut op = operation(extent, Affine::IDENTITY, None);
+        op.kind = RasterOperationKind::Transform(preview.transform.clone());
         let apply = DabBatch {
             damage: op.bounds(extent),
-            ..op_batch(0, &op)
+            ..op_batch(target(&layer), 0, &op)
         };
         let mut committed = layer.clone();
-        committed.pending_operations.push(op);
+        Arc::make_mut(&mut paint_mut(&mut committed).operations).push(op);
         r.set_transform_preview(None).unwrap();
-        frame(&mut r, std::slice::from_ref(&committed), extent, &[], &[apply], false);
+        frame(&mut r, committed.scene(), extent, &[], &[apply], false);
         assert_eq!(
             r.readback_srgb_rgba8().unwrap(),
             shown[2],
@@ -213,9 +222,9 @@ fn moving_bicubic_previews_draw_bilinearly_and_only_still_previews_commit_in_pla
         );
         r.submit(FramePacket {
             dabs: &[d],
-            dab_batches: &[batch(1)],
+            dab_batches: &[batch(target(&layer))],
             reset_layers: true,
-            ..packet(std::slice::from_ref(&layer), extent)
+            ..packet(layer.scene(), extent)
         })
         .unwrap();
     }
@@ -234,9 +243,9 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
         max: Point { x: 300., y: 300. },
     };
     for preset in [GPen, WatercolorWash] {
-        let mut layer = Layer::paint(LayerId(1), "live transform");
-        layer.properties.offset = Point { x: 5., y: 7. };
-        let mut b = batch(1);
+        let mut layer = paint_document(extent, "live transform");
+        occurrence_mut(&mut layer).translation = Point { x: 5., y: 7. };
+        let mut b = batch(target(&layer));
         b.style = preset_style(preset);
         b.damage = Rect {
             min: Point { x: 70., y: 70. },
@@ -246,7 +255,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
         d.center = Point { x: 175., y: 175. };
         d.radii = [100.; 2];
         d.material = [0.5, 0.8, 1., 0.8];
-        let layers = std::slice::from_ref(&layer);
+        let layers = layer.scene();
         frame(&mut r, layers, extent, &[d], &[b.clone()], true);
         let original = r.readback_srgb_rgba8().unwrap();
         let selection = Selection::polygon(vec![
@@ -259,7 +268,7 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
         let mut preview = layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: layer.id,
+            target: target(&layer),
             selection: Some(selection.clone()),
             transform: ImageTransform::default(),
         };
@@ -272,14 +281,14 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
             frame(&mut r, layers, extent, &[], &[], false);
             assert_ne!(r.readback_srgb_rgba8().unwrap(), original, "{preset:?} map {n} moves pixels");
             let mut expected = layer.clone();
-            let mut op = operation(20, Affine::IDENTITY, Some(selection.clone()));
-            op.kind = LayerOperationKind::Transform(preview.transform.clone());
-            expected.pending_operations.push(op.clone());
+            let mut op = operation(extent, Affine::IDENTITY, Some(selection.clone()));
+            op.kind = RasterOperationKind::Transform(preview.transform.clone());
+            Arc::make_mut(&mut paint_mut(&mut expected).operations).push(op.clone());
             let operation = DabBatch {
                 damage: op.bounds(extent),
-                ..op_batch(0, &op)
+                ..op_batch(target(&layer), 0, &op)
             };
-            frame(&mut reference, &[expected], extent, &[d], &[b.clone(), operation], true);
+            frame(&mut reference, expected.scene(), extent, &[d], &[b.clone(), operation], true);
             assert_eq!(
                 r.readback_srgb_rgba8().unwrap(),
                 reference.readback_srgb_rgba8().unwrap(),
@@ -294,15 +303,15 @@ fn live_previews_match_replay(maps: fn(Rect) -> Vec<LayerPlacement>, keep_source
         frame(&mut r, layers, extent, &[], &[], false);
         let before_commit = r.readback_srgb_rgba8().unwrap();
         let captures = r.test.source_captures.get();
-        let mut op = operation(21, Affine::IDENTITY, preview.selection.clone());
-        op.kind = LayerOperationKind::Transform(preview.transform.clone());
+        let mut op = operation(extent, Affine::IDENTITY, preview.selection.clone());
+        op.kind = RasterOperationKind::Transform(preview.transform.clone());
         let operation = DabBatch {
             damage: op.bounds(extent),
-            ..op_batch(0, &op)
+            ..op_batch(target(&layer), 0, &op)
         };
-        layer.pending_operations.push(op);
+        Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
         r.set_transform_preview(None).unwrap();
-        frame(&mut r, &[layer], extent, &[], &[operation], false);
+        frame(&mut r, layer.scene(), extent, &[], &[operation], false);
         assert_eq!(
             r.readback_srgb_rgba8().unwrap(),
             before_commit,
@@ -344,18 +353,18 @@ fn moved_copies_that_keep_their_source_match_replay_and_commit_without_jump() {
 fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [768, 512];
-    let mut layer = Layer::paint(LayerId(1), "selected transform");
-    layer.properties.offset = Point { x: 5., y: 7. };
+    let mut layer = paint_document(extent, "selected transform");
+    occurrence_mut(&mut layer).translation = Point { x: 5., y: 7. };
     let mut d = dab([1., 0., 0., 1.]);
     d.center = Point { x: 128., y: 128. };
     d.radii = [30.; 2];
-    let mut b = batch(1);
+    let mut b = batch(target(&layer));
     b.damage = Rect {
         min: Point { x: 80., y: 80. },
         max: Point { x: 176., y: 176. },
     };
-    let submit = |r: &mut WgpuRasterizer, layer: &Layer, dabs: &[Dab], batches: &[DabBatch], reset| {
-        frame(r, std::slice::from_ref(layer), extent, dabs, batches, reset)
+    let submit = |r: &mut WgpuRasterizer, layer: &Document, dabs: &[Dab], batches: &[DabBatch], reset| {
+        frame(r, layer.scene(), extent, dabs, batches, reset)
     };
     submit(&mut r, &layer, &[d], &[b.clone()], true);
     let before = r.readback_srgb_rgba8().unwrap();
@@ -367,15 +376,15 @@ fn transform_selection_moves_to_new_tiles_preserves_unselected_and_layer_offset(
     ])
     .unwrap();
     let op = operation(
-        10,
+        extent,
         Affine::translation(Point { x: 300., y: 100. }),
         Some(selection),
     );
     let op_batch = DabBatch {
         damage: op.bounds(extent),
-        ..op_batch(0, &op)
+        ..op_batch(target(&layer), 0, &op)
     };
-    layer.pending_operations.push(op);
+    Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
     submit(&mut r, &layer, &[], std::slice::from_ref(&op_batch), false);
     let incremental = r.readback_srgb_rgba8().unwrap();
     assert_ne!(incremental, before);
@@ -413,9 +422,9 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
     use layer_core::{Projective, SelectionPixels};
     use layer_render::{RegionRequest, RegionSource};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let layer = Layer::paint(LayerId(1), "mapped selection");
-    submit(&mut r, std::slice::from_ref(&layer), &[], &[], true);
     let extent = [128u32, 128];
+    let layer = paint_document(extent, "mapped selection");
+    submit(&mut r, layer.scene(), &[], &[], true);
     let soft = |x: u32, y: u32| -> u32 {
         let inside = (20..90).contains(&x) && (30..100).contains(&y);
         if !inside {
@@ -467,7 +476,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
                 selection: None,
                 request_id: id,
                 source: RegionSource::TransformedSelection {
-                    layer: layer.id,
+                    target: target(&layer),
                     selection: std::sync::Arc::new(selection),
                     map: LayerPlacement::from_projective(map),
                 },
@@ -515,7 +524,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         selection: None,
         request_id: 80,
         source: RegionSource::TransformedSelection {
-            layer: layer.id,
+            target: target(&layer),
             selection: std::sync::Arc::new(
                 Selection::polygon(vec![
                     Point::default(),
@@ -565,10 +574,10 @@ fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
 #[test]
 fn mask_warps_commit_and_replay_as_previewed() {
     let extent = [384, 256];
-    let frame = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset| {
-        frame(r, std::slice::from_ref(layer), extent, &[], batches, reset)
+    let frame = |r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset| {
+        frame(r, layer.scene(), extent, &[], batches, reset)
     };
-    let layer = masked([[20., 20.], [260., 30.], [230., 200.], [30., 180.]]);
+    let layer = masked(extent, [[20., 20.], [260., 30.], [230., 200.], [30., 180.]]);
     let source = Rect {
         min: Point { x: 10., y: 10. },
         max: Point { x: 280., y: 220. },
@@ -576,36 +585,37 @@ fn mask_warps_commit_and_replay_as_previewed() {
     for (n, mesh) in warps(source).into_iter().enumerate() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         frame(&mut r, &layer, &[], true);
-        let original = mask_values(&r);
+        let original = mask_values(&r, mask_target(&layer));
         let transform = ImageTransform { placement: layer_core::LayerPlacement { interpolation: Interpolation::Bicubic, ..layer_core::LayerPlacement { mesh: Some(std::sync::Arc::new(mesh)), ..Default::default() } },
             ..Default::default()
         };
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: LayerId(9),
+            target: mask_target(&layer),
             selection: None,
             transform: transform.clone(),
         }))
         .unwrap();
         frame(&mut r, &layer, &[], false);
-        let previewed = mask_values(&r);
+        let previewed = mask_values(&r, mask_target(&layer));
         assert_ne!(previewed, original, "warp {n} moves the mask");
-        let mut op = operation(30, Affine::IDENTITY, None);
-        op.kind = LayerOperationKind::Transform(transform);
+        let mut op = operation(extent, Affine::IDENTITY, None);
+        op.kind = RasterOperationKind::Transform(transform);
         let mut committed = layer.clone();
-        committed.mask.as_mut().unwrap().pending_operations = std::sync::Arc::new(vec![op.clone()]);
+        let SourceTarget::Coverage(mask) = mask_target(&committed) else { unreachable!() };
+        committed.artwork.coverage.get_mut(mask).unwrap().operations = Arc::new(vec![op.clone()]);
         let operation = DabBatch {
-            layer_id: LayerId(9),
+            target: mask_target(&layer),
             damage: op.bounds(extent),
-            ..op_batch(0, &op)
+            ..op_batch(target(&layer), 0, &op)
         };
         r.set_transform_preview(None).unwrap();
         frame(&mut r, &committed, std::slice::from_ref(&operation), false);
-        assert_eq!(mask_values(&r), previewed, "warp {n}: apply keeps the preview");
+        assert_eq!(mask_values(&r, mask_target(&layer)), previewed, "warp {n}: apply keeps the preview");
         let mut replay = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         frame(&mut replay, &committed, &[operation], true);
-        assert_eq!(mask_values(&replay), previewed, "warp {n}: replay matches the preview");
+        assert_eq!(mask_values(&replay, mask_target(&layer)), previewed, "warp {n}: replay matches the preview");
     }
 }
 
@@ -615,8 +625,8 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
     use layer_render::{RegionRequest, RegionSource};
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let extent = [1200u32, 700];
-    let layer = Layer::paint(LayerId(1), "warped selection");
-    r.submit(packet(std::slice::from_ref(&layer), extent)).unwrap();
+    let layer = paint_document(extent, "warped selection");
+    r.submit(packet(layer.scene(), extent)).unwrap();
     let soft = |x: u32, y: u32| -> u32 {
         if !((100..900).contains(&x) && (80..560).contains(&y)) {
             0
@@ -641,7 +651,7 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
             selection: None,
             request_id: id,
             source: RegionSource::TransformedSelection {
-                layer: layer.id,
+                target: target(&layer),
                 selection: selection.clone(),
                 map,
             },

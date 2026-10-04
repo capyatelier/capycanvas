@@ -11,6 +11,25 @@ is 4248 × 2832.
 
 ## Operations
 
+The BUILD32 G-Pen pair measures the M3 candidate captured on `192601dac`.
+BUILD28 and selected BUILD20 canvas diagnostics measure frozen `4a2cf6aa0`
+binaries. Earlier operation rows and 83/BUILD15 probes apply to their named
+binaries. Each row retains its presentation and scope limits.
+
+Overall M3 performance qualification remains pending. The finalized six normal
+release offscreen navigation runs meet the warmed 5% p95 and +1 ms p99 comparison
+bounds in all fifteen paired observations, for frame CPU, CPU through submission
+and completion time. Cold half/native/double navigation in the first pair exceeds
+5% p95; later same-phase comparisons improve, but individual cold observations
+are not all accepted. The later 100-repeat sixteen-layer affinity ABBA pair on
+frozen `4a2cf6aa0` meets the common moving and pen-up CPU-submit/completed bounds
+in both adjacent temporal comparisons; pen-up completion p99 changes by -0.246
+and -0.396 ms. This clears that bounded diagnostic, not the unrestricted matrix.
+These frozen binaries do not qualify current `192601dac` source, reference-tablet
+performance or physical input-to-present response. Exact results are retained in
+`artifacts/format/m3-uninstrumented-27/navigation-analysis.txt` and
+`artifacts/format/m3-final-ordinary-fixture-20261004/measurements/affinity-analysis.txt`.
+
 Decoded-source ownership diagnostic, 2026-09-29: the 12 MP photo transform
 sequence retained 204 decoded tiles throughout after sharing the renderer's
 source cache (APK `e91330b3a54e549712e60a89e5727ce31a5c604f1a6421fb5c2edcb119cae867`).
@@ -24,6 +43,8 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | --- | --- | --- | --- |
 | Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.31 presents/s, p99 ≤16.70 ms; renderer 59.71 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Pinch zoom | 60 | Photo, Navigator open: screen 59.43 presents/s, p99 ≤16.86 ms; renderer 59.83 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
+| Pan: Hand tool, one or two fingers, M3 BUILD20 | 60 | **Unqualified on current M3.** 59.078–59.729 completed updates/s; completion gap p99 18.821–19.033 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison); older actual presents below |
+| Pinch zoom, earlier retained-Navigator revision | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
 | Two-finger rotate | 60 | | |
 | Footer zoom and rotation sliders | 60 | Unmeasured on the reference tablet | |
 | Navigator drag | 60 | | |
@@ -46,14 +67,16 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Marquee, Lasso or Polygon drag | 60 | | |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
-| Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Screen 52.7 presents/s, p99 33.4 ms; renderer 30.8 completed updates/s | Pointwise graph comparison below |
+| Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Current M3 12.131–32.686 completed updates/s; completion gap p99 63.347–281.970 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison) |
 | Pointwise chain: Levels, Vibrance, Exposure slider | 60, soft | **Not met.** Screen 57.3 presents/s, p99 33.3 ms; renderer 25.1 completed updates/s, with a 13.9–31.7 range | Pointwise graph comparison below |
+| Threshold slider | 60, soft | **Not met.** Current M3 3.362–3.789 completed updates/s; completion gap p99 260.867–338.872 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison) |
 | Other pointwise adjustment sliders | 60, soft | | |
 | Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 50.0 presents/s, p99 33.4 ms; renderer 23.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 42.7 presents/s, p99 50.0 ms; renderer 15.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
 | Fill layer or gradient-fill edit | 60, soft | **Not met** for Solid Color opacity: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s. Gradient unmeasured | [Solid Color fills](#solid-color-fills) |
+| Navigation with Shadows/Highlights or Clarity | 60 | **Unqualified on current M3.** 52.398–59.826 completed updates/s; first contact below 57/s for both guides; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison) |
 | Navigation with proof or tone guide shown | 60 | | |
 | Gradient drag | 60 | | |
 | Figure or ruler drag | 60 | | |
@@ -758,6 +781,224 @@ Source patch, immutable APKs, raw results and traces are under
 `artifacts/display-production/source-window-oscillation-*`. The screen-present
 accounting limits in the geometry section apply.
 
+## BUILD32 G-Pen comparison
+
+Measured on 2026-10-04 UTC with clean `192601dac` baseline BUILD29 and M3
+candidate BUILD32 on the low-tier reference tablet. The contained G-Pen 1024 px
+workload uses 4248 × 2832, Fit 15.9703%, dark theme, Linear blending, Navigator
+open, Stats closed, Paper hidden, prediction enabled, pressure 1 and 200 Hz
+injected input. Three warmed ten-second contacts retain all captured samples.
+Logical setup matches; the nominal full tip stays at least 17.44 px inside the
+photo. Both invocations finish successfully, with thermal status zero before
+and after and no pending composition or edits at contact start.
+
+| Build / contact | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline29 / 1 | 65.306 | 26.870 | 52.038 | 13.998 |
+| Baseline29 / 2 | 64.870 | 27.905 | 50.290 | 14.252 |
+| Baseline29 / 3 | 65.753 | 27.743 | 50.473 | 14.120 |
+| Candidate32 / 1 | 64.416 | 25.855 | 51.523 | 14.231 |
+| Candidate32 / 2 | 64.687 | 25.810 | 49.326 | 14.048 |
+| Candidate32 / 3 | 65.539 | 24.960 | 51.480 | 13.921 |
+
+All three candidate contacts meet 60 fresh completed updates/s and the 33.3 ms
+fresh-gap limit. Throughput changes by −1.36 / −0.28 / −0.33%, owner CPU p95 by
++1.66 / −1.43 / −1.41%, and callback wall p95 by +4.02 / +0.20 / −2.64%, within
+the measured 5% bounds. Response p99 changes by −0.515 / −0.964 / **+1.007 ms**.
+The third pair's exact +1.006776 ms exceeds the +1 ms common bound by
+0.006776 ms. The low-tier stroke result passes; the complete common comparison
+gate remains open. This forward-order batch alone does not establish repeatability, other
+workloads or overall M3 qualification; the reverse check follows below.
+
+The reverse candidate→baseline check uses the same APKs and matching logical
+setup. All three additional candidate contacts meet the tier limits. The
+response excess repeats: candidate-minus-baseline p99 is **+1.192 / −3.075 /
++1.778 ms**; contacts 1 and 3 exceed +1 ms. Throughput changes by
++1.13 / −1.17 / −1.34%, owner CPU p95 by −1.62 / −0.28 / +3.39%, and callback
+wall p95 by −2.00 / −0.40 / +1.38%, within 5%. Both orders remain separate;
+averaging them or reversing their order does not clear the forward failure.
+
+| Reverse build / contact | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Candidate32 / 1 | 65.713 | 27.643 | 54.054 | 13.725 |
+| Candidate32 / 2 | 64.836 | 25.580 | 48.107 | 14.094 |
+| Candidate32 / 3 | 64.295 | 26.772 | 51.993 | 14.470 |
+| Baseline29 / 1 | 64.978 | 26.269 | 52.863 | 13.951 |
+| Baseline29 / 2 | 65.603 | 27.053 | 51.183 | 14.133 |
+| Baseline29 / 3 | 65.169 | 26.977 | 50.215 | 13.995 |
+
+Tracked renderer residency is 805.641 MiB, except candidate contact 3 at
+805.688 MiB; all boundaries satisfy max(16 MiB, 5% of baseline). Both retain
+204 source slots. Reverse candidate residency is 805.641 MiB throughout; reverse
+baseline contact 3 is 805.688 MiB. All reverse boundaries also satisfy the bound,
+and thermal status remains zero. Dynamic cache budgets differ, so this does not establish
+identical admission. Staging inventories and process RSS/high-water snapshots
+are retained; continuous renderer/import/driver peaks are unmeasured. Fresh
+completion and response metrics end at GPU callback service; presentation,
+physical pen latency and GPU execution timestamps are unmeasured.
+
+Exact APK SHA-256, baseline then candidate:
+`e7ddce0b37f254df4fcdee4c502bc2220c5a2f050e644060bc4a47a06067e429` /
+`acccdc9d9464c2ca2db5fc3291dc252b7affe683ca9cadb7628ffef58863a51c`.
+Provenance is in `artifacts/format/m3-baseline192-android-build-29/provenance.json`
+and `m3-candidate192-android-build-32/provenance.json`; raw captures, exact setup,
+staging and every per-contact comparison are in `m3-low-brush-35/analysis.local.md`
+and `analysis.json`. These APKs do not qualify later source edits. Earlier 4a
+BUILD28 and BUILD20 results remain scoped to their binaries.
+
+## BUILD28 G-Pen comparison
+
+The frozen M3 candidate BUILD28 and clean `4a2cf6aa0` baseline BUILD20 use the
+same contained G-Pen 1024 px workload on 4248 × 2832. Logical setup matches the
+earlier BUILD20 pair exactly: Fit 15.9703%, dark theme, Linear blending, Navigator
+open, Stats closed, Paper hidden, prediction enabled, pressure 1, 200 Hz injected
+stylus input and three warmed ten-second strokes. Screen semiaxes are 240 × 120 px;
+the nominal full brush tip remains at least 17.44 px inside the photo. Both
+instrumentation logs finish successfully; thermal status is zero before and after
+each invocation. All strokes begin without pending composition or edits.
+
+| Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline20 / 1 | 65.186 | 25.815 | 50.922 | 13.923 |
+| Baseline20 / 2 | 65.311 | 27.031 | 50.911 | 14.288 |
+| Baseline20 / 3 | 64.964 | 25.788 | 51.601 | 14.573 |
+| Candidate28 / 1 | 64.926 | 27.596 | 50.544 | 13.957 |
+| Candidate28 / 2 | 65.022 | 25.959 | 49.502 | 14.109 |
+| Candidate28 / 3 | 65.173 | 26.324 | 51.113 | 14.122 |
+
+Every stroke meets 60 fresh completed updates/s and the 33.3 ms fresh gap limit.
+Candidate throughput changes by −0.40 / −0.44 / +0.32%, owner CPU p95 by
++0.25 / −1.25 / −3.10%, and callback wall p95 by +0.44 / −2.38 / −2.41%.
+Response p99 changes by −0.378 / −1.409 / −0.489 ms. The measured 5% CPU and
+throughput bounds and +1 ms response bound hold in all three matched pairs.
+These observations preserve the passing low-tier stroke row; they do not erase
+the earlier BUILD20 +1.371 ms response sample or establish other workloads.
+
+Tracked renderer residency is 805.641 MiB in both builds, with 204 decoded
+source slots. Boundaries remain within max(16 MiB, 5% of baseline); continuous
+renderer/import/driver peaks and later edit/undo/output lifetimes are unmeasured.
+Rates count nonempty completions consuming fresh input inside contact, excluding
+refinement. Response ends at GPU completion callback service. Neither metric
+establishes actual screen presentation or physical pen latency; GPU execution
+timestamps are absent.
+
+Exact APK SHA-256, baseline then candidate:
+`2dd557379b1cac6ac51ce813f8a168a46cd9a460249846efe08a8e79b5801af2` /
+`b3e8bfe49f8e97bee101eb223a3c01debc540be34507c95e4e343eba470c4a5d`.
+Provenance is in `artifacts/format/m3-baseline4a-android-build-20/provenance.json`
+and `m3-candidate-android-build-28/provenance.json`; raw strokes, thermal records,
+exact setup checks and per-stroke analysis are in
+`artifacts/format/m3-low-brush-28/`. BUILD20 canvas diagnostics below and earlier
+reference measurements remain scoped to their named binaries. The interrupted
+mid-tier trace setup supplies no timing comparison or qualification evidence.
+
+## BUILD20 selected canvas comparison
+
+The matched 4248 × 2832 photo uses Navigator, dark theme, SDR and default glass.
+Cameras and logical setup match in all fifteen contact pairs. Configured display
+budgets differ; equal logical setup does not imply equal live headroom at cache
+admission. Each Exposure contact records 63–93 distinct observed values and each
+Threshold contact 83–106; parameters change in both builds. Pan has no
+camera-after trace, so the input gesture does not establish every rendered pose.
+
+| Motion / contact | Completed updates/s, baseline → M3 | Completion gap p99, ms, baseline → M3 | Owner CPU p95, ms, baseline → M3 |
+| --- | --- | --- | --- |
+| Pan, no effect / 1 | 59.154 → 59.078 | 19.087 → 19.033 | 4.387 → 5.184 |
+| Pan, no effect / 2 | 59.885 → 59.729 | 19.053 → 18.961 | 4.891 → 5.639 |
+| Pan, no effect / 3 | 59.776 → 59.624 | 18.902 → 18.821 | 4.093 → 4.162 |
+| Pan, Shadows/Highlights / 1 | 52.854 → 52.639 | 22.777 → 24.011 | 5.680 → 5.652 |
+| Pan, Shadows/Highlights / 2 | 59.573 → 59.641 | 19.289 → 19.714 | 4.804 → 4.559 |
+| Pan, Shadows/Highlights / 3 | 59.611 → 59.782 | 18.958 → 18.945 | 5.039 → 4.244 |
+| Pan, Clarity / 1 | 52.826 → 52.398 | 22.873 → 23.643 | 6.015 → 6.138 |
+| Pan, Clarity / 2 | 59.612 → 59.598 | 19.441 → 19.490 | 4.048 → 4.259 |
+| Pan, Clarity / 3 | 59.805 → 59.826 | 18.959 → 19.286 | 5.479 → 6.218 |
+| Exposure scrub / 1 | 33.465 → 32.686 | 55.151 → 63.347 | 9.770 → 10.161 |
+| Exposure scrub / 2 | 6.776 → 12.131 | 246.959 → 281.970 | 14.440 → 12.019 |
+| Exposure scrub / 3 | 15.319 → 16.133 | 155.874 → 92.442 | 11.170 → 11.110 |
+| Threshold scrub / 1 | 3.759 → 3.789 | 273.627 → 260.867 | 30.780 → 26.621 |
+| Threshold scrub / 2 | 3.787 → 3.777 | 274.260 → 279.263 | 26.186 → 28.737 |
+| Threshold scrub / 3 | 3.362 → 3.362 | 361.733 → 338.872 | 22.930 → 23.249 |
+
+Bare pan completes near 60/s, but the first Shadows/Highlights and Clarity
+contacts complete about 52/s in both builds. Exposure and Threshold miss the
+60/s target in both builds; their stalls remain in the table. No matched
+completion-throughput loss exceeds 5%. Owner CPU p95 increases by 18.17% and
+15.29% in the first two bare-pan contacts, and 5.21% and 13.49% in the last two
+Clarity contacts. Threshold has one 9.74% increase. These adverse repetitions
+prevent declaring the common CPU gate cleared; they are not averaged away.
+
+Tracked residency after contact is 573.350 MiB for bare pan, 522.788–522.985 MiB
+with Shadows/Highlights or Clarity, and 516.985 MiB for Threshold in both builds.
+Exposure is 574.350 MiB except the first M3 contact at 574.185 MiB. These matching
+boundaries do not establish a continuous peak or an import/source lifetime bound.
+
+These are renderer completion diagnostics. Navigator and retained refreshes
+count; actual fresh canvas presentation times and pose identities are absent.
+Scheduled presentation deadlines and physical panel refresh do not establish
+presentation rates. Submit-to-complete latency includes scheduling and polling;
+it cannot establish the common input-response p99 bound. GPU execution samples,
+continuous memory peaks and process/driver inventories were not collected.
+
+The exact baseline and candidate are the 4a/BUILD20 APKs identified in the
+[G-Pen comparison](#build20-g-pen-comparison). Each contact requests five seconds;
+all scenario thermal status samples are zero before and after. Raw reports,
+verified instrumentation outcomes, each parameter value, per-contact CPU/input
+quantiles and configured admission limits are retained under
+`artifacts/format/m3-final-android-performance-20/`, with
+`canvas-analysis.local.md`, `canvas-analysis.json` and `canvas-gestures.tsv`.
+
+## BUILD20 G-Pen comparison
+
+Measured on 2026-10-04 UTC with the clean `4a2cf6aa0` baseline and the M3
+candidate based on the same revision. Both are benchmark APKs with release Rust.
+The tier photo has one drawing layer above it, Paper hidden, Linear blending,
+Navigator open, Stats closed and default glass. Pressure is 1 and prediction is
+enabled. A priming stroke is undone before three warmed ten-second strokes with
+200 Hz OS-injected stylus input. Both before/after thermal samples are zero.
+The matched Fit zoom is 15.9703%, with screen semiaxes 240 × 120 px; the
+nominal full brush tip remains at least 17.44 px inside the photo.
+
+Rates count completed nonempty updates consuming new paint input inside the
+contact, excluding refinement-only completions. Response is the latest consumed
+input event to GPU completion; its p99 differs from the intercompletion gap.
+Neither metric establishes physical pen latency or screen presentation.
+
+| Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | ---: | ---: | ---: | ---: |
+| Baseline 1 | 65.793 | 25.665 | 50.743 | 13.745 |
+| Baseline 2 | 65.281 | 26.588 | 52.332 | 13.795 |
+| Baseline 3 | 66.138 | 26.681 | 49.989 | 13.455 |
+| Candidate 1 | 65.103 | 27.007 | 52.114 | 13.834 |
+| Candidate 2 | 64.995 | 27.159 | 52.525 | 13.984 |
+| Candidate 3 | 65.270 | 27.904 | 50.531 | 13.886 |
+
+Both builds meet 60 fresh updates/s and the 33.3 ms gap limit in every stroke.
+The candidate loses 0.44–1.31% throughput and grows owner CPU p95 by 0.65–3.21%,
+within the 5% comparison bound. Fresh gap p99 separately grows by
+1.343 / 0.571 / 1.223 ms. Response p99 grows by 1.371 / 0.193 / 0.542 ms;
+the first stroke exceeds the common +1 ms response bound. These samples do not
+establish that bound for the candidate, despite the passing stroke target.
+
+Accounted renderer residency after the strokes is 805.641 MiB in the candidate
+and 805.641–805.656 MiB in the baseline, with 204 decoded source slots in both.
+
+Measured resident boundaries stay within the additional max(16 MiB, 5%)
+comparison ceiling. Allocator snapshots are taken after settling, not inside
+motion; they do not establish continuous renderer/process/driver peaks or
+edit/undo/output lifetime. GPU execution p95 is unmeasured. Logical workload
+settings match; dynamic admission budgets are retained separately. One paired
+batch does not establish the repeatability of response outliers or complete M3
+qualification. Other brushes and earlier effect/transform rows retain their
+stated scope.
+
+Baseline APK SHA-256:
+`2dd557379b1cac6ac51ce813f8a168a46cd9a460249846efe08a8e79b5801af2`.
+Candidate APK SHA-256:
+`83aa369e1b7cc2d9eb16eaf4c2dc1f0f40f574ddeaa0a2965317feb75c2ca01e`.
+Exact app/test APK and source provenance is under
+`artifacts/format/m3-{baseline,candidate}4a-android-build-20/`; raw strokes and
+per-repetition analysis are under `artifacts/format/m3-final-android-performance-20/`.
+
 ## Brushes
 
 Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
@@ -765,13 +1006,15 @@ Target: **60 completed updates/s** at the guaranteed size, on the 12 MP canvas.
 Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with the [brush benchmark](measuring.md#how-to-measure). Each result is three 10 s strokes of a 200 Hz stylus ellipse at Fit zoom, at pressure 1 with 16 ms prediction, painting into an empty layer above the photo. The measured value is the median of the three strokes' completed updates per second, followed by the range across strokes. The gap is the interval between update starts. A brush meets its target when the median reaches it and the gap p99 is at most two frame budgets.
 
 - The older fixtures fit their 520 × 299 px ellipse to 339 × 299 px in the
-  TCL's 754 px work area at 16.0% zoom. The current G-Pen row uses the 500 × 280 px path documented in the
-  retained-Navigator painting comparison above.
+  TCL's 754 px work area at 16.0% zoom. The current G-Pen row uses the 240 × 120 px semiaxes documented in
+  the current comparison above.
 - Simple brushes are measured at their guaranteed 1024 px.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
 | G-Pen (1) | Simple | 1024 px | Solid Color revision: 95.77 fresh updates/s (89.67–96.53); fresh completion gap p99 ≤27.60 ms | Meets measured 1024 px stroke criteria; [Solid Color fills](#solid-color-fills) |
+| G-Pen (1), M3 BUILD32 | Simple | 1024 px | Both orders: 64.295–65.713 fresh updates/s; fresh gap p99 24.960–27.643 ms, Linear | Meets this stroke; common response excess repeats: forward **+1.007 ms**, reverse **+1.192/+1.778 ms**; presentation unmeasured; [BUILD32](#build32-g-pen-comparison) |
+| G-Pen (1), M3 BUILD28 | Simple | 1024 px | BUILD28: 64.926–65.173 fresh updates/s; fresh gap p99 25.959–27.596 ms, Linear | Meets this stroke and matched CPU/response bounds; presentation unmeasured; [BUILD28](#build28-g-pen-comparison) |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |

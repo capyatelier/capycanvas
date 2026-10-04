@@ -5,7 +5,7 @@ export function histogramJourney({evaluate,settle}) {
   const root='[data-scope="histogram"]';
   const json=expression=>evaluate(`JSON.parse(JSON.stringify(${expression},(_,v)=>typeof v==='bigint'?Number(v):v))`);
   const owner=()=>evaluate(`JSON.stringify([String(layerApp.state().document_file.epoch),String(layerApp.state().document_file.revision)])`);
-  const poll=async condition=>{const end=Date.now()+150000;while(Date.now()<end){if(await evaluate(condition))return;await settle();await new Promise(r=>setTimeout(r,30));}throw Error(`Histogram subscription timeout: ${condition}`);};
+  const poll=async condition=>{const end=Date.now()+150000;while(Date.now()<end){if(await evaluate(condition))return;await settle();await new Promise(r=>setTimeout(r,30));}const state=await json(`(()=>{const s=layerApp.state(),h=s.histogram;return {busy:layerApp.documents.busy(),host_error:s.host_error,histogram:{source:h.source,captured_source:h.captured_source,captured_time:h.captured_time,status:h.status,has_data:h.data!=null,pixels:h.data?.pixels},owner:[String(s.document_file.epoch),String(s.document_file.revision)]};})()`);throw Error(`Histogram subscription timeout: ${condition}; state=${JSON.stringify(state)}`);};
   const visible=async enabled=>{await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'histogram',visible:${enabled}}})`);await settle();};
   const reveal=async()=>{
     await poll('!layerApp.documents.busy()&&layerApp.startupTimes.complete!==null');

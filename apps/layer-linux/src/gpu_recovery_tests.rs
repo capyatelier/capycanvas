@@ -2,15 +2,14 @@ use super::*;
 
 fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
     let gpu = w.snapshot_gpu().unwrap();
-    let (project, time) = {
+    let project = {
         let canvas = w.gpu.borrow();
         let session = &canvas.as_ref().unwrap().session;
-        (session.capture_project_recovery().unwrap(),
-         session.engine().animation_time())
+        session.capture_project_recovery().unwrap()
     };
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
-        let extent = [project.document.width, project.document.height];
-        let mut renderer = gpu.capture(project, time, Default::default()).unwrap();
+        let extent = project.composition().size;
+        let mut renderer = gpu.capture(project, Default::default()).unwrap();
         renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
     })).unwrap()
 }
@@ -40,8 +39,9 @@ fn native_wide_color_gpu_failure_recovery() {
 fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::DocumentColor) {
     use layer_render::CanvasRenderer;
     let mut project = new_drawing(384, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-    project.document.color = color;
-    project.document.blend_space = project.document.blend_space.for_depth(color.depth);
+    let composition = composition_mut(&mut project);
+    composition.color = color;
+    composition.blend = composition.blend.for_depth(color.depth);
     let w = Workspace::with_project(app, Some((project, None)));
     w.window.present();
     until(
@@ -53,7 +53,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         },
         "canvas startup",
     );
-    if ui_session(&w).engine().document().color.depth.is_float() {
+    if ui_session(&w).engine().document().composition().color.depth.is_float() {
         w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
             color: layer_core::color::RgbColor::from_linear(
                 layer_core::color::RgbSpace::ProPhoto, [8., -0.125, 2., 1.]).unwrap(),
@@ -131,7 +131,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
                 .unwrap();
         }
         g.session.frame(now + 2, now + 2).unwrap();
-        g.session.engine().document().layers[0].raster.clone()
+        active_raster(g.session.engine().document()).clone()
     };
     let saved_root = stroke(false);
     w.wake();
@@ -173,18 +173,13 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
         assert_eq!(session.engine().checkpoint(), checkpoint);
-        assert_eq!(session.engine().document().layers[0].raster, saved_root);
+        assert_eq!(active_raster(session.engine().document()), &saved_root);
         assert!(session.command(CommandId::SaveDocumentAs).enabled);
         assert!(session.state().document_file.modified);
         let mut bytes = Vec::new();
-        session
-            .capture_project_recovery()
-            .unwrap()
-            .write(&mut bytes)
-            .unwrap();
-        let project =
-            layer_core::Project::read(std::io::Cursor::new(bytes), Default::default()).unwrap();
-        assert_eq!(project.document.color, color);
+        write_capture(&session.capture_project_recovery().unwrap(), &mut bytes).unwrap();
+        let project = open_native_document(std::io::Cursor::new(bytes));
+        assert_eq!(project.composition().color, color);
     }
     for _ in 0..5 {
         w.wake();

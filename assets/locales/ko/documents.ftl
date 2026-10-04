@@ -169,3 +169,10 @@ documents-refusal-open-drawings-operation = 그림을 열기 전에 현재 작�
 documents-storage-retained = { $detail }
     그림은 메모리에 보관되어 있습니다. 디스크 공간을 확보하거나 일부 탭을 닫으세요.
 documents-recovery-unavailable = 복구할 수 없습니다: { $detail }
+documents-package-preserved = This drawing can be viewed, but cannot be edited.
+documents-package-recovered = Only a preview of this drawing could be recovered.
+documents-package-failed = This drawing could not be opened.
+documents-package-copy-original = Copy Original File…
+
+documents-package-export-preview = Export Preview Image…
+documents-package-choose-different = Choose a different file.

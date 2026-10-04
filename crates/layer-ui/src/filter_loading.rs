@@ -1,7 +1,7 @@
 //! Atomic package publication and live instance migration. Hosts supply bytes
 //! and drive frames; all acceptance, invalidation and UI policy stays here.
 use super::*;
-use layer_core::{Edit, EffectCatalog, EffectInstallMode, EffectPackage};
+use layer_core::{Edit, EffectCatalog, EffectInstallMode, EffectPackage, EffectInstance, authored::RecordChange};
 use layer_render::EffectValidationRequest;
 use std::sync::Arc;
 
@@ -109,20 +109,17 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut namespace: Vec<_> = candidate.filters().iter().map(|f| f.program()).collect();
         // Self-contained documents may contain programs absent from the catalog.
         // Programs being replaced are deliberately excluded from this namespace.
-        for layer in &self.engine.document().layers {
+        for (_, _, definition) in self.engine.document().artwork.definitions.iter() {
+            let program = &definition.program;
             if matches!(mode, EffectInstallMode::Add)
-                && let Some(effect) = &layer.effect
-                && changed
-                    .iter()
-                    .any(|p| p.id == effect.program.id && *p != effect.program)
+                && changed.iter().any(|p| p.id == program.id && p != program)
             {
                 return Err(self.state.localization.text(MessageId::RESOURCES_DOCUMENT_FILTER_CONFLICT).to_string());
             }
-            if let Some(effect) = &layer.effect
-                && (!migrate_instances || !changed.iter().any(|p| p.id == effect.program.id))
-                && !namespace.contains(&effect.program)
+            if (!migrate_instances || !changed.iter().any(|p| p.id == program.id))
+                && !namespace.contains(program)
             {
-                namespace.push(effect.program.clone());
+                namespace.push(program.clone());
             }
         }
         let request_id = self.state.filter_load.request_id.wrapping_add(1);
@@ -193,39 +190,27 @@ impl<R: CanvasRenderer> UiSession<R> {
         migrate_instances: bool,
     ) -> Result<(), String> {
         let mut edits = Vec::new();
-        for layer in self
-            .engine
-            .document()
-            .layers
-            .iter()
-            .filter(|_| migrate_instances)
-        {
-            let Some(effect) = &layer.effect else {
-                continue;
-            };
-            let Some(definition) = catalog.get(&effect.program.id) else {
-                continue;
-            };
-            // Do not replace document-specific programs on an unrelated import.
-            if self
-                .effect_catalog
-                .get(definition.id())
-                .is_some_and(|f| f.program == definition.program)
-                || effect.program == definition.program
-            {
-                continue;
-            }
-            let replacement = effect
-                .rebind(definition.program())
-                .map_err(|error| {
+        let artwork = &self.engine.document().artwork;
+        for (handle, _, authored) in artwork.definitions.iter().filter(|_| migrate_instances) {
+            let Some(definition) = catalog.get(&authored.program.id) else { continue; };
+            if self.effect_catalog.get(definition.id()).is_some_and(|f| f.program == definition.program)
+                || authored.program == definition.program
+            { continue; }
+            for (effect, _, application) in artwork.effects.iter().filter(|(_, _, application)| application.definition == handle) {
+                let draft = EffectInstance {program: authored.program.clone(), values: application.values.clone()};
+                let replacement = draft.rebind(definition.program()).map_err(|error| {
                     eprintln!("Filter update {}: {error}", definition.id());
                     let mut args = fluent_bundle::FluentArgs::new();
                     args.set("name", effects::resource_label(definition.label(), &self.state.localization).to_string());
                     self.state.localization.format(MessageId::RESOURCES_UPDATE_FAILED, &args)
                 })?;
-            let mut layer = layer.clone();
-            layer.effect = Some(Arc::new(replacement));
-            edits.push(Edit::ReplaceLayer(Box::new(layer)));
+                let application = layer_core::authored::EffectApplication {definition: application.definition, domain: application.domain, values: replacement.values};
+                edits.push(Edit::Effect(RecordChange::replace(&artwork.effects, effect, Some(application)).map_err(str::to_string)?));
+            }
+            let mut authored = authored.clone();
+            authored.program = definition.program();
+            authored.dimensions.retain(|key, _| authored.program.parameters.iter().any(|parameter| parameter.key == *key));
+            edits.push(Edit::Definition(RecordChange::replace(&artwork.definitions, handle, Some(authored)).map_err(str::to_string)?));
         }
         if !edits.is_empty() {
             self.layer_edit(Edit::Batch(edits))?;
@@ -255,7 +240,7 @@ mod localization_tests {
         let validation = session.engine.backend().validation.clone().unwrap();
         let request_id = session.state.filter_load.request_id;
         let catalog_revision = session.state.filter_catalog_revision;
-        let document = serde_json::to_value(session.engine.document()).unwrap();
+        let document = session.engine.document().clone();
         let checkpoint = session.engine.checkpoint();
         let rendering = (session.engine.backend().composites, session.engine.backend().dabs);
         for language in [UiLanguage::Japanese, UiLanguage::Korean] {
@@ -289,7 +274,7 @@ mod localization_tests {
             assert!(session.pending_filters.is_none());
             assert!(session.engine.backend().validation.is_none());
             assert_eq!(session.state.filter_catalog_revision, catalog_revision);
-            assert_eq!(serde_json::to_value(session.engine.document()).unwrap(), document);
+            assert_eq!(session.engine.document(), &document);
             assert_eq!(session.engine.checkpoint(), checkpoint);
             assert_eq!((session.engine.backend().composites, session.engine.backend().dabs), rendering);
         }

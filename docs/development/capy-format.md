@@ -9,18 +9,20 @@ structured stacks, occurrences, editable sources and effect applications. Resolv
 portable IDs to compact runtime handles at the boundary; derive execution plans
 without constructing a second editable document.
 
-This selects an implementation direction, not a finished byte specification or a
-performance result. The initial code assessment uses `0f6b5b708`; sequencing and
-replacement boundaries include the source-analysis paths at `11954d8a1`. The
-prototype and qualification gates below remain required. The
+**Status: the application uses the authored model and new package format.
+M3 qualification remains pending.** The initial code assessment used
+`0f6b5b708`; sequencing and replacement boundaries included the source-analysis
+paths at `11954d8a1`. The milestone requirements and qualification gates below
+remain the acceptance criteria, not claims of measured performance. The
 [node research](../history/authored-graph-research.md) owns the broader artist
 workflows. The foundation owns ZIP, checksums, compatibility and preview rules;
 this plan resolves their relationship to the editor and renderer.
 
 M1's concrete ownership and wire contracts are in [authored model](../reference/authored-model.md)
 and [package grammar](../reference/capy-package.md). Their boundary fixtures live in
-`crates/layer-core/tests/fixtures/capy/`. The application remains on its current
-model and codec until the integrated M3 cutover.
+`crates/layer-core/tests/fixtures/capy/`. The integrated application uses typed
+`Artwork`/`WorkingState`, source targets and the shared package codec. This does
+not complete M3 qualification or start M4 or automatic recovery work.
 
 ## Scope and commitments
 
@@ -80,13 +82,14 @@ stay inline unless a feature needs independently addressable identity.
 Address today's mask use by occurrence plus a stable mask-slot key; its coverage
 source has separate paint-target identity. No additional wrapper node is needed.
 
-**Split source and occurrence now.** This replaces the foundation's earlier
-proposal to defer the split until the first sharing feature. Current layers
-combine `raster`, `source`, properties, masks and effects in
-[`Layer`](../../crates/layer-core/src/lib.rs); render targets also use `LayerId`.
-Moving just the file to separate sources while repeatedly reassembling `Layer`
-would add work and conceal which identity a brush mutates. Make the split at the
-shared model boundary and carry it through the renderer contract.
+**Source and occurrence ownership is split at the shared boundary.** This replaces
+the foundation's earlier proposal to defer the split until the first sharing
+feature. [`Document`](../../crates/layer-core/src/lib.rs) owns typed authored
+stores and separate working state. Paint and coverage sources own pixels;
+occurrences own placement and contribution properties. Render targets use
+`SourceTarget` with occurrence context supplied separately. Production consumers
+read typed scene views directly; reconstructing combined layer records remains
+outside the accepted boundary.
 
 The initial editable subset has at most one occurrence per editable source.
 Independent Duplicate creates new authored source and occurrence IDs but shares immutable
@@ -146,11 +149,13 @@ Effect parameter keys and Choice values are durable; GPU offsets are not. Load
 keyed values once into the definition's compact slot layout, then reuse it during
 painting. The embedded program's positional ABI must agree with that layout;
 renaming/reordering UI controls cannot reorder shader slots. Preserve program
-sharing across load, save and undo. Today's
-[`EffectInstance`](../../crates/layer-core/src/effects.rs) already has parameter
-keys but stores values and Choice selections positionally. Its `scaled_px` uses a
-unit label; the new type must give lengths semantic dimensions/reference spaces.
-Freeze evaluation semantics separately from the current shader ABI and UI schema.
+sharing across load, save and undo. Authored effect applications retain compact
+values resolved against their immutable definition layout; portable adapters
+persist stable parameter keys and Choice strings. [`EffectView` and the owned
+`EffectInstance` draft](../../crates/layer-core/src/effects.rs) support reads and
+explicit editing without becoming an alternate authored owner. Dimension records
+carry semantic length/reference-space declarations. Keep evaluation semantics
+separate from the shader ABI and UI schema.
 The current filter ABI is not a general multi-input node ABI. New definitions can
 declare additional typed ports without changing existing effect meanings or
 requiring all old programs to be rewritten.
@@ -195,7 +200,7 @@ Reuse the contracts in [`layers.rs`](../../crates/layer-core/src/layers.rs) and
   as today. That restriction belongs to its type/validator, not the package or
   resource table. Keep imported originals independent. Future mixed working
   contexts require explicit conversion boundaries, not reinterpretation of bytes.
-- Paper is authored content with defined stack behavior, not viewer chrome. Empty
+- Paper is an ordinary Solid Color effect occurrence, not viewer chrome. Empty
   stacks remain valid. Mask inspection and selection overlays never enter saved
   output previews. Session selection/active target remain separate from artwork.
 
@@ -208,12 +213,12 @@ file must not encode the execution representation that selects among them.
 
 | Structure | Fit and decision |
 | --- | --- |
-| Typed stores with direct stack traversal | Default baseline candidate. Compact handles and a borrowed scene view adapt today's common stack visitor without rebuilding old layers. Reuse the existing exact/display evaluators and measure traversal and allocation cost. This is sufficient if it passes the baseline gates. |
+| Typed stores with direct stack traversal | Integrated baseline. Compact handles and a borrowed scene view use the common stack visitor directly. Reuse the existing exact/display evaluators and measure traversal and allocation cost. This is sufficient if it passes the baseline gates. |
 | Typed authored stores plus retained indexed execution plan | Add when measurements require it or later graph workloads justify it. Lower stacks into compact operation/operand arrays and reverse dependencies; update source/parameter records separately. Replace superseded expression construction and cache traversal in the affected evaluator. No file change or second authored model. |
 | Typed authored stores plus task/region execution graph | Viable later when fan-out, several outputs and expensive spatial nodes justify finer scheduling. Tasks are keyed by operation, context, region and quality, with bounded queues and lifetimes. More complex; do not build a general task framework now. The same authored file remains sufficient. |
 
-Keeping today's `Vec<Layer>` authoritative and adding a separately mutable node
-model is rejected: it duplicates edits, undo and serialization rules. Interpreting
+Keeping a parallel editable layer vector and a separately mutable node model
+is rejected: it duplicates edits, undo and serialization rules. Interpreting
 JSON/string references on every frame is also rejected. A universal field or
 simulation runtime would enlarge scope without solving today's persistence work.
 
@@ -233,12 +238,11 @@ UUID map at each dab, tile or graph edge. Do not introduce a new collection or
 persistent-data-structure dependency without demonstrating that existing Rust
 containers and shared handles are insufficient.
 
-The first renderer cutover should accept a borrowed typed scene view with compact
-source/occurrence handles. Adapt the common stack visitor to that view, so the
-exact and display evaluators share ordering/scope semantics. A one-time adapter
-is useful for the prototype oracle; a per-frame `graph -> Vec<Layer> -> graph`
-conversion is not an acceptable production boundary. Retire superseded authority
-and traversal paths at cutover.
+The integrated renderer accepts a borrowed typed scene view with compact
+source/occurrence handles. The common stack visitor supplies exact and display
+ordering/scope semantics. Prototype conversion adapters are not a production
+boundary; per-frame reconstruction of old layer records fails the M3 removal
+and performance gates.
 
 Current [`Graph::prepare`](../../crates/layer-render-wgpu/src/scene/scale/graph.rs)
 reconstructs `Arc<Expression>` trees, hashes recursive structures, discovers cache
@@ -278,14 +282,13 @@ candidate without installing its pipelines/state.
 
 ### Ownership across frames and workers
 
-[`FramePacket`](../../crates/layer-render/src/lib.rs) currently borrows layers and
-dabs. [`frame_layers`](../../crates/layer-engine/src/canvas.rs) makes a metadata
-copy for a temporary effect or pending bake; the GTK
-[`Frame`](../../apps/layer-linux/src/render_thread.rs) copies layer/dab records
-into a mailbox bounded to two frames. Raster and imported-source payloads are
-shared. [`artwork::Frame`](../../crates/layer-render-wgpu/src/artwork.rs) retains
-another composition snapshot for queries. Do not describe these as pixel copies,
-but do not multiply them by adding a wire or graph reconstruction step.
+[`FramePacket`](../../crates/layer-render/src/lib.rs) borrows a typed `SceneView`,
+explicit source targets, batches and dabs. The GTK
+[`Frame`](../../apps/layer-linux/src/render_thread.rs) retains an
+`Arc<SceneSnapshot>`, shared working visibility overrides and bounded transient
+records in its mailbox. Queries retain immutable scene snapshots and explicit
+scopes. Authored stores and large payloads share unchanged owners; no host rebuilds
+a combined layer document for a frame or a file worker.
 
 Prefer retaining immutable render topology across submissions. Pass bounded
 source-root, parameter and transient-input updates with a scene generation; the
@@ -298,15 +301,12 @@ payloads and passes the allocation and latency gates more simply than a delta
 protocol. Copying bounded dab records across owners is still necessary. Choose
 one transport per ownership boundary; do not maintain redundant live replicas.
 
-Save/export snapshots may walk the object set and clone small records/shared
-handles once. The writer visits them through wire adapters without mutating a
-clone to detach binary payloads. In particular,
-[`ResourceIndex::detach`](../../crates/layer-core/src/project_storage/resources.rs)
-currently uses `Arc::make_mut` on effect instances/programs and parameter arrays;
-replace that save-time transformation with direct resource enumeration. Do not
-make every live edit copy a whole `Arc<Document>` or tile map just because a file
-worker holds a snapshot. Measure metadata snapshot cost before choosing more
-complex persistent containers.
+Save/export captures share authored roots once. The writer visits them through
+[`ResourceInventory`](../../crates/layer-core/src/package/resources.rs) and the
+record adapters, independently of ZIP assembly and without detaching resources
+from a cloned editable document. Preserve that boundary when a file worker holds
+a snapshot. Measure metadata snapshot cost before choosing more complex
+persistent containers.
 
 ### Source identity and evaluated identity
 
@@ -316,11 +316,12 @@ rules; it writes a source in its local coordinates. Captures, restoration and
 history follow that source revision. Queries may request the source, a placed
 occurrence, a stack prefix or an output; these are different results.
 
-Today [`Sources::prepare`](../../crates/layer-render-wgpu/src/scene/scale/sources.rs)
-keys by `LayerId`, admits visible layer sources and folds some mask, blend and
-material interpretation into their levels. Future sharing requires:
+[`Sources::prepare`](../../crates/layer-render-wgpu/src/scene/scale/sources.rs)
+uses `SourceTarget` and retains blend/material interpretation with its levels.
+Future sharing must preserve these separate identities:
 
-- Shared immutable decoded samples keyed by resource identity and interpretation.
+- Shared immutable decoded samples keyed by loaded owner/block identity or a
+  generated tile's descriptor and compressed fingerprint, plus interpretation.
 - Mutable paint/material backing and publications keyed by source identity.
 - Evaluated results keyed by operation/occurrence, semantic and input revisions,
   composition/color/alpha context, coordinate grid, time and quality.
@@ -393,10 +394,10 @@ cutover, rather than flatten arbitrary graphs into temporary layer documents:
   instantaneous self-cycle. Keep the selected occurrence's coordinates and
   explicit read generation; defer structural changes at the contact boundary.
 - **Selection, color sampling and statistics:**
-  [`RegionSource`](../../crates/layer-render/src/lib.rs) includes raw layer,
-  coverage and copied-layer queries. Replace copied layer lists with typed query
-  targets and an immutable scene revision. Preserve raw versus adjusted versus
-  displayed color, stack-prefix scope and mask coverage semantics.
+  [`RegionSource`](../../crates/layer-render/src/lib.rs) uses explicit source and
+  coverage targets or an immutable scene snapshot with `SceneScope`. Preserve raw
+  versus adjusted versus displayed color, stack-prefix scope and mask coverage
+  semantics.
 - **Source-aware adjustment analysis:**
   [`ArtworkQuery` and `EffectInputKey`](../../crates/layer-core/src/artwork_query.rs),
   shared [analysis policy](../../crates/layer-ui/src/effect_analysis.rs) and
@@ -433,18 +434,20 @@ seeking contracts without putting frame numbers into source identity.
 
 ### Lazy backing requires more than archive offsets
 
-The current reader constructs `TileBlob::from_compressed`, which decodes and
-checks decoded hashes. The writer deduplicates by that hash, and the renderer's
-[`DecodedTiles`](../../crates/layer-render-wgpu/src/scene/sources.rs) uses it for
-raster cache identity. Simply replacing the file digest with a CRC would either
-force eager decoding to reconstruct the old key or make collisions unsafe.
+The package reader validates bounded resources and decodes admitted tile samples
+on workers through `TileBlob::from_package`. Loaded tiles use immutable owner/block
+identity for cache reuse; generated tiles may use a descriptor and compressed
+fingerprint computed on the compression worker. Both include color interpretation.
+Decoded content digests remain explicit, lazy integrity/deduplication work, never
+required for installation or cache identity on opening or input. The writer retains
+original encoded resources. M4 demand loading must preserve these contracts.
 
 Use retained resource/block identity plus interpretation for loaded-byte reuse.
 Scope identity to an immutable backing owner/generation; two independently opened
 files containing the same declared IDs are not proof of identical bytes.
 Newly encoded identical blocks may be deduplicated with a strong hash or byte
-comparison; CRC-32 is only stored-byte integrity. No decoded content hash is
-required to install a resource handle. Preserve the same compressed LZ4 bytes
+comparison; CRC-32 is only stored-byte integrity. Payload equality never establishes
+editable source or occurrence identity. Preserve the same compressed LZ4 bytes
 through save, including their shuffle/layout contract. Avoid a file-specific tile
 object that must be copied into an otherwise identical renderer tile.
 
@@ -456,7 +459,7 @@ read seeks synchronously; neither is a promise of zero-copy access. Prefer an
 owned shared byte range when possible, without requiring memory mapping on every
 host. Never decompress the ZIP pack around independent LZ4 tiles.
 
-`raster_restore_ready` currently polls source tiles across the layer list;
+`raster_restore_ready` polls retained typed source revisions and demanded targets;
 restoration checks complete changed roots, and source upload can decode on a
 cache miss. A lazy package cannot inherit those whole-document readiness rules.
 For M4 lazy loading, install validated sparse indexes separately from resident
@@ -478,14 +481,15 @@ never leave lazy ranges pointing at a mutable destination being overwritten.
 
 ### Host transport and admission
 
-[`Project::read`](../../crates/layer-core/src/project.rs) currently takes `Read`;
-the ZIP directory needs random access, and lazy resources must retain access
-after that call returns. Introduce one shared random-access package/byte-source
-boundary and keep a stream-to-private-storage adapter for pipes/providers.
-[`read_import`](../../crates/layer-ui/src/import_policy.rs) identifies the master
-format before decoding; update that sniffing path too. Unknown native content
-needs a typed preserved/preview document result: today's `Result<Project, String>`
-with a mandatory editable `Document` cannot represent it faithfully.
+[`ImmutableBacking` and `ByteSource`](../../crates/layer-core/src/package/backing.rs)
+provide shared random access after opening. [`BackingReader` and bounded
+spooling](../../crates/layer-core/src/package/transport.rs) adapt ready ranges and
+non-seekable providers. [`read_import`](../../crates/layer-ui/src/import_policy.rs)
+identifies package/photo input and retains native backing through integrity,
+color and device admission. Its `ImportOutcome` selects an editable candidate or
+a preserved/recovered/failure package outcome; `PackageView` never adopts preview
+pixels as an editable document. Cancellation and stale preparation do not publish
+a package view or replace the incumbent editor.
 
 GTK, Android, Apple and Windows file workers call the shared reader/writer through
 [`files.rs`](../../apps/layer-linux/src/files.rs),
@@ -498,15 +502,14 @@ known sizes/CRCs; newly produced blocks/previews need bounded spooling before
 non-seekable output. ZIP64 and integer-safe offsets must cross every bridge.
 
 The web path in
-[`raster_project.rs`](../../apps/layer-web/src/raster_project.rs) detaches a
-`Document`, transfers compressed blocks between independent Wasm heaps, rebuilds
-a `Project` on the worker and writes a complete `Vec<u8>`. Its yields bound chunks
-of copying, not total retained file bytes. Transferable JS buffers do not remove
-copies into/out of Wasm. Replace this duplicate field inventory with the same
-shared snapshot/resource visitor and opaque resource handles/range requests.
-Account and bound unavoidable bridge copies; do not send unchanged large payloads
-back through the input owner for every save. A worker-owned package/Blob or private
-store is a possible backing implementation, not a requirement to add shared memory.
+[`artwork_transfer.rs`](../../apps/layer-web/src/artwork_transfer.rs) uses shared
+[`PreparedTransfer`](../../crates/layer-core/src/package/transfer.rs) metadata and
+bounded transferable payloads between independent Wasm heaps. Worker package
+writes stream into private browser storage before picker/download publication.
+Unsupported opening returns shared presentation facts and an optional verified
+PNG; the browser retains its original `Blob` as copy authority. No full archive
+or second editable artwork schema is transferred back through the input owner.
+Account and bound unavoidable bridge copies without adding shared memory.
 
 Keep structural validity separate from current device admission. Resource bytes,
 unique source backing, retained authored metadata, instance expansion, decoded
@@ -526,14 +529,14 @@ as part of the format work:
 
 | Boundary | Contract established by the format work |
 | --- | --- |
-| Coherent capture | Shared Rust captures immutable artwork and its edit checkpoint from the ordered editor owner. Keep working-state ownership and generation accessible so later recovery can capture selection, targets and bounded history at that same boundary. Manual saves need not clone undo history, and an artwork checkpoint must not be the sole version of session state. |
-| Resource reuse | Enumerate metadata and immutable resource handles independently of ZIP assembly. Unchanged resources retain identity across captures within a drawing, independent of file offsets or paths. A later private store can reuse their encoding and bytes without writing, reopening or unpacking a complete archive for each checkpoint. This does not promise incremental ZIP saves. |
-| Retained roots and budgets | Reuse the shared retention/accounting traversal for document, undo/redo, parked tabs, snapshots and accepted jobs. A later history codec must be able to enumerate its referenced resources through that boundary. The portable writer selects authored-document roots; it never silently starts exporting history or session state. |
-| Publication and lifetime | Capture and write tokens identify the document/session generation and the captured checkpoint. Manual-save acknowledgement remains distinct from recovery publication. Failed or stale writes cannot acknowledge newer work or release another owner's backing. Resource owners survive accepted jobs and release when their last owner goes away; future cleanup can use these lifetimes without depending on render caches. |
-| Private session records | Portable object/source identity remains available for later selection, target and history references; runtime handles are resolved on restoration. Reuse shared owners for selection, targets, camera and tabs, and workspace/preference persistence for the state it already owns. New private session/history codecs extend shared capture, not the portable manifest or a duplicate artwork model. Do not persist Rust inverse-edit enums or GPU state by default. |
+| Coherent capture | [`Editor::capture`](../../crates/layer-core/src/lib.rs) and [`CanvasEngine::capture_artwork`](../../crates/layer-engine/src/canvas.rs) produce [`ArtworkCapture` and `CaptureCheckpoint`](../../crates/layer-core/src/authored/artwork.rs) from the ordered owner and actual evaluation context. Keep working-state ownership and generation accessible so later recovery can capture selection, targets and bounded history at that same boundary. Manual saves need not clone undo history, and an artwork checkpoint must not be the sole version of session state. |
+| Resource reuse | [`ResourceInventory` and `PreparedResources`](../../crates/layer-core/src/package/resources.rs), [`artwork_records`](../../crates/layer-core/src/package/artwork_records.rs) and [`PreparedTransfer`](../../crates/layer-core/src/package/transfer.rs) enumerate metadata and immutable resources independently of ZIP assembly. Unchanged resources retain identity across captures within a drawing, independent of file offsets or paths. A later private store can reuse their encoding and bytes without writing, reopening or unpacking a complete archive for each checkpoint. This does not promise incremental ZIP saves. |
+| Retained roots and budgets | Reuse [`RootInventory`](../../crates/layer-core/src/lib.rs), [`Editor::retained_tiles` and `RetainedTiles`](../../crates/layer-core/src/raster_storage.rs), and [`history_budget`](../../crates/layer-core/src/history_budget.rs) for document, undo/redo, parked-tab, snapshot and accepted-job roots. A later history codec must be able to enumerate its referenced resources through that boundary. The portable writer selects authored-document roots; it never silently starts exporting history or session state. |
+| Publication and lifetime | [`document_files`](../../crates/layer-ui/src/document_files.rs) binds capture/write tokens to the document/session generation and captured checkpoint; [`RecoveryState`](../../crates/layer-ui/src/recovery.rs) owns recovery publication policy. Manual-save acknowledgement remains distinct from recovery publication. Failed or stale writes cannot acknowledge newer work or release another owner's backing. Resource owners survive accepted jobs and release when their last owner goes away; future cleanup can use these lifetimes without depending on render caches. |
+| Private session records | [`WorkingState`](../../crates/layer-core/src/authored/artwork.rs) and [`DocumentSessions`](../../crates/layer-ui/src/document_sessions.rs) retain editing state and tab owners. Portable object/source identity remains available for later selection, target and history references; runtime handles are resolved on restoration. Reuse shared owners for selection, targets, camera and tabs, and workspace/preference persistence for the state it already owns. New private session/history codecs extend shared capture, not the portable manifest or a duplicate artwork model. Do not persist Rust inverse-edit enums or GPU state by default. |
 
-M2 tests capture/resource reuse and cancellation with bounded backing. M3 verifies
-current recovery, Save/Undo/Redo and continued editing during publication through
+M2 tests capture/resource reuse and cancellation with bounded backing. M3 must
+verify current recovery, Save/Undo/Redo and continued editing during publication through
 the new interfaces, including stale completion and failure. Actual session/history
 serialization, resource-first checkpoint publication, cross-process claims,
 incremental-store selection and lifecycle flushing remain in the recovery plan.
@@ -562,10 +565,11 @@ context boundaries work.
 Proceed M1 -> M2 -> M3, then independently qualified M4 work where useful. Each
 milestone lands as a complete, checked change. Keep incomplete integration in the
 implementation worktree; never land an app that cannot save its live model.
-The current native codec is v15. Its `Manifest<Document>` and the web worker's
-separate `Metadata.document` both depend on the current layer structure, so
-replacing that structure before wiring its new persistence would create an
-intermediate format or adapter. Prepare the final codec first and switch once.
+The integrated model and shared package codec have replaced the pre-cutover v15
+native codec and separate Web field inventory. The requirements below retain the
+removal and qualification gates. The complete application cutover lands after
+critical correctness checks; remaining performance and host qualification must
+finish before its baseline can be declared qualified.
 
 ### M1: Resolve contracts and test the risky boundaries
 
@@ -574,11 +578,11 @@ needed to choose a passing implementation. Close these decisions before M2:
 
 | Contract | Required result |
 | --- | --- |
-| Field ownership | Map every field of `Document`, `Layer`, `LayerProperties`, `LayerMask` and effect definitions to an authored owner, derived data or shared working state. Include paper, reference designations, rulers, selections, image/profile/photo metadata, proof/SDR intent, placements and material state. Record defaults, units, lifetime and a round-trip or intentional-omission assertion. No field silently disappears. |
+| Field ownership | Account for every pre-cutover field of `Document`, `Layer`, `LayerProperties`, `LayerMask` and effect definitions to an authored owner, derived data or shared working state. Include paper, reference designations, rulers, selections, image/profile/photo metadata, proof/SDR intent, placements and material state. Record defaults, units, lifetime and a round-trip or intentional-omission assertion. No field silently disappears. |
 | Graph semantics | Specify the editable-subset validator, typed ports, scoped backdrop/clipping, group coordinates, mask slots, duplication/deletion and unplaced retention. Include indirect sharing through a reused group as an unsupported-content fixture. |
 | Wire grammar | Fix record/version names, reference and ID spelling, integer representation, frozen defaults, resource descriptors, pack index, checksum coverage, ZIP64/header rules and the bounded preview convention. Include malformed, unsupported and ancillary examples, not only valid JSON. |
 | Core and renderer API | Choose typed occurrence/source handles, lookup indexes, undo ownership, handle lifetime through deletion/redo, scene/query views and publication generations. Use the existing stack evaluator first; investigate retained plans only where counters show a need. |
-| File/host API | Define editable/preserved/recovered-view outcomes and their permitted operations; immutable byte-range ownership; read readiness, cancellation and failure; snapshot capture and save acknowledgement. A preserved package cannot become an editable preview `Project`. |
+| File/host API | Define editable/preserved/recovered-view outcomes and their permitted operations; immutable byte-range ownership; read readiness, cancellation and failure; snapshot capture and save acknowledgement. A preserved package view cannot become an editable `Document`. |
 | Output capture | Define opening phase, phase after rate changes and the saved output context for current time-dependent effects. Pair source roots, effect phases and analysis inputs in one capture; do not infer integrated phase from elapsed time alone. |
 | Recovery extension | Define the shared capture, resource traversal and checkpoint boundaries in [recovery extension](#recovery-extension-boundary). Retain identity and ownership needed by later private session/history codecs without adding them to the portable manifest. |
 
@@ -598,8 +602,9 @@ compressed-byte reuse, remapping, unsupported-content preservation, corruption,
 non-seekable streams and ZIP64 independently of changing the live editor. Use the
 same records that M3 will adopt; do not create a throwaway runtime model.
 
-The existing application continues to use its current model/codec until M3.
-There is no intermediate default format, dual writing or migration chain. A
+During M2 the application retained the pre-cutover model/codec. M3 now integrates
+the replacement; qualification remains pending. There is no intermediate default
+format, dual writing or migration chain. A
 separately landable codec is a complete tested library boundary. If preparation
 cannot stand independently, keep it with M3 rather than land broken integration.
 Temporary test conversion from the old model is allowed; it is removed at M3.
@@ -625,9 +630,11 @@ or graph synchronization bridge may remain in production.
 
 Before landing, run the correctness and host journeys below and measure affected
 frame paths against the common performance gates. Keep existing failures explicit.
-Freeze the new baseline after qualification, remove the old pre-release reader
-and writer, and update architecture, document, project-format and affected host
-guides. Maintain lossless support for this qualified baseline thereafter.
+The integrated replacement removes superseded readers, writers and editable
+model paths in the same change. Keep current architecture, document, format and
+host guides accurate while qualification is pending. Freeze the baseline and
+record M3 completion only after those gates pass; maintain lossless support for
+that qualified baseline thereafter.
 The [automatic recovery plan](autorecovery.md) can resume after this milestone;
 its session-restoration features are not part of this cutover.
 
@@ -651,7 +658,7 @@ do not retain it merely to catalogue unimplemented future possibilities.
 
 ### Required replacement and removal
 
-| Current boundary | Required replacement and deletion |
+| Superseded boundary | Required replacement and deletion |
 | --- | --- |
 | `Document.layers`, combined `Layer` ownership and overloaded paint/mask `LayerId` targets | At M3, use typed authored sources/occurrences, shared working state and explicit targets. Remove the old editable authority, duplicate parent/order storage, old ID-routing branches and production adapters that rebuild `Layer` records. Adapt callers to the new API rather than preserving a legacy facade. |
 | Native `project_storage` codec and direct `Document` serde | At M3, replace v15 read/write, its manifest/index records and detach/rebuild flows with the final package codec and visitor. Move useful profile, selection, metadata, material and validation helpers into their new owners once. Remove obsolete readers, writers and version branches; no old-format migration layer. |
@@ -757,5 +764,6 @@ evidence that their superseded production paths were removed. A qualified bounde
 eager M3 implementation need not meet the lazy-opening gate.
 
 Record measured results in the tier tables with their artifacts as required by
-the repository. This plan changes no runtime path; no build, host journey or new
-performance measurement establishes the proposed design yet.
+the repository. M1 and M2 have landed. M3's authored model and package cutover
+is implemented; qualification against the correctness, host and performance
+gates above remains pending.

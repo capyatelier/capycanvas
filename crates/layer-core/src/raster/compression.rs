@@ -61,7 +61,7 @@ mod tests {
             let tile = TileBlob::encode(descriptor, &pixels).unwrap();
             assert_eq!(tile.decode().unwrap(), pixels);
             let restored =
-                TileBlob::from_compressed(descriptor, tile.digest, tile.compressed().unwrap())
+                TileBlob::from_compressed(descriptor, tile.content_digest().unwrap(), tile.compressed().unwrap())
                     .unwrap();
             assert_eq!(restored.decode().unwrap(), pixels);
             assert!(

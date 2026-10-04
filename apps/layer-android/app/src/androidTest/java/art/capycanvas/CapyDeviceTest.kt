@@ -307,11 +307,3 @@ fun findNode(match: (SemanticsNode) -> Boolean, first: ViewRootForTest? = null):
 fun findTag(tag: String, first: ViewRootForTest? = null) = findNode(hasTag(tag), first)
 
 internal fun createEnglishHostForTest(profiling: Boolean = false): Long = Native.create("", arrayOf("en"), profiling)
-
-fun JSONObject.affinePlacement(): JSONArray {
-    val placement = getJSONObject("placement")
-    check(placement.isNull("mesh")) { "The fixture requires a complete affine placement" }
-    val outer = placement.getJSONArray("outer")
-    check(outer.getDouble(6) == 0.0 && outer.getDouble(7) == 0.0 && outer.getDouble(8) == 1.0)
-    return JSONArray(listOf(0, 3, 1, 4, 2, 5).map { outer.getDouble(it) })
-}

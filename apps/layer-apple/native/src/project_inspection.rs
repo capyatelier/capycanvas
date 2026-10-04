@@ -3,9 +3,8 @@ use super::*;
 use layer_render_wgpu::snapshot::SnapshotGpu;
 
 pub(super) struct Task {
-    project: Option<Project>,
+    project: Option<ArtworkCapture>,
     gpu: SnapshotGpu,
-    time: f32,
 }
 impl Task {
     pub(super) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
@@ -13,13 +12,12 @@ impl Task {
         Ok(Self {
             project: Some(session.capture_project_recovery()?),
             gpu: session.engine().backend().0.as_ref().ok_or("Canvas unavailable")?.snapshot_gpu(),
-            time: session.engine().animation_time(),
         })
     }
     pub(super) fn histogram(&mut self, task: &CapyProjectTask) -> Result<serde_json::Value, String> {
         let project = self.project.take().ok_or("Inspection was already consumed")?;
-        let sampled_time = project.document.has_animated_effects().then_some(self.time);
-        let mut snapshot = self.gpu.capture(project, self.time,
+        let sampled_time = project.artwork.effects.iter().any(|(_,_,e)| project.artwork.definitions.get(e.definition).is_some_and(|d| layer_core::EffectView::new(&d.program, &e.values).animated())).then_some(project.output().context.elapsed);
+        let mut snapshot = self.gpu.capture(project,
             task.control.clone()).map_err(|e| e.to_string())?;
         let histogram = snapshot.histogram().map_err(|e| e.to_string())?;
         task.check_cancelled()?;

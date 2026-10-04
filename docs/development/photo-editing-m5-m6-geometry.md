@@ -57,8 +57,7 @@ Use `Document::layer_roots` and `layer_subtrees` to normalize selection and own
 each descendant once. Freeze ordered targets, original selected roots, source/
 raster/geometry identities and selection identity at session start. Include
 hidden descendants. Any inherited lock, unsupported member, incompatible pending
-operation or invalid target refuses the entire set. Explicit paper/background
-selection is refused. Never move a convenient subset.
+operation or invalid target refuses the entire set. Never move a convenient subset.
 
 Supported groups may contain ordinary adjustment effects. Their parameters and
 document-space evaluation stay intact; move their independent masks with the

@@ -43,7 +43,7 @@ fn paint_at(
     let (mut input, consumer) = input_queue(1024);
     let mut engine = CanvasEngine::new(
         WgpuRasterizer::new_native_headless(color::DocumentColor::default()).unwrap(),
-        Document::new("bristle", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+        Document::new(layer_core::PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
         consumer,
         ViewState {
             width_px: extent[0],

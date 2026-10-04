@@ -28,7 +28,7 @@ fn layer_blend_submenu(s: &UiSession<Recorder>) -> Vec<Vec<ContextMenuItem>> {
 fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::AddLayer);
-    let id = s.engine.document().active_layer.0;
+    let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     let menu = s.layer_blend_menu(id).unwrap();
     assert_eq!(menu.title, "Blend Mode");
     assert_eq!(blend_items(&layer_blend_submenu(&s)), blend_items(&menu.sections));
@@ -50,7 +50,7 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
     );
     for item in menu.sections.iter().flatten() {
         s.dispatch(item.action.clone().unwrap()).unwrap();
-        let blend = s.engine.document().layer(LayerId(id)).unwrap().properties.blend;
+        let blend = s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().blend;
         assert_eq!(blend.label(), item.label);
         assert_eq!(s.state.layer_tools.editing_layer.as_ref().unwrap().blend, blend.code());
         let checked: Vec<_> = blend_items(&s.layer_blend_menu(id).unwrap().sections)
@@ -63,7 +63,7 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
     }
     layer(&mut s, LayerAction::Blend { id, value: layer_core::LayerBlend::Luminosity.code() });
     assert!(s.dispatch(UiAction::Layer { action: LayerAction::Blend { id, value: 25 } }).is_err());
-    let blend = |s: &UiSession<Recorder>| s.engine.document().layer(LayerId(id)).unwrap().properties.blend;
+    let blend = |s: &UiSession<Recorder>| s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().blend;
     invoke(&mut s, CommandId::Undo);
     assert_eq!(blend(&s), layer_core::LayerBlend::Color, "each choice is one step; the current mode adds none");
     invoke(&mut s, CommandId::Redo);
@@ -73,12 +73,12 @@ fn blend_menu_groups_every_mode_by_code_and_sets_it_in_one_step() {
 #[test]
 fn float_documents_offer_only_modes_defined_above_one() {
     use layer_core::color::SampleDepth;
-    let mut document = Document::new("HDR", 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.color.depth = SampleDepth::F32;
-    let renderer = Recorder { color: document.color, ..Default::default() };
+    let mut document = Document::new(layer_core::authored::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color.depth = SampleDepth::F32;
+    let renderer = Recorder { color: document.composition().color, ..Default::default() };
     let mut s = UiSession::new(renderer, document, [32, 32], Platform::Gtk).unwrap();
     invoke(&mut s, CommandId::AddLayer);
-    let id = s.engine.document().active_layer.0;
+    let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     let labels = |s: &UiSession<Recorder>| -> Vec<String> {
         blend_items(&s.layer_blend_menu(id).unwrap().sections)
             .into_iter()
@@ -92,9 +92,9 @@ fn float_documents_offer_only_modes_defined_above_one() {
         assert_eq!(offered.contains(&blend.label().to_string()), expected, "{blend:?}");
     }
     assert!(s.command_catalog().iter().all(|d| d.category != "Layer › Blend Mode" || offered.contains(&d.label)));
-    let mut layer = s.engine.document().layer(LayerId(id)).unwrap().clone();
-    layer.properties.blend = layer_core::LayerBlend::Overlay;
-    s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(layer))).unwrap();
+    let mut layer = s.engine.document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().clone();
+    layer.blend = layer_core::LayerBlend::Overlay;
+    s.layer_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, occurrence_handle(id).unwrap(), Some(layer)).unwrap())).unwrap();
     let current = labels(&s);
     assert!(current.contains(&"Overlay".to_string()), "a layer's current mode stays visible");
     assert!(!current.contains(&"Soft Light".to_string()));
@@ -104,28 +104,28 @@ fn float_documents_offer_only_modes_defined_above_one() {
 fn locked_layers_show_their_blend_without_offering_changes() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::AddLayer);
-    let id = s.engine.document().active_layer.0;
+    let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: true } }).unwrap();
     let menu = s.layer_blend_menu(id).unwrap();
     assert!(menu.sections.iter().flatten().all(|item| !item.enabled));
     assert!(s.layer_blend_menu(9999).is_err());
 }
 
-fn blend_of(s: &UiSession<Recorder>, id: LayerId) -> layer_core::LayerBlend {
-    s.engine.document().layer(id).unwrap().properties.blend
+fn blend_of(s: &UiSession<Recorder>, id: layer_core::authored::OccurrenceHandle) -> layer_core::LayerBlend {
+    s.engine.document().scene().occurrence(id).unwrap().blend
 }
 
 #[test]
 fn only_groups_offer_pass_through_and_choosing_it_is_one_step() {
     let mut s = session(Platform::Gtk);
     invoke(&mut s, CommandId::AddLayer);
-    let paint = s.engine.document().active_layer;
-    let labels = |s: &UiSession<Recorder>, id: LayerId| -> Vec<String> {
-        blend_items(&s.layer_blend_menu(id.0).unwrap().sections).into_iter().flatten().map(|(label, ..)| label).collect()
+    let paint = s.engine.document().working.occurrence.unwrap();
+    let labels = |s: &UiSession<Recorder>, id: layer_core::authored::OccurrenceHandle| -> Vec<String> {
+        blend_items(&s.layer_blend_menu(occurrence_token(id)).unwrap().sections).into_iter().flatten().map(|(label, ..)| label).collect()
     };
     assert!(!labels(&s, paint).contains(&"Pass Through".to_string()));
     let refused = s
-        .dispatch(UiAction::Layer { action: LayerAction::Blend { id: paint.0, value: layer_core::LayerBlend::PassThrough.code() } })
+        .dispatch(UiAction::Layer { action: LayerAction::Blend { id: occurrence_token(paint), value: layer_core::LayerBlend::PassThrough.code() } })
         .unwrap_err();
     assert_eq!(refused, "Only groups can use Pass Through");
     let choices = |s: &UiSession<Recorder>| match &s.state.layer_properties.controls.iter().find(|c| c.key == "blend").unwrap().kind {
@@ -135,9 +135,9 @@ fn only_groups_offer_pass_through_and_choosing_it_is_one_step() {
     assert!(!choices(&s).contains(&"Pass Through".to_string()));
 
     s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
-    let group = s.engine.document().active_layer;
+    let group = s.engine.document().working.occurrence.unwrap();
     assert_eq!(blend_of(&s, group), layer_core::LayerBlend::Normal, "new groups are isolated by default");
-    let menu = s.layer_blend_menu(group.0).unwrap();
+    let menu = s.layer_blend_menu(occurrence_token(group)).unwrap();
     assert_eq!(
         blend_items(&menu.sections)[0],
         [("Pass Through".to_string(), layer_core::LayerBlend::PassThrough.code(), false), ("Normal".to_string(), 0, true)],
@@ -166,18 +166,18 @@ fn the_pass_through_setting_picks_the_blend_of_every_new_group() {
         assert_eq!(s.state.settings.pass_through_groups, on);
         let expected = if on { layer_core::LayerBlend::PassThrough } else { layer_core::LayerBlend::Normal };
         s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
-        assert_eq!(blend_of(&s, s.engine.document().active_layer), expected, "New Group, setting {on}");
-        s.dispatch(UiAction::Layer { action: LayerAction::Select { id: s.engine.document().active_layer.0, mask: false } }).unwrap();
+        assert_eq!(blend_of(&s, s.engine.document().working.occurrence.unwrap()), expected, "New Group, setting {on}");
+        s.dispatch(UiAction::Layer { action: LayerAction::Select { id: occurrence_token(s.engine.document().working.occurrence.unwrap()), mask: false } }).unwrap();
         invoke(&mut s, CommandId::AddLayer);
-        let first = s.engine.document().active_layer;
+        let first = s.engine.document().working.occurrence.unwrap();
         invoke(&mut s, CommandId::AddLayer);
-        let second = s.engine.document().active_layer;
-        s.dispatch(UiAction::Layer { action: LayerAction::Select { id: first.0, mask: false } }).unwrap();
-        s.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id: second.0 } }).unwrap();
-        let before = s.engine.document().layers.len();
+        let second = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::Select { id: occurrence_token(first), mask: false } }).unwrap();
+        s.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id: occurrence_token(second) } }).unwrap();
+        let before = s.engine.document().scene().order().len();
         s.dispatch(UiAction::Layer { action: LayerAction::GroupSelected }).unwrap();
-        assert_eq!(s.engine.document().layers.len(), before + 1);
-        let grouped = s.engine.document().layer(first).unwrap().properties.parent.unwrap();
+        assert_eq!(s.engine.document().scene().order().len(), before + 1);
+        let grouped = s.engine.document().scene().parent(first).unwrap();
         assert_eq!(blend_of(&s, grouped), expected, "Group Selected, setting {on}");
     }
 }
@@ -186,14 +186,14 @@ fn the_pass_through_setting_picks_the_blend_of_every_new_group() {
 fn localized_layer_blend_description_preserves_literal_title_and_code() {
     let localization = Localizer::shared(UiLanguage::Japanese);
     let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localization).unwrap();
-    let id = session.engine().document().active_layer.0;
+    let id = occurrence_token(session.engine().document().working.occurrence.unwrap());
     let name = "Multiply 日本語 한글 {literal} 🎨";
     layer(&mut session, LayerAction::Rename { id, name: name.into() });
     layer(&mut session, LayerAction::Blend { id, value: layer_core::LayerBlend::Multiply.code() });
     let row = session.state().layers.iter().find(|row| row.id == id).unwrap();
     assert_eq!(row.label, name);
     assert_eq!(row.description, "乗算");
-    assert_eq!(session.engine().document().layer(LayerId(id)).unwrap().properties.blend, layer_core::LayerBlend::Multiply);
+    assert_eq!(session.engine().document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().blend, layer_core::LayerBlend::Multiply);
     invoke(&mut session, CommandId::Undo);
-    assert_eq!(session.engine().document().layer(LayerId(id)).unwrap().name.as_ref(), name);
+    assert_eq!(session.engine().document().scene().occurrence(occurrence_handle(id).unwrap()).unwrap().name.as_ref(), name);
 }

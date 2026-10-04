@@ -17,7 +17,7 @@ impl Plan {
     /// None retains the ordinary incremental image cache. A window plan is
     /// needed only when its conservative full-image allocation exceeds the cap.
     pub fn new(
-        layers: &[Layer],
+        layers: SceneView<'_>,
         extent: [u32; 2],
         limit: u64,
     ) -> Result<Option<Self>, GpuRasterError> {
@@ -28,10 +28,7 @@ impl Plan {
         if full <= limit {
             return Ok(None);
         }
-        let radius = layers
-            .iter()
-            .filter(|l| images::visible(layers, l))
-            .filter_map(|l| l.effect.as_ref())
+        let radius = layers.order().iter().filter(|handle| layers.visible(**handle)).filter_map(|handle| layers.effect(*handle))
             .try_fold(0u32, |r, e| Some(r.saturating_add(e.damage_radius()?)))
             .ok_or_else(|| GpuRasterError::Color(format!(
                 "Document-wide filters require up to {full} bytes of image pixels; the live filter limit is {limit} bytes"
@@ -84,41 +81,36 @@ mod tests {
     use super::*;
     use layer_core::{EffectInstance, EffectPass, EffectSampling};
 
-    fn adjustment(sampling: EffectSampling) -> Layer {
-        let mut p = (*layer_core::bundled_effect_catalog()
-            .get("exposure")
-            .unwrap()
-            .program())
-        .clone();
-        p.passes = vec![EffectPass {
-            entry: p.entry.clone(),
-            sampling,
-        }]
-        .into();
-        let mut l = Layer::paint(LayerId(1), "bounded filter");
-        l.kind = LayerKind::Effect;
-        l.effect = Some(std::sync::Arc::new(EffectInstance::new(
-            std::sync::Arc::new(p),
-        )));
-        l
+    fn adjustments(sampling: EffectSampling, count: usize, extent: [u32; 2]) -> layer_core::Document {
+        use layer_core::authored::*;
+        let mut artwork = Artwork::new(extent).unwrap();
+        let mut program = (*layer_core::bundled_effect_catalog().get("exposure").unwrap().program()).clone();
+        program.passes = vec![EffectPass { entry: program.entry.clone(), sampling }].into();
+        let definition = artwork.definitions.insert(PortableId::random(), Definition { program: Arc::new(program), dimensions: Default::default() }).unwrap();
+        let stack = artwork.compositions.get(artwork.root).unwrap().result;
+        for _ in 0..count {
+            let values = EffectInstance::new(artwork.definitions.get(definition).unwrap().program.clone()).values;
+            let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: extent }).unwrap();
+            let handle = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "bounded filter")).unwrap();
+            artwork.stacks.get_mut(stack).unwrap().entries.push(handle);
+        }
+        layer_core::Document::from_artwork(artwork).unwrap()
     }
 
     #[test]
     fn photo_windows_cover_output_and_complete_halos_within_cap() {
-        let mut layers = vec![adjustment(EffectSampling::Neighborhood { radius: 19 }); 5];
-        for (i, l) in layers.iter_mut().enumerate() {
-            l.id = LayerId(i as u64 + 1);
-        }
         for extent in [[6000, 4000], [8256, 5504], [8192, 7324], [32768, 257]] {
-            let plan = Plan::new(&layers, extent, DEFAULT_IMAGE_PIXEL_BYTES)
+            let document = adjustments(EffectSampling::Neighborhood { radius: 19 }, 5, extent);
+            let layers = document.scene();
+            let plan = Plan::new(layers, extent, DEFAULT_IMAGE_PIXEL_BYTES)
                 .unwrap()
                 .unwrap();
             let mut covered = 0;
             let mut previous = None;
             for (output, window) in plan.regions(PixelRect::full(extent)) {
                 covered += output.area();
-                assert_eq!(window, Scene::capture_window(&layers, output, extent));
-                assert!(Scene::capture_image_bound(&layers, window) <= DEFAULT_IMAGE_PIXEL_BYTES);
+                assert_eq!(window, Scene::capture_window(layers, output, extent));
+                assert!(Scene::capture_image_bound(layers, window) <= DEFAULT_IMAGE_PIXEL_BYTES);
                 assert_eq!(output.min_x() % PAGE_SIZE, 0);
                 assert_eq!(output.min_y() % PAGE_SIZE, 0);
                 if let Some(old) = previous {
@@ -135,23 +127,31 @@ mod tests {
         use layer_core::EffectValue;
         let extent=[9504,6336];
         for sigma in [21f32,85.] {for count in [1u32,3,6] {for limit in [256u64<<20,512<<20] {
-            let layers:Vec<_>=(0..count).map(|i| {
-                let mut layer=Layer::paint(LayerId(u64::from(i)+1),"Gaussian");layer.kind=LayerKind::Effect;
-                let mut effect=EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
-                effect.set("sigma",EffectValue::Number(sigma)).unwrap();layer.effect=Some(std::sync::Arc::new(effect));layer
-            }).collect();
+            use layer_core::authored::*;
+            let mut artwork=Artwork::new(extent).unwrap();
+            let stack=artwork.compositions.get(artwork.root).unwrap().result;
+            for _ in 0..count {
+                let mut draft=EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+                draft.set("sigma",EffectValue::Number(sigma)).unwrap();
+                let definition=artwork.definitions.insert(PortableId::random(),Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+                let effect=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values,domain:extent}).unwrap();
+                let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),"Gaussian")).unwrap();
+                artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
+            }
+            let document=layer_core::Document::from_artwork(artwork).unwrap();
+            let scene=document.scene();
             let radius=2*(sigma*3.).ceil() as u32*count;
             let bytes_per_pixel=u64::from(2*count+1)*16;
             let smallest=extent.map(|v|v.min(PAGE_SIZE+2*radius));
             let minimum=u64::from(smallest[0])*u64::from(smallest[1])*bytes_per_pixel;
-            let plan=Plan::new(&layers,extent,limit);
+            let plan=Plan::new(scene,extent,limit);
             if minimum>limit {assert!(plan.is_err(),"sigma={sigma} depth={count} minimum={minimum} cap={limit}");continue;}
             let plan=plan.unwrap().unwrap();let mut covered=0;let mut halo_pixels=0;let mut windows=0;
             for (output,input) in plan.regions(PixelRect::full(extent)) {
                 assert_eq!(input,output.expand(radius,extent));
                 let bytes=input.area()*bytes_per_pixel;
                 assert!(bytes<=limit,"sigma={sigma} depth={count} actual input={input:?} bytes={bytes} cap={limit}");
-                assert_eq!(bytes,Scene::capture_image_bound(&layers,input));
+                assert_eq!(bytes,Scene::capture_image_bound(scene,input));
                 covered+=output.area();halo_pixels+=input.area();windows+=1;
             }
             assert_eq!(covered,u64::from(extent[0])*u64::from(extent[1]));
@@ -169,29 +169,30 @@ mod tests {
     #[test]
     fn oversized_global_or_halo_dependencies_are_explicit_and_hidden_ones_are_excluded() {
         let extent = [8192, 7324];
-        let mut global = adjustment(EffectSampling::Document);
+        let mut global = adjustments(EffectSampling::Document, 1, extent);
         assert!(
-            Plan::new(&[global.clone()], extent, DEFAULT_IMAGE_PIXEL_BYTES)
+            Plan::new(global.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES)
                 .unwrap_err()
                 .to_string()
                 .contains("Document-wide")
         );
-        global.visible = false;
+        let handle = global.scene().order()[0];
+        global.artwork.occurrences.get_mut(handle).unwrap().visible = false;
         assert!(
-            Plan::new(&[global], extent, DEFAULT_IMAGE_PIXEL_BYTES)
+            Plan::new(global.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES)
                 .unwrap()
                 .is_none()
         );
-        let halo = adjustment(EffectSampling::Neighborhood { radius: 4096 });
+        let halo = adjustments(EffectSampling::Neighborhood { radius: 4096 }, 1, extent);
         assert!(
-            Plan::new(&[halo], extent, DEFAULT_IMAGE_PIXEL_BYTES)
+            Plan::new(halo.scene(), extent, DEFAULT_IMAGE_PIXEL_BYTES)
                 .unwrap_err()
                 .to_string()
                 .contains("halos")
         );
         assert!(
             Plan::new(
-                &[adjustment(EffectSampling::Document)],
+                adjustments(EffectSampling::Document, 1, [256, 256]).scene(),
                 [256, 256],
                 DEFAULT_IMAGE_PIXEL_BYTES
             )

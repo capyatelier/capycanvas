@@ -1,5 +1,6 @@
 use super::crop::{CropFrame, CropRatio};
 use super::*;
+use layer_core::authored::{OccurrenceHandle, SourceTarget};
 use layer_core::{
     Affine, CanvasGeometry, CanvasGeometryError, CanvasRect, ContentBoundsCache, ContentBoundsRequest, ContentScope, Edit,
     ImageOrientation, Point, Rect,
@@ -17,17 +18,17 @@ pub(super) enum ContentUse {
     Transform,
     Move,
     PrepareMove,
-    PrepareSnap(layer_core::LayerId),
+    PrepareSnap(OccurrenceHandle),
 }
 impl ContentUse {
-    fn scope(self, target: layer_core::LayerId) -> ContentScope {
-        match self {
+    fn scope(self, target: Option<SourceTarget>) -> Result<ContentScope, String> {
+        Ok(match self {
             Self::PrepareSnap(id) => ContentScope::PlacedTarget(id),
             Self::Trim => ContentScope::Canvas,
             Self::FitContent => ContentScope::Visible,
             Self::RevealAll => ContentScope::All,
-            Self::Transform | Self::Move | Self::PrepareMove => ContentScope::Target(target),
-        }
+            Self::Transform | Self::Move | Self::PrepareMove => ContentScope::Target(target.ok_or("Select a paint layer or mask first")?),
+        })
     }
 }
 
@@ -39,8 +40,8 @@ pub(super) struct PendingMove {
 struct ContentJob {
     purpose: ContentUse,
     revision: u64,
-    target: layer_core::LayerId,
-    roots: Vec<layer_core::LayerId>,
+    target: Option<SourceTarget>,
+    roots: Vec<OccurrenceHandle>,
     request: ContentBoundsRequest,
     submitted: bool,
 }
@@ -62,6 +63,16 @@ pub(super) struct ContentBounds {
 impl ContentBounds {
     pub(super) fn busy(&self) -> bool { self.job.is_some() || self.bake.is_some() }
     pub(super) fn baking(&self) -> bool { self.bake.is_some() }
+}
+
+fn same_destination(actual: &Edit, expected: &Edit) -> bool {
+    match (actual, expected) {
+        (Edit::Batch(a), Edit::Batch(b)) => a.len() == b.len() && a.iter().zip(b).all(|(a, b)| same_destination(a, b)),
+        (Edit::Paint(a), Edit::Paint(b)) => a.handle == b.handle && a.id == b.id,
+        (Edit::Coverage(a), Edit::Coverage(b)) => a.handle == b.handle && a.id == b.id,
+        (Edit::Occurrence(a), Edit::Occurrence(b)) => a.handle == b.handle && a.id == b.id,
+        _ => false,
+    }
 }
 
 pub(super) fn orientation(command: CommandId) -> Option<ImageOrientation> {
@@ -121,7 +132,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         refused(self.canvas_geometry_refusal())?;
         let doc = self.engine.document();
-        let geometry = CanvasGeometry::orient([doc.width, doc.height], orientation);
+        let geometry = CanvasGeometry::orient(doc.composition().size, orientation);
         self.apply_canvas_geometry(&geometry, Vec::new()).map_err(|e| e.to_string())
     }
 
@@ -149,9 +160,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_content_idle(purpose)?;
         refused(self.content_bounds_refusal(purpose))?;
         let doc = self.engine.document();
-        let mut request = ContentBoundsRequest::new(doc, purpose.scope(doc.active_target()));
+        let primary = self.bounds_targets().first().copied().or(doc.active_target());
+        let mut request = ContentBoundsRequest::new(doc, purpose.scope(primary)?);
         if !matches!(request.scope, ContentScope::Target(_)) && doc.has_animated_effects() {
-            request.time = self.engine.animation_time();
+            request.snapshot = self.engine.scene_snapshot();
         }
         if matches!(request.scope, ContentScope::Target(_)) {
             if let Some(bounds) = self.measured_target_bounds() { return self.use_content_bounds(purpose, bounds); }
@@ -181,39 +193,42 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    fn bounds_targets(&self) -> Vec<layer_core::LayerId> {
+    fn bounds_targets(&self) -> Vec<SourceTarget> {
         let doc = self.engine.document();
         if self.retained_transforming() {
             return doc.retained_transform_targets(&self.transform_roots()).unwrap_or_default().into_iter()
-                .filter(|id| doc.layer(*id).is_some_and(|layer| layer.kind == layer_core::LayerKind::Paint)).collect();
+                .filter_map(|h| doc.scene().paint_source(h).and_then(|_| doc.scene().source_target(h))).collect();
         }
-        std::iter::once(doc.active_target()).chain(self.bounds_companion()).collect()
+        doc.active_target().into_iter().chain(self.bounds_companion()).collect()
     }
-    fn snap_target_ids(&self) -> Vec<layer_core::LayerId> {
+    fn snap_target_ids(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
+        let scene = doc.scene();
         let roots = self.transform_roots();
         let mut excluded = doc.layer_subtrees(&roots);
         for root in roots {
-            let mut parent = doc.layer(root).and_then(|layer| layer.properties.parent);
+            let mut parent = scene.parent(root);
             while let Some(id) = parent {
                 if !excluded.insert(id) { break; }
-                parent = doc.layer(id).and_then(|layer| layer.properties.parent);
+                parent = scene.parent(id);
             }
         }
-        let mut ids: Vec<_> = doc.layers.iter().filter(|layer| {
-            if !matches!(layer.kind, layer_core::LayerKind::Paint | layer_core::LayerKind::Group)
-                || excluded.contains(&layer.id) { return false; }
-            let mut current = Some(*layer);
-            while let Some(layer) = current {
-                if !layer.visible || layer.properties.clipped || layer.opacity <= 0. { return false; }
-                current = layer.properties.parent.and_then(|id| doc.layer(id));
+        let mut ids: Vec<_> = scene.order().iter().copied().filter(|h| {
+            let Some(occurrence) = scene.occurrence(*h) else { return false; };
+            if !matches!(occurrence.kind(), layer_core::LayerKind::Paint | layer_core::LayerKind::Group)
+                || excluded.contains(h) { return false; }
+            let mut current = Some(*h);
+            while let Some(handle) = current {
+                let Some(occurrence) = scene.occurrence(handle) else { return false; };
+                if !occurrence.visible || occurrence.clipped || occurrence.opacity <= 0. { return false; }
+                current = scene.parent(handle);
             }
             true
-        }).map(|layer| layer.id).collect();
+        }).collect();
         ids.sort_unstable();
         ids
     }
-    pub(super) fn measured_snap_bounds(&self) -> Vec<(layer_core::LayerId, Rect)> {
+    pub(super) fn measured_snap_bounds(&self) -> Vec<(OccurrenceHandle, Rect)> {
         let doc = self.engine.document();
         self.snap_target_ids().into_iter().filter_map(|id| {
             self.content_bounds.cache.current(doc, ContentScope::PlacedTarget(id))
@@ -247,25 +262,28 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.content_bounds.cache.get(&request).or_else(|| request.known_bounds())
         };
         let targets = self.bounds_targets();
-        if self.retained_transforming() && (targets.len() != 1 || self.transform_roots() != targets) {
+        if self.retained_transforming() && (targets.len() != 1 || self.transform_roots() != targets.iter().filter_map(|t| doc.scene().source_owner(*t)).collect::<Vec<_>>()) {
             return targets.into_iter().try_fold(Rect::EMPTY, |bounds, id|
-                Some(bounds.union(doc.layer_geometry(id).forward_bounds(measured(id)?))));
+                Some(bounds.union(doc.target_geometry(id).forward_bounds(measured(id)?))));
         }
-        let bounds = measured(doc.active_target())?;
+        let bounds = measured(doc.active_target()?)?;
         if bounds.is_empty() { return Some(bounds); }
         let Some(companion) = self.bounds_companion() else { return Some(bounds); };
-        let to = doc.affine_edit_transform(companion)?.then(doc.affine_edit_transform(doc.active_target())?.inverse()?);
+        let to = doc.affine_edit_transform(companion)?.then(doc.affine_edit_transform(doc.active_target()?)?.inverse()?);
         let other = measured(companion)?;
         Some(if other.is_empty() { bounds } else { bounds.union(to.bounds(other)) })
     }
 
-    fn bounds_companion(&self) -> Option<layer_core::LayerId> {
+    fn bounds_companion(&self) -> Option<SourceTarget> {
         let doc = self.engine.document();
-        let owner = doc.target_owner(doc.active_target())?;
-        if owner.kind != layer_core::LayerKind::Paint
-            || (!doc.active_mask && doc.selection.is_none()) { return None; }
-        let mask = owner.mask.as_ref().filter(|mask| mask.linked)?;
-        Some(if doc.active_target() == owner.id { mask.id } else { owner.id })
+        let active = doc.active_target()?;
+        let owner = doc.target_owner(active)?;
+        let occurrence = doc.scene().occurrence(owner)?;
+        if occurrence.kind() != layer_core::LayerKind::Paint
+            || (!matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && doc.working.selection.is_none()) { return None; }
+        let mask = occurrence.mask.as_ref().filter(|mask| mask.linked)?;
+        let paint = doc.scene().source_target(owner)?;
+        Some(if active == paint { SourceTarget::Coverage(mask.source) } else { paint })
     }
 
     pub(super) fn cancel_content_bounds(&mut self) -> bool {
@@ -283,7 +301,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let doc = self.engine.document();
         let l = self.localization();
         if self.selection_masks.target().is_some() { return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST)); }
-        doc.transform_pixels_refusal(doc.active_target()).map(|reason| l.text(match reason {
+        doc.active_target().map_or(Some(layer_core::TransformPixelsRefusal::Target), |t| doc.transform_pixels_refusal(t)).map(|reason| l.text(match reason {
             Target => MessageId::COMMANDS_TRANSFORM_PIXELS_SELECT_LAYER,
             Locked => MessageId::COMMANDS_THE_LAYER_IS_LOCKED,
             Unchanged => MessageId::COMMANDS_TRANSFORM_PIXELS_UNCHANGED,
@@ -296,8 +314,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         refused(self.transform_pixels_refusal())?;
         self.cancel_content_bounds();
         let doc = self.engine.document();
-        let interpolation = doc.layer_geometry(doc.active_target()).placement.interpolation;
-        let plan = doc.transform_pixels_plan(doc.active_target(), interpolation, Default::default())?;
+        let target = doc.active_target().ok_or("Select a layer or mask first")?;
+        let interpolation = doc.target_geometry(target).placement.interpolation;
+        let plan = doc.transform_pixels_plan(target, interpolation, Default::default())?;
         self.engine.validate_edit(&plan.reserved_edit()).map_err(error)?;
         let mut bake = PixelBake { epoch: self.state.document_file.epoch, revision: doc.revision, plan, submitted: false };
         self.cancel_auto_levels();self.cancel_histogram();
@@ -312,7 +331,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let l = self.localization().clone();
         let Some(bake) = self.content_bounds.bake.as_mut() else { return 0; };
         let changed = bake.epoch != self.state.document_file.epoch || bake.revision != self.engine.document().revision
-            || self.engine.document().active_target() != bake.plan.target;
+            || self.engine.document().active_target() != Some(bake.plan.target);
         let result = if changed {
             self.engine.backend_mut().cancel_snapshot();
             Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_DRAWING_CHANGED).to_string())
@@ -329,12 +348,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let bake = self.content_bounds.bake.take().unwrap();
         let result = result.and_then(|result| {
-            let layer_render::SnapshotResult::TransformPixels(layer) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
-            if layer.id != bake.plan.output.id { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_LAYER_CHANGED).to_string()); }
+            let layer_render::SnapshotResult::TransformPixels(edit) = result else { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_UNEXPECTED_RESULT).to_string()); };
+            if !same_destination(&edit, &bake.plan.output) { return Err(l.text(MessageId::COMMANDS_TRANSFORM_PIXELS_LAYER_CHANGED).to_string()); }
             self.require_document_idle()?;
             refused(self.transform_pixels_refusal())?;
-            let edit = Edit::ReplaceLayer(layer);
-            self.source_edit_candidates(&edit, &[], Default::default())?;
+            self.source_edit_candidates(&edit, Default::default())?;
             self.engine.apply_edit(edit).map_err(error)?;
             self.refresh_document();
             Ok(())
@@ -352,10 +370,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         let roots = if job.roots.is_empty() { Vec::new() } else { self.transform_roots() };
         let job = self.content_bounds.job.as_mut().unwrap();
         let doc = self.engine.document();
-        let changed = doc.revision != job.revision || doc.id != job.request.document.id
+        let changed = doc.revision != job.revision || doc.owner != job.request.snapshot.owner
             || (!job.roots.is_empty() && job.roots != roots)
             || (matches!(job.purpose, ContentUse::Transform | ContentUse::Move | ContentUse::PrepareMove) && (doc.active_target() != job.target
-                || doc.selection != job.request.document.selection));
+                || doc.working.selection != job.request.selection));
         let cancelled = (job.purpose == ContentUse::FitContent && self.operation.crop.is_none()) || changed;
         let result = if cancelled {
             self.engine.backend_mut().cancel_content_bounds();
@@ -400,8 +418,8 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn use_content_bounds(&mut self, purpose: ContentUse, bounds: Rect) -> Result<(), String> {
         let doc = self.engine.document();
-        let canvas = Rect { min: Point::default(), max: Point { x: doc.width as f32, y: doc.height as f32 } };
-        let whole = CanvasRect { origin: [0; 2], size: [doc.width, doc.height] };
+        let canvas = Rect { min: Point::default(), max: Point { x: doc.composition().size[0] as f32, y: doc.composition().size[1] as f32 } };
+        let whole = CanvasRect { origin: [0; 2], size: doc.composition().size };
         match purpose {
             ContentUse::PrepareMove => Ok(()),
             ContentUse::PrepareSnap(_) => self.prepare_transform_snapping(),

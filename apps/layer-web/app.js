@@ -1899,13 +1899,22 @@ async function restartGpu() {
   await startGpu();
 }
 
+function documentGpuCurrent(owner) {
+  const current = app.state().document_file;
+  return owner.epoch === current.epoch && owner.revision === current.revision;
+}
+
 async function resumeDocumentCanvas() {
   compilerEpoch++;compilerScheduled=false;compilerFailed=false;
   gpuReady=app.gpu_ready();firstCanvasRendered=false;pending.length=0;
   for(const key of Object.keys(startupTimes))startupTimes[key]=null;
   if(!gpuReady){
-    try{gpuReady=app.resume_document_gpu();}
-    catch(error){stopGpu(error);return;}
+    const owner=app.state().document_file;
+    try{
+      await app.await_document_backing();
+      if(!documentGpuCurrent(owner))return;
+      gpuReady=app.resume_document_gpu();
+    }catch(error){if(documentGpuCurrent(owner))stopGpu(error);return;}
   }
   if(!gpuReady)await startGpu();
   else {document.body.dataset.gpu='ready';$('gpu-notice').hidden=true;wake();}
@@ -1923,8 +1932,18 @@ async function startGpu() {
   try {
     if (!isSecureContext) throw new Error("WebGPU requires HTTPS or localhost.");
     if (!navigator.gpu) throw new Error("navigator.gpu is unavailable.");
-    app.attach_gpu(await createGpu());
-    gpuReady = true;
+    while(!gpuReady){
+      const owner=app.state().document_file;
+      let gpu;
+      try{
+        await app.await_document_backing();
+        if(!documentGpuCurrent(owner))continue;
+        gpu=await createGpu();
+      }catch(error){if(!documentGpuCurrent(owner))continue;throw error;}
+      if(!documentGpuCurrent(owner)){gpu.free();continue;}
+      app.attach_gpu(gpu);
+      gpuReady=true;
+    }
     document.body.dataset.gpu = "ready";
     notice.hidden = true;
     wake();

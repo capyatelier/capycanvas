@@ -3,7 +3,7 @@
 use super::*;
 use layer_core::color::source::{SourceChannels, SourceInterpretation};
 use layer_core::raster::{RasterData, RasterPlane};
-use layer_core::{Project, ProjectLimits};
+use layer_core::authored::{ArtworkCapture, SceneIndex};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 
@@ -78,7 +78,6 @@ impl CaptureControl {
 pub struct SnapshotGpu {
     #[cfg(target_arch = "wasm32")]
     encoder: Option<raster::BrowserRasterEncoder>,
-    effect_clocks: effects::Clocks,
     analyses: Vec<Arc<crate::effect_analysis::Prepared>>,
     #[cfg(target_arch = "wasm32")]
     analysis_backing_waiter: Option<crate::effect_analysis::BackingWaiter>,
@@ -100,7 +99,6 @@ impl WgpuRasterizer {
     }
     pub fn snapshot_gpu(&self) -> SnapshotGpu {
         SnapshotGpu {
-            effect_clocks: self.effect_clocks.clone(),
             analyses: self.effect_analyses.clone(),
             #[cfg(target_arch = "wasm32")]
             analysis_backing_waiter: self.analysis_backing_waiter.clone(),
@@ -127,34 +125,48 @@ impl SnapshotGpu {
 
     /// Run on the file/inspection worker. Cloned handles keep the device alive
     /// through this job even if its canvas closes; loss still fails the job.
-    pub fn capture(
-        &self,
-        project: Project,
-        time: f32,
-        control: CaptureControl,
-    ) -> Result<SnapshotRenderer, GpuRasterError> {
-        project.validate(ProjectLimits::default()).map_err(GpuRasterError::Color)?;
-        SnapshotRenderer::construct(project, time, control, self)
+    pub fn capture(&self, capture: ArtworkCapture, control: CaptureControl) -> Result<SnapshotRenderer, GpuRasterError> {
+        let index = Arc::new(SceneIndex::build(&capture.artwork).map_err(GpuRasterError::Color)?);
+        let context = capture.artwork.outputs.get(capture.artwork.default_output).ok_or(GpuRasterError::InvalidExtent)?.context.clone();
+        let scene = Arc::new(SceneSnapshot::new((*capture.artwork).clone(), index, capture.checkpoint.owner,
+            capture.checkpoint.artwork_generation, context));
+        SnapshotRenderer::construct(scene, SceneScope::All, control, self)
+    }
+    pub fn scoped_transfer_artwork(scene:&SceneSnapshot,additional:&[SourceTarget])->layer_core::Artwork {
+        let mut required=capture_targets(scene.view(),&scene.scope);
+        required.extend_from_slice(additional);
+        scene.scoped_transfer_artwork(&required)
+    }
+    pub fn capture_scene(&self, scene: Arc<SceneSnapshot>, scope: SceneScope, control: CaptureControl) -> Result<SnapshotRenderer, GpuRasterError> {
+        SnapshotRenderer::construct(scene, scope, control, self)
     }
 }
 
-fn discard_hidden_backing(document: &mut layer_core::Document) {
-    let visible: Vec<_> = document.layers.iter().map(|layer| document.layer_is_visible(layer.id)).collect();
-    for (layer, visible) in document.layers.iter_mut().zip(visible) {
-        if !visible { layer.raster = Default::default(); layer.source = None; layer.mask = None; layer.pending_operations.clear(); }
-    }
+pub(super) fn capture_targets(scene: SceneView<'_>, scope: &SceneScope) -> Vec<SourceTarget> {
+    let contributors = match scope {
+        SceneScope::Raw(target) => return vec![*target],
+        SceneScope::Prefix {before, ..} => layer_core::composite_input_layers(scene, *before),
+        _ => scene.order().iter().copied().filter(|&h| scene.visible(h)).collect(),
+    };
+    scene.targets().filter(|target| {
+        let Some(owner) = scene.source_owner(*target) else { return false; };
+        let needed = contributors.contains(&owner) || target.is_coverage() && contributors.iter().any(|&h| layer_core::descends_from(scene, h, Some(owner)));
+        needed && scene.visible(owner) && (!target.is_coverage() || scene.mask(owner).is_some_and(|(use_,_)| use_.enabled))
+    }).collect()
 }
 
 pub struct SnapshotRenderer {
-    document: Arc<layer_core::Document>,
-    analysis_ready: std::collections::HashSet<LayerId>,
+    scene: Arc<SceneSnapshot>,
+    scope: SceneScope,
+    offset: layer_core::Point,
+    raw_geometry: Option<layer_core::ImageTransform>,
+    analysis_ready: std::collections::HashSet<OccurrenceHandle>,
     pub(crate) sdr_rendition: Option<layer_core::color::hdr::SdrRendition>,
     local_tone: Option<Arc<layer_core::color::hdr::LocalToneGuide>>,
     gpu_local_tone: Option<Arc<crate::local_tone::GpuToneGuide>>,
     renderer: WgpuRasterizer,
-    layers: Vec<Layer>,
-    backing: HashMap<LayerId, Arc<RasterData>>,
-    resident: HashMap<LayerId, RasterData>,
+    backing: HashMap<SourceTarget, Arc<RasterData>>,
+    resident: HashMap<SourceTarget, RasterData>,
     extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
     output_extent: [u32; 2],
@@ -166,83 +178,49 @@ pub struct SnapshotRenderer {
     control: CaptureControl,
 }
 impl SnapshotRenderer {
-    fn construct(
-        project: Project,
-        time: f32,
-        control: CaptureControl,
-        gpu: &SnapshotGpu,
-    ) -> Result<Self, GpuRasterError> {
+    fn construct(scene: Arc<SceneSnapshot>, scope: SceneScope, control: CaptureControl, gpu: &SnapshotGpu) -> Result<Self, GpuRasterError> {
         control.check()?;
+        let time = scene.context.elapsed;
         if !time.is_finite() {
-            return Err(GpuRasterError::Color(
-                "Invalid snapshot viewing state".into(),
-            ));
+            return Err(GpuRasterError::Color("Invalid snapshot viewing state".into()));
         }
-        let extent = [project.document.width, project.document.height];
-        let layers: Vec<_> = project
-            .document
-            .layers
-            .iter()
-            .map(Layer::composite_snapshot)
-            .collect();
+        let view = scene.view().with_scope(&scope);
+        let composition = view.composition();
+        let extent = composition.size;
+        let color = composition.color;
         let mut backing = HashMap::new();
-        for layer in &layers {
-            for (id, raster) in std::iter::once((layer.id, &layer.raster))
-                .chain(layer.masks().map(|m| (m.id, &m.raster)))
-            {
+        for target in capture_targets(view, &scope) {
+            if let Some(root) = view.raster(target) {
                 control.check()?;
-                backing.insert(id, raster.wait_data_cancellable(control.cancellation_flag()).map_err(GpuRasterError::Color)?);
+                backing.insert(target, root.wait_data_cancellable(control.cancellation_flag()).map_err(GpuRasterError::Color)?);
             }
         }
         control.check()?;
-        let mut renderer = WgpuRasterizer::native_capture_on_gpu(
-            gpu.adapter.clone(),
-            gpu.device.clone(),
-            gpu.queue.clone(),
-            project.document.color,
-        )?;
-        if gpu.device.working_space() == project.document.color.space
-            && gpu.device.hdr() == project.document.color.depth.is_float()
-        {
-            renderer.scene_pipelines = gpu.scene_pipelines.clone();
-            renderer.scene = None;
+        let mut renderer = WgpuRasterizer::native_capture_on_gpu(gpu.adapter.clone(), gpu.device.clone(), gpu.queue.clone(), color)?;
+        if gpu.device.working_space() == color.space && gpu.device.hdr() == color.depth.is_float() {
+            renderer.scene_pipelines = gpu.scene_pipelines.clone(); renderer.scene = None;
         }
         #[cfg(target_arch = "wasm32")]
-        if let Some(encoder) = gpu.encoder.clone() {
-            renderer.set_browser_raster_encoder(encoder);
+        if let Some(encoder) = gpu.encoder.clone() { renderer.set_browser_raster_encoder(encoder); }
+
+        for &handle in view.order() {
+            let Some(effect) = view.effect(handle) else { continue; };
+            if let Some(phase) = view.effect_handle(handle).and_then(|h| scene.context.phases.iter().find(|(target, _)| *target == h).map(|(_, phase)| *phase)) {
+                renderer.effect_clocks.insert(handle, (effect.program.id.clone(), layer_core::EffectClock::at(effect, time, phase)));
+            }
         }
-        renderer.effect_clocks = gpu.effect_clocks.clone();
+        renderer.submitted_context = Some(scene.context.clone());
         renderer.effect_analyses = gpu.analyses.clone();
-        renderer.ensure_document_metadata(extent, &layers)?;
-        Ok(Self {
-            document: Arc::new(project.document.clone()),
-            analysis_ready: Default::default(),
-            sdr_rendition: project
-                .document
-                .color
-                .depth
-                .is_float()
-                .then_some(project.document.sdr_rendition),
-            local_tone: None,
-            gpu_local_tone: None,
-            renderer,
-            layers,
-            backing,
-            resident: HashMap::new(),
-            extent,
-            #[cfg(not(target_arch = "wasm32"))]
-            output_extent: extent,
-            #[cfg(not(target_arch = "wasm32"))]
-            output_metadata: layer_color::photo::DeliveryMetadata {
-                resolution: project.document.resolution,
-                photo: project.document.metadata.clone(),
-                policy: Default::default(),
-            },
-            blend_space: project.document.blend_space,
-            time,
-            planned_pixel_bytes: PLANNED_PIXEL_BYTES,
-            control,
-        })
+        renderer.ensure_document_metadata(extent, view)?;
+        let sdr_rendition = color.depth.is_float().then_some(view.output().sdr);
+        let blend_space = composition.blend;
+        #[cfg(not(target_arch = "wasm32"))]
+        let output_metadata = layer_color::photo::DeliveryMetadata {resolution: composition.resolution, photo: (*scene.artwork.metadata).clone(), policy: Default::default()};
+        Ok(Self {scene, scope, offset: Default::default(), raw_geometry: None, analysis_ready: Default::default(), sdr_rendition, local_tone: None, gpu_local_tone: None,
+            renderer, backing, resident: HashMap::new(), extent,
+            #[cfg(not(target_arch = "wasm32"))] output_extent: extent,
+            #[cfg(not(target_arch = "wasm32"))] output_metadata,
+            blend_space, time, planned_pixel_bytes: PLANNED_PIXEL_BYTES, control})
     }
 
     /// One source/composite decision for native streaming writers and browser
@@ -264,26 +242,17 @@ impl SnapshotRenderer {
         &self,
         target: &SourceInterpretation,
     ) -> Option<Arc<layer_core::color::source::SourceImage>> {
-        let mut visible = self
-            .layers
-            .iter()
-            .filter(|l| l.visible && l.opacity > 0.);
-        let layer = visible.next()?;
-        if visible.next().is_some()
-            || layer.kind != LayerKind::Paint
-            || layer.opacity != 1.
-            || layer.properties.parent.is_some()
-            || layer.properties.offset != layer_core::Point::default()
-            || layer.properties.placement != layer_core::LayerPlacement::IDENTITY
-            || layer.properties.blend != layer_core::LayerBlend::Normal
-            || layer.properties.clipped
-            || layer.mask.as_ref().is_some_and(|m| m.enabled)
-            || layer.effect.is_some()
-            || !self.backing[&layer.id].tiles.is_empty()
-        {
-            return None;
-        }
-        let source = layer.source.as_ref()?;
+        let scene = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
+        let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h)
+            && scene.occurrence(h).is_some_and(|o| o.opacity > 0.));
+        let handle = visible.next()?;
+        let occurrence = scene.occurrence(handle)?;
+        let source_target = scene.source_target(handle)?;
+        if self.offset != layer_core::Point::default() || visible.next().is_some() || !matches!(source_target, SourceTarget::Paint(_)) || occurrence.opacity != 1.
+            || scene.parent(handle).is_some() || occurrence.translation != layer_core::Point::default()
+            || occurrence.placement != layer_core::LayerPlacement::IDENTITY || occurrence.blend != layer_core::LayerBlend::Normal
+            || occurrence.clipped || occurrence.mask.as_ref().is_some_and(|m| m.enabled) || !self.backing[&source_target].tiles.is_empty() { return None; }
+        let source = scene.original(source_target)?;
         (source.extent == self.extent
             && source.interpretation.channels == target.channels
             && source.interpretation.depth == target.depth
@@ -417,6 +386,9 @@ impl SnapshotRenderer {
     fn capture_output_region_gpu<T>(&mut self, [x,y,width,height]: [u32;4], output: scene::Output, reserved_bytes:u64,
         consume: impl FnOnce(&PipelineDevice, &wgpu::Texture, &mut submission::CommandEncoder) -> T,
     ) -> Result<T, GpuRasterError> {
+        let output=match (&self.scope,output) {
+            (SceneScope::Raw(target),scene::Output::Artwork(None))=>scene::Output::Source(*target),_=>output,
+        };
         self.with_region_gpu([x, y, width, height], reserved_bytes, |r, packet, region, encoder| {
             let (target, _) = create_color_target(&r.device, [width, height], "snapshot region");
             let mut scene = r.scene.take().unwrap_or_else(|| scene::Scene::new(r));
@@ -451,7 +423,8 @@ impl SnapshotRenderer {
         if region.is_empty() || region.intersect(PixelRect::full(self.extent)) != region {
             return Err(GpuRasterError::InvalidExtent);
         }
-        let window = scene::Scene::capture_window(&self.layers, region, self.extent);
+        let view = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
+        let window = scene::Scene::capture_window(view, region, self.extent);
         // Composition operates in page-sized tiles, including translated masks
         // and neighboring watercolor pigment. Restore their complete footprints.
         let pages = page_coordinates(window)
@@ -462,26 +435,26 @@ impl SnapshotRenderer {
         let material_pages = if self.backing.values().any(|data| data.watercolor.is_some()) {
             scene::Scene::MATERIAL_CACHE_PAGES as u64
         } else { 0 };
-        let mut planned = scene::Scene::capture_image_bound(&self.layers, window)
-            .saturating_add(scene::Scene::geometry_bytes(&self.layers,self.renderer.scene.as_ref()))
+        let mut planned = scene::Scene::capture_image_bound(view, window)
+            .saturating_add(scene::Scene::geometry_bytes(view,self.renderer.scene.as_ref()))
             .saturating_add(reserved_bytes)
             .saturating_add(self.renderer.analysis_bytes())
             .saturating_add(region.area().saturating_mul(32)) // output and mapping
-            .saturating_add((self.layers.len() as u64 * 3 + 32 + material_pages) * 256 * 256 * 16);
-        for layer in &self.layers {
-            for (id, mask) in
-                std::iter::once((layer.id, false)).chain(layer.masks().map(|m| (m.id, true)))
-            {
-                let extent = layer.local_extent(self.extent);
+            .saturating_add((view.order().len() as u64 * 3 + 32 + material_pages) * 256 * 256 * 16);
+        for id in self.backing.keys().copied() {
+                let mask = id.is_coverage();
+                let extent = view.target_extent(id);
                 let original = &self.backing[&id];
                 let halo = if mask { 0. } else { original.watercolor.map_or(0., |style| 2. * style.edge_width.clamp(1., 16.)) };
-                let geometry = layer_core::target_geometry(&self.layers, id);
-                let extent = layer.mask.as_ref().filter(|m| m.id == id).map_or(extent, |m| m.local_extent(extent));
+                let geometry = match (&self.raw_geometry, &self.scope) {
+                    (Some(geometry), SceneScope::Raw(target)) if *target == id => geometry.clone(),
+                    _ => view.target_geometry(id),
+                };
                 let local = paint_transform::snapshot::source_region(&geometry,
                     pages.to_rect().outset(halo), extent, self.renderer.scene.as_ref().and_then(|scene|scene.mesh_geometry(&geometry)))?.expand(if mask { 1 } else { PAGE_SIZE }, extent);
                 if mask {
                     masks.insert(id, local);
-                    if layer.mask.as_ref().is_some_and(|m| m.initial.is_some()) {
+                    if matches!(id, SourceTarget::Coverage(h) if view.coverage(h).is_some_and(|m| m.initial.is_some())) {
                         let prepared = page_coordinates(local).fold(PixelRect::EMPTY, |r, c| r.union(page_rect(c)))
                             .intersect(PixelRect::full(extent));
                         planned = planned.saturating_add(prepared.area() / 2 + 64);
@@ -509,7 +482,6 @@ impl SnapshotRenderer {
                     );
                 }
                 selected.insert(id, data);
-            }
         }
         if planned > self.planned_pixel_bytes {
             return Err(GpuRasterError::CaptureBudget {
@@ -523,7 +495,7 @@ impl SnapshotRenderer {
         }
         // These are disposable read-only caches. Evict obsolete pages before
         // allocating replacements, instead of temporarily retaining both windows.
-        let retained = |id: LayerId, plane, coordinate| {
+        let retained = |id: SourceTarget, plane, coordinate| {
             selected.get(&id).is_some_and(|data| {
                 data.tiles
                     .contains_key(&layer_core::raster::TileKey { plane, coordinate })
@@ -554,13 +526,6 @@ impl SnapshotRenderer {
             if self.control.is_cancelled() {
                 return Err(GpuRasterError::Color("Snapshot capture cancelled".into()));
             }
-            if self
-                .layers
-                .iter()
-                .any(|l| l.id == *id && l.kind != LayerKind::Paint)
-            {
-                continue;
-            }
             for tile in data.tiles.values() {
                 tile.wait_backing_cancellable(self.control.cancellation_flag()).map_err(GpuRasterError::Color)?;
             }
@@ -582,7 +547,9 @@ impl SnapshotRenderer {
                 document_to_surface: [1., 0., 0., 1., 0., 0.],
             },
             document_extent: self.extent,
-            layers: &self.layers,
+            scene: view,
+            selection_visibility: None,
+            inspect_mask: None,
             time_seconds: self.time,
             dabs: &[],
             dab_batches: &[],
@@ -596,7 +563,7 @@ impl SnapshotRenderer {
         r.layer_masks.prepare_regions(
             &r.device,
             &mut encoder,
-            (&self.layers, &[]),
+            (view, &[]),
             self.extent,
             false,
             &mut r.selection_clip,

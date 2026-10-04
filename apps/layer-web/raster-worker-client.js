@@ -48,7 +48,13 @@ export function createRasterWorker() {
   return async ({cancelled,...request})=>{
     const op=request.operation;
     if(op==='cancel-read'){for(const state of reads)state.fail(new DOMException('Opening cancelled','AbortError'));reads.clear();return true;}
-    if(op==='write'||op==='recover-write'){const state=owner(`archive:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Archive finished','AbortError'));}}
+    if(op==='write'){
+      if(outputs.size>=2)throw Error('Finish the current output before starting another');
+      const state=owner(`archive:${++next}`);
+      try{const output=await send(state,request,cancelled);outputs.set(output.token,state);return output;}
+      catch(error){state.fail(error);throw error;}
+    }
+    if(op==='recover-write'){const state=owner(`archive:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Archive finished','AbortError'));}}
     if(op==='read'){
       const state=owner(`read:${++next}`);reads.add(state);
       try{return await send(state,request,cancelled);}finally{reads.delete(state);state.fail(new DOMException('Reading finished','AbortError'));}

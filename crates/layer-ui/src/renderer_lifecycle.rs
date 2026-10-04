@@ -54,25 +54,24 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn submit_backdrop_frame(&mut self) -> Result<(), String> {
         let view = self.state.camera.view();
         let document = self.engine.document();
-        let extent = [document.width, document.height];
-        let blend_space = document.blend_space;
-        let layers = layer_core::constant_backdrop(&document.layers).to_vec();
-        self.engine
-            .backend_mut()
-            .submit(layer_render::FramePacket {
-                commit_rasters: true,
-                time_seconds: 0.,
-                view,
-                document_extent: extent,
-                layers: &layers,
-                dabs: &[],
-                dab_batches: &[],
-                restore_rasters: &[],
-                reset_layers: true,
-                composite_all: true,
-                blend_space,
-            })
-            .map_err(error)
+        let scene = document.scene();
+        let backdrop = scene.constant_backdrop();
+        let snapshot = document.snapshot().as_ref().clone().with_scope(layer_core::authored::SceneScope::Members(backdrop.to_vec().into()));
+        self.engine.backend_mut().submit(layer_render::FramePacket {
+            commit_rasters: true,
+            time_seconds: 0.,
+            view,
+            scene: snapshot.view(),
+            inspect_mask: None,
+            selection_visibility: None,
+            document_extent: snapshot.view().composition().size,
+            blend_space: snapshot.view().composition().blend,
+            dabs: &[],
+            dab_batches: &[],
+            restore_rasters: &[],
+            reset_layers: true,
+            composite_all: true,
+        }).map_err(error)
     }
 
     pub fn retained_document_tiles(&self) -> layer_core::raster_storage::RetainedTiles {
@@ -135,8 +134,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Initialize a newly opened drawing from the current painting tools. Do
     /// not call when reactivating a parked drawing: it owns its existing tools.
     pub fn inherit_initial_drawing_tools(&mut self, previous: &Self) -> Result<(), String> {
-        let destination = self.engine.document().color.space;
-        let transform = previous.engine.document().color.space.linear_transform(destination);
+        let destination = self.engine.document().composition().color.space;
+        let transform = previous.engine.document().composition().color.space.linear_transform(destination);
         let mut brush = previous.engine.configured_brush().clone();
         previous.state.colors.load_paint(&mut brush, destination)?;
         let secondary = &mut brush.color_dynamics.secondary_color_rgba_linear;
@@ -147,7 +146,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.colors = previous.state.colors.clone();
         self.state.color_library = previous.state.color_library.clone();
         self.state.colors.set_rgb_space(destination)?;
-        self.state.colors.set_document_depth(self.engine.document().color.depth)?;
+        self.state.colors.set_document_depth(self.engine.document().composition().color.depth)?;
         self.apply_brush()
     }
 
@@ -224,7 +223,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// readbacks are cancelled; pending filter validation resumes from retained
     /// source bytes before it can publish a catalog or edit.
     pub fn replace_renderer(&mut self, mut renderer: R) -> Result<(R, UiChange), String> {
-        if self.engine.document().layers.iter().any(|l| l.source.is_some())
+        if self.engine.document().artwork.paint.iter().any(|(_, _, source)| source.original.is_some())
             && !renderer.supports_tiled_sources()
         {
             return Err("The replacement renderer does not support tiled photo documents".into());
@@ -352,7 +351,7 @@ mod tests {
     fn parked_editor_inherits_window_viewport_without_losing_its_history() {
         let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
         let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
-        let layers = parked.engine().document().layers.len();
+        let layers = parked.engine().document().scene().order().len();
         parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
         let revision = parked.engine().document().revision;
         active.set_viewport([1000., 700.], [2000, 1400]).unwrap();
@@ -361,7 +360,7 @@ mod tests {
         assert_eq!(parked.logical_viewport, Some([1000., 700.]));
         assert_eq!(parked.engine().document().revision, revision);
         parked.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-        assert_eq!(parked.engine().document().layers.len(), layers);
+        assert_eq!(parked.engine().document().scene().order().len(), layers);
     }
 
     #[test]
@@ -370,7 +369,7 @@ mod tests {
             let mut active = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
             let mut parked = UiSession::blank(Recorder::default(), [800, 600], Platform::Gtk).unwrap();
             active.dispatch(UiAction::SetTheme { theme: Some(Theme::Dark) }).unwrap();
-            let layers = parked.engine().document().layers.len();
+            let layers = parked.engine().document().scene().order().len();
             parked.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
             parked.frame(0, 0).unwrap();
             let document = parked.engine().document().clone();
@@ -394,9 +393,9 @@ mod tests {
             assert_eq!(parked.engine().document(), &document);
             assert_eq!(parked.engine().checkpoint(), checkpoint);
             parked.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
-            assert_eq!(parked.engine().document().layers.len(), layers);
+            assert_eq!(parked.engine().document().scene().order().len(), layers);
             parked.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();
-            assert_eq!(parked.engine().document().layers, document.layers);
+            assert_live_artwork_eq(parked.engine().document(), &document);
             parked.frame(1, 1).unwrap();
         }
     }
@@ -405,7 +404,7 @@ mod tests {
     fn replacement_retains_sources_undo_redo_workspace_and_pending_save() {
         let mut s = UiSession::new(
             sources(),
-            Document::new("recovery", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [256, 256],
             Platform::Windows,
         )
@@ -436,14 +435,14 @@ mod tests {
         s.complete_document_request(request, Ok(false)).unwrap();
         invoke(&mut s, CommandId::Redo);
         s.frame(2, 2).unwrap();
-        assert_eq!(s.engine.document().layers, imported.layers);
+        assert_live_artwork_eq(s.engine.document(), &imported);
     }
 
     #[test]
     fn replacement_clears_gpu_waits_and_resumes_filter_validation() {
         let mut s = UiSession::new(
             Recorder::default(),
-            Document::new("requests", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [128, 128],
             Platform::Gtk,
         )
@@ -499,7 +498,7 @@ mod tests {
     fn suspension_cancels_transform_and_filter_candidate_without_changing_sources() {
         let mut s = UiSession::new(
             sources(),
-            Document::new("retire", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
+            Document::new(layer_core::PortableId::random(), 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }),
             [128, 128],
             Platform::Windows,
         )
@@ -507,7 +506,7 @@ mod tests {
         s.import_layer_source("Source", source([20, 30, 40, 255])).unwrap();
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
-        let imported = document.active_layer;
+        let imported = document.working.occurrence.unwrap();
         let catalog = s.effect_catalog.clone();
         stage_candidate_library(&mut s, &catalog, "Unpublished candidate", "owned sources");
         invoke(&mut s, CommandId::ScaleRotate);
@@ -520,8 +519,10 @@ mod tests {
         assert_eq!(s.effect_catalog.filters(), catalog.filters());
         assert_eq!(s.engine.document(), &document);
         let recovered = s.capture_project_recovery().unwrap();
-        let retained = |d: &Document| d.layer(imported).unwrap().source.clone().unwrap();
-        assert!(std::sync::Arc::ptr_eq(&retained(&recovered.document), &retained(&document)));
+        let paint = match document.scene().occurrence(imported).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
+        let retained = document.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+        let recovered = recovered.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
+        assert!(std::sync::Arc::ptr_eq(recovered, retained));
         assert!(s.command(CommandId::SaveDocumentAs).enabled);
         assert!(
             s.dispatch(UiAction::Color {

@@ -1,15 +1,13 @@
 use crate::{WgpuRasterizer, effect_analysis::Lease, snapshot::CaptureControl};
-use layer_core::{ArtworkQuery, ArtworkSource, EffectInstance, EffectValue, Layer, LayerKind};
+use layer_core::{ArtworkQuery, ArtworkSource, EffectInstance, EffectValue};
 use std::sync::Arc;
 
 fn document() -> layer_core::Document {
     let mut document = crate::artwork_sample_tests::document_in([31, 23], layer_core::color::RgbSpace::Srgb,
         |x, y| [0.01 + x as f32 / 255., 0.02 + y as f32 / 255., 0.08, 1.]);
-    let mut layer = Layer::paint(document.allocate_layer_id(), "Shadows");
-    layer.kind = LayerKind::Effect;
-    layer.effect = Some(Arc::new(EffectInstance::new(crate::tests::fixture("shadows_highlights").program())));
-    document.active_layer = layer.id;
-    document.layers.insert(0, layer);
+    let effect = EffectInstance::new(crate::tests::fixture("shadows_highlights").program());
+    let handle = crate::artwork_sample_tests::insert_effect(&mut document,effect,0);
+    document.working.occurrence = Some(handle);
     document
 }
 fn retained(renderer: &WgpuRasterizer) -> u64 { *renderer.device.analysis_memory.lock().unwrap() }
@@ -37,7 +35,7 @@ fn analysis_guide_reuses_one_resource_for_100_own_edits_and_snapshot_handles_ret
     let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let baseline = retained(&renderer);
     let mut document = document();
-    let target = document.active_layer;
+    let target = document.working.occurrence.unwrap();
     let query = |document: &layer_core::Document| ArtworkQuery::new(document, ArtworkSource::EffectInput(target));
     let candidate = pollster::block_on(renderer.snapshot_gpu().effect_analysis(query(&document), CaptureControl::default())).unwrap();
     assert_eq!(candidate.entries.len(), 1);
@@ -47,7 +45,9 @@ fn analysis_guide_reuses_one_resource_for_100_own_edits_and_snapshot_handles_ret
     renderer.apply_effect_analysis(candidate);
     assert_eq!(retained(&renderer), baseline + bytes);
     for amount in 0..100 {
-        Arc::make_mut(document.layers[0].effect.as_mut().unwrap()).set("shadows", EffectValue::Number(amount as f32)).unwrap();
+        let mut effect = crate::artwork_sample_tests::effect_draft(&document,target);
+        effect.set("shadows", EffectValue::Number(amount as f32)).unwrap();
+        crate::artwork_sample_tests::set_effect(&mut document,target,effect);
         let candidate = pollster::block_on(renderer.snapshot_gpu().effect_analysis(query(&document), CaptureControl::default())).unwrap();
         assert_eq!(candidate.entries.len(), 1);
         assert_eq!(Arc::as_ptr(&candidate.entries[0]) as usize, identity, "own amount {amount}");
@@ -72,7 +72,7 @@ fn analysis_cancelled_and_invalid_requests_leave_no_lease() {
     let document = document();
     let control = CaptureControl::default();
     control.cancel();
-    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.active_layer));
+    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.working.occurrence.unwrap()));
     assert!(pollster::block_on(renderer.snapshot_gpu().effect_analysis(query, control)).is_err());
     assert_eq!(retained(&renderer), baseline);
     let query = ArtworkQuery::new(&document, ArtworkSource::Visible);
@@ -85,9 +85,8 @@ fn analysis_in_flight_cancellation_releases_reserved_and_unpublished_storage() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let baseline = retained(&renderer);
     let mut document = document();
-    document.width = 769;
-    document.height = 513;
-    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.active_layer));
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().size = [769,513];
+    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.working.occurrence.unwrap()));
     let control = CaptureControl::default();
     let worker_control = control.clone();
     let gpu = renderer.snapshot_gpu();
@@ -114,12 +113,12 @@ fn analysis_failed_source_publication_releases_all_storage() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let baseline = retained(&renderer);
     let mut document = document();
-    let failed = RasterTile::pending(document.color.paint_descriptor());
+    let failed = RasterTile::pending(document.composition().color.paint_descriptor());
     failed.publish(Err("analysis source publication failed".into())).unwrap();
     let mut data = RasterData::default();
     data.tiles.insert(TileKey {plane: RasterPlane::Color, coordinate: [0, 0]}, failed);
-    document.layers.iter_mut().find(|layer| layer.kind == LayerKind::Paint).unwrap().raster = RasterRevision::backed(data);
-    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.active_layer));
+    crate::artwork_sample_tests::paint_mut(&mut document).raster = RasterRevision::backed(data);
+    let query = ArtworkQuery::new(&document, ArtworkSource::EffectInput(document.working.occurrence.unwrap()));
     let result = pollster::block_on(renderer.snapshot_gpu().effect_analysis(query, CaptureControl::default()));
     assert!(matches!(result, Err(ref error) if error.contains("analysis source publication failed")));
     assert_eq!(retained(&renderer), baseline);

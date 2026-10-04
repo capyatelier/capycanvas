@@ -43,7 +43,7 @@ fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
             ring.original,
             original
                 .definition()
-                .linear_in(s.engine.document().color.space)
+                .linear_in(s.engine.document().composition().color.space)
                 .unwrap()
         );
         assert!(!ring.classic);
@@ -107,7 +107,7 @@ fn color_picker_keeps_selection_mask_colors_separate_from_artwork() {
             s.color_picker_overlay().unwrap().original,
             original
                 .definition()
-                .linear_in(s.engine.document().color.space)
+                .linear_in(s.engine.document().composition().color.space)
                 .unwrap()
         );
         let preview = s.state.preview_colors().into_owned();
@@ -229,7 +229,7 @@ fn color_picker_touch_tracks_one_contact_toggles_source_and_commits_on_lift() {
     s.frame(1, 1).unwrap();
     assert!(matches!(
         s.renderer_mut().sample_requests.last().unwrap().source,
-        layer_render::ColorSampleSource::Layer(_)
+        layer_render::ColorSampleSource::Source(_)
     ));
     let aim = s
         .state

@@ -1,9 +1,5 @@
-//! New Dodge & Burn Layer and Frequency Separation: retouching layers that
-//! are inserted with their pixels in one undo step, through pending
-//! operations on the new layers.
 use super::*;
-
-pub const SEPARATION_IDS: usize = 6;
+use crate::authored::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RetouchLayerRefusal {
@@ -25,7 +21,8 @@ impl SeparationFilters {
     const RADIUS: &'static str = "sigma";
 
     pub fn new(catalog: &EffectCatalog, radius: f32) -> Result<Self, &'static str> {
-        let instance = |id: &str| catalog.get(id).map(|f| EffectInstance::new(f.program())).ok_or("Frequency Separation's filters are missing");
+        let instance =
+            |id: &str| catalog.get(id).map(|f| EffectInstance::new(f.program())).ok_or("Frequency Separation's filters are missing");
         let mut blur = instance(Self::BLUR)?;
         blur.set(Self::RADIUS, EffectValue::Number(radius))?;
         Ok(Self { blur: Arc::new(blur) })
@@ -35,172 +32,217 @@ impl SeparationFilters {
     pub fn radius_parameter(catalog: &EffectCatalog) -> Option<&EffectParameter> {
         catalog.get(Self::BLUR)?.program.parameters.iter().find(|p| p.key.as_ref() == Self::RADIUS)
     }
-
-    /// An effect layer that applies `effect` to the layer it is clipped to.
-    pub fn clipped(id: LayerId, effect: &Arc<EffectInstance>, name: impl Into<Arc<str>>) -> Layer {
-        let mut layer = Layer::paint(id, name);
-        layer.kind = LayerKind::Effect;
-        layer.effect = Some(effect.clone());
-        layer.properties.clipped = true;
-        layer
-    }
 }
-
-/// Edits that insert the new layers, and the pending operations that give
-/// them their pixels. `CanvasEngine::insert_with_operations` runs both as one
-/// step.
 #[derive(Clone, Debug)]
 pub struct RetouchLayerPlan {
     pub edits: Vec<Edit>,
-    pub operations: Vec<(LayerId, LayerOperation)>,
-    /// The layer that becomes active.
-    pub active: LayerId,
+    pub operations: Vec<(SourceTarget, RasterOperation)>,
+    pub active: OccurrenceHandle,
 }
-
 impl Document {
-    /// The gray a Soft Light layer leaves the image under it unchanged with:
-    /// in Perceptual documents the linear value that encodes to 8-bit 128 or
-    /// 16-bit 32768, and in Linear-light ones linear 0.5.
     pub fn soft_light_neutral(&self) -> f32 {
-        let code = |maximum: f64| self.color.space.decode((maximum + 1.) / 2. / maximum) as f32;
-        match (self.blend_space, self.color.depth) {
+        let color = self.composition().color;
+        let code = |maximum: f64| color.space.decode((maximum + 1.) / 2. / maximum) as f32;
+        match (self.composition().blend, color.depth) {
             (BlendSpace::Perceptual, color::SampleDepth::U8) => code(255.),
             (BlendSpace::Perceptual, color::SampleDepth::U16) => code(65535.),
             _ => 0.5,
         }
     }
-
-    /// Where a layer goes to sit above `id` and everything clipped to it, in
-    /// `id`'s group; on an empty stack, the top.
-    pub fn above_clipping_stack(&self, id: LayerId) -> (usize, Option<LayerId>) {
-        let parent = self.layer(id).and_then(|l| l.properties.parent);
-        let index = self
-            .clipping_stack_top(id)
-            .and_then(|top| self.layers.iter().position(|l| l.id == top))
-            .unwrap_or(0);
+    pub fn above_clipping_stack(&self, id: OccurrenceHandle) -> (usize, Option<OccurrenceHandle>) {
+        let scene = self.scene();
+        let parent = scene.parent(id);
+        let top = self.clipping_stack_top(id).unwrap_or(id);
+        let index = scene.children(parent).iter().position(|h| *h == top).unwrap_or(0);
         (index, parent)
     }
-
-    /// Why New Dodge & Burn Layer can't insert above the active layer.
     pub fn dodge_burn_refusal(&self) -> Option<RetouchLayerRefusal> {
-        let (_, parent) = self.above_clipping_stack(self.active_layer);
+        let parent = self.working.occurrence.and_then(|h| self.scene().parent(h));
         parent.is_some_and(|p| self.is_locked(p)).then_some(RetouchLayerRefusal::GroupLocked)
     }
-
-    /// A Soft Light layer filled with `soft_light_neutral`, above the active
-    /// layer and its clipping stack, made active.
-    pub fn dodge_burn_plan(&self, [id, coverage]: [LayerId; 2], name: impl Into<Arc<str>>) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
+    pub fn dodge_burn_plan(&self, name: impl Into<Arc<str>>) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
         if let Some(refusal) = self.dodge_burn_refusal() {
             return Err(refusal);
         }
-        let (index, parent) = self.above_clipping_stack(self.active_layer);
-        let mut layer = Layer::paint(id, name);
-        layer.properties.parent = parent;
-        layer.properties.blend = LayerBlend::SoftLight;
+        let (index, parent) = self.working.occurrence.map_or((0, None), |h| self.above_clipping_stack(h));
+        let containing = parent
+            .and_then(|h| match self.scene().occurrence(h)?.content {
+                OccurrenceContent::Stack(s) => Some(s),
+                _ => None,
+            })
+            .unwrap_or(self.composition().result);
+        let canvas = self.composition().size;
+        let paint = RecordChange::insert(
+            &self.artwork.paint,
+            PaintSource { domain: canvas, raster: Default::default(), original: None, operations: Arc::default() },
+        );
+        let target = SourceTarget::Paint(paint.handle);
+        let mut o = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
+        o.blend = LayerBlend::SoftLight;
+        let occurrence = RecordChange::insert(&self.artwork.occurrences, o);
+        let active = occurrence.handle;
+        let mut stack = self.artwork.stacks.get(containing).unwrap().clone();
+        stack.entries.insert(index, active);
         let gray = self.soft_light_neutral();
-        let fill = LayerOperation {
+        let fill = RasterOperation {
             placement: Affine::IDENTITY,
-            coverage: LayerMask::reveal_all(coverage, Point::default()),
-            kind: LayerOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false },
+            coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, Point::default()),
+            kind: RasterOperationKind::Fill { color: [gray, gray, gray, 1.], alpha_locked: false },
         };
+        let mut working = self.working.clone();
+        working.occurrence = Some(active);
+        working.target = Some(target);
+        working.inspect_mask = None;
         Ok(RetouchLayerPlan {
-            edits: vec![Edit::InsertLayer { index, layer: Box::new(layer) }, Edit::SetActiveLayer { id }],
-            operations: vec![(id, fill)],
-            active: id,
+            edits: vec![
+                Edit::Paint(paint),
+                Edit::Occurrence(occurrence),
+                Edit::Stack(
+                    RecordChange::replace(&self.artwork.stacks, containing, Some(stack)).map_err(|_| RetouchLayerRefusal::NoLayer)?,
+                ),
+                Edit::Working(working),
+            ],
+            operations: vec![(target, fill)],
+            active,
         })
     }
-
-    /// Why Frequency Separation can't split `target`. The size limit is
-    /// checked by `separation_plan` only.
-    pub fn separation_refusal(&self, target: LayerId) -> Option<RetouchLayerRefusal> {
+    pub fn separation_refusal(&self, target: OccurrenceHandle) -> Option<RetouchLayerRefusal> {
         use RetouchLayerRefusal as R;
-        if self.blend_space != BlendSpace::Perceptual {
+        if self.composition().blend != BlendSpace::Perceptual {
             return Some(R::Linear);
         }
-        let Some(layer) = self.layer(target) else {
+        let scene = self.scene();
+        let Some(o) = scene.occurrence(target) else {
             return Some(R::NoLayer);
         };
-        if layer.kind != LayerKind::Paint {
+        if o.kind() != LayerKind::Paint {
             Some(R::NotPaint)
-        } else if !layer.visible {
+        } else if !o.visible {
             Some(R::Hidden)
-        } else if layer.properties.blend != LayerBlend::Normal {
+        } else if o.blend != LayerBlend::Normal {
             Some(R::NotNormal)
-        } else if layer.properties.parent.is_some_and(|p| self.is_locked(p)) {
+        } else if scene.parent(target).is_some_and(|p| self.is_locked(p)) {
             Some(R::GroupLocked)
         } else {
             None
         }
     }
-
-    /// Split `target` into Low, its blur, and above it High, its detail
-    /// against that blur in Linear Light, in an isolated Normal group that
-    /// takes the layer's place and opacity. The layer stays, hidden, below the
-    /// group. Both are baked from the layer's pixels and mask over the canvas.
     pub fn separation_plan(
         &self,
-        target: LayerId,
+        target: OccurrenceHandle,
         filters: &SeparationFilters,
-        ids: [LayerId; SEPARATION_IDS],
         [group_name, low_name, high_name]: [Arc<str>; 3],
     ) -> Result<RetouchLayerPlan, RetouchLayerRefusal> {
         if let Some(refusal) = self.separation_refusal(target) {
             return Err(refusal);
         }
-        let [group_id, low, high, blur, low_coverage, high_coverage] = ids;
-        let index = self.layers.iter().position(|l| l.id == target).ok_or(RetouchLayerRefusal::NoLayer)?;
-        let layer = &self.layers[index];
-        let parent_offset = layer.properties.parent.map_or(Point::default(), |p| self.layer_offset(p));
-        let mut source = merge::bake_member(layer);
+        let scene = self.scene();
+        let old = scene.occurrence(target).unwrap();
+        let parent = scene.parent(target);
+        let parent_offset = parent.map_or(Point::default(), |p| self.layer_offset(p));
+        let canvas = self.composition().size;
+        let mut high_scene = self.snapshot();
+        let authored = &mut Arc::make_mut(&mut high_scene).artwork;
+        let source = authored.occurrences.get_mut(target).unwrap();
         source.opacity = 1.;
-        source.properties.parent = None;
-        source.properties.clipped = false;
-        let canvas = [self.width, self.height];
-        let operation = |kind, coverage: LayerId| {
-            let operation = LayerOperation {
+        source.clipped = false;
+        let high_scope = SceneScope::Members(vec![target].into());
+        let mut low_artwork = high_scene.artwork.clone();
+        let definition = low_artwork
+            .definitions
+            .insert(PortableId::random(), Definition { program: filters.blur.program.clone(), dimensions: Default::default() })
+            .map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let effect = low_artwork
+            .effects
+            .insert(PortableId::random(), EffectApplication { definition, values: filters.blur.values.clone(), domain: canvas })
+            .map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let mut blur = Occurrence::new(OccurrenceContent::Effect(effect), filters.blur.program.id.clone());
+        blur.clipped = true;
+        let blur = low_artwork.occurrences.insert(PortableId::random(), blur).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let stack = scene.stack(target).unwrap();
+        let entries = &mut low_artwork.stacks.get_mut(stack).unwrap().entries;
+        let index = entries.iter().position(|h| *h == target).unwrap();
+        entries.insert(index, blur);
+        let low_doc = Document::from_artwork(low_artwork).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let low_scene = low_doc.snapshot();
+        let low_scope = SceneScope::Members(vec![blur, target].into());
+        let mut allocator = self.artwork.clone();
+        let source = |domain| PaintSource { domain, raster: Default::default(), original: None, operations: Arc::default() };
+        let low = RecordChange::insert(&allocator.paint, source(canvas));
+        allocator.paint.change(low.handle, low.id, low.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let high = RecordChange::insert(&allocator.paint, source(canvas));
+        let low_target = SourceTarget::Paint(low.handle);
+        let high_target = SourceTarget::Paint(high.handle);
+        let operation = |kind| {
+            let op = RasterOperation {
                 placement: Affine::IDENTITY,
-                coverage: LayerMask::reveal_all(coverage, Point::default()),
+                coverage: CoverageSnapshot::reveal_all(self.artwork.coverage.next_handle(), canvas, Point::default()),
                 kind,
             };
-            if self.exceeds_publication(&operation, canvas) {
-                return Err(RetouchLayerRefusal::TooLarge);
-            }
-            Ok(operation)
+            if self.exceeds_publication(&op, canvas) { Err(RetouchLayerRefusal::TooLarge) } else { Ok(op) }
         };
         let operations = vec![
-            (low, operation(LayerOperationKind::Bake {
-                members: [SeparationFilters::clipped(blur, &filters.blur, filters.blur.program.id.clone()), source.clone()].into(), offset: parent_offset,
-            }, low_coverage)?),
-            (high, operation(LayerOperationKind::FrequencyDetail {
-                members: [source].into(), offset: parent_offset, low,
-            }, high_coverage)?),
+            (low_target, operation(RasterOperationKind::Bake { scene: low_scene, scope: low_scope, offset: Point::default() })?),
+            (
+                high_target,
+                operation(RasterOperationKind::FrequencyDetail {
+                    scene: high_scene,
+                    scope: high_scope,
+                    offset: Point::default(),
+                    low: low.handle,
+                })?,
+            ),
         ];
-        let mut group = Layer::paint(group_id, group_name);
-        group.kind = LayerKind::Group;
-        group.opacity = layer.opacity;
-        group.properties.parent = layer.properties.parent;
-        group.properties.clipped = layer.properties.clipped;
-        let part = |id, name: Arc<str>, blend| {
-            let mut part = Layer::paint(id, name);
-            part.properties.parent = Some(group_id);
-            part.properties.offset = Point { x: -parent_offset.x, y: -parent_offset.y };
-            part.properties.blend = blend;
-            part
+        let nested = RecordChange::insert(&allocator.stacks, Stack::default());
+        allocator.stacks.change(nested.handle, nested.id, nested.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let mut group = Occurrence::new(OccurrenceContent::Stack(nested.handle), group_name);
+        group.opacity = old.opacity;
+        group.clipped = old.clipped;
+        let group = RecordChange::insert(&allocator.occurrences, group);
+        allocator.occurrences.change(group.handle, group.id, group.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let part = |h, name, blend| {
+            let mut o = Occurrence::new(OccurrenceContent::Paint(h), name);
+            o.translation = Point { x: -parent_offset.x, y: -parent_offset.y };
+            o.blend = blend;
+            o
         };
+        let high_o = RecordChange::insert(&allocator.occurrences, part(high.handle, high_name, LayerBlend::LinearLight));
+        allocator.occurrences.change(high_o.handle, high_o.id, high_o.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
+        let low_o = RecordChange::insert(&allocator.occurrences, part(low.handle, low_name, LayerBlend::Normal));
+        let active = high_o.handle;
+        let mut nested = nested;
+        nested.value.as_mut().unwrap().entries = vec![high_o.handle, low_o.handle];
+        let containing = scene.stack(target).unwrap();
+        let mut stack = self.artwork.stacks.get(containing).unwrap().clone();
+        let index = stack.entries.iter().position(|h| *h == target).unwrap();
+        stack.entries.insert(index, group.handle);
+        let mut hidden = old.clone();
+        hidden.visible = false;
+        let mut working = self.working.clone();
+        working.occurrence = Some(active);
+        working.target = Some(high_target);
+        working.inspect_mask = None;
         Ok(RetouchLayerPlan {
             edits: vec![
-                Edit::InsertLayer { index, layer: Box::new(group) },
-                Edit::InsertLayer { index: index + 1, layer: Box::new(part(high, high_name, LayerBlend::LinearLight)) },
-                Edit::InsertLayer { index: index + 2, layer: Box::new(part(low, low_name, LayerBlend::Normal)) },
-                Edit::SetLayerVisibility { id: target, visible: false },
-                Edit::SetActiveLayer { id: high },
+                Edit::Paint(low),
+                Edit::Paint(high),
+                Edit::Stack(nested),
+                Edit::Occurrence(group),
+                Edit::Occurrence(high_o),
+                Edit::Occurrence(low_o),
+                Edit::Occurrence(
+                    RecordChange::replace(&self.artwork.occurrences, target, Some(hidden)).map_err(|_| RetouchLayerRefusal::NoLayer)?,
+                ),
+                Edit::Stack(
+                    RecordChange::replace(&self.artwork.stacks, containing, Some(stack)).map_err(|_| RetouchLayerRefusal::NoLayer)?,
+                ),
+                Edit::Working(working),
             ],
             operations,
-            active: high,
+            active,
         })
     }
 }
-
 #[cfg(test)]
 #[path = "retouch_layers_tests.rs"]
 mod tests;

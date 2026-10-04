@@ -35,7 +35,7 @@ fn area(source: [u32; 2], target: [u32; 2], pixels: &[[f32; 4]]) -> Vec<[f32; 4]
 fn snapshot_resized_composition_matches_area_before_profile_quantization_and_matte() {
     use layer_core::color::{OutputDither, OutputEncoding};
     for depth in [SampleDepth::U8, SampleDepth::U16] {
-        let project = rich_project(
+        let project = rich_document(
             DocumentColor {
                 space: RgbSpace::ProPhoto,
                 depth,
@@ -44,7 +44,7 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
         );
         let original = project.clone();
         let (_gpu, pixels) = frame(&project);
-        let source_extent = [project.document.width, project.document.height];
+        let source_extent = project.composition().size;
         let extent = [137, 83];
         let resized = area(source_extent, extent, &pixels);
         let mut renderer =
@@ -155,14 +155,14 @@ fn snapshot_resized_composition_matches_area_before_profile_quantization_and_mat
 
 #[test]
 fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity() {
-    let project = source_project(
+    let project = source_document(
         DocumentColor {
             space: RgbSpace::DisplayP3,
             depth: SampleDepth::U16,
         },
         [33, 17],
     );
-    let source = project.document.layers[0].source.as_ref().unwrap().clone();
+    let source = project.scene().paint(paint_id(&project)).unwrap().original.as_ref().unwrap().clone();
     let mut renderer = capture(project).unwrap();
     let extent = [97, 50];
     renderer.set_output_extent(extent).unwrap();
@@ -223,7 +223,7 @@ fn snapshot_enlarged_jpeg_matches_profiled_png_and_reset_restores_exact_identity
 #[test]
 fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_matte() {
     use layer_core::color::{OutputDither, OutputEncoding};
-    let project = source_project(
+    let project = source_document(
         DocumentColor {
             space: RgbSpace::ProPhoto,
             depth: SampleDepth::U16,
@@ -237,7 +237,7 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
     for view in [RgbSpace::Srgb, RgbSpace::DisplayP3] {
         let before = renderer.preview_document([73, 41], view).unwrap();
         let expected = area([513, 35], before.extent, &full);
-        let matrix = project.document.color.space.linear_transform(view);
+        let matrix = project.composition().color.space.linear_transform(view);
         for (actual, expected) in before.pixels.iter().zip(expected) {
             for c in 0..3 {
                 let value: f64 = (0..3).map(|k| matrix[c][k] * f64::from(expected[k])).sum();
@@ -355,8 +355,8 @@ fn output_preview_matches_the_delivered_samples_after_profile_depth_resize_and_m
     );
     renderer.control().cancel();
     assert!(renderer.preview_document([73, 41], RgbSpace::Srgb).is_err());
-    let target = original.document.layers[0]
-        .source
+    let target = original.scene().paint(paint_id(&original)).unwrap()
+        .original
         .as_ref()
         .unwrap()
         .interpretation

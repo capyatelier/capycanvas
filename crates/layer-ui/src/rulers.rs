@@ -1,6 +1,7 @@
 //! Shared ruler creation, editing and display. Hosts only render the projection.
 use crate::*;
-use layer_core::{Edit, Point, Rect, Ruler, RulerConstraint, RulerGeometry};
+use layer_core::{Point, Rect, Ruler, RulerConstraint, RulerGeometry};
+use layer_core::authored::PortableId;
 use layer_engine::{PenEvent, PenPhase};
 use layer_render::{CanvasRenderer, CursorSegment};
 
@@ -21,7 +22,10 @@ struct Drag {
 }
 pub(super) struct RulerInteraction {
     pub kind: RulerKind,
-    pub selected: Option<u64>,
+    pub selected: Option<PortableId>,
+    tokens: std::collections::HashMap<PortableId, u64>,
+    next_token: u64,
+    owner: u64,
     pub visible: bool,
     pub snapping: bool,
     drag: Option<Drag>,
@@ -31,6 +35,9 @@ impl Default for RulerInteraction {
         Self {
             kind: RulerKind::Straight,
             selected: None,
+            tokens: Default::default(),
+            next_token: 1,
+            owner: 0,
             visible: true,
             snapping: true,
             drag: None,
@@ -46,6 +53,18 @@ impl<B: CanvasRenderer> UiSession<B> {
         HIT_DISTANCE * scale / self.state.camera.zoom
     }
     pub(super) fn sync_ruler_snapping(&mut self) {
+        let doc = self.engine.document();
+        if self.rulers.owner != doc.owner {
+            self.rulers.tokens.clear();
+            self.rulers.owner = doc.owner;
+        }
+        for id in doc.rulers().map(|r| r.id).chain(self.rulers.selected) {
+            if !self.rulers.tokens.contains_key(&id) {
+                let token = self.rulers.next_token;
+                self.rulers.next_token = token.checked_add(1).expect("ruler token capacity");
+                self.rulers.tokens.insert(id, token);
+            }
+        }
         self.engine.set_ruler_snapping(
             (self.rulers.visible && self.rulers.snapping).then(|| self.ruler_reach()),
         );
@@ -53,7 +72,10 @@ impl<B: CanvasRenderer> UiSession<B> {
     /// The selected guide, while it still exists.
     pub(super) fn selected_ruler(&self) -> Option<Ruler> {
         let id = self.rulers.selected?;
-        self.engine.document().rulers.iter().find(|r| r.id == id).copied()
+        self.engine.document().rulers().find(|r| r.id == id)
+    }
+    pub(super) fn selected_ruler_token(&self) -> Option<u64> {
+        self.selected_ruler().and_then(|r| self.rulers.tokens.get(&r.id).copied())
     }
     pub(super) fn ruler_command(&mut self, command: CommandId) -> Result<(), String> {
         self.require_idle()?;
@@ -62,9 +84,10 @@ impl<B: CanvasRenderer> UiSession<B> {
             CommandId::SnapRulers => self.rulers.snapping = !self.rulers.snapping,
             CommandId::DeleteRuler => {
                 let selected = self.rulers.selected.ok_or("Select a ruler first")?;
-                let mut rulers = self.engine.document().rulers.clone();
+                let mut rulers = self.engine.document().rulers().collect::<Vec<_>>();
                 rulers.retain(|r| r.id != selected);
-                self.layer_edit(Edit::SetRulers(rulers))?;
+                let edit = self.engine.document().ruler_edit(rulers).map_err(|e| e.to_string())?;
+                self.layer_edit(edit)?;
                 self.rulers.selected = None;
             }
             _ => return Err("Unknown ruler action".into()),
@@ -102,8 +125,7 @@ impl<B: CanvasRenderer> UiSession<B> {
                     .rulers
                     .visible
                     .then(|| {
-                        doc.rulers
-                            .iter()
+                        doc.rulers()
                             .rev()
                             .filter_map(|r| {
                                 let (a, b) = r.geometry.handles();
@@ -115,7 +137,7 @@ impl<B: CanvasRenderer> UiSession<B> {
                                 } else {
                                     (r.geometry.distance(p) + reach, Grab::Body)
                                 };
-                                (d <= reach * 2.).then_some((d, *r, part))
+                                (d <= reach * 2.).then_some((d, r, part))
                             })
                             .min_by(|a, b| a.0.total_cmp(&b.0))
                     })
@@ -131,14 +153,7 @@ impl<B: CanvasRenderer> UiSession<B> {
                 let (original, part, existing) = if let Some((_, r, part)) = hit {
                     (r, part, true)
                 } else {
-                    let id = doc
-                        .rulers
-                        .iter()
-                        .map(|r| r.id)
-                        .max()
-                        .unwrap_or(0)
-                        .checked_add(1)
-                        .ok_or("No ruler IDs available")?;
+                    let id = PortableId::random();
                     (
                         Ruler {
                             id,
@@ -176,13 +191,14 @@ impl<B: CanvasRenderer> UiSession<B> {
                         if drag.preview.geometry.validate().is_ok()
                             && (!drag.existing || drag.preview != drag.original)
                         {
-                            let mut rulers = self.engine.document().rulers.clone();
+                            let mut rulers = self.engine.document().rulers().collect::<Vec<_>>();
                             if let Some(r) = rulers.iter_mut().find(|r| r.id == drag.original.id) {
                                 *r = drag.preview;
                             } else {
                                 rulers.push(drag.preview);
                             }
-                            self.layer_edit(Edit::SetRulers(rulers))?;
+                            let edit = self.engine.document().ruler_edit(rulers).map_err(|e| e.to_string())?;
+                            self.layer_edit(edit)?;
                         } else if !drag.existing {
                             self.rulers.selected = None;
                         }
@@ -245,8 +261,8 @@ impl<B: CanvasRenderer> UiSession<B> {
         let bounds = Rect {
             min: Point::default(),
             max: Point {
-                x: self.engine.document().width as f32,
-                y: self.engine.document().height as f32,
+                x: self.engine.document().composition().size[0] as f32,
+                y: self.engine.document().composition().size[1] as f32,
             },
         };
         let line = |out: &mut Vec<CursorSegment>, from, to, solid| {
@@ -261,9 +277,7 @@ impl<B: CanvasRenderer> UiSession<B> {
         for ruler in self
             .engine
             .document()
-            .rulers
-            .iter()
-            .copied()
+            .rulers()
             .filter(|r| {
                 self.rulers
                     .drag

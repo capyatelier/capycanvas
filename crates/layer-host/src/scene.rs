@@ -76,7 +76,7 @@ impl Navigators {
                 let [x, y, w, h] = slot.bounds.map(|v| v / units);
                 let g = layer_ui::NavigatorGeometry::new(
                     &state.camera,
-                    [document.width, document.height],
+                    [document.composition().size[0], document.composition().size[1]],
                     [w, h],
                 )?;
                 Some(OverviewPlacement {
@@ -227,7 +227,7 @@ impl NativeHost {
         let rendition = session
             .engine()
             .document()
-            .color
+            .composition().color
             .depth
             .is_float()
             .then(|| session.effective_sdr_rendition());

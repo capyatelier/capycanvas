@@ -1,3 +1,6 @@
+fn paper_color(document:&layer_core::Document)->Option<layer_core::color::RgbColor> {
+    document.scene().effect(occurrence_handle(2).unwrap())?.constant_color()
+}
 fn filters() -> (UiSession<Recorder>, u32) {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(WorkspaceState {
@@ -19,8 +22,8 @@ fn replacing_the_bottom_fill_previews_its_empty_input() {
     s.frame(0, 0).unwrap();
     assert!(s.request_filter_previews(1, vec!["exposure".into()], [120, 40]).unwrap());
     let request = s.engine.backend().filter_preview.as_ref().unwrap();
-    assert_eq!(request.source, layer_render::FilterPreviewSource::EffectInput(LayerId(2)));
-    assert_eq!(request.layers.len(), 2);
+    assert_eq!(request.source, layer_render::FilterPreviewSource::EffectInput(occurrence_handle(2).unwrap()));
+    assert_eq!(request.snapshot.view().order().len(), 2);
 }
 #[test]
 fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoable() {
@@ -28,55 +31,56 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
     assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
         [vec![Panel::FilterTypes], vec![Panel::Adjustments], vec![Panel::Properties]]);
     assert!(s.state.adjustments.iter().all(|c| Some(&c.category) == s.state.filter_picker.category.as_ref()));
+    let base=s.engine.document().scene().order()[0];let paper=s.engine.document().scene().order()[1];
     insert_effect(&mut s, "brightness_contrast");
-    let id = s.engine.document().active_layer;
-    assert_eq!(s.engine.document().layers.iter().map(|l| l.id).collect::<Vec<_>>(), [id, LayerId(1), LayerId(2)]);
+    let id = s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().order(), &[id,base,paper]);
     assert!(s.filter_drawer_open());
     s.dispatch(UiAction::Effect { action: EffectAction::Set {
-        layer: id.0, key: "brightness".into(), value: layer_core::EffectValue::Number(0.3),
+        layer: occurrence_token(id), key: "brightness".into(), value: layer_core::EffectValue::Number(0.3),
     } }).unwrap();
-    let edited = s.engine.document().layer(id).unwrap().clone();
+    let edited=s.engine.document().clone();
     s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
     assert!(!s.filter_drawer_open());
     s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
-    assert_eq!(s.engine.document().layer(id), Some(&edited));
+    assert_live_artwork_eq(s.engine.document(),&edited);
     insert_effect(&mut s, "curves");
-    assert_eq!(s.engine.document().active_layer, id);
-    assert_eq!(s.engine.document().layers.len(), 3);
+    assert_eq!(s.engine.document().working.occurrence.unwrap(), id);
+    assert_eq!(s.engine.document().scene().order().len(), 3);
     assert_eq!(s.state.filter_picker.selected.as_deref(), Some("curves"));
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().layer(id), Some(&edited));
+    assert_live_artwork_eq(s.engine.document(),&edited);
     invoke(&mut s, CommandId::Redo);
     s.dispatch(UiAction::Effect { action: EffectAction::CancelFilter }).unwrap();
     assert!(!s.filter_drawer_open());
-    assert!(s.engine.document().layer(id).is_none());
+    assert!(s.engine.document().scene().occurrence(id).is_none());
     invoke(&mut s, CommandId::Undo);
-    assert!(s.engine.document().layer(id).is_some());
+    assert!(s.engine.document().scene().occurrence(id).is_some());
 }
 
 #[test]
 fn filter_replacement_and_undo_preserve_literal_renamed_layer_names() {
     let (mut s, _) = filters();
     insert_effect(&mut s, "brightness_contrast");
-    let id = s.engine.document().active_layer;
+    let id = s.engine.document().working.occurrence.unwrap();
     assert_eq!(s.state.layer_properties.title, "Brightness / Contrast");
     let name = "私の曲線 한글 🎨 { $name } \u{2068}لوحة\u{2069}";
     s.dispatch(UiAction::Layer { action: LayerAction::Rename {
-        id: id.0, name: name.into(),
+        id: occurrence_token(id), name: name.into(),
     } }).unwrap();
     assert!(s.filter_drawer_open());
     insert_effect(&mut s, "curves");
-    let layer = s.engine.document().layer(id).unwrap();
+    let layer = s.engine.document().scene().occurrence(id).unwrap();
     assert_eq!(s.state.layer_properties.title, format!("{name} (Curves)"));
     assert_eq!(layer.name.as_ref(), name);
-    assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "curves");
+    assert_eq!(s.engine.document().scene().effect(id).unwrap().program.id.as_ref(), "curves");
     invoke(&mut s, CommandId::Undo);
-    let layer = s.engine.document().layer(id).unwrap();
+    let layer = s.engine.document().scene().occurrence(id).unwrap();
     assert_eq!(s.state.layer_properties.title, format!("{name} (Brightness / Contrast)"));
     assert_eq!(layer.name.as_ref(), name);
-    assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "brightness_contrast");
+    assert_eq!(s.engine.document().scene().effect(id).unwrap().program.id.as_ref(), "brightness_contrast");
     invoke(&mut s, CommandId::Redo);
-    assert_eq!(s.engine.document().layer(id).unwrap().name.as_ref(), name);
+    assert_eq!(s.engine.document().scene().occurrence(id).unwrap().name.as_ref(), name);
     assert_eq!(s.state.layer_properties.title, format!("{name} (Curves)"));
 }
 
@@ -89,59 +93,58 @@ fn the_filter_drawer_masks_a_new_effect_but_never_the_one_it_replaces() {
         Point { x: 250., y: 200. },
     ])
     .unwrap();
-    s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone()))).unwrap();
+    s.layer_edit(effect_test_selection_edit(s.engine.document(),Some(selection.clone()))).unwrap();
     insert_effect(&mut s, "brightness_contrast");
-    let id = s.engine.document().active_layer;
-    let mask = s.engine.document().layer(id).unwrap().mask.clone().expect("a new effect takes the selection");
-    assert_eq!(mask.initial.as_ref(), Some(&selection));
+    let id = s.engine.document().working.occurrence.unwrap();
+    let mask=s.engine.document().scene().mask(id).map(|(use_,source)|(use_.clone(),source.clone())).expect("a new effect takes the selection");
+    assert_eq!(mask.1.initial.as_ref(), Some(&selection));
     invoke(&mut s, CommandId::Reselect);
     insert_effect(&mut s, "curves");
-    assert_eq!(s.engine.document().active_layer, id, "the drawer replaces the effect");
-    assert_eq!(s.engine.document().layer(id).unwrap().mask, Some(mask), "and keeps its mask");
-    assert_eq!(s.engine.document().selection, Some(selection), "replacing leaves the selection");
+    assert_eq!(s.engine.document().working.occurrence.unwrap(), id, "the drawer replaces the effect");
+    assert_eq!(s.engine.document().scene().mask(id).map(|(use_,source)|(use_.clone(),source.clone())), Some(mask), "and keeps its mask");
+    assert_eq!(s.engine.document().working.selection, Some(selection), "replacing leaves the selection");
 }
 
 #[test]
 fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
     let (mut s, _) = filters();
     insert_effect(&mut s, "curves");
-    let first = s.engine.document().active_layer;
-    let mut doc = s.engine.document().clone();
-    assert_eq!(doc.drawing_target(), Some(LayerId(1)));
-    let mut upper = doc.layer(first).unwrap().clone();
-    upper.id = LayerId(20);
-    doc.layers.insert(0, upper);
-    doc.active_layer = LayerId(20);
-    doc.layers.iter_mut().find(|l| l.id == first).unwrap().mask = Some(layer_core::LayerMask::reveal_all(LayerId(21), Point::default()));
-    assert_eq!(doc.drawing_target(), Some(LayerId(1)), "ignore a lower filter's mask");
-    doc.layers[0].properties.clipped = true;
-    doc.layers.iter_mut().find(|l| l.id == first).unwrap().properties.clipped = true;
-    assert_eq!(doc.drawing_target(), Some(LayerId(1)), "clipped filter uses its base");
-    doc.layers[0].mask = Some(layer_core::LayerMask::reveal_all(LayerId(22), Point::default()));
-    assert_eq!(doc.drawing_target(), Some(LayerId(22)), "own mask wins without a separate mask click");
-    doc.layers[0].properties.locked = true;
-    assert_eq!(doc.drawing_target(), None);
-    doc.layers[0].properties.locked = false;
-    doc.layers[0].mask = None;
-    doc.layers[0].properties.clipped = false;
-    doc.layers.iter_mut().find(|l| l.id == LayerId(1)).unwrap().properties.locked = true;
-    assert_eq!(doc.drawing_target(), None, "do not skip a locked drawing layer");
-    let base = doc.layers.iter_mut().find(|l| l.id == LayerId(1)).unwrap();
-    base.properties.locked = false;
-    base.kind = LayerKind::Group;
-    base.mask = Some(layer_core::LayerMask::reveal_all(LayerId(23), Point::default()));
-    assert_eq!(doc.drawing_target(), None, "a group and its mask are not drawing fallbacks");
-    *doc.layers.iter_mut().find(|l| l.id == LayerId(1)).unwrap() = layer_core::Layer::solid_color(LayerId(1), "Fill", layer_core::color::RgbColor::WHITE);
-    assert_eq!(doc.drawing_target(), None);
+    let first = s.engine.document().working.occurrence.unwrap();
+    let mut doc=s.engine.document().clone();let base=effect_test_paint(&doc);let paint=doc.scene().source_target(base).unwrap();
+    assert_eq!(doc.drawing_target(),Some(paint));
+    let (upper,edit)=effect_insertion(&doc,effects::effect_draft(&doc,first).unwrap(),"Upper filter");doc.apply(edit).unwrap();
+    doc.apply(doc.select_occurrence_edit(upper).unwrap()).unwrap();
+    doc.apply(effect_test_mask_edit(&doc,first,1.)).unwrap();
+    assert_eq!(doc.drawing_target(),Some(paint),"ignore a lower filter's mask");
+    for handle in [upper,first] {doc.apply(effect_test_occurrence_edit(&doc,handle,|o|o.clipped=true)).unwrap();}
+    assert_eq!(doc.drawing_target(),Some(paint),"clipped filter uses its base");
+    doc.apply(effect_test_mask_edit(&doc,upper,1.)).unwrap();
+    let mask=doc.scene().mask(upper).unwrap().0.source;
+    assert_eq!(doc.drawing_target(),Some(layer_core::SourceTarget::Coverage(mask)),"own mask wins without a separate mask click");
+    doc.apply(effect_test_occurrence_edit(&doc,upper,|o|o.locked=true)).unwrap();assert_eq!(doc.drawing_target(),None);
+    doc.apply(effect_test_occurrence_edit(&doc,upper,|o|{o.locked=false;o.mask=None;o.clipped=false;})).unwrap();
+    doc.apply(effect_test_occurrence_edit(&doc,base,|o|o.locked=true)).unwrap();
+    assert_eq!(doc.drawing_target(),None,"do not skip a locked drawing layer");
+    let group=layer_core::authored::RecordChange::insert(&doc.artwork.stacks,Default::default());let group_handle=group.handle;
+    doc.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Stack(group),effect_test_occurrence_edit(&doc,base,|o|{o.locked=false;o.content=layer_core::authored::OccurrenceContent::Stack(group_handle);})])).unwrap();
+    doc.apply(effect_test_mask_edit(&doc,base,1.)).unwrap();
+    assert_eq!(doc.drawing_target(),None,"a group and its mask are not drawing fallbacks");
+    let fill = doc.scene().effect_handle(occurrence_handle(2).unwrap()).unwrap();
+    let fill = layer_core::authored::RecordChange::insert(&doc.artwork.effects, doc.artwork.effects.get(fill).unwrap().clone());
+    let content = layer_core::authored::OccurrenceContent::Effect(fill.handle);
+    let occurrence = effect_test_occurrence_edit(&doc,base,|o|{ o.content = content; o.mask = None; });
+    doc.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Effect(fill), occurrence])).unwrap();
+    assert_eq!(doc.drawing_target(),None);
     assert!(s.state.layers.iter().any(|l| l.id == 1 && l.drawing && l.selection_icon == "layer-brush-symbolic"));
-    assert!(s.state.layers.iter().any(|l| l.id == first.0 && l.editing && !l.drawing));
+    assert!(s.state.layers.iter().any(|l| l.id == occurrence_token(first) && l.editing && !l.drawing));
 }
 
 #[test]
 fn strokes_through_a_selected_filter_keep_selection_and_undo_on_the_drawing_target() {
     let (mut s, _) = filters();
     insert_effect(&mut s, "curves");
-    let filter = s.engine.document().active_layer;
+    let filter = s.engine.document().working.occurrence.unwrap();
+    let base=effect_test_paint(s.engine.document());
     let stroke = |s: &mut UiSession<Recorder>| {
         for (sequence, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
             s.pen(event(s, sequence, phase, 1.)).unwrap();
@@ -149,23 +152,23 @@ fn strokes_through_a_selected_filter_keep_selection_and_undo_on_the_drawing_targ
         s.frame(30_000_000, 38_000_000).unwrap();
     };
     stroke(&mut s);
-    assert_eq!(s.engine.document().active_layer, filter);
-    assert!(!s.engine.document().layer(LayerId(1)).unwrap().raster.is_empty());
-    assert!(s.engine.document().layer(filter).unwrap().raster.is_empty());
+    assert_eq!(s.engine.document().working.occurrence.unwrap(), filter);
+    assert!(!s.engine.document().scene().paint_source(base).unwrap().raster.is_empty());
+    assert!(s.engine.document().scene().paint_source(filter).is_none());
     invoke(&mut s, CommandId::Undo);
-    assert!(s.engine.document().layer(LayerId(1)).unwrap().raster.is_empty());
-    s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: filter.0, replace: false } }).unwrap();
-    s.dispatch(UiAction::SelectLayer { id: filter.0 }).unwrap();
-    assert!(!s.engine.document().active_mask);
+    assert!(s.engine.document().scene().paint_source(base).unwrap().raster.is_empty());
+    s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: occurrence_token(filter), replace: false } }).unwrap();
+    s.dispatch(UiAction::SelectLayer { id: occurrence_token(filter) }).unwrap();
+    assert!(s.engine.document().working.inspect_mask.is_none());
     stroke(&mut s);
-    assert_eq!(s.engine.document().active_layer, filter);
-    assert!(!s.engine.document().layer(filter).unwrap().mask.as_ref().unwrap().raster.is_empty());
-    assert!(s.engine.document().layer(LayerId(1)).unwrap().raster.is_empty());
+    assert_eq!(s.engine.document().working.occurrence.unwrap(), filter);
+    assert!(!s.engine.document().scene().mask(filter).unwrap().1.raster.is_empty());
+    assert!(s.engine.document().scene().paint_source(base).unwrap().raster.is_empty());
     invoke(&mut s, CommandId::Undo);
-    assert!(s.engine.document().layer(filter).unwrap().mask.as_ref().unwrap().raster.is_empty());
-    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: filter.0, value: true } }).unwrap();
+    assert!(s.engine.document().scene().mask(filter).unwrap().1.raster.is_empty());
+    s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: occurrence_token(filter), value: true } }).unwrap();
     stroke(&mut s);
-    assert!(s.engine.document().layer(filter).unwrap().mask.as_ref().unwrap().raster.is_empty());
+    assert!(s.engine.document().scene().mask(filter).unwrap().1.raster.is_empty());
 }
 
 #[test]
@@ -181,15 +184,14 @@ fn fill_color_lock_history_and_blocked_cursor_share_document_policy() {
     let color = s.state.colors.definition();
     let action = s.state.layer_properties.controls[0].color_action.clone().unwrap();
     s.dispatch(action.clone()).unwrap();
+    assert_eq!(paper_color(s.engine.document()), Some(color));
     let changed = s.state.layers.iter().find(|layer| layer.id == 2).unwrap().paint_revision;
     assert_ne!(changed, revision);
     assert!(changed < 1u64 << 53);
-    assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(color));
-    let serialized = serde_json::to_string(s.engine.document()).unwrap();
-    let loaded: Document = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(loaded.layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(color));
+    let loaded=package_roundtrip(s.engine.document());
+    assert_eq!(paper_color(&loaded), Some(color));
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
+    assert_eq!(paper_color(s.engine.document()), Some(layer_core::color::RgbColor::WHITE));
     invoke(&mut s, CommandId::Redo);
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 2, value: true } }).unwrap();
     assert!(s.dispatch(action).is_err());
@@ -203,11 +205,11 @@ fn fill_color_lock_history_and_blocked_cursor_share_document_policy() {
 fn every_generator_has_a_thumbnail_revision_for_its_parameters_and_history() {
     let mut s = session(Platform::Gtk);
     insert_effect(&mut s, "gradient_fill");
-    let id = s.engine.document().active_layer;
-    let row = |s: &UiSession<Recorder>| s.state.layers.iter().find(|layer| layer.id == id.0).unwrap().clone();
+    let id = s.engine.document().working.occurrence.unwrap();
+    let row = |s: &UiSession<Recorder>| s.state.layers.iter().find(|layer| layer.id == occurrence_token(id)).unwrap().clone();
     assert!(row(&s).content_icon.is_none());
     let original = row(&s).paint_revision;
-    s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: id.0, key: "angle".into(), value: layer_core::EffectValue::Number(30.) } }).unwrap();
+    s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: occurrence_token(id), key: "angle".into(), value: layer_core::EffectValue::Number(30.) } }).unwrap();
     let changed = row(&s).paint_revision;
     assert_ne!(original, changed);
     invoke(&mut s, CommandId::Undo);
@@ -215,20 +217,21 @@ fn every_generator_has_a_thumbnail_revision_for_its_parameters_and_history() {
     let undone = row(&s).paint_revision;
     invoke(&mut s, CommandId::Redo);
     assert_ne!(row(&s).paint_revision, undone);
-    let mut future = s.engine.document().layer(id).unwrap().clone();
-    Arc::make_mut(&mut Arc::make_mut(future.effect.as_mut().unwrap()).program).id = "future_fill".into();
-    s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(future))).unwrap();
+    let mut future = effects::effect_draft(s.engine.document(), id).unwrap();
+    Arc::make_mut(&mut future.program).id = "future_fill".into();
+    s.layer_edit(effects::effect_edit(s.engine.document(), id, future).unwrap()).unwrap();
     assert!(row(&s).content_icon.is_none());
     assert_ne!(row(&s).paint_revision, changed);
     let mut document = s.engine.document().clone();
     let mut revisions = art_layers::PreviewRevisions::default();
     revisions.update(&document);
     let initial = revisions.id(id);
-    document.width *= 2;
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().size[0] *= 2;
     revisions.update(&document);
     assert_ne!(revisions.id(id), initial);
     let resized = revisions.id(id);
-    document.blend_space = if document.blend_space == layer_core::BlendSpace::Linear {
+    let composition = document.artwork.compositions.get_mut(document.artwork.root).unwrap();
+    composition.blend = if composition.blend == layer_core::BlendSpace::Linear {
         layer_core::BlendSpace::Perceptual
     } else { layer_core::BlendSpace::Linear };
     revisions.update(&document);
@@ -243,10 +246,8 @@ fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
     }
     assert!(s.state.layers.is_empty());
     let project = s.capture_project_recovery().unwrap();
-    let mut bytes = Vec::new();
-    project.write(&mut bytes).unwrap();
-    let loaded = layer_core::Project::read(bytes.as_slice(), Default::default()).unwrap();
-    assert!(loaded.document.layers.is_empty());
+    let loaded=reopen_capture(&project);
+    assert!(loaded.scene().order().is_empty());
     s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();
     assert_eq!(s.state.layers.len(), 1);
     invoke(&mut s, CommandId::Undo);
@@ -265,16 +266,16 @@ fn animated_speed_changes_preserve_playback_phase_including_zero_and_restored_sp
     effect.set("animate", layer_core::EffectValue::Toggle(true)).unwrap();
     effect.set("speed", layer_core::EffectValue::Number(1.)).unwrap();
     let mut clock = layer_core::EffectClock::default();
-    assert_eq!(clock.advance(&effect, 10.), 10.);
+    assert_eq!(clock.advance(effect.view(), 10.), 10.);
     effect.set("speed", layer_core::EffectValue::Number(2.)).unwrap();
-    assert_eq!(clock.advance(&effect, 10.), 10.);
-    assert_eq!(clock.advance(&effect, 11.), 12.);
+    assert_eq!(clock.advance(effect.view(), 10.), 10.);
+    assert_eq!(clock.advance(effect.view(), 11.), 12.);
     effect.set("speed", layer_core::EffectValue::Number(0.)).unwrap();
-    assert_eq!(clock.advance(&effect, 11.), 12.);
-    assert_eq!(clock.advance(&effect, 21.), 12.);
+    assert_eq!(clock.advance(effect.view(), 11.), 12.);
+    assert_eq!(clock.advance(effect.view(), 21.), 12.);
     effect.set("speed", layer_core::EffectValue::Number(1.)).unwrap();
-    assert_eq!(clock.advance(&effect, 21.), 12.);
-    assert_eq!(clock.advance(&effect, 22.), 13.);
+    assert_eq!(clock.advance(effect.view(), 21.), 12.);
+    assert_eq!(clock.advance(effect.view(), 22.), 13.);
 }
 
 #[test]
@@ -334,26 +335,27 @@ fn menu_item<'a>(sections: &'a [Vec<ContextMenuItem>], label: &str) -> Option<&'
 fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::SetColor { rgba: [0.9, 0.2, 0.1, 1.] }).unwrap();
-    let base = s.engine.document().active_layer;
+    let base = s.engine.document().working.occurrence.unwrap();
     let menu = s.application_menu(ApplicationMenu::Layer);
     let new = menu_item(&menu.sections, "New").unwrap();
     let solid = menu_item(&new.sections, "Solid Color Fill").unwrap().clone();
     assert!(solid.enabled);
     assert!(menu_item(&new.sections, "Gradient Fill").is_some());
-    let before = s.engine.document().layers.clone();
+    let before = s.engine.document().clone();
     s.dispatch(solid.action.unwrap()).unwrap();
     let doc = s.engine.document();
-    let fill = doc.layer(doc.active_layer).unwrap();
-    assert_eq!((fill.kind, fill.name.as_ref()), (LayerKind::Effect, "Solid Color"));
-    let effect = fill.effect.as_ref().unwrap();
+    let handle=doc.working.occurrence.unwrap();
+    let fill=doc.scene().occurrence(handle).unwrap();
+    assert_eq!((fill.kind(), fill.name.as_ref()), (LayerKind::Effect, "Solid Color"));
+    let effect=doc.scene().effect(handle).unwrap();
     assert_eq!(effect.program.kind, layer_core::EffectKind::Generator);
     assert_eq!(effect.value("color"), Some(&layer_core::EffectValue::Color(s.state.colors.definition())));
-    let mask = fill.mask.as_ref().expect("painting on a fill goes to its mask");
-    assert_eq!((mask.initial.as_ref(), mask.default_coverage), (None, 1.), "a reveal-all mask");
-    assert_eq!(doc.layers.iter().position(|l| l.id == fill.id).unwrap() + 1, doc.layers.iter().position(|l| l.id == base).unwrap());
-    assert_eq!(doc.drawing_target(), Some(mask.id));
+    let (mask,source)=doc.scene().mask(handle).expect("painting on a fill goes to its mask");
+    assert_eq!((source.initial.as_ref(),source.default_coverage), (None, 1.), "a reveal-all mask");
+    assert_eq!(doc.scene().order().iter().position(|h|*h==handle).unwrap()+1,doc.scene().order().iter().position(|h|*h==base).unwrap());
+    assert_eq!(doc.drawing_target(), Some(layer_core::SourceTarget::Coverage(mask.source)));
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().layers, before, "inserting is one undo step");
+    assert_live_artwork_eq(s.engine.document(),&before);
 
     let selection = layer_core::Selection::polygon(vec![
         Point { x: 40., y: 40. },
@@ -361,15 +363,15 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
         Point { x: 120., y: 200. },
     ])
     .unwrap();
-    s.layer_edit(layer_core::Edit::SetSelection(Some(selection.clone()))).unwrap();
+    s.layer_edit(effect_test_selection_edit(s.engine.document(),Some(selection.clone()))).unwrap();
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "gradient_fill".into() } }).unwrap();
     let doc = s.engine.document();
-    let fill = doc.layer(doc.active_layer).unwrap();
-    assert_eq!(fill.effect.as_ref().unwrap().program.id.as_ref(), "gradient_fill");
-    assert_eq!(fill.mask.as_ref().unwrap().initial.as_ref(), Some(&selection), "the selection becomes the mask");
-    assert_eq!(doc.selection, None, "and is consumed");
+    let handle=doc.working.occurrence.unwrap();
+    assert_eq!(doc.scene().effect(handle).unwrap().program.id.as_ref(), "gradient_fill");
+    assert_eq!(doc.scene().mask(handle).unwrap().1.initial.as_ref(), Some(&selection), "the selection becomes the mask");
+    assert_eq!(doc.working.selection, None, "and is consumed");
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.document().selection, Some(selection), "undo restores the selection");
+    assert_eq!(s.engine.document().working.selection, Some(selection), "undo restores the selection");
 }
 
 #[test]
@@ -403,7 +405,7 @@ fn every_effect_color_control_offers_the_current_color() {
     }
     for id in with_colors {
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: id.as_str().into() } }).unwrap();
-        let layer = s.engine.document().active_layer.0;
+        let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
         let colors: Vec<_> = s.state.layer_properties.controls.iter()
             .filter(|c| c.kind == PropertyKind::Color).cloned().collect();
         assert!(!colors.is_empty(), "{id}");
@@ -412,7 +414,7 @@ fn every_effect_color_control_offers_the_current_color() {
             assert_eq!(control.color_action.as_ref(), Some(&action), "{id}.{}", control.key);
             assert!(!control.label.is_empty());
             s.dispatch(action).unwrap();
-            let value = s.engine.document().layer(LayerId(layer)).unwrap().effect.as_ref().unwrap().value(&control.key).cloned();
+            let value = s.engine.document().scene().effect(occurrence_handle(layer).unwrap()).unwrap().value(&control.key).cloned();
             assert_eq!(value, Some(layer_core::EffectValue::Color(s.state.colors.definition())), "{id}.{}", control.key);
         }
     }

@@ -14,7 +14,7 @@ pub type DefinitionHandle = Handle<Definition>;
 pub type SelectionHandle = Handle<SavedSelection>;
 pub type OutputHandle = Handle<Output>;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Artwork {
     pub id: PortableId,
     pub root: CompositionHandle,
@@ -30,7 +30,7 @@ pub struct Artwork {
     pub outputs: Store<Output>,
     pub default_output: OutputHandle,
     pub metadata: Arc<PhotoMetadata>,
-    pub extensions: super::Extensions,
+    pub extensions: Arc<super::Extensions>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Composition {
@@ -74,6 +74,7 @@ pub struct PaintSource {
     pub domain: [u32; 2],
     pub raster: RasterRevision,
     pub original: Option<Arc<SourceImage>>,
+    pub operations: Arc<Vec<crate::RasterOperation>>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct CoverageSource {
@@ -81,6 +82,7 @@ pub struct CoverageSource {
     pub raster: RasterRevision,
     pub initial: Option<Selection>,
     pub default_coverage: f32,
+    pub operations: Arc<Vec<crate::RasterOperation>>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct MaskUse {
@@ -109,7 +111,14 @@ pub struct SavedSelection { pub selection: Selection, pub display: SelectionMask
 #[derive(Clone, Debug, PartialEq)]
 pub struct Guides { pub rulers: Vec<(PortableId, RulerGeometry)> }
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct EvaluationContext { pub elapsed: f32, pub phases: Vec<(EffectHandle, f32)> }
+pub struct EvaluationContext { pub elapsed: f32, pub phases: Arc<Vec<(EffectHandle, f32)>> }
+impl EvaluationContext {
+    pub fn retain_effects(&mut self, artwork: &Artwork) {
+        if self.phases.iter().any(|(handle, _)| artwork.effects.get(*handle).is_none()) {
+            Arc::make_mut(&mut self.phases).retain(|(handle, _)| artwork.effects.get(*handle).is_some());
+        }
+    }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Output {
     pub composition: CompositionHandle,
@@ -120,18 +129,20 @@ pub struct Output {
     pub sdr: SdrRendition,
     pub proof: Option<ProofRecipe>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize)]
 pub enum SourceTarget { Paint(PaintHandle), Coverage(CoverageHandle), Selection(SelectionHandle) }
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct WorkingState {
     pub generation: u64,
     pub selection: Option<Selection>,
+    pub selection_visibility: BTreeMap<OccurrenceHandle,bool>,
     pub occurrence: Option<OccurrenceHandle>,
     pub target: Option<SourceTarget>,
     pub inspect_mask: Option<OccurrenceHandle>,
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CaptureCheckpoint {
+    pub owner: u64,
     pub document: PortableId,
     pub session_generation: u64,
     pub artwork_generation: u64,
@@ -154,7 +165,7 @@ impl Artwork {
             frame:None, scale:[1.;2], sdr:SdrRendition::default(), proof:None })?;
         Ok(Self { id:PortableId::random(), root, compositions, stacks, outputs, default_output,
             occurrences:Store::default(), paint:Store::default(), coverage:Store::default(), effects:Store::default(),
-            definitions:Store::default(), selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:super::Extensions::default() })
+            definitions:Store::default(), selections:Store::default(), guides:Store::default(), metadata:Arc::new(PhotoMetadata::default()), extensions:Arc::default() })
     }
     pub fn capture(&self, checkpoint: CaptureCheckpoint) -> Result<ArtworkCapture, &'static str> {
         if checkpoint.document != self.id { return Err("Capture belongs to a different drawing"); }
@@ -196,4 +207,10 @@ impl Artwork {
         shape.validate(id(&self.compositions,self.root)?,Default::default())?;
         Ok(shape)
     }
+}
+
+impl ArtworkCapture {
+    pub fn composition(&self)->&Composition{self.artwork.compositions.get(self.artwork.root).expect("Captured composition")}
+    pub fn output(&self)->&Output{self.artwork.outputs.get(self.artwork.default_output).expect("Captured output")}
+    pub fn metadata(&self)->&PhotoMetadata{&self.artwork.metadata}
 }

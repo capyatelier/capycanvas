@@ -2,7 +2,9 @@
 //! the renderer's paint pages after a preview are compared with the
 //! premultiplied source, the selection and each filter evaluated on the CPU.
 use super::*;
-use super::transforms::{mask_values, masked, packed};
+use super::placement::{paint_document, occurrence_mut, paint_mut, target, set_source, reveal_all};
+use layer_core::{Document, RasterOperation, RasterOperationKind};
+use super::transforms::{mask_values, mask_target, masked, packed};
 use crate::pixel_transform::EXACT_TAPS;
 use crate::test_support::preimage;
 use layer_core::color::{ColorProfile, RgbSpace, SampleDepth, source::*};
@@ -261,11 +263,11 @@ impl Oracle {
     }
 }
 
-fn frame(r: &mut WgpuRasterizer, layer: &Layer, reset: bool) {
+fn frame(r: &mut WgpuRasterizer, layer: &Document, reset: bool) {
     r.submit(FramePacket {
         reset_layers: reset,
         composite_all: reset,
-        ..packet(std::slice::from_ref(layer), EXTENT)
+        ..packet(layer.scene(), EXTENT)
     })
     .unwrap();
 }
@@ -295,8 +297,8 @@ fn pages(r: &WgpuRasterizer) -> Vec<([u32; 2], [f32; 4])> {
 #[test]
 fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "oracle");
-    layer.source = Some(source_image(straight));
+    let mut layer = paint_document(EXTENT, "oracle");
+    set_source(&mut layer, source_image(straight));
     frame(&mut r, &layer, true);
     let pivot = Point { x: 150., y: 110. };
     let source = Rect {
@@ -342,7 +344,7 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
                 let preview = layer_render::TransformPreview {
                     transaction,
                     moving: false,
-                    layer: layer.id,
+                    target: target(&layer),
                     selection: selection.clone(),
                     transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map.clone() },
                         ..Default::default()
@@ -364,8 +366,8 @@ fn native_transforms_match_an_independent_oracle_for_every_filter_and_map() {
 #[test]
 fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "oracle");
-    layer.source = Some(source_image(straight));
+    let mut layer = paint_document(EXTENT, "oracle");
+    set_source(&mut layer, source_image(straight));
     frame(&mut r, &layer, true);
     let maps = [
         Affine::translation(Point { x: 37., y: -12. }),
@@ -387,7 +389,7 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction,
                     moving: false,
-                    layer: layer.id,
+                    target: target(&layer),
                     selection: selection.clone(),
                     transform,
                 }))
@@ -405,8 +407,8 @@ fn transforms_that_keep_their_source_place_the_moved_copy_over_the_original() {
 #[test]
 fn minified_native_transforms_average_the_pixel_footprint() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "checkerboard");
-    layer.source = Some(source_image(|x, y| {
+    let mut layer = paint_document(EXTENT, "checkerboard");
+    set_source(&mut layer, source_image(|x, y| {
         let on = f32::from((x + y) % 2 == 0);
         [on, on, on, 1.]
     }));
@@ -419,7 +421,7 @@ fn minified_native_transforms_average_the_pixel_footprint() {
             r.set_transform_preview(Some(&layer_render::TransformPreview {
                 transaction: transaction as u64 * 2 + u64::from(scale < 0.3) + 1,
                 moving: false,
-                layer: layer.id,
+                target: target(&layer),
                 selection: Some(
                     Selection::polygon(vec![
                         Point::default(),
@@ -461,12 +463,12 @@ fn minified_native_transforms_average_the_pixel_footprint() {
 fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_interval() {
     for interpolation in [Interpolation::Bicubic, Interpolation::Lanczos] {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-        let layer = masked([[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
+        let layer = masked(EXTENT, [[20., 20.], [60., 20.], [60., 60.], [20., 60.]]);
         frame(&mut r, &layer, true);
         r.set_transform_preview(Some(&layer_render::TransformPreview {
             transaction: 1,
             moving: false,
-            layer: LayerId(9),
+            target: mask_target(&layer),
             selection: None,
             transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..LayerPlacement::from_affine(Affine([3.7, 0.3, -0.2, 3.9, 1.5, 0.5])) },
                 ..Default::default()
@@ -474,7 +476,7 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
         }))
         .unwrap();
         frame(&mut r, &layer, false);
-        let values: Vec<f32> = mask_values(&r).into_values().flatten().collect();
+        let values: Vec<f32> = mask_values(&r, mask_target(&layer)).into_values().flatten().collect();
         assert!(!values.is_empty(), "the preview draws mask pages");
         assert!(
             values.iter().all(|v| (0. ..=1.).contains(v)),
@@ -603,8 +605,8 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     use crate::paint_transform::mesh::MeshGeometry;
     use layer_core::MeshMap;
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "mesh oracle");
-    layer.source = Some(source_image(straight));
+    let mut layer = paint_document(EXTENT, "mesh oracle");
+    set_source(&mut layer, source_image(straight));
     frame(&mut r, &layer, true);
     let source = Rect {
         min: Point { x: 40., y: 30. },
@@ -662,7 +664,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction,
                     moving: false,
-                    layer: layer.id,
+                    target: target(&layer),
                     selection: selection.clone(),
                     transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..layer_core::LayerPlacement { mesh: Some(Arc::new(mesh.clone())), ..Default::default() } },
                         ..Default::default()
@@ -720,12 +722,12 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
             .iter()
             .map(|map| {
                 let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-                let layer = masked([[20., 20.], [150., 30.], [120., 160.], [30., 110.]]);
+                let layer = masked(EXTENT, [[20., 20.], [150., 30.], [120., 160.], [30., 110.]]);
                 frame(&mut r, &layer, true);
                 r.set_transform_preview(Some(&layer_render::TransformPreview {
                     transaction: 1,
                     moving: false,
-                    layer: LayerId(9),
+                    target: mask_target(&layer),
                     selection: None,
                     transform: ImageTransform { placement: layer_core::LayerPlacement { interpolation: interpolation, ..map.clone() },
                         ..Default::default()
@@ -733,7 +735,7 @@ fn mask_warps_seeded_from_an_affine_match_the_affine() {
                 }))
                 .unwrap();
                 frame(&mut r, &layer, false);
-                mask_values(&r)
+                mask_values(&r, mask_target(&layer))
             })
             .collect();
         assert!(!drawn[0].is_empty(), "{interpolation:?}: the affine draws mask pages");
@@ -814,14 +816,14 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let expected = area_reduced(size);
     let extent = [PLATE; 2];
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut layer = Layer::paint(LayerId(1), "zone plate");
-    layer.source = Some(zone_plate());
-    let submit = |r: &mut WgpuRasterizer, layer: &Layer, batches: &[DabBatch], reset: bool| {
+    let mut layer = paint_document(EXTENT, "zone plate");
+    set_source(&mut layer, zone_plate());
+    let submit = |r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset: bool| {
         r.submit(FramePacket {
             dab_batches: batches,
             reset_layers: reset,
             composite_all: reset,
-            ..packet(std::slice::from_ref(layer), extent)
+            ..packet(layer.scene(), extent)
         })
         .unwrap();
     };
@@ -842,7 +844,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     r.set_transform_preview(Some(&layer_render::TransformPreview {
         transaction: 1,
         moving: true,
-        layer: layer.id,
+        target: target(&layer),
         selection: None,
         transform: transform.clone(),
     }))
@@ -851,27 +853,26 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     let preview = largest_difference(reduced(&r).into_iter(), &expected);
     r.set_transform_preview(None).unwrap();
     submit(&mut r, &layer, &[], false);
-    let mut coverage = LayerMask::reveal_all(LayerId(40), Point::default());
-    coverage.default_coverage = 1.;
-    let operation = LayerOperation { placement: Affine::IDENTITY, coverage, kind: LayerOperationKind::Transform(transform) };
+    let mut coverage = reveal_all(extent, Point::default());
+    coverage.source.default_coverage = 1.;
+    let operation = RasterOperation { placement: Affine::IDENTITY, coverage, kind: RasterOperationKind::Transform(transform) };
     let batch = DabBatch {
-        kind: DabBatchKind::LayerOperation(0),
+        kind: DabBatchKind::RasterOperation(0),
         dab_count: 0,
         damage: operation.bounds(extent),
-        ..crate::test_support::dab_batch(layer.id, crate::tests::test_style(BrushExecution::Dry), operation.bounds(extent))
+        ..crate::test_support::dab_batch(target(&layer), crate::tests::test_style(BrushExecution::Dry), operation.bounds(extent))
     };
     let mut committed = layer.clone();
-    committed.pending_operations.push(operation);
+    Arc::make_mut(&mut paint_mut(&mut committed).operations).push(operation);
     submit(&mut r, &committed, &[batch], false);
     let commit = largest_difference(reduced(&r).into_iter(), &expected);
     assert!(preview > 0.1, "a moving preview averages at most four taps and aliases: {preview}");
     assert!(commit < 1e-3, "the commit averages the whole footprint: {commit} from the area reduction");
 
-    let mut document = layer_core::Document::new("placed zone plate", size, size, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    document.layers[1].visible = false;
-    document.layers[0].source = Some(zone_plate());
-    document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(EIGHTH);
-    let mut capture = r.snapshot_gpu().capture(layer_core::Project { document }, 0., Default::default()).unwrap();
+    let mut document = paint_document([size; 2], "placed zone plate");
+    set_source(&mut document, zone_plate());
+    occurrence_mut(&mut document).placement = layer_core::LayerPlacement::from_affine(EIGHTH);
+    let mut capture = r.snapshot_gpu().capture_scene(document.snapshot(), SceneScope::All, Default::default()).unwrap();
     let exported = capture.read_region([0, 0, size, size]).unwrap();
     let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);
     assert!(placed < 1e-3, "exact capture of a photo placed at an eighth: {placed} from the area reduction");

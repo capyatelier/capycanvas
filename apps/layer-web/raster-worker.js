@@ -66,13 +66,15 @@ async function execute({id,request}) {
       case "recover-delete": await recovery("readwrite", store=>store.delete(request.metadata)); result=true; break;
       case "recover-write": {
         const {key,project}=JSON.parse(request.metadata);
-        const bytes=await wasm.raster_worker_write(project,request.buffers);
-        await recovery("readwrite",store=>store.put(bytes,key)); result=true; break;
+        const output=await writePackage(project,request.buffers);
+        try { await recovery("readwrite",store=>store.put(output.blob,key)); result=true; }
+        finally { await closeOutput(output.token); }
+        break;
       }
-      case "write": result = await wasm.raster_worker_write(request.metadata,request.buffers); break;
+      case "write": { const output=await writePackage(request.metadata,request.buffers); result=output; break; }
       default: throw new Error("Unknown raster worker operation");
     }
-    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : (result?.bytes ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []).map(bytes=>bytes.buffer));
+    self.postMessage({id,result,retire:retire()},result instanceof Uint8Array ? [result.buffer] : [...(result?.bytes instanceof Uint8Array ? [result.bytes] : result?.waveform_counts ? [result.waveform_counts] : result?.buffers || []),...(result?.preview instanceof Uint8Array ? [result.preview] : [])].map(bytes=>bytes.buffer));
   } catch(error) { self.postMessage({id,error:String(error),color_feature_error:error?.color_feature_error,retire:retire()}); }
 }
 
@@ -98,6 +100,15 @@ async function beginOutput() {
     const directory=await root.getDirectoryHandle(token,{create:true}),handle=await directory.getFileHandle("capture",{create:true});
     const raw=await handle.createSyncAccessHandle();outputs.set(token,{root,directory,raw,offset:0,release});return token;
   } catch(error) { release();await root.removeEntry(token,{recursive:true}).catch(()=>{});throw error; }
+}
+async function writePackage(metadata,buffers) {
+  const token=await beginOutput(),job=outputJob(token);
+  try {
+    await wasm.raster_worker_write(metadata,buffers,(offset,bytes)=>job.raw.write(bytes,{at:offset}));
+    job.raw.flush();job.raw.close();job.raw=null;
+    const handle=await job.directory.getFileHandle("capture");
+    return {token,blob:await handle.getFile()};
+  } catch(error) { await closeOutput(token);throw error; }
 }
 function outputJob(token) { const job=outputs.get(token);if(!job)throw new Error("Output job is no longer available");return job; }
 async function closeOutput(token) {

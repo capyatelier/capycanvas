@@ -71,10 +71,21 @@ impl Lut3d {
     pub fn size(&self) -> u32 { self.descriptor.size }
     pub fn domain(&self) -> [[f32; 3]; 2] { self.descriptor.domain }
     pub fn title(&self) -> &str { &self.descriptor.title }
+    pub fn with_title(&self, title: Arc<str>) -> Result<Self, &'static str> {
+        let mut result = self.clone();
+        result.descriptor.title = title;
+        result.validate_descriptor()?;
+        Ok(result)
+    }
     pub fn digest(&self) -> [u8; 32] { self.descriptor.digest }
     pub fn payload(&self) -> Option<&[u8]> { self.payload.as_deref() }
     pub fn storage(&self) -> Option<&Arc<[u8]>> { self.payload.as_ref().map(Resource::storage) }
     pub fn resource(&self) -> Option<&Resource<[u8]>> { self.payload.as_ref() }
+    pub(crate) fn alias_resource(&self, id: crate::authored::PortableId) -> Result<Self, &'static str> {
+        let payload = self.payload.as_ref().ok_or("Unresolved color lookup resource")?;
+        let payload = payload.alias(id);
+        Ok(Self { descriptor: self.descriptor.clone(), payload: Some(payload), spaces: self.spaces })
+    }
     pub fn expected_bytes(&self) -> usize { Self::HEADER_BYTES + (self.size() as usize).pow(3) * 16 }
     pub fn samples(&self) -> Option<impl Iterator<Item = [f32; 3]> + '_> {
         self.payload.as_deref().map(|bytes| bytes[Self::HEADER_BYTES..].chunks_exact(16).map(|record| std::array::from_fn(|i| f32::from_le_bytes(record[i*4..i*4+4].try_into().unwrap()))))
@@ -255,7 +266,6 @@ impl Lut3d {
     pub fn from_verified_worker(&self, payload: Arc<[u8]>, spaces: u8) -> Result<Self, &'static str> {
         self.from_verified_worker_resource(payload.into(), spaces)
     }
-    #[cfg(target_arch = "wasm32")]
     pub fn from_verified_worker_resource(&self, payload: Resource<[u8]>, spaces: u8) -> Result<Self, &'static str> {
         self.validate_descriptor()?;
         if payload.len() != self.expected_bytes() || spaces == 0 || spaces & !15 != 0 {
@@ -267,6 +277,10 @@ impl Lut3d {
             }
         }
         Ok(Self {descriptor: self.descriptor.clone(), payload: Some(payload), spaces})
+    }
+    pub fn from_verified_resource(size:u32,domain:[[f32;3];2],title:Arc<str>,digest:[u8;32],payload:Resource<[u8]>,spaces:u8)->Result<Self,&'static str> {
+        let value=Self {descriptor:Descriptor {size,domain,title,digest},payload:None,spaces:0};
+        value.from_verified_worker_resource(payload,spaces)
     }
     pub fn with_owned_payload(&self, payload: Arc<[u8]>) -> Result<Self, &'static str> {
         self.with_resource(payload.into())

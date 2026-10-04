@@ -37,7 +37,7 @@ mod tests {
         for map in [LayerPlacement::from_affine(enlarged), LayerPlacement::from_projective(perspective), layer_core::LayerPlacement { mesh: Some(Arc::new(mesh)), ..Default::default() }] {
             for placement in [Affine::IDENTITY, Affine([0.3,0.2,-0.2,0.3,8.,4.])] {
                 let rate = stretch(&map, placement, bounds);
-                let preview = layer_render::TransformPreview { transaction: 1, layer: LayerId(1), moving: true,
+                let preview = layer_render::TransformPreview { transaction: 1, target: SourceTarget::Paint(layer_core::PaintHandle::from_index(1)), moving: true,
                     selection: None, transform: layer_core::ImageTransform { placement: map.clone(), ..Default::default() } };
                 let local = input_level(4, &preview, &layer_core::ImageTransform::affine(placement), extent);
                 for y in 1..20 { for x in 1..20 {

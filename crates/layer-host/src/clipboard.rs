@@ -30,6 +30,11 @@ impl ClipTask {
         &self.capture
     }
 
+    pub fn set_evaluation_context(&mut self, mut context: layer_core::authored::EvaluationContext) {
+        context.retain_effects(&self.capture.scene.artwork);
+        Arc::make_mut(&mut self.capture.scene).context = context;
+    }
+
     /// Worker-side composition and encoding. `nonce` identifies the clip on
     /// the system clipboard.
     pub fn run(self, nonce: String, control: CaptureControl) -> Result<PixelClip, String> {
@@ -42,7 +47,7 @@ impl ClipTask {
         }
         let mut renderer = self
             .gpu
-            .capture(capture.project.clone(), capture.time, control)
+            .capture_scene(capture.scene.clone(), capture.scope.clone(), control)
             .map_err(|e| e.to_string())?;
         let (source, png) =
             renderer.write_clip(capture.crop, capture.coverage.as_ref(), capture.original.is_none(), limit)?;
@@ -71,9 +76,9 @@ mod tests {
     use layer_ui::{CommandId, DocumentRequest, HostRequestKind, PasteMode, UiAction};
 
     fn host(document: layer_core::Document) -> NativeHost {
-        let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();
+        let gpu = WgpuRasterizer::new_native_headless(document.composition().color).unwrap();
         let mut host = NativeHost::new(layer_ui::Platform::Gtk).unwrap();
-        let extent = [document.width, document.height];
+        let extent = [document.composition().size[0], document.composition().size[1]];
         host.session = UiSession::new(Renderer(Some(gpu.into())), document, extent, layer_ui::Platform::Gtk).unwrap();
         host
     }
@@ -93,12 +98,10 @@ mod tests {
     }
 
     fn photo_host(selection: Option<Selection>) -> NativeHost {
-        let mut document = layer_core::Document::new("Clip", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        for paper in document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
-            paper.visible = false;
-        }
-        document.layers[0].source = Some(photo([64, 48], |x, y| [(x * 4) as u8, (y * 5) as u8, 200, 255]));
-        document.selection = selection;
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::hide_paper(&mut document);
+        crate::test_support::active_source_mut(&mut document).original = Some(photo([64, 48], |x, y| [(x * 4) as u8, (y * 5) as u8, 200, 255]));
+        document.working.selection = selection;
         let mut host = host(document);
         host.session.frame(0, 0).unwrap();
         host
@@ -136,7 +139,7 @@ mod tests {
         let mut host = photo_host(None);
         host.dispatch(UiAction::Invoke { command: CommandId::SelectAll }).unwrap();
         let whole = copy(&mut host, CommandId::Copy);
-        let photo = host.session.engine().document().layers.iter().find_map(|l| l.source.clone()).unwrap();
+        let photo = host.session.engine().document().artwork.paint.iter().find_map(|(_, _, source)| source.original.clone()).unwrap();
         assert!(Arc::ptr_eq(&whole.source, &photo), "an untouched photo keeps its original samples");
         assert_eq!(whole.origin, [0, 0]);
         let png = layer_color::photo::read_photo(std::io::Cursor::new(whole.png.to_vec()), Default::default()).unwrap();
@@ -167,16 +170,16 @@ mod tests {
         });
         other.session.paste_clip(&clip, PasteMode::InPlace).unwrap();
         let document = other.session.engine().document();
-        let pasted = document.layer(document.active_layer).unwrap();
-        assert_eq!(pasted.source.as_ref().unwrap().kind, SourceKind::Original, "another colour mode converts");
-        assert_eq!(pasted.properties.placement.as_affine().unwrap().0[4..], [10., 8.]);
+        let pasted = crate::test_support::active_source(document);
+        assert_eq!(pasted.original.as_ref().unwrap().kind, SourceKind::Original, "another colour mode converts");
+        assert_eq!(document.target_geometry(document.working.target.unwrap()).as_affine().unwrap().0[4..], [10., 8.]);
         drop((host, other));
         layer_render_wgpu::finish_shader_compiler_shutdown();
     }
 
     fn host_with_color(color: layer_core::color::DocumentColor) -> NativeHost {
-        let mut document = layer_core::Document::new("Other", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        document.color = color;
+        let mut document = layer_core::Document::new(layer_core::authored::PortableId::random(), 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+        crate::test_support::composition_mut(&mut document).color = color;
         host(document)
     }
 

@@ -4,7 +4,7 @@ mod painted_selection_checks {
     fn saving_quick_mask_activates_saved_layer_and_navigation_hides_only_previous_mask() {
         use layer_core::SelectionTarget;
         let mut s = session(Platform::Gtk);
-        let art = s.engine.document().active_layer;
+        let art = s.engine.document().working.occurrence.unwrap();
         let saved_menus = |s: &UiSession<Recorder>| {
             s.application_menu(ApplicationMenu::Select).sections.into_iter().flatten()
                 .filter(|i| matches!(i.label.as_str(), "Load Selection" | "Replace Selection Layer from Current Selection"))
@@ -13,10 +13,10 @@ mod painted_selection_checks {
         assert_eq!(saved_menus(&s).len(), 2);
         assert!(saved_menus(&s).iter().all(|i| !i.enabled && i.sections.is_empty()));
         invoke(&mut s, CommandId::SelectAll);
-        let coverage = s.engine.document().selection.clone().unwrap();
+        let coverage = s.engine.document().working.selection.clone().unwrap();
         invoke(&mut s, CommandId::QuickMask);
         invoke(&mut s, CommandId::SaveSelectionLayer);
-        let first = s.engine.document().active_layer;
+        let first = s.engine.document().working.occurrence.unwrap();
         assert_ne!(first, art);
         assert_eq!(s.selection_masks.target(), Some(SelectionTarget::Saved(first)));
         assert!(!s.state.layer_tools.quick_mask);
@@ -24,22 +24,62 @@ mod painted_selection_checks {
         assert_eq!(s.engine.document().saved_selection(first).unwrap(), coverage);
         assert!(saved_menus(&s).iter().all(|i| i.enabled && i.sections[0].len() == 1));
         invoke(&mut s, CommandId::NewSelectionLayer);
-        let second = s.engine.document().active_layer;
-        assert!(!s.engine.document().layer(first).unwrap().visible);
-        assert!(s.engine.document().layer(second).unwrap().visible);
-        s.layer_action(LayerAction::Select { id: art.0, mask: false }).unwrap();
-        assert!(!s.engine.document().layer(second).unwrap().visible);
-        s.layer_action(LayerAction::Select { id: first.0, mask: false }).unwrap();
-        assert!(s.engine.document().layer(first).unwrap().visible);
-        assert!(!s.engine.document().layer(second).unwrap().visible);
+        let second = s.engine.document().working.occurrence.unwrap();
+        assert!(!s.engine.document().effective_visibility(first));
+        assert!(s.engine.document().effective_visibility(second));
+        let authored = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        let redo = s.engine.can_redo();
+        s.layer_action(LayerAction::Select { id: crate::session::occurrence_token(art), mask: false }).unwrap();
+        assert_live_artwork_eq(s.engine.document(), &authored);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.can_redo(), redo);
+        assert!(!s.engine.document().effective_visibility(second));
+        s.layer_action(LayerAction::Select { id: crate::session::occurrence_token(first), mask: false }).unwrap();
+        assert!(s.engine.document().effective_visibility(first));
+        assert_live_artwork_eq(s.engine.document(), &authored);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        assert_eq!(s.engine.can_redo(), redo);
+        assert!(s.engine.document().scene().occurrence(first).unwrap().visible);
+        assert!(s.engine.document().scene().occurrence(second).unwrap().visible);
+        assert!(s.state.layers.iter().find(|layer| layer.id == crate::session::occurrence_token(first)).unwrap().visible);
+        assert!(!s.state.layers.iter().find(|layer| layer.id == crate::session::occurrence_token(second)).unwrap().visible);
+        assert!(!s.engine.document().effective_visibility(second));
         // Navigation neither adds undo steps nor destroys redo.
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().layer(second).is_none());
-        s.layer_action(LayerAction::Select { id: art.0, mask: false }).unwrap();
+        assert!(s.engine.document().scene().occurrence(second).is_none());
+        s.layer_action(LayerAction::Select { id: crate::session::occurrence_token(art), mask: false }).unwrap();
         assert!(s.command(CommandId::Redo).enabled);
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().layer(first).is_none());
-        assert_eq!(s.engine.document().selection, Some(coverage));
+        assert!(s.engine.document().scene().occurrence(first).is_none());
+        assert_eq!(s.engine.document().working.selection, Some(coverage));
+    }
+    #[test]
+    fn explicit_saved_selection_visibility_clears_navigation_override() {
+        let mut s = session(Platform::Gtk);
+        invoke(&mut s, CommandId::NewSelectionLayer);
+        let first = s.engine.document().working.occurrence.unwrap();
+        invoke(&mut s, CommandId::NewSelectionLayer);
+        let second = s.engine.document().working.occurrence.unwrap();
+        assert_eq!(s.engine.document().working.selection_visibility.get(&first), Some(&false));
+        assert!(!s.engine.document().effective_visibility(first));
+        let authored = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        s.layer_action(LayerAction::Visibility { id: crate::session::occurrence_token(first), value: true }).unwrap();
+        assert!(s.engine.document().effective_visibility(first));
+        assert!(s.engine.document().effective_visibility(second));
+        assert!(!s.engine.document().working.selection_visibility.contains_key(&first));
+        assert_live_artwork_eq(s.engine.document(), &authored);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
+        s.layer_action(LayerAction::Visibility { id: crate::session::occurrence_token(first), value: false }).unwrap();
+        assert!(!s.engine.document().scene().occurrence(first).unwrap().visible);
+        assert!(!s.engine.document().effective_visibility(first));
+        assert!(!s.engine.document().working.selection_visibility.contains_key(&first));
+        assert_ne!(s.engine.checkpoint(), checkpoint);
+        invoke(&mut s, CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(), &authored);
+        assert!(s.engine.document().effective_visibility(first));
+        assert!(s.command(CommandId::Redo).enabled);
     }
     #[test]
     fn mask_mode_couples_overlay_and_painting_and_bucket_uses_displayed_color() {
@@ -81,21 +121,21 @@ mod painted_selection_checks {
         assert!(!s.engine.can_undo());
         s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();
         invoke(&mut s, CommandId::SaveSelectionLayer);
-        let first = s.engine.document().active_layer;
+        let first = s.engine.document().working.occurrence.unwrap();
         invoke(&mut s, CommandId::NewSelectionLayer);
-        let second = s.engine.document().active_layer;
-        s.dispatch(set(second.0, "mask_color", EffectValue::Color(cyan))).unwrap();
+        let second = s.engine.document().working.occurrence.unwrap();
+        s.dispatch(set(crate::session::occurrence_token(second), "mask_color", EffectValue::Color(cyan))).unwrap();
         let before = s.engine.document().clone();
-        s.dispatch(set(second.0, "mask_mode", EffectValue::Choice(0))).unwrap();
+        s.dispatch(set(crate::session::occurrence_token(second), "mask_mode", EffectValue::Choice(0))).unwrap();
         assert_eq!(*s.engine.document(), before, "mode changes do not edit any layer or history");
-        s.layer_action(LayerAction::Select { id: first.0, mask: false }).unwrap();
+        s.layer_action(LayerAction::Select { id: crate::session::occurrence_token(first), mask: false }).unwrap();
         assert_eq!(s.state.layer_properties.controls[0].value, EffectValue::Choice(0));
         assert_eq!(s.mask_properties().opacity, 0.3);
         assert_ne!(s.mask_properties().color, cyan);
-        s.layer_action(LayerAction::Select { id: second.0, mask: false }).unwrap();
+        s.layer_action(LayerAction::Select { id: crate::session::occurrence_token(second), mask: false }).unwrap();
         assert_eq!(s.mask_properties().color, cyan);
         assert_eq!(s.mask_properties().opacity, 0.5);
-        s.dispatch(set(second.0, "mask_mode", EffectValue::Choice(1))).unwrap();
+        s.dispatch(set(crate::session::occurrence_token(second), "mask_mode", EffectValue::Choice(1))).unwrap();
         let saved = serde_json::to_string(&s.state.settings).unwrap();
         let mut restored = session(Platform::Gtk);
         restored.dispatch(UiAction::RestoreSettings { settings: serde_json::from_str(&saved).unwrap() }).unwrap();
@@ -124,7 +164,7 @@ mod painted_selection_checks {
         let mut s = session(Platform::Gtk);
         let color = DocumentColor { space: RgbSpace::DisplayP3, depth: SampleDepth::U16 };
         let prepare = |s: &UiSession<Recorder>| s.prepare_document_color_transition(ColorTransition::Apply {
-            color, layers: s.engine.document().layers.clone(),
+            edit: Box::new({let doc=s.engine.document();let mut composition=doc.composition().clone();composition.color=color;layer_core::Edit::Composition(layer_core::authored::RecordChange::replace(&doc.artwork.compositions,doc.artwork.root,Some(composition)).unwrap())}),
         });
         invoke(&mut s, CommandId::SelectionBrush);
         send(&mut s, PenPhase::Down, 100.);
@@ -194,8 +234,8 @@ mod painted_selection_checks {
     fn mask_editing_blocks_artwork_filters_and_destructive_commands() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::QuickMask);
-        let id = s.engine.document().active_layer.0;
-        let layers = s.engine.document().layers.clone();
+        let id = crate::session::occurrence_token(s.engine.document().working.occurrence.unwrap());
+        let layers = s.engine.document().artwork.clone();
         for action in [
             LayerAction::Clear { id },
             LayerAction::Delete { id },
@@ -213,7 +253,7 @@ mod painted_selection_checks {
             .unwrap_err()
             .contains("Return to artwork")
         );
-        assert_eq!(s.engine.document().layers, layers);
+        assert_eq!(s.engine.document().artwork, layers);
     }
     #[test]
     fn quick_mask_colors_remain_unrestricted_and_swap_the_paint_slot() {
@@ -253,19 +293,19 @@ mod painted_selection_checks {
         assert_eq!(s.engine.backend().selection_updates.len(), 1);
         reply(&mut s, 0x80808080);
         s.frame(2, 2).unwrap();
-        let first = s.engine.document().selection.clone().unwrap();
+        let first = s.engine.document().working.selection.clone().unwrap();
         assert_eq!(
             *s.engine.backend().selection_updates.last().unwrap().before,
             first
         );
         invoke(&mut s, CommandId::Undo); // Must wait for the second completed contact.
-        assert_eq!(s.engine.document().selection, Some(first.clone()));
+        assert_eq!(s.engine.document().working.selection, Some(first.clone()));
         reply(&mut s, 0xc0c0c0c0);
         s.frame(3, 3).unwrap();
-        assert_eq!(s.engine.document().selection, Some(first));
+        assert_eq!(s.engine.document().working.selection, Some(first));
         assert!(!s.painted_selections.busy());
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
     fn quick_mask_entry_preserves_none_and_empty_without_history() {
@@ -273,30 +313,28 @@ mod painted_selection_checks {
         let colors = s.state.colors.clone();
         invoke(&mut s, CommandId::QuickMask);
         assert!(s.state.layer_tools.quick_mask);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         assert_eq!(s.current_selection(), Some(layer_core::Selection::empty()));
         assert!(!s.engine.can_undo());
         invoke(&mut s, CommandId::QuickMask);
         assert!(!s.state.layer_tools.quick_mask);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         assert!(!s.engine.can_undo());
         assert_eq!(s.state.colors, colors);
-        s.layer_edit(layer_core::Edit::SetSelection(Some(
-            layer_core::Selection::empty(),
-        )))
+        s.set_mask_coverage(layer_core::SelectionTarget::Current,layer_core::Selection::empty())
         .unwrap();
         invoke(&mut s, CommandId::QuickMask);
         assert_eq!(s.current_selection(), Some(layer_core::Selection::empty()));
         invoke(&mut s, CommandId::QuickMask);
         assert_eq!(
-            s.engine.document().selection,
+            s.engine.document().working.selection,
             Some(layer_core::Selection::empty())
         );
     }
     #[test]
     fn quick_mask_captures_before_exit_and_keeps_artwork_untouched() {
         let mut s = session(Platform::Gtk);
-        let layers = s.engine.document().layers.clone();
+        let layers = s.engine.document().artwork.clone();
         invoke(&mut s, CommandId::QuickMask);
         send(&mut s, PenPhase::Down, 100.);
         send(&mut s, PenPhase::Up, 120.);
@@ -313,43 +351,36 @@ mod painted_selection_checks {
         reply(&mut s, 0x80808080);
         s.frame(2, 2).unwrap();
         assert!(!s.state.layer_tools.quick_mask);
-        assert_eq!(s.engine.document().layers, layers);
-        assert!(s.engine.document().selection.is_some());
+        assert_eq!(s.engine.document().artwork, layers);
+        assert!(s.engine.document().working.selection.is_some());
         invoke(&mut s, CommandId::Undo);
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
     }
     #[test]
     fn saved_selection_edit_load_and_replace_are_independent() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::SelectAll);
-        let original = s.engine.document().selection.clone().unwrap();
+        let original = s.engine.document().working.selection.clone().unwrap();
         invoke(&mut s, CommandId::SaveSelectionLayer);
-        let id = s
-            .engine
-            .document()
-            .layers
-            .iter()
-            .find(|l| l.kind == LayerKind::Selection)
-            .unwrap()
-            .id;
+        let id=s.engine.document().scene().order().iter().copied().find(|h|matches!(s.engine.document().scene().source_target(*h),Some(layer_core::authored::SourceTarget::Selection(_)))).unwrap();
         assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
-        s.dispatch(UiAction::SelectLayer { id: id.0 }).unwrap();
+        s.dispatch(UiAction::SelectLayer { id: crate::session::occurrence_token(id) }).unwrap();
         assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
         invoke(&mut s, CommandId::ClearSelectionMask);
         assert_eq!(
             s.engine.document().saved_selection(id).unwrap(),
             layer_core::Selection::empty()
         );
-        assert_eq!(s.engine.document().selection.as_ref(), Some(&original));
+        assert_eq!(s.engine.document().working.selection.as_ref(), Some(&original));
         s.dispatch(UiAction::Selection {
-            action: SelectionAction::ReplaceLayer { id: id.0 },
+            action: SelectionAction::ReplaceLayer { id: crate::session::occurrence_token(id) },
         })
         .unwrap();
         assert_eq!(s.engine.document().saved_selection(id).unwrap(), original);
         invoke(&mut s, CommandId::ClearSelectionMask);
         s.dispatch(UiAction::Selection {
             action: SelectionAction::LoadLayer {
-                id: id.0,
+                id: crate::session::occurrence_token(id),
                 mode: SelectionMode::New,
                 inverted: false,
             },
@@ -357,7 +388,7 @@ mod painted_selection_checks {
         .unwrap();
         assert!(s.selection_masks.target().is_none());
         assert_eq!(
-            s.engine.document().selection,
+            s.engine.document().working.selection,
             Some(layer_core::Selection::empty())
         );
         invoke(&mut s, CommandId::SelectAll);
@@ -368,20 +399,20 @@ mod painted_selection_checks {
         invoke(&mut s, CommandId::Deselect);
         assert!(s.command(CommandId::Reselect).enabled);
         invoke(&mut s, CommandId::Reselect);
-        assert_eq!(s.engine.document().selection, Some(original));
+        assert_eq!(s.engine.document().working.selection, Some(original));
     }
     #[test]
     fn saved_selection_locked_destination_and_non_dry_brush_do_not_paint_artwork() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::NewSelectionLayer);
-        let id = s.engine.document().active_layer;
+        let id = s.engine.document().working.occurrence.unwrap();
         assert!(
             !s.state.layer_tools.controls.opacity
                 && !s.state.layer_tools.controls.blend
                 && !s.state.layer_tools.controls.mask
         );
         s.layer_action(LayerAction::Lock {
-            id: id.0,
+            id: crate::session::occurrence_token(id),
             value: true,
         })
         .unwrap();
@@ -391,7 +422,7 @@ mod painted_selection_checks {
         assert!(s.engine.backend().selection_updates.is_empty());
         assert!(s.mask_brush_reason().unwrap().contains("locked"));
         s.layer_action(LayerAction::Lock {
-            id: id.0,
+            id: crate::session::occurrence_token(id),
             value: false,
         })
         .unwrap();
@@ -439,7 +470,7 @@ mod painted_selection_checks {
             .unwrap()
             .changed = false;
         s.frame(2, 2).unwrap();
-        assert!(s.engine.document().selection.is_none());
+        assert!(s.engine.document().working.selection.is_none());
         assert!(!s.engine.can_undo());
         assert!(!s.painted_selections.busy());
     }
@@ -464,7 +495,7 @@ mod painted_selection_checks {
         reply(&mut s, 0);
         s.frame(3, 3).unwrap();
         assert!(
-            s.engine.document().selection.is_some(),
+            s.engine.document().working.selection.is_some(),
             "empty remains a selection"
         );
         send(&mut s, PenPhase::Down, 100.);
@@ -516,20 +547,20 @@ mod painted_selection_checks {
         s.dispatch(set(0, "mask_opacity", EffectValue::Number(0.3))).unwrap();
         assert!(!s.engine.can_undo(), "temporary properties are not artwork history");
         invoke(&mut s, CommandId::SaveSelectionLayer);
-        let id = s.engine.document().layers.iter().find(|l| l.kind == LayerKind::Selection).unwrap().id;
-        assert_eq!(s.engine.document().layer(id).unwrap().properties.selection_mask.as_ref().unwrap().opacity, 0.3);
+        let id=s.engine.document().scene().order().iter().copied().find(|h|matches!(s.engine.document().scene().source_target(*h),Some(layer_core::authored::SourceTarget::Selection(_)))).unwrap();
+        assert_eq!(s.mask_properties().opacity, 0.3);
         invoke(&mut s, CommandId::ReturnToArtwork);
-        s.dispatch(UiAction::SelectLayer { id: id.0 }).unwrap();
+        s.dispatch(UiAction::SelectLayer { id: crate::session::occurrence_token(id) }).unwrap();
         assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
-        s.dispatch(set(id.0, "mask_opacity", EffectValue::Number(0.7))).unwrap();
+        s.dispatch(set(crate::session::occurrence_token(id), "mask_opacity", EffectValue::Number(0.7))).unwrap();
         invoke(&mut s, CommandId::Undo);
         assert_eq!(s.mask_properties().opacity, 0.3);
         invoke(&mut s, CommandId::Redo);
         assert_eq!(s.mask_properties().opacity, 0.7);
-        assert!(s.dispatch(set(id.0, "mask_opacity", EffectValue::Number(2.))).is_err());
+        assert!(s.dispatch(set(crate::session::occurrence_token(id), "mask_opacity", EffectValue::Number(2.))).is_err());
         let original = s.mask_properties();
         for (phase, value) in [(ContactPhase::Down, 0.5), (ContactPhase::Move, 0.1), (ContactPhase::Cancel, 0.1)] {
-            s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set { layer: id.0, key: "mask_opacity".into(), value: EffectValue::Number(value) }) } }).unwrap();
+            s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set { layer: crate::session::occurrence_token(id), key: "mask_opacity".into(), value: EffectValue::Number(value) }) } }).unwrap();
         }
         assert_eq!(s.mask_properties(), original);
     }
