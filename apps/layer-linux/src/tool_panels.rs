@@ -723,7 +723,7 @@ mod wheel {
         pub color: RefCell<ColorState>,
         pub preview: Cell<bool>,
         pub resizing: Cell<bool>,
-        pub resize_node: RefCell<Option<(f32, [f32; 2], gtk::gsk::RenderNode)>>,
+        pub surface_node: RefCell<Option<(f32, gtk::gsk::RenderNode)>>,
         pub(super) field: crate::color_preview_raster::PreviewRaster<super::field::Key, super::field::Request>,
         pub(super) field_path: RefCell<Option<super::field::FieldPath>>,
         pub intensity: RefCell<Option<crate::hdr_color_scale::HdrColorScale>>,
@@ -824,63 +824,60 @@ mod wheel {
             #[cfg(test)]
             let started = std::time::Instant::now();
             let (size, [x, y]) = self.obj().drawing_bounds();
-            if self.resizing.get() && size > 0.
-                && let Some((original, [ox, oy], node)) = self.resize_node.borrow().as_ref()
-            {
-                output.save();
-                output.translate(&gtk::graphene::Point::new(x, y));
-                output.scale(size / original, size / original);
-                output.translate(&gtk::graphene::Point::new(-ox, -oy));
-                output.append_node(gtk::gsk::DebugNode::new(node.clone(), crate::squircle::KEEP_ROUND.into()));
-                output.restore();
-                #[cfg(test)]
-                self.snapshot_ms.borrow_mut().push(started.elapsed().as_secs_f64() * 1000.);
-                return;
-            }
             let content = gtk::Snapshot::new();
             let snapshot = &content;
             if let Some(geometry) = ColorWheelGeometry::new(size) {
                 snapshot.save();
                 snapshot.translate(&gtk::graphene::Point::new(x, y));
-                let bounds = gtk::graphene::Rect::new(0., 0., size, size);
-                let state = self.color.borrow();
-                let shape = state.shape;
-                let view = self.view.get();
-                let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
-                let space = state.rgb_space();
-                let key = field::Key::new(side, &state, view, self.headroom.get());
-                let current = self.disc.borrow().as_ref().map(|d| (d.0,d.1,d.2,d.3,d.4,d.5,d.6));
-                let ring_ready = self.ring.borrow().as_ref().is_some_and(|(s, p, c, v, _)|
-                    (*s, *p, *c, *v) == (side, shape, space, view));
-                self.obj().request_field(key, &state, current == Some(key.tuple()) && ring_ready);
-                if let Some(cache) = self.ring.borrow().as_ref() {
-                    snapshot.append_texture(&cache.4, &bounds);
-                }
-                if let Some(cache) = self.disc.borrow().as_ref() {
-                    match shape {
-                        ColorShape::Circle => {
-                            let radius = geometry.disc_radius();
-                            snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(
-                                gtk::graphene::Rect::new(geometry.center[0] - radius, geometry.center[1] - radius,
-                                    radius * 2., radius * 2.), radius));
-                        }
-                        ColorShape::Square => {
-                            let [x, y, width] = geometry.square;
-                            snapshot.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(
-                                gtk::graphene::Rect::new(x, y, width, width), (size * 0.02).min(6.)));
-                        }
-                        ColorShape::Triangle => {
-                            let mut field_path = self.field_path.borrow_mut();
-                            if field_path.as_ref().is_none_or(|p| p.size != size) {
-                                *field_path = Some(field::FieldPath::new(size, &geometry));
-                            }
-                            snapshot.push_fill(&field_path.as_ref().unwrap().path, gtk::gsk::FillRule::Winding);
-                        }
+                if !self.resizing.get() || self.surface_node.borrow().is_none() {
+                    let surfaces = gtk::Snapshot::new();
+                    let bounds = gtk::graphene::Rect::new(0., 0., size, size);
+                    let state = self.color.borrow();
+                    let shape = state.shape;
+                    let view = self.view.get();
+                    let side = (size * self.obj().scale_factor() as f32).ceil() as u32;
+                    let space = state.rgb_space();
+                    let key = field::Key::new(side, &state, view, self.headroom.get());
+                    let current = self.disc.borrow().as_ref().map(|d| (d.0,d.1,d.2,d.3,d.4,d.5,d.6));
+                    let ring_ready = self.ring.borrow().as_ref().is_some_and(|(s, p, c, v, _)|
+                        (*s, *p, *c, *v) == (side, shape, space, view));
+                    self.obj().request_field(key, &state, current == Some(key.tuple()) && ring_ready);
+                    if let Some(cache) = self.ring.borrow().as_ref() {
+                        surfaces.append_texture(&cache.4, &bounds);
                     }
-                    snapshot.append_texture(&cache.7, &bounds);
-                    snapshot.pop();
+                    if let Some(cache) = self.disc.borrow().as_ref() {
+                        match shape {
+                            ColorShape::Circle => {
+                                let radius = geometry.disc_radius();
+                                surfaces.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(
+                                    gtk::graphene::Rect::new(geometry.center[0] - radius, geometry.center[1] - radius,
+                                        radius * 2., radius * 2.), radius));
+                            }
+                            ColorShape::Square => {
+                                let [x, y, width] = geometry.square;
+                                surfaces.push_rounded_clip(&gtk::gsk::RoundedRect::from_rect(
+                                    gtk::graphene::Rect::new(x, y, width, width), (size * 0.02).min(6.)));
+                            }
+                            ColorShape::Triangle => {
+                                let mut field_path = self.field_path.borrow_mut();
+                                if field_path.as_ref().is_none_or(|p| p.size != size) {
+                                    *field_path = Some(field::FieldPath::new(size, &geometry));
+                                }
+                                surfaces.push_fill(&field_path.as_ref().unwrap().path, gtk::gsk::FillRule::Winding);
+                            }
+                        }
+                        surfaces.append_texture(&cache.7, &bounds);
+                        surfaces.pop();
+                    }
+                    *self.surface_node.borrow_mut() = surfaces.to_node().map(|node| (size, node));
                 }
-                draw_wheel(snapshot, &state, &geometry, view, self.headroom.get());
+                if let Some((original, node)) = self.surface_node.borrow().as_ref() {
+                    snapshot.save();
+                    snapshot.scale(size / original, size / original);
+                    snapshot.append_node(node);
+                    snapshot.restore();
+                }
+                draw_wheel(snapshot, &self.color.borrow(), &geometry, self.view.get(), self.headroom.get());
                 snapshot.restore();
             }
             let mut child = self.obj().first_child();
@@ -888,10 +885,7 @@ mod wheel {
                 if widget.is_visible() { self.obj().snapshot_child(&widget, snapshot); }
                 child = widget.next_sibling();
             }
-            if let Some(node) = content.to_node() {
-                if size > 0. { *self.resize_node.borrow_mut() = Some((size, [x, y], node.clone())); }
-                output.append_node(gtk::gsk::DebugNode::new(node, crate::squircle::KEEP_ROUND.into()));
-            }
+            crate::squircle::append_round(output, content);
             #[cfg(test)]
             self.snapshot_ms.borrow_mut().push(started.elapsed().as_secs_f64() * 1000.);
         }
@@ -1345,6 +1339,7 @@ impl ColorPanel {
     pub fn set_resizing(&self, resizing: bool) {
         if self.wheel.imp().resizing.replace(resizing) != resizing {
             self.wheel.imp().field.cancel();
+            self.intensity.set_resizing(resizing);
             self.wheel.queue_draw();
         }
     }
@@ -1375,7 +1370,7 @@ impl ColorPanel {
             return;
         }
         *self.wheel.imp().color.borrow_mut() = state.clone();
-        self.wheel.imp().resize_node.borrow_mut().take();
+        self.wheel.imp().surface_node.borrow_mut().take();
         self.wheel.queue_draw();
         let shape_descriptions = self.shape_descriptions.borrow();
         let localization = self.localization.borrow();

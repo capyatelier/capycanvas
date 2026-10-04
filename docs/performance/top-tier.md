@@ -94,10 +94,10 @@ current-source results.
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
-| Panel or column resize | 120 | **Unqualified.** GTK desktop Color column 12.26–43.30, floating panel 38.42–85.81 presents/s; reference tablet unmeasured | [GTK Color resize](#gtk-color-panel-resize), 2026-10-03 |
+| Panel or column resize | 120 | **Unqualified.** GTK desktop Color column 12.88–44.61, floating panel 39.63–100.58 presents/s; reference tablet unmeasured | [GTK Color resize](#gtk-color-panel-resize), 2026-10-04 |
 | Drawer open and close | 120 | | |
 | Grouped tool menus, drawer switching and tile drag | 120 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
-| Colour wheel or picker drag | 120 | **Unqualified.** Current GTK 2× workstation picker diagnostic: docked SDR 74.66, HDR 71.41 canvas presents/s; reference tablet unmeasured | [GTK Color diagnostic](#gtk-color-panel-resize), 2026-10-03; earlier [swatch diagnostic](#gtk-selected-swatch-diagnostic) |
+| Colour wheel or picker drag | 120 | **Unqualified.** Current GTK 2× workstation picker diagnostic: docked SDR 75.00, HDR 62.96 canvas presents/s; reference tablet unmeasured | [GTK Color diagnostic](#gtk-color-panel-resize), 2026-10-04; earlier [swatch diagnostic](#gtk-selected-swatch-diagnostic) |
 | Slider scrub: size, opacity, flow | 120 | | |
 | Canvas action bar show, hide and move | 120 | **Not met.** UI frame p50/p95: 63.2/90.0 ms moving the bar, 23.0/34.6 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 120 | **Not met.** UI frame p50/p95 25.1/30.6 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
@@ -128,32 +128,42 @@ raw records and summaries are under `artifacts/color-overlap/pacing/`.
 
 ## GTK color panel resize
 
-Measured 2026-10-03 in a release build based on `922db0430`, on AMD Ryzen
+Measured 2026-10-04 in a release build based on `48efaf593`, on AMD Ryzen
 Threadripper PRO 9995WX and NVIDIA RTX PRO 6000 Blackwell Max-Q/Vulkan
 615.71.09. The private Mutter display is 3200 × 2000 at 120 Hz. The
-`native_color_wheel_resize_input` fixture uses a 2048 × 1536 drawing, three
+`native_color_wheel_resize_input` and `native_hdr_color_wheel_resize_input`
+fixtures use 2048 × 1536 SDR and F16 drawings, three
 6.6-second contacts per mouse/touch condition, 4 ms input intervals, and GTK's
 completed presentation feedback for frames with a changed panel width.
 
-| Scale / theme | Color column presents/s | Moving interval p99 | Floating Color presents/s | Moving interval p99 |
+| Document / scale / theme | Color column presents/s | Moving interval p99 | Floating Color presents/s | Moving interval p99 |
 | --- | --- | --- | --- | --- |
-| 1× / Light | 14.77–33.39 | 74.90–183.34 ms | 59.02–85.81 | 33.70–66.72 ms |
-| 1× / Dark | 22.14–43.30 | 66.77–166.78 ms | 50.51–73.92 | 66.58–91.55 ms |
-| 2× / Light | 12.26–22.08 | 108.33–183.47 ms | 38.42–50.61 | 66.55–100.15 ms |
-| 2× / Dark | 13.92–26.79 | 100.03–191.66 ms | 41.26–56.23 | 74.93–83.41 ms |
+| SDR / 1× / Light | 27.20–32.24 | 91.62–158.04 ms | 78.86–84.26 | 49.82–50.12 ms |
+| SDR / 1× / Dark | 22.72–38.78 | 100.00–164.62 ms | 62.19–86.02 | 49.87–66.81 ms |
+| SDR / 2× / Light | 19.52–27.82 | 108.34–133.34 ms | 48.58–58.50 | 66.63–83.33 ms |
+| SDR / 2× / Dark | 20.59–25.13 | 125.00–174.98 ms | 39.63–55.88 | 66.60–100.17 ms |
+| HDR / 1× / Light | 24.64–44.61 | 58.16–175.21 ms | 57.33–93.91 | 33.29–83.23 ms |
+| HDR / 1× / Dark | 27.91–38.16 | 66.81–141.39 ms | 47.00–100.58 | 25.02–83.33 ms |
+| HDR / 2× / Light | 12.88–28.67 | 74.88–241.48 ms | 43.79–58.64 | 50.07–91.74 ms |
+| HDR / 2× / Dark | 18.64–27.28 | 100.04–183.43 ms | 45.00–65.21 | 33.31–108.53 ms |
 
-Every contact performs zero color raster jobs during motion. Wheel snapshot p95
-is at most 0.0098 ms; release finishes the current hue, shape, rendition and
-physical raster size on a worker. Native input, cancellation, retained controls
-and undo/redo pass at both scales and themes. These rates remain below 120 Hz;
-the small workstation fixture does not qualify any reference tablet tier.
+After the first repetition, maximum per-contact wheel snapshot p95 is 1.89 ms;
+over all 96 contacts it is 3.90 ms. Every contact performs zero wheel raster jobs
+during motion; HDR also retains
+the same intensity texture. Only the hue ring, field and HDR ramp scale.
+Text, buttons and markers follow current geometry on every frame. Control pixels
+outside the color surfaces match within one byte before and after release at the
+same width. Release finishes the current hue, shape, rendition and physical
+raster size on workers. Native input, cancellation, retained controls and
+undo/redo pass at both scales and themes. These rates remain below 120 Hz;
+the small workstation fixtures do not qualify any reference tablet tier.
 
 The former 472 px managed ring takes 46.39–46.86 ms in a warmed release CPU
 probe. Shared adaptive hue stops and an antialiased ring texture reduce that to
 7.30–7.64 ms; the SDR field adds 3.09–3.12 ms, and HDR base evaluation alone
 adds 8.52–8.83 ms before mapping. Computation alone therefore cannot fit a
-120 Hz frame. Active panel resize scales a retained drawing every frame and
-prepares the final raster on release, with no redraw-rate cap.
+120 Hz frame. Active panel resize scales the retained color surfaces every frame
+and prepares the final raster on release, with no redraw-rate cap.
 
 A 2× control run with Color hidden presents other column resizes at
 22.8–27.8/s. Main-thread stack samples during motion predominantly land in
@@ -161,12 +171,12 @@ native GTK renderer/driver calls, including GPU image retirement. Reusing
 panel corner-mask slices and tinting solid masks do not improve that diagnostic
 and are excluded from the change. The remaining whole-UI stalls are not color
 raster computation; lowering the wheel redraw rate has no supporting evidence.
-Raw timings, CPU probes, stack samples and the captured release executable are
-under `artifacts/color-resize/`; identities and checks are indexed in
-`artifacts/color-resize/evidence.json`.
+Earlier CPU probes and stack samples are under `artifacts/color-resize/`.
+Current control-pixel captures, timing records, release executable and source
+identities are under `artifacts/color-resize-controls/`, indexed in `evidence.json`.
 
-The Web resize journey also passes three five-second mouse/touch contacts per
-theme and placement with zero synchronous field raster calls. On the same
+The Web resize diagnostic measured 2026-10-03 passes three five-second mouse/touch
+contacts per theme and placement with zero synchronous field raster calls. On the same
 workstation, its changed-width animation callbacks measure 65.16–77.58/s for
 the Color column and 49.50–82.55/s for floating Color at 1×, and 36.26–67.69/s
 and 43.33–68.56/s at explicit 2× browser DPI. The 1× browser viewport is
@@ -175,22 +185,22 @@ and 43.33–68.56/s at explicit 2× browser DPI. The 1× browser viewport is
 not screen presents or a matched scale comparison, and qualify no tier.
 Reports are `artifacts/color-resize/web-final-{1,2}/web.json`.
 
-The affected picker path also passes `native_color_picker_preview_pacing` on the
-same final executable at 2× scale, with one 6.6-second moving gesture per condition
+The affected picker path also passes `native_color_picker_preview_pacing` with the
+same production sources at 2× scale, with one 6.6-second moving gesture per condition
 and 16 ms input intervals. This is a functional and timing diagnostic, not the
 three-contact qualification required for a target result.
 
 | Document / Color panel | Canvas presents/s | Present interval p95 | GTK paint p95 |
 | --- | --- | --- | --- |
-| SDR / closed | 83.04 | 20.50 ms | 0.11 ms |
-| SDR / docked | 74.66 | 27.31 ms | 13.40 ms |
-| HDR / closed | 85.43 | 19.98 ms | 0.13 ms |
-| HDR / docked | 71.41 | 26.94 ms | 12.41 ms |
+| SDR / closed | 84.36 | 20.35 ms | 0.10 ms |
+| SDR / docked | 75.00 | 24.97 ms | 9.42 ms |
+| HDR / closed | 83.22 | 20.34 ms | 0.07 ms |
+| HDR / docked | 62.96 | 39.96 ms | 23.87 ms |
 
-Docked wheel snapshot p95 is 0.39–0.45 ms and refresh p95 is 0.12–0.16 ms.
-Worker field evaluation p95 is 3.14 ms for SDR and 21.34 ms for HDR. Physical
+Docked wheel snapshot p95 is 0.36–0.40 ms and refresh p95 is 0.12–0.14 ms.
+Worker field evaluation p95 is 2.86 ms for SDR and 21.69 ms for HDR. Physical
 HDR display behavior remains unverified. Records are in
-`artifacts/color-resize/final-picker-pacing.log`.
+`artifacts/color-resize-controls/picker-pacing.log`.
 
 ## Photo color adjustments
 

@@ -24,14 +24,18 @@ component values and the selected swatch live in Rust
 ([`color.rs`](../../crates/layer-ui/src/color.rs)).
 
 GTK prepares the field and managed hue ring on one worker with one replaceable
-pending request. Panel resizing scales the retained wheel drawing each frame;
-release and cancellation redraw its controls and prepare the final physical
+pending request. Panel resizing scales only the retained hue ring and field;
+markers, readout text and buttons follow the current layout on every frame.
+The HDR intensity ramp also retains its color texture during resize, draws its
+marker and caption at the current geometry, and prepares committed and preview
+rasters on its worker. Release and cancellation prepare the final physical
 rasters. The ring texture includes its antialiased silhouette; the circle
 field uses GTK's rounded clip. Shared adaptive hue stops retain display precision
 without evaluating the hue conversion at every pixel.
-`native_color_wheel_resize_input` exercises sustained mouse and touch resizing,
-retained controls, final raster sizes and workspace undo/redo on the private
-display. Run it in both themes and at 1× and 2× scale.
+`native_color_wheel_resize_input` and `native_hdr_color_wheel_resize_input`
+exercise sustained mouse and touch resizing, compare control pixels before and
+after release, and check retained rasters, final sizes and workspace undo/redo
+on the private display. Run them in both themes and at 1× and 2× scale.
 
 Web also prepares committed and preview fields on its existing Wasm worker,
 retaining and scaling compatible completed fields while newer sizes are pending.

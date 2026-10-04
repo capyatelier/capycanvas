@@ -35,7 +35,7 @@ pub(crate) struct ArcKey {
 }
 impl ArcKey {
     fn compatible(self, other: Self) -> bool {
-        self.width == other.width && self.dpi == other.dpi
+        self.dpi == other.dpi
             && self.min == other.min && self.max == other.max
             && self.color.1 == other.color.1 && self.color.2 == other.color.2
     }
@@ -78,6 +78,7 @@ mod imp {
         pub reset: Cell<bool>,
         pub(crate) texture: RefCell<Option<(ArcKey, gdk::Texture)>>,
         pub preview: Cell<bool>,
+        pub resizing: Cell<bool>,
         pub(super) raster: crate::color_preview_raster::PreviewRaster<ArcKey, ArcKey>,
         pub(super) paths: RefCell<Option<ArcPaths>>,
     }
@@ -113,15 +114,12 @@ mod imp {
             let max = obj.adjustment().upper();
             let dpi = obj.scale_factor();
             let key = ArcKey { width: obj.width() * dpi, dpi, min, max, color: (base, view, headroom) };
-            let bounds = key.bounds();
-            let mut cache = self.texture.borrow_mut();
+            let cache = self.texture.borrow();
             let ready = cache.as_ref().is_some_and(|(k, _)| *k == key);
-            if self.preview.get() {
+            if !self.resizing.get() {
                 self.raster.request(&*obj, key, || (!ready).then_some(key), ArcKey::render,
                     |scale, key, texture| { *scale.imp().texture.borrow_mut() = Some((key, texture)); },
                     ArcKey::compatible);
-            } else if !ready {
-                *cache = Some((key, key.render()));
             }
             let mut paths = self.paths.borrow_mut();
             if paths.as_ref().is_none_or(|p| p.key.0 != obj.width()) {
@@ -131,7 +129,15 @@ mod imp {
                 paths.zero = ArcPaths::zero(min, max, &g);
             }
             let paths = paths.as_ref().unwrap();
-            if let Some((_, texture)) = cache.as_ref() { snapshot.append_texture(texture, &bounds); }
+            if let Some((old, texture)) = cache.as_ref() {
+                let old_bounds = old.bounds();
+                let old_arc = HdrIntensityArc::new(old_bounds.width()).unwrap();
+                let scale = g.radius / old_arc.radius;
+                snapshot.append_texture(texture, &gtk::graphene::Rect::new(
+                    g.center[0] + (old_bounds.x() - old_arc.center[0]) * scale,
+                    g.center[1] + (old_bounds.y() - old_arc.center[1]) * scale,
+                    old_bounds.width() * scale, old_bounds.height() * scale));
+            }
             let [cx, cy] = g.point(((obj.value() - min) / (max - min)) as f32);
             let radius = g.marker_radius;
             let thumb =
@@ -233,7 +239,7 @@ impl HdrColorScale {
     }
     pub fn refresh_color(&self, state: &layer_ui::ColorState, view: ViewColor, headroom: f32, preview: bool) {
         let changed = self.imp().preview.replace(preview) != preview;
-        if changed || !preview { self.imp().raster.cancel(); }
+        if changed { self.imp().raster.cancel(); }
         if changed { self.queue_draw(); }
         let color = (state.picker_base(), view, headroom);
         if self.imp().color.borrow().as_ref() != Some(&color) {
@@ -255,6 +261,12 @@ impl HdrColorScale {
     }
     pub fn updating(&self) -> bool {
         self.imp().updating.get()
+    }
+    pub fn set_resizing(&self, resizing: bool) {
+        if self.imp().resizing.replace(resizing) != resizing {
+            self.imp().raster.cancel();
+            self.queue_draw();
+        }
     }
 }
 

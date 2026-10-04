@@ -13,13 +13,35 @@ fn native_color_wheel_resize_input() {
     resize_input(&["color", "color-float"]);
 }
 
+#[test]
+#[ignore = "isolated Mutter and native-input.js"]
+fn native_hdr_color_wheel_resize_input() {
+    resize_input(&["color-hdr", "color-hdr-float"]);
+}
+
 fn resize_input(scenarios: &[&str]) {
     use gtk::subclass::prelude::ObjectSubclassIsExt;
+    let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS")
+        .unwrap_or_else(|_| "../../artifacts/workspace-resize".into()));
+    std::fs::create_dir_all(&output).unwrap();
     let app = native_test_app("art.capycanvas.WorkspaceResize");
-    let w = fixture_workspace(&app);
+    let hdr = scenarios.iter().any(|s| s.contains("-hdr"));
+    let w = if hdr {
+        Workspace::with_project(&app,
+            Some((new_drawing_at(2048, 1536, layer_core::color::SampleDepth::F16), None)))
+    } else { fixture_workspace(&app) };
     w.window.maximize();
     w.window.present();
     pump(1600);
+    let theme = match std::env::var("CAPY_NATIVE_TEST_THEME").as_deref() {
+        Ok("light") => Theme::Light,
+        Ok("dark") | Err(_) => Theme::Dark,
+        _ => panic!("CAPY_NATIVE_TEST_THEME must be light or dark"),
+    };
+    w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+    pump(200);
+    assert_eq!(state(&w).theme, theme);
+    assert_eq!(adw::StyleManager::for_display(&w.area.display()).is_dark(), theme == Theme::Dark);
     let mut input = RemoteInput::new().settle_ms(0).timeout_secs(20);
     input.ready();
     input.click(screen_point(w.header.root.upcast_ref(), &w.window, [0.5, 0.5]));
@@ -31,7 +53,7 @@ fn resize_input(scenarios: &[&str]) {
             for repeat in 0..if scenario.starts_with("color") { 3 } else { 1 } {
                 let mut fixture = layer_ui::WorkspaceState::default();
                 let color = scenario.starts_with("color");
-                let floating = scenario == "color-float";
+                let floating = scenario.ends_with("-float");
                 if color {
                     let group = fixture.layout.panel_group(Panel::Brushes).unwrap();
                     fixture.layout.set_panel_visible(Panel::Color, true).unwrap();
@@ -47,7 +69,7 @@ fn resize_input(scenarios: &[&str]) {
                         panel.height = Some(430.);
                     }
                 }
-                let left = matches!(scenario, "left" | "sizes" | "color");
+                let left = matches!(scenario, "left" | "sizes") || (color && !floating);
                 let edge = if left {
                     Edge::Left
                 } else {
@@ -116,6 +138,9 @@ fn resize_input(scenarios: &[&str]) {
                 let device = if touch { "touch" } else { "mouse" };
                 let event = |phase: &str, point: [f32; 2]| contact(device, phase, point);
                 let before = saved();
+                if color { super::color_panel::settled_wheel(&wheel); }
+                let ramp = named::<crate::hdr_color_scale::HdrColorScale>(w.color_panel.root.upcast_ref(), "color-hdr-intensity-ramp");
+                let ramp_texture = if hdr { ramp.imp().texture.borrow().as_ref().map(|(_, t)| t.clone()) } else { None };
                 input.perform(serde_json::json!([event("down", start)]));
                 pump(35);
                 input.perform(serde_json::json!([event("move", origin)]));
@@ -227,10 +252,26 @@ fn resize_input(scenarios: &[&str]) {
                     assert_eq!(wheel.imp().field_render_ms.borrow().len(), 0,
                         "resize samples retained colors until release");
                 }
+                if hdr {
+                    assert_eq!(ramp.imp().texture.borrow().as_ref().map(|(_, t)| t.clone()), ramp_texture,
+                        "resize retains the intensity raster until release");
+                }
+                let active = if color {
+                    input.perform(serde_json::json!([event("move", origin)]));
+                    pump(100);
+                    Some(super::color_panel::wheel_texture(&w, wheel.scale_factor() as f32))
+                } else { None };
                 input.perform(serde_json::json!([event("up", origin)]));
                 pump(200);
                 if color {
                     super::color_panel::settled_wheel(&wheel);
+                }
+                if let Some(active) = active {
+                    let final_texture = super::color_panel::wheel_texture(&w, wheel.scale_factor() as f32);
+                    let name = format!("{scenario}-{device}-{repeat}");
+                    active.save_to_png(output.join(format!("{name}-active.png"))).unwrap();
+                    final_texture.save_to_png(output.join(format!("{name}-released.png"))).unwrap();
+                    assert_resize_controls(&wheel, &active, &final_texture);
                 }
                 let after = saved();
                 assert_ne!(after, before);
@@ -269,15 +310,42 @@ fn resize_input(scenarios: &[&str]) {
             }
         }
     }
-    let output = std::env::var("LAYER_TEST_ARTIFACTS")
-        .unwrap_or_else(|_| "../../artifacts/workspace-resize".into());
-    std::fs::create_dir_all(&output).unwrap();
     std::fs::write(
-        format!("{output}/gtk.json"),
+        output.join("gtk.json"),
         serde_json::to_vec_pretty(&reports).unwrap(),
     )
     .unwrap();
     input.finish();
     w.window.close();
     pump(100);
+}
+
+fn assert_resize_controls(wheel: &crate::tool_panels::ColorWheel, active: &gdk::Texture, released: &gdk::Texture) {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    assert_eq!((active.width(), active.height()), (released.width(), released.height()));
+    let scale = wheel.scale_factor() as f32;
+    let (size, [x, y]) = wheel.drawing_bounds();
+    let g = layer_ui::ColorWheelGeometry::new(size).unwrap();
+    let intensity = wheel.imp().intensity.borrow();
+    let arc = intensity.as_ref().filter(|i| i.is_visible()).map(|i|
+        (i.geometry().unwrap(), i.compute_bounds(wheel).unwrap()));
+    let mut a = vec![0; active.width() as usize * active.height() as usize * 4];
+    let mut b = a.clone();
+    let stride = active.width() as usize * 4;
+    active.download(&mut a, stride);
+    released.download(&mut b, stride);
+    let mut checked = 0;
+    let mut changed = 0;
+    for py in 0..active.height() as usize {
+        for px in 0..active.width() as usize {
+            let point = [(px as f32 + 0.5) / scale, (py as f32 + 0.5) / scale];
+            if (point[0] - x - g.center[0]).hypot(point[1] - y - g.center[1]) <= g.outer + 3. { continue; }
+            if arc.as_ref().is_some_and(|(g, b)| g.contains([point[0] - b.x(), point[1] - b.y()])) { continue; }
+            let i = py * stride + px * 4;
+            checked += 1;
+            if a[i..i + 4].iter().zip(&b[i..i + 4]).any(|(a,b)| a.abs_diff(*b) > 1) { changed += 1; }
+        }
+    }
+    assert!(checked > 1000);
+    assert_eq!(changed, 0, "text and controls keep their current layout through resize release");
 }

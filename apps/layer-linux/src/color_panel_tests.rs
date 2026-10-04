@@ -14,6 +14,9 @@ pub(super) fn settled_wheel(wheel: &crate::tool_panels::ColorWheel) {
                 (d.0, d.1, d.2, d.3, d.4, d.5, d.6) ==
                 (side, color.wheel_components()[0], color.shape, color.rgb_space(), view,
                     color.hdr_intensity(), imp.headroom.get()))
+            && imp.intensity.borrow().as_ref().is_none_or(|arc| !arc.is_visible()
+                || arc.imp().texture.borrow().as_ref().is_some_and(|(_, t)|
+                    t.width() == arc.width() * arc.scale_factor()))
     }, "native picker raster finishes at current color and display resolution");
 }
 
@@ -154,15 +157,20 @@ fn assert_swatch_picks(w: &Workspace, front: layer_ui::ColorSlot) {
     }
 }
 
-fn assert_swatch_pixels(w: &Workspace, output: &std::path::Path, name: &str, front: layer_ui::ColorSlot) {
+pub(super) fn wheel_texture(w: &Workspace, scale: f32) -> gtk::gdk::Texture {
     let wheel = named::<crate::tool_panels::ColorWheel>(w.color_panel.root.upcast_ref(), "color-wheel");
     let parent = wheel.parent().unwrap();
     let snapshot = gtk::Snapshot::new();
-    snapshot.scale(4., 4.);
+    snapshot.scale(scale, scale);
     parent.snapshot_child(&wheel, &snapshot);
     let b = wheel.compute_bounds(&parent).unwrap();
-    let bounds = gtk::graphene::Rect::new(b.x() * 4., b.y() * 4., b.width() * 4., b.height() * 4.);
-    let texture = w.window.renderer().unwrap().render_texture(&snapshot.to_node().unwrap(), Some(&bounds));
+    let bounds = gtk::graphene::Rect::new(b.x() * scale, b.y() * scale, b.width() * scale, b.height() * scale);
+    w.window.renderer().unwrap().render_texture(&snapshot.to_node().unwrap(), Some(&bounds))
+}
+
+fn assert_swatch_pixels(w: &Workspace, output: &std::path::Path, name: &str, front: layer_ui::ColorSlot) {
+    let wheel = named::<crate::tool_panels::ColorWheel>(w.color_panel.root.upcast_ref(), "color-wheel");
+    let texture = wheel_texture(w, 4.);
     texture.save_to_png(output.join(format!("{name}-{front:?}-swatches-4x.png"))).unwrap();
     let mut pixels = vec![0; texture.width() as usize * texture.height() as usize * 4];
     texture.download(&mut pixels, texture.width() as usize * 4);

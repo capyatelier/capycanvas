@@ -73,7 +73,7 @@ current-source results.
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
-| Panel or column resize | 90 | Color resize unmeasured on reference hardware; GTK desktop diagnostic remains below target | [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-03 |
+| Panel or column resize | 90 | Color resize unmeasured on reference hardware; GTK desktop diagnostic remains below target | [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04 |
 | Drawer open and close | 90 | | |
 | Grouped tool menus, drawer switching and tile drag | 90 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); desktop functional checks do not qualify this tier |
 | Colour wheel or picker drag | 90 | Huion: frame CPU p50 4.6–5.1 ms, p95 under 9.6 ms; XP-Pen swatch comparison below is diagnostic only | [Colour picker](../ui/color-picker.md); [swatch comparison](#selected-swatch-comparison), 2026-10-03 |

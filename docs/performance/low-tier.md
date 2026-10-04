@@ -107,7 +107,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: group/tab placements 47.38/60.22 Hz; Navigator assertion failed | Web workspace diagnostic below; no tier qualification |
-| Panel or column resize | 60 | Color resize unmeasured on reference hardware. Earlier Web checkpoint: width changes 11.93–13.49 Hz; nine retained-resource/geometry checks pass | Web workspace diagnostic below; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-03; no tier qualification |
+| Panel or column resize | 60 | Color resize unmeasured on reference hardware. Earlier Web checkpoint: width changes 11.93–13.49 Hz; nine retained-resource/geometry checks pass | Web workspace diagnostic below; [GTK Color resize](top-tier.md#gtk-color-panel-resize), 2026-10-04; no tier qualification |
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
 | Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.68–59.52 Hz, maximum p99 33.32 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
