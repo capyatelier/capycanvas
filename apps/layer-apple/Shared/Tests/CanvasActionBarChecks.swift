@@ -185,6 +185,7 @@ extension XCTestCase {
                 attachEditor(in: app, name: "canvas-bar-warp")
                 perform("reset_transform", "Reset transform")
                 expectBluePaper([true, true], at: probes, in: app)
+                XCTAssertFalse(app.buttons["recovery-retry"].exists, "A long transform defers session checkpoints")
                 editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
                 expectBluePaper(filled, at: sides, in: app)
             }

@@ -431,7 +431,7 @@ final class NativeOwner: @unchecked Sendable {
             }
         }
     }
-    func checkpointSession(exclusion: UInt64 = 0, cleanExit: Bool = false,
+    func checkpointSession(exclusion: UInt64 = 0, cleanExit: Bool = false, waits: Bool,
         completion: @escaping @Sendable (String?, Bool) -> Void) {
         let deadline = DispatchTime.now() + .seconds(30)
         @Sendable func poll() {
@@ -440,7 +440,8 @@ final class NativeOwner: @unchecked Sendable {
             }
             let ready = capy_apple_prepare_recovery(handle, FrameTrace.now())
             if ready == 1 {
-                if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+                if !waits { completion(nil, false) }
+                else if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(documentDeliveryCopy["change_in_progress"].string, false) }
                 return
             }

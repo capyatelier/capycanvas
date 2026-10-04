@@ -73,7 +73,7 @@ import UIKit
         let cleanExit = cleanExit || finalCheckpoint
         finalCheckpoint = false
         let captured = observed
-        native.checkpointSession(exclusion: exclusion, cleanExit: cleanExit) { [self] failure, committed in DispatchQueue.main.async { [self] in
+        native.checkpointSession(exclusion: exclusion, cleanExit: cleanExit, waits: !waiters.isEmpty) { [self] failure, committed in DispatchQueue.main.async { [self] in
             if committed { durable = captured }
             finish(failure, accepted: committed)
         } }

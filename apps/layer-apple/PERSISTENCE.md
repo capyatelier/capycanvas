@@ -130,8 +130,10 @@ iPad without multiple-window support reports that limitation.
   first; drawing storage is retired after accepted close. A window manifest is never replaced by an
   older manifest when it is unreadable.
 - The native two-second timer coalesces changes without restarting the timer for
-  every edit. One window write runs at a time. Lifecycle barriers wait for the
-  latest observed checkpoint and report failure after a bounded wait. Encoding,
+  every edit. One window write runs at a time. While a drawing change such as a
+  transform is in progress, the timed checkpoint waits for the next tick instead
+  of failing. Lifecycle barriers wait for the latest observed checkpoint and
+  report failure after a bounded wait. Encoding,
   decoding, GPU preparation, storage and durability waits stay on workers.
 - Startup restores drawing candidates through the shared GPU admission path,
   prepares the active drawing first, parks each inactive candidate and releases

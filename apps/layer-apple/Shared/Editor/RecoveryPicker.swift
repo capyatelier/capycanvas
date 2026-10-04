@@ -17,7 +17,7 @@ struct RecoveryPresentation: ViewModifier {
                 if let error = recovery.error {
                     HStack {
                         Text(error)
-                        Button(recovery.copy["retry"].string) { recovery.retry() }
+                        Button(recovery.copy["retry"].string) { recovery.retry() }.accessibilityIdentifier("recovery-retry")
                     }.padding(12).modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
                 }
             }
