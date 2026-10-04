@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Блокировка альфы
 resources-layer-menu-apply-mask-to-layer = Применить маску к слою
 resources-layer-menu-blend-mode = Режим наложения
 resources-layer-menu-clear-layer-row-selection = Снять выбор строк слоёв
-resources-layer-menu-clip-to-layer-below = Обтравка по нижнему слою
 resources-layer-menu-copy-mask = Копировать маску
 resources-layer-menu-delete-group-and-contents = Удалить группу с содержимым
 resources-layer-menu-delete-mask = Удалить маску

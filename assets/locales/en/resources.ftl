@@ -356,7 +356,6 @@ resources-layer-menu-alpha-lock = Alpha lock
 resources-layer-menu-apply-mask-to-layer = Apply mask to layer
 resources-layer-menu-blend-mode = Blend Mode
 resources-layer-menu-clear-layer-row-selection = Clear Layer Row Selection
-resources-layer-menu-clip-to-layer-below = Clip to layer below
 resources-layer-menu-copy-mask = Copy mask
 resources-layer-menu-delete-group-and-contents = Delete group and contents
 resources-layer-menu-delete-mask = Delete mask

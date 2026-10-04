@@ -28,6 +28,8 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
@@ -49,6 +51,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.*
@@ -62,7 +65,8 @@ private suspend fun CanvasHost.layerQuery(value: JSONObject): JSONObject? = susp
     query(value) { if (continuation.isActive) continuation.resume(it as? JSONObject) }
 }
 private data class PreviewRequest(val id: Long, val key: String, val target: Long, val revision: Long)
-private data class LayerDrag(val id: Long, val top: Float, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f)
+private data class LayerThumbnail(val hit: Rect, val anchor: Rect)
+private data class LayerDrag(val id: Long, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f, val surface: String = "row", val hintTarget: Long? = null, val position: String? = null)
 private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 
 /** Transient native gesture state, shared by retained layer panels in this window. */
@@ -94,12 +98,14 @@ internal class LayerSwipe {
     val epoch = state.getJSONObject("document_file").optLong("epoch")
     val images = remember(epoch) { mutableStateMapOf<String, ImageBitmap>() }
     val bounds = remember { mutableMapOf<Long, Rect>() }
+    val thumbnails = remember { mutableStateMapOf<Long, LayerThumbnail>() }
+    var dragGeneration by remember { mutableIntStateOf(0) }
     var panelOrigin by remember { mutableStateOf(Offset.Zero) }
     var drag by remember { mutableStateOf<LayerDrag?>(null) }
     var menu by remember { mutableStateOf<JSONObject?>(null) }
     var menuRequest by remember { mutableStateOf<JSONObject?>(null) }
     var menuGeneration by remember { mutableIntStateOf(0) }
-    LaunchedEffect(epoch) { host.layerSwipe.close(); menuGeneration++; menu = null; menuRequest = null }
+    LaunchedEffect(epoch) { host.layerSwipe.close(); dragGeneration++; drag = null; menuGeneration++; menu = null; menuRequest = null }
     var contactHeld by remember { mutableStateOf(false) }
     var menuPoint by remember { mutableStateOf(Offset.Zero) }
     fun contextMenu(layer: JSONObject, mask: Boolean, point: Offset) {
@@ -110,6 +116,28 @@ internal class LayerSwipe {
         val query = obj("type" to "layer_menu", "id" to id, "mask" to mask)
         host.query(query) {
             if (request == menuGeneration && host.menuEpoch() == epoch && drag == null) { menuRequest = query; menu = it as? JSONObject; menuPoint = point - panelOrigin }
+        }
+    }
+    fun moveLayer(id: Long, point: Offset, finished: Boolean, cancelled: Boolean) {
+        val ticket = ++dragGeneration
+        val to = currentLayers.find { it.getLong("id") != id && bounds[it.getLong("id")]?.contains(point) == true }
+        val target = to?.getLong("id")
+        val fraction = target?.let { bounds[it]!!.let { rect -> (point.y - rect.top) / rect.height } } ?: 0f
+        val surface = if (target != null && thumbnails[target]?.hit?.contains(point) == true) "thumbnail" else "row"
+        val next = LayerDrag(id,point,target,fraction,surface)
+        if (finished) drag = null else {
+            if (drag == null) { menuGeneration++; menu = null }
+            drag = next
+        }
+        if (cancelled || target == null) return
+        host.query(obj("type" to "layer_drop","epoch" to epoch,"id" to id,"target" to target,"fraction" to fraction,"surface" to surface)) { raw ->
+            val hint = raw as? JSONObject ?: return@query
+            if (ticket != dragGeneration || hint.optLong("epoch") != epoch || host.menuEpoch() != epoch) return@query
+            val position = hint.optString("position").takeUnless { hint.isNull("position") }
+            val normalized = hint.optLong("target").takeUnless { hint.isNull("target") }
+            if (finished) {
+                if (normalized != null && position != null) host.layer(obj("op" to "drop","id" to id,"target" to target,"fraction" to fraction,"surface" to surface))
+            } else drag = next.copy(hintTarget=normalized,position=position)
         }
     }
     LaunchedEffect(host, epoch) {
@@ -177,37 +205,31 @@ internal class LayerSwipe {
                 Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                     for ((icon, label, property, op, capability) in listOf(
                         listOf("alpha-lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("alpha_lock"),"alpha_locked","alpha_lock","alpha_lock"),
-                        listOf("lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("lock_editing"),"locked","lock","edit_lock"),
-                        listOf("clip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("clip"),"clipped","clip","clip"))) {
+                        listOf("lock",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("lock_editing"),"locked","lock","edit_lock"))) {
                         LayerButton(host,icon,label,enabled=controls.getBoolean(capability),selected=active?.optBoolean(property)==true,
                             action=active?.let { obj("type" to "layer","action" to obj("op" to op,"id" to it.getLong("id"),"value" to !it.getBoolean(property))) })
                     }
+                    val attachment = view.getJSONObject("attachment")
+                    LayerButton(host,iconName(attachment.getString("icon")),attachment.getString("label"),Modifier.testTag("layer-attachment"),
+                        enabled=!attachment.isNull("action"),selected=attachment.getBoolean("checked"),
+                        action=attachment.objectOrNull("action")?.let { obj("type" to "layer","action" to it) })
                     LayerButton(host,"reference",view.getString("reference_action_label"),enabled=view.getBoolean("can_reference"),
                         selected=view.getBoolean("references_selected"),subtle=true,action=obj("type" to "layer","action" to obj("op" to "reference_selection")))
                 }
             }
-            LazyColumn(Modifier.weight(1f).fillMaxWidth().testTag("layer-rows"),state=list) {
-                items(layers,key={it.getLong("id")}) { layer ->
-                    val id=layer.getLong("id")
-                    val target=drag?.takeIf { it.target==id }
-                    val highlight=when { target==null -> 0; layer.getBoolean("group") && target.fraction>.25f && target.fraction<.75f -> 3; target.fraction<.5f -> 1; else -> 2 }
-                    LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
-                        context={mask,point -> contextMenu(layer,mask,point)},
-                        held={contactHeld=it},
-                        cancelContext={menuGeneration++; menu=null},
-                        drag={point,finished,cancelled ->
-                            val origin=bounds[id] ?: return@LayerRow
-                            if (finished) {
-                                val end=drag; drag=null
-                                if (!cancelled && end?.target!=null) host.layer(obj("op" to "drop","id" to id,"target" to end.target,"fraction" to end.fraction))
-                            } else {
-                                if (drag == null) { menuGeneration++; menu = null }
-                                val to=currentLayers.find { it.getLong("id")!=id && bounds[it.getLong("id")]?.contains(point)==true }
-                                val fraction=to?.let { if (!it.getBoolean("can_drop_below")) 0f else bounds[it.getLong("id")]!!.let { r -> (point.y-r.top)/r.height } } ?: 0f
-                                drag=LayerDrag(id,origin.top,point,to?.getLong("id"),fraction)
-                            }
-                        })
+            Box(Modifier.weight(1f).fillMaxWidth()) {
+                LazyColumn(Modifier.fillMaxSize().testTag("layer-rows"),state=list) {
+                    items(layers,key={it.getLong("id")}) { layer ->
+                        val id=layer.getLong("id")
+                        val highlight=drag?.takeIf { it.hintTarget==id }?.position
+                        LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                            context={mask,point -> contextMenu(layer,mask,point)},
+                            contentBounds={rect,shift -> if(rect==null) { thumbnails.remove(id);bounds.remove(id) } else thumbnails[id]=LayerThumbnail(rect,rect.translate(Offset(shift.roundToInt().toFloat(),0f)))},
+                            held={contactHeld=it},cancelContext={menuGeneration++; menu=null},
+                            drag={point,finished,cancelled -> moveLayer(id,point,finished,cancelled)})
+                    }
                 }
+                LayerConnections(layers,view.array("connections").objects(),thumbnails,Modifier.matchParentSize())
             }
             Row(Modifier.fillMaxWidth().wrapContentHeight(unbounded = true).onSizeChanged { footerHeight = it.height / density.density }.padding(horizontal=6.dp,vertical=4.dp),horizontalArrangement=Arrangement.spacedBy(2.dp)) {
                 LayerButton(host,"add-layer",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("new_layer"),action=obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
@@ -231,23 +253,24 @@ internal class LayerSwipe {
 }
 
 @Composable private fun LayerButton(host:CanvasHost,icon:String,label:String,modifier:Modifier=Modifier,enabled:Boolean=true,selected:Boolean=false,subtle:Boolean=false,
-    action:JSONObject?=null,onClick:()->Unit={action?.let { host.dispatch(it) }}) {
+    action:JSONObject?=null,size:Dp=24.dp,onClick:()->Unit={action?.let { host.dispatch(it) }}) {
     val colors=LocalPalette.current
     val content: @Composable () -> Unit = {
-    Box(Modifier.size(24.dp).clip(ControlShape).alpha(if(enabled)1f else .4f)
+    Box(Modifier.size(size).clip(ControlShape).alpha(if(enabled)1f else .4f)
         .background(if(selected) { if(subtle) colors.text.copy(alpha=.12f) else colors.active } else Color.Transparent)
         .clickable(enabled=enabled,onClick=onClick),contentAlignment=Alignment.Center) { SharedIcon(icon,label,Modifier.size(16.dp)) }
     }
     if(action!=null) ActionTip(host,label,action,modifier,content) else HoverTip(label,modifier,content=content)
 }
 
-@Composable private fun LayerRow(host:CanvasHost,layer:JSONObject,rename:Long,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:Int=0,
-    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
+@Composable private fun LayerRow(host:CanvasHost,layer:JSONObject,rename:Long,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:String?=null,
+    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},contentBounds:(Rect?,Float)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
     val label=layer.getString("label")
     val rowCaption=remember(label, host.languageTag) { JSONObject(Native.nativeCaption(obj("type" to "layer_row", "title" to label).toString(), host.languageTag)).getString("text") }
     val latest by rememberUpdatedState(layer)
+    DisposableEffect(id) { onDispose { contentBounds(null,0f) } }
     var origin by remember { mutableStateOf(Offset.Zero) }
     var press by remember { mutableStateOf(Offset.Zero) }
     var longPressed by remember { mutableStateOf(false) }
@@ -277,9 +300,9 @@ internal class LayerSwipe {
         }
         .drawWithContent {
             drawContent()
-            when(highlight) { 1 -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
-                2 -> drawLine(colors.accent,Offset(0f,size.height),Offset(size.width,size.height),2*density)
-                3 -> drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density)) }
+            when(highlight) { "above" -> drawLine(colors.accent,Offset.Zero,Offset(size.width,0f),2*density)
+                "below" -> drawLine(colors.accent,Offset(0f,size.height),Offset(size.width,size.height),2*density)
+                "into" -> drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density)) }
         }.then(if(preview || rename==id) Modifier else Modifier.pointerInput(id,focused) {
             if (!focused) return@pointerInput
             awaitEachGesture {
@@ -319,7 +342,7 @@ internal class LayerSwipe {
                     if (!directDrag && !longPressed && moved && holdEligible) {
                         holdEligible=false
                         val delta=change.position-down.position
-                        val allowed=if(delta.x<0)row.getBoolean("can_delete") else swipeStart>0 || row.getBoolean("can_alpha_lock")
+                        val allowed=if(delta.x<0)row.getBoolean("can_delete") else swipeStart>0 || !row.isNull("right_swipe")
                         if(allowed && kotlin.math.abs(delta.x)>kotlin.math.abs(delta.y)) {
                             swiping=true; swipe.owner=swipeOwner; swipe.bounds=rowBounds; swipe.tracking=true
                             cancelContext()
@@ -327,7 +350,7 @@ internal class LayerSwipe {
                     }
                     if(swiping) {
                         change.consume()
-                        val minimum=if(swipeStart==0f && row.getBoolean("can_alpha_lock"))-72*density else 0f
+                        val minimum=if(swipeStart==0f && !row.isNull("right_swipe"))-72*density else 0f
                         swipe.offset=(swipeStart-(change.position.x-down.position.x)).coerceIn(minimum,72*density)
                         if(!change.pressed) { released=true; break }
                         continue
@@ -339,10 +362,10 @@ internal class LayerSwipe {
                     if (!change.pressed) { released=true; break }
                 } while(true) } finally {
                     if(swiping) {
-                        val toggle=released && swipe.offset<=-72*density*.4f
+                        val toggle=released && swipeStart==0f && swipe.offset<=-72*density*.4f
                         swipe.tracking=false
                         if(released && swipe.offset>=72*density*.4f)swipe.offset=72*density else swipe.close()
-                        if(toggle)host.layer(obj("op" to "toggle_alpha_lock","id" to id))
+                        if(toggle)latest.objectOrNull("right_swipe")?.let { host.layer(it) }
                     }
                     if(dragging)drag(origin+down.position,true,true)
                     if(!released)cancelContext()
@@ -360,20 +383,20 @@ internal class LayerSwipe {
         Row(Modifier.fillMaxWidth().heightIn(min=40.dp).offset { IntOffset(-shift.roundToInt(),0) }
             .background(if(layer.getBoolean("selected")) colors.active else Color.Transparent)
             .padding(horizontal=6.dp,vertical=2.dp),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(2.dp)) {
-        LayerButton(host,if(layer.getBoolean("visible")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("visible")) "hide_selection" else "show_selection") else if(layer.getBoolean("visible"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("hide") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("show"),
-            action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
+        LayerButton(host,if(layer.getBoolean("visible") && !layer.getBoolean("visibility_blocked")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("visible")) "hide_selection" else "show_selection") else if(layer.getBoolean("visible"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("hide") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("show"),
+            Modifier.testTag("layer-eye-$id").alpha(if(layer.getBoolean("visibility_blocked")) .35f else 1f),action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
         LayerButton(host,iconName(layer.getString("selection_icon")),host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("select_row_help"),
             action=obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to id)))
         Spacer(Modifier.width((layer.getInt("depth")*8).coerceAtMost(24).dp))
-        Box(Modifier.width(3.dp).height(28.dp).alpha(if(layer.getBoolean("clipped"))1f else 0f).background(Color(0xffe999a5),SquircleShape(1.dp)))
+        Spacer(Modifier.width(3.dp))
         @Composable fun thumb(mask:Boolean) {
             val group=!mask && layer.getBoolean("group")
             val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("editing") && !layer.getBoolean("mask_selected")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
-            ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp)) {
+            ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp).then(if(!mask && !preview) Modifier.testTag("layer-content-$id").onGloballyPositioned { contentBounds(it.boundsInRoot(),shift) } else Modifier)) {
             Box(Modifier.fillMaxSize().then(if(mask && !preview) Modifier.onGloballyPositioned { maskBounds=it.boundsInRoot() } else Modifier)
-                .then(if(group)Modifier else Modifier.background(colors.input,SquircleShape(3.dp)))
+                .then(if(group || !mask && layer.getBoolean("adjustment_effect"))Modifier else Modifier.background(colors.input,SquircleShape(3.dp)))
                 .then(if(group || preview) Modifier else Modifier.pointerInput(id,mask) {
                     awaitEachGesture {
                         val down = awaitFirstDown(requireUnconsumed=false, pass=PointerEventPass.Initial)
@@ -396,13 +419,17 @@ internal class LayerSwipe {
                 .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()
+                    if(!mask && highlight=="attach") drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
                     if(selected) for((x,y,dx,dy) in listOf(listOf(1f,1f,1f,1f),listOf(size.width-1,1f,-1f,1f),listOf(1f,size.height-1,1f,-1f),listOf(size.width-1,size.height-1,-1f,-1f))) {
                         for((color,width) in listOf(Color.Black to 3f,Color.White to 1f)) {
                             drawLine(color,Offset(x,y+dy*6*density),Offset(x,y),width*density); drawLine(color,Offset(x,y),Offset(x+dx*6*density,y),width*density)
                         }
                     }
                 },contentAlignment=Alignment.Center) {
-                if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
+                if(group) {
+                    SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
+                    if(layer.getBoolean("pass_through")) SharedIcon("group-pass-through",null,Modifier.align(Alignment.BottomEnd).size(14.dp).background(colors.input,SquircleShape(2.dp)).padding(1.dp).testTag("layer-group-pass-through-$id"))
+                }
                 else {
                 if(mask || layer.getBoolean("has_thumbnail")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
                 if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,
@@ -416,11 +443,7 @@ internal class LayerSwipe {
         thumb(false)
         if(layer.optBoolean("selection_layer")) {
             val load = obj("type" to "selection", "action" to obj("op" to "load_layer", "id" to id, "mode" to "new", "inverted" to false))
-            ActionTip(host,layer.getString("load_selection_tooltip"),load,Modifier.size(30.dp)) {
-                Box(Modifier.fillMaxSize().testTag("selection-load-$id").clickable { host.dispatch(load) }, contentAlignment=Alignment.Center) {
-                    SharedIcon("selection-load", layer.getString("load_selection_tooltip"), Modifier.size(24.dp))
-                }
-            }
+            LayerButton(host,"selection-load",layer.getString("load_selection_tooltip"),Modifier.testTag("selection-load-$id"),action=load,size=30.dp)
         }
         if(layer.getBoolean("has_mask")) {
             LayerButton(host,"link",if(layer.getBoolean("mask_linked"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("unlink_mask") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("link_mask_to_layer"),
@@ -444,6 +467,39 @@ internal class LayerSwipe {
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
         SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(16.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))
+        }
+    }
+}
+
+@Composable private fun LayerConnections(layers:List<JSONObject>,connections:List<JSONObject>,thumbnails:Map<Long,LayerThumbnail>,modifier:Modifier) {
+    val colors=LocalPalette.current
+    val glyph=sharedIconPainter("effect-link",colors.text)
+    var viewport by remember { mutableStateOf(Rect.Zero) }
+    Canvas(modifier.clipToBounds().testTag("layer-connections").onGloballyPositioned { viewport=it.boundsInRoot() }) {
+        val order=layers.mapIndexed { index,row -> row.getLong("id") to index }.toMap()
+        val visible=layers.filter { thumbnails[it.getLong("id")]?.anchor?.overlaps(viewport)==true }
+        val anchor=visible.firstOrNull() ?: return@Canvas
+        val column=thumbnails[anchor.getLong("id")]!!.anchor.left-viewport.left-(anchor.getInt("depth")*8).coerceAtMost(24)*density
+        val first=order[visible.first().getLong("id")]!!
+        val last=order[visible.last().getLong("id")]!!
+        fun endpoint(id:Long,bottom:Boolean):Float? {
+            thumbnails[id]?.anchor?.let { return (if(bottom) it.bottom else it.top)-viewport.top }
+            return order[id]?.let { if(it<first)0f else if(it>last)size.height else null }
+        }
+        for(connection in connections) {
+            val effect=connection.getString("kind")=="effect"
+            val from=connection.getLong("from");val to=connection.getLong("to")
+            val top=endpoint(from,effect) ?: continue
+            val bottom=endpoint(to,!effect) ?: continue
+            if(bottom<=top || bottom<0 || top>size.height)continue
+            val x=column+(connection.getInt("depth")*8).coerceAtMost(24)*density
+            if(!effect) drawLine(colors.relationship,Offset(x-3.5f*density,top),Offset(x-3.5f*density,bottom),2*density)
+            else if(order[to]==order[from]?.plus(1)) {
+                val center=x+15*density;val y=(top+bottom)*.5f
+                if(y-top>6*density)drawLine(colors.text,Offset(center,top),Offset(center,y-6*density),density)
+                if(bottom-y>6*density)drawLine(colors.text,Offset(center,y+6*density),Offset(center,bottom),density)
+                translate(center-6*density,y-6*density) { with(glyph) { draw(Size(12*density,12*density)) } }
+            }
         }
     }
 }

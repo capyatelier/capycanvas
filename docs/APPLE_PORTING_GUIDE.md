@@ -97,6 +97,14 @@ commands are in [macOS and iPadOS development](development/apple.md).
 - **Queries that decide visibility.** SwiftUI never runs `.task` or `.onAppear`
   on an empty `Group`. Attach a query that decides whether content appears (such
   as `canvas_bar_layout`) to a container that is always present.
+- **Layer relationships.** Present shared connection endpoints over measured
+  row and content-thumbnail frames, clipped to the native scroll viewport.
+  Read current `relationship` and `text` palette roles for rails and FX links.
+  Forward the supplied attachment and right-swipe actions; preserve local
+  visibility when displaying inherited hiding. Preview and release both query
+  `layer_drop` with epoch, raw target, fraction and hit surface. Guard replies
+  against cancellation and document changes, and commit the raw release hit
+  through shared `Drop` rather than reconstructing policy from the preview.
 - **Settings sub-pages.** macOS sheets have no title bar, so navigation titles
   and `.navigation` toolbar items inside Settings never appear. Put a sub-page's
   title and Back button in its content, as the shortcut page does.

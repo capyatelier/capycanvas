@@ -5718,7 +5718,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 parts.join(" · ")
             },
             can_delete: doc.can_delete_layers(&[id]),
-            can_alpha_lock: art_layers::LayerControls::for_layer(doc, id, l).alpha_lock,
             visible: doc.effective_visibility(id),
             visibility_blocked: l.is_artwork() && l.visible && !scene.visible(id),
             adjustment_effect: scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Adjustment),
@@ -5744,7 +5743,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
             alpha_locked: l.alpha_locked,
             locked: doc.is_locked(id),
-            clipped: l.attachment != layer_core::Attachment::None,
             relationship: crate::layer_relationships::relation(doc, id),
             right_swipe: crate::layer_relationships::right_swipe(doc, id),
             pass_through: l.passes_through(),
@@ -5783,12 +5781,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 id: 0, selection_layer: true, quick_mask: true, can_rename: false, has_thumbnail: true,
                 content_icon: Some("layer-selection-brush-symbolic".into()),
                 label: self.localization().text(MessageId::COMMAND_QUICK_MASK).to_string(), description: String::new(),
-                can_delete: true, can_alpha_lock: false, visible: self.selection_masks.quick_visible,
+                can_delete: true, visible: self.selection_masks.quick_visible,
                 visibility_blocked: false, adjustment_effect: false,
                 opacity: 1., selected: true, mask_selected: false, selection_icon: "layer-brush-symbolic",
                 load_selection_tooltip: "Finish Quick Mask and use it as the current selection",
                 editing: true, drawing: true, has_mask: false, mask_enabled: false, mask_linked: false,
-                alpha_locked: false, locked: false, clipped: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
+                alpha_locked: false, locked: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
                 can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
                 blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
                 paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None,
@@ -10110,17 +10108,13 @@ mod tests {
         layer(&mut s, LayerAction::New { group: false, clipped: false, });
         let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
         let created = s.engine.document().clone();
-        assert_eq!(s.layer_drop_hint(id, 1, 0.0), None);
-        assert_eq!(s.layer_drop_hint(id, id, 0.5), None);
-        assert_eq!(s.layer_drop_hint(0, id, 0.0), None);
-        assert_eq!(s.layer_drop_hint(id, u64::MAX, 0.0), None);
+        assert_eq!(s.layer_drop_preview(id, 1, 0.0, LayerDropSurface::Row), None);
+        assert_eq!(s.layer_drop_preview(id, id, 0.5, LayerDropSurface::Row), None);
+        assert_eq!(s.layer_drop_preview(0, id, 0.0, LayerDropSurface::Row), None);
+        assert_eq!(s.layer_drop_preview(id, u64::MAX, 0.0, LayerDropSurface::Row), None);
         for fraction in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
-            assert_eq!(s.layer_drop_hint(id, 1, fraction), None);
+            assert_eq!(s.layer_drop_preview(id, 1, fraction, LayerDropSurface::Row), None);
         }
-        assert_eq!(
-            s.layer_drop_hint(id, 1, 1.0),
-            Some(LayerDropPosition::Below)
-        );
         assert_eq!(s.layer_drop_preview(id,1,1.0,LayerDropSurface::Row),Some(LayerDropHint{target:paper,position:LayerDropPosition::Above}));
         test_support::assert_live_artwork_eq(s.engine.document(), &created);
         layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0,  surface: LayerDropSurface::Row, });
@@ -10146,20 +10140,20 @@ mod tests {
         }
         let child = s.engine.document().working.occurrence.unwrap();
         let parent = s.engine.document().scene().parent(child).unwrap();
-        assert_eq!(s.layer_drop_hint(occurrence_token(parent), occurrence_token(child), 0.5), None);
+        assert_eq!(s.layer_drop_preview(occurrence_token(parent), occurrence_token(child), 0.5, LayerDropSurface::Row), None);
         assert_eq!(
-            s.layer_drop_hint(1, occurrence_token(child), 0.5),
-            Some(LayerDropPosition::Into)
+            s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row),
+            Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into })
         );
         layer(&mut s, LayerAction::Lock { id: occurrence_token(parent), value: true, });
-        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), None);
-        assert_eq!(s.layer_drop_hint(occurrence_token(child), 1, 0.0), None);
+        assert_eq!(s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row), None);
+        assert_eq!(s.layer_drop_preview(occurrence_token(child), 1, 0.0, LayerDropSurface::Row), None);
         layer(&mut s, LayerAction::Lock { id: occurrence_token(parent), value: false, });
         layer(&mut s, LayerAction::Select { id: 1, mask: false });
         layer(&mut s, LayerAction::New { group: false, clipped: true, });
         let clipped = occurrence_token(s.engine.document().working.occurrence.unwrap());
-        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), Some(LayerDropPosition::Into));
-        assert_eq!(s.layer_drop_hint(clipped, occurrence_token(child), 0.5), Some(LayerDropPosition::Into));
+        assert_eq!(s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into }));
+        assert_eq!(s.layer_drop_preview(clipped, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into }));
     }
 
     #[test]

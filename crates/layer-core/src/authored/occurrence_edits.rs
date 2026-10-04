@@ -133,7 +133,8 @@ impl Document {
         destination.entries.splice(at..at,moving.iter().copied());
         let delta=Point{x:scene.parent(id).map_or(0.,|h|self.layer_offset(h).x)-parent.map_or(0.,|h|self.layer_offset(h).x),y:scene.parent(id).map_or(0.,|h|self.layer_offset(h).y)-parent.map_or(0.,|h|self.layer_offset(h).y)};
         let mut edits=Vec::new();
-        for &h in &moving {let mut occurrence=scene.occurrence(h).unwrap().clone();if h==id {occurrence.attachment=attachment;}occurrence.translation.x+=delta.x;occurrence.translation.y+=delta.y;if let Some(mask)=&mut occurrence.mask{mask.translation.x+=delta.x;mask.translation.y+=delta.y;}if scene.occurrence(h)!=Some(&occurrence){edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,h,Some(occurrence))?));}}
+        for &h in &moving {let mut occurrence=scene.occurrence(h).unwrap().clone();if h==id {occurrence.attachment=attachment;}occurrence.translation.x+=delta.x;occurrence.translation.y+=delta.y;if let Some(mask)=&mut occurrence.mask{mask.translation.x+=delta.x;mask.translation.y+=delta.y;}
+            if scene.occurrence(h)!=Some(&occurrence){edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,h,Some(occurrence))?));}}
         if old_stack!=new_stack {let mut old=self.artwork.stacks.get(old_stack).unwrap().clone();old.entries.retain(|h|!moving.contains(h));edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,old_stack,Some(old))?));}
         if self.artwork.stacks.get(new_stack)!=Some(&destination){edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,new_stack,Some(destination))?));}
         self.checked_relationship_edit(Edit::Batch(edits),&moving)

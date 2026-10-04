@@ -70,6 +70,21 @@ export async function checkLayerHolding({call, evaluate, settle}) {
     await input("down",{x:entry.x+entry.width/2,y:entry.y+entry.height/2});await wait(650);
     assert.equal(await menu(),false,"editing a name keeps native text input");
     await input("cancel");await send({type:"layer",action:{op:"cancel_rename"}});
+    device="touch";
+    for(const width of [1440,900]) {
+      await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});await wait();
+      for(const theme of ['light','dark']) {
+        await send({type:'set_theme',theme});
+        const r=await rect(`${source} .layer-name`);
+        await input('down',{x:r.x+r.width/2,y:r.y+r.height/2});await wait(600);
+        assert.equal(await menu(),true,`${theme}/${width}: touch hold`);
+        const target=await rect(`#layer-rows .layer-row[data-layer="${before[1]}"]`);
+        await input('move',{x:target.x+target.width/2,y:target.y+target.height-3});
+        assert.equal(await evaluate("document.querySelectorAll('.layer-drag-preview').length"),1);
+        await input('cancel');assert.deepEqual(await order(),before);
+      }
+    }
+    await call('Emulation.setDeviceMetricsOverride',{width:1440,height:1000,deviceScaleFactor:1,mobile:false});await wait();
     await evaluate("for(let i=0;i<30;i++)layerApp.dispatch({type:'layer',action:{op:'new',group:false,clipped:false}});document.querySelector('#layer-rows').scrollTop=0;");await wait();
     const scrollingOrder=await order(),r=await rect("#layer-rows .layer-swipe:nth-child(4) .layer-name");
     await input("down",{x:r.x+r.width/2,y:r.y+r.height/2});
@@ -87,9 +102,10 @@ export async function checkLayerHolding({call, evaluate, settle}) {
 export async function checkLayerSwipes({call, evaluate, settle}) {
   const wait=async()=>{await settle();await evaluate("new Promise(r=>setTimeout(r,200))");};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
-  const layer=()=>evaluate("({alpha_locked:layerApp.state().layers.find(l=>String(l.id)==='1').alpha_locked})");
-  const rect=()=>evaluate(`(()=>{const r=document.querySelector('#layer-rows .layer-row[data-layer="1"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
-  const revealed=()=>evaluate(`!document.querySelector('#layer-rows .layer-row[data-layer="1"]').parentElement.querySelector('.layer-swipe-delete').hidden`);
+  let targetId=1;
+  const layer=()=>evaluate(`(()=>{const l=layerApp.state().layers.find(l=>Number(l.id)===${targetId});return{alpha_locked:l.alpha_locked,pass_through:l.pass_through,blend:l.blend_label}})()`);
+  const rect=()=>evaluate(`(()=>{const r=document.querySelector('#layer-rows .layer-row[data-layer="${targetId}"]').getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  const revealed=()=>evaluate(`!document.querySelector('#layer-rows .layer-row[data-layer="${targetId}"]').parentElement.querySelector('.layer-swipe-delete').hidden`);
   const swipe=async(device,dx,{cancel=false,returnToStart=false}={})=>{
     const start=await rect();
     const input=async(type,x)=>{
@@ -123,5 +139,33 @@ export async function checkLayerSwipes({call, evaluate, settle}) {
       await send({type:'layer',action:{op:'lock',id:1,value:false}});
     }
   }
-  console.log('PASS: layer swipe alpha lock, both themes, touch/pen/mouse, undo/redo, short/reversed/cancelled swipes, Delete dismissal, locked layer');
+  await send({type:'layer',action:{op:'new',group:true,clipped:false}});
+  targetId=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+  await send({type:'layer',action:{op:'blend',id:targetId,value:1}});
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for(const device of ['touch','pen']) {
+      for(const options of [{dx:18},{dx:60,cancel:true},{dx:60,returnToStart:true}]) {
+        await swipe(device,options.dx,options);assert.equal((await layer()).blend,'Multiply',`${device}: unfinished group swipe`);
+      }
+      await swipe(device,60);assert.equal((await layer()).pass_through,true);
+      assert.equal(await evaluate(`!!document.querySelector('#layer-rows .layer-row[data-layer="${targetId}"] .layer-group-pass-through')`),true);
+      await send({type:'invoke',command:'undo'});assert.equal((await layer()).blend,'Multiply');
+      await send({type:'invoke',command:'redo'});assert.equal((await layer()).pass_through,true);
+      await swipe(device,60);assert.equal((await layer()).blend,'Multiply','group swipe restores retained isolated blend');
+      await swipe(device,-60);assert.equal(await revealed(),true);
+      await swipe(device,90);assert.equal(await revealed(),false);
+      assert.equal((await layer()).blend,'Multiply','closing group Delete does not change mode');
+      await send({type:'layer',action:{op:'lock',id:targetId,value:true}});
+      await swipe(device,60);assert.equal((await layer()).blend,'Multiply','locked group has no right action');
+      await send({type:'layer',action:{op:'lock',id:targetId,value:false}});
+    }
+  }
+  await send({type:'layer',action:{op:'select',id:targetId,mask:false}});
+  await send({type:'effect',action:{op:'insert',effect:'curves'}});
+  const effect=await evaluate('Number(layerApp.state().layer_tools.editing_layer.id)');
+  await send({type:'layer',action:{op:'clip',id:effect,value:true}});
+  assert.equal(await evaluate(`layerApp.state().layers.find(l=>Number(l.id)===${targetId}).right_swipe??null`),null);
+  await swipe('touch',60);assert.equal((await layer()).blend,'Multiply','attached FX protect group isolation');
+  console.log('PASS: paint/group shared swipe actions, themes, touch/pen/mouse, retained Multiply, undo/redo, cancelled swipes, Delete closure, lock and attached-content protection');
 }

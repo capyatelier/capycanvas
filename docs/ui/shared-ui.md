@@ -433,7 +433,7 @@ right-swipe action. Hosts render these values without scanning sibling rows to
 infer ownership. The [authored model](../reference/authored-model.md) owns the
 composition and editing rules.
 
-GTK uses one header button for both operations. Its tooltip and accessible label
+Hosts use one header button for both operations. Its tooltip and accessible label
 say **Clip to {base}** or **Release clipping from {base}** for content, and
 **Apply to {owner}** or **Apply to layers below** for effects. The effect action
 uses the vertical link symbol. Attaching across a Pass Through boundary requires

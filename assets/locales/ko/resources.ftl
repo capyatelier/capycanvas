@@ -387,7 +387,6 @@ resources-layer-menu-blend-mode = 혼합 모드
 
 resources-layer-menu-clear-layer-row-selection = 레이어 행 선택 해제
 
-resources-layer-menu-clip-to-layer-below = 아래 레이어에 클리핑
 
 resources-layer-menu-copy-mask = 마스크 복사
 

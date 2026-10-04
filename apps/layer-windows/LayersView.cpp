@@ -3,6 +3,7 @@
 #include "EffectControls.h"
 #include "WorkspaceQuery.h"
 #include <chrono>
+#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyLayers;
 namespace CapyLayers {
@@ -63,7 +64,7 @@ void LayersView::init(){
     tools.Orientation(Orientation::Horizontal);tools.Spacing(2);
     struct Toggle {wchar_t const* icon;LocalizedCopy label;wchar_t const* property;wchar_t const* op;wchar_t const* capability;};
     for(auto spec:{Toggle{L"alpha-lock",data->copyCaption(L"layers",L"alpha_lock"),L"alpha_locked",L"alpha_lock",L"alpha_lock"},
-        Toggle{L"lock",data->copyCaption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"},Toggle{L"clip",data->copyCaption(L"layers",L"clip"),L"clipped",L"clip",L"clip"}}){
+        Toggle{L"lock",data->copyCaption(L"layers",L"lock_editing"),L"locked",L"lock",L"edit_lock"}}){
         auto pick=button<Primitives::ToggleButton>(data,spec.label,[weak,spec]{if(auto self=weak.lock()){
             auto layer=self->editing();if(layer.Size())self->action(O({{L"op",S(spec.op)},
                 {L"id",layer.GetNamedValue(L"id")},{L"value",B(!flag(layer,spec.property))}}));
@@ -76,6 +77,18 @@ void LayersView::init(){
             pick.IsEnabled(flag(capabilities,spec.capability));pick.IsChecked(flag(layer,spec.property));pick.Opacity(pick.IsEnabled()?1.:.36);pick.Background(flag(layer,spec.property)?selected(data):clear());
         });
     }
+    auto attachment=button<Primitives::ToggleButton>(data,L"",[weak]{if(auto self=weak.lock()){
+        auto operation=object(object(self->view(),L"attachment"),L"action");if(operation.Size())self->action(operation);
+    }});
+    attachment.Width(24);attachment.Height(24);AutomationProperties::SetAutomationId(attachment,L"layer-attachment");tools.Children().Append(attachment);
+    controls.emplace_back([weak,attachment,key=std::make_shared<hstring>()](J,J){if(auto self=weak.lock()){
+        auto state=object(self->view(),L"attachment");auto next=self->data->theme()+L":"+str(state,L"icon");
+        if(*key!=next){*key=next;attachment.Content(icon(str(state,L"icon"),self->data->theme()));}
+        attachment.IsEnabled(object(state,L"action").Size()!=0);attachment.IsChecked(flag(state,L"checked"));
+        attachment.Opacity(attachment.IsEnabled()?1.:.36);attachment.Background(flag(state,L"checked")?selected(self->data):clear());
+        AutomationProperties::SetName(attachment,str(state,L"label"));AutomationProperties::SetHelpText(attachment,str(state,L"description"));
+        CapyUi::tooltip(attachment,str(state,L"description"));
+    }});
     auto reference=button<Primitives::ToggleButton>(data,L"",[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"reference_selection")}}));});
     reference.Width(24);reference.Height(24);reference.Content(icon(L"reference",data->theme()));
     for(auto role:{L"ToggleButtonBackgroundChecked",L"ToggleButtonBackgroundCheckedPointerOver",L"ToggleButtonBackgroundCheckedPressed"})
@@ -92,7 +105,14 @@ void LayersView::init(){
     repeater.HorizontalCacheLength(.0);repeater.VerticalCacheLength(.5);
     list.Content(repeater);list.HorizontalScrollMode(ScrollingScrollMode::Disabled);
     list.HorizontalScrollBarVisibility(ScrollingScrollBarVisibility::Hidden);list.VerticalScrollBarVisibility(ScrollingScrollBarVisibility::Auto);
-    AutomationProperties::SetAutomationId(list,L"layer-scroll-container");Grid::SetRow(list,1);root.Children().Append(list);
+    AutomationProperties::SetAutomationId(list,L"layer-scroll-container");listFrame.Children().Append(list);
+    connectionOverlay.IsHitTestVisible(false);AutomationProperties::SetAccessibilityView(connectionOverlay,Automation::Peers::AccessibilityView::Raw);
+    listFrame.Children().Append(connectionOverlay);Grid::SetRow(listFrame,1);root.Children().Append(listFrame);
+    list.ViewChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->connections();});
+    listFrame.SizeChanged([weak](auto&&,SizeChangedEventArgs const& e){if(auto self=weak.lock()){
+        RectangleGeometry clip;clip.Rect({0,0,e.NewSize().Width,e.NewSize().Height});self->connectionOverlay.Clip(clip);self->connections();
+    }});
+    repeater.LayoutUpdated([weak](auto&&,auto&&){if(auto self=weak.lock())self->connections();});
     footer.Orientation(Orientation::Horizontal);footer.Spacing(2);footer.Padding({6,4,6,4});
     auto footerButton=[&](hstring const& iconName,LocalizedCopy const& text,hstring const& id,std::function<void()> action){
         auto pick=button(data,L"",std::move(action));pick.Width(24);pick.Height(24);pick.Content(icon(iconName,data->theme()));
@@ -150,7 +170,7 @@ void LayersView::refresh(){
     bool rowsShown=shown(L"layers"),opacityShown=shown(L"layer_opacity");
     header.Visibility(rowsShown||opacityShown?Visibility::Visible:Visibility::Collapsed);
     blend.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);tools.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);
-    list.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);opacityGate.Visibility(opacityShown?Visibility::Visible:Visibility::Collapsed);
+    list.Visibility(rowsShown?Visibility::Visible:Visibility::Collapsed);listFrame.Visibility(list.Visibility());opacityGate.Visibility(opacityShown?Visibility::Visible:Visibility::Collapsed);
     footerFrame.Visibility(shown(L"layer_actions")?Visibility::Visible:Visibility::Collapsed);
     auto nextEpoch=epochOf(data);if(epoch!=nextEpoch){
         epoch=nextEpoch;++menuGeneration;if(menu)menu.Hide();if(pickup)pickup->Cancel();source.Clear();
@@ -187,6 +207,43 @@ void LayersView::refresh(){
         ++menuGeneration;menuPending=false;menuOpen=false;if(menu)menu.Hide();
     }
     if(pickup)pickup->Refresh();
+    connections();
+}
+void LayersView::connections(){
+    if(!list.IsLoaded()||list.Visibility()!=Visibility::Visible)return;
+    auto layers=array(data->state,L"layers");std::map<double,std::pair<uint32_t,double>> order;
+    for(uint32_t i=0;i<layers.Size();i++)order[num(layers.GetObjectAt(i),L"id")]={i,num(layers.GetObjectAt(i),L"depth")};
+    std::map<double,Windows::Foundation::Rect> geometry;double column=0;uint32_t first=layers.Size(),last=0;
+    for(auto const& [key,row]:rows){
+        if(!row->current()||!row->root.IsLoaded()||row->content.ActualWidth()<=0||!order.contains(row->id))continue;
+        auto rect=row->content.TransformToVisual(list).TransformBounds({0,0,float(row->content.ActualWidth()),float(row->content.ActualHeight())});
+        geometry[row->id]=rect;auto [index,depth]=order.at(row->id);
+        if(index<first){first=index;column=rect.X+row->swipeOffset-std::min(depth*8,24.);}last=std::max(last,index);
+    }
+    A shapes;auto edges=array(view(),L"connections");double height=list.ActualHeight();
+    auto endpoint=[&](double id,bool bottom)->std::optional<double>{
+        if(auto at=geometry.find(id);at!=geometry.end())return at->second.Y+(bottom?at->second.Height:0);
+        if(auto at=order.find(id);at!=order.end()){
+            if(at->second.first<first)return 0.;if(at->second.first>last)return height;
+        }return {};
+    };
+    if(!geometry.empty())for(auto value:edges){
+        auto edge=value.GetObject();bool effect=str(edge,L"kind")==L"effect";
+        auto top=endpoint(num(edge,L"from"),effect),bottom=endpoint(num(edge,L"to"),!effect);
+        if(!top||!bottom||*bottom<=*top||*bottom<0||*top>height)continue;
+        shapes.Append(O({{L"effect",B(effect)},{L"x",N(column+std::min(num(edge,L"depth")*8,24.))},{L"top",N(*top)},{L"bottom",N(*bottom)}}));
+    }
+    auto key=data->theme()+shapes.Stringify();if(connectionKey==key)return;connectionKey=key;connectionOverlay.Children().Clear();
+    auto line=[&](double x,double top,double bottom,bool effect){
+        Shapes::Line item;item.X1(x);item.X2(x);item.Y1(top);item.Y2(bottom);item.StrokeThickness(effect?1:2);
+        item.Stroke(data->brush(effect?L"text":L"relationship"));item.StrokeStartLineCap(PenLineCap::Round);item.StrokeEndLineCap(PenLineCap::Round);connectionOverlay.Children().Append(item);
+    };
+    for(auto value:shapes){auto shape=value.GetObject();bool effect=flag(shape,L"effect");double x=num(shape,L"x"),top=num(shape,L"top"),bottom=num(shape,L"bottom");
+        if(!effect){line(x-3.5,top,bottom,false);continue;}
+        double center=x+15,y=(top+bottom)*.5;
+        if(y-top>6)line(center,top,y-6,true);if(bottom-y>6)line(center,y+6,bottom,true);
+        auto glyph=icon(L"effect-link",data->theme(),12);Canvas::SetLeft(glyph,center-6);Canvas::SetTop(glyph,y-6);connectionOverlay.Children().Append(glyph);
+    }
 }
 void LayersView::preview(){
     if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;

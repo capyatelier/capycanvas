@@ -760,6 +760,8 @@ impl NativeHost {
                 id: u64,
                 target: u64,
                 fraction: f32,
+                #[serde(default)]
+                surface: layer_ui::LayerDropSurface,
             },
             LayerThumbnails {
                 requests: Vec<(u64, u64)>,
@@ -928,12 +930,13 @@ impl NativeHost {
                 id,
                 target,
                 fraction,
+                surface,
             } => {
                 let current = self.session.state().document_file.epoch;
-                let position = (epoch == current)
-                    .then(|| self.session.layer_drop_hint(id, target, fraction))
+                let hint = (epoch == current)
+                    .then(|| self.session.layer_drop_preview(id, target, fraction, surface))
                     .flatten();
-                json!({ "epoch": current, "position": position })
+                json!({ "epoch": current, "target": hint.map(|h| h.target), "position": hint.map(|h| h.position) })
             }
             Query::LayerThumbnails { requests } => {
                 let (accepted, images) = self.layer_thumbnails(requests)?;
@@ -1276,6 +1279,32 @@ mod tests {
         host.session.frame(3, 3).unwrap();
         assert!(host.query(query).unwrap().is_null());
     }
+    #[test]
+    fn layer_drop_query_preserves_surface_normalized_target_and_epoch() {
+        use layer_ui::{EffectAction,LayerAction,Platform};
+        let mut host=NativeHost::new(Platform::Android).unwrap();
+        host.session=UiSession::new(Renderer::default(),layer_ui::new_drawing(32,32,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),[1,1],Platform::Android).unwrap();
+        let rows=&host.session.state().layers;let ink=rows[0].id;let paper=rows[1].id;
+        host.dispatch(UiAction::Layer{action:LayerAction::New{group:false,clipped:false}}).unwrap();
+        let id=host.session.state().layers.iter().find(|row|row.editing).unwrap().id;
+        let epoch=host.session.state().document_file.epoch;let revision=host.session.engine().document().revision;
+        for surface in [None,Some("row")] {
+            let mut query=json!({"type":"layer_drop","epoch":epoch,"id":id,"target":ink,"fraction":1.});
+            if let Some(surface)=surface{query["surface"]=json!(surface);}
+            assert_eq!(host.query(query).unwrap(),json!({"epoch":epoch,"target":paper,"position":"above"}));
+        }
+        assert_eq!(host.session.engine().document().revision,revision);
+        host.dispatch(UiAction::Effect{action:EffectAction::Insert{effect:"curves".into()}}).unwrap();
+        let effect=host.session.state().layers.iter().find(|row|row.editing).unwrap().id;
+        let revision=host.session.engine().document().revision;
+        let query=json!({"type":"layer_drop","epoch":epoch,"id":effect,"target":ink,"fraction":0.5,"surface":"thumbnail"});
+        assert_eq!(host.query(query.clone()).unwrap(),json!({"epoch":epoch,"target":ink,"position":"attach"}));
+        let mut stale=query.clone();stale["epoch"]=json!(epoch+1);
+        assert_eq!(host.query(stale).unwrap(),json!({"epoch":epoch,"target":null,"position":null}));
+        let mut invalid=query;invalid["surface"]=json!("unknown");assert!(host.query(invalid).is_err());
+        assert_eq!(host.session.engine().document().revision,revision);
+    }
+
     #[test]
     fn requests_query_does_not_consume_publications() {
         let mut host = NativeHost::new(layer_ui::Platform::Android).unwrap();

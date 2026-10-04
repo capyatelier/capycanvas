@@ -259,9 +259,8 @@ try{
   'layer-flags'=@('native-layers-flags','common');'layer-footer'=@('workspace-control-layer-actions','workspace')
   'layer-blend'=@('native-layers-blend','common');'layer-list'=@('workspace-panel-layers','workspace')
   'layer-alpha_lock'=@('resources-layer-menu-alpha-lock','resources');'layer-lock'=@('resources-layer-menu-lock-editing','resources')
-  'layer-clip'=@('resources-layer-menu-clip-to-layer-below','resources')
  }
- $workspaceIdentities=Native-Identities (@($workspaceCopies.Keys)+@('layer-opacity',('layer-row-'+$layer),('layer-'+$layer+'-name'),('layer-'+$layer+'-selection'),('layer-'+$layer+'-drag'),('layer-'+$layer+'-thumbnail'),('layer-'+$layer+'-mask'),('layer-'+$layer+'-mask-thumbnail')))
+ $workspaceIdentities=Native-Identities (@($workspaceCopies.Keys)+@('layer-opacity','layer-attachment',('layer-row-'+$layer),('layer-'+$layer+'-name'),('layer-'+$layer+'-selection'),('layer-'+$layer+'-drag'),('layer-'+$layer+'-thumbnail'),('layer-'+$layer+'-mask'),('layer-'+$layer+'-mask-thumbnail')))
  Workspace-Grips
  $groups=@(((Fresh-Model).application_menus|Where-Object id -eq 'window').model.sections|ForEach-Object {$_})
  $toolbarMenu=@($groups|Where-Object {@($_.sections|ForEach-Object {$_}|Where-Object {$_.action.command -eq 'new_toolbar'}).Count})[0]
@@ -305,6 +304,8 @@ try{
   foreach($page in $preferenceView.preferences.pages){if((Control ('preference-page-'+$page.id)).Current.Name -ne $page.title){throw 'Native Preferences page accessibility name differs from the shared current copy'}}
   $seen+=$choice
   Use-Window $textWindow;Check-Identities $workspaceIdentities;Check-WorkspaceGrips $textView $tag
+  $attachment=Control 'layer-attachment';$attachmentCopy=$textView.state.layer_tools.attachment
+  if($attachment.Current.Name -ne $attachmentCopy.label -or $attachment.Current.HelpText -ne $attachmentCopy.description){throw 'Retained attachment control did not follow shared contextual copy'}
   foreach($id in $workspaceCopies.Keys){$copy=$workspaceCopies[$id];if((Control $id).Current.Name -ne (Catalog-Text $tag $copy[0] $copy[1])){throw "Retained workspace control did not follow current canonical copy: $id"}}
   if((Control ('layer-row-'+$layer)).Current.Name -ne (Catalog-Text $tag 'native-layer-row' 'common').Replace('{ $title }',$literalName) -or (Control ('layer-'+$layer+'-name')).Current.Name -ne $literalName){throw 'Retained layer row lost its current typed caption or literal Unicode name'}
   foreach($pair in @(@('selection','native-layers-select-row-help'),@('drag','native-layers-move-layer'),@('thumbnail','native-layers-preview'),@('mask','native-layers-edit-mask'),@('mask-thumbnail','native-layers-mask-preview'))){if((Control ('layer-'+$layer+'-'+$pair[0])).Current.Name -ne (Catalog-Text $tag $pair[1] 'common')){throw 'Retained layer row selection, grip or preview caption stayed stale'}}

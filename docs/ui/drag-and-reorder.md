@@ -62,11 +62,11 @@ change the immediate pickup rule for handles and title/tab bars.
 - Pen drags scroll lists like touch on every host (GTK's shared pen scroller,
   Web `pen-scroll.js`, Android Compose); mouse drags never pan lists.
 - A touch or pen swipe left across a layer row reveals Delete; a reverse swipe
-  or an outside click closes it. On GTK, Web, Android and iPadOS, swiping right
+  or an outside click closes it. Swiping right
   on a closed paint-layer row toggles alpha lock. Locked layers cannot toggle alpha
   lock. Release commits one undo step; a short or cancelled swipe changes nothing.
   Swiping right to close Delete does not also toggle alpha lock.
-- GTK group rows use the same right swipe to toggle Pass Through, whether the
+- Group rows use the same right swipe to toggle Pass Through, whether the
   folder is expanded or collapsed. Returning to isolation restores its previous
   blend mode. Locked groups and groups needed by clipping or attached effects
   cannot enter Pass Through. The shared optional row action controls availability;

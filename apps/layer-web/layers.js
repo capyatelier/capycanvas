@@ -36,7 +36,6 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   for (const [glyph, label, property, op, capability] of [
     ["alpha-lock", ()=>copy.alpha_lock, "alpha_locked", "alpha_lock", "alpha_lock"],
     ["lock", ()=>copy.lock_editing, "locked", "lock", "edit_lock"],
-    ["clip", ()=>copy.clip, "clipped", "clip", "clip"],
     ["reference", ()=>state().layer_tools.reference_action_label, "reference", "reference_selection", "reference"],
   ]) {
     const getAction = () => op === "reference_selection" ? { op } : { op, id: active().id, value: !active()[property] };
@@ -44,8 +43,22 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     if (capability === "reference") b.classList.add("layer-reference");
     toggles.push({ b, property, capability }); flags.append(b);
   }
+  const attachment = glyphButton("clip", "", () => {
+    const action = state().layer_tools.attachment.action;
+    if (action) send(action);
+  });
+  attachment.classList.add("layer-attachment");
+  attachment.onpointerenter = () => {
+    const control = state().layer_tools.attachment;
+    attachment.title = control.action ? app.action_tooltip(control.label, { type: "layer", action: control.action }) : control.label;
+  };
+  flags.insertBefore(attachment, flags.lastChild);
   header.append(flags);
   const rows = element("div", "layer-rows"); rows.id = "layer-rows"; rows.dataset.control = "layers";
+  const list = element("div", "layer-list");
+  const connections = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  connections.classList.add("layer-connections"); connections.setAttribute("aria-hidden", "true");
+  list.append(rows, connections);
   const records = new Map();
   let documentEpoch, measurementKey;
   const menu = (node, getLayer, mask = false) => {
@@ -67,8 +80,54 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const more = glyphButton("more-small", ()=>copy.actions, () => more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true,
     clientX: more.getBoundingClientRect().left, clientY: more.getBoundingClientRect().top })));
   more.classList.add("layer-more"); menu(more, active, () => active()?.mask_selected ?? false); footer.append(more);
-  panel.append(header, rows, footer);
+  panel.append(header, list, footer);
   const nameIcon = value => value.replace(/^layer-/, "").replace(/-symbolic$/, "");
+  const connectionNodes = new Map();
+  let connectionFrame = 0, connectionAnimationUntil = 0;
+  const scheduleConnections = () => {
+    if (!connectionFrame) connectionFrame = requestAnimationFrame(drawConnections);
+  };
+  function drawConnections(now) {
+    connectionFrame = 0;
+    const bounds = list.getBoundingClientRect(), geometry = new Map();
+    const edges = state().layer_tools.connections;
+    for (const edge of edges) for (const handle of [edge.from, edge.to]) {
+      const id = String(handle), record = records.get(id);
+      if (!record || geometry.has(id)) continue;
+      const thumb = record.content.b.getBoundingClientRect();
+      if (thumb.width && thumb.height) geometry.set(id, thumb);
+    }
+    const anchor = state().layers.find(row => geometry.has(String(row.id)));
+    if (!anchor || !bounds.width || !bounds.height) { connections.replaceChildren(); connectionNodes.clear(); return; }
+    const record = records.get(String(anchor.id)), rect = record.row.getBoundingClientRect();
+    const column = geometry.get(String(anchor.id)).left - rect.left + record.root.getBoundingClientRect().left - bounds.left - Math.min(anchor.depth * 8, 24);
+    connections.setAttribute("viewBox", `0 0 ${bounds.width} ${bounds.height}`);
+    const keys = new Set();
+    for (const edge of edges) {
+      const from = geometry.get(String(edge.from)), to = geometry.get(String(edge.to));
+      if (!from || !to) continue;
+      const effect = edge.kind === "effect", top = (effect ? from.bottom : from.top) - bounds.top, bottom = (effect ? to.top : to.bottom) - bounds.top;
+      if (bottom <= top || bottom < 0 || top > bounds.height) continue;
+      const key = `${edge.kind}:${edge.from}:${edge.to}`, x = column + Math.min(edge.depth * 8, 24);
+      keys.add(key);
+      let node = connectionNodes.get(key);
+      if (!node) {
+        node = document.createElementNS(connections.namespaceURI, "g"); node.dataset.kind = edge.kind; node.dataset.from = String(edge.from); node.dataset.to = String(edge.to);
+        const path = document.createElementNS(connections.namespaceURI, "path"); node.append(path);
+        if (effect) { const glyph = icon("effect-link"); glyph.setAttribute("width", "12"); glyph.setAttribute("height", "12"); node.append(glyph); }
+        connectionNodes.set(key, node); connections.append(node);
+      }
+      if (effect) {
+        const center = x + 15, y = (top + bottom) * .5;
+        node.firstChild.setAttribute("d", `${y - top > 6 ? `M${center} ${top}V${y - 6}` : ""}${bottom - y > 6 ? `M${center} ${y + 6}V${bottom}` : ""}`);
+        node.lastChild.setAttribute("x", String(center - 6)); node.lastChild.setAttribute("y", String(y - 6));
+      } else node.firstChild.setAttribute("d", `M${x - 3.5} ${top}V${bottom}`);
+    }
+    for (const [key, node] of connectionNodes) if (!keys.has(key)) { node.remove(); connectionNodes.delete(key); }
+    if (now < connectionAnimationUntil) scheduleConnections();
+  }
+  rows.addEventListener("scroll", scheduleConnections, { passive: true });
+  const connectionResize = new ResizeObserver(scheduleConnections); connectionResize.observe(list);
   function makeRow(layer) {
     const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
     const get = () => record.layer, select = mask => send({ op: "select", id: get().id, mask });
@@ -76,7 +135,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     eye.onpointerenter = () => { eye.title = app.action_tooltip(eye.getAttribute("aria-label"), { type: "set_layer_visibility", id: get().id, visible: !get().visible }); };
     const selection = () => ({ op: "toggle_selection", id: get().id });
     const check = glyphButton("selection-empty", ()=>copy.select_row_help, () => send(selection()), "", selection);
-    const thumbnails = element("div", "layer-thumbnails"), clipping = element("span", "layer-clipping");
+    const thumbnails = element("div", "layer-thumbnails"), gutter = element("span", "layer-connection-gutter");
     const thumb = (mask) => {
       const getAction = () => !mask && get().group ? { op: "collapse", id: get().id } : { op: "select", id: get().id, mask };
       const readLabel = ()=>mask?copy.edit_mask:get().group?(get().collapsed?copy.expand:copy.collapse):get().selection_layer?copy.edit_selection:copy.edit_content;
@@ -96,16 +155,16 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const content = thumb(false), mask = thumb(true);
     const linkAction = () => ({ op: "link_mask", id: get().id, value: !get().mask_linked });
     const link = glyphButton("link", ()=>get().mask_linked?copy.unlink_mask:copy.link_mask_to_layer, () => send(linkAction()), "layer-link", linkAction);
-    thumbnails.append(clipping, content.b, link, mask.b);
+    thumbnails.append(gutter, content.b, link, mask.b);
     const text = element("div", "layer-text"), name = element("span", "layer-name"), meta = element("span", "layer-meta"); text.append(name, meta);
     const lock = element("span", "layer-lock"), grip = element("span", "layer-grip"); grip.append(icon("grip"));
-    const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'selection-layer-load');
+    const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'layer-icon selection-layer-load');
     load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
     row.append(eye, check, thumbnails, text, lock, grip);
     row.onclick = e => { if (!e.target.closest("button,input")) select(false); };
     name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
-    Object.assign(record, { load, eye, check, thumbnails, clipping, content, mask, link, name, text, meta, lock, grip });
+    Object.assign(record, { load, eye, check, thumbnails, content, mask, link, name, text, meta, lock, grip });
     const remove = button(()=>liveCopy(app,"bootstrap_view").common.delete, e => { e.stopPropagation(); send({ op: "delete", id: get().id }); }, "layer-swipe-delete");
     root.append(remove, row);
     let offset = 0, drag, suppressClick;
@@ -113,12 +172,14 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       offset = value; root.classList.toggle("swipe-animating", animate);
       root.style.setProperty("--swipe", `${offset}px`);
       remove.hidden = offset <= 0; remove.disabled = !get().can_delete;
+      if (animate) connectionAnimationUntil = performance.now() + 180;
+      scheduleConnections();
     };
     record.closeSwipe = () => position(0, true);
     position(0);
     row.addEventListener("pointerdown", e => {
       if (suppressClick) { row.removeEventListener("click", suppressClick, true); suppressClick = null; }
-      if (e.button || !e.isPrimary || e.target.closest("input") || (!get().can_drop_below && !get().can_delete && !get().can_alpha_lock)) return;
+      if (e.button || !e.isPrimary || e.target.closest("input") || (!get().can_drop_below && !get().can_delete && !get().right_swipe)) return;
       drag = { x: e.clientX, y: e.clientY, top: row.getBoundingClientRect().top, pointer: e.pointerId,
         waitForHold: e.pointerType !== "mouse" && !grip.contains(e.target), held: false, origin: offset };
       // Follow fast mouse exits before pickup without retargeting ordinary
@@ -141,13 +202,13 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       const dx = e.clientX-drag.x, dy = e.clientY-drag.y;
       if (drag.waitForHold && !drag.held) {
         if (!drag.swiping && Math.hypot(dx,dy) > 8) {
-          const allowed = dx < 0 ? get().can_delete : drag.origin > 0 || get().can_alpha_lock;
+          const allowed = dx < 0 ? get().can_delete : drag.origin > 0 || !!get().right_swipe;
           if (allowed && Math.abs(dx) > Math.abs(dy)) {
             drag.swiping = true; dismissContext(); row.setPointerCapture(e.pointerId);
           } else { finish({type:"pointercancel",pointerId:e.pointerId}); return; }
         }
         if (drag.swiping) {
-          const minimum = drag.origin === 0 && get().can_alpha_lock ? -72 : 0;
+          const minimum = drag.origin === 0 && get().right_swipe ? -72 : 0;
           e.preventDefault(); position(Math.max(minimum,Math.min(72,drag.origin-dx)));
         }
         return;
@@ -162,13 +223,18 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
       if (!drag.ghost) return;
       drag.ghost.style.top = `${drag.top + e.clientY-drag.y}px`;
-      rows.querySelectorAll(".layer-drop-before,.layer-drop-after,.layer-drop-into").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into"));
-      const target = document.elementFromPoint(e.clientX,e.clientY)?.closest(".layer-row"); drag.target = null;
+      rows.querySelectorAll(".layer-drop-before,.layer-drop-after,.layer-drop-into,.layer-drop-attach").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into","layer-drop-attach"));
+      const hit = document.elementFromPoint(e.clientX,e.clientY), target = hit?.closest(".layer-row"); drag.target = null;
       if (target && target !== row && rows.contains(target)) {
-        const to = records.get(target.dataset.layer).layer, rect = target.getBoundingClientRect();
+        const record = records.get(target.dataset.layer), to = record.layer, rect = target.getBoundingClientRect();
         const fraction = to.can_drop_below ? (e.clientY-rect.top)/rect.height : 0;
-        drag.target = { op: "drop", id: get().id, target: to.id, fraction };
-        target.classList.add(to.group && fraction > .25 && fraction < .75 ? "layer-drop-into" : fraction < .5 ? "layer-drop-before" : "layer-drop-after");
+        const surface = record.content.b.contains(hit) ? "thumbnail" : "row";
+        const preview = app.layer_drop_preview(get().id, to.id, fraction, surface);
+        if (preview) {
+          drag.target = { op: "drop", id: get().id, target: to.id, fraction, surface };
+          const feedback = records.get(String(preview.target));
+          if (feedback) (preview.position === "attach" ? feedback.content.b : feedback.row).classList.add(`layer-drop-${{above:"before",below:"after",into:"into",attach:"attach"}[preview.position]}`);
+        }
       }
     };
     const finish = e => {
@@ -187,12 +253,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (previous.swiping) {
         const toggle = e.type === "pointerup" && offset <= -72*.4;
         position(e.type === "pointerup" && offset >= 72*.4 ? 72 : 0, true);
-        if (toggle) send({ op: "toggle_alpha_lock", id: get().id });
+        if (toggle && get().right_swipe) send(get().right_swipe);
       }
       if (e.type !== "pointerup" && previous.held) dismissContext();
       if (previous.ghost) {
-        previous.ghost.remove(); rows.querySelectorAll(".layer-row").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into"));
-        if (e.type === "pointerup" && previous.target) send(previous.target);
+        previous.ghost.remove(); rows.querySelectorAll(".layer-drop-before,.layer-drop-after,.layer-drop-into,.layer-drop-attach").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into","layer-drop-attach"));
+        if (e.type === "pointerup" && previous.target && app.layer_drop_preview(previous.target.id, previous.target.target, previous.target.fraction, previous.target.surface)) send(previous.target);
       }
     };
     record.cancelDrag = () => finish({type:"pointercancel"});
@@ -227,6 +293,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       b.setAttribute("aria-pressed", reference ? view.references_selected : !!current?.[property]);
       if (reference) b.title = b.ariaLabel = view.reference_action_label;
     }
+    const control = view.attachment;
+    attachment.disabled = !control.action;
+    attachment.title = attachment.ariaLabel = control.label;
+    attachment.setAttribute("aria-description", control.description);
+    attachment.setAttribute("aria-pressed", control.checked);
+    if (attachment.firstChild?.dataset.asset !== nameIcon(control.icon)) attachment.replaceChildren(icon(nameIcon(control.icon)));
     const ids = new Set(state().layers.map(l => String(l.id)));
     for (const [id, record] of records) if (!ids.has(id)) {
       record.cancelDrag();
@@ -243,15 +315,20 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if(r.presentation===key)return;
       r.presentation=key;
       r.row.classList.toggle("selected", layer.selected);r.load.hidden=!layer.selection_layer;r.load.title=layer.load_selection_tooltip;r.load.setAttribute("aria-label",r.load.title);
-      if (!layer.can_delete && !layer.can_alpha_lock) r.closeSwipe();
-      r.eye.replaceChildren(icon(layer.visible ? "eye" : "eye-hidden")); r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?copy.hide_selection:copy.show_selection):(layer.visible?copy.hide:copy.show);
+      if (!layer.can_delete && !layer.right_swipe) r.closeSwipe();
+      r.eye.replaceChildren(icon(layer.visible && !layer.visibility_blocked ? "eye" : "eye-hidden")); r.eye.style.opacity = layer.visibility_blocked ? .35 : 1;
+      r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?copy.hide_selection:copy.show_selection):(layer.visible?copy.hide:copy.show);
       r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
-      r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`; r.clipping.style.opacity = layer.clipped ? 1 : 0;
+      r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`;
       r.content.b.classList.toggle("editing-target", layer.editing && !layer.mask_selected);
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
       for(const thumbnail of [r.content,r.mask])thumbnail.b.title=thumbnail.b.ariaLabel=thumbnail.readLabel();
       r.content.b.classList.toggle("layer-folder", layer.group);
-      if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
+      r.content.b.classList.toggle("layer-adjustment", layer.adjustment_effect);
+      if (layer.group) {
+        r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
+        if (layer.pass_through) { const glyph = icon("group-pass-through"); glyph.classList.add("layer-group-pass-through"); r.content.b.append(glyph); }
+      }
       else if(layer.content_icon && !layer.selection_layer) {
         const glyph = icon(nameIcon(layer.content_icon));
         if (layer.has_thumbnail) {
@@ -282,6 +359,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const next = JSON.stringify([view.quick_mask,current?.selection_layer,view.rename_layer?.toString(), state().layers.map(({paint_revision,mask_revision,...row})=>row)],
       (_,value)=>typeof value==="bigint"?String(value):value);
     if (next !== measurementKey) { measurementKey=next; contentChanged("layers"); }
+    scheduleConnections();
   }
   const pending = thumbnailPending, revisions = new Map();
   const owned = new Set();
@@ -318,5 +396,5 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
     } catch (error) { message(error); }
   }, 120);
-  return { refresh, dispose(){cancelDrags();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
+  return { refresh, dispose(){cancelDrags();cancelAnimationFrame(connectionFrame);connectionResize.disconnect();document.removeEventListener("pointerdown",closeSwipes,true);document.removeEventListener("click",closeOnClick);window.removeEventListener("blur",cancelDrags);window.removeEventListener("keydown",cancelOnEscape);clearInterval(thumbnailTimer); for(const id of owned)pending.delete(id);} };
 }

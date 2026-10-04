@@ -3,8 +3,10 @@ import SwiftUI
 struct LayerRowFrame: Equatable {
     var row: CGRect = .zero
     var root: CGRect = .zero
+    var swipe: CGRect = .zero
     var grip: CGRect = .zero
     var name: CGRect = .zero
+    var content: CGRect = .zero
     var mask: CGRect = .zero
 }
 struct LayerRowFrames: PreferenceKey {
@@ -13,8 +15,10 @@ struct LayerRowFrames: PreferenceKey {
         value.merge(nextValue()) { old, next in
             LayerRowFrame(row: next.row == .zero ? old.row : next.row,
                 root: next.root == .zero ? old.root : next.root,
+                swipe: next.swipe == .zero ? old.swipe : next.swipe,
                 grip: next.grip == .zero ? old.grip : next.grip,
                 name: next.name == .zero ? old.name : next.name,
+                content: next.content == .zero ? old.content : next.content,
                 mask: next.mask == .zero ? old.mask : next.mask)
         }
     }
@@ -53,13 +57,19 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
 /// Native pickup and measured feedback only. Rust owns context selection,
 /// menu capabilities, hierarchy edits and the single completed drop transaction.
 @MainActor final class LayerRowInteraction: ObservableObject, NativeReorderModel {
+    struct DropHit: Equatable {
+        let target: UInt64
+        let fraction: Double
+        let surface: String
+    }
     struct Drag {
         let id: UInt64
         let bounds: CGRect
         let origin: CGPoint
         var point: CGPoint
+        var hit: DropHit?
         var target: UInt64?
-        var fraction: Double = 0
+        var position: String?
     }
     weak var store: EditorStore?
     let contact = ReorderContact()
@@ -74,6 +84,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     @Published private(set) var menu = JSON()
     @Published private(set) var menuSource: LayerMenuSource?
     private var menuRequest = UUID()
+    private var dropRequest = UUID()
     private var layers: [JSON] { store?.state["layers"].array ?? [] }
     private var epoch: UInt64 { store?.state["document_file"]["epoch"].uint ?? 0 }
     private var renaming: UInt64? {
@@ -90,7 +101,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
     private func identity(_ id: UInt64) -> String { "\(epoch):layer:\(id)" }
     func source(at point: CGPoint) -> ReorderTarget? {
         guard let row = row(at: point), let frame = frames[row["id"].uint] else { return nil }
-        closeMenu()
+        closeMenu(); cancelDrop()
         let id = row["id"].uint, currentEpoch = epoch
         contactLayer = id
         let mask = row["has_mask"].bool && frame.mask.contains(point)
@@ -99,7 +110,9 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
             canDrag: row["can_drop_below"].bool && (grip || ThumbnailSelectionLoad.current() == nil),
             valid: { [weak self] _ in
                 guard let self else { return false }
-                return enabled && epoch == currentEpoch && renaming != id && layers.contains { $0["id"].uint == id }
+                return enabled && epoch == currentEpoch && renaming != id && layers.contains {
+                    $0["id"].uint == id && (!row["can_drop_below"].bool || $0["can_drop_below"].bool)
+                }
             }, openContext: { [weak self] in self?.openMenu(id: id, mask: mask) },
             closeContext: { [weak self] in self?.closeMenu() },
             begin: { [weak self] origin in
@@ -107,13 +120,8 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
                 self?.drag = Drag(id: id, bounds: frame.row, origin: origin, point: origin)
             },
             move: { [weak self] point in self?.move(point) },
-            finish: { [weak self] point in
-                guard let self else { return }
-                move(point); let completed = drag; drag = nil
-                if let completed, let target = completed.target {
-                    store?.layer(["op": "drop", "id": id, "target": target, "fraction": completed.fraction])
-                }
-            }, cancel: { [weak self] in self?.drag = nil })
+            finish: { [weak self] point in self?.finishDrop(point) },
+            cancel: { [weak self] in self?.cancelDrop() })
     }
     var swiping: Bool { store?.layerSwipe.owner == swipeOwner && store?.layerSwipe.tracking == true }
     func beginSwipe(at point: CGPoint) -> Bool {
@@ -123,10 +131,10 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         let delta = CGPoint(x: point.x - contact.origin.x, y: point.y - contact.origin.y)
         let swipe = store.layerSwipe
         let start = swipe.owner == swipeOwner && swipe.layer == id ? swipe.offset : 0
-        let allowed = delta.x < 0 ? row["can_delete"].bool : start > 0 || row["can_alpha_lock"].bool
+        let allowed = delta.x < 0 ? row["can_delete"].bool : start > 0 || !row["right_swipe"].isNull
         guard abs(delta.x) > abs(delta.y), allowed else { return false }
         swipeOrigin = contact.origin; swipeStart = start
-        swipeMinimum = start == 0 && row["can_alpha_lock"].bool ? -72 : 0
+        swipeMinimum = start == 0 && !row["right_swipe"].isNull ? -72 : 0
         contact.suppressActivation(); closeMenu()
         swipe.owner = swipeOwner; swipe.layer = id; swipe.bounds = frame.root; swipe.tracking = true
         moveSwipe(to: point)
@@ -142,19 +150,53 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         swipe.tracking = false
         if cancelled || swipe.offset < 72 * 0.4 { swipe.close() }
         else { swipe.offset = 72 }
-        if toggle { store.layer(["op": "toggle_alpha_lock", "id": id]) }
-    }
-    private func move(_ point: CGPoint) {
-        guard var drag else { return }
-        drag.point = point; drag.target = nil; drag.fraction = 0
-        if viewport.contains(point), let target = layers.first(where: {
-            $0["id"].uint != drag.id && frames[$0["id"].uint]?.row.contains(point) == true
-        }), let frame = frames[target["id"].uint]?.row, frame.height > 0 {
-            drag.target = target["id"].uint
-            drag.fraction = target["can_drop_below"].bool ? Double((point.y - frame.minY) / frame.height) : 0
+        if toggle, let row = layers.first(where: { $0["id"].uint == id }), !row["right_swipe"].isNull {
+            store.layer(row["right_swipe"].object)
         }
-        self.drag = drag
     }
+    private func hit(_ point: CGPoint, excluding id: UInt64) -> DropHit? {
+        guard viewport.contains(point), let target = layers.first(where: {
+            $0["id"].uint != id && frames[$0["id"].uint]?.row.contains(point) == true
+        }), let frame = frames[target["id"].uint], frame.row.height > 0 else { return nil }
+        return DropHit(target: target["id"].uint, fraction: Double((point.y - frame.row.minY) / frame.row.height),
+            surface: frame.content.contains(point) ? "thumbnail" : "row")
+    }
+    private func move(_ point: CGPoint, refresh: Bool = false) {
+        guard var drag, let store else { return }
+        drag.point = point
+        let hit = hit(point, excluding: drag.id)
+        if !refresh && drag.hit == hit { self.drag = drag; return }
+        drag.hit = hit; drag.target = nil; drag.position = nil; self.drag = drag
+        let request = UUID(), currentEpoch = epoch; dropRequest = request
+        guard let hit else { return }
+        let id = drag.id
+        store.query(["type": "layer_drop", "epoch": currentEpoch, "id": id, "target": hit.target,
+            "fraction": hit.fraction, "surface": hit.surface]) { [weak self] result in
+            guard let self, dropRequest == request, epoch == currentEpoch, result["epoch"].uint == currentEpoch,
+                  var current = self.drag, current.id == id, current.hit == hit,
+                  layers.contains(where: { $0["id"].uint == hit.target }) else { return }
+            if !result["position"].isNull && !result["target"].isNull {
+                current.target = result["target"].uint; current.position = result["position"].string
+            }
+            self.drag = current
+        }
+    }
+    private func finishDrop(_ point: CGPoint) {
+        guard let drag, let store else { return }
+        let hit = hit(point, excluding: drag.id), id = drag.id
+        cancelDrop()
+        guard let hit else { return }
+        let request = dropRequest, currentEpoch = epoch
+        store.query(["type": "layer_drop", "epoch": currentEpoch, "id": id, "target": hit.target,
+            "fraction": hit.fraction, "surface": hit.surface]) { [weak self] result in
+            guard let self, dropRequest == request, epoch == currentEpoch, result["epoch"].uint == currentEpoch,
+                  !result["position"].isNull, !result["target"].isNull,
+                  layers.contains(where: { $0["id"].uint == id && $0["can_drop_below"].bool }),
+                  layers.contains(where: { $0["id"].uint == hit.target }) else { return }
+            store.layer(["op": "drop", "id": id, "target": hit.target, "fraction": hit.fraction, "surface": hit.surface])
+        }
+    }
+    private func cancelDrop() { dropRequest = UUID(); if drag != nil { drag = nil } }
     func acceptsContext(at point: CGPoint) -> Bool { row(at: point) != nil }
     func context(at point: CGPoint) {
         guard !contact.dragging, let row = row(at: point) else { return }
@@ -179,10 +221,11 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         // Retire it on publication, without waiting for a native move or release.
         if contact.target != nil, !contact.validate() { cancel() }
         if let swipe = store?.layerSwipe, swipe.owner == swipeOwner,
-           !layers.contains(where: { $0["id"].uint == swipe.layer && ($0["can_delete"].bool || $0["can_alpha_lock"].bool) }) { swipe.close() }
+           !layers.contains(where: { $0["id"].uint == swipe.layer && ($0["can_delete"].bool || !$0["right_swipe"].isNull) }) { swipe.close() }
+        if let drag { move(drag.point, refresh: true) }
     }
     func cancel() {
-        contact.cancel(); if drag != nil { drag = nil }; closeMenu()
+        contact.cancel(); cancelDrop(); closeMenu()
         if store?.layerSwipe.owner == swipeOwner { store?.layerSwipe.close() }
     }
 }

@@ -559,7 +559,7 @@ fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
     layer(&mut s, LayerAction::New { group: false, clipped: false });
     let target = s.engine.document().working.occurrence.unwrap();
     let selected = s.layer_interaction.selected.clone();
-    assert!(s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
+    assert_eq!(s.state.layers.iter().find(|l| l.id == 1).unwrap().right_swipe, Some(LayerAction::ToggleAlphaLock { id: 1 }));
     layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
     assert!(s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     assert_eq!(s.engine.document().working.occurrence.unwrap(), target);
@@ -576,9 +576,9 @@ fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
         assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
         assert_eq!(s.engine.document(), &before);
     }
-    assert!(!s.state.layers.iter().find(|l| l.id == 1).unwrap().can_alpha_lock);
+    assert!(s.state.layers.iter().find(|l| l.id == 1).unwrap().right_swipe.is_none());
     layer(&mut s, LayerAction::New { group: true, clipped: false });
     let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
-    assert!(!s.state.layers.iter().find(|l| l.id == id).unwrap().can_alpha_lock);
+    assert_eq!(s.state.layers.iter().find(|l| l.id == id).unwrap().right_swipe, Some(LayerAction::TogglePassThrough { id }));
     assert!(s.dispatch(UiAction::Layer { action: LayerAction::ToggleAlphaLock { id } }).is_err());
 }

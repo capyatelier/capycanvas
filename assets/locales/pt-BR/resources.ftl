@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Bloqueio alfa
 resources-layer-menu-apply-mask-to-layer = Aplicar máscara à camada
 resources-layer-menu-blend-mode = Modo de mesclagem
 resources-layer-menu-clear-layer-row-selection = Limpar seleção de linhas de camada
-resources-layer-menu-clip-to-layer-below = Recortar pela camada abaixo
 resources-layer-menu-copy-mask = Copiar máscara
 resources-layer-menu-delete-group-and-contents = Excluir grupo e conteúdo
 resources-layer-menu-delete-mask = Excluir máscara

@@ -62,11 +62,15 @@ private object IconPictures {
  * paint: fixed swatch colors and their drawing order are part of the artwork. */
 @Composable internal fun SharedIcon(name: String, description: String?, modifier: Modifier = Modifier,
     tint: Color = LocalPalette.current.text, fill: Color? = null) {
+    val painter = sharedIconPainter(name, tint, fill)
+    Image(painter, description, modifier.size(16.dp))
+}
+
+@Composable internal fun sharedIconPainter(name: String, tint: Color, fill: Color? = null): Painter {
     val context = LocalContext.current
-    val painter = remember(context, name, tint, fill) {
+    return remember(context, name, tint, fill) {
         SharedIconPainter(IconPictures.get(context.assets, name, tint, fill))
     }
-    Image(painter, description, modifier.size(16.dp))
 }
 
 @Composable internal fun PaintPairIcon(view: JSONObject, description: String?, modifier: Modifier = Modifier) {

@@ -26,7 +26,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     double swipeOffset=0;
     void swipe(double offset);
     Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
-    Border indent,clip,dropMark,contentSymbol;
+    Border indent,dropMark,contentSymbol,groupMode;
     Grid contentTile,maskTile;
     Image contentImage,maskImage,lockImage;
     Canvas contentCorners,maskCorners;
@@ -56,7 +56,9 @@ struct ElementFactory : implements<ElementFactory,IElementFactory> {
 };
 struct LayersView : std::enable_shared_from_this<LayersView> {
     std::shared_ptr<WorkspaceData> data;
-    Grid root,values,footerFrame;
+    Grid root,values,footerFrame,listFrame;
+    Canvas connectionOverlay;
+    hstring connectionKey;
     UIElement outsideSurface{nullptr};
     PointerEventHandler outsidePress{nullptr};
     StackPanel header,tools,footer;
@@ -85,6 +87,7 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     void init();
     void refresh();
     void preview();
+    void connections();
     void context(double id,bool mask,UIElement const& anchor,
         std::optional<Windows::Foundation::Point> at={},bool holding=false,bool blendMenu=false);
 };

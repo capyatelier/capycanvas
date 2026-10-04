@@ -47,7 +47,7 @@ pub struct LayerPanel {
     mask_action: gtk::Button,
     delete: gtk::Button,
     reference: gtk::ToggleButton,
-    clip: gtk::ToggleButton,
+    attachment: gtk::ToggleButton,
     context: gtk::PopoverMenu,
     owner: Rc<RefCell<Weak<Workspace>>>,
     rows: Rc<RefCell<HashMap<usize, Row>>>,
@@ -416,20 +416,20 @@ impl LayerPanel {
         let blend_menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         blend.set_popover(Some(&blend_menu));
         options.append(&blend);
-        let opacity = NumberControl::inline(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization);
+        let opacity = NumberControl::inline(NumericControl::layer_opacity(), copy.borrow().layer.opacity.as_ref(), localization.clone());
         options.append(&opacity);
         header.append(&options);
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         let alpha = toggle("layer-alpha-lock-symbolic", copy.borrow().layer.alpha_lock.as_ref());
         let lock = toggle("layer-lock-symbolic", copy.borrow().layer.lock_editing.as_ref());
-        let clip = toggle("layer-clip-symbolic", copy.borrow().layer.clip.as_ref());
-        clip.set_widget_name("layer-attachment");
+        let attachment = toggle("layer-clip-symbolic", localization.text(layer_ui::MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE).as_ref());
+        attachment.set_widget_name("layer-attachment");
         let reference = toggle(
             "layer-reference-symbolic",
             copy.borrow().reference.as_ref(),
         );
         reference.add_css_class("layer-reference");
-        for b in [&alpha, &lock, &clip, &reference] {
+        for b in [&alpha, &lock, &attachment, &reference] {
             actions.append(b);
         }
         header.append(&actions);
@@ -951,7 +951,7 @@ impl LayerPanel {
                 copy.borrow().layer.add_mask.as_ref(),
             ),
             reference,
-            clip,
+            attachment,
             delete: button("layer-delete-symbolic", copy.borrow().layer.delete_selected.as_ref()),
             context,
             owner,
@@ -1074,7 +1074,7 @@ impl LayerPanel {
                 action: A::ReferenceSelection,
             },
         );
-        for (button, kind) in [(&self.alpha, 0), (&self.lock, 1), (&self.clip, 2)] {
+        for (button, kind) in [(&self.alpha, 0), (&self.lock, 1), (&self.attachment, 2)] {
             w.bind_dynamic_action_tooltip(button, move |s| {
                 let row = s.layer_tools.editing_layer.as_ref()?;
                 let id = row.id;
@@ -1188,7 +1188,7 @@ impl LayerPanel {
                 }
             }
         ));
-        self.clip.connect_clicked(glib::clone!(
+        self.attachment.connect_clicked(glib::clone!(
             #[weak]
             w,
             move |_| {
@@ -1234,7 +1234,6 @@ impl LayerPanel {
         caption(&self.blend, &copy.layer.blend);
         caption(&self.alpha, &copy.layer.alpha_lock);
         caption(&self.lock, &copy.layer.lock_editing);
-        caption(&self.clip, &copy.layer.clip);
         caption(&self.reference, &copy.reference);
         caption(&self.mask_action, &copy.layer.add_mask);
         caption(&self.delete, &copy.layer.delete_selected);
@@ -1301,11 +1300,11 @@ impl LayerPanel {
             self.lock.set_active(l.locked);
         }
         let attachment = &state.layer_tools.attachment;
-        self.clip.set_active(attachment.checked);
-        self.clip.set_sensitive(attachment.action.is_some());
-        crate::icons::set_button(&self.clip, attachment.icon);
-        caption(&self.clip, &attachment.label);
-        self.clip.update_property(&[gtk::accessible::Property::Description(&attachment.description)]);
+        self.attachment.set_active(attachment.checked);
+        self.attachment.set_sensitive(attachment.action.is_some());
+        crate::icons::set_button(&self.attachment, attachment.icon);
+        caption(&self.attachment, &attachment.label);
+        self.attachment.update_property(&[gtk::accessible::Property::Description(&attachment.description)]);
         self.connections.refresh(&state.layers, &state.layer_tools.connections);
         let controls = state.layer_tools.controls;
         self.opacity.set_sensitive(controls.opacity);
@@ -1571,6 +1570,7 @@ mod copy_tests {
     #[test]
     #[ignore = "private display native_layers_control_copy"]
     fn native_layers_control_copy() {
+        unsafe { std::env::set_var("GTK_A11Y", "test"); }
         adw::init().unwrap();
         for theme in [adw::ColorScheme::ForceLight, adw::ColorScheme::ForceDark] {
             adw::StyleManager::default().set_color_scheme(theme);
@@ -1582,7 +1582,7 @@ mod copy_tests {
                 assert_eq!(panel.blend_label.text().as_str(), context.text(layer_ui::MessageId::RESOURCES_BLEND_NORMAL).as_ref());
                 assert_eq!(panel.alpha.tooltip_text().as_deref(), Some(expected.alpha_lock.as_ref()));
                 assert_eq!(panel.lock.tooltip_text().as_deref(), Some(expected.lock_editing.as_ref()));
-                assert_eq!(panel.clip.tooltip_text().as_deref(), Some(expected.clip.as_ref()));
+                assert_eq!(panel.attachment.tooltip_text().as_deref(), Some(context.text(layer_ui::MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE).as_ref()));
                 assert_eq!(panel.delete.tooltip_text().as_deref(), Some(expected.delete_selected.as_ref()));
                 assert_eq!(panel.mask_action.tooltip_text().as_deref(), Some(expected.add_mask.as_ref()));
                 assert!(std::sync::Arc::ptr_eq(&panel.copy.borrow().layer.blend, &expected.blend));

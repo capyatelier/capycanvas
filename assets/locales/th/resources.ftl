@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = ล็อกอัลฟา
 resources-layer-menu-apply-mask-to-layer = ใช้มาสก์กับเลเยอร์
 resources-layer-menu-blend-mode = โหมดผสม
 resources-layer-menu-clear-layer-row-selection = ล้างการเลือกแถวเลเยอร์
-resources-layer-menu-clip-to-layer-below = ตัดตามเลเยอร์ด้านล่าง
 resources-layer-menu-copy-mask = คัดลอกมาสก์
 resources-layer-menu-delete-group-and-contents = ลบกลุ่มและเนื้อหา
 resources-layer-menu-delete-mask = ลบมาสก์

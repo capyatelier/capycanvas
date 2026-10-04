@@ -31,10 +31,10 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     std::vector<weak_ref<UIElement>> path;
     struct ScrollClaim {ScrollingInputKinds input;ScrollingScrollMode horizontal,vertical;};
     std::optional<ScrollClaim> scrollInput;
-    struct Hit {double id;int zone;bool operator==(Hit const&)const=default;};
+    struct Hit {double id;int zone;bool thumbnail;bool operator==(Hit const&)const=default;};
     std::optional<Hit> hit,answered;
     hstring placement,epoch;
-    double id=-1,slopX=4,slopY=4;
+    double id=-1,normalizedTarget=-1,slopX=4,slopY=4;
     Point origin{},position{};
     double initialScroll=0,sourceOpacity=1,initialSwipe=0;
     bool swiping=false;
@@ -72,7 +72,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"scroll_claimed",B(scrollInput.has_value())},{L"menu_open",B(owner&&owner->menuOpen)},
             {L"pointer_id",pointer?N(pointer.PointerId()):JsonValue::CreateNullValue()},
             {L"can_drop",B(!placement.empty())},{L"position",S(placement)},
-            {L"target",hit?N(hit->id):JsonValue::CreateNullValue()}});
+            {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
         if(lastCaptureLoss.Size())value.Insert(L"last_capture_loss",lastCaptureLoss);
@@ -89,7 +89,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     }
     void marks(){
         if(auto owner=view.lock())for(auto const& [element,row]:owner->rows)
-            row->highlight(hit&&hit->id==row->id?(placement==L"into"?3:placement==L"above"?1:placement==L"below"?2:0):0);
+            row->highlight(normalizedTarget==row->id?(placement==L"attach"?4:placement==L"into"?3:placement==L"above"?1:placement==L"below"?2:0):0);
     }
     void release(){
         releasing=true;surface.ReleasePointerCaptures();
@@ -103,14 +103,14 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(swiping)if(auto row=source.lock())row->swipe(0);
         if(dragging)if(auto row=source.lock())row->root.Opacity(sourceOpacity);
         ++generation;pointer=nullptr;source.reset();held=false;dragging=false;swiping=false;finishing=false;busy=false;
-        hit.reset();answered.reset();placement=L"";timer.Stop();
+        hit.reset();answered.reset();placement=L"";normalizedTarget=-1;timer.Stop();
         if(recognizing){recognizing=false;recognizer.CompleteGesture();}
         release();if(closeMenu)hideMenu();
         marks();deferClick();evidence();
     }
     bool cancel(hstring reason=L"cancel"){
         auto owner=view.lock();bool active=bool(pointer)||finishing;
-        bool revealed=false;if(owner)for(auto const& [key,row]:owner->rows)if(row->swipeOffset>0){row->swipe(0);revealed=true;}
+        bool revealed=false;if(owner)for(auto const& [key,row]:owner->rows)if(row->swipeOffset!=0){row->swipe(0);revealed=true;}
         if(!active&&!(owner&&(owner->menuOpen||owner->menuPending)))return revealed;
         if(active){
             rejected=pointer?std::optional<uint32_t>(pointer.PointerId()):std::nullopt;
@@ -175,8 +175,11 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(auto owner=view.lock())for(auto const& [element,row]:owner->rows){
             if(!row->current()||!row->root.IsLoaded())continue;
             auto bounds=row->root.TransformToVisual(list).TransformBounds({0,0,float(row->root.ActualWidth()),float(row->root.ActualHeight())});
-            if(at.X>=bounds.X&&at.X<bounds.X+bounds.Width&&at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height&&bounds.Height>0)
-                return Hit{row->id,std::clamp(int((at.Y-bounds.Y)/bounds.Height*4),0,3)};
+            if(at.X>=bounds.X&&at.X<bounds.X+bounds.Width&&at.Y>=bounds.Y&&at.Y<bounds.Y+bounds.Height&&bounds.Height>0){
+                auto thumb=row->content.TransformToVisual(list).TransformBounds({0,0,float(row->content.ActualWidth()),float(row->content.ActualHeight())});
+                bool thumbnail=at.X>=thumb.X&&at.X<thumb.X+thumb.Width&&at.Y>=thumb.Y&&at.Y<thumb.Y+thumb.Height;
+                return Hit{row->id,std::clamp(int((at.Y-bounds.Y)/bounds.Height*4),0,3),thumbnail};
+            }
         }
         return {};
     }
@@ -185,23 +188,24 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         bool commit=current()&&focus()&&hit&&!placement.empty();
         auto owner=view.lock();auto destination=hit;auto document=epoch;auto sourceId=id;
         if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(commit)},{L"generation",N(double(generation))},
-            {L"target",hit?N(hit->id):JsonValue::CreateNullValue()},{L"position",S(placement)}});
+            {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")},{L"position",S(placement)}});
         clear(true);
         if(commit&&owner)owner->data->dispatchDocument(layerAction(O({{L"op",S(L"drop")},{L"id",N(sourceId)},
-            {L"target",N(destination->id)},{L"fraction",N((destination->zone+.5)/4)}})),document);
+            {L"target",N(destination->id)},{L"fraction",N((destination->zone+.5)/4)},{L"surface",S(destination->thumbnail?L"thumbnail":L"row")}})),document);
     }
     void query(){
         if(!dragging||busy||!hit||hit==answered){complete();return;}
         auto owner=view.lock();if(!owner)return;
         auto version=generation,modelVersion=revision;auto requested=*hit;busy=true;
         auto request=O({{L"type",S(L"layer_drop")},{L"epoch",N(std::stod(to_string(epoch)))},
-            {L"id",N(id)},{L"target",N(requested.id)},{L"fraction",N((requested.zone+.5)/4)}});
+            {L"id",N(id)},{L"target",N(requested.id)},{L"fraction",N((requested.zone+.5)/4)},{L"surface",S(requested.thumbnail?L"thumbnail":L"row")}});
         if(!QueryWorkspace(owner->data->query,request,[weak=weak_from_this(),version,modelVersion,requested](J packet){
             auto self=weak.lock();if(!self||self->generation!=version)return;self->busy=false;
             if(!self->current()||!self->focus()){self->cancel(L"source_or_focus");return;}
             if(self->revision==modelVersion&&self->hit==requested){
                 auto result=object(packet,L"result");self->answered=requested;
                 self->placement=num(result,L"epoch",-1)==std::stod(to_string(self->epoch))?str(result,L"position"):L"";
+                self->normalizedTarget=self->placement.empty()?-1:num(result,L"target",-1);
                 self->marks();self->evidence();
             }
             self->query();
@@ -209,7 +213,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     }
     void target(){
         auto next=pick();
-        if(hit!=next){hit=next;answered.reset();placement=L"";marks();evidence();}
+        if(hit!=next){hit=next;answered.reset();placement=L"";normalizedTarget=-1;marks();evidence();}
         query();
     }
     void motion(PointerRoutedEventArgs const& e){
@@ -220,20 +224,20 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(!dragging&&!swiping&&crossed(position)){
             if(device!=NativeInput::PointerDeviceType::Mouse&&!grip&&!held){
                 auto row=source.lock();double dx=position.X-origin.X,dy=position.Y-origin.Y;
-                if(row&&flag(row->model(),L"can_delete")&&std::abs(dx)>std::abs(dy)&&(dx<0||initialSwipe>0)){
+                if(row&&std::abs(dx)>std::abs(dy)&&((dx<0&&flag(row->model(),L"can_delete"))||(dx>0&&(initialSwipe>0||object(row->model(),L"right_swipe").Size())))){
                     if(!claim())return;
                     swiping=true;ignoreClick=true;suppressContext=true;hideMenu();
                     if(recognizing){recognizing=false;recognizer.CompleteGesture();}
                 }else{cancel(L"early_motion");return;}
             }
-            if(swiping){if(auto row=source.lock())row->swipe(initialSwipe-(position.X-origin.X));e.Handled(true);return;}
+            if(swiping){if(auto row=source.lock())row->swipe(initialSwipe>0?std::max(0.,initialSwipe-(position.X-origin.X)):initialSwipe-(position.X-origin.X));e.Handled(true);return;}
             auto owner=view.lock();auto row=owner?findId(array(owner->data->state,L"layers"),id):J{};
             if(!flag(row,L"can_drop_below")||flag(row,L"locked")){cancel(L"source_locked");return;}
             if(!claim())return;
             dragging=true;ignoreClick=true;suppressContext=true;hideMenu();
             if(auto item=source.lock()){sourceOpacity=item->root.Opacity();item->root.Opacity(.55);}
         }
-        if(swiping){if(auto row=source.lock())row->swipe(initialSwipe-(position.X-origin.X));e.Handled(true);}
+        if(swiping){if(auto row=source.lock())row->swipe(initialSwipe>0?std::max(0.,initialSwipe-(position.X-origin.X)):initialSwipe-(position.X-origin.X));e.Handled(true);}
         if(dragging){target();e.Handled(true);evidence();}
     }
     void up(PointerRoutedEventArgs const& e){
@@ -243,14 +247,15 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(recognizing){recognizing=false;recognizer.ProcessUpEvent(e.GetCurrentPoint(surface));}
         position=e.GetCurrentPoint(surface).Position();
         if(swiping){
-            if(auto row=source.lock())row->swipe(row->swipeOffset>=72*.4?72:0);
-            swiping=false;e.Handled(true);clear(true);return;
+            auto row=source.lock();auto operation=row&&row->swipeOffset<=-72*.4?object(row->model(),L"right_swipe"):J{};
+            if(row)row->swipe(row->swipeOffset>=72*.4?72:0);
+            swiping=false;e.Handled(true);clear(true);if(row&&operation.Size())row->action(operation);return;
         }
         if(dragging){
             finishing=true;ignoreClick=true;e.Handled(true);release();
             // A release always asks current shared policy again, even when the
             // pointer stayed in a cached target while another action changed it.
-            ++revision;answered.reset();placement=L"";target();evidence();
+            ++revision;answered.reset();placement=L"";normalizedTarget=-1;target();evidence();
         }else{
             if(held||grip)e.Handled(true);
             if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(false)},{L"held",B(held)}});
@@ -323,7 +328,7 @@ void LayerRowDrag::Attach(std::shared_ptr<LayerRow> const& row){
 void LayerRowDrag::Refresh(){
     if(impl->pointer){
         if(!impl->current())impl->cancel(L"source_invalid");
-        else if(impl->dragging){++impl->revision;impl->answered.reset();impl->placement=L"";impl->marks();impl->query();}
+        else if(impl->dragging){++impl->revision;impl->answered.reset();impl->placement=L"";impl->normalizedTarget=-1;impl->marks();impl->query();}
     }
 }
 void LayerRowDrag::MenuChanged(){impl->evidence();}

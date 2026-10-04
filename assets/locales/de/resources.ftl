@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Alphaschutz
 resources-layer-menu-apply-mask-to-layer = Maske auf Ebene anwenden
 resources-layer-menu-blend-mode = Verrechnungsmodus
 resources-layer-menu-clear-layer-row-selection = Ebenenzeilenauswahl aufheben
-resources-layer-menu-clip-to-layer-below = Auf Ebene darunter beschneiden
 resources-layer-menu-copy-mask = Maske kopieren
 resources-layer-menu-delete-group-and-contents = Gruppe und Inhalt löschen
 resources-layer-menu-delete-mask = Maske löschen

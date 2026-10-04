@@ -699,7 +699,6 @@ resources-layer-menu-blend-mode = Mode Baur
 
 resources-layer-menu-clear-layer-row-selection = Bersihkan Seleksi Baris Lapisan
 
-resources-layer-menu-clip-to-layer-below = Klip ke lapisan di bawah
 
 resources-layer-menu-copy-mask = Salin mask
 

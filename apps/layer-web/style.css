@@ -375,17 +375,24 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel .layer-reference[aria-pressed="true"] { background: color-mix(in srgb,var(--text) 12%,transparent); }
 .layer-footer { margin-top: auto; }
 .layer-more { margin-left: auto; }
+.layer-list { position: relative; display: flex; flex-direction: column; overflow: hidden; min-height: 0; flex: 1; }
 .layer-rows { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1; }
+.layer-connections { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; overflow: hidden; }
+.layer-connections > g > path { fill: none; stroke: currentColor; stroke-linecap: round; }
+.layer-connections svg { width: 12px; height: 12px; }
+.layer-connections [data-kind="clip"] { color: var(--relationship); stroke-width: 2px; }
+.layer-connections [data-kind="effect"] { stroke-width: 1px; }
 .layer-row { display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 2px 6px; flex: none; border-radius: 0; }
 .layer-row.selected { background: var(--selection); }
 .layer-row > .layer-icon { height: auto; align-self: stretch; }
 .layer-thumbnails { display: flex; align-items: center; gap: 2px; flex: none; }
-.layer-clipping { width: 3px; height: 28px; background: #e999a5; border-radius: 1px; }
+.layer-connection-gutter { width: 3px; flex: none; }
 .panel .layer-thumbnail { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 3px; background: var(--input); position: relative; }
 .layer-thumbnail canvas { width: 28px; height: 28px; pointer-events: none; }
 .layer-thumbnail .layer-type-symbol { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; padding: 1px; border-radius: 2px; background: var(--input); color: var(--text); pointer-events: none; }
-.panel .layer-thumbnail.layer-folder { background: transparent; }
+.panel .layer-thumbnail.layer-folder,.panel .layer-thumbnail.layer-adjustment { background: transparent; }
 .layer-folder svg { width: 28px; height: 28px; }
+.layer-folder .layer-group-pass-through { position: absolute; right: 0; bottom: 0; width: 16px; height: 16px; border-radius: 2px; background: var(--input); pointer-events: none; }
 .panel .layer-link { width: 12px; }
 .layer-link svg,.layer-lock svg { width: 12px; height: 12px; }
 .layer-grip svg { width: 16px; height: 16px; }
@@ -405,6 +412,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-drop-before { box-shadow: inset 0 2px var(--accent); }
 .layer-drop-after { box-shadow: inset 0 -2px var(--accent); }
 .layer-drop-into { box-shadow: inset 0 0 0 2px var(--accent); }
+.layer-drop-attach { outline: 2px solid var(--accent); outline-offset: -2px; }
 .layer-drag-preview { position: fixed; z-index: 100; pointer-events: none; opacity: .7; background: var(--panel); }
 .panel.palettes-panel { display: flex; flex-direction: column; gap: 6px; padding: 6px 8px; overflow: hidden; }
 .drawer-column > .panel.palettes-panel { padding: 6px 8px; }
@@ -1060,8 +1068,8 @@ body[data-theme="light"] #header { text-shadow:none; }
 .selection-layer-load[hidden] { display:none; }
 .selection-menu-button { min-height:44px; padding:6px 12px; display:flex; gap:6px; align-items:center; justify-content:center; }
 .selection-menu-button svg { width:12px; height:12px; }
-.selection-layer-load { flex:none; width:30px; height:30px; min-width:30px; min-height:30px; padding:3px; }
-.selection-layer-load svg { width:24px; height:24px; }
+.panel .selection-layer-load { width:30px; height:30px; min-width:30px; min-height:30px; }
+.selection-layer-load svg { width:16px; height:16px; }
 .selection-modes { gap:0; border-radius:var(--control-radius); overflow:hidden; border:1px solid color-mix(in srgb,var(--text) 20%,transparent); }
 .selection-modes > button { height:44px; border-radius:0; border:0; }
 .selection-modes > button + button { border-left:1px solid color-mix(in srgb,var(--text) 20%,transparent); }

@@ -592,6 +592,19 @@ Where to look:
 - Workspaces: `crates/layer-workspace` stores them. Android takes the
   workspace liveness lock with Bionic `flock`, because `std::fs::File::try_lock`
   is unsupported on this target.
+- Layers: `Layers.kt` draws shared clipping rails and FX connections over measured
+  content thumbnails, using the relationship palette role for clipping and native
+  text ink for the canonical FX glyph. Connector geometry cancels the row face
+  translation while drop hit testing keeps the moved thumbnail bounds. Saved
+  Selection uses the ordinary button helper with a 16 dp icon in a 30 dp slot.
+  Group badges, contextual attachment, inherited visibility and optional
+  right-swipe actions come from shared state.
+  Native row and thumbnail hit testing supplies the contact surface to the
+  `layer_drop` query; its normalized target and position drive feedback before
+  the shared action commits a drop. `AndroidTitleBarTest#layerRelationships`
+  covers the focused light/dark journey. Add `-e layerRelationshipBenchmark true`
+  to `#layerSwipeFrameTiming` to measure moving relationship indicators over the
+  24 MP photo.
 - Panel rendering: `panelSurface` in [`PanelShadow.kt`](../../apps/layer-android/app/src/main/java/art/capycanvas/PanelShadow.kt);
   `AndroidPanelShadowTest` compares panels with and without shadows.
 

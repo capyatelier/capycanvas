@@ -10,7 +10,7 @@ $run=Join-Path $repo ('artifacts/windows/layer-pickup/'+[Guid]::NewGuid().ToStri
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Gesture {try{(Find 'layer-list').Current.ItemStatus|ConvertFrom-Json}catch{}}
 function Rows {
-    @((Model).state.layers|ForEach-Object {[ordered]@{id=$_.id;depth=$_.depth;visible=$_.visible;mask_linked=$_.mask_linked}})|ConvertTo-Json -Compress
+    @((Model).state.layers|ForEach-Object {[ordered]@{id=$_.id;depth=$_.depth;visible=$_.visible;mask_linked=$_.mask_linked;alpha_locked=$_.alpha_locked;pass_through=$_.pass_through;relationship=$_.relationship}})|ConvertTo-Json -Depth 8 -Compress
 }
 function Dismiss {
     [CapyRowPointer]::Key(0x1b)
@@ -186,6 +186,26 @@ try {
         Move-To $to;[CapyRowPointer]::Up()
         Wait-Until {(Gesture).phase -eq 'idle'} 'Early motion retained a contact'
         if((Rows) -ne $before -or (Gesture).menu_open){throw 'Early row motion reordered layers or opened a menu'}
+    }
+    if($Device -ne 'mouse'){
+        $script:case='swipe-delete-close'
+        $before=Rows
+        $at=Point "layer-$created-name"
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 35
+        Move-To @{x=$at.x-90;y=$at.y};[CapyRowPointer]::Up()
+        Wait-Until {$null -ne (Find "layer-$created-swipe-delete" -Visible)} 'Left swipe did not reveal Delete'
+        $at=Point "layer-$created-name"
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 35
+        Move-To @{x=$at.x+110;y=$at.y};[CapyRowPointer]::Up()
+        Wait-Until {$null -eq (Find "layer-$created-swipe-delete" -Visible)} 'Right swipe did not close Delete'
+        if((Rows) -ne $before){throw 'Closing Delete applied the right swipe action'}
+        $at=Point "layer-$created-name"
+        [CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 35
+        Move-To @{x=$at.x-90;y=$at.y};[CapyRowPointer]::Up()
+        Wait-Until {$null -ne (Find "layer-$created-swipe-delete" -Visible)} 'Delete did not reveal again'
+        Tap "layer-$created-swipe-delete"
+        Wait-Until {!@((Model).state.layers|Where-Object id -eq $created).Count} 'Revealed Delete did not remove its row'
+        Layer-History 'Undo';Wait-Until {(Rows) -eq $before} 'Revealed Delete requires more than one Undo'
     }
     $script:case='row-drag';Drag-Row "layer-$created-name" $created $paint
     $script:case='row-whitespace';Drag-Row "layer-row-$created" $created $paint

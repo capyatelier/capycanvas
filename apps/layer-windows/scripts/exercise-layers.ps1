@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Executable)
+param([Parameter(Mandatory)][string]$Executable,[switch]$Relationships)
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 $CapyCaptureDelay=250
@@ -90,6 +90,13 @@ try {
     [CapyLayersCapture]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
     if(!@((Model).layout.groups|Where-Object {$_.active -eq 'layers'}).Count){Invoke 'Layers' -Name}
+    if($Relationships){
+        . (Join-Path $PSScriptRoot 'layer-relationships.ps1')
+        Test-LayerRelationships
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+        [PSCustomObject]@{relationships='passed';themes='dark/light';pointer_devices='mouse/pen/touch';evidence=$run;scope='WARP presentation and synthetic native input; physical pens and hardware frame pacing unverified'}|ConvertTo-Json
+        return
+    }
     $paint=(Model).state.layer_tools.editing_layer.id
     Wait-Until {(Find ("layer-$paint-thumbnail")).Current.ItemStatus -eq 'Ready'} 'Paint thumbnail not ready' 20
     $original=Preview-Hash "layer-$paint-thumbnail";if(!$original){throw 'No initial thumbnail pixels'}
@@ -158,8 +165,8 @@ try {
     Invoke "layer-$created-link"
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_linked} 'Mask link not applied'
     Invoke "layer-$created-name"
-    Toggle-Flag 'layer-clip';Wait-Until {(Model).state.layer_tools.editing_layer.clipped} 'Clipping not applied'
-    Toggle-Flag 'layer-clip';Wait-Until {!(Model).state.layer_tools.editing_layer.clipped} 'Clipping not cleared'
+    Toggle-Flag 'layer-attachment';Wait-Until {(Model).state.layer_tools.editing_layer.relationship.kind -eq 'clip'} 'Clipping not applied'
+    Toggle-Flag 'layer-attachment';Wait-Until {$null -eq (Model).state.layer_tools.editing_layer.relationship} 'Clipping not cleared'
     Toggle-Flag 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Reference selection not applied'
     Toggle-Flag 'layer-reference';Wait-Until {!(Model).state.layer_tools.references_selected} 'Reference selection not cleared'
     Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-duplicate'
@@ -233,6 +240,7 @@ try {
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
 }catch{
+    if($Relationships -and $review -and !$review.HasExited){try{Capture 'relationships-failure' -Composed -WithModel}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
     Exit-CapyEnvironment

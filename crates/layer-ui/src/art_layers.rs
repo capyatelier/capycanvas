@@ -143,7 +143,6 @@ pub struct LayerControls {
     pub blend: bool,
     pub alpha_lock: bool,
     pub edit_lock: bool,
-    pub clip: bool,
     pub mask: bool,
     pub fill: bool,
 }
@@ -165,9 +164,6 @@ impl LayerControls {
             blend: editable && unlocked,
             alpha_lock: l.kind() == LayerKind::Paint && unlocked,
             edit_lock: !doc.scene().parent(id).is_some_and(|p| doc.is_locked(p)),
-            clip: editable && unlocked && (l.attachment != Attachment::None || if doc.scene().effect(id).is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment) {
-                doc.effect_target(id).is_some()
-            } else { doc.clipping_base(id).is_some() }),
             mask: editable && unlocked,
             fill: l.kind() == LayerKind::Paint && unlocked && !matches!(doc.working.target, Some(SourceTarget::Coverage(_))),
         }
@@ -435,9 +431,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub fn layer_drop_preview(&self,id:u64,target:u64,fraction:f32,surface:LayerDropSurface)->Option<LayerDropHint> {
         self.layer_drop_edit(id,target,fraction,surface).ok().flatten().map(|(_,hint)|hint)
-    }
-    pub fn layer_drop_hint(&self,id:u64,target:u64,fraction:f32)->Option<LayerDropPosition> {
-        self.layer_drop_preview(id,target,fraction,LayerDropSurface::Row).map(|hint|if hint.position==LayerDropPosition::Into {hint.position}else if fraction<0.5 {LayerDropPosition::Above}else{LayerDropPosition::Below})
     }
     /// Shared external-image feedback, independent of a dragged internal layer.
     pub fn image_placement_context(
@@ -1183,7 +1176,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::ReferenceSelection => !self.reference_selection().is_empty(),
                 A::Lock { .. } => controls.edit_lock,
                 A::AlphaLock { .. } | A::Clear { .. } => controls.alpha_lock,
-                A::Clip { .. } => controls.clip,
                 A::MaskSelection { .. } => !locked && doc.working.selection.is_some(),
                 A::ApplyMask { .. } => {
                     paint && !locked && l.mask.as_ref().is_some_and(|m| m.enabled)

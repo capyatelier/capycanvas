@@ -70,7 +70,7 @@ current-source results.
 | Figure or ruler drag | 90 | | |
 | Layer opacity scrub | 90 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 90 | | |
-| Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android 59.0–59.2 fps, interval p99 16.8 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | `1d251ece`, 2026-09-27; details below |
+| Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android relationship overlay 58.8–59.4 fps, interval p99 16.8–16.9 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | Android `00b2d6e73` + native port, 2026-10-04; Web `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
 | Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
@@ -95,6 +95,25 @@ Chrome 137, injected pen input through DevTools and Chrome's
 Raw frame data, Chrome traces and fixture details are in
 `artifacts/swipe-alpha-lock/`; Android's repeatable entry point is
 `AndroidTitleBarTest#layerSwipeFrameTiming` ([layer gesture checks](../ui/drag-and-reorder.md#required-validation-when-implementing)).
+
+The Android relationship overlay was measured again on 2026-10-04 at thermal
+status 0 before and after motion. The 6000 × 4000 photo had one clipped empty
+paint layer and two attached adjustments, Gaussian Blur and Curves, at Fit zoom
+with default panel glass. Three five-second native touch gestures after priming
+produced 59.0, 58.8 and 59.4 fps. Frame interval p99 was 16.90, 16.80 and 16.80 ms;
+`FrameMetrics.TOTAL_DURATION` p99 was 31.37, 36.11 and 29.51 ms. These are native
+window frame metrics, not a scanout latency measurement. The active display mode
+was 60 Hz, so this result does not meet the 90 fps tier target.
+
+The benchmark APK contains release Rust and unminified Kotlin from `00b2d6e73`
+plus the Android relationship port. APK SHA-256 is
+`a3a6ebf01e59cc6c7f89b7538fd0eb2d355188cd79657c45c006d18b54db0e22`;
+the JNI library SHA-256 is recorded with exact compiled source hashes in
+`artifacts/layer-relationship-android/benchmark-build-final.json` and
+`build-final-source-end.json`. Raw records and the three-run summary are in
+`artifacts/layer-relationship-android/layer-swipe-{1,2,3}.json` and
+`motion-summary.json`. This updates the Android result; the Web result above
+retains its earlier workload and measurement date.
 
 ## Selected swatch comparison
 

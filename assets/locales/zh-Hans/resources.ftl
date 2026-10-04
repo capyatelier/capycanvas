@@ -387,7 +387,6 @@ resources-layer-menu-blend-mode = 混合模式
 
 resources-layer-menu-clear-layer-row-selection = 清除图层行选择
 
-resources-layer-menu-clip-to-layer-below = 剪贴到下方图层
 
 resources-layer-menu-copy-mask = 复制蒙版
 

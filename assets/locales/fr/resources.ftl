@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Verrouillage alpha
 resources-layer-menu-apply-mask-to-layer = Appliquer le masque au calque
 resources-layer-menu-blend-mode = Mode de fusion
 resources-layer-menu-clear-layer-row-selection = Effacer la sélection des lignes de calque
-resources-layer-menu-clip-to-layer-below = Écrêter sur le calque inférieur
 resources-layer-menu-copy-mask = Copier le masque
 resources-layer-menu-delete-group-and-contents = Supprimer le groupe et son contenu
 resources-layer-menu-delete-mask = Supprimer le masque

@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Blocca alfa
 resources-layer-menu-apply-mask-to-layer = Applica maschera al livello
 resources-layer-menu-blend-mode = Metodo di fusione
 resources-layer-menu-clear-layer-row-selection = Deseleziona righe dei livelli
-resources-layer-menu-clip-to-layer-below = Ritaglia al livello sottostante
 resources-layer-menu-copy-mask = Copia maschera
 resources-layer-menu-delete-group-and-contents = Elimina gruppo e contenuto
 resources-layer-menu-delete-mask = Elimina maschera

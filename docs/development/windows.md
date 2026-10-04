@@ -109,6 +109,14 @@ reenters the picker and checks current captions and unchanged sample choices.
 A windowless shared test checks pure language publication while picking stays
 active; the native fixture does not claim retained sampler identity across Blur.
 
+The Layers panel presents shared attachment actions, owner visibility and group mode.
+Decorative clipping rails and effect links use realized thumbnail geometry and remain
+clipped to the scrolling viewport. A content-thumbnail drop attaches to that layer's
+output; a row drop uses shared insertion policy. Native drag feedback uses the shared
+normalized destination and release revalidates the original hit. Right swipes dispatch
+the shared row action. `exercise-layers.ps1 -Relationships` checks these interactions
+and their undo history in both themes, alongside the existing pickup fixture variants.
+
 ### Environment switches
 
 Remove a switch with `Remove-Item Env:NAME`. An empty variable still counts as

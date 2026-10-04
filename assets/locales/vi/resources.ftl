@@ -353,7 +353,6 @@ resources-layer-menu-alpha-lock = Khóa alpha
 resources-layer-menu-apply-mask-to-layer = Áp dụng mặt nạ vào lớp
 resources-layer-menu-blend-mode = Chế độ hòa trộn
 resources-layer-menu-clear-layer-row-selection = Bỏ chọn hàng lớp
-resources-layer-menu-clip-to-layer-below = Cắt theo lớp bên dưới
 resources-layer-menu-copy-mask = Sao chép mặt nạ
 resources-layer-menu-delete-group-and-contents = Xóa nhóm và nội dung
 resources-layer-menu-delete-mask = Xóa mặt nạ

@@ -105,10 +105,11 @@ mod tests {
         let before = host.session.engine().document().clone();
         for requested_epoch in [epoch, epoch + 1] {
             let reply = metadata(query(&mut host, &json!({
-                "type":"layer_drop", "epoch":requested_epoch, "id":1, "target":group, "fraction":0.5
+                "type":"layer_drop", "epoch":requested_epoch, "id":1, "target":group, "fraction":0.5, "surface":"row"
             }).to_string()).unwrap());
             assert!(reply["error"].is_null());
             assert_eq!(reply["result"]["epoch"], epoch);
+            assert_eq!(reply["result"]["target"], if requested_epoch == epoch { json!(group) } else { Value::Null });
             assert_eq!(
                 reply["result"]["position"],
                 if requested_epoch == epoch {

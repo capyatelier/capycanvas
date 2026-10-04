@@ -355,7 +355,6 @@ resources-layer-menu-alpha-lock = Alfa kilidi
 resources-layer-menu-apply-mask-to-layer = Maskeyi katmana uygula
 resources-layer-menu-blend-mode = Karıştırma modu
 resources-layer-menu-clear-layer-row-selection = Katman satırı seçimini temizle
-resources-layer-menu-clip-to-layer-below = Alttaki katmana kırp
 resources-layer-menu-copy-mask = Maskeyi kopyala
 resources-layer-menu-delete-group-and-contents = Grubu ve içeriğini sil
 resources-layer-menu-delete-mask = Maskeyi sil

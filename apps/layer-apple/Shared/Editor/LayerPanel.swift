@@ -26,7 +26,7 @@ struct LayerPanel: View {
                                 }
                                     .modifier(LayerRowMeasurement(id: layer["id"].uint))
                                     .modifier(PanelBodyMeasurement(panel: "layers", part: "row-unit", kind: .unit))
-                                    .overlay { dropMark(layer) }
+                                    .overlay(alignment: .topLeading) { dropMark(layer) }
                                     .modifier(PhotoDropTarget(store: store, row: layer["id"].uint))
                                     .editorPopover(isPresented: menuPresented(at: .row(layer["id"].uint)), placement: .inward) { menuContent }
                                     .onAppear { store.layerThumbnails.show(token: thumbnailToken, id: layer["id"].uint) }
@@ -40,6 +40,8 @@ struct LayerPanel: View {
                             .onPreferenceChange(LayerRowFrames.self) { interaction.frames = $0 }
                             .overlay(alignment: .topLeading) { dragPreview }
                             .modifier(PanelBodyMeasurement(panel: "layers", part: "rows", kind: .scroll))
+                    }.overlayPreferenceValue(LayerRowFrames.self) { frames in
+                        LayerConnections(store: store, frames: frames)
                     }.accessibilityIdentifier("layer-rows").modifier(LayerInputCheckOrder(layers: layers))
                 } else { Spacer(minLength: 0) }
                 if visible("layer_actions") { footer.modifier(PanelBodyMeasurement(panel: "layers", part: "footer")) }
@@ -82,7 +84,13 @@ struct LayerPanel: View {
             HStack(spacing: 2) {
                 flag("alpha-lock", store.catalog["native_copy"]["layers"]["alpha_lock"].string, "alpha_locked", "alpha_lock", "alpha_lock")
                 flag("lock", store.catalog["native_copy"]["layers"]["lock_editing"].string, "locked", "lock", "edit_lock")
-                flag("clip", store.catalog["native_copy"]["layers"]["clip"].string, "clipped", "clip", "clip")
+                let attachment = view["attachment"]
+                LayerButton(icon: attachment["icon"].string, label: attachment["label"].string,
+                    enabled: !attachment["action"].isNull, selected: attachment["checked"].bool) {
+                    let action = store.state["layer_tools"]["attachment"]["action"]
+                    if !action.isNull { store.layer(action.object) }
+                }.accessibilityHint(attachment["description"].string).help(attachment["description"].string)
+                    .accessibilityIdentifier("layer-attachment")
                 LayerButton(icon: "reference", label: view["reference_action_label"].string,
                     enabled: view["can_reference"].bool, selected: view["references_selected"].bool) {
                     store.layer(["op": "reference_selection"])
@@ -130,17 +138,81 @@ struct LayerPanel: View {
         interaction.openMenu(id: layer["id"].uint, mask: mask, source: source)
     }
     @ViewBuilder private func dropMark(_ layer: JSON) -> some View {
-        if let drag = interaction.drag, drag.target == layer["id"].uint {
-            if layer["group"].bool && (0.25..<0.75).contains(drag.fraction) {
+        if let drag = interaction.drag, drag.target == layer["id"].uint, let position = drag.position {
+            if position == "attach", let frame = interaction.frames[layer["id"].uint] {
+                Rectangle().stroke(palette.accent, lineWidth: 2)
+                    .frame(width: frame.content.width, height: frame.content.height)
+                    .offset(x: frame.content.minX - frame.row.minX, y: frame.content.minY - frame.row.minY)
+                    .allowsHitTesting(false)
+            } else if position == "into" {
                 Rectangle().stroke(palette.accent, lineWidth: 2).allowsHitTesting(false)
             } else {
                 VStack(spacing: 0) {
-                    if drag.fraction >= 0.5 { Spacer(minLength: 0) }
+                    if position == "below" { Spacer(minLength: 0) }
                     Rectangle().fill(palette.accent).frame(height: 2)
-                    if drag.fraction < 0.5 { Spacer(minLength: 0) }
+                    if position == "above" { Spacer(minLength: 0) }
                 }.allowsHitTesting(false)
             }
         }
+    }
+}
+
+private struct LayerConnections: View {
+    @ObservedObject var store: EditorStore
+    let frames: [UInt64: LayerRowFrame]
+    var body: some View {
+        GeometryReader { allocation in
+            let rows = store.state["layers"].array
+            let connections = store.state["layer_tools"]["connections"].array
+            let palette = EditorPalette(source: store.state["palette"])
+            let order = Dictionary(uniqueKeysWithValues: rows.enumerated().map { ($0.element["id"].uint, $0.offset) })
+            let bounds = allocation.frame(in: .named("editor-workspace"))
+            let geometry = frames.compactMapValues { frame -> CGRect? in
+                guard frame.row.height > 0, frame.content.width > 0 else { return nil }
+                return frame.content.offsetBy(dx: frame.root.minX - frame.row.minX - bounds.minX,
+                    dy: frame.root.minY - frame.row.minY - bounds.minY)
+            }
+            Canvas { context, size in
+                let viewport = CGRect(origin: .zero, size: size)
+                let visible = rows.enumerated().filter { geometry[$0.element["id"].uint]?.intersects(viewport) == true }
+                guard let first = visible.first, let last = visible.last,
+                      let anchor = frames[first.element["id"].uint], anchor.swipe.width > 0 else { return }
+                let column = anchor.content.minX - anchor.swipe.minX + anchor.root.minX - bounds.minX
+                    - min(CGFloat(first.element["depth"].uint) * 8, 24)
+                let endpoint = { (id: UInt64, bottom: Bool) -> CGFloat? in
+                    if let frame = geometry[id] { return bottom ? frame.maxY : frame.minY }
+                    guard let index = order[id] else { return nil }
+                    if index < first.offset { return 0 }
+                    if index > last.offset { return size.height }
+                    return nil
+                }
+                let glyph = context.resolveSymbol(id: 0)
+                for connection in connections {
+                    let effect = connection["kind"].string == "effect"
+                    guard let top = endpoint(connection["from"].uint, effect),
+                          let bottom = endpoint(connection["to"].uint, !effect),
+                          bottom > top, bottom > 0, top < size.height else { continue }
+                    let x = column + min(CGFloat(connection["depth"].uint) * 8, 24)
+                    var path = Path()
+                    if effect {
+                        let center = x + 15, y = (top + bottom) / 2
+                        if y - top > 6 {
+                            path.move(to: CGPoint(x: center, y: top)); path.addLine(to: CGPoint(x: center, y: y - 6))
+                        }
+                        if bottom - y > 6 {
+                            path.move(to: CGPoint(x: center, y: y + 6)); path.addLine(to: CGPoint(x: center, y: bottom))
+                        }
+                        if let glyph { context.draw(glyph, at: CGPoint(x: center, y: y)) }
+                    } else {
+                        path.move(to: CGPoint(x: x - 3.5, y: top)); path.addLine(to: CGPoint(x: x - 3.5, y: bottom))
+                    }
+                    context.stroke(path, with: .color(palette[effect ? "text" : "relationship"]),
+                        style: StrokeStyle(lineWidth: effect ? 1 : 2, lineCap: .round))
+                }
+            } symbols: {
+                SharedIcon(name: "layer-effect-link-symbolic", size: 12).foregroundStyle(palette["text"]).tag(0)
+            }
+        }.clipped().allowsHitTesting(false).accessibilityHidden(true)
     }
 }
 
@@ -213,18 +285,17 @@ private struct LayerRow: View {
     private var id: UInt64 { layer["id"].uint }
     var body: some View {
         HStack(spacing: 2) {
-            LayerButton(icon: layer["visible"].bool ? "eye" : "eye-hidden", label: visibilityLabel, height: 36) {
+            LayerButton(icon: layer["visible"].bool && !layer["visibility_blocked"].bool ? "eye" : "eye-hidden", label: visibilityLabel, height: 36) {
                 perform { store.dispatch(["type": "set_layer_visibility", "id": id, "visible": !layer["visible"].bool]) }
-            }
+            }.opacity(layer["visibility_blocked"].bool ? 0.35 : 1)
             LayerButton(icon: layer["selection_icon"].string, label: store.catalog["native_copy"]["layers"]["select_row_help"].string, height: 36) {
                 perform { store.layer(["op": "toggle_selection", "id": id]) }
             }.accessibilityAddTraits(layer["selected"].bool ? .isSelected : [])
             HStack(spacing: 2) {
-                SquircleShape(1).fill(Color(red: 233/255, green: 153/255, blue: 165/255))
-                    .frame(width: 3, height: 28).opacity(layer["clipped"].bool ? 1 : 0)
+                Color.clear.frame(width: 3, height: 28)
                 thumbnail(mask: false)
                 if layer["selection_layer"].bool {
-                    IconTile(icon: "selection-load", label: layer["load_selection_tooltip"].string, size: 24) {
+                    IconTile(icon: "selection-load", label: layer["load_selection_tooltip"].string) {
                         perform { store.dispatch(["type": "selection", "action": ["op": "load_layer", "id": id, "mode": "new", "inverted": false]]) }
                     }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
                 }
@@ -254,6 +325,7 @@ private struct LayerRow: View {
                     .accessibilityLabel(store.catalog["native_copy"]["layers"]["move_layer"].string).accessibilityIdentifier("layer-grip-\(id)")
             }
         }.padding(.horizontal, 6).padding(.vertical, 2).frame(minHeight: 40)
+            .modifier(LayerRowMeasurement(id: id, part: \.swipe, enabled: !preview))
             .background((layer["selected"].bool ? surface.active : Color.clear)
                 .contentShape(Rectangle()).onTapGesture {
                     perform { store.layer(["op": "select", "id": id, "mask": false]) }
@@ -284,7 +356,14 @@ private struct LayerRow: View {
             }
         } label: {
             ZStack {
-                if !mask && layer["group"].bool { SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28) }
+                if !mask && layer["group"].bool {
+                    SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28)
+                    if layer["pass_through"].bool {
+                        SharedIcon(name: "layer-group-pass-through-symbolic", size: 12)
+                            .padding(1).background(palette["input"], in: SquircleShape(2))
+                            .frame(width: 28, height: 28, alignment: .bottomTrailing)
+                    }
+                }
                 else {
                     if mask || layer["has_thumbnail"].bool,
                        let image = previews.images[LayerThumbnails.key(id, mask)] {
@@ -292,7 +371,7 @@ private struct LayerRow: View {
                             .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
                     }
                     if !mask && !layer["content_icon"].isNull && !layer["selection_layer"].bool {
-                        SharedIcon(name: layer["content_icon"].string, size: layer["has_thumbnail"].bool ? 12 : 28)
+                        SharedIcon(name: layer["content_icon"].string, size: layer["has_thumbnail"].bool ? 12 : layer["adjustment_effect"].bool ? 24 : 28)
                             .foregroundStyle(palette["text"])
                             .padding(layer["has_thumbnail"].bool ? 1 : 0)
                             .background(layer["has_thumbnail"].bool ? palette["input"] : Color.clear, in: SquircleShape(2))
@@ -301,7 +380,7 @@ private struct LayerRow: View {
                     }
                 }
             }.frame(width: 30, height: 30)
-                .background(!mask && layer["group"].bool ? Color.clear : palette["input"], in: SquircleShape(3))
+                .background(!mask && (layer["group"].bool || layer["adjustment_effect"].bool) ? Color.clear : palette["input"], in: SquircleShape(3))
                 .overlay {
                     if mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool {
                         TargetCorners().stroke(.white, lineWidth: 1).shadow(color: .black, radius: 1).allowsHitTesting(false)
@@ -315,7 +394,7 @@ private struct LayerRow: View {
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
             .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
-            .modifier(LayerRowMeasurement(id: id, part: \.mask, enabled: mask && !preview))
+            .modifier(LayerRowMeasurement(id: id, part: mask ? \.mask : \.content, enabled: !preview))
     }
     private func perform(_ action: () -> Void) {
         guard !preview, interaction?.contact.consumeClick() != true else { return }

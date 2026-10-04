@@ -23,6 +23,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Layer clipping and effect attachment](layer-clipping-and-effects.md): common
+  bases, owner-local effects, compact connections and shared drop planning.
 - [Photo editing M2–M4](photo-editing-m2-m4.md): the decisions, design notes
   and steps of the quick wins, foundations and retouching milestones.
 - [Pencil, charcoal and ink brush redesign](dry-media-brush-design.md).

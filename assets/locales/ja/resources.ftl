@@ -387,7 +387,6 @@ resources-layer-menu-blend-mode = 合成モード
 
 resources-layer-menu-clear-layer-row-selection = レイヤー行の選択を解除
 
-resources-layer-menu-clip-to-layer-below = 下のレイヤーでクリッピング
 
 resources-layer-menu-copy-mask = マスクをコピー
 

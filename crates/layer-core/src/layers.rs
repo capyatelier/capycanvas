@@ -525,7 +525,8 @@ impl Document {
     }
     pub fn relationship_roots(&self,roots:&[OccurrenceHandle])->Vec<OccurrenceHandle> {
         let scene=self.scene();let mut selected:BTreeSet<_>=roots.iter().copied().collect();
-        loop {let count=selected.len();for &h in scene.order(){if selected.contains(&h){selected.extend(scene.attached_effects(h).iter().copied());}if scene.clipping_base(h).is_some_and(|base|selected.contains(&base)){selected.insert(h);}}if count==selected.len(){break;}}
+        loop {let count=selected.len();for &h in scene.order(){if selected.contains(&h){selected.extend(scene.attached_effects(h).iter().copied());}
+            if scene.clipping_base(h).is_some_and(|base|selected.contains(&base)){selected.insert(h);}}if count==selected.len(){break;}}
         scene.order().iter().copied().filter(|h|selected.contains(h)).collect()
     }
     pub fn layer_subtrees(&self, roots: &[OccurrenceHandle]) -> BTreeSet<OccurrenceHandle> {

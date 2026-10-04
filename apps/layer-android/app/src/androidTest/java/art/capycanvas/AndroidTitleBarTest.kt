@@ -1231,6 +1231,16 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke","command" to "apply_transform"))
         for(id in listOf(1,2))action(obj("type" to "layer","action" to obj("op" to "delete","id" to id)))
         action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
+        if(args.getString("layerRelationshipBenchmark")=="true") {
+            val owner=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+            action(obj("type" to "layer","action" to obj("op" to "clip","id" to owner,"value" to true)))
+            for(kind in listOf("gaussian_blur","curves")) {
+                action(obj("type" to "effect","action" to obj("op" to "insert","effect" to kind)))
+                val effect=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+                action(obj("type" to "layer","action" to obj("op" to "attach_effect","id" to effect,"owner" to owner)))
+            }
+            action(obj("type" to "layer","action" to obj("op" to "select","id" to owner,"mask" to false)))
+        }
         showSwipeLayers()
         action(obj("type" to "invoke","command" to "fit_canvas"))
         val id=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
@@ -1283,6 +1293,131 @@ class AndroidTitleBarTest {
             instrumentation.runOnMainSync { window.removeOnFrameMetricsAvailableListener(listener) }
             thread.quitSafely()
         }
+    }
+
+    @Test fun layerRelationships() {
+        host.newDocument(2048,1536)
+        val source=java.io.File(device.root,"relationship-source.png")
+        android.graphics.Bitmap.createBitmap(2048,1536,android.graphics.Bitmap.Config.ARGB_8888).let { bitmap ->
+            android.graphics.Canvas(bitmap).drawOval(350f,230f,1700f,1300f,android.graphics.Paint().apply { color=android.graphics.Color.rgb(75,174,158) })
+            source.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it) };bitmap.recycle()
+        }
+        host.importImage(source)
+        waitFor("imported relationship source",60_000) { state().array("layers").length()==3 }
+        action(obj("type" to "invoke","command" to "apply_transform"))
+        fun layer(value:JSONObject)=action(obj("type" to "layer","action" to value))
+        fun current()=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+        fun row(id:Long)=state().array("layers").objects().first { it.getLong("id")==id }
+        fun order()=state().array("layers").objects().map { it.getLong("id") }
+        fun rename(id:Long,name:String)=layer(obj("op" to "rename","id" to id,"name" to name))
+        fun select(id:Long)=layer(obj("op" to "select","id" to id,"mask" to false))
+        fun undo()=action(obj("type" to "invoke","command" to "undo"))
+        val base=current();rename(base,"Base colors")
+        layer(obj("op" to "new","group" to false,"clipped" to true))
+        val owner=current();rename(owner,"Shadows")
+        fun effect(name:String,kind:String):Long {
+            select(owner)
+            action(obj("type" to "effect","action" to obj("op" to "insert","effect" to kind)))
+            return current().also { rename(it,name);layer(obj("op" to "attach_effect","id" to it,"owner" to owner)) }
+        }
+        val blur=effect("Blur","gaussian_blur");val curves=effect("Curves","curves")
+        select(owner);layer(obj("op" to "new","group" to false,"clipped" to true))
+        val highlights=current();rename(highlights,"Highlights")
+        layer(obj("op" to "new","group" to true,"clipped" to false))
+        val isolated=current();rename(isolated,"Isolated group");layer(obj("op" to "blend","id" to isolated,"value" to 0))
+        select(highlights);layer(obj("op" to "new","group" to true,"clipped" to false))
+        val through=current();rename(through,"Pass Through group")
+        if(!row(through).getBoolean("pass_through"))layer(obj("op" to "toggle_pass_through","id" to through))
+        action(obj("type" to "invoke","command" to "select_all"))
+        action(obj("type" to "invoke","command" to "save_selection_layer"))
+        val saved=state().array("layers").objects().first { it.getBoolean("selection_layer") }.getLong("id")
+        rename(saved,"Saved selection")
+        layer(obj("op" to "drop","id" to saved,"target" to owner,"fraction" to 0,"surface" to "row"))
+        val savedAt=order().indexOf(saved)
+        assertEquals(listOf(saved,curves,blur,owner),order().subList(savedAt,savedAt+4))
+        val relationshipWorkspace=JSONObject(fixture.toString())
+        relationshipWorkspace.getJSONObject("layout").apply {
+            put("bands",JSONArray(listOf(obj("id" to 40,"edge" to "right","extent" to 226,"root" to tabs(41,"layers")))))
+            put("next_id",maxOf(42,getInt("next_id")))
+        }
+        action(obj("type" to "restore_workspace","workspace" to relationshipWorkspace));select(curves)
+        waitFor("all relationship rows") { listOf(base,owner,blur,curves,isolated,through,saved).all { node("layer-row-$it")!=null } }
+        waitFor("relationship controls") { node("layer-attachment")!=null && node("layer-content-$curves")!=null }
+        assertTrue(row(isolated).getString("description").contains("Normal"))
+        assertNotNull(node("layer-group-pass-through-$through"));assertNull(node("layer-group-pass-through-$isolated"))
+        tap("layer-attachment");assertNull(row(curves).objectOrNull("relationship"))
+        tap("layer-attachment");assertEquals(highlights,row(curves).getJSONObject("relationship").getLong("target"))
+        undo();undo();assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+        for(width in listOf(226,300)) for(theme in listOf("light","dark")) {
+            val workspace=JSONObject(state().getJSONObject("workspace").toString())
+            workspace.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").toString().contains("layers") }.put("extent",width)
+            action(obj("type" to "restore_workspace","workspace" to workspace))
+            action(obj("type" to "set_theme","theme" to theme))
+            val ordinary=bounds("layer-row-$base")
+            for(id in listOf(owner,blur,curves,isolated,through,saved)) {
+                assertEquals(ordinary.width,bounds("layer-row-$id").width,1f)
+                assertEquals(ordinary.height,bounds("layer-row-$id").height,1f)
+                assertEquals(30*density,bounds("layer-content-$id").width,1f)
+            }
+            assertEquals(30*density,bounds("selection-load-$saved").width,1f)
+            shot("layer-relationships-$theme-$width")
+        }
+        val first=order().first()
+        val firstThumb=bounds("layer-content-$first")
+        val rail=screenBounds("layer-content-$owner").let { Offset(it.left-3.5f*density,it.center.y) }
+        fun railPixel():Int {
+            val bitmap=checkNotNull(instrumentation.uiAutomation.takeScreenshot())
+            return try { bitmap.getPixel(rail.x.toInt(),rail.y.toInt()) } finally { bitmap.recycle() }
+        }
+        val railColor=railPixel()
+        assertTrue("Clipping rail pixel",android.graphics.Color.blue(railColor)>android.graphics.Color.red(railColor)+20)
+        down("layer-row-$first");val swipeStart=point
+        for(i in 1..4)event(MotionEvent.ACTION_MOVE,swipeStart+Offset(-36*density*i/4,0f))
+        assertTrue("Row face moves",bounds("layer-content-$first").left<firstThumb.left-20*density)
+        assertEquals("Connector column stays fixed during first-row swipe",railColor,railPixel())
+        shot("layer-relationships-swiping")
+        event(MotionEvent.ACTION_CANCEL);idle()
+        tap("layer-eye-$owner")
+        for(id in listOf(blur,curves)) {
+            assertTrue(row(id).getBoolean("visible"));assertTrue(row(id).getBoolean("visibility_blocked"))
+            assertEquals(owner,row(id).getJSONObject("relationship").getLong("target"))
+        }
+        shot("layer-relationships-hidden-owner");undo()
+        fun swipe(id:Long,dx:Float,cancel:Boolean=false) {
+            down("layer-row-$id");val start=point
+            for(i in 1..4)event(MotionEvent.ACTION_MOVE,start+Offset(dx*density*i/4,0f))
+            event(if(cancel)MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP);idle()
+        }
+        layer(obj("op" to "blend","id" to isolated,"value" to 1))
+        val mode=row(isolated).getString("description")
+        for((theme,pointer) in listOf("light" to MotionEvent.TOOL_TYPE_FINGER,"dark" to MotionEvent.TOOL_TYPE_STYLUS)) {
+            action(obj("type" to "set_theme","theme" to theme));tool=pointer
+            swipe(isolated,12f);assertFalse(row(isolated).getBoolean("pass_through"))
+            swipe(isolated,60f,true);assertFalse(row(isolated).getBoolean("pass_through"))
+            swipe(isolated,-60f);assertNotNull(node("layer-delete-$isolated"))
+            swipe(isolated,90f);assertNull(node("layer-delete-$isolated"));assertFalse(row(isolated).getBoolean("pass_through"))
+            swipe(isolated,60f);assertTrue(row(isolated).getBoolean("pass_through"));assertFalse(row(isolated).getBoolean("alpha_locked"))
+            swipe(isolated,60f);assertFalse(row(isolated).getBoolean("pass_through"));assertEquals(mode,row(isolated).getString("description"))
+            undo();assertTrue(row(isolated).getBoolean("pass_through"));undo();assertFalse(row(isolated).getBoolean("pass_through"))
+            swipe(base,60f);assertTrue(row(base).getBoolean("alpha_locked"));undo();assertFalse(row(base).getBoolean("alpha_locked"))
+        }
+        for((pointer,thumbnail) in listOf(MotionEvent.TOOL_TYPE_MOUSE to true,MotionEvent.TOOL_TYPE_FINGER to false,MotionEvent.TOOL_TYPE_STYLUS to true)) {
+            action(obj("type" to "set_theme","theme" to if(pointer==MotionEvent.TOOL_TYPE_MOUSE) "light" else "dark"))
+            tool=pointer;select(curves);val before=order()
+            if(pointer!=MotionEvent.TOOL_TYPE_MOUSE) {
+                down("layer-row-$curves");event(MotionEvent.ACTION_MOVE,point+Offset(0f,24*density));event(MotionEvent.ACTION_UP);idle();assertEquals(before,order())
+            }
+            down("layer-row-$curves")
+            if(pointer!=MotionEvent.TOOL_TYPE_MOUSE)SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong()+150)
+            event(MotionEvent.ACTION_MOVE,point+Offset(-30*density,0f))
+            waitFor("layer pickup") { node("layer-drag-preview")!=null }
+            val target=if(thumbnail)bounds("layer-content-$isolated").center else bounds("layer-row-$through").let { Offset(it.center.x,it.bottom-2*density) }
+            event(MotionEvent.ACTION_MOVE,target)
+            event(MotionEvent.ACTION_UP);idle()
+            if(thumbnail)assertEquals(isolated,row(curves).getJSONObject("relationship").getLong("target")) else assertNotEquals(before,order())
+            undo();assertEquals(before,order());assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+        }
+        assertNull(host.actionError)
     }
 
     @Test fun layerSwipeAlphaLock() {

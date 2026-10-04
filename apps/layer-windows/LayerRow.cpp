@@ -84,8 +84,7 @@ void LayerRow::init(){
     check=pick(L"",1,[weak]{if(auto self=weak.lock())self->action(O({{L"op",S(L"toggle_selection")},{L"id",N(self->id)}}));});
     copyName(data,check,data->copyCaption(L"layers",L"select_row_help"));
     for(auto control:{eye,check}){control.ClearValue(FrameworkElement::HeightProperty());control.MinHeight(24);control.VerticalAlignment(VerticalAlignment::Stretch);}
-    Grid::SetColumn(indent,2);body.Children().Append(indent);clip.Width(3);clip.Height(28);clip.CornerRadius({1,1,1,1});clip.Background(fill({255,233,153,165}));clip.HorizontalAlignment(HorizontalAlignment::Left);
-    Grid::SetColumn(clip,3);body.Children().Append(clip);
+    Grid::SetColumn(indent,2);body.Children().Append(indent);
     content=pick(data->caption(L"layers",L"edit_content"),4,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(false)){
         auto layer=self->model();self->action(flag(layer,L"group")?O({{L"op",S(L"collapse")},{L"id",N(self->id)}}):
             O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(false)}}));
@@ -93,13 +92,15 @@ void LayerRow::init(){
     load=pick(L"",5,[weak]{if(auto self=weak.lock();self&&!self->data->updating&&self->current())
         self->data->dispatchDocument(O({{L"type",S(L"selection")},{L"action",O({{L"op",S(L"load_layer")},{L"id",N(self->id)},
             {L"mode",S(L"new")},{L"inverted",B(false)}})}}),self->epoch);});
-    load.Content(icon(L"selection-load",data->theme(),24));load.Visibility(Visibility::Collapsed);
+    load.Visibility(Visibility::Collapsed);
     mask=pick(L"",7,[weak]{if(auto self=weak.lock();self&&!self->loadThumbnail(true))self->action(O({{L"op",S(L"select")},{L"id",N(self->id)},{L"mask",B(true)}}));});
     copyName(data,mask,data->copyCaption(L"layers",L"edit_mask"));
     for(auto pair:{std::pair{contentImage,contentTile},std::pair{maskImage,maskTile}}){
         pair.first.Width(28);pair.first.Height(28);pair.first.Stretch(Stretch::Fill);pair.first.IsHitTestVisible(false);pair.second.Children().Append(pair.first);
     }
     contentSymbol.IsHitTestVisible(false);contentTile.Children().Append(contentSymbol);
+    groupMode.IsHitTestVisible(false);groupMode.Width(14);groupMode.Height(14);groupMode.CornerRadius({2,2,2,2});groupMode.Background(data->brush(L"input"));
+    groupMode.HorizontalAlignment(HorizontalAlignment::Right);groupMode.VerticalAlignment(VerticalAlignment::Bottom);contentTile.Children().Append(groupMode);
     corners(contentCorners);corners(maskCorners);contentTile.Children().Append(contentCorners);maskTile.Children().Append(maskCorners);
     content.Content(contentTile);mask.Content(maskTile);
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
@@ -165,8 +166,9 @@ void LayerRow::init(){
     Grid::SetColumnSpan(dropMark,11);body.Children().Append(dropMark);
 }
 void LayerRow::swipe(double offset){
-    swipeOffset=std::clamp(offset,0.,72.);swipeTransform.X(-swipeOffset);
-    swipeDelete.Width(swipeOffset);swipeDelete.Visibility(swipeOffset>0?Visibility::Visible:Visibility::Collapsed);
+    swipeOffset=std::clamp(offset,object(model(),L"right_swipe").Size()?-72.:0.,72.);swipeTransform.X(-swipeOffset);
+    swipeDelete.Width(std::max(0.,swipeOffset));swipeDelete.Visibility(swipeOffset>0?Visibility::Visible:Visibility::Collapsed);
+    if(auto view=owner.lock())view->connections();
 }
 void LayerRow::commit(bool cancel){
     if(!renaming||committing||data->updating||!current())return;
@@ -179,33 +181,38 @@ void LayerRow::commit(bool cancel){
 void LayerRow::highlight(int position){
     // Keep row geometry stable throughout the drag.
     dropMark.BorderThickness(position==3?Thickness{2,2,2,2}:position==1?Thickness{0,2,0,0}:position==2?Thickness{0,0,0,2}:Thickness{0});
+    content.BorderBrush(accent(data));content.BorderThickness(position==4?Thickness{2,2,2,2}:Thickness{0});
     AutomationProperties::SetHelpText(root,position==3?data->caption(L"layers",L"drop_into"):position==1?data->caption(L"layers",L"drop_above"):position==2?data->caption(L"layers",L"drop_below"):L"");
 }
 void LayerRow::refresh(){
     if(!current())return;auto layer=model();
     root.Background(flag(layer,L"selected")?selected(data):clear());
-    swipeDelete.IsEnabled(flag(layer,L"can_delete"));if(!flag(layer,L"can_delete")||renaming)swipe(0);
+    swipeDelete.IsEnabled(flag(layer,L"can_delete"));if((swipeOffset>0&&!flag(layer,L"can_delete"))||(swipeOffset<0&&!object(layer,L"right_swipe").Size())||renaming)swipe(0);
     title.Text(str(layer,L"label"));AutomationProperties::SetName(name,str(layer,L"label"));
     auto nextTitle=str(layer,L"label");if(nextTitle!=captionTitle){captionTitle=nextTitle;AutomationProperties::SetName(root,data->caption(O({{L"type",S(L"layer_row")},{L"title",S(nextTitle)}})));}
-    auto shown=flag(layer,L"visible")?L"eye":L"eye-hidden";
-    auto icons=hstring(shown)+L":"+str(layer,L"selection_icon")+L":"+str(layer,L"content_icon")+L":"+
-        to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"has_thumbnail"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
+    auto shown=flag(layer,L"visible")&&!flag(layer,L"visibility_blocked")?L"eye":L"eye-hidden";
+    eye.Opacity(flag(layer,L"visibility_blocked")?.35:1);
+    auto icons=data->theme()+L":"+hstring(shown)+L":"+str(layer,L"selection_icon")+L":"+str(layer,L"content_icon")+L":"+
+        to_hstring(flag(layer,L"pass_through"))+L":"+to_hstring(flag(layer,L"adjustment_effect"))+L":"+to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"has_thumbnail"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
     if(icons!=iconKey){
         iconKey=icons;eye.Content(icon(shown,data->theme()));check.Content(icon(str(layer,L"selection_icon"),data->theme()));
         auto contentIcon=flag(layer,L"group")?(flag(layer,L"collapsed")?L"folder":L"folder-open"):str(layer,L"content_icon");
-        bool preview=flag(layer,L"has_thumbnail"),symbol=!contentIcon.empty()&&!flag(layer,L"selection_layer");
+        bool adjustment=flag(layer,L"adjustment_effect"),preview=flag(layer,L"has_thumbnail"),symbol=!contentIcon.empty()&&!flag(layer,L"selection_layer");
         contentImage.Visibility(preview?Visibility::Visible:Visibility::Collapsed);
         contentSymbol.Visibility(symbol?Visibility::Visible:Visibility::Collapsed);
-        contentSymbol.Width(preview?14:28);contentSymbol.Height(preview?14:28);
+        contentSymbol.Width(preview?14:adjustment?16:28);contentSymbol.Height(preview?14:adjustment?16:28);
         contentSymbol.Padding({preview?1.:0.});contentSymbol.CornerRadius({2,2,2,2});
         contentSymbol.HorizontalAlignment(preview?HorizontalAlignment::Right:HorizontalAlignment::Center);
         contentSymbol.VerticalAlignment(preview?VerticalAlignment::Bottom:VerticalAlignment::Center);
         contentSymbol.Background(preview?data->brush(L"input"):clear());
         if(symbol){
-            auto glyph=icon(contentIcon,data->theme(),preview?12:28);
+            auto glyph=icon(contentIcon,data->theme(),preview?12:adjustment?16:28);
             if(preview)AutomationProperties::SetAutomationId(glyph,L"layer-"+to_hstring(uint64_t(id))+L"-type-symbol");
             contentSymbol.Child(glyph);
         }
+        groupMode.Child(icon(L"group-pass-through",data->theme(),12));
+        groupMode.Visibility(flag(layer,L"pass_through")?Visibility::Visible:Visibility::Collapsed);
+        link.Content(icon(L"link",data->theme(),12));load.Content(icon(L"selection-load",data->theme(),16));grip.Content(icon(L"grip",data->theme()));
         lockImage.Source(icon(flag(layer,L"locked")?L"lock":L"alpha-lock",data->theme(),12).Source());
     }
     bool selectionLayer=flag(layer,L"selection_layer");
@@ -218,7 +225,7 @@ void LayerRow::refresh(){
     if(selectionLayer){auto tip=str(layer,L"load_selection_tooltip");AutomationProperties::SetName(load,tip);CapyUi::tooltip(load,tip);}
     AutomationProperties::SetItemStatus(check,flag(layer,L"selected")?data->caption(L"search",L"selected"):data->caption(L"layers",L"unselected"));
     bool hasMask=flag(layer,L"has_mask"),group=flag(layer,L"group");
-    content.Background(group?clear():data->brush(L"input"));mask.Background(data->brush(L"input"));
+    content.Background(group||flag(layer,L"adjustment_effect")?clear():data->brush(L"input"));mask.Background(data->brush(L"input"));
     contentCorners.Visibility(flag(layer,L"editing")&&!flag(layer,L"mask_selected")?Visibility::Visible:Visibility::Collapsed);
     maskCorners.Visibility(flag(layer,L"mask_selected")?Visibility::Visible:Visibility::Collapsed);
     mask.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);link.Visibility(hasMask?Visibility::Visible:Visibility::Collapsed);
@@ -229,7 +236,7 @@ void LayerRow::refresh(){
     AutomationProperties::SetName(link,linkName);CapyUi::tooltip(link,linkName);
     maskImage.Opacity(flag(layer,L"mask_enabled")?1:.4);
     body.ColumnDefinitions().GetAt(2).Width({std::min(24.,num(layer,L"depth")*8),GridUnitType::Pixel});
-    clip.Opacity(flag(layer,L"clipped")?1:0);lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);
+    lockImage.Opacity(flag(layer,L"locked")||flag(layer,L"alpha_locked")?1:0);
     AutomationProperties::SetName(lockImage,flag(layer,L"locked")?data->caption(L"layers",L"locked"):flag(layer,L"alpha_locked")?data->caption(L"layers",L"alpha_locked"):L"");
     AutomationProperties::SetAccessibilityView(lockImage,flag(layer,L"locked")||flag(layer,L"alpha_locked")?Automation::Peers::AccessibilityView::Content:Automation::Peers::AccessibilityView::Raw);
     body.ColumnDefinitions().GetAt(9).Width({flag(layer,L"can_drop_below")?14.:12.,GridUnitType::Pixel});
