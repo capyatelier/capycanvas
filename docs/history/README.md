@@ -23,6 +23,8 @@ Progress notes, validation reports and other work records are not committed
 
 ## Design records
 
+- [Object layers: GA contract and long-term design](object-layer-ga-design.md):
+  image objects, paint-grid constraints, scalable rendering, tools and format cleanup.
 - [Layer clipping and effect attachment](layer-clipping-and-effects.md): common
   bases, owner-local effects, compact connections and shared drop planning.
 - [Photo editing M2–M4](photo-editing-m2-m4.md): the decisions, design notes
