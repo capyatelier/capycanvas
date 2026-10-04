@@ -46,6 +46,16 @@ UI development; use the required optimized profile for frame measurements.
 Keep profile overrides, compiler flags and the target directory stable to reuse
 the same cache.
 
+## Compilation and linking targets
+
+Client implementations compile as Rust libraries so Cargo can start them when
+shared dependency metadata is ready, while dependency code generation continues.
+GTK's executable calls `layer_linux::run`. Web, Android, Apple and Windows build
+their `layer-<platform>-link` package to produce the Wasm module, JNI library,
+static archive or DLL. Each linking package reexports its implementation crate;
+artifact names and native exports stay the same. The platform build scripts select
+these packages. Keep crate tests and `cargo check` on the implementation packages.
+
 `tools/build/profile-rust-incremental.py` times cached rebuilds after a temporary
 edit to `layer-core`'s sRGB decode threshold, then restores the source. Run it on
 an otherwise idle machine in your own worktree. To measure the GTK launcher profile:

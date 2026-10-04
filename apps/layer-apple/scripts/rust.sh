@@ -19,4 +19,4 @@ else
   # Cross builds resolve host and iOS target SDKs independently.
   unset SDKROOT
 fi
-cargo build --locked -p layer-apple --target "$CAPY_TARGET" --profile "$CAPY_PROFILE"
+cargo build --locked -p layer-apple-link --target "$CAPY_TARGET" --profile "$CAPY_PROFILE"

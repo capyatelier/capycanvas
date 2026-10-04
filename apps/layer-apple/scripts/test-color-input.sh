@@ -6,7 +6,7 @@ export MACOSX_DEPLOYMENT_TARGET=15.0
 CAPY_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/capy-color-input.XXXXXX")"
 trap 'rm -rf "$CAPY_CHECK_DIR"' EXIT
 CAPY_TARGET_DIR="${CARGO_TARGET_DIR:-$CAPY_APP/../../target}"
-cargo build --locked --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple --target aarch64-apple-darwin
+cargo build --locked --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple-link --target aarch64-apple-darwin
 xcrun swiftc -parse-as-library -target arm64-apple-macos15.0 \
   -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "$CAPY_APP/Shared/Bridge/JSON.swift" "$CAPY_APP/Shared/Bridge/ColorUI.swift" \

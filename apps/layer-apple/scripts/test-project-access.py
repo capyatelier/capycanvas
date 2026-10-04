@@ -24,7 +24,7 @@ with tempfile.TemporaryDirectory(prefix="capy-project-access-") as temporary:
     entitlements = root / "entitlements.plist"
     entitlements.write_bytes(plistlib.dumps({"com.apple.security.app-sandbox": True,
                                            "com.apple.security.files.user-selected.read-write": True}))
-    subprocess.run(["cargo", "build", "--offline", "-p", "layer-apple", "--target", "aarch64-apple-darwin"],
+    subprocess.run(["cargo", "build", "--offline", "-p", "layer-apple-link", "--target", "aarch64-apple-darwin"],
                    cwd=repo, env=env, check=True)
     target = Path(env.get("CARGO_TARGET_DIR", repo / "target"))
     subprocess.run(["xcrun", "swiftc", "-import-objc-header", str(apple / "native/include/CapyApple.h"),

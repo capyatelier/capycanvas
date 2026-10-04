@@ -551,7 +551,7 @@ paces frame preparation. `render_thread.rs` owns the bounded frame handoff,
 Vulkan brush engine, viewport/cursor presenter and swapchain. `wayland.rs` owns
 the child surface/protocol lifetime, not GTK's connection or parent. No host
 module duplicates brush rules or manipulates canvas pixels.
-`previews.rs` embeds the shared swatches. `main.rs` owns application lifetime. The canvas stays parented while dock
+`previews.rs` embeds the shared swatches. `lib.rs` owns application lifetime. The canvas stays parented while dock
 wrappers change. Controls and divider handles are reused. A timer handles
 input/frame preparation and native control refresh, then stops when idle.
 Its period and phase come from the child surface's Wayland presentation feedback

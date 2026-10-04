@@ -26,9 +26,9 @@ BEFORE = "if magnitude <= 0.04045 {"
 AFTER = "if magnitude <= 0.04046 {"
 PLATFORMS = {
     "gtk": ("layer-linux", None),
-    "web": ("layer-web", "wasm32-unknown-unknown"),
-    "android-arm64": ("layer-android", "aarch64-linux-android"),
-    "android-x86_64": ("layer-android", "x86_64-linux-android"),
+    "web": ("layer-web-link", "wasm32-unknown-unknown"),
+    "android-arm64": ("layer-android-link", "aarch64-linux-android"),
+    "android-x86_64": ("layer-android-link", "x86_64-linux-android"),
 }
 
 

@@ -68,10 +68,10 @@ androidComponents.onVariants { variant ->
         environment("ANDROID_NDK_HOME", "${System.getenv("ANDROID_HOME") ?: System.getProperty("user.home") + "/Android/Sdk"}/ndk/29.0.14206865")
         commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
             listOf("--platform", "29", "-o", jniDirectory.get().asFile.absolutePath,
-                "build", "--locked", "--profile", profile, "-p", "layer-android"))
+                "build", "--locked", "--profile", profile, "-p", "layer-android-link"))
         inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
-        inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "Cargo.toml") })
+        inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("../../assets/filters")))
         inputs.files(fileTree(rootDir.resolve("../../assets/locales")) { include("**/*.ftl") })
         inputs.files(rootDir.resolve("../../Cargo.lock"), rootDir.resolve("../../Cargo.toml"), rootDir.resolve("../../.cargo/config.toml"))

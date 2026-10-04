@@ -39,7 +39,7 @@ require("node:fs").appendFileSync(process.env.COMMAND_LOG,
     const commands = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
     assert.deepEqual(commands[0], platform === "linux"
       ? ["cargo", "run", "--locked", "--profile", expected, "-p", "layer-linux", "--", ...args]
-      : ["cargo", "build", "--locked", "--profile", expected, "-p", "layer-web", "--target", "wasm32-unknown-unknown"]);
+      : ["cargo", "build", "--locked", "--profile", expected, "-p", "layer-web-link", "--target", "wasm32-unknown-unknown"]);
     if (platform === "web") {
       assert.deepEqual(commands[1], ["wasm-bindgen", "--target", "web", "--out-dir",
         explicit ? "custom pkg" : "apps/layer-web/pkg",

@@ -101,7 +101,7 @@ def run(output):
     env.setdefault("DEVELOPER_DIR", "/Applications/Xcode.app/Contents/Developer")
     env.setdefault("MACOSX_DEPLOYMENT_TARGET", "15.0")
     with (output / "build.log").open("w") as log:
-        subprocess.run(["cargo", "build", "--locked", "--offline", "-p", "layer-apple", "--target", "aarch64-apple-darwin"],
+        subprocess.run(["cargo", "build", "--locked", "--offline", "-p", "layer-apple-link", "--target", "aarch64-apple-darwin"],
                        cwd=ROOT, env=env, stdout=log, stderr=subprocess.STDOUT, check=True)
         sources = [APPLE / "Shared/Bridge" / (name + ".swift")
                    for name in ["JSON", "AtomicJSONFile", "ProjectFileIO", "RecoveryFiles"]]

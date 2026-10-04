@@ -39,7 +39,8 @@ arguments to the app; set `CAPY_RUST_PROFILE=release` for release comparisons.
 See [build profiles](environment.md#build-profiles).
 
 Where to look in [`apps/layer-linux/src`](../../apps/layer-linux/src):
-`main.rs` creates the application and handles file launches, `canvas.rs` adapts
+`main.rs` calls the library's `run`; `lib.rs` creates the application and handles
+file launches. `canvas.rs` adapts
 the shared session and schedules frames against Wayland presentation timing,
 `render_thread.rs` owns canvas GPU work, `wayland.rs` presents into an app-owned
 subsurface beneath the GTK controls ([design record](../history/wayland-subsurface-feasibility.md)),

@@ -29,7 +29,7 @@ if (!$SkipRestore) {
 Push-Location $repo
 try {
     if (!$SkipRust) {
-        $cargoArgs = @('build','--locked','-p','layer-windows')
+        $cargoArgs = @('build','--locked','-p','layer-windows-link')
         if ($Configuration -eq 'Release') { $cargoArgs += '--release' }
         if ($SoftwareAdapterTests) { $cargoArgs += '--features', 'software-adapter-tests' }
         & cargo @cargoArgs

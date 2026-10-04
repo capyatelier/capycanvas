@@ -12,9 +12,13 @@ members = [
     "crates/layer-host",
     "apps/layer-linux",
     "apps/layer-web",
+    "apps/layer-web/link",
     "apps/layer-android/native",
+    "apps/layer-android/native/link",
     "apps/layer-apple/native",
+    "apps/layer-apple/native/link",
     "apps/layer-windows/native",
+    "apps/layer-windows/native/link",
 ]
 resolver = "2"
 exclude = ["vendor/wgpu-core", "vendor/wgpu", "vendor/wgpu-hal", "vendor/wgpu-types", "vendor/image-webp", "vendor/rav1d", "vendor/rust_h265"]

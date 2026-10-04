@@ -20,7 +20,7 @@ cargo test -p layer-host --lib
 cargo run -p layer-host --example inventory
 cargo check -p layer-android --target aarch64-linux-android
 DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer \
-  cargo build -p layer-apple --target aarch64-apple-ios
+  cargo build -p layer-apple-link --target aarch64-apple-ios
 ```
 
 See [Capy Canvas for macOS and iPadOS](../README.md).

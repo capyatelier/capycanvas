@@ -18,7 +18,7 @@ else
   exit 1
 fi
 layer_profile="${2:-${CAPY_RUST_PROFILE:-dev-perf}}"
-cargo build --locked --profile "$layer_profile" -p layer-web --target wasm32-unknown-unknown
+cargo build --locked --profile "$layer_profile" -p layer-web-link --target wasm32-unknown-unknown
 # Cargo calls the dev/test output directory "debug", not the profile name.
 layer_directory="$layer_profile"
 if [[ "$layer_profile" == dev || "$layer_profile" == test ]]; then layer_directory=debug; fi

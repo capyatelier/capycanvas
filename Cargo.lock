@@ -1329,6 +1329,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layer-android-link"
+version = "0.1.0"
+dependencies = [
+ "layer-android",
+]
+
+[[package]]
 name = "layer-apple"
 version = "0.1.0"
 dependencies = [
@@ -1345,6 +1352,13 @@ dependencies = [
  "serde",
  "serde_json",
  "wgpu",
+]
+
+[[package]]
+name = "layer-apple-link"
+version = "0.1.0"
+dependencies = [
+ "layer-apple",
 ]
 
 [[package]]
@@ -1533,6 +1547,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "layer-web-link"
+version = "0.1.0"
+dependencies = [
+ "layer-web",
+]
+
+[[package]]
 name = "layer-windows"
 version = "0.1.0"
 dependencies = [
@@ -1549,6 +1570,13 @@ dependencies = [
  "serde_json",
  "wgpu",
  "windows 0.62.2",
+]
+
+[[package]]
+name = "layer-windows-link"
+version = "0.1.0"
+dependencies = [
+ "layer-windows",
 ]
 
 [[package]]
