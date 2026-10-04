@@ -34,6 +34,9 @@ a settings dialog dismisses the view; it is not a second Apply operation.
 Dependent fields are enabled or disabled by shared rules, so different clients
 cannot disagree about whether a setting is valid.
 
+About ends with a read-only two-column row, Dedicated to / Nagu, after Source
+code. Application license shows its value without a description.
+
 **Cursor shape** is one shared setting for painting tools, with None first,
 followed by Cross, Triangle, Dot, Single-pixel dot, Sight, and brush-size
 outlines with no center marker, a cross, a dot, or a single-pixel dot. The

@@ -74,7 +74,6 @@ settings-version = Versi
 
 settings-application-license = Lisensi aplikasi
 
-settings-branding-and-dependencies-have-separate-licenses = Merek dan dependensi memiliki lisensi tersendiri.
 
 settings-canvas-rendering = Perenderan kanvas
 
@@ -102,6 +101,7 @@ settings-change-icon = Ubah ikon…
 settings-website = Situs web
 
 settings-source-code = Kode sumber
+settings-dedicated-to = Dipersembahkan untuk
 
 settings-custom = Khusus
 

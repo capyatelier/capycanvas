@@ -353,6 +353,7 @@ pub enum PreferenceId {
     Renderer,
     Website,
     SourceCode,
+    Dedication,
 }
 impl PreferenceId {
     pub fn key(self) -> &'static str {
@@ -387,6 +388,7 @@ impl PreferenceId {
             Self::Renderer => "renderer",
             Self::Website => "website",
             Self::SourceCode => "source-code",
+            Self::Dedication => "dedication",
         }
     }
 }
@@ -1195,7 +1197,7 @@ impl Settings {
                     row(
                         License,
                         &localizer.text(MessageId::SETTINGS_APPLICATION_LICENSE),
-                        &localizer.text(MessageId::SETTINGS_BRANDING_AND_DEPENDENCIES_HAVE_SEPARATE_LICENSES),
+                        "",
                         PreferenceKind::Info {
                             value: env!("CARGO_PKG_LICENSE").into(),
                         },
@@ -1230,6 +1232,14 @@ impl Settings {
                         PreferenceKind::Link {
                             label: crate::ApplicationLink::SourceCode.display().into(),
                             url: crate::ApplicationLink::SourceCode.url().into(),
+                        },
+                    ),
+                    row(
+                        Dedication,
+                        &localizer.text(MessageId::SETTINGS_DEDICATED_TO),
+                        "",
+                        PreferenceKind::Info {
+                            value: "Nagu".into(),
                         },
                     ),
                 ],
@@ -1453,7 +1463,7 @@ impl Settings {
                 }
             }
             EraserErase => self.eraser_end.erase = matches!(value, PreferenceValue::Bool(true)),
-            Version | License | Renderer | Website | SourceCode => {
+            Version | License | Renderer | Website | SourceCode | Dedication => {
                 return Err(localizer.text(MessageId::SETTINGS_THIS_INFORMATION_IS_READ_ONLY).to_string());
             }
         }
@@ -2573,6 +2583,7 @@ mod copy_tests {
                 PreferenceId::ZoomSpeed,
                 PreferenceId::PredictionHorizon,
                 PreferenceId::Renderer,
+                PreferenceId::License,
                 PreferenceId::ZenIcon,
                 PreferenceId::ZenShowCapy,
                 PreferenceId::ZenRevealAtEdges,
@@ -2593,11 +2604,7 @@ mod copy_tests {
                     .title,
                 "Light theme base color"
             );
-            for id in [
-                PreferenceId::Pressure,
-                PreferenceId::Feedback,
-                PreferenceId::License,
-            ] {
+            for id in [PreferenceId::Pressure, PreferenceId::Feedback] {
                 assert!(!settings.field(id, platform).unwrap().description.is_empty());
             }
         }
