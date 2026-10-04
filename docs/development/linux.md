@@ -64,6 +64,19 @@ The launcher runs `cargo run` with the `dev-perf` profile and forwards its
 arguments to the app; set `CAPY_RUST_PROFILE=release` for release comparisons.
 See [build profiles](environment.md#build-profiles).
 
+To develop against system GTK without building the local runtime, run Cargo
+directly with no local GTK override in `LD_LIBRARY_PATH`:
+
+```bash
+cargo run --locked --profile dev-perf -p layer-linux
+```
+
+This needs the GTK/libadwaita/Wayland development packages, but none of the
+additional GTK source-build tools. System GTK can serve setups without the
+affected tablet-pad input, or a distribution build containing the crash fix.
+The [runtime guide](../../tools/build/gtk-runtime/README.md#using-system-gtk)
+explains the upstream bug and the limits of application workarounds.
+
 Where to look in [`apps/layer-linux/src`](../../apps/layer-linux/src):
 `main.rs` calls the library's `run`; `lib.rs` creates the application and handles
 file launches. `canvas.rs` adapts
@@ -341,10 +354,10 @@ asserting, and check persistence by reopening, not only by reading rows.
 
 ## Troubleshooting
 
-- **Startup crash with a tablet, or an arrow cursor flash on pen entry.** Upstream
-  GTK 4.22.4 and 4.22.5 dereference a null surface when a tablet pad reports a mode change
-  before keyboard focus, and picks a cursor from stale coordinates when a pen
-  enters. The package and `run.sh` build and use the same patched GTK, cached in
+- **Startup crash with a tablet pad, or an arrow cursor flash on pen entry.** The
+  [runtime guide](../../tools/build/gtk-runtime/README.md#using-system-gtk)
+  distinguishes GTK's pad-event crash from its pen-entry cursor glitch. The
+  package and `run.sh` build and use the same patched GTK, cached in
   `target/gtk-runtime` or `CAPY_GTK_BUILD_DIR`. Direct Cargo commands and tests
   use system GTK unless the local runtime is selected explicitly:
 

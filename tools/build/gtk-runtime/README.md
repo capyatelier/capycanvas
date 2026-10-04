@@ -10,6 +10,36 @@ cursor using stale coordinates and briefly flash an arrow over the canvas.
 It also suppresses GDK's cached surface cursor during entry, allowing GTK's
 widget pick to install the first visible cursor.
 
+## Using system GTK
+
+Capy Canvas uses public GTK APIs and can link to system GTK. Direct Cargo
+builds use it unless `LD_LIBRARY_PATH` selects the local runtime; see the
+[Linux guide](../../../docs/development/linux.md#build-and-run).
+
+The crash fix protects GTK's own event dispatch. A Wayland tablet-pad mode
+event can arrive after pad entry but before keyboard focus. GTK creates the
+event with `seat->keyboard_focus` as its surface, then
+`gdk_surface_handle_event` dereferences it before emitting `GdkSurface::event`.
+Application event controllers cannot discard the event before this access.
+GTK 4.22.4 and 4.22.5 contain this path, and the official
+[GTK 4.24.1 source](https://download.gnome.org/sources/gtk/4.24/gtk-4.24.1.tar.xz)
+still contains both the nullable event surface and its unchecked dereference.
+Requiring a newer version alone does not establish that the crash is fixed.
+
+GTK's documented
+[`GDK_WAYLAND_DISABLE`](https://docs.gtk.org/gtk4/running.html#gdk-wayland-disable)
+can disable `zwp_tablet_manager_v2`, but that removes native pen pressure,
+tool axes and pad input together. It is unsuitable as the painting client's
+default workaround. System GTK is usable without the affected pad input, or
+with a distribution build that fixes this event path.
+
+The cursor patch addresses a separate visual glitch; it is not a crash fix.
+Remove the bundled-runtime requirement once the supported system GTK builds
+handle unfocused pad events safely. Verify pen entry separately before
+removing the cursor patch.
+
+## Build and validate
+
 After building, check the actual patched callbacks with split proximity/motion
 frames, stale cursor suppression, canvas/control cursors, repeated motion, and
 departure before any motion:
