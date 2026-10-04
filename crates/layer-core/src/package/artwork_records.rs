@@ -38,8 +38,8 @@ fn dimension(value:&Value,reader:&ResourceReader<'_>)->DecodeResult<[u32;2]> {
     if size.iter().any(|n|*n>crate::MAX_EXTENT || *n>reader.limits.dimension) {return Err(DecodeError::Unsupported("Source exceeds dimension admission".into()));}
     Ok(size)
 }
-fn plane_name(plane:RasterPlane)->&'static str {match plane {RasterPlane::Color=>"color",RasterPlane::Mask=>"mask",RasterPlane::Wetness=>"wetness",RasterPlane::WatercolorWetness=>"watercolor_wetness"}}
-fn parse_plane(value:&Value)->DecodeResult<RasterPlane> {Ok(match v::string(value)? {"color"=>RasterPlane::Color,"mask"=>RasterPlane::Mask,"wetness"=>RasterPlane::Wetness,"watercolor_wetness"=>RasterPlane::WatercolorWetness,name=>return Err(DecodeError::Unsupported(format!("Unknown tile plane {name}")))})}
+fn plane_name(plane:RasterPlane)->&'static str {match plane {RasterPlane::Color=>"color",RasterPlane::Mask=>"mask",RasterPlane::WatercolorWetness=>"watercolor_wetness"}}
+fn parse_plane(value:&Value)->DecodeResult<RasterPlane> {Ok(match v::string(value)? {"color"=>RasterPlane::Color,"mask"=>RasterPlane::Mask,"watercolor_wetness"=>RasterPlane::WatercolorWetness,name=>return Err(DecodeError::Unsupported(format!("Unknown tile plane {name}")))})}
 fn coordinate(value:&Value)->DecodeResult<[u32;2]> {let pair=v::array(value,2)?; Ok([v::u32_value(&pair[0])?,v::u32_value(&pair[1])?])}
 fn material(value:&Value)->DecodeResult<Option<RasterWatercolor>> {
     let data=fields(value,&["watercolor"])?;
@@ -74,8 +74,7 @@ fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:Document
             let tile=fields(value,&["coordinate","plane","resource"])?;
             let key=TileKey {coordinate:coordinate(v::required(tile,"coordinate")?)?,plane:parse_plane(v::required(tile,"plane")?)?};
             if raster.tiles.contains_key(&key) || key.coordinate[0]>=domain[0].div_ceil(TILE_SIZE) || key.coordinate[1]>=domain[1].div_ceil(TILE_SIZE) || mask!=(key.plane==RasterPlane::Mask) {return Err("Invalid raster tile index".into());}
-            let resource=v::required(tile,"resource")?;let backing=reader.tile(resource)?;
-            if backing.resource_profile().is_some() {return Err(DecodeError::Unsupported("Paint overrides require the composition working profile".into()));}
+            let resource=v::required(tile,"resource")?;
             raster.tiles.insert(key,reader.raster_tile(resource)?);
         }
     }
@@ -113,21 +112,14 @@ fn decode_original(value:&Value,reader:&mut ResourceReader<'_>)->DecodeResult<Ar
         let data=fields(value,&["coordinate","resource"])?; let coordinate=coordinate(v::required(data,"coordinate")?)?;
         if tiles.contains_key(&coordinate) || coordinate[0]>=extent[0].div_ceil(TILE_SIZE) || coordinate[1]>=extent[1].div_ceil(TILE_SIZE) {return Err("Invalid original tile index".into());}
         let tile=reader.tile(v::required(data,"resource")?)?;
-        if let Some(profile)=tile.resource_profile() {
-            match &interpretation.profile {
-                crate::color::ColorProfile::Icc(expected) if expected==profile=>{},
-                _=>return Err(DecodeError::Unsupported("Mixed original tile profiles".into())),
-            }
-        }
         tiles.insert(coordinate,tile);
     }
     let source=SourceImage {extent,interpretation,kind,tiles,resolution:data.get("resolution").map(v::parse_resolution).transpose()?}; source.validate()?; let source=Arc::new(source); reader.originals.insert(key,source.clone()); Ok(source)
 }
 fn content_bounds(art:&Artwork,content:&OccurrenceContent,canvas:[u32;2])->Result<Rect,String> {
     Ok(match content {OccurrenceContent::Paint(h)=>Rect::from_extent(art.paint.get(*h).ok_or("Missing paint source")?.domain),
-        OccurrenceContent::Effect(h)=>Rect::from_extent(art.effects.get(*h).ok_or("Missing effect")?.domain),
         OccurrenceContent::Selection(h)=> {let bounds=art.selections.get(*h).ok_or("Missing selection")?.selection.bounds();if bounds.is_empty() {Rect::from_extent(canvas)} else {bounds}},
-        OccurrenceContent::Stack(_)=>Rect::from_extent(canvas)})
+        OccurrenceContent::Stack(_)|OccurrenceContent::Effect(_)=>Rect::from_extent(canvas)})
 }
 fn encode_guides(guides:&Guides)->Result<Value,String> {
     let mut seen=BTreeSet::new(); let mut rulers=Vec::new();
@@ -140,7 +132,7 @@ fn encode_guides(guides:&Guides)->Result<Value,String> {
 }
 fn decode_guides(value:&Value)->DecodeResult<Guides> {
     let data=fields(value,&["rulers"])?; let mut rulers=Vec::new(); let mut seen=BTreeSet::new();
-    if let Some(value)=data.get("rulers") {for ruler in list(value)? {
+    if let Some(value)=data.get("rulers") {let records=list(value)?;if records.len()>1024 {return Err(DecodeError::Unsupported("Too many rulers".into()));}for ruler in records {
         let ruler=fields(ruler,&["id","geometry"])?; let id=v::string(v::required(ruler,"id")?)?.parse::<PortableId>()?;
         if !seen.insert(id) {return Err("Duplicate ruler identity".into());}
         let geometry=v::required(ruler,"geometry")?; let kind=v::string(v::required(geometry.as_object().ok_or("Expected ruler geometry")?,"kind")?)?;
@@ -183,7 +175,7 @@ pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut Resour
         },
         crate::Edit::Effect(change)=>{let identity=change.id;let effect=change.value.as_ref().ok_or("Cannot encode removed record")?;
             let definition=art.definitions.get(effect.definition).ok_or("Missing effect definition")?;
-        let mut data=json!({"definition":reference(id(&art.definitions,effect.definition)?),"domain":v::encode_domain(effect.domain)?}).as_object().unwrap().clone();
+        let mut data=json!({"definition":reference(id(&art.definitions,effect.definition)?)}).as_object().unwrap().clone();
         optional_object(&mut data,"values",effect_records::encode_values(&definition.program,&effect.values,resources)?);
         Ok(record(identity,"capy.effect/1",Value::Object(data)))
         },
@@ -200,7 +192,6 @@ pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut Resour
         let mut data=json!({"content":content}).as_object().unwrap().clone(); set_name(&mut data,&occurrence.name);
         for (key,value,default) in [("visible",occurrence.visible,true),("locked",occurrence.locked,false),("alpha_locked",occurrence.alpha_locked,false),("reference",occurrence.reference,false)] {set_bool(&mut data,key,value,default);}
         match occurrence.attachment {Attachment::None=>{},Attachment::Clip=>{data.insert("attachment".into(),json!("clip"));},Attachment::Effect=>{data.insert("attachment".into(),json!("effect"));}}
-        if occurrence.isolated_blend!=LayerBlend::Normal {data.insert("isolated_blend".into(),v::encode_layer_blend(occurrence.isolated_blend));}
         set_float(&mut data,"opacity",occurrence.opacity,1.)?;
         if occurrence.blend!=LayerBlend::Normal {data.insert("blend".into(),v::encode_layer_blend(occurrence.blend));}
         optional_object(&mut data,"placement",v::encode_placement(occurrence.translation,&occurrence.placement,content_bounds(art,&occurrence.content,canvas.size)?)?);
@@ -215,7 +206,7 @@ pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut Resour
         },
         crate::Edit::Output(change)=>{let identity=change.id;let output=change.value.as_ref().ok_or("Cannot encode removed record")?;
             let mut data=json!({"source":endpoint(id(&art.compositions,output.composition)?)}).as_object().unwrap().clone(); set_name(&mut data,&output.name);
-        let mut context=Map::new(); set_float(&mut context,"elapsed",output.context.elapsed,0.)?;
+        let mut context=Map::new();
         let mut seen=BTreeSet::new(); let mut phases=Vec::new();
         for (effect,phase) in output.context.phases.iter() {
             let effect=id(&art.effects,*effect)?;
@@ -298,7 +289,7 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
         if size.iter().any(|n|*n>reader.limits.dimension || *n>crate::MAX_EXTENT) {return Err(DecodeError::Unsupported("Composition exceeds dimension admission".into()));}
         let color=data.get("color").map(v::parse_document_color).transpose()?.unwrap_or(DocumentColor {space:crate::color::RgbSpace::Srgb,depth:crate::color::SampleDepth::U8});
         let blend=data.get("blend").map(v::parse_blend_space).transpose()?.unwrap_or(BlendSpace::Linear);
-        if color.depth.is_float() && blend!=BlendSpace::Linear {return Err("Float compositions require linear blending".into());}
+        if color.depth.is_float() && blend!=BlendSpace::Linear {return Err(DecodeError::Unsupported("Float compositions require linear blending".into()));}
         let c=Composition {origin,size,color,blend,resolution:data.get("resolution").map(v::parse_resolution).transpose()?,result:endpoint_handle(&art.stacks,v::required(data,"result")?)?};
         art.compositions.install(art.compositions.allocated(*identity).unwrap(),c)?;
     }}
@@ -318,17 +309,16 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
         "capy.guides/1"=> {let guides=decode_guides(value)?;art.guides.install(art.guides.allocated(*identity).unwrap(),guides)?;}, _=>{}
     }}
     for (identity,kind,value) in &known {if *kind=="capy.effect/1" {
-        let data=fields(value,&["definition","domain","values","bindings","inputs"])?;
+        let data=fields(value,&["definition","values","bindings","inputs"])?;
         for key in ["bindings","inputs"] {if let Some(value)=data.get(key) && !value.as_object().ok_or("Expected keyed effect map")?.is_empty() {return Err(DecodeError::Unsupported("Explicit effect inputs or bindings are unsupported".into()));}}
         let definition=handle(&art.definitions,v::required(data,"definition")?)?;let program=&art.definitions.get(definition).ok_or("Missing effect definition")?.program;
         let values=effect_records::decode_values(program,data.get("values").unwrap_or(&json!({})),reader)?;
-        let domain=dimension(v::required(data,"domain")?,reader)?;
-        art.effects.install(art.effects.allocated(*identity).unwrap(),EffectApplication {definition,values,domain})?;
+        art.effects.install(art.effects.allocated(*identity).unwrap(),EffectApplication {definition,values})?;
     }}
     for (identity,kind,value) in &known {match *kind {
         "capy.stack/1"=> {let data=fields(value,&["entries"])?;let entries=data.get("entries").map(|v|list(v)?.iter().map(|value|handle(&art.occurrences,value)).collect::<DecodeResult<Vec<_>>>()).transpose()?.unwrap_or_default();art.stacks.install(art.stacks.allocated(*identity).unwrap(),Stack {entries})?;},
         "capy.occurrence/2"=> {
-            let data=fields(value,&["content","name","visible","opacity","blend","locked","alpha_locked","reference","attachment","isolated_blend","placement","mask"])?;
+            let data=fields(value,&["content","name","visible","opacity","blend","locked","alpha_locked","reference","attachment","placement","mask"])?;
             let content=fields(v::required(data,"content")?,&["paint","stack","effect","selection"])?;
             if content.len()!=1 {return Err("Occurrence requires one content alternative".into());}
             let (kind,value)=content.iter().next().unwrap();let content=match kind.as_str() {"paint"=>OccurrenceContent::Paint(handle(&art.paint,value)?),"stack"=>OccurrenceContent::Stack(handle(&art.stacks,value)?),"effect"=>OccurrenceContent::Effect(handle(&art.effects,value)?),"selection"=>OccurrenceContent::Selection(handle(&art.selections,value)?),_=>unreachable!()};
@@ -341,9 +331,8 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
                 let bounds=Rect::from_extent(art.coverage.get(source).ok_or("Missing coverage source")?.domain);
                 let (translation,placement)=data.get("placement").map(|v|v::parse_mask_placement(v,bounds)).transpose()?.unwrap_or((Point::default(),crate::Projective::IDENTITY));
                 Ok::<_,DecodeError>(MaskUse {source,enabled:bool_field(data,"enabled",true)?,linked:bool_field(data,"linked",true)?,inverted:bool_field(data,"inverted",false)?,translation,placement})}).transpose()?;
-            let attachment=match data.get("attachment").map(Value::as_str) {None|Some(Some("none"))=>Attachment::None,Some(Some("clip"))=>Attachment::Clip,Some(Some("effect"))=>Attachment::Effect,_=>return Err("Invalid occurrence attachment".into())};
-            let isolated_blend=data.get("isolated_blend").map(v::parse_layer_blend).transpose()?.unwrap_or(LayerBlend::Normal);
-            let occurrence=Occurrence {content,name:name(data)?,visible:bool_field(data,"visible",true)?,opacity,blend,locked:bool_field(data,"locked",false)?,alpha_locked:bool_field(data,"alpha_locked",false)?,reference:bool_field(data,"reference",false)?,attachment,isolated_blend,translation,placement,mask};
+            let attachment=match data.get("attachment").map(v::string).transpose()? {None|Some("none")=>Attachment::None,Some("clip")=>Attachment::Clip,Some("effect")=>Attachment::Effect,Some(name)=>return Err(DecodeError::Unsupported(format!("Unknown occurrence attachment {name}")))};
+            let occurrence=Occurrence {content,name:name(data)?,visible:bool_field(data,"visible",true)?,opacity,blend,locked:bool_field(data,"locked",false)?,alpha_locked:bool_field(data,"alpha_locked",false)?,reference:bool_field(data,"reference",false)?,attachment,translation,placement,mask};
             art.occurrences.install(art.occurrences.allocated(*identity).unwrap(),occurrence)?;
         },_=>{}
     }}
@@ -351,7 +340,7 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
         let data=fields(value,&["source","name","context","frame","scale","sdr","proof","representation"])?;
         let composition=endpoint_handle(&art.compositions,v::required(data,"source")?)?;
         let mut context=EvaluationContext::default();
-        if let Some(value)=data.get("context") {let data=fields(value,&["elapsed","effect_phases"])?;context.elapsed=float_field(data,"elapsed",0.)?;
+        if let Some(value)=data.get("context") {let data=fields(value,&["effect_phases"])?;
             if let Some(value)=data.get("effect_phases") {let mut seen=BTreeSet::new();for phase in list(value)? {
                 let data=fields(phase,&["effect","phase"])?;let effect=handle(&art.effects,v::required(data,"effect")?)?;
                 let identity=art.effects.id(effect).unwrap();if !seen.insert(identity) {return Err("Duplicate output phase".into());}
@@ -439,7 +428,7 @@ mod tests {
     fn fixture()->Artwork {
         let mut art=Artwork::new([37,29]).unwrap();let color=art.compositions.get(art.root).unwrap().color;
         let mut raster=RasterData::default();raster.watercolor=Some(RasterWatercolor {wet_edge:0.25,burnt_edge:0.3,edge_width:3.});
-        for plane in [RasterPlane::Color,RasterPlane::Wetness,RasterPlane::WatercolorWetness] {
+        for plane in [RasterPlane::Color,RasterPlane::WatercolorWetness] {
             let descriptor=plane.descriptor(color);let bytes=vec![73;descriptor.byte_len([TILE_SIZE;2]).unwrap()];
             raster.tiles.insert(TileKey {plane,coordinate:[0,0]},RasterTile::backed(crate::raster::TileBlob::encode(descriptor,&bytes).unwrap()));
         }
@@ -459,8 +448,8 @@ mod tests {
         art.guides.insert(PortableId::random(),Guides {rulers:vec![(PortableId::random(),RulerGeometry::Parallel {start:Point {x:1.,y:2.},end:Point {x:3.,y:4.}})]}).unwrap();
         let program=crate::bundled_effect_catalog().filters()[0].program();let values=crate::EffectInstance::new(program.clone()).values;
         let definition=art.definitions.insert(PortableId::random(),Definition {program}).unwrap();
-        let effect=art.effects.insert(PortableId::random(),EffectApplication {definition,values,domain:[37,29]}).unwrap();
-        let output=art.outputs.get_mut(art.default_output).unwrap();output.context.elapsed=17.125;output.context.phases=vec![(effect,0.75)].into();output.name="Export".into();output.frame=Some((Point {x:-0.,y:1.},[23,17]));output.scale=[1.25,0.75];output.sdr.exposure=0.625;
+        let effect=art.effects.insert(PortableId::random(),EffectApplication {definition,values}).unwrap();
+        let output=art.outputs.get_mut(art.default_output).unwrap();output.context.phases=vec![(effect,0.75)].into();output.name="Export".into();output.frame=Some((Point {x:-0.,y:1.},[23,17]));output.scale=[1.25,0.75];output.sdr.exposure=0.625;
         output.proof=Some(crate::color::ProofRecipe::new("Print".into(),crate::color::ColorProfile::Builtin(crate::color::RgbSpace::AdobeRgb)));
         art.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![7;61])),xmp:Some(Resource::from(vec![11;71])),iptc:None});art
     }
@@ -490,6 +479,8 @@ mod tests {
         assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Unsupported(_))));
         manifest.objects.insert(paint,original);let occurrence=art.occurrences.iter().next().unwrap().1;let original=manifest.objects[&occurrence].clone();
         manifest.objects.get_mut(&occurrence).unwrap()["data"]["mask"]["placement"]["interpolation"]="nearest".into();
+        assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Unsupported(_))));
+        manifest.objects.insert(occurrence,original.clone());manifest.objects.get_mut(&occurrence).unwrap()["data"]["attachment"]="future".into();
         assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Unsupported(_))));
         for attachment in ["clip","effect"] {manifest.objects.insert(occurrence,original.clone());manifest.objects.get_mut(&occurrence).unwrap()["data"]["attachment"]=attachment.into();assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Invalid(_))));}
     }

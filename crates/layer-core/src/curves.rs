@@ -26,10 +26,10 @@ pub fn curve_place_knot(points:&mut Vec<[f32;2]>,point:[f32;2])->Result<usize,&'
     let index=points.partition_point(|p|p[0]<x);points.insert(index,point);Ok(index)
 }
 fn curve(effect:&EffectInstance,page:u8)->Result<&[[f32;2]],&'static str> {
-    match effect.value(&format!("curve_{page}")) {Some(EffectValue::Curve(points))=>Ok(points),_=>Err("Missing curve")}
+    match effect.value(crate::CURVE_KEYS[usize::from(page)]) {Some(EffectValue::Curve(points))=>Ok(points),_=>Err("Missing curve")}
 }
 fn transform(effect:&EffectInstance,space:RgbSpace,value:f64,encode:bool)->f64 {
-    if effect.choice("domain")==Some("Log HDR") {
+    if effect.choice("domain")==Some("log_hdr") {
         let Some(EffectValue::Number(stops))=effect.value("hdr_stops") else {return f64::NAN;};
         if encode {crate::log_curve_encode(value,f64::from(*stops))} else {crate::log_curve_decode(value,f64::from(*stops))}
     } else if encode {space.encode(value)} else {space.decode(value)}
@@ -58,7 +58,7 @@ pub fn calibrate_curves(effect:&EffectInstance,rgb:[f32;3],space:RgbSpace,page:u
         if page!=0 && usize::from(page)!=i+1 {continue;}
         let y=curve_inverse(master,normalized as f32,channel[i]).ok_or("The master curve cannot reach this tone")?;
         let mut points=curve(effect,i as u8+1)?.to_vec();curve_place_knot(&mut points,[input[i],y])?;
-        result.set(&format!("curve_{}",i+1),EffectValue::Curve(points))?;
+        result.set(crate::CURVE_KEYS[i+1],EffectValue::Curve(points))?;
     }
     result.validate()?;
     for (i, &value) in input.iter().enumerate() {

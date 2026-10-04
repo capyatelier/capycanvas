@@ -229,7 +229,7 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn target_extent(self,t:SourceTarget)->[u32;2]{match t{SourceTarget::Paint(h)=>self.paint(h).map(|p|p.domain),SourceTarget::Coverage(h)=>self.coverage(h).map(|p|p.domain),SourceTarget::Selection(_)=>None}.unwrap_or(self.composition().size)}
     #[inline]
-    pub fn local_extent(self,h:OccurrenceHandle)->[u32;2]{self.source_target(h).map(|t|self.target_extent(t)).or_else(||self.effect_application(h).map(|e|e.domain)).unwrap_or(self.composition().size)}
+    pub fn local_extent(self,h:OccurrenceHandle)->[u32;2]{self.source_target(h).map(|t|self.target_extent(t)).unwrap_or(self.composition().size)}
     #[inline]
     pub fn includes(self,h:OccurrenceHandle)->bool{match self.scope{None|Some(SceneScope::All)|Some(SceneScope::EffectInput(_))=>true,Some(SceneScope::Members(m))=>m.contains(&h),Some(SceneScope::Raw(t))=>self.source_owner(*t)==Some(h)}}
     #[inline]

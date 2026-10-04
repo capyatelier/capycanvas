@@ -171,7 +171,7 @@ impl PropertyEditorState {
     use super::*;
     #[test] fn page_selection_and_stale_contact_are_transient() {
         let mut state=PropertyEditorState::default();state.sync(1,Some(3),1,vec!["rgb".into(),"red".into()],false);
-        let old=state.epoch;assert!(state.select(3,old,"curve_0",Some(1),&[[0.,0.],[1.,1.]]));
+        let old=state.epoch;assert!(state.select(3,old,"rgb",Some(1),&[[0.,0.],[1.,1.]]));
         assert!(state.select_page(3,"red"));assert!(!state.accepts(3,old));assert_eq!(state.page(),Some("red"));
         state.sync(1,Some(3),2,vec!["rgb".into(),"red".into()],false);assert!(!state.accepts(3,old));
         state.sync(1,Some(4),2,vec!["rgb".into(),"red".into()],false);assert_eq!(state.page(),Some("rgb"));

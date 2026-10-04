@@ -77,7 +77,7 @@ fn insert_effect(doc: &Document, name: &str, draft: EffectInstance, mask: Option
         program: draft.program,
     });
     let effect = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: draft.values, domain: doc.composition().size,
+        definition: definition.handle, values: draft.values,
     });
     let handle = effect.handle;
     let mut edits = vec![Edit::Definition(definition), Edit::Effect(effect)];

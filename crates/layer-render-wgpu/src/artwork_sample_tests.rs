@@ -46,7 +46,7 @@ pub(super) fn refresh(doc: &mut Document) {
 }
 pub(super) fn insert_effect(doc: &mut Document, effect: layer_core::EffectInstance, index: usize) -> OccurrenceHandle {
     let definition=doc.artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:doc.composition().size}).unwrap();
+    let application=doc.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
     let h=doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"Effect")).unwrap();
     let stack=doc.composition().result;doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(index,h);refresh(doc);h
 }

@@ -101,7 +101,7 @@ shared session or workspace owners.
 | `Composition.resolution` | Optional exact positive rational physical density on both axes, with inch, centimetre or metre units. | Round-trip rational pairs and units without normalization; changing resolution alone does not invalidate pixels. |
 | `Composition.result`, `Stack.entries` | Typed result stack and front-to-back occurrence order. | Preserve membership, including empty stacks; no parallel flat order or authored parent field. |
 | `Output.composition`, `name` | Output source composition and literal UTF-8 name. | Preserve output identity independently of presentation name. |
-| `Output.context` | Explicit elapsed time and effective effect phases. | Evaluate captured source roots at these phases, never reconstruct phases from elapsed time and the latest rate. |
+| `Output.context` | Effective effect phases; the runtime elapsed origin is not saved and reopens at zero. | Evaluate captured source roots at these phases, never reconstruct phases from elapsed time and the latest rate. |
 | `Output.frame`, `scale` | Optional output frame and positive delivery scale, initially absent and `[1,1]`. | Output framing is independent of composition and source domains. |
 | `Output.proof` | Optional proof intent with immutable profile resource. | Preserve name, profile, intent, black-point compensation, paper and black-ink simulation; temporary proof toggles are omitted. |
 | `Output.sdr` | Exposure, contrast, headroom, highlight-color fraction and balance; defaults `0`, `1`, `2.3004484`, `0.3`, `0`. | All five values survive save/reopen; screen capability never changes authored intent. |
@@ -117,7 +117,7 @@ shared session or workspace owners.
 | `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
 | `Occurrence.visible` | Artwork contribution visibility, initially true; fixed true for saved selections. | Hiding artwork contribution does not disable a source demanded by an explicit input. Selection overlay visibility belongs to working state. |
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
-| `Occurrence.blend`, `isolated_blend` | Actual blend operation and retained isolated group blend, initially Normal. | Pass Through is an explicit mode; toggling isolation restores the retained blend. |
+| `Occurrence.blend` | Actual blend operation, initially Normal. | Pass Through is an explicit mode; isolating a Pass Through group makes it Normal. |
 | `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
 | `Occurrence.translation` | Translation in enclosing-stack pixels, initially zero. | Preserve inherited group offsets, including mask placement. |
 | `Occurrence.placement` | Local retained projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Retain analytic geometry; omit generated tessellation and GPU buffers. |
@@ -197,7 +197,6 @@ strong deduplication remain separate from editable source identity.
 | --- | --- | --- |
 | `EffectApplication.definition` | Typed reference to an immutable authored definition. | Capture/undo preserves one definition owner; application and definition identities remain distinct. |
 | `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
-| `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
 | `Definition.program` | Shared immutable runtime program. Built-in wire records store only stable ID and parameter-data version; custom records embed their definition. | Built-ins resolve the current catalog on open; custom code and literal labels retain their owners. |
 | `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths without UI precision rounding; count bounds and values are whole numbers. UI unit labels never decide scaling. |
 | `EffectParameter.opaque` | Color-control capability, default false. | RGB-only controls author opaque colors; stored alpha remains intact even when the filter ignores it. |

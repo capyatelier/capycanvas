@@ -344,7 +344,7 @@ export async function checkPhotoCorrections({evaluate,settle}) {
   const save=async()=>{await invoke('save_document_as');await idle();return readPackage(evaluate,'sdrFiles.get(layerApp.state().document_file.location.name)');};
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'photo-master.capy',async getFile(){return new File([sdrPhotoMaster],'photo-master.capy')}}]`);await invoke('open_document');await idle();
   const source=sourceIdentity(await save());
-  const controls=[['exposure','exposure',.75],['white_balance','temperature',25],['levels','gamma',.9],['curves','curve_0',[[0,0],[.213,.13],[.79,.9],[1,1]]],['hue_saturation','hue',10],['color_balance','midtones_red',12]];
+  const controls=[['exposure','exposure',.75],['white_balance','temperature',25],['levels','gamma',.9],['curves','rgb',[[0,0],[.213,.13],[.79,.9],[1,1]]],['hue_saturation','hue',10],['color_balance','midtones_red',12]];
   const ids=[];
   for(const [name,key,value] of controls){
     const id=await evaluate(`(()=>{layerApp.dispatch({type:'effect',action:{op:'insert',effect:${JSON.stringify(name)}}});const layer=Number(layerApp.state().layer_properties.layer);layerApp.dispatch({type:'effect',action:{op:'set',layer,key:${JSON.stringify(key)},value:{kind:${JSON.stringify(Array.isArray(value)?'curve':'number')},value:${JSON.stringify(value)}}}});layerApp.dispatch({type:'layer',action:{op:'add_mask',id:layer,replace:false}});return layer})()`);ids.push(id);await settle();

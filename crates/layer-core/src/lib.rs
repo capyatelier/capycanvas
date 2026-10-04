@@ -1312,7 +1312,7 @@ impl Document {
             program: fill.program,
         }).expect("new definition store");
         let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
-            definition, values: fill.values, domain: [width, height],
+            definition, values: fill.values,
         }).expect("new effect store");
         let paper = artwork
             .occurrences
@@ -1660,11 +1660,10 @@ impl Document {
                 return Err(invalid("Only groups can use Pass Through"));
             }
             if o.attachment!=Attachment::None && self.scene().attachment_target(h).is_none(){return Err(invalid("An attachment needs a target in its stack"));}
-            if o.isolated_blend==LayerBlend::PassThrough {return Err(invalid("The retained isolated blend cannot be Pass Through"));}
             if o.passes_through() && (o.attachment!=Attachment::None || !self.scene().attached_effects(h).is_empty() || self.scene().order().iter().any(|other|self.scene().clipping_base(*other)==Some(h))) {return Err(invalid("Release attachments before switching to Pass Through"));}
             if let OccurrenceContent::Selection(_) = o.content
                 && (o.mask.is_some() || o.attachment != Attachment::None || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.
-                    || !o.visible || o.reference || o.isolated_blend != LayerBlend::Normal)
+                    || !o.visible || o.reference)
             {
                 return Err(invalid("Selection Layers cannot contain artwork"));
             }
@@ -1686,7 +1685,6 @@ impl Document {
             }
         }
         for (_, _, e) in self.artwork.effects.iter() {
-            extent(e.domain)?;
             let definition = self
                 .artwork
                 .definitions

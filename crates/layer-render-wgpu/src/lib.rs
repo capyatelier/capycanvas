@@ -367,7 +367,6 @@ struct PaintLayer {
     id: SourceTarget,
     pages: Vec<LayerPage>,
     coverage_pages: Vec<StrokeCoveragePage>,
-    material_pages: Vec<CanvasMaterialPage>,
     watercolor_wetness_pages: Vec<WatercolorWetnessPage>,
     watercolor: Option<WatercolorLayerStyle>,
 }
@@ -457,28 +456,21 @@ impl DirectPipelineKind {
 enum MaterialPipelineKind {
     Color,
     Coverage,
-    Wetness,
-    State,
     Watercolor,
 }
 
 impl MaterialPipelineKind {
-    const COUNT: usize = 5;
+    const COUNT: usize = 3;
 
     fn index(self, operation: MaterialOperation) -> usize {
         operation as usize * Self::COUNT + self as usize
     }
 
-    fn for_attachments(watercolor: bool, coverage: bool, wetness: bool) -> Self {
-        if watercolor {
-            Self::Watercolor
-        } else {
-            match (coverage, wetness) {
-                (false, false) => Self::Color,
-                (true, false) => Self::Coverage,
-                (false, true) => Self::Wetness,
-                (true, true) => Self::State,
-            }
+    fn for_attachments(watercolor: bool, coverage: bool) -> Self {
+        match (watercolor, coverage) {
+            (true, _) => Self::Watercolor,
+            (false, true) => Self::Coverage,
+            (false, false) => Self::Color,
         }
     }
 }
@@ -507,7 +499,6 @@ struct BrushEncodingContext<'a> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 struct BrushStateTargets {
     coverage: bool,
-    canvas_wetness: bool,
     watercolor_wetness: bool,
 }
 
@@ -531,7 +522,6 @@ impl BrushPassPlan {
             coverage: style.rendering.accumulation == BrushAccumulation::Uniform
                 || style.rendering.edge_after_stroke
                 || style.execution == BrushExecution::Watercolor,
-            canvas_wetness: style.wet_mix.wetness > 0.0,
             watercolor_wetness: style.execution == BrushExecution::Watercolor,
         };
         let needs_destination = style.execution != BrushExecution::Dry
@@ -574,7 +564,7 @@ impl BrushPassPlan {
     }
 
     fn uses_paint_state(self) -> bool {
-        self.state.coverage || self.state.canvas_wetness || self.state.watercolor_wetness
+        self.state.coverage || self.state.watercolor_wetness
     }
 }
 
@@ -604,12 +594,6 @@ impl StrokeCoveragePage {
             &self.primary
         }
     }
-}
-
-struct CanvasMaterialPage {
-    coordinate: [u32; 2],
-    wetness: PageSurface,
-    needs_clear: bool,
 }
 
 /// Persistent watercolor wetness on one sparse layer page. The two R8
@@ -807,10 +791,8 @@ impl Pipelines {
         operation: MaterialOperation,
         watercolor: bool,
         coverage: bool,
-        wetness: bool,
     ) -> &wgpu::RenderPipeline {
-        &self.material
-            [MaterialPipelineKind::for_attachments(watercolor, coverage, wetness).index(operation)]
+        &self.material[MaterialPipelineKind::for_attachments(watercolor, coverage).index(operation)]
     }
 }
 
@@ -1591,7 +1573,7 @@ impl WgpuRasterizer {
         for target in source_access::placed_targets(scene).filter(|target| matches!(target, SourceTarget::Paint(_))) {
             if self.paint_layers.iter().all(|stored| stored.id != target) {
                 self.paint_layers.push(PaintLayer { id: target, pages: Vec::with_capacity(8), coverage_pages: Vec::with_capacity(4),
-                    material_pages: Vec::with_capacity(4), watercolor_wetness_pages: Vec::with_capacity(4), watercolor: None });
+                    watercolor_wetness_pages: Vec::with_capacity(4), watercolor: None });
             }
         }
         Ok(resized)
@@ -1857,22 +1839,6 @@ impl WgpuRasterizer {
                             owner: None,
                         });
                 }
-                if plan.state.canvas_wetness
-                    && self.paint_layers[layer_index]
-                        .material_pages
-                        .iter()
-                        .all(|page| page.coordinate != coordinate)
-                {
-                    let wetness =
-                        self.create_scalar_page_surface("layer sparse canvas wetness page");
-                    self.paint_layers[layer_index]
-                        .material_pages
-                        .push(CanvasMaterialPage {
-                            coordinate,
-                            wetness,
-                            needs_clear: true,
-                        });
-                }
                 if plan.state.watercolor_wetness
                     && self.paint_layers[layer_index]
                         .watercolor_wetness_pages
@@ -2057,16 +2023,12 @@ impl WgpuRasterizer {
         let material_pages = self
             .paint_layers
             .iter()
-            .map(|layer| {
-                layer.material_pages.len() as u64 + layer.watercolor_wetness_pages.len() as u64
-            })
+            .map(|layer| layer.watercolor_wetness_pages.len() as u64)
             .sum::<u64>();
         let material_surface_pages = self
             .paint_layers
             .iter()
-            .map(|layer| {
-                layer.material_pages.len() as u64 + layer.watercolor_wetness_pages.len() as u64 * 2
-            })
+            .map(|layer| layer.watercolor_wetness_pages.len() as u64 * 2)
             .sum::<u64>();
         self.metrics.paint_pages = paint_pages;
         self.metrics.preview_pages = preview_pages;
@@ -3516,7 +3478,6 @@ impl WgpuRasterizer {
             for layer in &mut self.paint_layers {
                 layer.pages.clear();
                 layer.coverage_pages.clear();
-                layer.material_pages.clear();
                 layer.watercolor_wetness_pages.clear();
                 layer.watercolor = None;
             }
@@ -3755,15 +3716,6 @@ impl WgpuRasterizer {
                     );
                 }
             }
-            for page in &layer.material_pages {
-                if page.needs_clear {
-                    self.encode_clear(
-                        &mut encoder,
-                        &page.wetness.view,
-                        "layer clear new canvas wetness",
-                    );
-                }
-            }
             for page in &layer.watercolor_wetness_pages {
                 if page.primary_needs_clear {
                     self.encode_clear(
@@ -3790,9 +3742,6 @@ impl WgpuRasterizer {
         for layer in &mut self.paint_layers {
             for page in &mut layer.pages {
                 page.primary_needs_clear = false;
-            }
-            for page in &mut layer.material_pages {
-                page.needs_clear = false;
             }
             for page in &mut layer.watercolor_wetness_pages {
                 page.primary_needs_clear = false;
@@ -4967,7 +4916,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         Deferred::new(move || {
             device.create_shader_module(wgpu::ShaderModuleDescriptor {
                 label: Some("layer live watercolor composite shader"),
-                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("watercolor_composite.wgsl")])),
+                source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), include_str!("watercolor_floor.wgsl"), include_str!("watercolor_composite.wgsl")])),
             })
         })
     };
@@ -4978,6 +4927,7 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
                 label: Some("layer watercolor capillary transport shader"),
                 source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[
                     &working_color::shader(&device),
+                    include_str!("watercolor_floor.wgsl"),
                     include_str!("watercolor_transport.wgsl"),
                     include_str!("selection_clip.wgsl"),
                 ])),
@@ -5103,11 +5053,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         blend: None,
         write_mask: wgpu::ColorWrites::RED,
     });
-    let wetness_target = Some(wgpu::ColorTargetState {
-        format: device.scalar_format(),
-        blend: Some(max_blend),
-        write_mask: wgpu::ColorWrites::RED,
-    });
     let watercolor_wetness_target = Some(wgpu::ColorTargetState {
         format: device.scalar_format(),
         // All microbatches in one submitted update write the same destination
@@ -5123,18 +5068,6 @@ fn create_pipelines(device: &PipelineDevice, layouts: PipelineLayouts<'_>) -> Pi
         (
             [color_target.clone(), coverage_target.clone(), None],
             "layer destination brush with stroke coverage",
-        ),
-        (
-            [color_target.clone(), None, wetness_target.clone()],
-            "layer destination brush with canvas material",
-        ),
-        (
-            [
-                color_target.clone(),
-                coverage_target.clone(),
-                wetness_target,
-            ],
-            "layer destination brush with paint state",
         ),
         (
             [

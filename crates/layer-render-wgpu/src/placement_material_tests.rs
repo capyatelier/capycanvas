@@ -11,7 +11,6 @@ fn field(plane: RasterPlane, x: f32, y: f32) -> Vec<u8> {
     let inside = (232. ..272.).contains(&x) && (120. ..160.).contains(&y);
     match plane {
         RasterPlane::Color => if inside { vec![76, 38, 19, 128] } else { vec![0; 4] },
-        RasterPlane::Wetness => vec![if inside { 37 + (x.floor() as u32 % 8) as u8 * 19 } else { 0 }],
         RasterPlane::WatercolorWetness => vec![if inside { 89 + (y.floor() as u32 % 8) as u8 * 17 } else { 0 }],
         RasterPlane::Mask => unreachable!(),
     }
@@ -23,7 +22,7 @@ fn fixture(map: Affine, width: f32) -> RasterData {
         watercolor: Some(RasterWatercolor { wet_edge: 0.9, burnt_edge: 0.6, edge_width: width }),
         ..Default::default()
     };
-    for plane in [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+    for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness] {
         for coordinate in [[0, 0], [1, 0], [0, 1], [1, 1]] {
             let mut bytes = Vec::new();
             for y in 0..PAGE_SIZE {
@@ -71,8 +70,6 @@ fn live_planes(r: &WgpuRasterizer) -> std::collections::BTreeMap<TileKey, Vec<u8
     let layer = &r.paint_layers[0];
     layer.pages.iter().map(|p| (TileKey { plane: RasterPlane::Color, coordinate: p.coordinate },
         page_bytes(r, &p.active().texture)))
-        .chain(layer.material_pages.iter().map(|p| (TileKey { plane: RasterPlane::Wetness, coordinate: p.coordinate },
-            page_bytes(r, &p.wetness.texture))))
         .chain(layer.watercolor_wetness_pages.iter().map(|p| (TileKey { plane: RasterPlane::WatercolorWetness, coordinate: p.coordinate },
             page_bytes(r, &p.active().texture))))
         .collect()
@@ -189,13 +186,9 @@ fn cold_backed_scalar_planes_survive_destructive_affine_mapping_without_live_pag
     let mut source = layer(fixture(Affine::IDENTITY, 4.), Affine::IDENTITY);
     let immutable = paint(&source).raster.clone();
     render(&mut transformed, &source, &[], true);
-    assert!(!transformed.paint_layers[0].material_pages.is_empty());
     assert!(!transformed.paint_layers[0].watercolor_wetness_pages.is_empty());
-    transformed.paint_layers[0].material_pages.clear();
     transformed.paint_layers[0].watercolor_wetness_pages.clear();
-    for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
-        assert!(transformed.native_plane_tile(target(&source), plane, [1, 0]).unwrap().is_some());
-    }
+    assert!(transformed.native_plane_tile(target(&source), RasterPlane::WatercolorWetness, [1, 0]).unwrap().is_some());
     let destination = layer(fixture(map, 4.), Affine::IDENTITY);
     let expected_pixels = render(&mut expected, &destination, &[], true);
     let operation = RasterOperation {
@@ -282,7 +275,7 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
             wet_edge: 0.9, burnt_edge: 0.6, edge_width: 4.,
         }), ..Default::default() };
         let coordinates = if mapped { vec![[1, 0]] } else { vec![[8, 4], [9, 4], [8, 5], [9, 5]] };
-        for plane in [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+        for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness] {
             for &coordinate in &coordinates {
                 let mut bytes = Vec::new();
                 for y in 0..PAGE_SIZE {
@@ -292,7 +285,6 @@ fn minified_material_split_pieces_clear_color_scalar_and_clip_mask_coverage() {
                         let inside = !mapped || ((256. ..320.).contains(&point.x) && (128. ..192.).contains(&point.y));
                         match plane {
                             RasterPlane::Color => bytes.extend(if inside { [76, 38, 19, 128] } else { [0; 4] }),
-                            RasterPlane::Wetness => bytes.push(if inside { 103 } else { 0 }),
                             RasterPlane::WatercolorWetness => bytes.push(if inside { 127 } else { 0 }),
                             _ => unreachable!(),
                         }
@@ -403,6 +395,7 @@ fn perceptual_low_zoom_sparse_material_keeps_dry_photo_pixels_across_halo_page_e
     let mut wet = layer(data.clone(), map);
     set_source(&mut wet, photo);
     data.watercolor = None;
+    data.tiles.retain(|key, _| key.plane != RasterPlane::WatercolorWetness);
     let mut dry = wet.clone();
     paint_mut(&mut dry).raster = RasterRevision::backed(data);
     let mut actual = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
@@ -499,7 +492,7 @@ fn snapshot_affine_material_bake_preserves_raw_codes_masks_and_world_registratio
         assert!(paint(&baked).original.is_none());
         assert_eq!(paint(&baked).raster.wait_data().unwrap().watercolor, paint(&before).raster.wait_data().unwrap().watercolor);
         let inverse = map.inverse().unwrap();
-        assert_baked_codes(&baked, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], |plane, point| {
+        assert_baked_codes(&baked, &[RasterPlane::Color, RasterPlane::WatercolorWetness], |plane, point| {
             let source = inverse.map(point);
             field(plane, source.x.floor() + 0.5, source.y.floor() + 0.5)
         });
@@ -532,7 +525,7 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
             ..Default::default()
         };
         let coordinate = [(size - 1) / PAGE_SIZE, 0];
-        for plane in [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+        for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness] {
             let mut bytes = Vec::new();
             for y in 0..PAGE_SIZE {
                 for x in 0..PAGE_SIZE {
@@ -541,7 +534,6 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
                         && (40..56).contains(&y);
                     bytes.extend(match plane {
                         RasterPlane::Color => if inside { vec![76, 38, 19, 128] } else { vec![0; 4] },
-                        RasterPlane::Wetness => vec![if inside { 127 } else { 0 }],
                         RasterPlane::WatercolorWetness => vec![if inside { 255 } else { 0 }],
                         RasterPlane::Mask => unreachable!(),
                     });
@@ -893,11 +885,11 @@ fn accepted_photo_keeps_raw_lod_for_sparse_watercolor_and_transform_reopen() {
 }
 
 #[derive(Debug, PartialEq)]
-struct RawTexel([Vec<u8>; 3]);
+struct RawTexel([Vec<u8>; 2]);
 
-const PLANES: [RasterPlane; 3] = [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness];
+const PLANES: [RasterPlane; 2] = [RasterPlane::Color, RasterPlane::WatercolorWetness];
 
-fn raw_texel(planes: &Planes, sizes: [usize; 3], at: [i32; 2]) -> RawTexel {
+fn raw_texel(planes: &Planes, sizes: [usize; 2], at: [i32; 2]) -> RawTexel {
     RawTexel(std::array::from_fn(|i| {
         if at.iter().any(|v| *v < 0) { return vec![0; sizes[i]]; }
         let coordinate = at.map(|v| v as u32 / PAGE_SIZE);
@@ -907,7 +899,7 @@ fn raw_texel(planes: &Planes, sizes: [usize; 3], at: [i32; 2]) -> RawTexel {
     }))
 }
 
-fn plane_sizes(planes: &Planes) -> [usize; 3] {
+fn plane_sizes(planes: &Planes) -> [usize; 2] {
     PLANES.map(|plane| planes.iter().find(|(k, _)| k.plane == plane).unwrap().1.len()
         / (PAGE_SIZE * PAGE_SIZE) as usize)
 }
@@ -1062,7 +1054,7 @@ fn nonlinear_material_transform_maps_raw_planes_with_preview_commit_and_destinat
     for (label, map) in nonlinear_maps() {
         let positions = source_positions(&map);
         for (width, missing) in [(1., None), (4., None), (16., None),
-            (4., Some(RasterPlane::Wetness)), (4., Some(RasterPlane::WatercolorWetness))] {
+            (4., Some(RasterPlane::WatercolorWetness))] {
             let mut data = fixture(Affine::IDENTITY, width);
             if let Some(plane) = missing { data.tiles.remove(&TileKey { plane, coordinate: [1, 0] }); }
             let context = format!("{label} width={width} missing={missing:?}");

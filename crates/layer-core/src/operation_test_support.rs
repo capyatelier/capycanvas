@@ -90,7 +90,7 @@ pub fn effect(doc: &mut Document, name: &str, program: &str) {
     let e = doc
         .artwork
         .effects
-        .insert(PortableId::random(), EffectApplication { definition: d, values: draft.values, domain: doc.composition().size })
+        .insert(PortableId::random(), EffectApplication { definition: d, values: draft.values})
         .unwrap();
     doc.artwork.occurrences.get_mut(h).unwrap().content = OccurrenceContent::Effect(e);
     refresh(doc);

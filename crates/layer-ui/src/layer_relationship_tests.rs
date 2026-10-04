@@ -370,11 +370,11 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
     assert_eq!(mode.selected, Some(true));
     let isolate = relationship_row(&s, group).right_swipe.clone().unwrap();
     layer(&mut s, isolate);
-    assert_eq!(relationship_row(&s, group).blend, layer_core::LayerBlend::Multiply.code());
+    assert_eq!(relationship_row(&s, group).blend, layer_core::LayerBlend::Normal.code());
     invoke(&mut s, CommandId::Undo);
     assert!(relationship_row(&s, group).pass_through);
     invoke(&mut s, CommandId::Redo);
-    assert_eq!(relationship_row(&s, group).description, "Multiply");
+    assert_eq!(relationship_row(&s, group).description, "");
 }
 
 #[test]

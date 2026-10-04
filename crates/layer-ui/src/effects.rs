@@ -543,7 +543,7 @@ pub(super) fn effect_edit(document: &Document, occurrence: OccurrenceHandle, dra
         edits.push(Edit::Definition(RecordChange::replace(&document.artwork.definitions, application.definition, Some(definition)).map_err(str::to_string)?));
     }
     if application.values != draft.values {
-        let application = EffectApplication {definition: application.definition, domain: application.domain, values: draft.values};
+        let application = EffectApplication {definition: application.definition, values: draft.values};
         edits.push(Edit::Effect(RecordChange::replace(&document.artwork.effects, handle, Some(application)).map_err(str::to_string)?));
     }
     Ok(Edit::Batch(edits))
@@ -684,7 +684,7 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
     if effect.is_some_and(|effect|effect.program.id.as_ref()=="gradient_fill") {
         view.controls.sort_by_key(|control|control.key!="style");
     }
-    let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
+    let domain=effect.filter(|effect|effect.choice("domain")==Some("log_hdr")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
     for control in &mut view.controls {
         if matches!(control.value,EffectValue::Gradient(_)) {
             control.gradient=Some(GradientControls::new(GradientDestination::Effect {layer:view.layer.unwrap(),key:control.key.clone(),epoch:view.epoch},match &control.value {EffectValue::Gradient(value)=>value,_=>unreachable!()},l));
@@ -1101,7 +1101,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
                 let depth = doc.composition().color.depth;
                 let mut instance = EffectInstance::new(catalog.program());
-                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set_choice("domain", "Log HDR").map_err(str::to_string)?; }
+                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set_choice("domain", "log_hdr").map_err(str::to_string)?; }
                 if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
                     instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
                 }
@@ -1112,7 +1112,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
                     let handle = change.handle; edits.push(Edit::Definition(change)); handle
                 };
-                let application = EffectApplication {definition, values: instance.values, domain: if replacing {scene.local_extent(current.unwrap())} else {doc.composition().size}};
+                let application = EffectApplication {definition, values: instance.values};
                 let effect_handle = if replacing {
                     let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
                     edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
@@ -1332,7 +1332,7 @@ mod resource_tests {
         assert_eq!(&*options[1], "キャンセル");
         let mut instance = instance;
         instance.set("domain", EffectValue::Choice(1)).unwrap();
-        assert_eq!(instance.choice("domain"), Some("Log HDR"));
+        assert_eq!(instance.choice("domain"), Some("log_hdr"));
     }
 
     #[test]

@@ -48,7 +48,8 @@ and `package::session` tests. The fixed
 snapshot checks semantic types, choice IDs, units, dimensions, hard bounds,
 constraints and shader parameter order. The fixed
 [`authored-filters.capy`](../../crates/layer-core/src/package/codec/fixtures/authored-filters.capy)
-checks all built-ins alongside exact raster, watercolor, LUT and SDR values.
+checks all built-ins alongside exact raster, watercolor, LUT and SDR values, and
+every wire name it lists in the [package contract](../reference/capy-package.md#fixtures-and-acceptance-cases).
 Keep resize precision, whole-count controls, choice reordering and private
 selection-overlay recovery assertions. Replace superseded pre-release fixtures
 without conversion readers; retain the pixel and authored-value checks.

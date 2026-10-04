@@ -261,7 +261,7 @@ fn native_curves_histogram_preserves_numeric_focus() {
     w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } });ready(&w);
     let layer = state(&w).layer_properties.layer.unwrap();
     let set = |key: &str, value| w.dispatch(UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } });
-    set("curve_0", EffectValue::Curve(vec![[0., 0.], [0.5, 0.5], [1., 1.]]));
+    set("rgb", EffectValue::Curve(vec![[0., 0.], [0.5, 0.5], [1., 1.]]));
     let output = artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk");
     std::fs::create_dir_all(&output).unwrap();
     for theme in [Theme::Light, Theme::Dark] {
@@ -269,9 +269,9 @@ fn native_curves_histogram_preserves_numeric_focus() {
         choose(&w, &mut input, "properties-page", 0);
         choose(&w, &mut input, "property-domain", 0);
         let initial = tonal_completed(&w);assert_eq!(initial.domain, HistogramDomain::Encoded);
-        let graph = histogram_widget::<gtk::DrawingArea>(&w, "property-curve_0-graph");
+        let graph = histogram_widget::<gtk::DrawingArea>(&w, "property-rgb-graph");
         scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(), &w.window, [0.5, 0.5]));
-        let field = histogram_widget::<gtk::Widget>(&w, "property-curve_0-output");
+        let field = histogram_widget::<gtk::Widget>(&w, "property-rgb-output");
         let control = field.clone().downcast::<crate::number_control::NumberControl>().unwrap();
         let display = find_css(control.upcast_ref(), "number-value").unwrap();input.click(screen_point(&display, &w.window, [0.5, 0.5]));
         let entry = descendant::<gtk::Entry>(&control).unwrap();let scroll=widgets(w.effects.properties.upcast_ref()).find_map(|widget|widget.downcast::<gtk::ScrolledWindow>().ok());let horizontal=scroll.as_ref().map(|scroll|scroll.hadjustment().value());entry.set_text("0.12345678901234567890123456789");let text = entry.text();pump(150);
@@ -287,12 +287,12 @@ fn native_curves_histogram_preserves_numeric_focus() {
         let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Properties) && group.root.is_mapped()).unwrap().root.clone();
         let bounds=plot.compute_bounds(&group).unwrap();assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1.,"curve axes and plot fit visible Properties: {bounds:?}, {}",group.width());
         let graph_bounds=graph.compute_bounds(&w.window).unwrap();assert!(graph_bounds.x()>=0. && graph_bounds.x()+graph_bounds.width()<=w.window.width() as f32,"HDR draft cannot overflow the graph");if let Some(scroll)=scroll {assert_eq!(Some(scroll.hadjustment().value()),horizontal,"long exact draft scrolls within its editor, not the panel");}
-        set("curve_1", EffectValue::Curve(vec![[0., 0.], [0.5, 0.25], [1., 1.]]));
+        set("red", EffectValue::Curve(vec![[0., 0.], [0.5, 0.25], [1., 1.]]));
         let checkpoint = ui_session(&w).engine().checkpoint();
         until(|| state(&w).tonal_histogram.data.as_ref().is_some_and(|data| **data != *initial), "channel edit publishes new embedded statistics");
         let updated = tonal_completed(&w);
         assert_ne!(*updated, *initial, "RGB page reads the nonneutral channel stages");
-        assert_eq!(histogram_widget::<gtk::Widget>(&w, "property-curve_0-output"), field);
+        assert_eq!(histogram_widget::<gtk::Widget>(&w, "property-rgb-output"), field);
         assert_eq!(entry.text(), text);
         assert_eq!(gtk::prelude::RootExt::focus(&w.window), focus, "statistics publication preserves numeric focus");
         input.key(0xff1b);
@@ -306,8 +306,8 @@ fn native_curves_histogram_preserves_numeric_focus() {
         choose(&w, &mut input, "properties-page", 0);
         choose(&w, &mut input, "property-domain", 1);
         assert!(matches!(tonal_completed(&w).domain, HistogramDomain::CurveLog { .. }));
-        let controls=state(&w).layer_properties.controls;let control=controls.iter().find(|control|control.key=="curve_0").unwrap();let curve=control.curve.as_ref().unwrap();let EffectValue::Curve(points)=&control.value else {panic!("curve value")};let point=points[1];let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(),&w.window,[curve.domain.encode(point[0] as f64) as f32,1.-curve.domain.encode(point[1] as f64) as f32]));pump(150);
-        assert!(state(&w).layer_properties.controls.iter().find(|control|control.key=="curve_0").unwrap().curve.as_ref().unwrap().output.as_ref().unwrap().ev.is_some());
+        let controls=state(&w).layer_properties.controls;let control=controls.iter().find(|control|control.key=="rgb").unwrap();let curve=control.curve.as_ref().unwrap();let EffectValue::Curve(points)=&control.value else {panic!("curve value")};let point=points[1];let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-rgb-graph");scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(),&w.window,[curve.domain.encode(point[0] as f64) as f32,1.-curve.domain.encode(point[1] as f64) as f32]));pump(150);
+        assert!(state(&w).layer_properties.controls.iter().find(|control|control.key=="rgb").unwrap().curve.as_ref().unwrap().output.as_ref().unwrap().ev.is_some());
 
         for widget in widgets(w.effects.properties.upcast_ref()).filter(|widget|widget.is_mapped()) {
             let (minimum,natural,_,_)=widget.measure(gtk::Orientation::Horizontal,-1);
@@ -331,7 +331,7 @@ fn native_curves_histogram_preserves_numeric_focus() {
         w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
         tonal_completed(&w);
         choose(&w, &mut input, "property-domain", 0);
-        set("curve_1", EffectValue::Curve(vec![[0., 0.], [1., 1.]]));tonal_completed(&w);
+        set("red", EffectValue::Curve(vec![[0., 0.], [1., 1.]]));tonal_completed(&w);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("curves-encoded-{width}-{theme:?}.png"))).unwrap();
     }
     input.finish();w.window.close();pump(100);
@@ -365,7 +365,7 @@ fn native_compact_graphs_photo_review() {
         for effect in ["levels","curves","white_balance","color_lookup"] {
             w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:effect.into()}});ready(&w);pump(200);
             if effect=="curves" {
-                let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");let bounds=graph.compute_bounds(&w.window).unwrap();assert!(bounds.width()>=200. && bounds.height()>=200.);assert!(bounds.y()>=0. && bounds.y()+bounds.height()<=800.);assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"curve chart remains inside the private viewport");for axis in ["input","output"] {let field=histogram_widget::<gtk::Widget>(&w,&format!("property-curve_0-{axis}"));let bounds=field.compute_bounds(&w.window).unwrap();assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"paired coordinate {axis} remains visible");}
+                let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-rgb-graph");let bounds=graph.compute_bounds(&w.window).unwrap();assert!(bounds.width()>=200. && bounds.height()>=200.);assert!(bounds.y()>=0. && bounds.y()+bounds.height()<=800.);assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"curve chart remains inside the private viewport");for axis in ["input","output"] {let field=histogram_widget::<gtk::Widget>(&w,&format!("property-rgb-{axis}"));let bounds=field.compute_bounds(&w.window).unwrap();assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"paired coordinate {axis} remains visible");}
                 input.perform(serde_json::json!([{"point":screen_point(graph.upcast_ref(),&w.window,[0.5,0.5]),"down":true},{"point":screen_point(graph.upcast_ref(),&w.window,[0.5,0.65])},{"down":false}]));ready(&w);
             }
             if effect=="color_lookup" {
@@ -571,11 +571,11 @@ fn native_histogram_live_language() {
     w.dispatch(UiAction::MovePanel {panel:Panel::Properties,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[width as f32,800.]});
     w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:"curves".into()}});ready(&w);
     let layer=state(&w).layer_properties.layer.unwrap();
-    w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Set {layer,key:"curve_0".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[0.5,0.5],[1.,1.]])}});
+    w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Set {layer,key:"rgb".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[0.5,0.5],[1.,1.]])}});
     choose(&w,&mut input,"properties-page",0);choose(&w,&mut input,"property-domain",0);
-    let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");
+    let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-rgb-graph");
     scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(),&w.window,[0.5,0.5]));
-    let field=histogram_widget::<gtk::Widget>(&w,"property-curve_0-output");
+    let field=histogram_widget::<gtk::Widget>(&w,"property-rgb-output");
     let control=field.clone().downcast::<crate::number_control::NumberControl>().unwrap();
     let display=find_css(control.upcast_ref(),"number-value").unwrap();input.click(screen_point(&display,&w.window,[0.5,0.5]));
     let entry=descendant::<gtk::Entry>(&control).unwrap();
@@ -628,8 +628,8 @@ fn native_histogram_live_language() {
             assert_eq!(widgets(w.effects.stats.upcast_ref()).find(|widget|widget.widget_name()=="stroke-recording").unwrap(),recording_button.clone().upcast::<gtk::Widget>());
             assert_eq!(recording_button.tooltip_text().as_deref(),Some(layer_ui::NativeCopy::new(&w.localization()).color.record_tablet.as_ref()));
             assert!(std::sync::Arc::ptr_eq(view.data.as_ref().unwrap(),&initial));
-            assert_eq!(histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph"),graph);
-            assert_eq!(histogram_widget::<gtk::Widget>(&w,"property-curve_0-output"),field);
+            assert_eq!(histogram_widget::<gtk::DrawingArea>(&w,"property-rgb-graph"),graph);
+            assert_eq!(histogram_widget::<gtk::Widget>(&w,"property-rgb-output"),field);
             assert_eq!(descendant::<gtk::Entry>(&control).unwrap(),entry);
             assert_eq!(histogram_widget::<gtk::MenuButton>(&w,"property-picker-menu"),picker);
             assert_eq!(picker.popover().unwrap(),choices);

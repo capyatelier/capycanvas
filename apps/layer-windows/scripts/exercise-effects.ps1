@@ -82,19 +82,19 @@ function Preview-Hash([string]$Id){
     }finally{$bitmap.Dispose()}
 }
 
-function Field([string]$Axis){Control "property-curve_0-$Axis"}
+function Field([string]$Axis){Control "property-rgb-$Axis"}
 function Show-Graph([double]$Percent=0){
-    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-curve_0-curve'))
+    $walker=[System.Windows.Automation.TreeWalker]::ControlViewWalker;$node=$walker.GetParent((Control 'property-rgb-curve'))
     while($node){$scroll=$null;if($node.TryGetCurrentPattern([System.Windows.Automation.ScrollPattern]::Pattern,[ref]$scroll) -and $scroll.Current.VerticallyScrollable){break};$node=$walker.GetParent($node)}
     if($node -and $scroll.Current.VerticalScrollPercent -ne $Percent){$scroll.SetScrollPercent([System.Windows.Automation.ScrollPattern]::NoScroll,$Percent)}
-    $settled=@{bounds=$null};Wait-Until {$bounds=(Control 'property-curve_0-curve').Current.BoundingRectangle;$same=$bounds -eq $settled.bounds;$settled.bounds=$bounds;Start-Sleep -Milliseconds 100;$same} 'The curve graph did not settle after scrolling'
+    $settled=@{bounds=$null};Wait-Until {$bounds=(Control 'property-rgb-curve').Current.BoundingRectangle;$same=$bounds -eq $settled.bounds;$settled.bounds=$bounds;Start-Sleep -Milliseconds 100;$same} 'The curve graph did not settle after scrolling'
 }
 function Tap-Point([int]$Index){
-    $point=(Property 'curve_0').value.value[$Index];$low=$point[1] -lt .5;Show-Graph $(if($low){100}else{0})
-    $r=(Control 'property-curve_0-curve').Current.BoundingRectangle;$top=if($low){$r.Bottom-$r.Width}else{$r.Y}
+    $point=(Property 'rgb').value.value[$Index];$low=$point[1] -lt .5;Show-Graph $(if($low){100}else{0})
+    $r=(Control 'property-rgb-curve').Current.BoundingRectangle;$top=if($low){$r.Bottom-$r.Width}else{$r.Y}
     $at=@([int][Math]::Min([Math]::Max($r.X+$point[0]*$r.Width,$r.Left+10),$r.Right-10),[int][Math]::Min([Math]::Max($top+(1-$point[1])*$r.Width,$r.Top+10),$r.Bottom-10))
     [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
-    Wait-Until {(Property 'curve_0').curve.selected -eq $Index} "Tapping point $Index did not select it"
+    Wait-Until {(Property 'rgb').curve.selected -eq $Index} "Tapping point $Index did not select it"
 }
 function Pointer-Session([scriptblock]$Body){
     Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
@@ -118,20 +118,20 @@ function Check-LogCurve {Pointer-Session {
     if(!$grown){throw 'The window did not grow for the curve check'}
     Select-Filter 'curves' 'Curves'
     Choose 'property-domain' (Property 'domain').kind.options[1]
-    Wait-Until {(Property 'curve_0').curve.domain.kind -eq 'log_hdr' -and (Find 'property-hdr_stops')} 'Log HDR did not offer its stops'
+    Wait-Until {(Property 'rgb').curve.domain.kind -eq 'log_hdr' -and (Find 'property-hdr_stops')} 'Log HDR did not offer its stops'
     Tap-Point 0
-    Wait-Until {$ev=Find 'property-curve_0-output-ev';$ev -and $ev.Current.Name -and $ev.Current.Name -eq (Property 'curve_0').curve.output.ev} 'Log HDR did not show the EV readout'
+    Wait-Until {$ev=Find 'property-rgb-output-ev';$ev -and $ev.Current.Name -and $ev.Current.Name -eq (Property 'rgb').curve.output.ev} 'Log HDR did not show the EV readout'
     Capture 'curve-log-hdr'
 }}
 
 function Check-CurveGestures {
-    function Curve-Json {ConvertTo-Json -InputObject ((Property 'curve_0').value.value) -Compress -Depth 10}
+    function Curve-Json {ConvertTo-Json -InputObject ((Property 'rgb').value.value) -Compress -Depth 10}
     function Curve-At([double]$X,[double]$Y) {
         Show-Graph
         # The graph is square; UIA can report only its visible, clipped height.
         $hit=@{at=$null}
         Wait-Until {
-            $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
+            $r=(Control 'property-rgb-curve').Current.BoundingRectangle
             $at=@([int]($r.X+$X*$r.Width),[int]($r.Y+(1-$Y)*$r.Width))
             $hit.at=$at
             !($at[0] -le $r.Left+6 -or $at[0] -ge $r.Right-6 -or $at[1] -le $r.Top+6 -or $at[1] -ge $r.Bottom-6)
@@ -139,14 +139,14 @@ function Check-CurveGestures {
         $hit.at
     }
     function Move-Curve([string]$Device) {
-        $point=(Property 'curve_0').value.value[1]
+        $point=(Property 'rgb').value.value[1]
         $from=Curve-At $point[0] $point[1];$to=Curve-At .7 .92
         [CapyRowPointer]::Down($Device,$from[0],$from[1])
         for($i=1;$i -le 12;$i++){
             [CapyRowPointer]::Move([int]($from[0]+($to[0]-$from[0])*$i/12),[int]($from[1]+($to[1]-$from[1])*$i/12))
             Start-Sleep -Milliseconds 35
         }
-        Wait-Until {$p=(Property 'curve_0').value.value[1];[Math]::Abs($p[0]-.7) -lt .01 -and [Math]::Abs($p[1]-.92) -lt .01} "$Device curve did not reach the drag target during contact"
+        Wait-Until {$p=(Property 'rgb').value.value[1];[Math]::Abs($p[0]-.7) -lt .01 -and [Math]::Abs($p[1]-.92) -lt .01} "$Device curve did not reach the drag target during contact"
     }
     function Check-Redo([string]$Reason) {
         Invoke 'Redo' -Name;Wait-Until {(Curve-Json) -eq $edited} "$Reason consumed Redo"
@@ -158,21 +158,21 @@ function Check-CurveGestures {
         # Seed a visible handle instead of resizing or scrolling the workspace.
         $at=Curve-At .5 .85
         [CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up()
-        Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Pointer insertion did not add a curve point'
+        Wait-Until {(Property 'rgb').value.value.Count -eq 3} 'Pointer insertion did not add a curve point'
         $original=Curve-Json
         foreach($device in @('mouse','pen','touch')){
             Move-Curve $device;[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
             $edited=Curve-Json
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device drag needs more than one Undo"
             Check-Redo "$device completed drag"
-            $point=(Property 'curve_0').value.value[1];$at=Curve-At $point[0] $point[1]
+            $point=(Property 'rgb').value.value[1];$at=Curve-At $point[0] $point[1]
             [CapyRowPointer]::Down($device,$at[0]+3,$at[1]+3);[CapyRowPointer]::Up()
             Start-Sleep -Milliseconds 150
             if((Curve-Json) -ne $original){throw "$device click moved the handle"}
             Check-Redo "$device unchanged click"
             Move-Curve $device;[CapyRowPointer]::Key(0x1B)
             Wait-Until {(Curve-Json) -eq $original} "$device Escape kept the curve preview"
-            if(!(Find 'property-curve_0-curve')){throw "$device Escape dismissed the curve drawer"}
+            if(!(Find 'property-rgb-curve')){throw "$device Escape dismissed the curve drawer"}
             [CapyRowPointer]::Up();Check-Redo "$device Escape"
             if($device -ne 'mouse'){
                 Move-Curve $device;[CapyRowPointer]::Cancel()
@@ -182,68 +182,68 @@ function Check-CurveGestures {
             Move-Curve $device;Select-Panel 'adjustments'
             Wait-Until {(Curve-Json) -eq $original} "$device hidden curve kept the preview"
             [CapyRowPointer]::Up();Select-Panel 'properties'
-            Wait-Until {$null -ne (Find 'property-curve_0-curve')} 'Curve did not reopen'
+            Wait-Until {$null -ne (Find 'property-rgb-curve')} 'Curve did not reopen'
             Check-Redo "$device source hide"
             # A canceled insertion must also remove its provisional handle.
             $at=Curve-At .3 .9
             [CapyRowPointer]::Down($device,$at[0],$at[1])
-            Wait-Until {(Property 'curve_0').value.value.Count -eq 4} "$device insertion did not preview"
+            Wait-Until {(Property 'rgb').value.value.Count -eq 4} "$device insertion did not preview"
             [CapyRowPointer]::Key(0x1B)
             Wait-Until {(Curve-Json) -eq $original} "$device canceled insertion kept its handle"
             [CapyRowPointer]::Up();Check-Redo "$device canceled insertion"
             $at=Curve-At .3 .9;$to=Curve-At .36 .6
             [CapyRowPointer]::Down($device,$at[0],$at[1])
-            Wait-Until {(Property 'curve_0').value.value.Count -eq 4} "$device insertion did not preview"
+            Wait-Until {(Property 'rgb').value.value.Count -eq 4} "$device insertion did not preview"
             for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($at[0]+($to[0]-$at[0])*$i/8),[int]($at[1]+($to[1]-$at[1])*$i/8));Start-Sleep -Milliseconds 30}
-            Wait-Until {$p=(Property 'curve_0').value.value[1];[Math]::Abs($p[0]-.36) -lt .015 -and [Math]::Abs($p[1]-.6) -lt .015} "$device inserted point did not follow the same contact"
+            Wait-Until {$p=(Property 'rgb').value.value[1];[Math]::Abs($p[0]-.36) -lt .015 -and [Math]::Abs($p[1]-.6) -lt .015} "$device inserted point did not follow the same contact"
             [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
-            if((Property 'curve_0').value.value.Count -ne 4){throw "$device insert and drag did not keep the point"}
+            if((Property 'rgb').value.value.Count -ne 4){throw "$device insert and drag did not keep the point"}
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device insert and drag was not one Undo"
             Write-Host "$device curve: one-step history, unchanged click, Escape, source hide, insertion rollback and insert-drag passed"
         }
-        if(!(Find 'property-curve_0-reset')){throw 'Modified curve hides its reset icon'}
+        if(!(Find 'property-rgb-reset')){throw 'Modified curve hides its reset icon'}
         foreach($device in @('mouse','pen','touch')){
-            $point=(Property 'curve_0').value.value[1];$at=Curve-At $point[0] $point[1]
+            $point=(Property 'rgb').value.value[1];$at=Curve-At $point[0] $point[1]
             [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60
             [CapyRowPointer]::Down($device,$at[0],$at[1]);[CapyRowPointer]::Up()
-            Wait-Until {(Property 'curve_0').value.value.Count -eq 2} "$device double tap did not remove the point"
+            Wait-Until {(Property 'rgb').value.value.Count -eq 2} "$device double tap did not remove the point"
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device double tap removal was not one Undo"
-            $point=(Property 'curve_0').value.value[1];$from=Curve-At $point[0] $point[1]
-            $r=(Control 'property-curve_0-curve').Current.BoundingRectangle
+            $point=(Property 'rgb').value.value[1];$from=Curve-At $point[0] $point[1]
+            $r=(Control 'property-rgb-curve').Current.BoundingRectangle
             $away=@($from[0],[int]($r.Y-.25*$r.Width))
             [CapyRowPointer]::Down($device,$from[0],$from[1])
             for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($from[0],[int]($from[1]+($away[1]-$from[1])*$i/10));Start-Sleep -Milliseconds 30}
-            Wait-Until {(Property 'curve_0').value.value.Count -eq 2} "$device drag beyond the graph did not remove the point"
+            Wait-Until {(Property 'rgb').value.value.Count -eq 2} "$device drag beyond the graph did not remove the point"
             $back=Curve-At .5 .8
             for($i=1;$i -le 10;$i++){[CapyRowPointer]::Move($back[0],[int]($away[1]+($back[1]-$away[1])*$i/10));Start-Sleep -Milliseconds 30}
-            Wait-Until {(Property 'curve_0').value.value.Count -eq 3} "$device drag back did not restore the point"
+            Wait-Until {(Property 'rgb').value.value.Count -eq 3} "$device drag back did not restore the point"
             [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
             Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} "$device detach and restore was not one Undo"
             Write-Host "$device curve: double tap removal and drag-off restore passed"
         }
         Tap-Point 1
         Wait-Until {(Field 'input').Current.IsEnabled -and (Field 'output').Current.IsEnabled} 'Selecting a point did not enable Input and Output'
-        Wait-Until {(Field 'output').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq (Property 'curve_0').curve.output.text} 'Output did not show the exact shared text'
-        $revision=(Model).state.document_file.revision;$point=(Property 'curve_0').value.value[1]
-        Edit 'property-curve_0-output' '1';Edit 'property-curve_0-output' (Property 'curve_0').curve.output.text;(Control 'property-curve_0-curve').SetFocus();Start-Sleep -Milliseconds 300
+        Wait-Until {(Field 'output').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).Current.Value -eq (Property 'rgb').curve.output.text} 'Output did not show the exact shared text'
+        $revision=(Model).state.document_file.revision;$point=(Property 'rgb').value.value[1]
+        Edit 'property-rgb-output' '1';Edit 'property-rgb-output' (Property 'rgb').curve.output.text;(Control 'property-rgb-curve').SetFocus();Start-Sleep -Milliseconds 300
         if((Curve-Json) -ne $original -or (Model).state.document_file.revision -ne $revision){throw 'Committing unchanged Output text changed the point'}
-        Edit 'property-curve_0-output' '200';(Control 'property-curve_0-curve').SetFocus()
-        Wait-Until {$p=(Property 'curve_0').value.value;$p.Count -eq 3 -and [Math]::Abs($p[1][1]-200/255) -lt 1e-6 -and $p[1][0] -eq $point[0]} 'Typed Output did not move only the selected point'
+        Edit 'property-rgb-output' '200';(Control 'property-rgb-curve').SetFocus()
+        Wait-Until {$p=(Property 'rgb').value.value;$p.Count -eq 3 -and [Math]::Abs($p[1][1]-200/255) -lt 1e-6 -and $p[1][0] -eq $point[0]} 'Typed Output did not move only the selected point'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'Typed Output was not one Undo'
-        Tap-Point 1;$graph=Control 'property-curve_0-curve';$graph.SetFocus();Wait-Until {$graph.Current.HasKeyboardFocus} 'The curve graph did not take focus'
+        Tap-Point 1;$graph=Control 'property-rgb-curve';$graph.SetFocus();Wait-Until {$graph.Current.HasKeyboardFocus} 'The curve graph did not take focus'
         for($i=0;$i -lt 5;$i++){[CapyRowPointer]::Hold(0x26,$true);Start-Sleep -Milliseconds 60}
         [CapyRowPointer]::Hold(0x26,$false)
-        Wait-Until {[Math]::Abs((Property 'curve_0').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'
+        Wait-Until {[Math]::Abs((Property 'rgb').value.value[1][1]-$point[1]-5/255) -lt 1e-4} 'A held Up arrow did not step the point by 1/255 per repeat'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'A held arrow was not one Undo'
         Tap-Point 1;[CapyRowPointer]::Key(0x2E)
-        Wait-Until {(Property 'curve_0').value.value.Count -eq 2} 'Delete did not remove the selected point'
+        Wait-Until {(Property 'rgb').value.value.Count -eq 2} 'Delete did not remove the selected point'
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'Delete was not one Undo'
         Tap-Point 0
         Wait-Until {!(Field 'input').Current.IsEnabled -and (Field 'output').Current.IsEnabled} 'An endpoint Input was editable'
         $at=Curve-At .25 .6
         for($i=0;$i -lt 2;$i++){[CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 60}
         Start-Sleep -Milliseconds 400
-        if((Property 'curve_0').value.value.Count -ne 4){throw 'A double click on the empty graph did not insert exactly one point'}
+        if((Property 'rgb').value.value.Count -ne 4){throw 'A double click on the empty graph did not insert exactly one point'}
         Invoke 'Undo' -Name;Wait-Until {(Curve-Json) -eq $original} 'The double-click insertion was not one Undo'
         if((Find 'property-hdr_stops') -or (Find 'property-domain')){throw 'An integer drawing offered the HDR curve domain'}
         Capture 'curve-gestures'
@@ -300,26 +300,26 @@ try {
     Check-PropertyScrub
     Select-Filter 'curves' 'Curves'
     $curveGestures=Check-CurveGestures
-    $graph=(Control 'property-curve_0-curve').GetRuntimeId() -join ':'
-    if(Find 'property-curve_0-reset'){throw 'Unmodified curve shows its reset icon'}
-    Invoke 'Redo' -Name;Wait-Until {(Property 'curve_0').value.value.Count -eq 3} 'Curve point not restored'
-    Wait-Until {$null -ne (Find 'property-curve_0-reset')} 'Modified curve hides its reset icon'
-    if(((Control 'property-curve_0-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Editing replaced the curve graph'}
+    $graph=(Control 'property-rgb-curve').GetRuntimeId() -join ':'
+    if(Find 'property-rgb-reset'){throw 'Unmodified curve shows its reset icon'}
+    Invoke 'Redo' -Name;Wait-Until {(Property 'rgb').value.value.Count -eq 3} 'Curve point not restored'
+    Wait-Until {$null -ne (Find 'property-rgb-reset')} 'Modified curve hides its reset icon'
+    if(((Control 'property-rgb-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Editing replaced the curve graph'}
     Capture 'curve'
     $wide=(Model).state.camera.viewport[0]
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1450 -Height 1000
     Wait-Until {(Model).state.camera.viewport[0] -lt $wide-50} 'Resize did not reach the canvas'
-    if(((Control 'property-curve_0-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Resize replaced the curve graph'}
-    Invoke 'property-curve_0-reset'
-    Wait-Until {(Property 'curve_0').value.value.Count -eq 2} 'Curve reset failed'
-    if((Property 'curve_0').value.value[0][1] -ne 0 -or (Property 'curve_0').value.value[1][1] -ne 1){throw 'Reset curve kept an edited endpoint'}
-    Wait-Until {!(Find 'property-curve_0-reset')} 'Reset curve still shows its reset icon'
+    if(((Control 'property-rgb-curve').GetRuntimeId() -join ':') -ne $graph){throw 'Resize replaced the curve graph'}
+    Invoke 'property-rgb-reset'
+    Wait-Until {(Property 'rgb').value.value.Count -eq 2} 'Curve reset failed'
+    if((Property 'rgb').value.value[0][1] -ne 0 -or (Property 'rgb').value.value[1][1] -ne 1){throw 'Reset curve kept an edited endpoint'}
+    Wait-Until {!(Find 'property-rgb-reset')} 'Reset curve still shows its reset icon'
     $revision=(Model).state.document_file.revision;$pages=@((Model).state.layer_properties.pages)
     if($pages.Count -ne 4){throw 'Curves did not publish its four pages'}
     Choose 'properties-page' $pages[1].label
-    Wait-Until {(Model).state.layer_properties.page -eq $pages[1].id -and (Find 'property-curve_1-curve') -and !(Find 'property-curve_0-curve')} 'The Properties page did not show the second curve'
+    Wait-Until {(Model).state.layer_properties.page -eq $pages[1].id -and (Find 'property-red-curve') -and !(Find 'property-rgb-curve')} 'The Properties page did not show the second curve'
     Choose 'properties-page' $pages[0].label
-    Wait-Until {(Model).state.layer_properties.page -eq $pages[0].id -and (Find 'property-curve_0-curve')} 'The Properties page did not return to the composite curve'
+    Wait-Until {(Model).state.layer_properties.page -eq $pages[0].id -and (Find 'property-rgb-curve')} 'The Properties page did not return to the composite curve'
     if((Model).state.document_file.revision -ne $revision){throw 'Changing the Properties page added an undo step'}
     Select-Filter 'color_balance' 'Color Balance'
     foreach($page in @((Model).state.layer_properties.pages)){

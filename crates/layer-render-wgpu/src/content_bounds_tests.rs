@@ -91,7 +91,7 @@ fn wrap(document: &mut Document, child: OccurrenceHandle, name: &str) -> Occurre
 }
 fn add_effect(document: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
     let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
-    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values, domain: document.composition().size }).unwrap();
+    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values}).unwrap();
     let h = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap();
     let root = document.composition().result; document.artwork.stacks.get_mut(root).unwrap().entries.insert(0, h);
     h
@@ -253,7 +253,9 @@ fn inverted_mask_target_uses_actual_coverage_and_finite_extent() {
 fn wetness_pages_without_color_do_not_create_content_bounds() {
     let renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
     let mut document = document(Default::default());
-    paint(&mut document).raster = raster(RasterPlane::Wetness, document.composition().color, |_, _| 1.);
+    let mut data = raster(RasterPlane::WatercolorWetness, document.composition().color, |_, _| 1.).wait_data().unwrap().as_ref().clone();
+    data.watercolor = Some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. });
+    paint(&mut document).raster = RasterRevision::backed(data);
     assert!(bounds(&renderer, &document, ContentScope::All).is_empty());
     assert!(bounds(&renderer, &document, ContentScope::Target(paint_target(&document))).is_empty());
 }

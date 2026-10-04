@@ -149,19 +149,19 @@ function Property-Surfaces{
  }
  (Control 'property-midtones_red').SetFocus();Key 27
  Property-Filter 'curves'
- $graph=Control 'property-curve_0-curve' -Arranged;$bounds=$graph.Current.BoundingRectangle
+ $graph=Control 'property-rgb-curve' -Arranged;$bounds=$graph.Current.BoundingRectangle
  [CapyRowPointer]::Down('mouse',[int]($bounds.Left+$bounds.Width*.5),[int]($bounds.Top+$bounds.Width*.25));[CapyRowPointer]::Up()
  (Fresh-Model)|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run 'curve-contact-before-settlement-model.json')
- Wait-Until {$view=Model;$view -and @($view.state.layer_properties.controls|Where-Object key -eq 'curve_0')[0].curve.selected -eq 1 -and @($view.state.layer_properties.controls|Where-Object key -eq 'curve_0')[0].value.value.Count -eq 3 -and @($view.state.commands|Where-Object id -eq 'undo')[0].enabled} 'Native curve release did not commit and select its interior precise point' 20
- Select-Draft (Control 'property-curve_0-output') $numericDraft
+ Wait-Until {$view=Model;$view -and @($view.state.layer_properties.controls|Where-Object key -eq 'rgb')[0].curve.selected -eq 1 -and @($view.state.layer_properties.controls|Where-Object key -eq 'rgb')[0].value.value.Count -eq 3 -and @($view.state.commands|Where-Object id -eq 'undo')[0].enabled} 'Native curve release did not commit and select its interior precise point' 20
+ Select-Draft (Control 'property-rgb-output') $numericDraft
  $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
  $baseline|ConvertTo-Json -Depth 80|Set-Content (Join-Path $run 'curve-before-locale-model.json')
  $choiceValue=$baseline.state.layer_properties.page
  $choicePage=@($baseline.state.layer_properties.pages|Where-Object id -eq $choiceValue)[0]
  if(!$choicePage -or $choiceValue -ne 'rgb'){throw 'Curves fixture did not expose its actual RGB channel page choice'}
  $choiceId='properties-page'
- $identities=Native-Identities @('layer-properties',$choiceId,'property-curve_0-curve','property-curve_0-input','property-curve_0-output')
- $curveBefore=@($baseline.state.layer_properties.controls|Where-Object key -eq 'curve_0')[0].curve
+ $identities=Native-Identities @('layer-properties',$choiceId,'property-rgb-curve','property-rgb-input','property-rgb-output')
+ $curveBefore=@($baseline.state.layer_properties.controls|Where-Object key -eq 'rgb')[0].curve
  $optionIdentity=(Selected-Option (Control $choiceId)).GetRuntimeId() -join ':'
  Surface-Languages 'retained-properties-choice-curve-coordinate' {
   $view=Fresh-Model $first $choice.tag;Property-Owner $view;Check-Identities $identities
@@ -169,11 +169,11 @@ function Property-Surfaces{
   if(!$page -or $view.state.layer_properties.page -ne $choiceValue -or (Control $choiceId).Current.Name -ne $view.state.layer_properties.title -or (Selected-Option (Control $choiceId)).Current.Name -ne $expected -or ((Selected-Option (Control $choiceId)).GetRuntimeId() -join ':') -ne $optionIdentity){throw 'Properties choice lost its current label or retained semantic option'}
   Scroll-Position (Control $choiceId) 0
   Check-VisibleText $choiceId $expected
-  $curve=@($view.state.layer_properties.controls|Where-Object key -eq 'curve_0')[0].curve;$output=Control 'property-curve_0-output'
+  $curve=@($view.state.layer_properties.controls|Where-Object key -eq 'rgb')[0].curve;$output=Control 'property-rgb-output'
   if($curve.epoch -ne $curveBefore.epoch -or $curve.selected -ne $curveBefore.selected -or $curve.input.value -ne $curveBefore.input.value -or $curve.output.value -ne $curveBefore.output.value -or (Value $output) -ne $numericDraft -or (Selection $output) -ne $numericDraft){throw 'Precise curve coordinate lost its raw point, owner epoch, pending Unicode draft or selected literal'}
-  if($output.Current.Name -ne (Catalog-Text $choice.tag 'numeric-edit-label' 'common').Replace('{ $label }',$curve.axes[1].label) -or (Control 'property-curve_0-curve').Current.HelpText -ne $curve.help){throw 'Precise curve field or graph help did not follow current shared captions'}
+  if($output.Current.Name -ne (Catalog-Text $choice.tag 'numeric-edit-label' 'common').Replace('{ $label }',$curve.axes[1].label) -or (Control 'property-rgb-curve').Current.HelpText -ne $curve.help){throw 'Precise curve field or graph help did not follow current shared captions'}
  }
- (Control 'property-curve_0-output').SetFocus();Key 27
+ (Control 'property-rgb-output').SetFocus();Key 27
  foreach($surface in @(@{filter='split_tone';key='shadows'},@{filter='gradient_map';key='gradient'})){
   Property-Filter $surface.filter;$colorId='property-'+$surface.key+'-color'
   Invoke-Id $colorId

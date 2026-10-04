@@ -140,8 +140,8 @@ The full brush retains three kinds of state.
 ### Canvas state
 
 - dry premultiplied color;
-- optional stroke-local coverage, deposited-wetness, and watercolor-wetness
-  fields, allocated only for affected regions;
+- optional stroke-local coverage and watercolor-wetness fields, allocated only
+  for affected regions;
 - optional pigment or water channels chosen by the brush-material version.
 
 ### Brush state
@@ -188,7 +188,7 @@ source(x) = mix(dragged(x), reservoir(local(x)), dilution, paint_amount)
 canvas_new(x) = deposit(canvas_old(x), source(x), density × attack × a(x))
 ```
 
-Watercolor does not use the reservoir or a drying clock. A sparse R8 wetness
+Watercolor does not use the reservoir or a drying clock. A sparse wetness
 channel records water/material membership independently of pigment density and
 remains wet until an explicit merge.
 Uniform stroke-local coverage prevents overlapping contacts from building
@@ -200,8 +200,8 @@ edges, and dry paint outside the wetness field is not classified as watercolor.
 
 An optional `BrushTransport` uses a brush-owned conductance texture tiled in
 document space. Deposition recharges prior water toward full from the stroke's
-absolute uniform coverage, with tip/conductance variation, while preserving a
-two-level R8 material floor. After the update's internal
+absolute uniform coverage, with tip/conductance variation, while preserving the
+2/255 material floor. After the update's internal
 microbatches, three sparse GPU stages advance water and premultiplied pigment
 from wetter neighbors using incommensurate coarse-to-fine hops. A small local
 relaxation continues color mixing after adjacent watercolor regions reach
@@ -229,8 +229,8 @@ the replaceable GPU preview and becomes persistent only at a stable chunk
 boundary or pen-up, so results do not depend on display cadence. Liquify retains
 one ordered contact per step. Contact placement and dynamics are sequential CPU
 work; canvas sampling, coverage, material transfer, state writes, reservoir
-exchange, and deformation are parallel GPU work. For non-watercolor wet brushes,
-the sparse R8 wetness map records deposition only.
+exchange, and deformation are parallel GPU work. Non-watercolor wet brushes keep
+no canvas wetness; their state is the reservoir.
 
 ## Read/write rule
 
@@ -303,7 +303,7 @@ Implemented now:
   live wetness-driven morphology edge;
 - brush-owned long/short, broad/narrow conductance fields and bounded
   event-driven pigment transport with separate wet/dry rates;
-- lazy sparse R8 stroke-coverage, canvas-wetness, and watercolor-wetness pages;
+- lazy sparse stroke-coverage and watercolor-wetness pages;
 - push, twirl, pinch, expand, crystals, and edge deformation;
 - sparse persistent GPU layer pages and sparse prediction pages;
 - stroke-start page copies and a cached reference composite for retouching
@@ -329,7 +329,7 @@ The layer-wide watercolor is an efficient artistic model, not a fluid
 simulation. It has three instantaneous event-driven relaxation stages, but no
 background stepping, evaporation clock, persistent velocity, or pigment
 separation. Watercolor material membership remains persistent until explicit
-merge; the separate deposited-wetness field belongs only to other wet brushes.
+merge.
 
 ## References
 

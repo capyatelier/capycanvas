@@ -156,7 +156,7 @@ impl Document {
             .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let effect = low_artwork
             .effects
-            .insert(PortableId::random(), EffectApplication { definition, values: filters.blur.values.clone(), domain: canvas })
+            .insert(PortableId::random(), EffectApplication { definition, values: filters.blur.values.clone()})
             .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let mut blur = Occurrence::new(OccurrenceContent::Effect(effect), filters.blur.program.id.clone());
         blur.attachment = crate::Attachment::Effect;

@@ -60,7 +60,6 @@ impl Metadata {
         occurrence.alpha_locked = false;
         occurrence.reference = false;
         if occurrence.attachment.is_clip() && !scene.effective_clipped(handle) { occurrence.attachment = layer_core::Attachment::None; }
-        occurrence.isolated_blend = layer_core::LayerBlend::Normal;
         let effect = match occurrence.content {
             layer_core::authored::OccurrenceContent::Effect(effect) => scene.artwork().effects.shared(effect).map(Arc::downgrade),
             _ => None,

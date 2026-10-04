@@ -64,10 +64,6 @@ fn fixture(color: DocumentColor) -> Document {
                 RasterTile::backed_shared(rgba.clone()),
             ),
             (
-                key(RasterPlane::Wetness),
-                RasterTile::backed_shared(scalar.clone()),
-            ),
-            (
                 key(RasterPlane::WatercolorWetness),
                 RasterTile::backed_shared(scalar.clone()),
             ),
@@ -123,7 +119,7 @@ fn fixture(color: DocumentColor) -> Document {
         let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
         effect.set(key, value).unwrap();
         let definition=artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-        let application=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:[TILE_SIZE;2]}).unwrap();
+        let application=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
         entries.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),id)).unwrap());
     }
     entries.push(paper); artwork.stacks.get_mut(stack).unwrap().entries=entries;
@@ -220,7 +216,6 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
             for plane in [
                 RasterPlane::Color,
                 RasterPlane::Mask,
-                RasterPlane::Wetness,
                 RasterPlane::WatercolorWetness,
             ] {
                 let root = if plane == RasterPlane::Mask {
@@ -255,11 +250,7 @@ fn depth_changes_rescale_all_codes_in_color_alpha_mask_and_both_wetness_planes()
             let source = paint(document,1).original.as_ref().unwrap();
             assert_eq!(source.interpretation.depth, target);
             assert!(source.tiles.values().all(|blob| Arc::ptr_eq(blob, &rgba)));
-            let wetness = backing(&paint(document,0).raster, RasterPlane::Wetness);
-            assert!(Arc::ptr_eq(
-                &wetness,
-                &backing(&paint(document,0).raster, RasterPlane::WatercolorWetness)
-            ));
+            let wetness = backing(&paint(document,0).raster, RasterPlane::WatercolorWetness);
             assert!(Arc::ptr_eq(
                 &wetness,
                 &backing(&coverage(document,0).raster, RasterPlane::Mask)
@@ -373,12 +364,10 @@ fn dither_is_repeatable_coordinate_dependent_and_never_changes_coverage() {
         || false,
     )
     .unwrap();
-    for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
-        assert_eq!(
-            backing(&paint(&a.document,0).raster, plane).content_digest().unwrap(),
-            backing(&paint(&plain.document,0).raster, plane).content_digest().unwrap()
-        );
-    }
+    assert_eq!(
+        backing(&paint(&a.document,0).raster, RasterPlane::WatercolorWetness).content_digest().unwrap(),
+        backing(&paint(&plain.document,0).raster, RasterPlane::WatercolorWetness).content_digest().unwrap()
+    );
     let bytes = backing(&paint(&plain.document,0).raster, RasterPlane::Color)
         .decode()
         .unwrap();
@@ -582,7 +571,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     }).flat_map(u16::to_le_bytes).collect();
     let rgba = Arc::new(TileBlob::encode(color.paint_descriptor(), &half).unwrap());
     let mask = Arc::new(TileBlob::encode(color.coverage_descriptor(), &vec![123; 65536*2]).unwrap());
-    paint_mut(&mut document,0).raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::Wetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: None });
+    paint_mut(&mut document,0).raster = RasterRevision::backed(RasterData { tiles: [(key(RasterPlane::Color), RasterTile::backed_shared(rgba)), (key(RasterPlane::WatercolorWetness), RasterTile::backed_shared(mask.clone()))].into(), watercolor: Some(RasterWatercolor { wet_edge: 0.25, burnt_edge: 0.125, edge_width: 3. }) });
     let project = document;
     let promote = DocumentColorChange::Depth { depth: SampleDepth::F32, dither: OutputDither::None };
     let result = prepare_document_color(&project, promote, LIMIT, || false).unwrap();
@@ -591,7 +580,7 @@ fn float32_depth_promotion_is_exact_demotion_and_cancel_are_atomic() {
     for (input, output) in half.chunks_exact(2).zip(output.chunks_exact(4)) {
         assert_eq!(layer_core::color::f16::from_bits(u16::from_le_bytes(input.try_into().unwrap())).to_f32().to_bits(), u32::from_le_bytes(output.try_into().unwrap()));
     }
-    assert!(Arc::ptr_eq(&root.tiles[&key(RasterPlane::Wetness)].wait_backing().unwrap(), &mask));
+    assert!(Arc::ptr_eq(&root.tiles[&key(RasterPlane::WatercolorWetness)].wait_backing().unwrap(), &mask));
     let mut editor = Editor::new(project.clone());
     editor.perform(edit(&project, &result)).unwrap(); editor.undo().unwrap();
     assert_eq!(editor.document().composition().color, color); editor.redo().unwrap();

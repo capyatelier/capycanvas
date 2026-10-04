@@ -90,8 +90,7 @@ impl ResourceInventory {
         ColorProfile::Icc(bytes) => json!({"resource":self.bytes("capy.icc/1",bytes,json!({}))?}),
     }) }
     pub fn tile(&mut self, tile: Arc<TileBlob>) -> Result<Value, String> {
-        let mut data = encode_descriptor(tile.descriptor)?;
-        if let Some(profile)=tile.resource_profile() {data["profile"]=self.bytes("capy.icc/1",profile,json!({}))?;}
+        let data = encode_descriptor(tile.descriptor)?;
         self.insert(ResourceEntry { kind:"capy.raster-tile/1", data, raw_encoding:"capy.lz4-tile/1", payload:Payload::Tile(tile) })
     }
     pub fn prepare(&self, cancelled: &AtomicBool) -> Result<PreparedResources, String> {
@@ -190,24 +189,21 @@ pub fn encode_descriptor(descriptor: PixelDescriptor) -> Result<Value, String> {
         (1,_,TransferEncoding::Linear) => "coverage", (1,_,_) => "gray", (2,_,_) => "gray_alpha", (3,_,_) => "rgb", (4,AlphaAssociation::None,_) => "cmyk", (4,_,_) => "rgba", _ => return Err("Unknown raster channels".into()),
     };
     let depth = match (descriptor.sample,descriptor.bits_per_channel) { (SampleType::Unsigned,8)=>"u8",(SampleType::Unsigned,16)=>"u16",(SampleType::Float,16)=>"f16",(SampleType::Float,32)=>"f32",_=>return Err("Invalid raster sample depth".into()) };
-    Ok(json!({"channels":channels,"depth":depth,"transfer":match descriptor.encoding {TransferEncoding::Linear=>"linear",TransferEncoding::Srgb=>"srgb",TransferEncoding::Profile=>"profile"},
-        "alpha":match descriptor.alpha {AlphaAssociation::None=>"none",AlphaAssociation::Straight=>"straight",AlphaAssociation::PremultipliedLinear=>"premultiplied_linear"}}))
+    let transfer = match descriptor.encoding { TransferEncoding::Linear=>"linear", TransferEncoding::Profile=>"profile", TransferEncoding::Srgb=>return Err("Unsupported raster transfer".into()) };
+    let alpha = match descriptor.alpha { AlphaAssociation::None=>"none", AlphaAssociation::Straight=>"straight", AlphaAssociation::PremultipliedLinear=>return Err("Unsupported raster alpha".into()) };
+    Ok(json!({"channels":channels,"depth":depth,"transfer":transfer,"alpha":alpha}))
 }
 pub fn parse_descriptor(value: &Value) -> DecodeResult<PixelDescriptor> {
-    let data = values::object(value,&["channels","depth","transfer","alpha","profile"])?;
+    let data = values::object(value,&["channels","depth","transfer","alpha"])?;
     let name = values::string(values::required(data,"channels")?)?;
     let channels = match name { "coverage"|"gray"=>1,"gray_alpha"=>2,"rgb"=>3,"rgba"|"cmyk"=>4,unknown=>return Err(DecodeError::Unsupported(format!("Unknown raster channels {unknown}"))) };
     let depth = values::parse_depth(values::required(data,"depth")?)?;
-    let encoding = match values::string(values::required(data,"transfer")?)? {"linear"=>TransferEncoding::Linear,"srgb"=>TransferEncoding::Srgb,"profile"=>TransferEncoding::Profile,unknown=>return Err(DecodeError::Unsupported(format!("Unknown transfer {unknown}")))};
-    let alpha = match values::string(values::required(data,"alpha")?)? {"none"=>AlphaAssociation::None,"straight"=>AlphaAssociation::Straight,"premultiplied_linear"=>AlphaAssociation::PremultipliedLinear,unknown=>return Err(DecodeError::Unsupported(format!("Unknown alpha {unknown}")))};
+    let encoding = match values::string(values::required(data,"transfer")?)? {"linear"=>TransferEncoding::Linear,"profile"=>TransferEncoding::Profile,unknown=>return Err(DecodeError::Unsupported(format!("Unknown transfer {unknown}")))};
+    let alpha = match values::string(values::required(data,"alpha")?)? {"none"=>AlphaAssociation::None,"straight"=>AlphaAssociation::Straight,unknown=>return Err(DecodeError::Unsupported(format!("Unknown alpha {unknown}")))};
     let descriptor = PixelDescriptor { channels, bits_per_channel:depth.bits(), sample:if depth.is_float(){SampleType::Float}else{SampleType::Unsigned}, encoding, alpha };
     if descriptor.byte_len([TILE_SIZE;2]).is_none() || name == "coverage" && (depth.is_float() || encoding != TransferEncoding::Linear || alpha != AlphaAssociation::None)
         || matches!(name,"cmyk"|"gray"|"rgb") && alpha != AlphaAssociation::None || matches!(name,"rgba"|"gray_alpha") && alpha == AlphaAssociation::None {
         return Err("Invalid raster sample interpretation".into());
-    }
-    if let Some(profile)=data.get("profile") {
-        reference_id(profile)?;
-        if descriptor.encoding!=TransferEncoding::Profile {return Err("Profile binding on non-profile samples".into());}
     }
     Ok(descriptor)
 }
@@ -346,16 +342,11 @@ impl<'a> ResourceReader<'a> {
             self.tiles.insert(id,tile.clone()); return Ok(tile);
         }
         let descriptor=parse_descriptor(&record["data"])?;
-        let profile=record["data"].get("profile").cloned();
-        let profile=profile.as_ref().map(|reference|self.bytes(reference,"capy.icc/1",crate::color::source::MAX_PROFILE_BYTES)).transpose()?;
         let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
         let retained=if self.retained_tiles {self.manifest.resources[&id].bytes}else{size as u64};
         self.charge(retained)?;
         let (bytes,integrity)=self.stored(id,lz4_flex::block::get_maximum_output_size(size))?;
-        let tile=Arc::new(match profile {
-            Some(profile)=>TileBlob::from_profiled_package(id,descriptor,bytes,profile),
-            None=>TileBlob::from_package(id,descriptor,bytes),
-        }.map_err(|e|self.backing.fail(e))?);
+        let tile=Arc::new(TileBlob::from_package(id,descriptor,bytes).map_err(|e|self.backing.fail(e))?);
         tile.compressed.set_integrity(integrity)?;
         self.decoded+=retained; self.remember_alias(id);
         self.tiles.insert(id,tile.clone()); Ok(tile)

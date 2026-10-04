@@ -7,7 +7,9 @@ pub(super) fn raw_revision(color: layer_core::color::DocumentColor, planes: &[la
             let descriptor = plane.descriptor(color);
             let bytes = vec![seed + i as u8; descriptor.byte_len([TILE_SIZE; 2]).unwrap()];
             (TileKey { plane: *plane, coordinate: [0, 0] }, RasterTile::backed(TileBlob::encode(descriptor, &bytes).unwrap()))
-        }).collect(), watercolor: None,
+        }).collect(),
+        watercolor: planes.contains(&layer_core::raster::RasterPlane::WatercolorWetness)
+            .then_some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. }),
     })
 }
 
@@ -44,7 +46,7 @@ fn bake_session(linked: bool) -> UiSession<Recorder> {
     let p = doc.artwork.paint.get_mut(paint).unwrap();
     p.original = Some(std::sync::Arc::new(source.finish().unwrap()));
     p.domain = [16, 8];
-    p.raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], 20);
+    p.raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 20);
     doc.artwork.occurrences.get_mut(owner).unwrap().placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([2., 0., 0., 3., -17., 13.]));
     let mask_handle = doc.artwork.coverage.next_handle();
     let mut mask = layer_core::CoverageSnapshot::reveal_all(mask_handle, [16, 8], Point { x: 5., y: 7. });
@@ -74,7 +76,7 @@ fn completed_bake(plan: &layer_core::TransformPixelsPlan) -> layer_core::Edit {
     fn complete(edit: &mut layer_core::Edit, color: layer_core::color::DocumentColor, paint: Option<PaintHandle>, coverage: Option<CoverageHandle>) {
         match edit {
             layer_core::Edit::Paint(change) if Some(change.handle) == paint => {
-                change.value.as_mut().unwrap().raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness], 150);
+                change.value.as_mut().unwrap().raster = raw_revision(color, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 150);
             }
             layer_core::Edit::Coverage(change) if Some(change.handle) == coverage => {
                 change.value.as_mut().unwrap().raster = raw_revision(color, &[RasterPlane::Mask], 210);

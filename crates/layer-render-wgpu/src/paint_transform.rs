@@ -196,13 +196,13 @@ struct ImageTransformState {
     scalar: PixelTransform,
     visibility: PixelTransform,
     background: Option<f32>,
-    sources: [Option<TileSnapshot>; 3],
-    captures: [std::collections::BTreeMap<[u32; 2], snapshot::SnapshotPage>; 3],
+    sources: [Option<TileSnapshot>; 2],
+    captures: [std::collections::BTreeMap<[u32; 2], snapshot::SnapshotPage>; 2],
     selection: Option<wgpu::Buffer>,
     has_selection: bool,
     cut: layer_core::Rect,
-    original_pages: [Vec<[u32; 2]>; 3],
-    source_bounds: [PixelRect; 3],
+    original_pages: [Vec<[u32; 2]>; 2],
+    source_bounds: [PixelRect; 2],
     preview: Option<layer_render::TransformPreview>,
     preview_regions: [PixelRect; 2],
     native_preview: bool,
@@ -409,14 +409,12 @@ impl Atlas {
 #[derive(Default)]
 struct PreviewPages {
     paint: Vec<LayerPage>,
-    material: Vec<CanvasMaterialPage>,
     watercolor: Vec<WatercolorWetnessPage>,
     masks: Vec<layer_masks::MaskPage>,
 }
 impl PreviewPages {
     fn clear(&mut self) {
         self.paint.clear();
-        self.material.clear();
         self.watercolor.clear();
         self.masks.clear();
     }
@@ -425,7 +423,6 @@ impl PreviewPages {
             .iter()
             .map(|p| p.primary.storage_bytes() + p.secondary.as_ref().map_or(0, PageSurface::storage_bytes))
             .sum::<u64>()
-            + self.material.iter().map(|p| p.wetness.storage_bytes()).sum::<u64>()
             + self.watercolor.iter().map(|p| p.primary.storage_bytes() + p.secondary.storage_bytes()).sum::<u64>()
             + self.masks.iter().map(|p| texture_bytes(&p.texture)).sum::<u64>()
     }
@@ -460,7 +457,7 @@ impl ImageTransformState {
             has_selection: false,
             cut: layer_core::Rect::EMPTY,
             original_pages: Default::default(),
-            source_bounds: [PixelRect::EMPTY; 3],
+            source_bounds: [PixelRect::EMPTY; 2],
             preview: None,
             preview_regions: [PixelRect::EMPTY; 2],
             native_preview: false,
@@ -584,8 +581,7 @@ impl ImageTransformState {
                 .fold(PixelRect::EMPTY, |b, (c, _)| b.union(page_rect(*c)))
                 .intersect(PixelRect::full(extent))
         });
-        let planes = [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::Wetness,
-            layer_core::raster::RasterPlane::WatercolorWetness];
+        let planes = [layer_core::raster::RasterPlane::Color, layer_core::raster::RasterPlane::WatercolorWetness];
         if let Some((data, _)) = &backing {
             for (i, plane) in planes.iter().enumerate() {
                 for key in data.tiles.keys().filter(|key| key.plane == *plane) {
@@ -682,8 +678,7 @@ impl ImageTransformState {
             }
             _ => None,
         };
-        let material = self.sources[1].is_some();
-        let watercolor = self.sources[2].is_some();
+        let watercolor = self.sources[1].is_some();
         let support = self.channel_regions(transform, r.target_extent(layer));
         let coordinates: std::collections::BTreeSet<_> = regions
             .iter()
@@ -691,7 +686,7 @@ impl ImageTransformState {
             .filter(|b| !b.is_empty())
             .flat_map(page_coordinates)
             .collect();
-        let channel_pages: [Vec<[u32; 2]>; 3] = std::array::from_fn(|channel| {
+        let channel_pages: [Vec<[u32; 2]>; 2] = std::array::from_fn(|channel| {
             if self.sources[channel].is_none() {
                 return Vec::new();
             }
@@ -755,33 +750,8 @@ impl ImageTransformState {
                 page.primary_needs_clear = false;
                 r.paint_layers[index].pages.push(page);
             }
-            if material
-                && support[1].iter().any(|b| !b.page_local(c).is_empty())
-                && r.paint_layers[index]
-                    .material_pages
-                    .iter()
-                    .all(|p| p.coordinate != c)
-            {
-                let mut page = self
-                    .spares
-                    .material
-                    .pop()
-                    .unwrap_or_else(|| CanvasMaterialPage {
-                        coordinate: c,
-                        wetness: r.create_scalar_page_surface("transformed material wetness"),
-                        needs_clear: false,
-                    });
-                page.coordinate = c;
-                page.needs_clear = false;
-                r.encode_clear(
-                    encoder,
-                    &page.wetness.view,
-                    "initialize transformed material",
-                );
-                r.paint_layers[index].material_pages.push(page);
-            }
             if watercolor
-                && support[2].iter().any(|b| !b.page_local(c).is_empty())
+                && support[1].iter().any(|b| !b.page_local(c).is_empty())
                 && r.paint_layers[index]
                     .watercolor_wetness_pages
                     .iter()
@@ -1516,7 +1486,7 @@ impl ImageTransformState {
         &self,
         transform: &layer_core::ImageTransform,
         extent: [u32; 2],
-    ) -> [[PixelRect; 2]; 3] {
+    ) -> [[PixelRect; 2]; 2] {
         self.source_bounds.map(|b| {
             let cut = layer_core::Rect {
                 min: layer_core::Point {
@@ -1542,7 +1512,7 @@ impl ImageTransformState {
     ) {
         let support = transform
             .map(|t| self.channel_regions(t, r.target_extent(id)))
-            .unwrap_or([[PixelRect::EMPTY; 2]; 3]);
+            .unwrap_or([[PixelRect::EMPTY; 2]; 2]);
         let keep = |c: [u32; 2], original: &Vec<_>, regions: &[PixelRect]| {
             original.contains(&c) || regions.iter().any(|b| !b.page_local(c).is_empty())
         };
@@ -1560,14 +1530,9 @@ impl ImageTransformState {
                 !keep(p.coordinate, &self.original_pages[0], regions)
             }));
             self.spares
-                .material
-                .extend(layer.material_pages.extract_if(.., |p| {
-                    !keep(p.coordinate, &self.original_pages[1], &support[1])
-                }));
-            self.spares
                 .watercolor
                 .extend(layer.watercolor_wetness_pages.extract_if(.., |p| {
-                    !keep(p.coordinate, &self.original_pages[2], &support[2])
+                    !keep(p.coordinate, &self.original_pages[1], &support[1])
                 }));
         }
     }
@@ -1614,13 +1579,6 @@ fn destination(
             .iter()
             .find(|p| p.coordinate == coordinate)?
             .active(),
-        1 => {
-            &layer
-                .material_pages
-                .iter()
-                .find(|p| p.coordinate == coordinate)?
-                .wetness
-        }
         _ => layer
             .watercolor_wetness_pages
             .iter()
@@ -1630,7 +1588,7 @@ fn destination(
     Some((&surface.texture, &surface.view))
 }
 
-type TexturePages = [Vec<([u32; 2], snapshot::SnapshotPage)>; 3];
+type TexturePages = [Vec<([u32; 2], snapshot::SnapshotPage)>; 2];
 fn source_pages(
     r: &WgpuRasterizer,
     id: SourceTarget,
@@ -1646,7 +1604,6 @@ fn source_pages(
                     .map(|((_, c), p)| (*c, snapshot::SnapshotPage::of(&p.texture, &p.view)))
                     .collect(),
                 Vec::new(),
-                Vec::new(),
             ],
         ));
     }
@@ -1661,10 +1618,6 @@ fn source_pages(
             l.pages
                 .iter()
                 .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.active().texture, &p.active().view)))
-                .collect(),
-            l.material_pages
-                .iter()
-                .map(|p| (p.coordinate, snapshot::SnapshotPage::of(&p.wetness.texture, &p.wetness.view)))
                 .collect(),
             l.watercolor_wetness_pages
                 .iter()

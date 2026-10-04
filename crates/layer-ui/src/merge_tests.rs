@@ -93,7 +93,7 @@ mod merge_checks {
         let instance = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("levels").unwrap().program());
         let doc = s.engine.document();
         let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program: instance.program });
-        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: instance.values, domain: doc.composition().size });
+        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: instance.values});
         let mut effect = doc.scene().occurrence(upper).unwrap().clone();
         effect.content = OccurrenceContent::Effect(application.handle);
         let effect = RecordChange::insert(&doc.artwork.occurrences, effect);

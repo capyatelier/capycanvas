@@ -54,7 +54,7 @@ impl TransformPixelsPlan {
                 Edit::Paint(c) if Some(c.handle) == paint => {
                     if let Some(p) = c.value.as_mut() {
                         p.raster =
-                            reserve(&[raster::RasterPlane::Color, raster::RasterPlane::Wetness, raster::RasterPlane::WatercolorWetness]);
+                            reserve(&[raster::RasterPlane::Color, raster::RasterPlane::WatercolorWetness]);
                     }
                 }
                 Edit::Coverage(c) if Some(c.handle) == coverage => {

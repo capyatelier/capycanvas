@@ -63,7 +63,7 @@ pub(super) fn right_swipe(doc: &Document, id: OccurrenceHandle) -> Option<LayerA
     match row.kind() {
         LayerKind::Paint => Some(LayerAction::ToggleAlphaLock { id: occurrence_token(id) }),
         LayerKind::Group => {
-            let next = if row.passes_through() { row.isolated_blend } else { LayerBlend::PassThrough };
+            let next = if row.passes_through() { LayerBlend::Normal } else { LayerBlend::PassThrough };
             doc.group_blend_refusal(id, next).is_none().then(|| LayerAction::TogglePassThrough { id: occurrence_token(id) })
         }
         _ => None,

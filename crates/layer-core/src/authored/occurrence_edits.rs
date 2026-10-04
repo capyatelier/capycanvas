@@ -46,7 +46,6 @@ impl Document {
     pub fn group_blend_edit(&self,id:OccurrenceHandle,blend:crate::LayerBlend)->Result<Edit,DocumentError> {
         if let Some(refusal)=self.group_blend_refusal(id,blend){return Err(refusal);}
         let mut occurrence=self.scene().occurrence(id).unwrap().clone();
-        if blend==crate::LayerBlend::PassThrough {if occurrence.blend!=blend {occurrence.isolated_blend=occurrence.blend;}} else {occurrence.isolated_blend=blend;}
         occurrence.blend=blend;
         Ok(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,id,Some(occurrence))?))
     }
@@ -66,8 +65,8 @@ impl Document {
         let mut occurrence=original.clone();let mut edits=Vec::new();
         if enabled {
             let target=self.attachment_target_below(id,true).ok_or(invalid("Choose paint or an isolated group below"))?;
-            if original.passes_through(){if !isolate{return Err(invalid("Isolate the group before clipping"));}occurrence.blend=occurrence.isolated_blend;}
-            if scene.occurrence(target).is_some_and(Occurrence::passes_through){if !isolate{return Err(invalid("Isolate the target group before attaching"));}edits.push(self.group_blend_edit(target,scene.occurrence(target).unwrap().isolated_blend)?);}
+            if original.passes_through(){if !isolate{return Err(invalid("Isolate the group before clipping"));}occurrence.blend=crate::LayerBlend::Normal;}
+            if scene.occurrence(target).is_some_and(Occurrence::passes_through){if !isolate{return Err(invalid("Isolate the target group before attaching"));}edits.push(self.group_blend_edit(target,crate::LayerBlend::Normal)?);}
             occurrence.attachment=Attachment::Clip;
         } else {occurrence.attachment=Attachment::None;}
         edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,id,Some(occurrence))?));
@@ -118,7 +117,7 @@ impl Document {
         if let Some(mask)=&mut occurrence.mask{mask.translation.x+=delta.x;mask.translation.y+=delta.y;}
         let mut edits=vec![Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,id,Some(occurrence))?),Edit::Stack(RecordChange::replace(&self.artwork.stacks,stack,Some(destination))?)];
         if old_stack!=stack {let mut old=self.artwork.stacks.get(old_stack).unwrap().clone();old.entries.retain(|h|*h!=id);edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,old_stack,Some(old))?));}
-        if target.passes_through(){if !isolate{return Err(invalid("Isolate the target group before attaching"));}edits.push(self.group_blend_edit(owner,target.isolated_blend)?);}
+        if target.passes_through(){if !isolate{return Err(invalid("Isolate the target group before attaching"));}edits.push(self.group_blend_edit(owner,crate::LayerBlend::Normal)?);}
         self.checked_relationship_edit(Edit::Batch(edits),&[id])
     }
     pub fn reparent_occurrence_edit(&self,id:OccurrenceHandle,parent:Option<OccurrenceHandle>,index:usize)->Result<Edit,DocumentError> {
@@ -315,9 +314,9 @@ mod tests {
         assert_eq!(doc.scene().occurrence(fx).unwrap().attachment,Attachment::None);
         assert_eq!(doc.scene().occurrence(clip).unwrap().attachment,Attachment::None);
         doc.apply(undo).unwrap();f::restored(&before,&doc);
-        doc.apply(doc.group_blend_edit(group,LayerBlend::Multiply).unwrap()).unwrap();doc.apply(doc.group_blend_edit(group,LayerBlend::PassThrough).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().isolated_blend,LayerBlend::Multiply);
-        assert!(doc.attach_effect_edit(fx,group,0,false).is_err());let undo=doc.apply(doc.attach_effect_edit(fx,group,0,true).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().blend,LayerBlend::Multiply);assert!(doc.group_blend_edit(group,LayerBlend::PassThrough).is_err());
-        let reopened=f::roundtrip(&doc);assert_eq!(reopened.scene().occurrence(f::id(&reopened,"Group")).unwrap().isolated_blend,LayerBlend::Multiply);doc.apply(undo).unwrap();
+        doc.apply(doc.group_blend_edit(group,LayerBlend::Multiply).unwrap()).unwrap();doc.apply(doc.group_blend_edit(group,LayerBlend::PassThrough).unwrap()).unwrap();
+        assert!(doc.attach_effect_edit(fx,group,0,false).is_err());let undo=doc.apply(doc.attach_effect_edit(fx,group,0,true).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().blend,LayerBlend::Normal);assert!(doc.group_blend_edit(group,LayerBlend::PassThrough).is_err());
+        doc.apply(undo).unwrap();
     }
     #[test]
     fn drop_plans_distinguish_owner_hits_and_chain_gaps_and_preserve_preview_targets() {
@@ -491,7 +490,7 @@ mod tests {
         let program = crate::bundled_effect_catalog().get("unsharp_mask").unwrap().program();
         let draft = crate::EffectInstance::new(program.clone());
         let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program });
-        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: [16, 16] });
+        let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values});
         let effect = RecordChange::insert(&doc.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(application.handle), "Effect"));
         let effect_handle = effect.handle; let app_handle = application.handle;
         let selection = RecordChange::insert(&doc.artwork.selections, SavedSelection { selection: crate::Selection::empty(),});

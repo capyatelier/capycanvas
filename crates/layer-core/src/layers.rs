@@ -947,7 +947,6 @@ impl Document {
             LayerBlend::PassThrough
         } else { blend };
         group.blend = blend;
-        if blend!=LayerBlend::PassThrough {group.isolated_blend=blend;}
         let occurrence = RecordChange::insert(&self.artwork.occurrences, group);
         let mut containing = self.artwork.stacks.get(stack).unwrap().clone();
         containing.entries.retain(|h| !selected.contains(h));

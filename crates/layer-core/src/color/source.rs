@@ -122,7 +122,6 @@ impl PartialEq for SourceImage {
             && self.tiles.len() == other.tiles.len()
             && self.tiles.iter().zip(&other.tiles).all(|((a, x), (b, y))| {
                 a == b && x.descriptor == y.descriptor && x.resource_id() == y.resource_id()
-                    && x.resource_profile().map(|p| p.id()) == y.resource_profile().map(|p| p.id())
             })
     }
 }

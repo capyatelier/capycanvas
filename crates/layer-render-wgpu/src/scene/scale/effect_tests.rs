@@ -550,7 +550,7 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
         let mut full=WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let extent=doc.composition().size;
         for (step,y) in [0.2,0.7,0.4].into_iter().enumerate() {
-            set_effect_at(&mut doc,0,"curve_0",EffectValue::Curve(vec![[0.,0.],[0.4,y],[1.,1.]]));
+            set_effect_at(&mut doc,0,"rgb",EffectValue::Curve(vec![[0.,0.],[0.4,y],[1.,1.]]));
             let mut frame=packet(doc.scene(),extent);frame.blend_space=space;frame.composite_all=false;
             frame.view.width_px=640;frame.view.height_px=480;
             frame.view.document_to_surface=[0.5,0.,0.,0.5,-190.,-130.];

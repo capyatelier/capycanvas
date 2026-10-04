@@ -132,7 +132,7 @@ export async function checkTonalControls({call,evaluate,settle}) {
       await press('[data-curve-axis="input"] .number-value');
       await evaluate(`(()=>{const n=document.querySelector('[data-curve-axis="input"] .number-entry');window.scopeDraft=n;n.value='0.4123456789012345';n.dispatchEvent(new Event('input',{bubbles:true}));n.setSelectionRange(3,9)})()`);
       const binsBefore=JSON.stringify(await fixture.json('layerApp.state().tonal_histogram.data'));
-      await send({type:'effect',action:{op:'set',layer:v.layer,key:'curve_1',value:{kind:'curve',value:[[0,0],[.5,.25],[1,1]]}}});
+      await send({type:'effect',action:{op:'set',layer:v.layer,key:'red',value:{kind:'curve',value:[[0,0],[.5,.25],[1,1]]}}});
       await fixture.poll(`JSON.stringify(layerApp.state().tonal_histogram.data,(_,v)=>typeof v==='bigint'?Number(v):v)!==${JSON.stringify(binsBefore)}&&layerApp.state().tonal_histogram.data!=null`);await ready();
       assert.ok(await evaluate(`document.activeElement===scopeDraft&&scopeDraft===document.querySelector('[data-curve-axis="input"] .number-entry')`),'Analysis refresh retains the exact numeric field and focus');
       assert.deepEqual(await evaluate('[scopeDraft.value,scopeDraft.selectionStart,scopeDraft.selectionEnd]'),['0.4123456789012345',3,9]);

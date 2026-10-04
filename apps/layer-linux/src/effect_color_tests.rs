@@ -375,7 +375,7 @@ fn native_curve_graph_numbers_pages_and_history() {
     let mut native = super::canvas_bar_tests::remote_input();
     let output = std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
     std::fs::create_dir_all(&output).unwrap();
-    let key = "curve_0";
+    let key = "rgb";
     set(&w, "domain", EffectValue::Choice(0));
     set(&w, key, EffectValue::Curve(vec![[0., 0.], [0.5, 0.5], [1., 1.]]));
     let graph = curve_graph(&w, key);
@@ -546,9 +546,9 @@ fn native_curve_graph_numbers_pages_and_history() {
     choose_curve_option(&w, &mut native, &page, 1);
     assert_eq!(state(&w).layer_properties.page.as_deref(), Some("red"));
     assert_eq!(snapshot(&w), before, "page navigation is transient");
-    let red = curve_graph(&w, "curve_1");
+    let red = curve_graph(&w, "red");
     native.click(screen_point(&red, &w.window, [0.3, 0.4]));
-    assert_eq!(curve_points(&w, "curve_1").len(), 3);
+    assert_eq!(curve_points(&w, "red").len(), 3);
     assert_eq!(curve_points(&w, key).len(), 3);
     capture_ui(&w, &output, "curves-red.png");
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() { native.perform(json!([{"wait_ms":250},{"capture":"curves-red"}])); }

@@ -67,8 +67,8 @@ change the immediate pickup rule for handles and title/tab bars.
   lock. Release commits one undo step; a short or cancelled swipe changes nothing.
   Swiping right to close Delete does not also toggle alpha lock.
 - Group rows use the same right swipe to toggle Pass Through, whether the
-  folder is expanded or collapsed. Returning to isolation restores its previous
-  blend mode. Locked groups and groups needed by clipping or attached effects
+  folder is expanded or collapsed. Returning to isolation makes the group Normal.
+  Locked groups and groups needed by clipping or attached effects
   cannot enter Pass Through. The shared optional row action controls availability;
   closing Delete, a short swipe and cancellation never change group mode.
 - Before a touch/pen list-row hold wins, motion remains available to normal list

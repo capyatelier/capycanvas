@@ -119,6 +119,44 @@ fn prepare_analysis(r: &mut WgpuRasterizer, document: &Document, target: Occurre
 }
 
 #[test]
+fn saved_procedural_patterns_keep_their_noise() {
+    fn random([x, y]: [f32; 2], seed: u32) -> f32 {
+        let h = (x.floor() as i32 as u32).wrapping_mul(1664525).wrapping_add((y.floor() as i32 as u32).wrapping_mul(1013904223))
+            .wrapping_add(seed.wrapping_mul(747796405));
+        let h = (h ^ (h >> 15)).wrapping_mul(2246822519);
+        (h ^ (h >> 13)) as f32 / 4294967295.
+    }
+    fn noise(p: [f32; 2], seed: u32) -> f32 {
+        let q = p.map(f32::floor);
+        let t = p.map(|v| { let f = v - v.floor(); f * f * (3. - 2. * f) });
+        let corner = |dx: f32, dy: f32| random([q[0] + dx, q[1] + dy], seed);
+        let mix = |a: f32, b: f32, t: f32| a + (b - a) * t;
+        mix(mix(corner(0., 0.), corner(1., 0.), t[0]), mix(corner(0., 1.), corner(1., 1.), t[0]), t[1]) * 2. - 1.
+    }
+    let grain = layer_core::bundled_effect_catalog().get("film_grain").unwrap().program();
+    let mut sources = grain.wgsl.sources().unwrap().to_vec();
+    sources.push("fn pinned_noise(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(fx_random(p,17u),fx_noise(p*.37,3u)*.5+.5,0.,1.)*c.a;}".into());
+    let program = std::sync::Arc::new(layer_core::EffectProgram { id: "pinned_noise".into(), label: "Pinned noise".into(),
+        wgsl: layer_core::EffectShader::Linked { sources: sources.into() }, entry: "pinned_noise".into(), time: false,
+        parameters: Default::default(), pages: Default::default(), constraints: Default::default(), ..(*grain).clone() });
+    let extent = [64, 32];
+    let (document, _) = filtered(&setup(extent), EffectInstance::new(program));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    submit(&mut r, extent, &document, 0., true, true, None);
+    let pixels = image(&mut r);
+    let encoded = |v: f32| (255. * layer_core::color::RgbSpace::Srgb.encode(f64::from(v))).round() as f32;
+    for y in 8..extent[1] - 8 {
+        for x in 8..extent[0] - 8 {
+            let p = [x as f32 + 0.5, y as f32 + 0.5];
+            let i = ((y * extent[0] + x) * 4) as usize;
+            for (channel, expected) in [random(p, 17), noise(p.map(|v| v * 0.37), 3) * 0.5 + 0.5].into_iter().enumerate() {
+                assert!((f32::from(pixels[i + channel]) - encoded(expected)).abs() <= 1., "noise channel {channel} changed at {x},{y}");
+            }
+        }
+    }
+}
+
+#[test]
 fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/filters/tent-blur");

@@ -101,7 +101,7 @@ fn resource_document() -> Document {
         let mut effect=lookup_effect();effect.set("table",EffectValue::Lut3d(Some(alias.clone()))).unwrap();
         Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[0].default=EffectValue::Lut3d(Some(alias));
         let definition=document.artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
-        let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:[64,48]}).unwrap();
+        let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
         let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),title)).unwrap();
         document.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,occurrence);
     }

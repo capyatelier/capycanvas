@@ -9644,7 +9644,7 @@ mod tests {
     }
 
     #[test]
-    fn group_isolation_restores_blend_and_protects_attached_content() {
+    fn group_isolation_returns_to_normal_and_protects_attached_content() {
         let mut s = session(Platform::Gtk);
         layer(&mut s, LayerAction::New { group: true, clipped: false });
         let group = s.engine.document().working.occurrence.unwrap();
@@ -9654,7 +9654,7 @@ mod tests {
         assert!(s.engine.document().scene().occurrence(group).unwrap().passes_through());
         assert!(s.dispatch(UiAction::Layer { action: LayerAction::AlphaLock { id, value: true } }).is_err());
         layer(&mut s, LayerAction::TogglePassThrough { id });
-        assert_eq!(s.engine.document().scene().occurrence(group).unwrap().blend, layer_core::LayerBlend::Multiply);
+        assert_eq!(s.engine.document().scene().occurrence(group).unwrap().blend, layer_core::LayerBlend::Normal);
         invoke(&mut s, CommandId::Undo);
         assert!(s.engine.document().scene().occurrence(group).unwrap().passes_through());
         invoke(&mut s, CommandId::Redo);
@@ -14607,7 +14607,7 @@ mod tests {
             &mut app,
             EffectAction::CurvePoint {
                 layer: occurrence_token(id),
-                key: "curve_0".into(),
+                key: "rgb".into(),
                 index: None,
                 point: [0.4, 0.7],
                 remove: false,
@@ -14621,7 +14621,7 @@ mod tests {
             &mut app,
             EffectAction::Reset {
                 layer: occurrence_token(id),
-                key: "curve_0".into(),
+                key: "rgb".into(),
             },
         );
         assert_eq!(

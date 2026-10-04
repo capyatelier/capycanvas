@@ -156,7 +156,7 @@ pub(super) fn install(renderer: &mut WgpuRasterizer) {
                     .get(offset..end)
                     .ok_or("Incomplete raster worker tile")?;
                 blobs.push(TileBlob::from_verified_resource(
-                    layer_core::PortableId::random(), descriptor, encoded.into(), None,
+                    layer_core::PortableId::random(), descriptor, encoded.into(),
                 )?);
                 offset = end;
             }

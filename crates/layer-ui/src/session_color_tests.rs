@@ -670,7 +670,7 @@ fn hdr_curves_default_to_log_domain_with_reference_white_on_the_axis() {
     s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
     let id = s.state.layer_properties.layer.unwrap();
     let effect = s.engine.document().scene().effect(occurrence_handle(id).unwrap()).unwrap();
-    assert_eq!(effect.choice("domain"), Some("Log HDR"));
+    assert_eq!(effect.choice("domain"), Some("log_hdr"));
     assert_eq!(s.state.layer_properties.curve_max, Some(16.));
     assert_eq!(s.state.layer_properties.curve_white, Some(8. / 12.));
     let set = |key: &str, value| UiAction::Effect { action: EffectAction::Set { layer: id, key: key.into(), value } };

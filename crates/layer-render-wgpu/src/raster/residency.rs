@@ -46,7 +46,6 @@ impl WgpuRasterizer {
     pub(crate) fn drop_vacated_pages(&mut self, target: SourceTarget, keep: impl Fn([u32; 2]) -> bool) {
         if let Some(layer) = self.paint_layers.iter_mut().find(|l| l.id == target) {
             layer.pages.retain(|p| keep(p.coordinate));
-            layer.material_pages.retain(|p| keep(p.coordinate));
             layer.watercolor_wetness_pages.retain(|p| keep(p.coordinate));
         } else {
             self.layer_masks.pages.retain(|(id, c), _| *id != target || keep(*c));

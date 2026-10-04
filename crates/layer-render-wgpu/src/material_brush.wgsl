@@ -518,7 +518,6 @@ fn wet_fragment(
     if style.canvas_opacity.w > 0.5 {
         stroke_coverage = 0.0;
     }
-    var deposited_wetness = 0.0;
     var batch_color = vec3<f32>(0.0);
     var batch_alpha = 0.0;
     for (var offset = 0u; offset < count; offset += 1u) {
@@ -559,10 +558,6 @@ fn wet_fragment(
             0.0,
             1.0,
         );
-        deposited_wetness = max(
-            deposited_wetness,
-            coverage * style.material_a.z * wet_jitter,
-        );
         if contact_uniform() {
             let next_coverage = max(stroke_coverage, source_alpha);
             source_alpha = clamp(
@@ -586,7 +581,7 @@ fn wet_fragment(
     return MaterialOutput(
         result,
         vec4<f32>(stroke_coverage, 0.0, 0.0, 1.0),
-        vec4<f32>(deposited_wetness, 0.0, 0.0, 1.0),
+        vec4<f32>(0.0),
     );
 }
 

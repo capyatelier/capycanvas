@@ -139,18 +139,10 @@ impl Requirements {
             let kind = MaterialPipelineKind::for_attachments(
                 plan.state.watercolor_wetness,
                 plan.state.coverage,
-                plan.state.canvas_wetness,
             );
             self.render
                 .push(r.pipelines.material[kind.index(plan.material)].clone());
             if preview {
-                let variant = MaterialPipelineKind::for_attachments(
-                    plan.state.watercolor_wetness,
-                    plan.state.coverage,
-                    false,
-                );
-                self.render
-                    .push(r.pipelines.material[variant.index(plan.material)].clone());
                 // A single predicted destination batch on a simple canvas reads
                 // persistent coverage but writes only its disposable color.
                 if !plan.state.watercolor_wetness {
@@ -576,7 +568,7 @@ mod tests {
         let program = layer_core::bundled_effect_catalog().get("curves").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
         let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
-        let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: doc.composition().size }).unwrap();
+        let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values}).unwrap();
         let occurrence = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "curves")).unwrap();
         let stack=doc.composition().result;
         doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, occurrence);

@@ -4,10 +4,10 @@ use crate::levels::CalibrationRole;
 
 fn effect() -> EffectInstance {EffectInstance::new(bundled_effect_catalog().get("curves").unwrap().program())}
 fn points(effect: &EffectInstance, page: u8) -> &[[f32; 2]] {
-    match effect.value(&format!("curve_{page}")) {Some(EffectValue::Curve(value)) => value, _ => panic!("missing curve")}
+    match effect.value(crate::CURVE_KEYS[usize::from(page)]) {Some(EffectValue::Curve(value)) => value, _ => panic!("missing curve")}
 }
 fn set_curve(effect: &mut EffectInstance, page: u8, points: &[[f32; 2]]) {
-    effect.set(&format!("curve_{page}"), EffectValue::Curve(points.to_vec())).unwrap();
+    effect.set(crate::CURVE_KEYS[usize::from(page)], EffectValue::Curve(points.to_vec())).unwrap();
 }
 fn near(actual: f64, expected: f64, tolerance: f64) {
     assert!((actual - expected).abs() <= tolerance, "{actual} != {expected}, tolerance {tolerance}");
@@ -32,14 +32,14 @@ fn hermite(points: &[[f32; 2]], x: f64) -> f64 {
         + (-2.*t3+3.*t2)*knots[i+1][1] + (t3-t2)*widths[i]*derivatives[i+1]
 }
 fn encode(effect: &EffectInstance, space: RgbSpace, value: f64) -> f64 {
-    if effect.choice("domain") != Some("Log HDR") {return space.encode(value);}
+    if effect.choice("domain") != Some("log_hdr") {return space.encode(value);}
     let Some(EffectValue::Number(stops)) = effect.value("hdr_stops") else {panic!("missing stops")};
     let span = f64::from(*stops)+8.;
     let toe = std::f64::consts::E/256.;
     if value <= toe {value/(toe*std::f64::consts::LN_2*span)} else {(value.log2()+8.)/span}
 }
 fn decode(effect: &EffectInstance, space: RgbSpace, value: f64) -> f64 {
-    if effect.choice("domain") != Some("Log HDR") {return space.decode(value);}
+    if effect.choice("domain") != Some("log_hdr") {return space.decode(value);}
     let Some(EffectValue::Number(stops)) = effect.value("hdr_stops") else {panic!("missing stops")};
     let span = f64::from(*stops)+8.;
     if value*span <= std::f64::consts::LOG2_E {value*span*std::f64::consts::LN_2*std::f64::consts::E/256.}
@@ -59,7 +59,7 @@ fn luminance(rgb: [f64; 3], space: RgbSpace) -> f64 {
 fn log_effect(stops: f32) -> EffectInstance {
     let mut effect = EffectInstance::new(bundled_effect_catalog().get("curves").unwrap().program());
     let crate::EffectParameterKind::Choice {options} = &effect.program.parameters.iter().find(|p| p.key.as_ref() == "domain").unwrap().kind else {panic!("missing domain")};
-    let index = options.iter().position(|o| o.value() == "Log HDR").unwrap();
+    let index = options.iter().position(|o| o.value() == "log_hdr").unwrap();
     effect.set("domain", EffectValue::Choice(index as u32)).unwrap();
     effect.set("hdr_stops", EffectValue::Number(stops)).unwrap(); effect
 }

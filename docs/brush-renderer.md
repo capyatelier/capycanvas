@@ -47,7 +47,7 @@ fixed-function blending; no fragment shader reads the paint attachment.
 Raster is incremental. A normal display frame processes only contacts generated
 from newly drained samples, applies the batch damage scissor, and keeps the
 updated layer texture for later frames. Predicted contacts use replaceable
-preview storage and never mutate persistent paint, stroke coverage, canvas
+preview storage and never mutate persistent paint, stroke coverage, watercolor
 wetness, reservoir state, or undo history.
 
 ## Brush range
@@ -56,9 +56,8 @@ One contact primitive supports G‑Pen, pencil, eraser, paintbrush, airbrush,
 chalk, marker, scatter/spray, dual texture, blend, smudge, wet mix, and liquify.
 Sensor mappings control geometry, coverage, color, material transfer, and
 deformation. Dry flow configuration remains the exact zero-state fast path.
-Uniform accumulation adds stroke-ID-keyed R32Float coverage; non-watercolor
-wetness allocates one R32Float field; loaded wet paint uses the spatial GPU
-reservoir; and smudge uses ordered backtrace advection. Watercolor uses coverage
+Uniform accumulation adds stroke-ID-keyed R32Float coverage; loaded wet paint
+uses the spatial GPU reservoir; and smudge uses ordered backtrace advection. Watercolor uses coverage
 plus same-layer pigment advection, with its edge derived live during composition
 and a separate sparse R32Float wetness channel, but no reservoir or drying
 clock. An optional brush-owned conductance texture triggers one bounded GPU
@@ -91,9 +90,8 @@ request it.
 The live path has one contiguous contact upload and one small style-table upload.
 Shaders, pipelines, and samplers are prepared. Dry contact creates no resource;
 destination brushes build small neighborhood bind groups for touched sparse
-pages. Four generic material target variants plus one watercolor-state variant
-prevent an unused coverage or wetness feature from attaching and writing its
-state target. A single pass plan supplies the same attachment decision to page
+pages. Two generic material target variants plus one watercolor-state variant
+prevent an unused coverage feature from attaching and writing its state target. A single pass plan supplies the same attachment decision to page
 allocation, committed rendering, and prediction. Only damaged
 pixels are rasterized and recomposited. Capillary transport uses three
 incommensurate scalar-field-aligned hops rather than iterating one-pixel diffusion

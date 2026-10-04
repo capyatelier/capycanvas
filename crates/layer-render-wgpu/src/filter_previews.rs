@@ -154,7 +154,7 @@ impl FilterPreviews {
             analyses_changed|=previous.map(|e|e.program.analysis())!=Some(effect.program.analysis());
             if previous.is_none_or(|old|old.program!=effect.program.as_ref()||old.values!=effect.values){self.rows.remove(&id);}
             let definition=artwork.definitions.insert(PortableId::random(),Definition{program:effect.program.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
-            let application=artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values.clone(),domain:request.snapshot.view().composition().size}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let application=artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
             let handle=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"")).map_err(|e|GpuRasterError::Effect(e.into()))?;
             programs.insert(id,handle);
         }
@@ -916,7 +916,7 @@ mod tests {
     fn effect(artwork: &mut Artwork, effect: layer_core::EffectInstance) -> OccurrenceHandle {
         let definition = artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
         let application = artwork.effects.insert(PortableId::random(), EffectApplication {
-            definition, values: effect.values, domain: artwork.compositions.get(artwork.root).unwrap().size,
+            definition, values: effect.values,
         }).unwrap();
         artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "effect")).unwrap()
     }

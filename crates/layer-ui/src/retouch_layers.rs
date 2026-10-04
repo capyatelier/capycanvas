@@ -104,7 +104,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 program: draft.filters.blur.program.clone(),
             })?;
             let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
-                definition, values: draft.filters.blur.values.clone(), domain: doc.composition().size,
+                definition, values: draft.filters.blur.values.clone(),
             })?;
             let name = effects::resource_label(&draft.filters.blur.program.label, self.localization());
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect), name);

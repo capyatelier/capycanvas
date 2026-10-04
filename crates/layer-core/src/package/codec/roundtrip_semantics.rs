@@ -32,11 +32,10 @@ fn native(color: DocumentColor) -> Artwork {
                     tiles: [
                         (TileKey { plane: RasterPlane::Color, coordinate: [0, 0] }, color_tile.clone()),
                         (TileKey { plane: RasterPlane::Color, coordinate: [1, 0] }, color_tile),
-                        (TileKey { plane: RasterPlane::Wetness, coordinate: [0, 0] }, tile(RasterPlane::Wetness)),
                         (TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [1, 0] }, tile(RasterPlane::WatercolorWetness)),
                     ]
                     .into(),
-                    watercolor: None,
+                    watercolor: Some(crate::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. }),
                 }),
             },
         )
@@ -106,7 +105,7 @@ fn literal_choices_and_pixels_resave_unchanged() {
     for option in Arc::make_mut(options){*option=crate::EffectOption::Literal(option.value().into());}
     let mut effect=EffectInstance::new(Arc::new(program));effect.set("domain",EffectValue::Choice(1)).unwrap();
     let definition=artwork.definitions.insert(identity(90),Definition{program:effect.program}).unwrap();
-    let application=artwork.effects.insert(identity(91),EffectApplication{definition,values:effect.values.clone(),domain:[256;2]}).unwrap();
+    let application=artwork.effects.insert(identity(91),EffectApplication{definition,values:effect.values.clone()}).unwrap();
     let occurrence=artwork.occurrences.insert(identity(92),Occurrence::new(OccurrenceContent::Effect(application),"  My curves { $name } 한글 🎨  ")).unwrap();
     let root=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(root).unwrap().entries.insert(0,occurrence);
     let bytes=serialize(&prepare(&artwork,false));let reopened=editable(bytes.clone());
@@ -541,7 +540,7 @@ fn filter_blending_space_round_trips() {
     let instance = EffectInstance::new(crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
     let definition =
         artwork.definitions.insert(identity(30), Definition { program: instance.program }).unwrap();
-    let effect = artwork.effects.insert(identity(40), EffectApplication { definition, values: instance.values, domain: [256; 2] }).unwrap();
+    let effect = artwork.effects.insert(identity(40), EffectApplication { definition, values: instance.values}).unwrap();
     let occurrence = artwork.occurrences.insert(identity(50), Occurrence::new(OccurrenceContent::Effect(effect), "Blur")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);

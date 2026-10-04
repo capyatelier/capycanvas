@@ -358,10 +358,10 @@ fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_o
         let mut doc = generated([pixels.len() as u32,1],DocumentColor {space,depth:SampleDepth::F32},&pixels);
         let mut effect = EffectInstance::new(crate::tests::fixture("curves").program());
         effect.set("domain",EffectValue::Choice(u32::from(logarithmic))).unwrap();
-        effect.set("curve_0",EffectValue::Curve(vec![[0.,0.],[1.,0.25]].into())).unwrap();
+        effect.set("rgb",EffectValue::Curve(vec![[0.,0.],[1.,0.25]].into())).unwrap();
         if channels {
-            effect.set("curve_1",EffectValue::Curve(vec![[0.,0.],[1.,0.5]].into())).unwrap();
-            effect.set("curve_3",EffectValue::Curve(vec![[0.,0.],[1.,0.75]].into())).unwrap();
+            effect.set("red",EffectValue::Curve(vec![[0.,0.],[1.,0.5]].into())).unwrap();
+            effect.set("blue",EffectValue::Curve(vec![[0.,0.],[1.,0.75]].into())).unwrap();
         }
         let adjustment=insert_effect(&mut doc,effect,0);doc.artwork.occurrences.get_mut(adjustment).unwrap().opacity=0.;
         let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,doc.composition().size,Point::default());mask.source.default_coverage=0.;

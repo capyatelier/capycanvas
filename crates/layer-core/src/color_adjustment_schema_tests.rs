@@ -25,8 +25,8 @@ fn color_adjustment_schemas_have_independent_ranges_and_tagged_defaults() {
 fn hue_angular_bounds_and_independent_range_limits_reject_invalid_values_atomically() {
     let mut hue=color_effect("hue_saturation");
     for key in ["reds_center","colorize_hue"] {
-        assert!(hue.set(key,EffectValue::Number(360f32.next_down())).is_ok());
-        let before=hue.clone();assert!(hue.set(key,EffectValue::Number(360.)).is_err());assert_eq!(hue,before);
+        assert!(hue.set(key,EffectValue::Number(360.)).is_ok());
+        let before=hue.clone();assert!(hue.set(key,EffectValue::Number(360f32.next_up())).is_err());assert_eq!(hue,before);
     }
     for (key,value) in [("reds_width",180.),("reds_feather",90.)] {hue.set(key,EffectValue::Number(value)).unwrap();}
     let before=hue.clone();assert!(hue.set("reds_feather",EffectValue::Number(90f32.next_up())).is_err());assert_eq!(hue,before);

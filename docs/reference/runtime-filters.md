@@ -200,12 +200,13 @@ Each parameter declares its semantic `dimension`: `scalar` (the default),
 Counts require whole bounds and values. Posterize Levels and Kaleidoscope Segments
 are counts. Denoise exposes Strength and uses an internal radius of two pixels;
 Domain Warp uses three internal noise octaves. Image resize scales pixel lengths
-without rounding to displayed decimal places; displayed `unit` labels affect presentation
-only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
+without rounding to displayed decimal places or clamping to the evaluated range;
+displayed `unit` labels affect presentation only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
 Custom packages retain their own declarations; built-in files omit the schema.
-Percentages keep their existing meanings: center coordinates use the respective
-source width/height, radial controls use the documented filter extent, and color
-amounts are scalar strengths. They are not rescaled as pixel lengths.
+Percentages keep their existing meanings: center coordinates use the composition
+frame's width/height, radial controls use the frame extents listed in
+[evaluation meaning](capy-package.md#evaluation-meaning), and color amounts are
+scalar strengths. They are not rescaled as pixel lengths.
 
 | Owner | Responsibility |
 | --- | --- |
@@ -244,13 +245,14 @@ remain that supplied text, or an explicit object separating them:
 ```json
 {"kind":"choice","options":[
   "Encoded RGB",
-  {"value":"Log HDR","label":{"message":"resources-choice-curves-domain-log-hdr"}}
+  {"value":"log_hdr","label":{"message":"resources-choice-curves-domain-log-hdr"}}
 ]}
 ```
 
 Option values are nonempty and unique within a parameter. Display labels may
 match. Runtime `EffectValue::Choice` values and host actions use indices. Files store
-stable option strings. Curves Domain, Selective Color Mode, Gradient Fill Style
+stable option strings; bundled values are lower snake case IDs with separate
+translated labels, and Curves keys are `rgb`, `red`, `green` and `blue`. Curves Domain, Selective Color Mode, Gradient Fill Style
 and LUT color-space choices map stable values explicitly to GPU codes, so their
 option order can change. Custom choice codes follow their retained ordered
 options. Category IDs, parameter keys and

@@ -74,7 +74,7 @@ fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
     }
     let mut effect = definition.preview().unwrap();
     effect.set("domain", layer_core::EffectValue::Choice(1)).unwrap();
-    assert_eq!(effect.choice("domain"), Some("Log HDR"));
+    assert_eq!(effect.choice("domain"), Some("log_hdr"));
     let mut project = layer_ui::new_drawing(64, 48,
         &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     insert_effect(&mut project,"Literal filter name",effect);
@@ -83,8 +83,8 @@ fn property_wire_keeps_section_identity_and_choice_indices_with_equal_labels() {
         None, [64, 48], layer_ui::Platform::Windows).unwrap();
     let wire = serde_json::to_value(&native.session.state().layer_properties).unwrap();
     let controls = wire["controls"].as_array().unwrap();
-    let first = controls.iter().find(|control| control["key"] == "curve_0").unwrap();
-    let second = controls.iter().find(|control| control["key"] == "curve_1").unwrap();
+    let first = controls.iter().find(|control| control["key"] == "rgb").unwrap();
+    let second = controls.iter().find(|control| control["key"] == "red").unwrap();
     assert_eq!(wire["pages"].as_array().unwrap().iter().map(|page| page["id"].as_str().unwrap()).collect::<Vec<_>>(), ["rgb", "green", "blue"]);
     assert_eq!((&wire["page"], &first["page"], &second["page"]), (&serde_json::json!("rgb"), &serde_json::json!("rgb"), &serde_json::json!("rgb")));
     assert_eq!(first["section"], second["section"]);

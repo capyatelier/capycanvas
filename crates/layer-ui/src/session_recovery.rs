@@ -523,9 +523,10 @@ mod tests {
         invoke(&mut source,CommandId::SaveDocument);let request=source.state.requests.last().unwrap().id;
         source.capture_project_save(request,source.state.document_file.location.clone().unwrap()).unwrap();
         assert!(source.state.document_file.busy);assert!(!source.recovery_document().busy);
-        let expected=source.capture_session().unwrap().artwork().artwork.clone();
+        let mut expected=source.capture_session().unwrap().artwork().artwork.as_ref().clone();
+        expected.outputs.get_mut(expected.default_output).unwrap().context.elapsed=0.;
         let mut restored=restore(&encode(&source),false);assert!(!restored.state.document_file.busy);
-        assert_eq!(&restored.engine.document().artwork,expected.as_ref());assert_eq!(restored.files.saved_checkpoint,saved);
+        assert_eq!(restored.engine.document().artwork,expected);assert_eq!(restored.files.saved_checkpoint,saved);
         assert!(restored.state.document_file.modified);invoke(&mut restored,CommandId::Undo);restored.frame(3,3).unwrap();
         assert_eq!(restored.engine.checkpoint(),saved);assert!(!restored.state.document_file.modified);
         let capture=source.capture_session().unwrap();assert!(capture.prepare(&AtomicBool::new(true)).is_err());

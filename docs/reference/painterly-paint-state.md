@@ -11,21 +11,21 @@ Painterly brushes extend the existing incremental wgpu material pass. They are
 not a second renderer and have no CPU pixel implementation. `layer-engine`
 computes sequential input, dynamics, contact placement, stroke distance, and
 explicit stroke start/end boundaries. `layer-render-wgpu` owns every canvas
-sample, transfer, coverage update, reservoir exchange, wetness write, and edge
-operation.
+sample, transfer, coverage update, reservoir exchange, watercolor wetness write,
+and edge operation.
 
 This milestone implements three bounded kinds of state:
 
 | State | Storage | Lifetime | Current use |
 | --- | --- | --- | --- |
-| Stroke coverage | two sparse R8 256×256 pages per touched color page | keyed to layer + stroke ID | uniform accumulation |
-| Canvas wetness | one sparse R8 256×256 page per touched color page | persistent, deterministic on replay | non-watercolor wet brushes only |
-| Watercolor wetness | one logical sparse R8 channel, ping-ponged during updates | persistent until merge/replay | localized transport, material identity, and live edges |
+| Stroke coverage | two sparse R32Float 256×256 pages per touched color page | keyed to layer + stroke ID | uniform accumulation |
+| Watercolor wetness | one logical sparse R32Float channel, ping-ponged during updates; saved as U8/U16 tiles | persistent until merge | localized transport, material identity, and live edges |
 | Wet brush reservoir | two 64×64 RGBA8 textures | active wet stroke; reused | spatial carried RGB + paint amount for oils/gouache |
 
-Watercolor does not use the non-watercolor deposited-wetness field or reservoir.
-Its R8 value is both membership and localized water amount, independent of
-pigment alpha. Every positive region remains wet until the user merges the
+Other wet brushes keep their state in the reservoir; only watercolor leaves
+wetness on the canvas. Watercolor does not use the reservoir. A wetness value at
+or above the 2/255 floor marks watercolor paint and the amount above it is
+localized water, independent of pigment alpha. Every positive region remains wet until the user merges the
 result and continues on a new layer. Untouched dry media on the same raster
 layer is therefore not classified as watercolor.
 
@@ -46,8 +46,8 @@ only lifecycle contract needed by the renderer:
   state.
 
 The engine never merges batches across stroke identity or past a stroke-end
-boundary. Undo, load, cancellation, and device recreation use the same full
-replay path and reproduce current state deterministically.
+boundary. Undo and load restore committed raster tiles rather than replaying
+strokes.
 
 ## Material transfer
 
@@ -65,7 +65,6 @@ carried paint  = spatial reservoir sample (wet only)
 paint color    = mix(pickup, carried paint) in the brush's Color mixing space
 color output   = premultiplied source-over(destination, paint color, source alpha)
                  in the document's blend space
-wetness output = max(old wetness, coverage × configured wetness)
 ```
 
 Transparent premultiplied source pixels do not contain a meaningful straight
@@ -135,10 +134,10 @@ Wet watercolor destinations select `wet_flow`; empty destinations select
 `dry_flow`. A weaker local pigment relaxation mixes colors that have already
 reached similar wetness.
 
-The R8 field stores a persistent two-level watercolor-material floor plus water
-above that floor. Excess water trends toward the floor on input events, while
-the floor remains until merge so edges and material identity do not disappear.
-The two physical R8 surfaces are ping-pong storage for this one logical channel.
+The field stores the persistent `WATERCOLOR_FLOOR` of 2/255 plus water above that
+floor. Excess water decays toward the floor on each input update, while the floor
+remains until merge so edges and material identity do not disappear. The two
+physical surfaces are ping-pong storage for this one logical channel.
 Only stage one synchronizes them; later stages overwrite the same scissor.
 There is no provenance, direction channel, second material mask, background
 step, document-owned paper texture, or Gaussian blur.
@@ -170,11 +169,9 @@ every frame without mutating stored paint. Outer boundaries and interior holes
 follow the same rule; overlapping wet strokes create no internal edge, pigment
 alpha changes do not move the edge, and lifting the pen causes no visual change.
 
-Each R8 wetness surface costs 64 KiB per touched 256×256 page. The ping-pong pair
-costs 128 KiB per page, or 32 MiB for a fully covered 4096×4096 layer. Against
-the existing watercolor page set (two RGBA8 color surfaces, two R8 coverage
-surfaces, and one R8 wetness surface), the second R8 surface is a 9.1% increment.
-Predicted watercolor uses recyclable private pairs and cannot mutate committed
+Each R32Float wetness surface costs 256 KiB per touched 256×256 page. The
+ping-pong pair costs 512 KiB per page, or 128 MiB for a fully covered 4096×4096
+layer. Predicted watercolor uses recyclable private pairs and cannot mutate committed
 wetness.
 
 Pigment remains flattened RGBA. Watercolor drawn directly over dry paint on the
@@ -184,21 +181,19 @@ require internal pigment planes and is outside this minimal model.
 
 ## Feature-specialized GPU work
 
-The material shader has one semantic implementation and four prepared render
-pipelines selected once per batch:
+The material shader has one semantic implementation and three prepared render
+pipelines per operation, selected once per batch:
 
 | Enabled output | Attachments written |
 | --- | --- |
-| Color only | RGBA8 color |
-| Uniform coverage | RGBA8 color + R8 coverage |
-| Wetness only | RGBA8 color + R8 wetness |
-| Coverage + wetness | RGBA8 color + both R8 fields |
+| Color only | color |
+| Uniform coverage | color + coverage |
+| Watercolor | color + coverage + watercolor wetness |
 
 This is deliberately a small finite pipeline set. It keeps disabled-feature
 bandwidth out of the fast path without generating a pipeline for every preset.
 Color and coverage use source/destination ping-pong textures to obey portable
-WebGPU read/write rules. Non-watercolor deposited wetness remains a write-only
-MAX attachment. Watercolor wetness ping-pongs because transport must read the
+WebGPU read/write rules. Watercolor wetness ping-pongs because transport must read the
 pre-update value while writing all deposition from that submitted update.
 
 ## Painter presets and benchmark proof
@@ -211,7 +206,7 @@ localized swatches.
 
 The release harness runs each brush on three fresh canvases, warms the exact
 pipeline outside the timing window, and aggregates all frames rather than
-choosing a favorable repetition. Coverage-only, wetness-only, wet-reservoir,
+choosing a favorable repetition. Coverage-only, wet-reservoir,
 and smudge-advection brushes measure each primitive independently. Combined
 brushes exercise attachment composition. The legacy optional after-stroke edge
 kernel is reported in pen-up timing; watercolor's live edge is included in

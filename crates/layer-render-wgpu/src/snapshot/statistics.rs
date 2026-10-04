@@ -48,7 +48,7 @@ impl SnapshotGpu {
             && let Some(effect)=request.query.snapshot.view().effect(id)
                 && matches!(effect.program.id.as_ref(),"curves"|"levels") {
                 histogram.domain = match (effect.choice("domain"),effect.value("hdr_stops")) {
-                    (Some("Log HDR"),Some(layer_core::EffectValue::Number(stops)))=>layer_core::color::histogram::HistogramDomain::CurveLog {stops:*stops},
+                    (Some("log_hdr"),Some(layer_core::EffectValue::Number(stops)))=>layer_core::color::histogram::HistogramDomain::CurveLog {stops:*stops},
                     _=>layer_core::color::histogram::HistogramDomain::Encoded,
                 };
             }

@@ -196,7 +196,7 @@ pub fn effect_edit(doc: &Document, handle: OccurrenceHandle, effect: EffectInsta
         program: effect.program,
     });
     let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: effect.values, domain: doc.composition().size,
+        definition: definition.handle, values: effect.values,
     });
     Edit::Batch(vec![occurrence_edit(doc, handle, |o| o.content = OccurrenceContent::Effect(application.handle)),
         Edit::Definition(definition), Edit::Effect(application)])

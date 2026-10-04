@@ -175,7 +175,7 @@ fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots
                 .collect(),
         ] {
             let mut probe = table_probe("curves", image, 0);
-            set(&mut probe, "curve_0", EffectValue::Curve(points.clone()));
+            set(&mut probe, "rgb", EffectValue::Curve(points.clone()));
             for (code, actual) in samples(&mut r, &probe).into_iter().enumerate() {
                 let x = code as f32 / 65535.;
                 let expected = curve_reference(&points, f64::from(x));
@@ -295,7 +295,7 @@ fn native_profiled_curves_match_integer16_reference_through_fused_and_physical_p
             )
             .into();
             let mut curves = effect(2, "curves", image);
-            set(&mut curves, "curve_0", EffectValue::Curve(points.clone()));
+            set(&mut curves, "rgb", EffectValue::Curve(points.clone()));
             frame(&mut r, &[curves, input]);
             let bytes = crate::layer_tests::page_bytes(&r, crate::test_support::document_texture(&r));
             for (code, pixel) in bytes.chunks_exact(16).enumerate() {
@@ -338,7 +338,7 @@ fn hdr_log_curves_and_exposure_retain_range_across_physical_passes() {
                 let rgb=[-0.25,4.,if depth == SampleDepth::F32 { 1000000.125 } else { 32768. }];
                 let mut curve=effect(2,"curves",image);
                 set(&mut curve,"domain",EffectValue::Choice(1));set(&mut curve,"hdr_stops",EffectValue::Number(4.));
-                set(&mut curve,"curve_0",EffectValue::Curve(points.clone()));
+                set(&mut curve,"rgb",EffectValue::Curve(points.clone()));
                 let mut exposure=effect(3,"exposure",image);set(&mut exposure,"exposure",EffectValue::Number(1.));
                 let actual=frame(&mut r,&[exposure,curve,source(rgb,alpha)]);
                 assert_eq!(actual[3],alpha);

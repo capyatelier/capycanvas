@@ -124,7 +124,7 @@ fn effect_grids_preserve_document_coordinates_and_partial_edge_centers() {
     let program = Arc::new(program);
     let values = layer_core::EffectInstance::new(program.clone()).values;
     let definition = artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
-    let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: extent }).unwrap();
+    let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values}).unwrap();
     let handle = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Grid probe")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(handle);

@@ -6,7 +6,7 @@ fn transformed_document(linked: bool) -> Document {
     p.original = Some(Arc::new(photo_source([24, 12])));
     p.domain = [768, 512];
     let mut data = raster(RasterPlane::Color, color, &[[0, 0], [1, 0]]).wait_data().unwrap().as_ref().clone();
-    for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+    for plane in [RasterPlane::WatercolorWetness] {
         data.tiles.insert(TileKey { plane, coordinate: [1, 0] }, tile(plane, color, 7));
     }
     fixture::paint_mut(&mut doc, "Ink").raster = RasterRevision::backed(data);

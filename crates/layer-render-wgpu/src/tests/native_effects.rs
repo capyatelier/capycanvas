@@ -25,7 +25,7 @@ pub(crate) fn refresh(document: &mut Document) {
 pub(crate) fn insert_effect(document: &mut Document, effect: EffectInstance) -> OccurrenceHandle {
     let name = effect.program.id.clone();
     let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program:effect.program}).unwrap();
-    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values:effect.values,domain:document.composition().size}).unwrap();
+    let application = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values:effect.values}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);
     refresh(document);
@@ -240,7 +240,7 @@ fn native_photo_adjustments_and_masks_remain_editable_after_save_reopen() {
                     "white_balance" => set(&mut draft,"temperature",EffectValue::Number(25.)),
                     "hue_saturation" => set(&mut draft,"hue",EffectValue::Number(10.)),
                     "levels" => {set(&mut draft,"black",EffectValue::Number(0.03));set(&mut draft,"gamma",EffectValue::Number(0.9));set(&mut draft,"clamp_input",EffectValue::Toggle(true));},
-                    "curves" => set(&mut draft,"curve_0",EffectValue::Curve(vec![[0.,0.],[0.213,0.13],[0.79,0.9],[1.,1.]])),
+                    "curves" => set(&mut draft,"rgb",EffectValue::Curve(vec![[0.,0.],[0.213,0.13],[0.79,0.9],[1.,1.]])),
                     "color_balance" => {set(&mut draft,"midtones_red",EffectValue::Number(12.));set(&mut draft,"shadows_blue",EffectValue::Number(-5.));},
                     _ => unreachable!(),
                 }

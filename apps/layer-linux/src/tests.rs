@@ -3931,7 +3931,7 @@ fn native_adjustment_panels_review() {
         let program = kind.program();
         let edit = (!program.parameters.is_empty()).then(|| match kind.id() {
             "curves" => (
-                "curve_0",
+                "rgb",
                 EffectValue::Curve(vec![[0., 0.], [0.4, 0.65], [1., 1.]]),
             ),
             "levels" => ("gamma", EffectValue::Number(1.5)),

@@ -111,7 +111,7 @@ fn remove_occurrence(doc: &mut Document, handle: OccurrenceHandle) {
 }
 fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
     let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
-    let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values, domain: doc.composition().size }).unwrap();
+    let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values}).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap()
 }
 pub(super) fn add_fill(doc: &mut Document, color: layer_core::color::RgbColor) -> OccurrenceHandle {

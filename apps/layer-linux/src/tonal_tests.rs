@@ -167,7 +167,7 @@ fn targeted_curves(page: u32) {
                 }
                 until(||artwork_manifest(&document(&w))!=artwork_manifest(&before),"native targeted drag publishes curve");ready(&w);pump(200);
                 assert_source_unchanged(&w,&before);assert_eq!(state(&w).colors,foreground);assert_ne!(shown(&w,[128.,128.]),pixel);
-                let after=document(&w);let key=format!("curve_{page}");
+                let after=document(&w);let key=layer_core::CURVE_KEYS[page as usize];
                 assert!(matches!(active_effect(&after).value(&key),Some(EffectValue::Curve(points)) if points.len()==3));
                 assert_eq!(super::pointwise::value(&w,&key),active_effect(&after).value(&key).unwrap().clone(),"targeted document edits publish current Properties points");
                 crate::snapshot(&w).save_to_png(output.join(format!("targeted-{page}-{kind}-{width}-{theme:?}.png"))).unwrap();
@@ -207,7 +207,7 @@ fn native_targeted_curves_motion_and_latency() {
         input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
         let point=canvas_point(&w,[128.,128.]);
         input.perform(json!([{"point":point,"down":true},{"point":[point[0],point[1]-20.]},{"wait_ms":400},{"down":false}]));
-        until(||active_effect(&document(&w)).value("curve_0").is_some_and(|value|matches!(value,EffectValue::Curve(points) if points.len()==3)),"priming targeted gesture applies");
+        until(||active_effect(&document(&w)).value("rgb").is_some_and(|value|matches!(value,EffectValue::Curve(points) if points.len()==3)),"priming targeted gesture applies");
         input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);
         for gesture in 0..3 {
             let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
@@ -215,12 +215,12 @@ fn native_targeted_curves_motion_and_latency() {
             until(||ui_session(&w).engine().backend().frames_idle() && w.frame_timer.borrow().is_none(),"preceding targeted frames settle");pump(100);
             let baseline=stats.lock().unwrap().camera_views.last().map(|entry|entry.2);
             *stats.lock().unwrap()=Default::default();
-            let original=active_effect(ui_session(&w).engine().document()).value("curve_0").unwrap().clone();
+            let original=active_effect(ui_session(&w).engine().document()).value("rgb").unwrap().clone();
             let applications=Rc::new(RefCell::new(Vec::new()));
             let observations=applications.clone();let observed=w.clone();let mut previous=original;
             let observer=glib::timeout_add_local(Duration::from_millis(1),move || {
                 let session=ui_session(&observed);let doc=session.engine().document();
-                let current=active_effect(doc).value("curve_0").unwrap();
+                let current=active_effect(doc).value("rgb").unwrap();
                 if *current!=previous {observations.borrow_mut().push(glib::monotonic_time().max(0) as u64*1000);previous=current.clone();}
                 glib::ControlFlow::Continue
             });

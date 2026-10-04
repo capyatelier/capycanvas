@@ -1305,7 +1305,7 @@ class AndroidHostTest {
             themeArchive = theme
             set("domain", "choice", 0)
             selectPage(0)
-            set("curve_0", "curve", JSONArray("[[0,0],[0.5,0.5],[1,1]]"))
+            set("rgb", "curve", JSONArray("[[0,0],[0.5,0.5],[1,1]]"))
             for (channel in 1..3) set("curve_$channel", "curve", JSONArray("[[0,0],[1,1]]"))
             val sourceArchive = archive("before-actions")
             val sourceBacking = backing(sourceArchive)
@@ -1322,7 +1322,7 @@ class AndroidHostTest {
             assertTrue("The exact coordinate fits the visible Properties body", fieldBounds.width > 20 && propertiesBounds.contains(fieldBounds.topLeft)
                 && propertiesBounds.contains(fieldBounds.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
             val retained = draft.fetchSemanticsNode().config
-            set("curve_1", "curve", JSONArray("[[0,0],[1,0.7]]"))
+            set("red", "curve", JSONArray("[[0,0],[1,0.7]]"))
             waitState { !it.getJSONObject("tonal_histogram").isNull("data") && it.getJSONObject("tonal_histogram").getJSONObject("data").toString() != statistics }
             draft.assertIsFocused()
             assertEquals(retained[SemanticsProperties.EditableText], draft.fetchSemanticsNode().config[SemanticsProperties.EditableText])
@@ -1435,7 +1435,7 @@ class AndroidHostTest {
             invoke("redo"); assertEquals(savedEffect(automatic, levelsLayer), savedEffect(archive("auto-redo"), levelsLayer))
             action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to levelsLayer)))
             action(obj("type" to "select_layer", "id" to curvesLayer))
-            set("curve_1", "curve", JSONArray("[[0,0],[1,1]]"))
+            set("red", "curve", JSONArray("[[0,0],[1,1]]"))
             effect(obj("op" to "insert", "effect" to "white_balance"))
             val balanceLayer = properties().getLong("layer")
             effectKeys[balanceLayer] = "white_balance"
@@ -1460,7 +1460,7 @@ class AndroidHostTest {
             invoke("redo"); assertEquals(savedEffect(balanced, balanceLayer), savedEffect(archive("balance-redo"), balanceLayer))
             action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to balanceLayer)))
             action(obj("type" to "select_layer", "id" to curvesLayer))
-            set("curve_1", "curve", JSONArray("[[0,0],[1,0.7]]"))
+            set("red", "curve", JSONArray("[[0,0],[1,0.7]]"))
             action(obj("type" to "select_layer", "id" to paintLayer))
             penStroke(12)
             val resumed = backing(archive("resumed-pen"))

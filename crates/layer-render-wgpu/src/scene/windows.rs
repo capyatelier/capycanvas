@@ -89,7 +89,7 @@ mod tests {
         let stack = artwork.compositions.get(artwork.root).unwrap().result;
         for _ in 0..count {
             let values = EffectInstance::new(artwork.definitions.get(definition).unwrap().program.clone()).values;
-            let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: extent }).unwrap();
+            let effect = artwork.effects.insert(PortableId::random(), EffectApplication { definition, values}).unwrap();
             let handle = artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "bounded filter")).unwrap();
             artwork.stacks.get_mut(stack).unwrap().entries.push(handle);
         }
@@ -133,7 +133,7 @@ mod tests {
                 let mut draft=EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
                 draft.set("sigma",EffectValue::Number(sigma)).unwrap();
                 let definition=artwork.definitions.insert(PortableId::random(),Definition {program:draft.program}).unwrap();
-                let effect=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values,domain:extent}).unwrap();
+                let effect=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values}).unwrap();
                 let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),"Gaussian")).unwrap();
                 artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
             }

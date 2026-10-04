@@ -231,16 +231,16 @@ coral/indigo/gold/teal palette over localized color swatches:
 | Textured Flat Filbert | advanced dry build-up |
 | Dry Scumble | stroke-uniform coverage only, thresholded grain |
 | Pastel Block | advanced dry build-up with dense paper grain |
-| Transparent Glaze | deposited wetness only |
-| Opaque Gouache | spatial reservoir + wetness |
-| Watercolor Wash | coverage + R8 wetness + capillary transport + live edge |
-| Wet Watercolor | coverage + stronger wet transport + R8 wetness live edge |
-| Loaded Oil Mixer | spatial reservoir + wetness |
-| Palette Knife | spatial reservoir + wetness |
+| Transparent Glaze | stroke-uniform coverage |
+| Opaque Gouache | spatial reservoir |
+| Watercolor Wash | coverage + wetness + capillary transport + live edge |
+| Wet Watercolor | coverage + stronger wet transport + wetness live edge |
+| Loaded Oil Mixer | spatial reservoir |
+| Palette Knife | spatial reservoir |
 | Natural Blender | ordered smudge advection |
 
 This gives every new state primitive an independent path: coverage-only,
-wetness-only, spatial reservoir, same-layer watercolor advection, and smudge
+spatial reservoir, same-layer watercolor advection, and smudge
 advection are timed directly. The watercolor cases also time the bounded
 conductance-gated transport pass. Watercolor's edge is part of ordinary
 composition; the older optional post-stroke edge remains in the pen-up

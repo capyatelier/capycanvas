@@ -51,7 +51,7 @@ fn encode_value(value: &EffectValue, kind: &EffectParameterKind, writer: &mut im
             json!({"stops":stops.iter().map(|stop| {
                 let GradientStop {position,color}=stop;
                 Ok(json!({"position":position,"color":values::encode_rgb_color(*color)?}))
-            }).collect::<Result<Vec<_>,String>>()?,"interpolation":interpolation})
+            }).collect::<Result<Vec<_>,String>>()?,"interpolation":values::encode_mix_space(*interpolation)})
         },
         EffectValue::Lut3d(None) => Value::Null, EffectValue::Lut3d(Some(resource)) => writer.lut(resource)?,
     };
@@ -88,7 +88,7 @@ fn decode_value(value: &Value, kind: &EffectParameterKind, reader: &mut impl Res
             let fields=object(value,&["stops","interpolation"])?;
             let gradient=crate::GradientDefinition {
                 stops:decode_gradient_stops(required(fields,"stops")?)?,
-                interpolation:serde_json::from_value(required(fields,"interpolation")?.clone()).map_err(|_|unsupported("gradient interpolation"))?,
+                interpolation:values::parse_mix_space(required(fields,"interpolation")?)?,
             };
             gradient.validate()?;EffectValue::Gradient(gradient)
         },
@@ -302,9 +302,11 @@ pub fn decode_values(program: &Arc<EffectProgram>, value: &Value, reader: &mut i
     let fields=value.as_object().ok_or("Expected keyed effect values")?;
     if fields.keys().any(|key|!program.parameters.iter().any(|p|p.key.as_ref()==key)) {return Err(unsupported("parameter key"));}
     if fields.len()!=program.parameters.len() {return Err("Missing authored effect parameter".into());}
-    let values=program.parameters.iter().map(|parameter|
-        decode_value(required(fields,&parameter.key)?,&parameter.kind,reader)
-    ).collect::<DecodeResult<Vec<_>>>()?;
+    let values=program.parameters.iter().map(|parameter| {
+        let value=decode_value(required(fields,&parameter.key)?,&parameter.kind,reader)?;
+        if let EffectValue::Number(v)=value && !parameter.accepts(v) {return Err(unsupported("parameter value"));}
+        Ok(value)
+    }).collect::<DecodeResult<Vec<_>>>()?;
     let instance=EffectInstance {program:program.clone(),values};
     instance.validate()?;
     Ok(instance.values)
@@ -359,9 +361,9 @@ mod tests {
     }
     #[test]
     fn saved_builtin_choices_keep_shader_meaning_when_controls_move_or_change_labels() {
-        for (id,key,slot,choices) in [("curves","domain",261,&["Encoded RGB","Log HDR"][..]),
-            ("selective_color","mode",37,&["Relative","Absolute"][..]),
-            ("gradient_fill","style",66,&["Linear","Radial","Reflected"][..])] {
+        for (id,key,slot,choices) in [("curves","domain",261,&["encoded_rgb","log_hdr"][..]),
+            ("selective_color","mode",37,&["relative","absolute"][..]),
+            ("gradient_fill","style",66,&["linear","radial","reflected"][..])] {
             let original=crate::bundled_effect_catalog().get(id).unwrap().program();
             let mut program=original.clone();
             let parameter=Arc::make_mut(&mut Arc::make_mut(&mut program).parameters).iter_mut().find(|p|p.key.as_ref()==key).unwrap();
@@ -459,7 +461,7 @@ mod tests {
             assert_eq!(decoded,value);
             if let EffectValue::Choice(_)=value {assert_eq!(encoded["value"],"second");}
             if let EffectValue::Gradient(_)=value {
-                assert_eq!(encoded["value"]["interpolation"],"Classic");
+                assert_eq!(encoded["value"]["interpolation"],"classic");
                 assert!(encoded["value"].get("dither").is_none());
                 let mut stale=encoded.clone();stale["value"]=encoded["value"]["stops"].clone();
                 assert!(decode_value(&stale,&kind,&mut resources).is_err());

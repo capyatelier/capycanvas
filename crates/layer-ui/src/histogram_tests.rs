@@ -369,7 +369,7 @@ fn histogram_embedded_focus_changes_no_history_or_query_identity() {
     let requests = s.engine.backend().snapshot_requests.len();
     let cancels = s.engine.backend().snapshot_cancels;
     let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
-    s.dispatch(UiAction::Effect {action:EffectAction::CurveSelectPoint {layer,key:"curve_0".into(),epoch:s.state.layer_properties.epoch,index:Some(0)}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::CurveSelectPoint {layer,key:"rgb".into(),epoch:s.state.layer_properties.epoch,index:Some(0)}}).unwrap();
     s.frame(150_000_000,150_000_000).unwrap();
     assert_eq!(s.engine.document(),&before);
     assert_eq!(s.engine.checkpoint(),checkpoint);
@@ -410,7 +410,7 @@ fn histogram_embedded_domain_change_discards_old_axis_and_pending_result() {
         let mut s = tonal_histogram_session();
         histogram_reply(&mut s,7,150_000_000);
         if preview {
-            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(s.engine.document().working.occurrence.unwrap()),key:"curve_1".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
+            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(s.engine.document().working.occurrence.unwrap()),key:"red".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
         }
         s.frame(350_000_000,350_000_000).unwrap();
         assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview==preview));
@@ -439,7 +439,7 @@ fn histogram_embedded_ignores_edits_excluded_from_its_source() {
         assert!(s.tonal_histogram.settled);
         let requests=s.engine.backend().snapshot_requests.len();
         let cancels=s.engine.backend().snapshot_cancels;
-        for (index,key) in if input {vec!["curve_0","curve_1"]} else {vec!["curve_0"]}.into_iter().enumerate() {
+        for (index,key) in if input {vec!["rgb","red"]} else {vec!["rgb"]}.into_iter().enumerate() {
             s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:key.into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
             let now=500_000_000+index as u64*100_000_000;
             s.frame(now,now).unwrap();
@@ -449,7 +449,7 @@ fn histogram_embedded_ignores_edits_excluded_from_its_source() {
             assert_eq!(s.state.tonal_histogram.data.as_ref().unwrap().pixels,11);
         }
         if !input {
-            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:"curve_1".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.75]])}}).unwrap();
+            s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:"red".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.75]])}}).unwrap();
             s.frame(700_000_000,700_000_000).unwrap();
             assert_eq!(s.engine.backend().snapshot_requests.len(),requests+1);
             assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview));
@@ -468,7 +468,7 @@ fn targeted_sampling_retains_settled_tonal_statistics_for_unchanged_input() {
     let layer=occurrence_token(s.engine.document().working.occurrence.unwrap());
     s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
     s.frame(500_000_000,500_000_000).unwrap();
-    s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:"curve_0".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:"rgb".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
     s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
     s.frame(800_000_000,800_000_000).unwrap();
     assert!(s.tonal_histogram.settled);

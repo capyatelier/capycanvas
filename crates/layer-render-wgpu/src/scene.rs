@@ -1333,9 +1333,6 @@ impl Scene {
                     r.encode_clear(encoder, &p.primary.view, "clear baked wetness");
                     r.encode_clear(encoder, &p.secondary.view, "clear baked wetness companion");
                 }
-                for p in &stored.material_pages {
-                    r.encode_clear(encoder, &p.wetness.view, "clear baked material");
-                }
                 for p in &stored.coverage_pages {
                     r.encode_clear(encoder, &p.primary.view, "clear baked stroke coverage");
                     r.encode_clear(encoder, &p.secondary.view, "clear baked coverage companion");

@@ -20,6 +20,7 @@ pub enum NumericMapping {
 }
 
 pub const EFFECT_ABI: u32 = 5;
+pub const MAX_PIXEL_LENGTH: f32 = 65536.;
 /// Header plus two records for at most 32 control points/stops. Curves store
 /// analytic Hermite segments; gradients store exact stops, never sampled LUTs.
 pub const EFFECT_TABLE_VECTORS: usize = 65;
@@ -180,9 +181,9 @@ impl EffectSampling {
                 key,
                 scale,
                 padding,
-            } => match effect.value(key) {
-                Some(EffectValue::Number(value)) => {
-                    ((value * scale).ceil() as u32).checked_add(*padding)
+            } => match effect.parameter(key)? {
+                (parameter, EffectValue::Number(value)) => {
+                    ((parameter.evaluated(*value) * scale).ceil() as u32).checked_add(*padding)
                 }
                 _ => None,
             },
@@ -423,11 +424,11 @@ impl<'a> EffectView<'a> {
         seconds * self.playback_rate()
     }
     pub fn value(&self, key: &str) -> Option<&'a EffectValue> {
-        self.program
-            .parameters
-            .iter()
-            .position(|p| &*p.key == key)
-            .and_then(|i| self.values.get(i))
+        self.parameter(key).map(|(_, value)| value)
+    }
+    pub fn parameter(&self, key: &str) -> Option<(&'a EffectParameter, &'a EffectValue)> {
+        let i = self.program.parameters.iter().position(|p| &*p.key == key)?;
+        Some((&self.program.parameters[i], self.values.get(i)?))
     }
     pub fn choice(&self, key: &str) -> Option<&'a str> {
         let i = self.program.parameters.iter().position(|p| &*p.key == key)?;
@@ -594,18 +595,18 @@ impl<'a> EffectView<'a> {
         let mut data = vec![[0.; 4]];
         for (parameter,value) in self.program.parameters.iter().zip(self.values) {
             match value {
-                EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
+                EffectValue::Number(v) => data.push([parameter.evaluated(*v), 0., 0., 0.]),
                 EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
                 EffectValue::Choice(v) => {
                     let code = if matches!(&self.program.auxiliary, Some(EffectAuxiliary::Lut3d {color_space,..}) if color_space == &parameter.key) {
                         RgbSpace::from_id(self.choice(&parameter.key).ok_or("Invalid color lookup color space")?).ok_or("Invalid color lookup color space")?.shader_code()
                     } else {
                         match (self.program.id.as_ref(), parameter.key.as_ref(), self.choice(&parameter.key)) {
-                            ("curves", "domain", Some("Encoded RGB")) | ("selective_color", "mode", Some("Relative"))
-                                | ("gradient_fill", "style", Some("Linear")) => 0,
-                            ("curves", "domain", Some("Log HDR")) | ("selective_color", "mode", Some("Absolute"))
-                                | ("gradient_fill", "style", Some("Radial")) => 1,
-                            ("gradient_fill", "style", Some("Reflected")) => 2,
+                            ("curves", "domain", Some("encoded_rgb")) | ("selective_color", "mode", Some("relative"))
+                                | ("gradient_fill", "style", Some("linear")) => 0,
+                            ("curves", "domain", Some("log_hdr")) | ("selective_color", "mode", Some("absolute"))
+                                | ("gradient_fill", "style", Some("radial")) => 1,
+                            ("gradient_fill", "style", Some("reflected")) => 2,
                             ("curves", "domain", _) | ("selective_color", "mode", _) | ("gradient_fill", "style", _) => return Err("Unknown built-in choice".into()),
                             _ => *v,
                         }
@@ -632,10 +633,8 @@ impl<'a> EffectView<'a> {
     pub fn scaled_values(&self, factor: f32) -> Option<Vec<EffectValue>> {
         let mut values = self.values.to_vec();
         for (parameter, value) in self.program.parameters.iter().zip(&mut values) {
-            if let (EffectParameterKind::Number { min, max, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
-                && matches!(parameter.dimension, Dimension::SourcePixels | Dimension::CompositionPixels)
-            {
-                *v = (*v * factor).clamp(*min, *max);
+            if let (Some([low, high]), EffectValue::Number(v)) = (parameter.accepted_range(), value) && parameter.pixel_length() {
+                *v = (*v * factor).clamp(low, high);
             }
         }
         (values != self.values && EffectView::new(self.program, &values).validate().is_ok()).then_some(values)
@@ -719,6 +718,24 @@ impl EffectInstance {
 }
 
 impl EffectParameter {
+    fn pixel_length(&self) -> bool {
+        matches!(self.dimension, Dimension::SourcePixels | Dimension::CompositionPixels)
+    }
+    fn accepted_range(&self) -> Option<[f32; 2]> {
+        let EffectParameterKind::Number { min, max, .. } = self.kind else { return None };
+        Some(if self.pixel_length() {
+            [if min < 0. { min.min(-MAX_PIXEL_LENGTH) } else { 0. }, max.max(MAX_PIXEL_LENGTH)]
+        } else { [min, max] })
+    }
+    pub fn accepts(&self, value: f32) -> bool {
+        self.accepted_range().is_some_and(|[low, high]| value.is_finite() && (low..=high).contains(&value))
+    }
+    pub fn evaluated(&self, value: f32) -> f32 {
+        match self.kind {
+            EffectParameterKind::Number { min, max, .. } if self.pixel_length() => value.clamp(min, max),
+            _ => value,
+        }
+    }
     pub fn validate(&self, value: &EffectValue) -> Result<(), &'static str> {
         if self.key.is_empty()
             || self.key.len() > 128
@@ -755,8 +772,7 @@ impl EffectParameter {
                     && step.is_finite()
                     && *step > 0.
                     && *decimals <= 6
-                    && v.is_finite()
-                    && (*min..=*max).contains(v)
+                    && self.accepts(*v)
                     && (self.dimension != Dimension::Count || [*min, *max, *v].into_iter().all(|v| v.fract() == 0.))
             }
             (EffectParameterKind::Toggle, EffectValue::Toggle(_)) => true,
@@ -859,10 +875,11 @@ fn curve_parameters(points: &[[f32; 2]]) -> [[f32; 4]; EFFECT_TABLE_VECTORS] {
     data
 }
 pub const LOG_CURVE_FLOOR_STOPS: f32 = -8.;
+pub const CURVE_KEYS: [&str; 4] = ["rgb", "red", "green", "blue"];
 
 pub fn hdr_curve_white(space: &str, stops: f32) -> Option<f32> {
     match space {
-        "Log HDR" => Some(-LOG_CURVE_FLOOR_STOPS / (stops - LOG_CURVE_FLOOR_STOPS)),
+        "log_hdr" => Some(-LOG_CURVE_FLOOR_STOPS / (stops - LOG_CURVE_FLOOR_STOPS)),
         _ => None,
     }
 }
@@ -1020,6 +1037,16 @@ mod tests {
             assert_eq!(scaled[0],EffectValue::Number(1.875));
             assert_eq!(EffectView::new(&effect.program,&scaled).scaled_values(2./3.).unwrap(),effect.values);
         }
+    }
+    #[test]
+    fn resizing_keeps_pixel_lengths_beyond_the_evaluated_range() {
+        let mut effect=EffectInstance::new(fixture("gaussian_blur").program());
+        effect.set("sigma",EffectValue::Number(60.)).unwrap();
+        let scaled=effect.view().scaled_values(2.).unwrap();
+        assert_eq!(scaled[0],EffectValue::Number(120.));
+        let view=EffectView::new(&effect.program,&scaled);
+        assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1][0],85.);
+        assert_eq!(view.scaled_values(0.5).unwrap(),effect.values);
     }
     #[test]
     fn count_parameters_accept_only_whole_authored_values() {
@@ -1207,7 +1234,7 @@ mod tests {
     fn analytic_parameter_tables_preserve_knots_and_reject_the_sampled_abi() {
         let points = vec![[0., 0.], [0.40003, 0.1], [0.40007, 0.9], [1., 1.]];
         let mut fx = EffectInstance::new(fixture("curves").program());
-        fx.set("curve_0", EffectValue::Curve(points.clone()))
+        fx.set("rgb", EffectValue::Curve(points.clone()))
             .unwrap();
         let data = fx.gpu_parameters(RgbSpace::Srgb).unwrap();
         assert_eq!(data.len(), 3 + 4 * EFFECT_TABLE_VECTORS);

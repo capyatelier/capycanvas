@@ -8,7 +8,7 @@ use serde_json::json;
 use std::{collections::BTreeSet, sync::{Arc, atomic::AtomicBool}};
 
 fn raster(plane:RasterPlane,marker:u8,material:bool)->RasterRevision {
-    let planes=if material {vec![plane,RasterPlane::Wetness,RasterPlane::WatercolorWetness]}else{vec![plane]};
+    let planes=if material {vec![plane,RasterPlane::WatercolorWetness]}else{vec![plane]};
     RasterRevision::backed(RasterData {
         tiles:planes.into_iter().map(|plane|{let descriptor=plane.descriptor(Default::default());
             (TileKey {plane,coordinate:[0,0]},RasterTile::backed(TileBlob::encode(descriptor,
@@ -32,7 +32,7 @@ fn fixture()->Editor {
     let coverage=art.coverage.insert(PortableId::random(),CoverageSource {domain:[19,11],raster:raster(RasterPlane::Mask,127,false),
         initial:Some(Selection::polygon(vec![Point{x:1.,y:2.},Point{x:15.,y:2.},Point{x:1.,y:9.}]).unwrap()),default_coverage:0.375,operations:Arc::default()}).unwrap();
     *art.occurrences.get_mut(ink).unwrap()=Occurrence {content:OccurrenceContent::Paint(paint),name:"Ink 色".into(),visible:false,
-        opacity:0.625,blend:LayerBlend::Multiply,locked:true,alpha_locked:true,reference:true,attachment:Attachment::None,isolated_blend:LayerBlend::Screen,
+        opacity:0.625,blend:LayerBlend::Multiply,locked:true,alpha_locked:true,reference:true,attachment:Attachment::None,
         translation:Point{x:2.,y:3.},placement:LayerPlacement {outer:Projective([1.,0.,1.,0.,1.,2.,0.,0.,1.]),
             mesh:Some(Arc::new(MeshMap::fit(Rect::from_extent([19,11]),[1,1],|p|Some(Point{x:p.x+0.01*p.y*p.y,y:p.y})).unwrap())),interpolation:Interpolation::Bicubic},
         mask:Some(MaskUse {source:coverage,enabled:false,linked:false,inverted:true,translation:Point{x:3.,y:1.},placement:Projective([1.,0.,2.,0.,1.,0.,0.,0.,1.])})};
@@ -41,7 +41,7 @@ fn fixture()->Editor {
     let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
     let mut effect=EffectInstance::new(program.clone());effect.set("resource",EffectValue::Lut3d(Some(lut(0.25)))).unwrap();
     let definition=art.definitions.insert(PortableId::random(),Definition {program}).unwrap();
-    let lookup=art.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:[19,11]}).unwrap();
+    let lookup=art.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
     let lookup_occurrence=art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(lookup),"Lookup 色")).unwrap();
     let stack=art.compositions.get(art.root).unwrap().result;
     let mut entries=art.stacks.get(stack).unwrap().entries.clone();entries.extend([lookup_occurrence,selection]);
@@ -96,11 +96,11 @@ fn perform_all(editor:&mut Editor) {
     Arc::make_mut(&mut Arc::make_mut(&mut program).parameters).iter_mut().find(|parameter|parameter.key.as_ref()=="resource").unwrap().dimension=Dimension::Normalized;
     change!(definitions,Definition,definition,Definition {program:program.clone()});
     let mut effect=EffectInstance::new(program);effect.set("resource",EffectValue::Lut3d(Some(lut(0.75)))).unwrap();
-    change!(effects,Effect,lookup,EffectApplication {definition,values:effect.values,domain:[19,11]});
+    change!(effects,Effect,lookup,EffectApplication {definition,values:effect.values});
     change!(selections,SavedSelection,saved,SavedSelection {selection:Selection::polygon(vec![Point{x:2.,y:1.},Point{x:17.,y:1.},Point{x:17.,y:8.}]).unwrap(),});
     change!(guides,Guides,guides,Guides {rulers:vec![(PortableId::random(),RulerGeometry::Radial {center:Point{x:7.,y:5.}})]});
     let mut proof=ProofRecipe::new("Print 色".into(),ColorProfile::Builtin(RgbSpace::AdobeRgb));proof.simulate_paper=true;
-    change!(outputs,Output,output,Output {composition:root,name:"Output 色".into(),context:EvaluationContext {elapsed:3.25,phases:Arc::new(vec![(lookup,0.625)])},
+    change!(outputs,Output,output,Output {composition:root,name:"Output 色".into(),context:EvaluationContext {elapsed:0.,phases:Arc::new(vec![(lookup,0.625)])},
         frame:Some((Point{x:-1.,y:2.},[17,9])),scale:[1.5,0.75],sdr:SdrRendition {exposure:0.5,contrast:1.25,headroom:2.,highlight_color:0.25,balance:0.125},proof:Some(proof)});
     let mut working=editor.document().working.clone();working.selection=Some(Selection::polygon(vec![Point{x:1.,y:1.},Point{x:8.,y:1.},Point{x:8.,y:7.}]).unwrap());
     perform!(Edit::Working(working));
@@ -231,7 +231,7 @@ fn dehaze_definition_and_shared_shader_modules_survive_restart_and_history() {
     let mut instance=EffectInstance::new(program.clone());instance.set("amount",EffectValue::Number(-35.)).unwrap();
     original.perform(Edit::Batch(vec![
         Edit::Definition(RecordChange::replace(&original.document().artwork.definitions,definition,Some(Definition {program})).unwrap()),
-        Edit::Effect(RecordChange::replace(&original.document().artwork.effects,effect,Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap()),
+        Edit::Effect(RecordChange::replace(&original.document().artwork.effects,effect,Some(EffectApplication {definition,values:instance.values})).unwrap()),
     ])).unwrap();
     let mut restored=reopen(&original);
     assert!(original.undo().unwrap());assert!(restored.undo().unwrap());assert_editor(&original,&restored);
@@ -260,13 +260,13 @@ fn gradient_defaults_interpolation_hdr_colors_and_stops_survive_restart_and_hist
     instance.set("gradient",EffectValue::Gradient(gradient(crate::ColorMixSpace::LinearRgb))).unwrap();
     original.perform(Edit::Batch(vec![
         Edit::Definition(RecordChange::replace(&art.definitions,definition,Some(Definition {program:program.clone()})).unwrap()),
-        Edit::Effect(RecordChange::replace(&art.effects,effect,Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap()),
+        Edit::Effect(RecordChange::replace(&art.effects,effect,Some(EffectApplication {definition,values:instance.values})).unwrap()),
     ])).unwrap();
     for interpolation in [crate::ColorMixSpace::Oklab,crate::ColorMixSpace::Classic] {
         let mut value=gradient(interpolation);value.reverse();
         let mut instance=EffectInstance::new(program.clone());instance.set("gradient",EffectValue::Gradient(value)).unwrap();
         original.perform(Edit::Effect(RecordChange::replace(&original.document().artwork.effects,effect,
-            Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap())).unwrap();
+            Some(EffectApplication {definition,values:instance.values})).unwrap())).unwrap();
     }
     assert!(original.undo().unwrap());
     let mut restored=reopen(&original);
@@ -279,7 +279,7 @@ fn gradient_defaults_interpolation_hdr_colors_and_stops_survive_restart_and_hist
     for editor in [&mut original,&mut restored] {
         let instance=EffectInstance::new(program.clone());
         editor.perform(Edit::Effect(RecordChange::replace(&editor.document().artwork.effects,effect,
-            Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap())).unwrap();
+            Some(EffectApplication {definition,values:instance.values})).unwrap())).unwrap();
         assert!(!editor.can_redo());
     }
     assert_editor(&original,&restored);
@@ -294,7 +294,7 @@ fn dependent_effect_definition_and_output_phase_removal_survive_restart_and_undo
     let effect=art.effects.iter().find(|(_,_,effect)|art.definitions.get(effect.definition).unwrap().program.id.as_ref()=="color_lookup").unwrap().0;
     let definition=art.effects.get(effect).unwrap().definition;
     let occurrence=art.occurrences.iter().find(|(_,_,occurrence)|occurrence.content==OccurrenceContent::Effect(effect)).unwrap().0;
-    art.outputs.get_mut(art.default_output).unwrap().context=EvaluationContext {elapsed:7.25,phases:vec![(effect,0.625)].into()};
+    art.outputs.get_mut(art.default_output).unwrap().context=EvaluationContext {elapsed:0.,phases:vec![(effect,0.625)].into()};
     original.perform(original.document().delete_layers_edit(&[occurrence]).unwrap()).unwrap();
     assert!(original.document().artwork.definitions.get(definition).is_none());
     assert!(original.document().output().context.phases.is_empty());
@@ -314,7 +314,7 @@ fn captured_output_phases_remain_reversible_across_session_history() {
     let document=original.document();let art=&document.artwork;let owner=document.working.occurrence.unwrap();let stack=document.composition().result;
     let definition=crate::RecordChange::insert(&art.definitions,Definition {program:crate::bundled_effect_catalog().get("motion_blur").unwrap().program()});
     let values=EffectInstance::new(definition.value.as_ref().unwrap().program.clone()).values;
-    let application=crate::RecordChange::insert(&art.effects,EffectApplication {definition:definition.handle,values,domain:[32,32]});
+    let application=crate::RecordChange::insert(&art.effects,EffectApplication {definition:definition.handle,values});
     let effect=application.handle;let mut occurrence=Occurrence::new(OccurrenceContent::Effect(effect),"Motion blur");occurrence.attachment=Attachment::Effect;
     let occurrence=crate::RecordChange::insert(&art.occurrences,occurrence);
     let mut scratch=art.occurrences.clone();scratch.change(occurrence.handle,occurrence.id,occurrence.value.clone()).unwrap();
@@ -330,7 +330,7 @@ fn captured_output_phases_remain_reversible_across_session_history() {
         original.redo().unwrap();let mut selected=original.document().working.clone();selected.selection=Some(Selection::empty());
         original.perform(Edit::Working(selected.clone())).unwrap();selected.selection=None;original.perform(Edit::Working(selected)).unwrap();original.undo().unwrap();
     }
-    let context=EvaluationContext {elapsed:13.,phases:original.document().scene().order().iter().filter_map(|h|original.document().scene().effect_handle(*h).map(|e|(e,3.25))).collect::<Vec<_>>().into()};
+    let context=EvaluationContext {elapsed:0.,phases:original.document().scene().order().iter().filter_map(|h|original.document().scene().effect_handle(*h).map(|e|(e,3.25))).collect::<Vec<_>>().into()};
     let authored=original.document().output().context.clone();let checkpoint=original.checkpoint();let cancel=AtomicBool::new(false);
     let capture=original.capture_session(original.capture(11,context.clone()).unwrap()).unwrap();
     let archive=PreparedSession::prepare(&capture,json!({}),&cancel).unwrap();let mut bytes=Vec::new();archive.write(&mut bytes,&cancel).unwrap();
@@ -353,7 +353,7 @@ fn captured_output_phases_remain_reversible_across_session_history() {
 }
 
 #[test]
-fn attachment_chains_common_clip_bases_and_isolated_blends_survive_restart_and_history() {
+fn attachment_chains_and_common_clip_bases_survive_restart_and_history() {
     use crate::operation_test_support as f;
     let mut document=f::document([32,32],&["Top","Curves","Saved","Blur","Shade","Base blur","Base","Backdrop","Group","Member"]);
     f::effect(&mut document,"Curves","exposure");f::effect(&mut document,"Blur","gaussian_blur");f::effect(&mut document,"Base blur","gaussian_blur");
@@ -375,7 +375,6 @@ fn attachment_chains_common_clip_bases_and_isolated_blends_survive_restart_and_h
         assert_eq!(scene.clipping_base(top),Some(base));assert_eq!(scene.clipping_base(shade),Some(base));
         assert_eq!(scene.attached_effects(shade),[blur,curves]);assert_eq!(scene.effect_owner(curves),Some(shade));
         assert_eq!(scene.occurrence(group).unwrap().blend,LayerBlend::PassThrough);
-        assert_eq!(scene.occurrence(group).unwrap().isolated_blend,LayerBlend::Multiply);
     }
     while original.undo().unwrap() {assert!(restored.undo().unwrap());assert_editor(&original,&restored);}
     assert!(!restored.undo().unwrap());let mut restored=reopen(&restored);
@@ -400,14 +399,14 @@ fn custom_opaque_color_parameters_and_authored_alpha_survive_restart_and_history
     assert!(program.parameters.iter().find(|parameter|parameter.key.as_ref()=="tint_color").unwrap().opaque);
     original.perform(Edit::Batch(vec![
         Edit::Definition(RecordChange::replace(&art.definitions,definition,Some(Definition {program:program.clone()})).unwrap()),
-        Edit::Effect(RecordChange::replace(&art.effects,effect,Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap()),
+        Edit::Effect(RecordChange::replace(&art.effects,effect,Some(EffectApplication {definition,values:instance.values})).unwrap()),
     ])).unwrap();
     Arc::make_mut(&mut Arc::make_mut(&mut program).parameters).iter_mut().find(|parameter|parameter.key.as_ref()=="tint_color").unwrap().opaque=false;
     let mut instance=EffectInstance::new(program.clone());
     instance.set("tint_color",EffectValue::Color(RgbColor::from_linear(RgbSpace::DisplayP3,[0.1,0.2,1.75,0.375]).unwrap())).unwrap();
     original.perform(Edit::Batch(vec![
         Edit::Definition(RecordChange::replace(&original.document().artwork.definitions,definition,Some(Definition {program})).unwrap()),
-        Edit::Effect(RecordChange::replace(&original.document().artwork.effects,effect,Some(EffectApplication {definition,values:instance.values,domain:[19,11]})).unwrap()),
+        Edit::Effect(RecordChange::replace(&original.document().artwork.effects,effect,Some(EffectApplication {definition,values:instance.values})).unwrap()),
     ])).unwrap();
     original.undo().unwrap();let mut restored=reopen(&original);
     assert!(original.undo().unwrap());assert!(restored.undo().unwrap());assert_editor(&original,&restored);

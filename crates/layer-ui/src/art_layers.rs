@@ -1090,7 +1090,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = occurrence_handle(id)?;
                 let doc = self.engine.document();
                 let group = doc.scene().occurrence(id).ok_or("Unknown group")?;
-                let blend = if group.passes_through() { group.isolated_blend } else { LayerBlend::PassThrough };
+                let blend = if group.passes_through() { LayerBlend::Normal } else { LayerBlend::PassThrough };
                 self.layer_edit(doc.group_blend_edit(id, blend).map_err(error)?)?;
             }
             LayerAction::Blend { id, value } => {

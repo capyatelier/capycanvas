@@ -776,15 +776,6 @@ impl WgpuRasterizer {
                     &page.active().texture,
                 );
             }
-            for page in &layer.material_pages {
-                textures.insert(
-                    TileKey {
-                        plane: RasterPlane::Wetness,
-                        coordinate: page.coordinate,
-                    },
-                    &page.wetness.texture,
-                );
-            }
             for page in &layer.watercolor_wetness_pages {
                 textures.insert(
                     TileKey {
@@ -895,7 +886,6 @@ impl WgpuRasterizer {
         enum Replacement {
             Color(LayerPage),
             Mask([u32; 2], layer_masks::MaskPage),
-            Wetness(CanvasMaterialPage),
             Watercolor(WatercolorWetnessPage),
         }
         let mut replacements = Vec::new();
@@ -925,18 +915,6 @@ impl WgpuRasterizer {
                     let page = layer_masks::MaskPage::new(&self.device);
                     let texture = page.texture.clone();
                     (Replacement::Mask(key.coordinate, page), texture)
-                }
-                RasterPlane::Wetness => {
-                    let wetness = self.create_scalar_page_surface("restored wetness tile");
-                    let texture = wetness.texture.clone();
-                    (
-                        Replacement::Wetness(CanvasMaterialPage {
-                            coordinate: key.coordinate,
-                            wetness,
-                            needs_clear: false,
-                        }),
-                        texture,
-                    )
                 }
                 RasterPlane::WatercolorWetness => {
                     let primary = self.create_scalar_page_surface("restored watercolor wetness");
@@ -974,12 +952,6 @@ impl WgpuRasterizer {
                     coordinate: p.coordinate,
                 })
             });
-            layer.material_pages.retain(|p| {
-                data.tiles.contains_key(&TileKey {
-                    plane: RasterPlane::Wetness,
-                    coordinate: p.coordinate,
-                })
-            });
             layer.watercolor_wetness_pages.retain(|p| {
                 data.tiles.contains_key(&TileKey {
                     plane: RasterPlane::WatercolorWetness,
@@ -1010,11 +982,6 @@ impl WgpuRasterizer {
                 }
                 Replacement::Mask(coordinate, page) => {
                     self.layer_masks.pages.insert((target, coordinate), page);
-                }
-                Replacement::Wetness(page) => {
-                    let pages = &mut self.paint_layers[index.unwrap()].material_pages;
-                    pages.retain(|p| p.coordinate != page.coordinate);
-                    pages.push(page);
                 }
                 Replacement::Watercolor(page) => {
                     let pages = &mut self.paint_layers[index.unwrap()].watercolor_wetness_pages;

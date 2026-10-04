@@ -81,8 +81,9 @@ an adjustment inside changes everything below it up to the nearest isolated grou
 ([`isolated_scope`, `backdrop_layers`](../../crates/layer-core/src/layers.rs)).
 The group's opacity and mask fade between what lies below and that result,
 `lerp(below, result, opacity × mask)`. Pass-through groups cannot clip or serve as
-clipping bases or effect owners. The shared group-mode edit retains the prior
-isolated blend and refuses Pass Through while these relationships need isolation.
+clipping bases or effect owners. Isolating a Pass Through group makes it Normal,
+and the shared group-mode edit refuses Pass Through while these relationships
+need isolation.
 An explicit isolate-and-attach edit performs both changes in one undo step.
 
 Empty new groups are isolated Normal groups unless the

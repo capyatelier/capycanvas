@@ -230,8 +230,8 @@ impl Scene {
         let extent = packet.scene.target_extent(target);
         let planes: &[RasterPlane] = match scope {
             layer_core::TransformPixelsScope::Mask => &[RasterPlane::Mask],
-            layer_core::TransformPixelsScope::Paint { linked_mask: true } => &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness, RasterPlane::Mask],
-            layer_core::TransformPixelsScope::Paint { linked_mask: false } => &[RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness],
+            layer_core::TransformPixelsScope::Paint { linked_mask: true } => &[RasterPlane::Color, RasterPlane::WatercolorWetness, RasterPlane::Mask],
+            layer_core::TransformPixelsScope::Paint { linked_mask: false } => &[RasterPlane::Color, RasterPlane::WatercolorWetness],
         };
         let mut inputs = Vec::new();
         let mut tiles = Vec::new();
@@ -301,7 +301,6 @@ impl Scene {
                 };
             }
             let view = stored.and_then(|stored| match plane {
-                RasterPlane::Wetness => stored.material_pages.iter().find(|p| p.coordinate == c).map(|p| &p.wetness.view),
                 RasterPlane::WatercolorWetness => r.preview_watercolor_wetness_pages.iter()
                     .find(|p| r.preview_layer_id == Some(target) && p.coordinate == c && !r.preview_damage.intersect(page_rect(c)).is_empty())
                     .or_else(|| stored.watercolor_wetness_pages.iter().find(|p| p.coordinate == c)).map(|p| &p.active().view),

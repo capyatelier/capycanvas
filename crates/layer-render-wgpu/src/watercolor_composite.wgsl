@@ -109,9 +109,7 @@ fn wetness_at(document_position: vec2<f32>) -> f32 {
 }
 
 fn occupied(wetness: f32) -> f32 {
-    // R8 wetness is sampled with textureLoad. Ignore only the bottom quantized
-    // fringe so a nearly empty texel cannot create an amplified outside halo.
-    return select(0.0, 1.0, wetness >= (2.0 / 255.0));
+    return select(0.0, 1.0, wetness >= WATERCOLOR_FLOOR);
 }
 
 struct Band {

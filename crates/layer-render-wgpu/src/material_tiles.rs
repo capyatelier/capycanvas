@@ -239,12 +239,6 @@ impl WgpuRasterizer {
                     .iter()
                     .find(|p| p.coordinate == job.coordinate)
                     .map(|p| &p.inactive().view)
-            } else if !preview {
-                self.paint_layers[layer_index]
-                    .material_pages
-                    .iter()
-                    .find(|p| p.coordinate == job.coordinate)
-                    .map(|p| &p.wetness.view)
             } else {
                 None
             };
@@ -297,7 +291,6 @@ impl WgpuRasterizer {
                 plan.material,
                 !from_persistent && plan.state.watercolor_wetness,
                 coverage_view.is_some(),
-                scalar_state_view.is_some(),
             ));
             pass.set_bind_group(
                 0,

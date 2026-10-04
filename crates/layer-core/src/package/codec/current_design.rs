@@ -22,13 +22,27 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
         assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"){2}else{1}}));
     }
     assert_eq!(builtin_ids.len(),52);
+    let objects=manifest["objects"].as_array().unwrap();
+    let occurrence=|name:&str|&objects.iter().find(|r|r["type"]=="capy.occurrence/2" && r["data"]["name"]==name).unwrap()["data"];
+    assert_eq!(objects.iter().filter_map(|r|r["data"]["blend"].as_str()).collect::<BTreeSet<_>>().len(),24);
+    assert_eq!([&occurrence("Original source")["attachment"],&occurrence("color_lookup")["attachment"],&occurrence("Fills")["blend"]],["clip","effect","pass_through"]);
+    let placement=&occurrence("Independent copy")["placement"];
+    assert_eq!([placement["interpolation"].as_str(),placement["mesh"]["frame"].as_array().map(|_|"mesh")],[Some("bicubic"),Some("mesh")]);
+    let kinds=objects.iter().filter(|r|r["type"]=="capy.guides/1").flat_map(|r|r["data"]["rulers"].as_array().unwrap()).map(|r|r["geometry"]["kind"].as_str().unwrap()).collect::<BTreeSet<_>>();
+    assert_eq!(kinds,["parallel","radial","straight"].into());
+    assert!(objects.iter().any(|r|r["data"]["shape"]["contours"].is_array() && r["data"]["inverted"]==true));
+    let output=&objects.iter().find(|r|r["type"]=="capy.output/1").unwrap()["data"];
+    assert_eq!([&output["proof"]["intent"],&output["sdr"]["balance"]],[&json!("perceptual"),&json!(-0.25)]);
+    let curves=artwork.effects.iter().map(|(_,_,e)|crate::EffectView::new(&artwork.definitions.get(e.definition).unwrap().program,&e.values)).find(|e|e.program.id.as_ref()=="curves").unwrap();
+    assert_eq!(curves.choice("domain"),Some("log_hdr"));
+    assert!(crate::CURVE_KEYS.iter().all(|key|matches!(curves.value(key),Some(EffectValue::Curve(_)))));
     for (_,id,application) in artwork.effects.iter() {
         let program=&artwork.definitions.get(application.definition).unwrap().program;
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
         assert_eq!(record["data"]["values"].as_object().map_or(0,|v|v.len()),program.parameters.len());
-        if matches!(program.id.as_ref(),"gradient_map"|"gradient_fill") {
+        if let Some(expected)=match program.id.as_ref() {"gradient_map"=>Some(crate::ColorMixSpace::LinearRgb),"gradient_fill"=>Some(crate::ColorMixSpace::Oklab),_=>None} {
             let Some(EffectValue::Gradient(gradient))=crate::EffectView::new(program,&application.values).value("gradient") else {panic!()};
-            assert_eq!(gradient.interpolation,crate::ColorMixSpace::Classic);
+            assert_eq!(gradient.interpolation,expected);
         }
         if program.id.as_ref()=="color_lookup" && let Some(EffectValue::Lut3d(Some(lut)))=crate::EffectView::new(program,&application.values).value("resource") {
             assert_eq!(lut.bytes(),96);

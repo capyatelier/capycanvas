@@ -52,15 +52,12 @@ fn fixture(depth: SampleDepth) -> Artwork {
     let material=Arc::new(TileBlob::encode(color.coverage_descriptor(),&vec![0x55;coverage_size]).unwrap());
     let raster=RasterRevision::backed(RasterData {tiles:[
         (TileKey{plane:RasterPlane::Color,coordinate:[0,0]},RasterTile::backed_shared(paint)),
-        (TileKey{plane:RasterPlane::Wetness,coordinate:[0,0]},RasterTile::backed_shared(material.clone())),
         (TileKey{plane:RasterPlane::WatercolorWetness,coordinate:[0,0]},RasterTile::backed_shared(material.clone())),
     ].into(),watercolor:Some(RasterWatercolor {wet_edge:0.25,burnt_edge:0.75,edge_width:3.5})});
     let interpretation=SourceInterpretation {channels:SourceChannels::Gray,depth:SampleDepth::U16,
         profile:ColorProfile::Icc(Resource::from((0..256).map(|n|n as u8).collect::<Vec<_>>())),profile_assumed:false};
     let source_bytes=(0..256*256).flat_map(|n|(n as u16).to_le_bytes()).collect::<Vec<_>>();
     let tile=TileBlob::encode(interpretation.descriptor(),&source_bytes).unwrap();
-    let ColorProfile::Icc(profile)=&interpretation.profile else {panic!()};
-    let tile=TileBlob::from_profiled_package(tile.resource_id(),tile.descriptor,tile.compressed().unwrap(),profile.clone()).unwrap();
     let original=Arc::new(SourceImage {kind:SourceKind::Original,extent:[256;2],resolution:Some(crate::ImageResolution::ppi(300)),
         tiles:[([0,0],Arc::new(tile))].into(),interpretation});
     let source=PaintSource {domain:[256;2],raster,original:Some(original),operations:Default::default()};
@@ -82,7 +79,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
         let mut instance=EffectInstance::new(crate::bundled_effect_catalog().get(key).unwrap().program());
         if key=="color_lookup" {instance.set("resource",EffectValue::Lut3d(Some(lut.clone()))).unwrap();}
         let definition=artwork.definitions.insert(identity(30+index as u128),Definition {program:instance.program.clone()}).unwrap();
-        let effect=artwork.effects.insert(identity(40+index as u128),EffectApplication {definition,values:instance.values,domain:[256;2]}).unwrap();
+        let effect=artwork.effects.insert(identity(40+index as u128),EffectApplication {definition,values:instance.values}).unwrap();
         let occurrence=artwork.occurrences.insert(identity(50+index as u128),Occurrence::new(OccurrenceContent::Effect(effect),key)).unwrap();
         artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
         Arc::make_mut(&mut artwork.outputs.get_mut(artwork.default_output).unwrap().context.phases).push((effect,2.125+index as f32));
@@ -91,7 +88,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     artwork.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![0,255,17,5])),
         xmp:Some(Resource::from(b"<xmp>paint</xmp>".to_vec())),iptc:Some(Resource::from(vec![0x1c,2,120,0,1,42]))});
     let output=artwork.outputs.get_mut(artwork.default_output).unwrap();
-    output.name="Captured output".into(); output.context.elapsed=1.25; output.scale=[0.5,0.75];
+    output.name="Captured output".into(); output.scale=[0.5,0.75];
     output.frame=Some((Point{x:-2.,y:3.5},[240,200])); output.sdr.exposure=0.5;
     artwork
 }
@@ -125,8 +122,7 @@ fn full_archives_preserve_authored_graph_exact_samples_material_and_resource_byt
             assert_eq!(loaded.domain,expected.domain); assert_eq!(loaded.original,expected.original);
             let original_tile=&expected.original.as_ref().unwrap().tiles[&[0,0]];
             let loaded_tile=&loaded.original.as_ref().unwrap().tiles[&[0,0]];
-            assert_eq!(loaded_tile.resource_profile().unwrap().id(),original_tile.resource_profile().unwrap().id());
-            assert_eq!(loaded_tile.resource_profile(),original_tile.resource_profile());
+            assert_eq!(loaded_tile.resource_id(),original_tile.resource_id());
             let (original,loaded)=(expected.raster.wait_data().unwrap(),loaded.raster.wait_data().unwrap());
             assert_eq!(loaded.watercolor,original.watercolor);
             for (key,tile) in &original.tiles {
@@ -306,7 +302,7 @@ fn effect_removal_and_replacement_reclaim_only_newly_unused_definitions() {
         let effect=editor.document().scene().effect_handle(copies[0]).unwrap();
         let definition=editor.document().artwork.definitions.resolve(target).unwrap();
         let values=EffectInstance::new(editor.document().artwork.definitions.get(definition).unwrap().program.clone()).values;
-        let replacement=EffectApplication{definition,values,domain:application.domain};
+        let replacement=EffectApplication{definition,values};
         let changes=editor.document().effect_edits(vec![RecordChange::replace(&editor.document().artwork.effects,effect,Some(replacement)).unwrap()]).unwrap();
         editor.perform(crate::Edit::Batch(changes)).unwrap();
         assert!(editor.document().artwork.definitions.get(application.definition).is_none());

@@ -1,4 +1,4 @@
-use crate::{Affine, BlendSpace, ImageResolution, Interpolation, LayerBlend, LayerPlacement, MeshMap,
+use crate::{Affine, BlendSpace, ColorMixSpace, ImageResolution, Interpolation, LayerBlend, LayerPlacement, MeshMap,
     Point, Projective, Rect, ResolutionUnit, color::{ConversionOptions, DocumentColor, ProofRecipe,
     RenderingIntent, RgbColor, RgbSpace, SampleDepth, hdr::SdrRendition}};
 use serde_json::{Map, Value};
@@ -72,19 +72,30 @@ pub fn parse_depth(value: &Value) -> DecodeResult<SampleDepth> {
 pub fn encode_depth(value: SampleDepth) -> Value {
     Value::from(match value { SampleDepth::U8 => "u8", SampleDepth::U16 => "u16", SampleDepth::F16 => "f16", SampleDepth::F32 => "f32" })
 }
+pub fn parse_mix_space(value: &Value) -> DecodeResult<ColorMixSpace> {
+    Ok(match string(value)? { "classic" => ColorMixSpace::Classic, "linear_rgb" => ColorMixSpace::LinearRgb,
+        "oklab" => ColorMixSpace::Oklab, name => return Err(unsupported("gradient interpolation", name)) })
+}
+pub fn encode_mix_space(value: ColorMixSpace) -> Value {
+    Value::from(match value { ColorMixSpace::Classic => "classic", ColorMixSpace::LinearRgb => "linear_rgb", ColorMixSpace::Oklab => "oklab" })
+}
 pub fn parse_rgb_color(value: &Value) -> DecodeResult<RgbColor> {
-    let fields = object(value, &["rgba", "space", "linear_rgb"])?;
-    let color = RgbColor { space: optional(fields, "space", RgbSpace::Srgb, parse_rgb_space)?,
-        rgba: floats(required(fields, "rgba")?)?, linear_rgb: fields.get("linear_rgb").map(floats).transpose()? };
-    color.validate()?;
-    Ok(color)
+    let fields = object(value, &["rgba", "linear_rgba", "space"])?;
+    let space = optional(fields, "space", RgbSpace::Srgb, parse_rgb_space)?;
+    Ok(match (fields.get("rgba"), fields.get("linear_rgba")) {
+        (Some(rgba), None) => RgbColor::new(space, floats(rgba)?)?,
+        (None, Some(linear)) => RgbColor::from_linear(space, floats(linear)?)?,
+        _ => return Err("A color requires exactly one of rgba or linear_rgba".into()),
+    })
 }
 pub fn encode_rgb_color(value: RgbColor) -> Result<Value, String> {
     value.validate()?;
     let mut fields = Map::new();
-    fields.insert("rgba".into(), float_array(&value.rgba));
+    match value.linear_rgb {
+        Some([r, g, b]) => fields.insert("linear_rgba".into(), float_array(&[r, g, b, value.rgba[3]])),
+        None => fields.insert("rgba".into(), float_array(&value.rgba)),
+    };
     if value.space != RgbSpace::Srgb { fields.insert("space".into(), encode_rgb_space(value.space)); }
-    if let Some(linear) = value.linear_rgb { fields.insert("linear_rgb".into(), float_array(&linear)); }
     Ok(Value::Object(fields))
 }
 pub fn parse_document_color(value: &Value) -> DecodeResult<DocumentColor> {
@@ -191,7 +202,8 @@ pub fn parse_mesh(value: &Value) -> DecodeResult<MeshMap> {
     let mut breakpoints: [Arc<[f32]>; 2] = [Arc::from([]), Arc::from([])];
     for (out, axis) in breakpoints.iter_mut().zip(axes) {
         let values = axis.as_array().ok_or("Invalid mesh breakpoints")?;
-        if !(2..=usize::from(MeshMap::MAX_CELLS) + 1).contains(&values.len()) { return Err("Invalid mesh breakpoint count".into()); }
+        if values.len() < 2 { return Err("Invalid mesh breakpoint count".into()); }
+        if values.len() > usize::from(MeshMap::MAX_CELLS) + 1 { return Err(DecodeError::Unsupported("Mesh exceeds the supported cell count".into())); }
         *out = values.iter().map(finite_f32).collect::<DecodeResult<Vec<_>>>()?.into();
     }
     let values = required(fields, "net")?.as_array().ok_or("Invalid mesh net")?;
@@ -248,7 +260,7 @@ pub fn parse_sdr(value: &Value) -> DecodeResult<SdrRendition> {
     let result = SdrRendition { exposure: optional(fields, "exposure", 0., finite_f32)?,
         contrast: optional(fields, "contrast", 1., finite_f32)?, headroom: optional(fields, "headroom", 2.3004484, finite_f32)?,
         highlight_color: optional(fields, "highlight_color", 0.3, finite_f32)?, balance: optional(fields, "balance", 0., finite_f32)? };
-    result.validate()?;
+    result.validate().map_err(|error| DecodeError::Unsupported(error.into()))?;
     Ok(result)
 }
 pub fn encode_sdr(value: SdrRendition) -> Result<Value, String> {
@@ -334,14 +346,15 @@ mod tests {
     #[test]
     fn malformed_known_values_are_invalid_and_additions_are_unsupported() {
         invalid(parse_rgb_color(&json!({"rgba":[0,0,0,1.1]})));
-        invalid(parse_rgb_color(&json!({"rgba":[0,0,0,1], "linear_rgb":[1,0,0]})));
+        invalid(parse_rgb_color(&json!({"rgba":[0,0,0,1], "linear_rgba":[1,0,0,1]})));
+        unsupported(parse_rgb_color(&json!({"rgba":[0,0,0,1], "linear_rgb":[1,0,0]})));
         invalid(parse_rgb_color(&json!({"space":"srgb"})));
         invalid(parse_point(&json!([1,2,3])));
         invalid(parse_point(&json!([1e100,0])));
         invalid(parse_domain(&json!({"size":[0,17]})));
         invalid(parse_size(&json!([1.0,2])));
         invalid(parse_resolution(&json!({"unit":"inch", "density":[[300,0],[300,1]]})));
-        invalid(parse_sdr(&json!({"exposure":13})));
+        unsupported(parse_sdr(&json!({"exposure":13})));
         invalid(parse_sdr(&json!({"contrast":null})));
         unsupported(parse_rgb_color(&json!({"rgba":[0,0,0,1], "space":"xyz"})));
         unsupported(parse_rgb_color(&json!({"rgba":[0,0,0,1], "future":true})));
@@ -361,7 +374,9 @@ mod tests {
             for rgba in [[65504.,100000.125,-0.12345679,0.25], [f32::MAX,-f32::MAX,f32::MIN_POSITIVE,1.],
                 [f32::from_bits(1),-f32::from_bits(1),-0.,-0.]] {
                 let color = RgbColor::from_linear(space, rgba).unwrap();
-                let restored = parse_rgb_color(&wire(encode_rgb_color(color).unwrap())).unwrap();
+                let encoded = encode_rgb_color(color).unwrap();
+                assert_ne!(encoded.get("rgba").is_some(), encoded.get("linear_rgba").is_some());
+                let restored = parse_rgb_color(&wire(encoded)).unwrap();
                 assert_eq!(restored.rgba.map(f32::to_bits), color.rgba.map(f32::to_bits));
                 assert_eq!(restored.linear_rgb.map(|v|v.map(f32::to_bits)), color.linear_rgb.map(|v|v.map(f32::to_bits)));
                 assert_eq!(restored.linear_in(space).unwrap().map(f32::to_bits), rgba.map(f32::to_bits));

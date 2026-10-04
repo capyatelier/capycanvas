@@ -57,7 +57,7 @@ fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstanc
         program: effect.program.clone(),
     });
     let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
-        definition: definition.handle, values: effect.values.clone(), domain: doc.composition().size,
+        definition: definition.handle, values: effect.values.clone(),
     });
     let mut occurrence = Occurrence::new(OccurrenceContent::Effect(application.handle), name);
     occurrence.attachment = layer_core::Attachment::Clip;

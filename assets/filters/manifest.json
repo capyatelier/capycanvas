@@ -16,7 +16,7 @@
     {
       "category": "tone",
       "icon": "curves",
-      "preview": {"curve_0":{"kind":"curve","value":[[0,0],[0.25,0.15],[0.75,0.85],[1,1]]}},
+      "preview": {"rgb":{"kind":"curve","value":[[0,0],[0.25,0.15],[0.75,0.85],[1,1]]}},
       "program": {
         "abi": 5,
         "entry": "capy_curves",
@@ -28,28 +28,28 @@
         "parameters": [
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
-            "key": "curve_0",
+            "key": "rgb",
             "page": "rgb",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-0"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
-            "key": "curve_1",
+            "key": "red",
             "page": "red",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-1"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
-            "key": "curve_2",
+            "key": "green",
             "page": "green",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-2"}
           },
           {
             "default": {"kind":"curve","value":[[0,0],[1,1]]},
-            "key": "curve_3",
+            "key": "blue",
             "page": "blue",
             "kind": {"kind":"curve"},
             "label": {"message":"resources-parameter-curves-curve-3"}
@@ -57,7 +57,7 @@
           {
             "default": {"kind":"choice","value":0},
             "key": "domain",
-            "kind": {"kind":"choice","options": [{"value":"Encoded RGB","label":{"message":"resources-choice-curves-domain-encoded-rgb"}},{"value":"Log HDR","label":{"message":"resources-choice-curves-domain-log-hdr"}}]},
+            "kind": {"kind":"choice","options": [{"value":"encoded_rgb","label":{"message":"resources-choice-curves-domain-encoded-rgb"}},{"value":"log_hdr","label":{"message":"resources-choice-curves-domain-log-hdr"}}]},
             "label": {"message":"resources-parameter-curves-domain"}
           },
           {
@@ -152,44 +152,44 @@
         "label": {"message":"resources-filter-hue-saturation"},
         "parameters": [
           {"dimension":"angle","key":"hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"colorize_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":true}}},
+          {"dimension":"angle","key":"colorize_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":true}}},
           {"key":"saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"colorize_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":25},"page":"rgb","visible_when":{"key":"colorize","value":{"kind":"toggle","value":true}}},
           {"key":"lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"rgb"},
           {"dimension":"angle","key":"reds_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"reds_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"reds_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"reds_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"reds_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"reds_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"reds_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"reds","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"yellows_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"yellows_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"yellows_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"yellows_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":110},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"yellows_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":110},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"yellows_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"yellows_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"yellows","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"greens_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"greens_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"greens_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"greens_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":145},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"greens_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":145},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"greens_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"greens_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"greens","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"cyans_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"cyans_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"cyans_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"cyans_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":195},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"cyans_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":195},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"cyans_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"cyans_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"cyans","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"blues_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"blues_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"blues_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"blues_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":265},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"blues_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":265},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"blues_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"blues_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"blues","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"magentas_hue","label":{"message":"resources-parameter-hue-saturation-hue"},"kind":{"kind":"number","min":-180,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"magentas_saturation","label":{"message":"resources-parameter-hue-saturation-saturation"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"magentas_lightness","label":{"message":"resources-parameter-hue-saturation-lightness"},"kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":0},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
-          {"dimension":"angle","key":"magentas_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":359.99997,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":330},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
+          {"dimension":"angle","key":"magentas_center","label":{"message":"resources-parameter-hue-saturation-center"},"kind":{"kind":"number","min":0,"max":360,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":330},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"magentas_width","label":{"message":"resources-parameter-hue-saturation-width"},"kind":{"kind":"number","min":0,"max":180,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"dimension":"angle","key":"magentas_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"colorize","label":{"message":"resources-parameter-hue-saturation-colorize"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":false}}
@@ -314,7 +314,7 @@
           {"key":"blacks_magenta","label":{"message":"creation-color-magenta"},"page":"blacks","kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":2,"unit":"%"},"default":{"kind":"number","value":0}},
           {"key":"blacks_yellow","label":{"message":"creation-color-yellow"},"page":"blacks","kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":2,"unit":"%"},"default":{"kind":"number","value":0}},
           {"key":"blacks_black","label":{"message":"creation-color-black"},"page":"blacks","kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":2,"unit":"%"},"default":{"kind":"number","value":0}},
-          {"key":"mode","label":{"message":"resources-parameter-selective-color-mode"},"kind":{"kind":"choice","options":[{"value":"Relative","label":{"message":"resources-choice-selective-color-relative"}},{"value":"Absolute","label":{"message":"resources-choice-selective-color-absolute"}}]},"default":{"kind":"choice","value":0}}
+          {"key":"mode","label":{"message":"resources-parameter-selective-color-mode"},"kind":{"kind":"choice","options":[{"value":"relative","label":{"message":"resources-choice-selective-color-relative"}},{"value":"absolute","label":{"message":"resources-choice-selective-color-absolute"}}]},"default":{"kind":"choice","value":0}}
         ],
         "wgsl": ["color.wgsl","effects.wgsl"]
       }
@@ -2102,7 +2102,7 @@
           {
             "default": {"kind":"choice","value":0},
             "key": "style",
-            "kind": {"kind":"choice","options": [{"value":"Linear","label":{"message":"resources-choice-gradient-fill-style-linear"}},{"value":"Radial","label":{"message":"resources-choice-gradient-fill-style-radial"}},{"value":"Reflected","label":{"message":"resources-choice-gradient-fill-style-reflected"}}]},
+            "kind": {"kind":"choice","options": [{"value":"linear","label":{"message":"resources-choice-gradient-fill-style-linear"}},{"value":"radial","label":{"message":"resources-choice-gradient-fill-style-radial"}},{"value":"reflected","label":{"message":"resources-choice-gradient-fill-style-reflected"}}]},
             "label": {"message":"resources-parameter-gradient-fill-style"}
           },
           {

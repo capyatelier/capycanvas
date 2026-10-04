@@ -83,10 +83,10 @@ The initial registry is:
 | --- | --- |
 | `capy.composition/1` | `frame` with required pixel `size`, optional `origin`; `resolution`, `color`, `blend`, and required `result` endpoint. |
 | `capy.stack/1` | `entries`, an ordered array of occurrence references, front to back. |
-| `capy.occurrence/2` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, `isolated_blend`, `placement`, and optional `mask`. |
+| `capy.occurrence/2` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, `placement`, and optional `mask`. |
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
-| `capy.effect/1` | Required `definition` reference and pixel `domain`; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
+| `capy.effect/1` | Required `definition` reference; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
 | `capy.effect-definition/1` | Built-in: required `builtin` ID and parameter-data `version`. Custom: stable `key`, evaluation `contract`, `kind`, `code`, `entry`, keyed `parameters`, ordered `slots` and literal labels. |
 | `capy.selection/1` | Required `shape`; placement/inversion. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
@@ -114,7 +114,7 @@ The common frozen defaults are:
 | `opacity` | One. |
 | Stack `entries` | Empty array. |
 | `locked`, `alpha_locked`, `reference`, `inverted` | False. |
-| Occurrence `blend`, `isolated_blend` | `normal`; actual group pass-through is explicitly `pass_through`, and the retained isolated blend cannot be pass-through. |
+| Occurrence `blend` | `normal`; group pass-through is explicitly `pass_through`. |
 | Occurrence `attachment` | `none`; alternatives are `clip` and `effect`. |
 | Composition `blend` | `linear`. |
 | Composition `color` | Built-in `srgb`, unsigned `u8`. |
@@ -127,12 +127,16 @@ The common frozen defaults are:
 | Coverage `default_coverage` | One; supplied `initial` coverage takes precedence before painted overrides. |
 | Effect parameter value | Required for every parameter, including a value equal to the insertion default. |
 | Custom effect alpha/space/time | `preserve`, `linear`, false. |
-| Output context | Elapsed coordinate zero; animated effect opening phase zero. |
+| Output context | Animated effect opening phase zero. |
 | Output representation | Unavailable. |
 
 Unknown fields, variants, parameter keys, choice values, ports, resource encodings
 or evaluation contracts in a required record make the entire artwork unsupported.
 Do not deserialize them away. Malformed data for understood fields is invalid.
+Invalid is reserved for data that can never become valid: malformed JSON, IDs,
+references, lengths, integrity, cycles and values outside a field's mathematical
+domain. A well-formed value that this version does not accept, such as a count,
+range or combination a later version may allow, is unsupported.
 Validate every retained object, including unplaced work. A valid graph outside the
 editable subset remains preserved: shared editable sources, shared effect
 applications or two group occurrences using one stack cannot be normalized by
@@ -148,9 +152,7 @@ version describes parameter data, not shader code. Gradient Map, Gradient Fill,
 Denoise, Domain Warp, Posterize and Kaleidoscope use data version 2. Gradients
 retain explicit interpolation and stops; Posterize and Kaleidoscope require whole
 counts. Denoise authors Strength with an internal radius of two pixels; Domain
-Warp uses three internal noise octaves. Only the current
-data version is supported; there are no pre-release conversion readers.
-Opening resolves the current bundled
+Warp uses three internal noise octaves. Opening resolves the current bundled
 implementation and editor schema once. Labels, ranges used by sliders,
 shader ABI, modules, passes, GPU preparation and fusion policy are app code;
 they are not saved for built-ins. Slight rendering changes from shader fixes
@@ -163,8 +165,11 @@ unchanged. A UI range uses `soft_bounds`; it must not narrow accepted saved data
 Unknown IDs, data versions, parameter keys or choices preserve the package as
 unsupported, without guessing, dropping values or substituting defaults.
 
-Keep fixed-file tests for the supported parameter data. Before launch, replace
-superseded representations without adding conversion readers. Historical shaders,
+Keep fixed-file tests for the supported parameter data. Before release, replace
+superseded representations without adding conversion readers. Once a data version
+is released it stays readable: changing what a built-in's saved values mean needs
+a new data version with a conversion from the previous one and a fixed-file test,
+never a reinterpretation in place. Historical shaders,
 shader generations, generic schema rebinding and migration machinery are outside
 the format. New fields must represent authored
 intent; runtime layouts, caches, preview settings and editor organization stay
@@ -175,8 +180,12 @@ independently of built-in shader fusion. Their `slots` fixes the shader layout.
 Their parameter dimensions use `scalar`, `count`, `angle`, `time`, or `length` with a
 `source_pixels`, `composition_pixels` or `normalized` reference. Built-in dimensions
 come from the current catalog; a displayed unit never controls resizing.
-Counts require whole bounds and values. Resizing multiplies pixel lengths without
-rounding to the number field's displayed precision, then applies hard bounds.
+Counts require whole bounds and values. A pixel length accepts any value from zero
+to 65,536 pixels (or the declared bounds when wider, keeping a negative minimum's
+sign), independently of its declared `min`/`max`. Those bounds are the range the
+renderer evaluates: a value beyond them renders at the nearest bound and stays
+saved unchanged. Resizing multiplies pixel lengths without rounding to the number
+field's displayed precision or clamping to the evaluated range.
 The custom evaluation contract `capy.filter/1` fixes shader ABI `5`; artwork has
 no separate `abi` field. This contract is independent of built-in parameter
 versions. Unknown custom contracts remain preserved.
@@ -191,7 +200,7 @@ objects have closed known field sets; unknown additions follow preservation poli
 | Pixel point/size | Two-element `[x,y]`; point components finite F32, sizes positive U32. |
 | Source `domain` | `{"size":[width,height]}`; local origin is zero. Composition frame additionally permits `origin:[x,y]`. |
 | Working `color` | `{"space":"srgb","depth":"u8"}` with either default-valued field omitted. Spaces are `srgb`, `display_p3`, `adobe_rgb`, `pro_photo`. |
-| Portable color | `{"rgba":[r,g,b,a],"space":"srgb","linear_rgb":[r,g,b]}`; `space` defaults to `srgb`, `linear_rgb` is optional exact authored linear RGB. Alpha belongs only to `rgba`. |
+| Portable color | `{"rgba":[r,g,b,a],"space":"srgb"}` with transfer-encoded RGB, or `{"linear_rgba":[r,g,b,a],"space":"srgb"}` with linear RGB in the space's primaries; exactly one of the two arrays. `space` defaults to `srgb`. Writers use `linear_rgba` only when encoding would lose the authored value. |
 | Physical resolution | `{"unit":"inch","density":[[x_n,x_d],[y_n,y_d]]}`; all values required and positive U32; unit also permits `centimetre`, `metre`. |
 | Profile | `{"builtin":"srgb"}` or `{"resource":{"ref":"…"}}`; exactly one alternative. |
 | Placement | Optional `translation:[x,y]`, row-major `projective:[m00,m01,m02,m10,m11,m12,m20,m21,m22]`, `mesh`, `interpolation`; maps local geometry, then translates. Interpolation is `nearest`, `linear`, `bicubic`, `lanczos`, default `linear`. |
@@ -212,7 +221,7 @@ A mask placement permits projective/translation only; linked owner mesh mapping
 is evaluated by its existing pre-map contract, not duplicated onto the mask.
 Saved-selection overlay visibility, color and opacity belong to working state
 and are absent from this grammar. Selection occurrences fix `visible` to true,
-`opacity` to one, `blend` and `isolated_blend` to normal, and `reference` and
+`opacity` to one, `blend` to normal, and `reference` and
 `alpha_locked` to false, with no mask or attachment; these defaults are omitted.
 Names, placement and edit locks remain authored. Blend and
 rendering-intent names use the existing semantic names in lower snake case,
@@ -233,7 +242,7 @@ simulation; absolute colorimetric intent forbids black-point compensation.
 Effect `values` maps stable parameter keys to `{kind,value}` values: `number`
 (F32), `toggle` (boolean), `choice` (stable option string), `color` (portable
 color), `curve` (ordered `[x,y]` pairs), `gradient` (`stops`, an ordered array of
-`{position,color}`, and `interpolation`: `Classic`, `LinearRgb` or `Oklab`), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
+`{position,color}`, and `interpolation`: `classic`, `linear_rgb` or `oklab`), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
 null). Every parameter is required; null LUT means intentionally empty.
 Custom definition parameters are a map keyed by stable keys, with required `kind`,
 `default`, `label`, optional `opaque` (default false, color only) and dimensional
@@ -263,6 +272,24 @@ until explicitly interpreted by the reader. Runtime `resolution` and
 `constant_color` optimization declarations are omitted; reopened custom programs
 evaluate at native resolution through their retained code.
 
+### Evaluation meaning
+
+Saved values mean the following. Renderer changes may refine precision,
+performance and approximations within these meanings; changing one of them needs
+a new record or data version.
+
+| Saved value | Meaning |
+| --- | --- |
+| Pixel samples | Integer composition samples are display-referred values under the working space's transfer curve. Float RGB is linear, with 1.0 at the 203 cd/m² reference white. Composition `depth` selects that range and the committed sample precision; composition never uses less precision than the declared depth. |
+| Blend names | The formulas, ranges and luma weights in [blend modes](../internals/rendering.md#blend-modes), checked against its independent reference. |
+| Built-in positions | Composition-frame pixels with the origin at the frame's top-left. Centers are percentages of the frame's width and height. Vignette radius is a percentage of half the frame on each axis, Swirl radius of half the shorter side, and Gradient Fill scale of the frame's extent along its axis, or of half its diagonal when radial. |
+| Built-in angles | Degrees. Gradient Fill turns counterclockwise from +x; every other spatial angle, including Swirl's turn, turns clockwise from +x in y-down frame pixels. |
+| Curves | Monotone cubic Hermite through the saved points with Fritsch–Butland interior tangents and secant end tangents, continuing linearly beyond the end points. |
+| Procedural patterns | `fx_random`, `fx_noise` and `fx_fbm` in [`filter_library.wgsl`](../../assets/filters/filter_library.wgsl), with each filter's fixed seeds, belong to that filter's data version. |
+| Imported originals | Untouched original tiles convert to the working space with relative colorimetric intent and no black-point compensation; painted tiles hold the converted result. |
+| Linked masks | Mask pixels pass through the mask's projective placement, then its translation relative to the owner's, then the owner's placement and translation. |
+| SDR rendition | Parameters of the tone mapper in [`sdr.rs`](../../crates/layer-core/src/color/hdr/sdr.rs): `contrast` and `balance` are relative to its 1.3 and 0.3 baselines, and the default `headroom` is log2(1000/203). |
+
 ## Resources and packs
 
 A resource has required `id`, `type`, `data`, `encoding`, `location`, `bytes` and
@@ -288,7 +315,7 @@ Pack partition and range changes never change source or resource identity.
 
 | Resource type | Encoding and descriptor |
 | --- | --- |
-| `capy.raster-tile/1` | `capy.lz4-tile/1`; exactly 256 × 256 samples, with `channels`, `depth`, `transfer`, `alpha` and an optional visible profile reference. |
+| `capy.raster-tile/1` | `capy.lz4-tile/1`; exactly 256 × 256 samples, with `channels`, `depth`, `transfer` and `alpha`. A `profile` transfer uses the profile of the owning original or composition. |
 | `capy.selection-coverage/1` | `capy.lz4-coverage/1`; coverage depth `u4` or `u8`, required extent/bounds and chunk index. |
 | `capy.icc/1` | `raw`; exact profile bytes, profile interpretation validated by the color subsystem. |
 | `capy.photo-metadata/1` | `raw`; `kind` is `exif`, `xmp` or `iptc`; retain exact supplied bytes. |
@@ -308,8 +335,8 @@ No quantization, palette reduction or lossy image encoding is used for authored 
 Raster channels are `coverage`, `gray`, `gray_alpha`, `rgb`, `rgba` or `cmyk`;
 color depths are `u8`, `u16`, `f16`, `f32`. Coverage/material samples are unsigned
 `u8` or `u16`; F16/F32 composition coverage is U16, as fixed by
-`SampleDepth::coverage`, never floating-point coverage. Multibyte samples are little-endian. Transfers are `linear`, `srgb`
-or `profile`; alpha is `none`, `straight` or `premultiplied_linear`. Ordinary
+`SampleDepth::coverage`, never floating-point coverage. Multibyte samples are little-endian. Transfers are `linear` or
+`profile`; alpha is `none` or `straight`. Ordinary
 paint is straight RGBA, integer paint uses its working profile and float paint
 is linear. Float color is RGB/RGBA only and finite; float alpha is straight and
 within `[0,1]`. Preserve hidden straight RGB, including alpha-zero pixels, and
@@ -320,9 +347,13 @@ Tiles store one raw LZ4 block with no frame or prefixed decoded length. With `P`
 pixels and `B` bytes/pixel, bytes of a multibyte-depth pixel are shuffled by
 `stored_uncompressed[b*P+p] = interleaved[p*B+b]`. U8-depth tiles are unshuffled.
 The decoded length is exactly `256*256*B`; decoding is bounded to that size and
-rejects trailing input. Tile plane membership (`color`, `mask`, `wetness`,
+rejects trailing input. Tile plane membership (`color`, `mask`,
 `watercolor_wetness`) belongs to the source's tile index, not the byte identity.
 Material settings and missing-tile behavior stay on their authored source.
+`watercolor_wetness` tiles require the source's watercolor material. A sample of
+at least 2/255 (U8 code 2, U16 code 514) marks watercolor paint, whose edges the
+material settings shape; the amount above that is water left for later strokes,
+which the brush engine may use as it chooses. Smaller values are not watercolor.
 
 Selection coverage preserves the current defined packing: rows start at whole
 little-endian U32 words, low bits hold the first pixel, with eight U4 or four U8
@@ -490,7 +521,7 @@ identity across captures. Metadata capture may share immutable roots while raste
 publication remains pending; workers await those publications cancellably.
 Active contact/predicted pixels and uncommitted operations are excluded.
 
-Output `context` contains finite seconds `elapsed` and an `effect_phases` array
+Output `context` contains an `effect_phases` array
 of `{"effect":{"ref":"…"},"phase":seconds}` records. Entries address effect
 application identity, never source content hashes or shader catalog names, and
 cannot repeat an effect. Captures include every time-dependent effect needed by
@@ -622,7 +653,10 @@ Fixtures distinguish malformed content from unsupported content and preservation
 | Save after rate change; renderer recreation; retained analysis/bake during later painting | Saved/reopened output uses captured roots and integrated phase; old resources live through accepted jobs. |
 
 The checked-in `codec/fixtures/authored-filters.capy` covers all 52 built-ins, exact
-raster samples, watercolor state, LUT samples and SDR rendition using the current
+raster samples, watercolor state, LUT samples, SDR rendition and proof, every blend
+name, clip and effect attachments, a Pass Through group, projective and mesh
+placement, contour selection placement, every ruler kind, non-default built-in
+choices and gradient interpolations, and both color forms, using the current
 occurrence and filter data versions. Its fixed values exercise opening, editing,
 saving, reopening and compiling current filters. `builtin-contracts.json` fixes
 all 52 built-in contracts and 282 parameter keys: kinds, choice IDs, units,

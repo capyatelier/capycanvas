@@ -86,7 +86,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             let Some(contact)=mode.contact.as_mut() else {return Ok(());};
             let Some((points,index))=&contact.point else {return Ok(());};
             let mut changed=points.clone();changed[*index][1]=(points[*index][1]+(contact.start-contact.current)/(contact.scale*255.)).clamp(0.,1.);
-            let key=format!("curve_{}",mode.page);
+            let key=layer_core::CURVE_KEYS[usize::from(mode.page)].to_string();
             let action=EffectAction::Set {layer:occurrence_token(mode.layer),key:key.clone(),value:EffectValue::Curve(changed.clone())};
             let started=self.effect_gesture.is_some();
             self.effect_gesture_action(if started {ContactPhase::Move} else {ContactPhase::Down},action.clone())?;

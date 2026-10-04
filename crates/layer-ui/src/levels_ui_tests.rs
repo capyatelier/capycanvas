@@ -20,12 +20,12 @@ fn stale_property_actions(layer:u64,epoch:u64)->Vec<EffectAction> {
     vec![
         EffectAction::AutoLevels {layer,epoch},EffectAction::TargetCurve {layer,epoch},
         EffectAction::Calibrate {layer,epoch,role:layer_core::levels::CalibrationRole::Gray},
-        EffectAction::CurveSelectPoint {layer,epoch,key:"curve_0".into(),index:Some(0)},
-        EffectAction::CurveRemoveAt {layer,epoch,key:"curve_0".into(),point:[0.;2],extent:[255.;2],point_count:Some(2)},
-        EffectAction::CurveContact {layer,epoch,key:"curve_0".into(),phase:ContactPhase::Down,point:[100.;2],extent:[255.;2]},
-        EffectAction::CurveKey {layer,epoch,key:"curve_0".into(),key_event:"ArrowUp".into(),pressed:true,repeat:false,modifiers:Modifiers::default()},
-        EffectAction::CurveNumber {layer,epoch,key:"curve_0".into(),axis:CurveAxis::Output,operation:NumericOperation::Step {steps:1.}},
-        EffectAction::Gesture {phase:ContactPhase::Down,action:Box::new(EffectAction::CurveContact {layer,epoch,key:"curve_0".into(),phase:ContactPhase::Down,point:[100.;2],extent:[255.;2]})},
+        EffectAction::CurveSelectPoint {layer,epoch,key:"rgb".into(),index:Some(0)},
+        EffectAction::CurveRemoveAt {layer,epoch,key:"rgb".into(),point:[0.;2],extent:[255.;2],point_count:Some(2)},
+        EffectAction::CurveContact {layer,epoch,key:"rgb".into(),phase:ContactPhase::Down,point:[100.;2],extent:[255.;2]},
+        EffectAction::CurveKey {layer,epoch,key:"rgb".into(),key_event:"ArrowUp".into(),pressed:true,repeat:false,modifiers:Modifiers::default()},
+        EffectAction::CurveNumber {layer,epoch,key:"rgb".into(),axis:CurveAxis::Output,operation:NumericOperation::Step {steps:1.}},
+        EffectAction::Gesture {phase:ContactPhase::Down,action:Box::new(EffectAction::CurveContact {layer,epoch,key:"rgb".into(),phase:ContactPhase::Down,point:[100.;2],extent:[255.;2]})},
     ]
 }
 
@@ -141,7 +141,7 @@ fn curves_calibration_roles_commit_one_atomic_current_page_edit_and_preserve_mas
         s.dispatch(UiAction::Effect {action:EffectAction::Calibrate {layer:occurrence_token(layer),epoch:s.state.layer_properties.epoch,role}}).unwrap();release_calibration(&mut s);
         calibration_reply(&mut s,Ok(layer_core::ArtworkSample::Color([0.2,0.3,0.4,1.])));
         assert_eq!(s.engine.document().scene().effect(layer).unwrap(),expected.view());assert_eq!(s.engine.backend().dabs,0);
-        assert_eq!(expected.value("curve_0"),prior.value("curve_0"));
+        assert_eq!(expected.value("rgb"),prior.value("rgb"));
         assert!(s.engine.undo().unwrap());assert_eq!(s.engine.document().artwork,before);assert_eq!(s.engine.checkpoint(),checkpoint);
     }}
 }
@@ -151,7 +151,7 @@ fn curves_calibration_unreachable_master_refuses_all_channels_without_history() 
     let mut s=session(Platform::Gtk);
     s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"curves".into()}}).unwrap();
     s.reveal_panel(Panel::Properties).unwrap();s.frame(1,1).unwrap();let layer=s.engine.document().working.occurrence.unwrap();
-    s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(layer),key:"curve_0".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.2],[1.,0.8]])}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(layer),key:"rgb".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.2],[1.,0.8]])}}).unwrap();
     let before=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();
     s.dispatch(UiAction::Effect {action:EffectAction::Calibrate {layer:occurrence_token(layer),epoch:s.state.layer_properties.epoch,role:layer_core::levels::CalibrationRole::Black}}).unwrap();release_calibration(&mut s);
     calibration_reply(&mut s,Ok(layer_core::ArtworkSample::Color([0.2,0.3,0.4,1.])));

@@ -180,7 +180,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     effect(
         &photo,
         "curves",
-        "curve_0",
+        "rgb",
         layer_core::EffectValue::Curve(vec![[0., 0.], [1., 0.75]]),
     );
     let curved = pixels(&photo);

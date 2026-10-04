@@ -20,7 +20,7 @@ impl SnapshotGpu {
         let mut color = RasterData { watercolor: snapshot.backing[&target].watercolor, ..Default::default() };
         let mut mask = RasterData::default();
         let mut empty = std::collections::BTreeMap::new();
-        for plane in [RasterPlane::Color, RasterPlane::Wetness, RasterPlane::WatercolorWetness, RasterPlane::Mask] {
+        for plane in [RasterPlane::Color, RasterPlane::WatercolorWetness, RasterPlane::Mask] {
             if plane == RasterPlane::Mask && ((!linked_mask && !scalar) || plan.coverage.and_then(|h| plan.scene.view().coverage(h)).map_or(0., |c| c.default_coverage) != 0.) { continue; }
             let descriptor = plane.descriptor(snapshot.color());
             let tile = layer_core::raster::TileBlob::encode(descriptor, &vec![0; descriptor.byte_len([PAGE_SIZE; 2]).unwrap()])?;

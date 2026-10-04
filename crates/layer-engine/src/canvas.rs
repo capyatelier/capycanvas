@@ -690,9 +690,8 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             let color = document.composition().color;
             let mut page_bytes = layer_core::raster::TileBlob::max_compressed_len(plane.descriptor(color)).ok_or(DocumentError::InvalidLayerOperation("Unsupported raster capture representation"))? as u64;
             if matches!(target, SourceTarget::Paint(_)) && !plain_color(&pixels) {
-                let coverage = layer_core::raster::TileBlob::max_compressed_len(layer_core::raster::RasterPlane::Wetness.descriptor(color)).ok_or(DocumentError::InvalidLayerOperation("Unsupported raster capture representation"))? as u64;
-                page_bytes = page_bytes.checked_add(coverage.checked_mul(2).ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?)
-                    .ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?;
+                let wetness = layer_core::raster::TileBlob::max_compressed_len(layer_core::raster::RasterPlane::WatercolorWetness.descriptor(color)).ok_or(DocumentError::InvalidLayerOperation("Unsupported raster capture representation"))? as u64;
+                page_bytes = page_bytes.checked_add(wetness).ok_or(DocumentError::InvalidLayerOperation("Raster capture exceeds the memory limit"))?;
             }
             let output_bounds = if pixels.is_empty() { damage } else { Rect::from_extent(extent) };
             let bytes = layer_core::raster::page_count(output_bounds, extent).checked_mul(page_bytes)
@@ -2596,7 +2595,7 @@ mod tests {
         let program = layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
         let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program}).unwrap();
-        let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values,domain:[64,64]}).unwrap();
+        let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values}).unwrap();
         let saved = EvaluationContext {elapsed:3.,phases:vec![(effect,7.)].into()};
         document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().context = saved.clone();
         let (_, mut canvas) = engine_with(RecordingRenderer::default(), document, view(64,64), TRANSFORM);
@@ -3814,7 +3813,7 @@ mod tests {
             mask.use_.source = handle;
             let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
             let definition = RecordChange::insert(&document.artwork.definitions, Definition { program:draft.program });
-            let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition:definition.handle, values:draft.values, domain:[64; 2] });
+            let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition:definition.handle, values:draft.values});
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect.handle), "Masked exposure");
             occurrence.mask = Some(mask.use_);
             let occurrence = RecordChange::insert(&document.artwork.occurrences, occurrence);

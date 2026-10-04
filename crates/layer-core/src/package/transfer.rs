@@ -229,10 +229,9 @@ impl PreparedTransfer {
         for (id,state) in &self.descriptor.resources {if let VerifiedResource::Tile{payload}=state {
             let record=&manifest.resources[id].value;if record["type"]!="capy.raster-tile/1"{return Err("Transfer tile type mismatch".into());}
             let descriptor=resources::parse_descriptor(&record["data"]).map_err(|e|e.to_string())?;
-            let profile=record["data"].get("profile").map(|r|{let id=resources::reference_id(r).map_err(|e|e.to_string())?;reader.bytes.get(&id).cloned().ok_or_else(||"Missing verified tile profile".to_string())}).transpose()?;
             let raw=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64;
             decoded=decoded.saturating_add(if retained {self.payload_len(*payload)?}else{raw});
-            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource(*id,descriptor,self.bytes(*payload)?,profile)?));
+            reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource(*id,descriptor,self.bytes(*payload)?)?));
         }}
         for selection in &self.descriptor.selections {
             let words=match self.payloads.get(selection.payload){Some(TransferPayload::Words(words))=>words.clone(),_=>return Err("Missing decoded selection words".into())};decoded=decoded.saturating_add(words.len() as u64*4);
@@ -341,7 +340,7 @@ mod tests {
         let mut output=document.artwork.outputs.get(document.artwork.default_output).unwrap().clone();
         output.proof=Some(crate::color::ProofRecipe {name:"proof".into(),profile:crate::color::ColorProfile::Icc(Resource::from(vec![1,2,3,4])),conversion:Default::default(),simulate_paper:false,simulate_black_ink:false});
         document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().clone_from(&output);
-        Editor::new(document).capture(7,EvaluationContext{elapsed:2.,phases:Vec::new().into()}).unwrap()
+        Editor::new(document).capture(7,EvaluationContext{elapsed:0.,phases:Vec::new().into()}).unwrap()
     }
     fn receive(prepared:&PreparedTransfer)->PreparedTransfer {
         let descriptor=serde_json::from_slice(&serde_json::to_vec(prepared.descriptor()).unwrap()).unwrap();
@@ -465,7 +464,7 @@ mod tests {
         let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
         let definition=art.definitions.insert(PortableId::random(),Definition{program:program.clone()}).unwrap();
         for lookup in [lut.clone(),alias.clone()]{let mut effect=EffectInstance::new(program.clone());effect.set("resource",EffectValue::Lut3d(Some(lookup))).unwrap();
-            let application=art.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values,domain:[19,11]}).unwrap();
+            let application=art.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values}).unwrap();
             occurrences.push(art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"lookup")).unwrap());
         }
         let stack=art.compositions.get(art.root).unwrap().result;art.stacks.get_mut(stack).unwrap().entries.splice(0..0,occurrences);

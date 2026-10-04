@@ -13,7 +13,7 @@ fn targeted_reply(s:&mut UiSession<Recorder>) {
     s.frame(30,30).unwrap();
 }
 fn targeted_points(s:&UiSession<Recorder>,page:usize)->Vec<[f32;2]> {
-    match s.engine.document().scene().effect(s.engine.document().scene().order()[0]).unwrap().value(&format!("curve_{page}")) {Some(layer_core::EffectValue::Curve(points))=>points.clone(),_=>panic!("missing curve")}
+    match s.engine.document().scene().effect(s.engine.document().scene().order()[0]).unwrap().value(layer_core::CURVE_KEYS[usize::from(page)]) {Some(layer_core::EffectValue::Curve(points))=>points.clone(),_=>panic!("missing curve")}
 }
 
 #[test]
@@ -156,7 +156,7 @@ fn targeted_curve_retired_failure_reprojects_typed_notice_without_resampling_or_
 }
 
 fn targeted_published_points(s:&UiSession<Recorder>)->Vec<[f32;2]> {
-    match &s.state.layer_properties.controls.iter().find(|control|control.key=="curve_0").unwrap().value {
+    match &s.state.layer_properties.controls.iter().find(|control|control.key=="rgb").unwrap().value {
         layer_core::EffectValue::Curve(points)=>points.clone(),_=>panic!("missing published curve")
     }
 }

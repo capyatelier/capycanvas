@@ -619,7 +619,7 @@ fn paint_extent_plan_inverse_maps_the_canvas_and_preserves_hidden_material_and_m
             let mut doc = Document::new(PortableId::random(), 256, 128, crate::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
             let id = fixture::target(&doc,"Current ink");
             let mut data = raster(RasterPlane::Color, doc.composition().color, &[[0, 0], [3, 2]]).wait_data().unwrap().as_ref().clone();
-            for plane in [RasterPlane::Wetness, RasterPlane::WatercolorWetness] {
+            for plane in [RasterPlane::WatercolorWetness] {
                 data.tiles.insert(TileKey { plane, coordinate: [3, 2] }, tile(plane, doc.composition().color, 17));
             }
             data.watercolor = Some(crate::raster::RasterWatercolor { wet_edge: 0.8, burnt_edge: 0.6, edge_width: 7. });

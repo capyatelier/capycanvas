@@ -103,7 +103,6 @@ impl<T> Publication<T> {
 pub enum RasterPlane {
     Color,
     Mask,
-    Wetness,
     WatercolorWetness,
 }
 impl RasterPlane {
@@ -125,7 +124,6 @@ pub struct TileKey {
 /// Independently compressed exact samples. Immutable backing
 /// can be written repeatedly without readback, conversion or recompression.
 pub struct TileBlob {
-    resource_profile: Option<crate::authored::Resource<[u8]>>,
     resource_id: crate::authored::PortableId,
     owner_identity: u64,
     encoded_fingerprint: Option<[u8; 32]>,
@@ -185,9 +183,8 @@ impl TileBlob {
     pub fn owner_identity(&self) -> u64 { self.owner_identity }
     pub fn encoded_fingerprint(&self) -> Option<[u8; 32]> { self.encoded_fingerprint }
     pub fn resource_id(&self) -> crate::authored::PortableId { self.resource_id }
-    pub fn resource_profile(&self) -> Option<&crate::authored::Resource<[u8]>> { self.resource_profile.as_ref() }
     pub(crate) fn alias(&self, resource_id: crate::authored::PortableId) -> Self {
-        Self { resource_id, resource_profile: self.resource_profile.clone(), owner_identity: self.owner_identity,
+        Self { resource_id, owner_identity: self.owner_identity,
             encoded_fingerprint: self.encoded_fingerprint, digest: self.digest.clone(), expected_digest: self.expected_digest, descriptor: self.descriptor, compressed: self.compressed.clone() }
     }
     /// Worst-case encoded ownership reserved before a tile is published.
@@ -209,7 +206,6 @@ impl TileBlob {
         let compressed = compression::compress(shuffled.as_deref().unwrap_or(bytes))?;
         let encoded_fingerprint = Some(Self::descriptor_digest(descriptor, &compressed));
         Ok(Self {
-            resource_profile: None,
             resource_id: crate::authored::PortableId::random(),
             owner_identity: next_tile_owner(),
             encoded_fingerprint,
@@ -264,18 +260,8 @@ impl TileBlob {
     ) -> Result<Self, String> {
         if compressed.len() > MAX_COMPRESSED_TILE_BYTES { return Err("Oversized compressed raster tile".into()); }
         Self::decode_samples(descriptor, &compressed)?;
-        Ok(Self { resource_profile: None, resource_id, owner_identity: next_tile_owner(), descriptor,
+        Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
             encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(compressed.into()) })
-    }
-    pub fn from_profiled_package(
-        resource_id: crate::authored::PortableId, descriptor: PixelDescriptor,
-        compressed: Arc<[u8]>, profile: crate::authored::Resource<[u8]>,
-    ) -> Result<Self,String> {
-        if descriptor.encoding != crate::color::TransferEncoding::Profile || profile.is_empty() || profile.len()>crate::color::source::MAX_PROFILE_BYTES {
-            return Err("Invalid tile profile interpretation".into());
-        }
-        let mut tile=Self::from_package(resource_id,descriptor,compressed)?;
-        tile.resource_profile=Some(profile); Ok(tile)
     }
     pub fn from_compressed(
         descriptor: PixelDescriptor,
@@ -294,7 +280,6 @@ impl TileBlob {
             return Err("Oversized compressed raster tile".into());
         }
         let result = Self {
-            resource_profile: None,
             resource_id,
             descriptor,
             owner_identity: next_tile_owner(),
@@ -312,15 +297,11 @@ impl TileBlob {
         resource_id: crate::authored::PortableId,
         descriptor: PixelDescriptor,
         bytes: Arc<[u8]>,
-        resource_profile: Option<crate::authored::Resource<[u8]>>,
     ) -> Result<Self, String> {
         if bytes.is_empty() || bytes.len() > MAX_COMPRESSED_TILE_BYTES || descriptor.byte_len([TILE_SIZE; 2]).is_none() {
             return Err("Invalid raster worker blob".into());
         }
-        if resource_profile.as_ref().is_some_and(|profile| descriptor.encoding != crate::color::TransferEncoding::Profile || profile.is_empty() || profile.len() > crate::color::source::MAX_PROFILE_BYTES) {
-            return Err("Invalid tile profile interpretation".into());
-        }
-        Ok(Self { resource_profile, resource_id, owner_identity: next_tile_owner(), descriptor,
+        Ok(Self { resource_id, owner_identity: next_tile_owner(), descriptor,
             encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
     }
 }
@@ -448,6 +429,7 @@ impl RasterData {
             if key.coordinate[0] >= extent[0].div_ceil(TILE_SIZE)
                 || key.coordinate[1] >= extent[1].div_ceil(TILE_SIZE)
                 || mask != (key.plane == RasterPlane::Mask)
+                || (key.plane == RasterPlane::WatercolorWetness && self.watercolor.is_none())
             {
                 return Err("Invalid raster tile coordinates or plane".into());
             }
@@ -569,7 +551,7 @@ mod tests {
         let package = super::TileBlob::from_package(original.resource_id(), descriptor, encoded.clone()).unwrap();
         assert!(package.digest.get().is_none(), "package validation does not compute a content hash");
         assert!(package.encoded_fingerprint().is_none());
-        let adopted = super::TileBlob::from_verified_resource(original.resource_id(), descriptor, encoded.clone(), None).unwrap();
+        let adopted = super::TileBlob::from_verified_resource(original.resource_id(), descriptor, encoded.clone()).unwrap();
         assert!(adopted.encoded_fingerprint().is_none());
         assert!(adopted.digest.get().is_none());
         assert_ne!(package.owner_identity(), original.owner_identity());
@@ -716,6 +698,11 @@ mod tests {
             )
             .is_err()
         );
+        let wetness = TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [0, 0] };
+        let mut watercolor = RasterData { tiles: BTreeMap::from([(wetness, RasterTile::pending(RasterPlane::WatercolorWetness.descriptor(color)))]), watercolor: None };
+        assert!(watercolor.validate_index([256; 2], false, color).is_err());
+        watercolor.watercolor = Some(RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. });
+        watercolor.validate_index([256; 2], false, color).unwrap();
         let wrong = TileBlob::encode(crate::color::SRGB8_PAINT, &vec![0; 262144]).unwrap();
         assert!(tile.publish(Ok(wrong)).is_err());
         assert!(matches!(tile.try_backing(), Some(Err(_))));

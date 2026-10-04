@@ -527,7 +527,7 @@ pub(crate) fn effect_insertion(document: &Document, draft: layer_core::EffectIns
     use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent, RecordChange};
     let artwork=&document.artwork;
     let definition=RecordChange::insert(&artwork.definitions,Definition {program:draft.program});
-    let effect=RecordChange::insert(&artwork.effects,EffectApplication {definition:definition.handle,values:draft.values,domain:document.composition().size});
+    let effect=RecordChange::insert(&artwork.effects,EffectApplication {definition:definition.handle,values:draft.values});
     let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Effect(effect.handle),name));
     let handle=occurrence.handle;
     let stack_handle=document.composition().result;

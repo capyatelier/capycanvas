@@ -18,7 +18,7 @@ fn raster_cache_keys_share_generated_contents_and_keep_loaded_owner_identity() {
     assert!(!key.matches(&Key::raster(&blob, RgbSpace::DisplayP3, RgbSpace::Srgb)));
     assert!(!key.matches(&Key::raster(&blob, RgbSpace::Srgb, RgbSpace::DisplayP3)));
     let loaded = |id| Arc::new(TileBlob::from_verified_resource(
-        id, blob.descriptor, blob.compressed().unwrap(), None,
+        id, blob.descriptor, blob.compressed().unwrap(),
     ).unwrap());
     let first = loaded(blob.resource_id());
     let second = loaded(blob.resource_id());
@@ -119,7 +119,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             let program = crate::tests::fixture("threshold").program();
             let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
             let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: program.clone() }).unwrap();
-            let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: EffectInstance::new(program).values, domain: extent }).unwrap();
+            let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: EffectInstance::new(program).values}).unwrap();
             let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
             let stack = doc.composition().result;
             doc.artwork.stacks.get_mut(stack).unwrap().entries.insert(0, handle);

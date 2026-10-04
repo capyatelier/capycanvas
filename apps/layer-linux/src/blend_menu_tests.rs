@@ -85,7 +85,7 @@ fn grouped_adjustment() -> layer_core::Document {
     if !remove.is_empty() { document.apply(document.delete_layers_edit(&remove).unwrap()).unwrap(); }
     let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("black_white").unwrap().program());
     let definition = RecordChange::insert(&document.artwork.definitions, Definition { program: draft.program });
-    let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: document.composition().size });
+    let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values});
     let adjustment = RecordChange::insert(&document.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(effect.handle), "Black & White"));
     document.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Definition(definition), layer_core::Edit::Effect(effect), layer_core::Edit::Occurrence(adjustment.clone())])).unwrap();
     let children = RecordChange::insert(&document.artwork.stacks, Stack { entries: vec![adjustment.handle] });

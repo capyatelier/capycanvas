@@ -34,7 +34,7 @@ import QuartzCore
                 let layer = store.state["layer_properties"]["layer"].uint
                 let brushControl = mode == "brush-size" || mode == "brush-opacity"
                 let defaultControls = store.state["layer_properties"]["controls"].stableKey
-                let key = effect == "curves" ? "curve_0" : effect == "gradient_map" ? "gradient"
+                let key = effect == "curves" ? "rgb" : effect == "gradient_map" ? "gradient"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
                 let identifier = toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"

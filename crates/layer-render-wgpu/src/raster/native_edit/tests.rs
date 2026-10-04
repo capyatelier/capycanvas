@@ -401,10 +401,9 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
     let color = r.document_color();
     let mut layers = paint_document([256 * 17, 256], "many tiles");
     set_color(&mut layers,color);
-    let mut data = RasterData::default();
+    let mut data = RasterData { watercolor: Some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. }), ..Default::default() };
     for plane in [
         RasterPlane::Color,
-        RasterPlane::Wetness,
         RasterPlane::WatercolorWetness,
     ] {
         for x in 0..17 {
@@ -436,7 +435,7 @@ fn restored_fixture(r: &mut WgpuRasterizer) -> Document {
         tiles: data
             .tiles
             .iter()
-            .filter(|(key, _)| key.plane == RasterPlane::Wetness)
+            .filter(|(key, _)| key.plane == RasterPlane::WatercolorWetness)
             .map(|(key, tile)| {
                 (
                     TileKey {

@@ -40,9 +40,6 @@ const TRANSPORT_STEP_SCALES: array<f32, 3> = array<f32, 3>(
     0.31,
     0.18,
 );
-// Two R8 levels are the persistent watercolor-material floor used by live
-// edge composition. Values above it are the local water amount.
-const MIN_WETNESS: f32 = 2.0 / 255.0;
 
 @vertex
 fn vertex_main(@builtin(vertex_index) vertex_index: u32) -> @builtin(position) vec4<f32> {
@@ -149,7 +146,7 @@ fn exchange(
     let neighbor = page_sample(neighbor_position, false);
     // The destination's wetness selects the artist-facing mode. Watercolor can
     // favor wet paper while ink can favor dry fibers with the same kernel.
-    let recipient_is_watercolor = center_wet >= MIN_WETNESS;
+    let recipient_is_watercolor = center_wet >= WATERCOLOR_FLOOR;
     let rate = select(
         style.transport_b.y,
         style.transport_b.x,
@@ -178,7 +175,7 @@ fn exchange(
     // still settle locally. Keep this weaker than front transport so it mixes
     // adjacent washes without turning the entire wet layer into a blur.
     let shared_wetness = smoothstep(
-        MIN_WETNESS,
+        WATERCOLOR_FLOOR,
         0.45,
         min(center_wet, neighbor_wet),
     );
@@ -285,8 +282,8 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
 
     let decayed_wetness = select(
         0.0,
-        MIN_WETNESS + (center_wet - MIN_WETNESS) * 0.984,
-        center_wet >= MIN_WETNESS,
+        WATERCOLOR_FLOOR + (center_wet - WATERCOLOR_FLOOR) * 0.984,
+        center_wet >= WATERCOLOR_FLOOR,
     );
     let next_wetness = clamp(max(decayed_wetness, best_wetness), 0.0, 1.0);
     let relaxation_stability = select(
@@ -299,11 +296,11 @@ fn fragment_main(@builtin(position) position: vec4<f32>) -> TransportOutput {
     // Water activation is a material-model threshold. Native pigment coverage
     // has its own precision; a faint wash must travel with the same wet front.
     let pigment_present=working_has_color(best_pigment.a);
-    if best_wetness > decayed_wetness + MIN_WETNESS && pigment_present {
+    if best_wetness > decayed_wetness + WATERCOLOR_FLOOR && pigment_present {
         let arrival = clamp(
             sqrt(
                 (best_wetness - decayed_wetness)
-                    / max(best_wetness, MIN_WETNESS),
+                    / max(best_wetness, WATERCOLOR_FLOOR),
             ),
             0.0,
             1.0,

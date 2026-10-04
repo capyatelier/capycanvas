@@ -24,7 +24,8 @@ fn data(color: DocumentColor, count: u32, planes: &[RasterPlane], seed: u32) -> 
             TileKey { plane, coordinate: [i % 11, i / 11] },
             RasterTile::backed(blob(color, plane, seed + i)),
         ))).collect(),
-        watercolor: None,
+        watercolor: planes.contains(&RasterPlane::WatercolorWetness)
+            .then_some(layer_core::raster::RasterWatercolor { wet_edge: 0.5, burnt_edge: 0.5, edge_width: 2. }),
     }
 }
 
@@ -32,8 +33,8 @@ fn live_pixels(r: &WgpuRasterizer) -> Vec<(RasterPlane, [u32; 2], Vec<u8>)> {
     let layer = &r.paint_layers[0];
     layer.pages.iter().map(|p| (RasterPlane::Color, p.coordinate,
         crate::layer_tests::page_bytes(r, &p.primary.texture)))
-        .chain(layer.material_pages.iter().map(|p| (RasterPlane::Wetness, p.coordinate,
-            crate::layer_tests::page_bytes(r, &p.wetness.texture)))).collect()
+        .chain(layer.watercolor_wetness_pages.iter().map(|p| (RasterPlane::WatercolorWetness, p.coordinate,
+            crate::layer_tests::page_bytes(r, &p.active().texture)))).collect()
 }
 
 #[test]
@@ -44,7 +45,7 @@ fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() 
         let document = restore_document(color);
         let source = target(&document);
         r.ensure_document_metadata([9504, 6336], document.scene()).unwrap();
-        let first = data(color, 33, &[RasterPlane::Color, RasterPlane::Wetness], 1);
+        let first = data(color, 33, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 1);
         let before = r.metrics.native_restore_submissions;
         r.restore_raster(source, &RasterData::default(), &first).unwrap();
         assert_eq!(r.metrics.native_restore_submissions - before, 66, "cold decodes and scalars keep their early submissions");
@@ -58,7 +59,7 @@ fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() 
         r.restore_raster(source, &first, &first).unwrap();
         assert_eq!(r.metrics.native_restore_submissions, before, "unchanged backing needs no uploads");
 
-        let second = data(color, 33, &[RasterPlane::Color, RasterPlane::Wetness], 100);
+        let second = data(color, 33, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 100);
         r.restore_raster(source, &first, &second).unwrap();
         assert_ne!(original, live_pixels(&r));
         r.restore_raster(source, &second, &first).unwrap();
@@ -68,10 +69,10 @@ fn native_raster_restore_batches_keep_pixels_reuse_and_late_failure_atomicity() 
 
         // Several valid candidate batches reach the queue before a later digest
         // fails. None may replace a live page, and retry must remain usable.
-        let mut corrupt = data(color, 33, &[RasterPlane::Color, RasterPlane::Wetness], 200);
-        let bad = blob(color, RasterPlane::Wetness, 232);
+        let mut corrupt = data(color, 33, &[RasterPlane::Color, RasterPlane::WatercolorWetness], 200);
+        let bad = blob(color, RasterPlane::WatercolorWetness, 232);
         let bad=crate::test_support::corrupt_tile(bad);
-        corrupt.tiles.insert(TileKey { plane: RasterPlane::Wetness, coordinate: [10, 2] }, bad);
+        corrupt.tiles.insert(TileKey { plane: RasterPlane::WatercolorWetness, coordinate: [10, 2] }, bad);
         let before = r.metrics.native_restore_submissions;
         assert!(r.restore_raster(source, &second, &corrupt).is_err());
         assert!(r.metrics.native_restore_submissions > before, "failure must occur after an earlier batch was submitted");

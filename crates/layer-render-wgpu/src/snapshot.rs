@@ -506,9 +506,6 @@ impl SnapshotRenderer {
                 .pages
                 .retain(|p| retained(layer.id, RasterPlane::Color, p.coordinate));
             layer
-                .material_pages
-                .retain(|p| retained(layer.id, RasterPlane::Wetness, p.coordinate));
-            layer
                 .watercolor_wetness_pages
                 .retain(|p| retained(layer.id, RasterPlane::WatercolorWetness, p.coordinate));
         }

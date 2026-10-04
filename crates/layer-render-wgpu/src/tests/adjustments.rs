@@ -182,7 +182,7 @@ fn independent_owner_counts_and_local_chain_lengths_bound_resident_work() {
             let group=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"owner")).unwrap();
             let mut chain=Vec::new();
             for _ in 0..length {
-                let application=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:EffectInstance::new(program.clone()).values,domain:extent}).unwrap();
+                let application=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:EffectInstance::new(program.clone()).values}).unwrap();
                 let mut occurrence=Occurrence::new(OccurrenceContent::Effect(application),"average");occurrence.attachment=Attachment::Effect;
                 chain.push(document.artwork.occurrences.insert(PortableId::random(),occurrence).unwrap());
             }

@@ -11,10 +11,10 @@ fn sample(doc: &Document, source: ArtworkSource) -> [f32;4] {
     let ArtworkSample::Color(rgba) = result else {panic!("missing sampled color: {result:?}")}; rgba
 }
 fn curve(effect: &EffectInstance, page: u8) -> &[[f32;2]] {
-    match effect.value(&format!("curve_{page}")) {Some(EffectValue::Curve(points))=>points,_=>panic!("missing curve")}
+    match effect.value(layer_core::CURVE_KEYS[usize::from(page)]) {Some(EffectValue::Curve(points))=>points,_=>panic!("missing curve")}
 }
 fn set_curve(effect: &mut EffectInstance, page: u8, points: &[[f32;2]]) {
-    effect.set(&format!("curve_{page}"),EffectValue::Curve(points.to_vec())).unwrap();
+    effect.set(layer_core::CURVE_KEYS[usize::from(page)],EffectValue::Curve(points.to_vec())).unwrap();
 }
 fn interpolate(points: &[[f32;2]], x: f64) -> f64 {
     let p: Vec<_> = points.iter().map(|v|v.map(f64::from)).collect();
@@ -32,13 +32,13 @@ fn interpolate(points: &[[f32;2]], x: f64) -> f64 {
         +(-2.*t3+3.*t2)*p[i+1][1]+(t3-t2)*h[i]*tangent[i+1]
 }
 fn encode(effect: &EffectInstance, space: RgbSpace, value: f64) -> f64 {
-    if effect.choice("domain")!=Some("Log HDR") {return space.encode(value);}
+    if effect.choice("domain")!=Some("log_hdr") {return space.encode(value);}
     let Some(EffectValue::Number(stops))=effect.value("hdr_stops") else {panic!("missing stops")};
     let span=f64::from(*stops)+8.; let toe=std::f64::consts::E/256.;
     if value<=toe {value/(toe*span*std::f64::consts::LN_2)} else {(value.log2()+8.)/span}
 }
 fn decode(effect: &EffectInstance, space: RgbSpace, value: f64) -> f64 {
-    if effect.choice("domain")!=Some("Log HDR") {return space.decode(value);}
+    if effect.choice("domain")!=Some("log_hdr") {return space.decode(value);}
     let Some(EffectValue::Number(stops))=effect.value("hdr_stops") else {panic!("missing stops")};
     let span=f64::from(*stops)+8.;
     if value*span<=std::f64::consts::LOG2_E {value*span*std::f64::consts::LN_2*std::f64::consts::E/256.}
