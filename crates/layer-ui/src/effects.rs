@@ -534,8 +534,20 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     let Some(layer) = doc.layer(doc.active_layer) else {
         return LayerPropertiesView::default();
     };
+    let layer_type = match layer.kind {
+        LayerKind::Paint => None,
+        LayerKind::Group => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_GROUP)),
+        LayerKind::Selection => Some(l.text(MessageId::RESOURCES_LAYER_TYPE_SELECTION)),
+        LayerKind::Effect => layer.effect.as_ref().map(|effect| resource_label(&effect.program.label, l)),
+    };
+    let title = if let Some(kind) = layer_type.as_deref().filter(|kind| *kind != layer.name.as_ref()) {
+        let mut args = FluentArgs::new();
+        args.set("name", layer.name.as_ref());
+        args.set("type", kind);
+        l.format(MessageId::RESOURCES_PROPERTIES_LAYER_TITLE, &args)
+    } else { layer.name.to_string() };
     if layer.kind == LayerKind::Selection {
-        return super::selection_properties::properties(layer.id.0, &layer.name, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id), l);
+        return super::selection_properties::properties(layer.id.0, &title, &layer.properties.selection_mask.clone().unwrap_or_default(), painting, !doc.is_locked(layer.id), l);
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
@@ -579,7 +591,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     };
     LayerPropertiesView {
         layer: Some(layer.id.0),
-        title: layer.name.to_string(),
+        title,
         description,
         enabled: !doc.is_locked(layer.id),
         controls,
@@ -1123,6 +1135,36 @@ impl<R: CanvasRenderer> UiSession<R> {
 mod resource_tests {
     use super::*;
     use layer_core::{EffectCatalog, EffectInstallMode, EffectPackage};
+
+    #[test]
+    fn properties_titles_identify_nonpaint_layers_without_repeating_matching_names() {
+        for (language, fill_type, group_type, selection_type, paper_title) in [
+            (UiLanguage::English, "Solid Color", "Group", "Selection", "Paper (Solid Color)"),
+            (UiLanguage::Japanese, "単色", "グループ", "選択範囲", "Paper（単色）"),
+        ] {
+            let l = Localizer::shared(language);
+            let mut doc = Document::new("Titles", 32, 32, layer_core::DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
+            doc.active_layer = LayerId(2);
+            assert_eq!(properties(&doc, Default::default(), &l).title, paper_title);
+            for (kind, name, expected) in [
+                (LayerKind::Paint, "Paper", "Paper"),
+                (LayerKind::Effect, fill_type, fill_type),
+                (LayerKind::Group, group_type, group_type),
+                (LayerKind::Selection, selection_type, selection_type),
+                (LayerKind::Group, "Sky", if language == UiLanguage::English { "Sky (Group)" } else { "Sky（グループ）" }),
+                (LayerKind::Selection, "{ $type } 🎨", if language == UiLanguage::English { "{ $type } 🎨 (Selection)" } else { "{ $type } 🎨（選択範囲）" }),
+            ] {
+                let mut layer = if kind == LayerKind::Selection {
+                    Layer::selection(LayerId(2), name, layer_core::Selection::empty())
+                } else { Layer::paint(LayerId(2), name) };
+                layer.kind = kind;
+                if kind == LayerKind::Effect { layer.effect = doc.layers[1].effect.clone(); }
+                let mut selected = doc.clone();
+                selected.layers = vec![layer];
+                assert_eq!(properties(&selected, Default::default(), &l).title, expected);
+            }
+        }
+    }
 
     fn package() -> EffectPackage {
         let bundled = layer_core::bundled_effect_catalog();

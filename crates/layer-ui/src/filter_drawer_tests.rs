@@ -59,6 +59,7 @@ fn filter_replacement_and_undo_preserve_literal_renamed_layer_names() {
     let (mut s, _) = filters();
     insert_effect(&mut s, "brightness_contrast");
     let id = s.engine.document().active_layer;
+    assert_eq!(s.state.layer_properties.title, "Brightness / Contrast");
     let name = "私の曲線 한글 🎨 { $name } \u{2068}لوحة\u{2069}";
     s.dispatch(UiAction::Layer { action: LayerAction::Rename {
         id: id.0, name: name.into(),
@@ -66,14 +67,17 @@ fn filter_replacement_and_undo_preserve_literal_renamed_layer_names() {
     assert!(s.filter_drawer_open());
     insert_effect(&mut s, "curves");
     let layer = s.engine.document().layer(id).unwrap();
+    assert_eq!(s.state.layer_properties.title, format!("{name} (Curves)"));
     assert_eq!(layer.name.as_ref(), name);
     assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "curves");
     invoke(&mut s, CommandId::Undo);
     let layer = s.engine.document().layer(id).unwrap();
+    assert_eq!(s.state.layer_properties.title, format!("{name} (Brightness / Contrast)"));
     assert_eq!(layer.name.as_ref(), name);
     assert_eq!(layer.effect.as_ref().unwrap().program.id.as_ref(), "brightness_contrast");
     invoke(&mut s, CommandId::Redo);
     assert_eq!(s.engine.document().layer(id).unwrap().name.as_ref(), name);
+    assert_eq!(s.state.layer_properties.title, format!("{name} (Curves)"));
 }
 
 #[test]

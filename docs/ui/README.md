@@ -95,10 +95,13 @@ to relearn. Configurable layouts, controls and shortcuts let the app adapt to
 those habits while keeping the underlying commands consistent. These workflows
 are arrangements of a common editor rather than separate applications. Tool
 Settings follows the active tool, and Properties exposes the relevant effect
-parameters. Shared Properties pages choose which parameter controls are shown;
-hidden values remain active. Channel selection, automatic adjustment and sampling
-share one toolbar. Levels and Curves offer black, neutral and white points through
-one sampling menu; White Balance uses the same sampling icon for its neutral point.
+parameters. Its heading shows the layer name followed by the localized filter,
+group or saved selection type when the name differs from that type. Ordinary
+paint layers keep their name alone. Shared Properties pages choose which
+parameter controls are shown; hidden values remain active. Channel selection,
+automatic adjustment and sampling share one toolbar. Levels and Curves offer
+black, neutral and white points through one sampling menu; White Balance uses the
+same sampling icon for its neutral point.
 Number fields sit beside their labels; Curves coordinates use two labeled
 columns below the graph. Color Lookup (LUT) has a single selector
 for Original, Warm, Cool, Monochrome and the current imported LUT, with a separate

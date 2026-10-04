@@ -628,3 +628,6 @@ resources-lookup-original = 원본
 resources-lookup-warm = 따뜻하게
 resources-lookup-cool = 차갑게
 resources-lookup-monochrome = 흑백
+resources-layer-type-group = 그룹
+resources-layer-type-selection = 선택 영역
+resources-properties-layer-title = { $name } ({ $type })

@@ -1521,8 +1521,17 @@ fn native_filter_drawer_input() {
     pump(100);
     d.click_name("color-bucket");
     assert!(state(&d.w).layer_properties.controls[0].color_action.is_some());
-    let _warm = crate::snapshot(&d.w); pump(120);
-    crate::snapshot(&d.w).save_to_png(output.join("paper-properties.png")).unwrap();
+    let title = d.w.effects.properties.first_child().unwrap().downcast::<gtk::Label>().unwrap();
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (name, expected) in [("Paper", "Paper (Solid Color)"), ("Solid Color", "Solid Color"), ("Paper", "Paper (Solid Color)")] {
+            d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::Rename { id: 2, name: name.into() } });
+            pump(120);
+            assert_eq!(title.text().as_str(), expected);
+        }
+        let _warm = crate::snapshot(&d.w); pump(120);
+        crate::snapshot(&d.w).save_to_png(output.join(format!("paper-properties-{theme:?}.png"))).unwrap();
+    }
     // Native hover exercises the GPU's prohibited cursor path.
     d.click_name(&opener);
     d.input.perform(serde_json::json!([{"point":[600.,400.]}]));

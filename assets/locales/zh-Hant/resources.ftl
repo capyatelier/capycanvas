@@ -628,3 +628,6 @@ resources-lookup-original = 原始
 resources-lookup-warm = 暖色
 resources-lookup-cool = 冷色
 resources-lookup-monochrome = 黑白
+resources-layer-type-group = 圖層群組
+resources-layer-type-selection = 選取範圍
+resources-properties-layer-title = { $name }（{ $type }）

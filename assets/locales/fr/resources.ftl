@@ -511,3 +511,6 @@ resources-lookup-original = Original
 resources-lookup-warm = Chaud
 resources-lookup-cool = Froid
 resources-lookup-monochrome = Monochrome
+resources-layer-type-group = Groupe
+resources-layer-type-selection = Sélection
+resources-properties-layer-title = { $name } ({ $type })

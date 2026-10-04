@@ -628,3 +628,6 @@ resources-lookup-original = 元の色
 resources-lookup-warm = 暖色
 resources-lookup-cool = 寒色
 resources-lookup-monochrome = モノクロ
+resources-layer-type-group = グループ
+resources-layer-type-selection = 選択範囲
+resources-properties-layer-title = { $name }（{ $type }）

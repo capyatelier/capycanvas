@@ -55,7 +55,15 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   await send({type:'set_color',rgba:[1,0,0,1]});await contact('.content-drawer [data-action="color-bucket"]','touch');
   assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),undefined);
   assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).has_mask'),false);
-  assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);await capture('paper-properties');
+  assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for(const [name,expected] of [['Paper','Paper (Solid Color)'],['Solid Color','Solid Color'],['Paper','Paper (Solid Color)']]) {
+      await send({type:'layer',action:{op:'rename',id:2,name}});
+      assert.equal(await evaluate('document.querySelector(".content-drawer .effect-properties h3").textContent'),expected);
+    }
+    await capture(`paper-properties-${theme}`);
+  }
   console.log('PASS: filter replacement, cancellation, reopening and paper properties');
   await contact(layers);
   const row=id=>`.content-drawer .layer-row[data-layer="${id}"]`;

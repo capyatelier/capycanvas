@@ -512,3 +512,6 @@ resources-lookup-original = ต้นฉบับ
 resources-lookup-warm = โทนอุ่น
 resources-lookup-cool = โทนเย็น
 resources-lookup-monochrome = ขาวดำ
+resources-layer-type-group = กลุ่ม
+resources-layer-type-selection = พื้นที่เลือก
+resources-properties-layer-title = { $name } ({ $type })

@@ -144,7 +144,12 @@ try {
     Tap 'cancel-filter' 'pen';Wait-Until {!(Model).state.customization.drawer -and @((Model).state.layers).Count -eq $count} 'Cancel did not delete filter and close'
     Tap $layers;Drawer @('layers')
     $paper=@((Model).state.layers|Where-Object label -eq 'Paper')[0];Tap ('layer-'+$paper.id+'-name')
-    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'color-bucket' 'touch';Capture 'paper-properties' -WithModel
+    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'color-bucket' 'touch'
+    foreach($theme in @('Light','Dark')){
+        Set-Theme $theme;if(!(Model).state.customization.drawer){Tap $filters};Drawer @('filter_types','adjustments','properties')
+        Wait-Until {(Control 'layer-properties').Current.Name -eq 'Paper (Solid Color)'} 'Properties heading omitted the fill type'
+        Capture ('paper-properties-'+$theme.ToLowerInvariant()) -WithModel
+    }
     if(!(Model).state.layer_properties.controls){throw 'Paper properties missing'}
     $fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0]
     if($fill.has_mask -or $fill.content_icon -or !(Model).state.layer_tools.controls.opacity){throw 'Paper is not an ordinary maskless fill'}
