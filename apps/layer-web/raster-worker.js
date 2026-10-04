@@ -140,8 +140,7 @@ async function colorPreferences(mode,operation,storeName="values") {
     const request=indexedDB.open("capy-color-preferences",2);
     request.onupgradeneeded=()=>{
       const database=request.result;
-      for(const name of [...database.objectStoreNames])database.deleteObjectStore(name);
-      for(const name of ["values","profiles"])database.createObjectStore(name);
+      for(const name of ["values","profiles"])if(!database.objectStoreNames.contains(name))database.createObjectStore(name);
     };
     request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
   });

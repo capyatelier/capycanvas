@@ -20,6 +20,29 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   };
   const installSave=()=>evaluate(`window.showSaveFilePicker=async options=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals',{create:true});return directory.getFileHandle(crypto.randomUUID()+'.'+options.suggestedName.split('.').at(-1),{create:true});};`);
   const snapshot=()=>evaluate(`(()=>{const state=layerApp.state(),stamp=layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected);return JSON.parse(JSON.stringify({layers:state.layers.map(({label,selected,editing,mask_selected})=>({label,selected,editing,mask_selected})),camera:stamp.state.camera,modified:state.document_file.modified,location:state.document_file.location?.name??null,checkpoint:stamp.checkpoint,selection:state.layer_tools.has_selection,undo:state.commands.find(command=>command.id==='undo')?.enabled,redo:state.commands.find(command=>command.id==='redo')?.enabled},(_,v)=>typeof v==='bigint'?Number(v):v));})()`);
+  const leaveWarning=()=>evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`);
+  const restart=async()=>{await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();};
+  const origin=await evaluate('location.origin'),persistence=setting=>call('Browser.setPermission',{permission:{name:'persistent-storage'},setting,origin},null);
+  const counter=await call('Page.addScriptToEvaluateOnNewDocument',{source:'window.persistRequests=0;{const persist=StorageManager.prototype.persist;StorageManager.prototype.persist=function(){persistRequests++;return persist.call(this);};}'});
+  try {
+    await ready();await persistence('denied');await restart();
+    assert.equal(await leaveWarning(),false,'A blank drawing permits quiet exit without asking to keep storage');
+    const unsaved=[];
+    for(let i=0;i<2;i++){unsaved.push(await create());await invoke('add_layer');await ready();await evaluate('layerApp.documents.autosave()');await wait('persistRequests>0');}
+    assert.equal(await evaluate('persistRequests'),1,'The first checkpoint of a never-saved drawing asks once per page to keep storage');
+    assert.equal(await leaveWarning(),true,'A never-saved drawing keeps the leave warning while the browser may clear its storage');
+    await persistence('granted');await call('Runtime.evaluate',{expression:'void 0',userGesture:true});await restart();
+    assert.equal(await evaluate('persistRequests'),0,'Kept storage needs no request');
+    assert.deepEqual((await tabs()).tabs.slice(-2).map(tab=>tab.id),unsaved);
+    await evaluate('layerApp.documents.autosave()');
+    assert.equal(await leaveWarning(),false,'Kept storage lets never-saved drawings restart quietly');
+    for(const id of unsaved) {
+      const count=(await tabs()).tabs.length;await evaluate(`layerApp.documents.close(BigInt(${id}))`);
+      await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')");
+      await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()");
+      await wait(`layerApp.app.document_tabs(0).tabs.length===${count-1}`);await ready();
+    }
+  } finally {await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:counter.identifier});}
   await ready();await installSave();
   const first=(await tabs()).selected;
   const pending=await create();
@@ -27,7 +50,7 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   try {
     assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'First checkpoint failure is reported');
     assert.equal(await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !(await store.read(drawing.key));}return false;})()`),true,'First checkpoint failure retains authoritative membership for retry');
-    assert.equal(await evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`),true,'Pending unsaved state prevents quiet browser exit');
+    assert.equal(await leaveWarning(),true,'Pending unsaved state prevents quiet browser exit');
   } finally {await evaluate('layerApp.app.capture_tab_session=sessionCaptureOriginal');}
   await evaluate('layerApp.documents.autosave()');
   const beforeLostAck=await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const drawing=(await store.manifest(key)).drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing){window.lostAckKey=drawing.key;return (await store.read(drawing.key)).current.generation;}}})()`);
@@ -56,7 +79,7 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   for(const theme of ['light','dark']) {
     await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await select(first);
     await evaluate('layerApp.documents.autosave()');
-    assert.equal(await evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`),false,'A complete private checkpoint permits a seamless browser restart');
+    assert.equal(await leaveWarning(),false,'A complete private checkpoint permits a seamless browser restart');
     const old=await evaluate('performance.timeOrigin');await call('Page.reload',{ignoreCache:true});
     await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Ordinary restart restores automatically');
@@ -89,7 +112,7 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
       }
       if(kind!=='intact')await evaluate(`(async()=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals'),name=layerApp.state().document_file.location.name;if(${JSON.stringify(kind)}==='missing')await directory.removeEntry(name);else{const stream=await(await directory.getFileHandle(name)).createWritable();await stream.write(new Uint8Array([42]));await stream.close();}})()`);
     }
-    await evaluate('layerApp.documents.autosave()');const origin=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${origin}&&window.layerApp?.app.brush_ready()`);await ready();
+    await restart();
     assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Original verification never prompts during restart');
     for(const {id,kind,layers} of originals) {
       await select(id);assert.equal((await snapshot()).layers.length,layers,'The private checkpoint retains the drawing independently of its original');
@@ -119,7 +142,7 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   await evaluate(`layerApp.documents.close(BigInt(${first}))`);
   await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')");
   await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()");await wait('layerApp.app.document_tabs(0).tabs.length===2');await ready();
-  await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
+  await restart();
   assert.deepEqual((await tabs()).tabs.map(tab=>tab.id),[third,second],'An acknowledged close cannot resurrect on restart');
   await select(third);await evaluate(`layerApp.dispatch({type:'set_rotation',rotation:0})`);await invoke('fit_canvas');await invoke('deselect');await invoke('rectangle_select');await ready();await settle();
   const overlayPoint=(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);

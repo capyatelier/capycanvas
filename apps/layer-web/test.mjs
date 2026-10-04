@@ -170,6 +170,7 @@ try {
   await call("Runtime.enable");
   await call("Page.enable");
   await call("Log.enable");
+  await call("Browser.grantPermissions", { permissions: ["durableStorage"] }, null);
   // Keep the test tab focused even when the surrounding desktop is in use.
   if (!process.argv.includes("--fullscreen")) await call("Emulation.setFocusEmulationEnabled", { enabled: true });
   if (process.argv.includes("--parity") || process.argv.includes("--preferences"))

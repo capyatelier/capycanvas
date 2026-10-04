@@ -75,8 +75,13 @@ The next checkpoint retains that verified drawing as its previous generation.
 Lost acknowledgements retry with newer drawing generations or identical manifest
 receipts, including an already committed ownership transfer.
 
-Ordinary restart opens drawings without a dialog. An up-to-date private checkpoint
-permits quiet browser exit; pending state requests the browser's native exit warning.
+Ordinary restart opens drawings without a dialog. Browsers may clear site storage
+under storage pressure, and Safari after seven days without a visit unless the app
+is installed. The first checkpoint of a changed drawing that was never saved to a
+file therefore asks the browser to keep the site's storage
+(`navigator.storage.persist()`), once per page. An up-to-date checkpoint permits
+quiet browser exit. Pending state, or such a drawing while the browser has not
+agreed to keep storage, requests the browser's native exit warning.
 Saved originals are read through retained handles without requesting permission.
 A missing, changed or inaccessible original protects the restored drawing until
 the painter saves or explicitly discards it. A verified original stays clean.
@@ -131,6 +136,9 @@ membership. `--drawing-tabs-recovery` walks automatic restart in both themes wit
 clean and dirty drawings, tab order, cameras, undo/redo, save checkpoints and close.
 It checks Selection Layer overlay pixels immediately after color, opacity and
 native eye edits and after restart, while the portable artwork remains unchanged.
+It also checks the storage request and exit warning with Chrome's persistent-storage
+permission denied and then granted. `test.mjs` grants that permission, as Chrome
+does for installed apps, so other journeys reload without an exit warning.
 `--session-restart-performance` records three six-second pen gestures alongside
 background checkpoints, logical resource/metadata bytes, snapshot age
 at publication and browser callback/input costs under `artifacts/seamless-restart/web`.

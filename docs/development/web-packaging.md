@@ -151,8 +151,11 @@ available to open tabs and are deleted on a cold navigation with no other
 clients in scope. Registration uses `updateViaCache: "none"`. The worker never
 caches unknown URLs, non-GET requests or user data, and never clears the
 separate storage that holds recovery checkpoints and preferences. Offline
-availability is not drawing recovery: storage can be evicted, so saved project
-files remain the durable copy.
+availability is not drawing recovery. The app asks the browser to keep its
+storage when it first checkpoints a drawing that was never saved to a file, and
+keeps the exit warning while the browser has not agreed; see
+[restart snapshots](web.md#build-and-run). Storage the browser has not agreed to
+keep can still be cleared, so saved project files remain the durable copy.
 
 `./apps/layer-web/run.sh` registers no worker. Use different origins, such as
 ports 4173 and 4174, for development and package previews, so an installed

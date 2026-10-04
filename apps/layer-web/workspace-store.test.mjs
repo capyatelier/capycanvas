@@ -87,6 +87,24 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
       tx.onerror = () => reject(tx.error);
     };
   })`;
+  const workspaceRecord = id => `new Promise((resolve, reject) => {
+    const open = indexedDB.open("capycanvas.workspaces", 1);
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const read = open.result.transaction("workspace").objectStore("workspace").get(${JSON.stringify(id)});
+      read.onsuccess = () => { open.result.close(); resolve(read.result?.snapshot ?? null); };
+      read.onerror = () => reject(read.error);
+    };
+  })`;
+  const keptProfile = `new Promise((resolve, reject) => {
+    const open = indexedDB.open("capy-color-preferences");
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const read = open.result.transaction("profiles").objectStore("profiles").get("kept-profile");
+      read.onsuccess = () => { open.result.close(); resolve(read.result ? Array.from(read.result) : null); };
+      read.onerror = () => reject(read.error);
+    };
+  })`;
   const olderColorPreferences = `new Promise((resolve, reject) => {
     const removed = indexedDB.deleteDatabase("capy-color-preferences");
     removed.onblocked = () => reject(new Error("color preferences are open"));
@@ -96,9 +114,10 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
       open.onupgradeneeded = () => { open.result.createObjectStore("values"); open.result.createObjectStore("profiles"); };
       open.onerror = () => reject(open.error);
       open.onsuccess = () => {
-        const tx = open.result.transaction("values", "readwrite"), values = tx.objectStore("values");
+        const tx = open.result.transaction(["values", "profiles"], "readwrite"), values = tx.objectStore("values");
         values.put(new TextEncoder().encode('{"destinations":[null,null,null,null],"named":[]}'), "export-presets");
         values.put({hidden: ["not a list"]}, "profile-menu-hidden");
+        tx.objectStore("profiles").put(new Uint8Array([1, 2, 3]), "kept-profile");
         tx.oncomplete = () => { open.result.close(); resolve(true); };
         tx.onerror = () => reject(tx.error);
       };
@@ -108,6 +127,7 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   await wait(ready);
   const stale = await evaluate(snapshot(`database => Object.values(database.items).map(item => { item.entity.working.zen_mode = {}; return item.entity.id; })`));
   assert.ok(stale.length >= 3);
+  const unreadable = await evaluate(workspaceRecord("database"));
   await evaluate(`localStorage.setItem("layer.preferences.v1", JSON.stringify({...layerApp.state().settings, pan_speed: 2, tip_lock: true, prediction_algorithm: "kalman", zoom_speed: "fast"}))`);
   await evaluate(`sessionStorage.setItem("capy.workspace.owner", JSON.stringify({id: 7, epoch: "stale", extra: true}))`);
   assert.equal(await evaluate(olderColorPreferences), true);
@@ -119,12 +139,15 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent'), reset);
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate('[...document.querySelectorAll("dialog")].some(d => d.open)'), false);
+  assert.equal(await evaluate(workspaceRecord("unreadable")), unreadable, "Reset keeps the unreadable workspaces beside the new store");
+  assert.notEqual(await evaluate(workspaceRecord("database")), unreadable);
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
   assert.equal(await evaluate("layerApp.state().settings.zoom_speed"), 1);
   const zen = await evaluate(snapshot(`database => Object.values(database.items).map(item => item.entity.working.zen_mode)`));
   assert.ok(zen.length >= 3 && zen.every(value => typeof value === "boolean"));
   assert.equal(await evaluate("(async () => Array.isArray(await layerApp.app.profile_library('list')))()"), true);
   assert.equal(await evaluate("(async () => !!(await layerApp.app.export_presets({type: 'get', index: 0})).recipe)()"), true);
+  assert.deepEqual(await evaluate(keptProfile), [1, 2, 3], "Upgrading color preferences keeps stored profiles");
   await wait('!layerApp.documents.busy() && layerApp.state().commands.find(c => c.id === "export_document")?.enabled');
   await evaluate("layerApp.dispatch({type: 'invoke', command: 'export_document'})");
   await wait('!!document.querySelector(\'dialog[open] select[aria-label="Format"]\')');
@@ -148,5 +171,5 @@ export async function checkStaleStorageStartup({evaluate, reload}) {
   assert.equal(await evaluate('document.querySelector(".canvas-notice-text")?.textContent || ""'), "");
   assert.equal(await evaluate('document.querySelector("#status").textContent'), "");
   assert.equal(await evaluate("layerApp.state().settings.pan_speed"), 2);
-  console.log(`PASS: startup read stale preferences, replaced ${stale.length} unreadable workspaces and older color preferences, and opened Export without a message`);
+  console.log(`PASS: startup read stale preferences, replaced ${stale.length} unreadable workspaces and kept a copy, upgraded older color preferences without losing data, and opened Export without a message`);
 }

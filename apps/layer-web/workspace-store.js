@@ -40,6 +40,7 @@ export function createWorkspaceStore(reduce, { name = "capycanvas.workspaces", i
           try {
             const result = reduce(read.result?.snapshot, request, pending, Date.now(), live, liveAt);
             response = result.response;
+            if (command.type === "reset" && read.result) store.put({ id: "unreadable", snapshot: read.result.snapshot });
             if (!readonly) store.put({ id: "database", snapshot: result.snapshot });
           } catch (e) { failure = typeof e === "string" ? e : error(e); tx.abort(); }
         };

@@ -1341,13 +1341,14 @@ fn import_toolbar_package_selects_it_and_backup_adopts() {
     assert!(!f.controller.view.busy && f.controller.view.page.is_none());
 }
 
-/// Answers like `Store` until request `fail_from`, then fails every request.
-/// A reset heals it when `reset_heals`, as replacing unreadable data does.
+/// Answers like `Store` until request `fail_from`, then fails every request
+/// with `kind`. A reset heals it when `reset_heals`, as replacing unreadable data does.
 struct Faulty {
     database: RefCell<BrowserDatabase>,
     requests: Cell<usize>,
     fail_from: usize,
     reset_heals: bool,
+    kind: ErrorKind,
     healed: Cell<bool>,
     reset: Cell<bool>,
 }
@@ -1355,11 +1356,15 @@ struct Faulty {
 struct FaultyStore(Rc<Faulty>);
 impl FaultyStore {
     fn new(fail_from: usize, reset_heals: bool) -> Self {
+        Self::failing(fail_from, reset_heals, ErrorKind::InvalidData)
+    }
+    fn failing(fail_from: usize, reset_heals: bool, kind: ErrorKind) -> Self {
         Self(Rc::new(Faulty {
             database: RefCell::default(),
             requests: Cell::new(0),
             fail_from,
             reset_heals,
+            kind,
             healed: Cell::new(false),
             reset: Cell::new(false),
         }))
@@ -1372,7 +1377,7 @@ impl WorkspaceStore for FaultyStore {
         let reset = matches!(request, StoreRequest::Reset);
         f.reset.set(f.reset.get() || reset);
         if index >= f.fail_from && !f.healed.get() && !(reset && f.reset_heals) {
-            return Err(StoreError::invalid("invalid type: map, expected a boolean"));
+            return Err(StoreError::new(f.kind.clone(), "invalid type: map, expected a boolean"));
         }
         f.healed.set(f.healed.get() || reset);
         if let StoreRequest::Commit { batch } = &request {
@@ -1522,6 +1527,21 @@ fn startup_survives_a_failure_at_every_storage_request() {
                 };
                 assert_eq!(items.len(), DEFAULT_WORKSPACES.len(), "{context}");
             }
+        }
+    }
+}
+
+#[test]
+fn startup_replaces_only_storage_it_cannot_read() {
+    let clean = FaultyStore::new(usize::MAX, false);
+    let (_, _) = start(clean.clone(), Platform::Web);
+    for fail_from in 0..clean.0.requests.get() {
+        for kind in [ErrorKind::Unavailable, ErrorKind::Conflict, ErrorKind::OwnedElsewhere, ErrorKind::FailedWrite, ErrorKind::StorageFull] {
+            let store = FaultyStore::failing(fail_from, true, kind.clone());
+            let (controller, mut host) = start(store.clone(), Platform::Web);
+            let context = format!("{kind:?} from request {fail_from}");
+            assert_started(&controller, &mut host, &context);
+            assert!(!store.0.reset.get(), "{context}");
         }
     }
 }

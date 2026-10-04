@@ -44,14 +44,18 @@ Lock failures fail closed; database export refuses paths inside the lock store.
 ## Startup always adopts a workspace
 
 Every host (GTK, Web, Android, Apple and Windows) starts through
-`WorkspaceController`, in up to three stages. Any error before the first
-adoption, whether from storage, decoding, validation, claiming or
-`adopt_workspace`, moves startup to the next stage:
+`WorkspaceController`, in up to three stages. An error before the first
+adoption moves startup to a later stage:
 
 1. **Stored**: start from the store as it is.
-2. **Replaced**: `StoreRequest::Reset` empties the store, then start again.
-3. **In memory**: continue on a `BrowserDatabase` owned by the manager. Nothing
-   in this window is persisted.
+2. **Replaced**: only when this build cannot read the store (an unsupported
+   schema or invalid data), `StoreRequest::Reset` keeps a copy of it and empties
+   it, then startup begins again. SQLite copies the database and its log to
+   `workspaces.unreadable.sqlite3`; the browser keeps the previous record under
+   the id `unreadable`. Each reset replaces the previous copy.
+3. **In memory**: after any other error, or a failed replacement, continue on a
+   `BrowserDatabase` owned by the manager. Nothing in this window is persisted,
+   and the next launch tries the store again.
 
 Stages 2 and 3 raise the shared canvas notice to explain what happened (GTK, Web,
 Android and Windows show it). Stage 3 reads nothing that was stored: it seeds the
@@ -80,7 +84,10 @@ browser lease behavior.
 
 Startup is covered by `startup_on_every_platform_adopts_from_empty_or_unusable_storage`
 and `startup_survives_a_failure_at_every_storage_request`, which fails each
-startup request in turn, with and without a healing reset. The SQLite cases
+startup request in turn, with and without a healing reset.
+`startup_replaces_only_storage_it_cannot_read` checks that unavailable, busy,
+owned, failed and full storage never reaches `Reset`, and
+`stores_of_other_versions_serve_only_reset` checks the kept copy. The SQLite cases
 `sqlite_startup_replaces_workspaces_of_the_same_version_it_cannot_read` and
 `sqlite_startup_keeps_a_newer_store_and_runs_in_memory` cover the rest. The same
 journey runs on real storage with

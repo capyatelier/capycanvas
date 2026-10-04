@@ -284,8 +284,8 @@ Reading it never fails and never shows a message:
 - Export presets load through `ExportPresets::restore`, and the hidden-profile
   list keeps the IDs this build reads. A copy this build cannot read counts as
   empty, and the next change replaces it. The web color-preference database
-  replaces its stores when its version changes.
-- Workspaces: startup replaces a store it cannot read; see
+  adds missing stores when its version changes and never deletes stored data.
+- Workspaces: startup replaces a store it cannot read, after keeping a copy; see
   [workspace startup](../internals/workspace-ownership.md#startup-always-adopts-a-workspace).
 - Caches discard data they cannot use.
 - Artwork is never replaced automatically. A recovery copy this build cannot

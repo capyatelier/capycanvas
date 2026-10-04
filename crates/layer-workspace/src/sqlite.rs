@@ -41,6 +41,9 @@ impl From<rusqlite::Error> for StoreError {
                 }
             }
             Some(rusqlite::ErrorCode::DiskFull) => ErrorKind::StorageFull,
+            Some(rusqlite::ErrorCode::DatabaseCorrupt | rusqlite::ErrorCode::NotADatabase) => {
+                ErrorKind::InvalidData
+            }
             _ => ErrorKind::FailedWrite,
         };
         Self::new(kind, format!("Workspace storage: {error}"))
@@ -116,6 +119,7 @@ impl SqliteStore {
         if version > SCHEMA_VERSION {
             return Err(newer_schema());
         }
+        preserve(Path::new(tx.path().unwrap_or_default()))?;
         for table in table_names(&tx)? {
             tx.execute(
                 &format!("DROP TABLE \"{}\"", table.replace('"', "\"\"")),
@@ -552,6 +556,30 @@ impl SqliteStore {
         }
         Ok(result)
     }
+}
+/// Copies a store this build cannot read beside it before a reset replaces it.
+/// The write lock held by the caller keeps the database and its log consistent.
+fn preserve(path: &Path) -> Result<()> {
+    let failed = |e: std::io::Error| StoreError::new(ErrorKind::FailedWrite, format!("Cannot keep a copy of workspace storage: {e}"));
+    let backup = path.with_extension("unreadable.sqlite3");
+    let suffixed = |path: &Path, suffix: &str| {
+        let mut name = path.as_os_str().to_owned();
+        name.push(suffix);
+        std::path::PathBuf::from(name)
+    };
+    for suffix in ["", "-wal", "-shm"] {
+        match std::fs::remove_file(suffixed(&backup, suffix)) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(failed(e)),
+            _ => {}
+        }
+    }
+    for suffix in ["", "-wal"] {
+        match std::fs::copy(suffixed(path, suffix), suffixed(&backup, suffix)) {
+            Err(e) if !(suffix == "-wal" && e.kind() == std::io::ErrorKind::NotFound) => return Err(failed(e)),
+            _ => {}
+        }
+    }
+    Ok(())
 }
 fn table_names(connection: &Connection) -> Result<Vec<String>> {
     Ok(connection

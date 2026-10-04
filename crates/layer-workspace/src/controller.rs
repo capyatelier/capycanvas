@@ -195,8 +195,9 @@ impl Outcome {
         Self::Adopt(Box::new(entity))
     }
 }
-/// Any failure before the first adoption moves startup to the next stage. The
-/// last stage reads nothing that was stored, so startup always ends adopted.
+/// Any failure before the first adoption moves startup to a later stage. Only
+/// a store this build cannot read is replaced; the last stage reads nothing that
+/// was stored, so startup always ends adopted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Startup {
     Stored,
@@ -204,10 +205,10 @@ enum Startup {
     InMemory,
 }
 impl Startup {
-    fn next(self) -> Option<Self> {
+    fn next(self, error: &StoreError) -> Option<Self> {
         match self {
-            Self::Stored => Some(Self::Replaced),
-            Self::Replaced => Some(Self::InMemory),
+            Self::Stored if matches!(error.kind, ErrorKind::UnsupportedSchema | ErrorKind::InvalidData) => Some(Self::Replaced),
+            Self::Stored | Self::Replaced => Some(Self::InMemory),
             Self::InMemory => None,
         }
     }
@@ -477,7 +478,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     fn restart(&mut self, error: StoreError, now: u64) -> bool {
         let Some(next) = self
             .startup
-            .and_then(Startup::next)
+            .and_then(|stage| stage.next(&error))
             .filter(|_| !self.terminating)
         else {
             return false;

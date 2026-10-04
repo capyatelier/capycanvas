@@ -135,7 +135,8 @@ Orderly exit waits asynchronously for accepted edits to become durable before
 marking a clean exit. Storage failure keeps the window open. Backgrounding requests
 a flush but abrupt termination always depends on the last completed publication.
 Browser unload cannot guarantee an asynchronous flush; pending work keeps the
-browser's leave warning enabled.
+browser's leave warning enabled. On the web, so does a changed drawing never saved to a
+file while the browser has not agreed to keep the site's storage.
 
 Before decoding a drawing, publish its unfinished restore marker. Each attempt
 carries its publication generation, so a late completion cannot finish a later

@@ -1,12 +1,19 @@
 export function createDocumentRecovery({app,call,message,restore,settled=()=>{},canOffer=()=>true,handles=()=>[],order=()=>{},failed=async()=>'later',reserve=()=>{}}) {
   const owners=new Map(),leases=new Map(),pending=new Map(),windowKey=crypto.randomUUID();
-  let initialization,job,manifest=null,restoring=false;
+  let initialization,job,manifest=null,restoring=false,storageKept=false,keepingStorage;
   const json=value=>JSON.stringify(value,(_,item)=>{
     if(typeof item!=='bigint')return item;
     if(JSON.rawJSON)return JSON.rawJSON(String(item));
     const number=Number(item);if(!Number.isSafeInteger(number))throw new Error('Session identity exceeds browser JSON precision');return number;
   });
   const tabs=()=>app.document_tabs(0);
+  const irreplaceable=tab=>tab.uri==null&&tab.modified;
+  function keepStorage() {
+    keepingStorage??=(async()=>{
+      if(!navigator.storage?.persist)return;
+      storageKept=await navigator.storage.persisted()||await navigator.storage.persist();
+    })().catch(()=>{});
+  }
   const storage=(operation,metadata='',buffers=[])=>call({operation:`restart-store-${operation}`,metadata:typeof metadata==='string'?metadata:json(metadata),buffers});
   const fail=error=>{const detail=String(error);message(()=>app.document_recovery_unavailable(detail));};
   const update=(state,event)=>app.session_manifest_update(state?json(state):'',event);
@@ -71,6 +78,7 @@ export function createDocumentRecovery({app,call,message,restore,settled=()=>{},
       const base=[stored?.current,stored?.previous].find(checkpoint=>checkpoint&&generation(checkpoint.generation)===owner.base);
       await capture.write(owner.key,BigInt(next),BigInt(owner.base),base?.resources??[],handles(id));
       owner.generation=next;owner.base=next;owner.durable=observed;
+      if(tabs().tabs.some(tab=>String(tab.id)===String(id)&&irreplaceable(tab)))keepStorage();
     } finally {capture.free();}
   }
   function autosave(clean_exit=false) {
@@ -174,7 +182,7 @@ export function createDocumentRecovery({app,call,message,restore,settled=()=>{},
     try {
       const current=tabs();
       return manifest&&json(current.tabs.map(tab=>String(tab.id)))===json(manifest.drawings.map(drawing=>String(drawing.id)))
-        &&String(current.selected)===String(manifest.active)&&current.tabs.every(tab=>owners.get(String(tab.id))?.durable===stamp(tab.id));
+        &&String(current.selected)===String(manifest.active)&&current.tabs.every(tab=>owners.get(String(tab.id))?.durable===stamp(tab.id)&&(storageKept||!irreplaceable(tab)));
     } catch{return false;}
   };
   setInterval(()=>{if(!restoring&&canOffer())autosave().catch(fail);},app.session_checkpoint_interval());
