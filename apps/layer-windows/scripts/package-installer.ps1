@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory)][string]$PortableResultFile,
     [switch]$TestIdentity,
-    [switch]$AllowDirty
+    [switch]$AllowDirty,
+    [string[]]$SignArguments
 )
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -56,6 +57,11 @@ Assert-PackagingSourceUnchanged $repo $packager
 $hash=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
 if((Get-FileHash -LiteralPath $repeat -Algorithm SHA256).Hash.ToLowerInvariant() -ne $hash){throw 'Repeated installer assembly produced different bytes.'}
 Remove-Item -LiteralPath $repeat
+if($SignArguments){
+    & signtool sign @SignArguments $installer
+    if($LASTEXITCODE -ne 0){throw 'Signing the setup program failed.'}
+    $hash=(Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant()
+}
 $report=[ordered]@{installer=$installer;sha256=$hash;payload=$payload;source_commit=$manifest.source_commit;development=$manifest.development;packaging_source_commit=$packager.commit;name=$identity.name;key=$identity.key;progid=$identity.progid;version=$Version;test_identity=[bool]$TestIdentity;signed=$false;repeat_installer='passed'}
 [IO.File]::WriteAllText(($installer+'.sha256'),$hash+'  '+[IO.Path]::GetFileName($installer)+$lf,$utf8)
 [IO.File]::WriteAllText((Join-Path $run 'result.json'),($report|ConvertTo-Json)+$lf,$utf8)

@@ -82,12 +82,15 @@ and require a maintainer's approval.
 | `APPLE_API_KEY` | Secret | Base64 App Store Connect team API key (`.p8`) with the Admin role, for cloud signing, upload and notarization |
 | `APPLE_API_KEY_ID`, `APPLE_API_ISSUER_ID`, `APPLE_TEAM_ID` | Variables | That key's identifiers and the team |
 | `APPLE_DEVELOPER_ID_P12`, `APPLE_DEVELOPER_ID_PASSWORD` | Secrets | Base64 Developer ID Application certificate and its password; Xcode cannot cloud-sign Developer ID builds with an API key |
+| `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_SUBSCRIPTION_ID` | Variables | The Microsoft Entra app the Windows job signs in as through OIDC; it holds the Artifact Signing Certificate Profile Signer role and trusts the `release` environment |
+| `ARTIFACT_SIGNING_ENDPOINT`, `ARTIFACT_SIGNING_ACCOUNT`, `ARTIFACT_SIGNING_PROFILE` | Variables | The Azure Artifact Signing account's regional endpoint, its name and the Public Trust certificate profile |
 
 Locally, `CAPY_UPLOAD_KEYSTORE` and `CAPY_UPLOAD_KEYSTORE_PASSWORD` sign the
 Android bundle, and `CAPY_APPLE_TEAM`, `CAPY_APPLE_KEY`, `CAPY_APPLE_KEY_ID` and
-`CAPY_APPLE_ISSUER` make `release.sh` sign, upload or notarize. The Windows
-packager signs with `-SignArguments` ([Windows](windows.md#portable-zip)); the
-workflow does not sign Windows executables yet.
+`CAPY_APPLE_ISSUER` make `release.sh` sign, upload or notarize. On a tag, the
+Windows job passes Azure Artifact Signing's `signtool` plugin to the packagers'
+`-SignArguments` ([Windows](windows.md#portable-zip)), signing the app
+executables and the setup program; the Store signs the MSIX.
 
 ## Publishing a release
 

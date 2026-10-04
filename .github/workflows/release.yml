@@ -96,18 +96,44 @@ jobs:
   windows:
     needs: version
     runs-on: windows-2025
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - run: |
           rustup toolchain install $env:RUST_VERSION --profile minimal --component rust-docs
           rustup default $env:RUST_VERSION
-      - run: |
-          ./apps/layer-windows/scripts/package.ps1
+      - if: env.SIGNED == 'true'
+        uses: azure/login@a641126d1b8aa4d1fa005f4f92df94a3a4c4c906 # v3.1.0
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+      - env:
+          ENDPOINT: ${{ vars.ARTIFACT_SIGNING_ENDPOINT }}
+          ACCOUNT: ${{ vars.ARTIFACT_SIGNING_ACCOUNT }}
+          PROFILE: ${{ vars.ARTIFACT_SIGNING_PROFILE }}
+        run: |
+          $sign = @{}
+          if ($env:SIGNED -eq 'true') {
+            nuget install Microsoft.ArtifactSigning.Client -Version 1.0.128 -ExcludeVersion -OutputDirectory $env:RUNNER_TEMP | Out-Null
+            $metadata = Join-Path $env:RUNNER_TEMP metadata.json
+            @{ Endpoint = $env:ENDPOINT; CodeSigningAccountName = $env:ACCOUNT; CertificateProfileName = $env:PROFILE
+               ExcludeCredentials = @('EnvironmentCredential', 'WorkloadIdentityCredential', 'ManagedIdentityCredential',
+                 'SharedTokenCacheCredential', 'VisualStudioCredential', 'VisualStudioCodeCredential',
+                 'AzurePowerShellCredential', 'AzureDeveloperCliCredential', 'InteractiveBrowserCredential') } |
+              ConvertTo-Json | Set-Content $metadata
+            $sign.SignArguments = '/fd', 'SHA256', '/tr', 'http://timestamp.acs.microsoft.com', '/td', 'SHA256',
+              '/dlib', "$env:RUNNER_TEMP/Microsoft.ArtifactSigning.Client/bin/x64/Azure.CodeSigning.Dlib.dll", '/dmdf', $metadata
+          }
+          ./apps/layer-windows/scripts/package.ps1 @sign
           $portable = (Get-ChildItem artifacts/windows/distribution -Recurse -Filter result.json).FullName
           ./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile $portable
           $msix = (Get-ChildItem artifacts/windows/msix -Recurse -Filter result.json).FullName
           ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile $msix
-          ./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile $portable
+          ./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile $portable @sign
           $setup = (Get-ChildItem artifacts/windows/installer -Recurse -Filter result.json).FullName
           New-Item -ItemType Directory dist | Out-Null
           foreach ($result in @($portable, $msix)) { Copy-Item (Get-Content $result -Raw | ConvertFrom-Json).archive dist }
