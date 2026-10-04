@@ -2814,7 +2814,7 @@ class AndroidRasterTest {
         val authoredLookup = original.occurrenceRecords().objects().single {
             val effect = it.getJSONObject("data").getJSONObject("content").optJSONObject("effect") ?: return@single false
             val definition = original.packageData(original.packageData(effect.getString("ref")).getJSONObject("definition").getString("ref"))
-            definition.getString("key") == "color_lookup"
+            definition.optString("builtin") == "color_lookup"
         }
         val lookupName = authoredLookup.getJSONObject("data").optString("name")
         fun selectLookup() {

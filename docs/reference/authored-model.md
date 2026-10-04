@@ -193,37 +193,29 @@ strong deduplication remain separate from editable source identity.
 | `EffectApplication.definition` | Typed reference to an immutable authored definition. | Capture/undo preserves one definition owner; application and definition identities remain distinct. |
 | `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
 | `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
-| `Definition.program` | Shared immutable `EffectProgram`. | Saving retains its owner rather than detaching or mutating program metadata. |
-| `EffectParameter.dimension` | Semantic dimension stored with the parameter: Scalar (default), Angle, Time, SourcePixels, CompositionPixels or Normalized. | Catalog insertion, package I/O and resize use the same declaration; display units never control resizing. |
-| `EffectProgram.abi`, `id` | Definition's execution ABI and program identity, distinct from its portable authored ID and semantic type version. | Validate ABI/slot layout before admission; unsupported definitions remain preserved. |
-| `label` | Definition presentation metadata. | Preserve literal/localized label representation independently of semantic identity. |
-| `constant_color` | Optional generator contract naming its color parameter. | Static pointwise fills evaluate directly from the tagged color, including its alpha; the definition and parameter survive save and undo. |
-| `kind` | Definition Adjustment or Generator. | Adjustment consumes a typed scoped backdrop; generator does not invent that dependency. |
-| `alpha`, `space`, `resolution` | Definition contracts; defaults Preserve, Linear, Native. | Freeze premultiplied evaluation, blend-domain conversion, support and exact/display resolution roles. |
-| `wgsl`, `entry` | Immutable code resources and stable entry point; module-local bindings contain no artwork IDs. | Preserve source bytes and resource sharing; remap bindings outside shader text. |
-| `passes` | Ordered immutable pass declarations; default empty pointwise path. Each owns `entry` and `sampling`. | Preserve fusion boundary, sampling bounds, previous/original-input meanings and last-pass property application. |
-| `time` | Definition's time-input declaration, default false. | Evaluation uses the capture's explicit effect phase. |
-| `lookups` | Immutable lookup declarations, default empty. Retain code, entry, dependency keys, output count, workgroup size and workgroups. | Derived lookup buffers are omitted; keyed dependencies retain their declared order. |
-| `auxiliary` | Optional definition-local binding contract: LUT resource/color space or analysis kind. | LUT bytes are authored resources; derived illumination buffers and leases are not. |
-| `pages` | Immutable page IDs and labels, default empty. | Page reorder does not alter ABI slots. |
-| `parameters` | Immutable stable-key schema, including explicit ABI slot association. | Retain every field listed below and preserve shader offsets independently of UI order. |
-| `constraints` | Immutable keyed constraints, default empty; ordered-number lower/upper keys and gap. | Validate complete candidate values before publication, independent of UI ordering. |
+| `Definition.program` | Shared immutable runtime program. Built-in wire records store only stable ID and parameter-data version; custom records embed their definition. | Built-ins resolve the current catalog on open; custom code and literal labels retain their owners. |
+| `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths; UI unit labels never decide scaling. |
+| `EffectParameter.opaque` | Color-control capability, default false. | RGB-only parameters author opaque colors; ignored old alpha remains readable. |
 
-Each parameter retains `key`, `label`, optional `section`, `page`, `visible_when`
-and `soft_bounds`, plus `mapping` (default Linear), `kind` and typed `default`.
-Numeric parameters retain min/max/step/decimals and display unit; numeric semantic
-dimension is explicit: dimensionless, seconds, or length with a named pixel
-reference space. Existing pixel-scaled effect controls mean composition pixels;
-a unit label such as `px` never decides resizing behavior. Visibility conditions
-refer to stable parameter keys and typed values.
+Built-in shader ABI, code, passes, preparation, labels, page layout and slider
+presentation are runtime details. They are absent from artwork records. Rendering
+may change slightly with bug fixes; authored values must remain readable and
+editable. No shader generations or retained historical built-in implementations
+are required.
 
-Choice values persist stable option strings from `EffectOption.value`, retaining
-optional labels. GPU numeric choice indices are derived once from the immutable
-ABI option mapping. Number and Toggle retain their values; Color retains portable
-color interpretation; Curve retains analytic control points; Gradient retains
-positions and colors; LUT retains its optional typed resource binding. Empty LUT
-and missing application values are distinct: omitted values use only the frozen
-definition default, and an unknown parameter or option is unsupported content.
+Custom definitions retain code, ABI slots, kind, alpha/space/resolution policy,
+passes, time input, lookup declarations, auxiliary bindings, literal labels,
+parameters and constraints. They execute separately from built-in fusion. Their
+schema includes accepted numeric bounds and separate optional slider bounds.
+
+Every application saves every value under its stable key, including defaults.
+Choice selections use stable option IDs; runtime indices are derived on load.
+LUT color-space IDs map explicitly to RGB spaces and GPU codes. Numbers, toggles,
+portable colors, curve control points, gradient stops and LUT bindings remain
+authored data. Missing values and unknown parameters/options never silently use
+current defaults. A concrete data change needs an explicit per-filter conversion
+and a fixed compatibility fixture; otherwise retain support for its meaning.
+See the [package contract](capy-package.md) for the wire grammar and evolution rules.
 
 ## Validation and supported editing
 

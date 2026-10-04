@@ -94,7 +94,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let original = effects::effect_draft(self.engine.document(), calibration.original.occurrence)?;
                 let mut effect = original.clone();
-                effect.program = effect.program.for_depth(self.engine.document().composition().color.depth);
                 if effect.program.id.as_ref() == "curves" {
                     effect = layer_core::curves::calibrate_curves(&effect,[r,g,b],self.engine.document().composition().color.space,calibration.page,calibration.role)
                         .map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_CALIBRATION_FAILED))?;
@@ -174,9 +173,7 @@ impl<R:CanvasRenderer> UiSession<R> {
             self.engine.backend_mut().take_snapshot().map(|result|result.map_err(error).map_err(CalibrationFailure::Diagnostic).and_then(|result| {
                 let layer_render::SnapshotResult::LevelsStatistics(statistics)=result else {return Err(CalibrationFailure::Diagnostic("Unexpected Auto statistics".into()));};
                 let original = effects::effect_draft(self.engine.document(), task.original.occurrence)?;
-                let mut effect = original.clone();
-                effect.program = effect.program.for_depth(self.engine.document().composition().color.depth);
-                let candidate = layer_core::levels::auto_levels(&effect,&statistics,task.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_LEVELS_AUTO_FAILED))?;
+                let candidate = layer_core::levels::auto_levels(&original,&statistics,task.page).map_err(|_|CalibrationFailure::Message(MessageId::RESOURCES_LEVELS_AUTO_FAILED))?;
                 if candidate != original { self.layer_edit(effects::effect_edit(self.engine.document(),task.original.occurrence,candidate)?)?; }
                 Ok(())
             }))

@@ -7,6 +7,7 @@ struct ManagedColorButton: View {
     let value: JSON
     let documentSpace: String
     var viewing = JSON()
+    var opaque = false
     let change: (JSON) -> Void
     @State private var editing = false
     var body: some View {
@@ -19,7 +20,7 @@ struct ManagedColorButton: View {
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
                 .help(preview["in_gamut"].bool ? label : nativeCopy["color"]["outside_p3"].string)
                 .sheet(isPresented: $editing) {
-                    ColorEditor(value: value, documentSpace: documentSpace, viewing: viewing) { change($0); editing = false }
+                    ColorEditor(value: value, documentSpace: documentSpace, viewing: viewing, opaque: opaque) { change($0); editing = false }
                 }
         }
     }
@@ -37,9 +38,9 @@ struct ColorEditor: View {
     let hdrUse: ((JSON, Double) -> Void)?
     let viewing: JSON
     @State private var intensityText: String
-    init(value: JSON, documentSpace: String, intensity: Double? = nil, viewing: JSON = JSON(), hdrUse: ((JSON, Double) -> Void)? = nil, use: @escaping (JSON) -> Void) {
+    init(value: JSON, documentSpace: String, intensity: Double? = nil, viewing: JSON = JSON(), opaque: Bool = false, hdrUse: ((JSON, Double) -> Void)? = nil, use: @escaping (JSON) -> Void) {
         _form = State(initialValue: ColorUI.resolve(["type": "form", "request": [
-            "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "document_depth": viewing["document_depth"].raw, "model": viewing["hdr"].bool ? "linear_rgb" : "document_rgb", "rendition": viewing["recipe"].raw, "intensity": intensity as Any? ?? NSNull()]]))
+            "opaque": opaque, "color": value.raw, "document_space": documentSpace, "display_space": "DisplayP3", "document_depth": viewing["document_depth"].raw, "model": viewing["hdr"].bool ? "linear_rgb" : "document_rgb", "rendition": viewing["recipe"].raw, "intensity": intensity as Any? ?? NSNull()]]))
         self.use = use; self.hdrUse = hdrUse; self.viewing = viewing
         _intensityText = State(initialValue: intensity.map { String(format: "%.2f", $0) } ?? "")
     }

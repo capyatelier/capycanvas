@@ -351,8 +351,8 @@ fn reopened_catalog_shader_ids_reconcile_reinsertion_and_other_shared_definition
     use super::super::effect_records::{encode_definition,decode_definition};
     let cancelled=AtomicBool::new(false);
     let catalog=crate::bundled_effect_catalog();
-    let first=Definition {program:catalog.get("color_lookup").unwrap().program()};
-    let shared=Definition {program:catalog.get("hue_saturation").unwrap().program()};
+    let first=Definition {program:crate::effect_catalog::custom_program("color_lookup")};
+    let shared=Definition {program:crate::effect_catalog::custom_program("hue_saturation")};
     let mut inventory=ResourceInventory::default();let record=encode_definition(&first,&mut inventory).unwrap();
     let shared_record=encode_definition(&shared,&mut inventory).unwrap();
     let prepared=inventory.prepare(&cancelled).unwrap();let mut packed=Vec::new();prepared.reader(&cancelled).read_to_end(&mut packed).unwrap();
@@ -373,7 +373,7 @@ fn reopened_catalog_shader_ids_reconcile_reinsertion_and_other_shared_definition
     let other=catalog.filters().iter().filter(|filter|filter.id()!="color_lookup"&&filter.id()!="hue_saturation").find(|filter| {
         filter.program().wgsl.sources().unwrap().iter().any(|source|ids.contains(&source.id()))
     }).expect("another bundled definition shares shader helpers");
-    let second=Definition {program:other.program()};
+    let second=Definition {program:crate::effect_catalog::custom_program(other.id())};
     encode_definition(&second,&mut reused).unwrap();
     let mut transfer=ResourceInventory::for_transfer();
     encode_definition(&reopened,&mut transfer).unwrap();encode_definition(&reopened_shared,&mut transfer).unwrap();

@@ -26,9 +26,9 @@ Hidden and unplaced content remains authored work and is validated and saved.
 Working selection, saved-selection overlay visibility, editing targets, camera,
 preferences, GPU handles, active
 contacts and undo history stay outside the portable manifest. Saved selection
-objects and initial mask coverage are authored data. Embedded effect definitions
-retain their exact program and keyed values independently of the installed
-catalog. Output contexts preserve captured integrated effect phases.
+objects and initial mask coverage are authored data. Built-in effects save stable IDs, parameter-data versions and every keyed
+value, and resolve the current app implementation on open. Custom effects retain
+embedded code and literal editor metadata independently of the installed catalog. Output contexts preserve captured integrated effect phases.
 
 An original image retains its independent extent, channels, depth, profile and
 resolution. Rasterization replaces that original with document-space samples

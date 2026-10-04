@@ -99,6 +99,7 @@ impl ColorEditorError {
 }
 #[derive(Clone, Debug)]
 pub struct ColorEditor {
+    opaque: bool,
     definition: RgbColor,
     document_space: RgbSpace,
     model: ColorInputModel,
@@ -111,6 +112,7 @@ impl ColorEditor {
     pub fn new(definition: RgbColor, document_space: RgbSpace) -> Result<Self, String> {
         ColorState::validate_definition(definition)?;
         let mut editor = Self {
+            opaque: false,
             definition,
             document_space,
             model: ColorInputModel::DocumentRgb,
@@ -121,6 +123,16 @@ impl ColorEditor {
         };
         editor.populate();
         Ok(editor)
+    }
+    pub fn opaque(&self) -> bool { self.opaque }
+    pub fn set_opaque(&mut self, opaque: bool) {
+        self.opaque=opaque;
+        if opaque { self.definition.rgba[3]=1.; self.fields[3]="100".into(); self.initial[3]=self.fields[3].clone(); }
+    }
+    pub fn localized_labels(&self, localizer: &crate::Localizer) -> [std::sync::Arc<str>;4] {
+        let mut labels=self.model.localized_labels(localizer);
+        if self.opaque {labels[3]="".into();}
+        labels
     }
     pub fn set_document_depth(&mut self, depth: layer_core::color::SampleDepth) { self.depth = depth; }
     fn validate_range(&self, color: RgbColor) -> Result<(), ColorEditorError> {
@@ -176,6 +188,7 @@ impl ColorEditor {
         if index >= 4 {
             return Err("Invalid color entry".into());
         }
+        if self.opaque && index==3 {return Ok(());}
         self.fields[index] = text;
         Ok(())
     }
@@ -232,7 +245,7 @@ impl ColorEditor {
         let parse = |i: usize| -> Result<f32, ColorEditorError> {
             crate::numeric::parse_numeric_text(&self.fields[i]).map_err(|reason| ColorEditorError::Numeric { field: i, reason })
         };
-        let alpha = if self.fields[3] == self.initial[3] {
+        let alpha = if self.opaque {1.} else if self.fields[3] == self.initial[3] {
             self.definition.rgba[3]
         } else {
             let percent = parse(3)?;

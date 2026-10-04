@@ -622,7 +622,7 @@ const CONSUMERS:[&str;6]=["gaussian_blur","unsharp_mask","high_pass","bloom","so
 fn gaussian_fixture(id:&str,sigma:f32,resolution:EffectResolution)->EffectInstance {
     let mut program=(*crate::tests::fixture(id).program()).clone();
     program.resolution=resolution;
-    let mut effect=EffectInstance::new(Arc::new(program).for_depth(SampleDepth::F32));
+    let mut effect=EffectInstance::new(Arc::new(program));
     set(&mut effect,"sigma",sigma);
     effect
 }

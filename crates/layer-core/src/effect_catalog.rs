@@ -1,5 +1,5 @@
-//! Runtime filter packages. Hosts supply bytes; no files, GPU types, built-in
-//! switches or filter-specific constructors are involved in loading a catalog.
+//! Runtime custom-filter packages. Hosts supply bytes; shared code reserves
+//! built-in identities and stages catalog updates without editing documents.
 use crate::{EffectInstance, EffectProgram, EffectShader, EffectValue, EffectView};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -9,8 +9,6 @@ use std::{
 
 include!(concat!(env!("OUT_DIR"), "/filter_resources.rs"));
 
-/// Startup fallback only. Runtime packages use precisely the same parser and
-/// resolver, without modifying or rebuilding this embedded resource copy.
 pub fn bundled_effect_catalog() -> &'static EffectCatalog {
     static CATALOG: std::sync::OnceLock<EffectCatalog> = std::sync::OnceLock::new();
     CATALOG.get_or_init(|| {
@@ -192,8 +190,7 @@ impl EffectPackage {
 pub enum EffectInstallMode {
     Add,
     Replace,
-    /// Explicitly update known IDs and add new ones, e.g. a shipped resource
-    /// catalog newer than the executable's startup fallback. Omitted IDs stay.
+    /// Update custom IDs and add new ones. Omitted IDs stay.
     Merge,
 }
 
@@ -217,6 +214,9 @@ impl EffectCatalog {
     pub fn stage(&self, package: EffectCatalog, mode: EffectInstallMode) -> Result<Self, String> {
         let mut candidate = self.clone();
         for category in package.categories {
+            if let Some(builtin)=bundled_effect_catalog().categories().iter().find(|c|c.id==category.id) {
+                if builtin!=&category {return Err("Reserved built-in filter category".into());}
+            } else if !matches!(category.label,ResourceLabel::Literal(_)) {return Err("Custom categories require literal labels".into());}
             match candidate
                 .categories
                 .iter_mut()
@@ -229,6 +229,11 @@ impl EffectCatalog {
             }
         }
         for filter in package.filters {
+            if let Some(builtin) = bundled_effect_catalog().get(filter.id()) {
+                if matches!(mode,EffectInstallMode::Add) || filter != *builtin { return Err(format!("Reserved built-in filter ID: {}", filter.id())); }
+                continue;
+            }
+            if !filter.program.literal_labels() { return Err("Custom filters require literal labels".into()); }
             if let Some(old) = candidate.filters.iter_mut().find(|f| f.id() == filter.id()) {
                 if matches!(mode, EffectInstallMode::Add) {
                     return Err(format!("Filter ID already exists: {}", filter.id()));
@@ -281,6 +286,22 @@ impl EffectCatalog {
 }
 
 #[cfg(test)]
+pub(crate) fn custom_program(id: &str) -> Arc<EffectProgram> {
+    fn literal(value: &mut serde_json::Value) {
+        if let Some(message) = value.get("message").and_then(serde_json::Value::as_str) { *value = serde_json::Value::String(message.into()); }
+        else { match value { serde_json::Value::Object(fields) => fields.values_mut().for_each(literal),
+            serde_json::Value::Array(items) => items.iter_mut().for_each(literal), _ => {} } }
+    }
+    let mut value = serde_json::to_value(bundled_effect_catalog().get(id).unwrap().program()).unwrap();
+    literal(&mut value);
+    value["id"] = serde_json::json!(format!("custom_{id}"));
+    let mut program:EffectProgram=serde_json::from_value(value).unwrap();
+    let builtin=bundled_effect_catalog().get(id).unwrap().program();
+    program.wgsl=builtin.wgsl.clone();program.lookups=builtin.lookups.clone();
+    Arc::new(program)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     fn disk_catalog() -> EffectCatalog {
@@ -294,6 +315,31 @@ mod tests {
                     .map_err(|e| e.to_string())
             })
             .unwrap()
+    }
+    #[test]
+    fn catalog_dimensions_and_opaque_color_capabilities_are_explicit() {
+        let mut opaque=0;
+        for filter in bundled_effect_catalog().filters() {
+            for parameter in filter.program.parameters.iter() {
+                if let crate::EffectParameterKind::Number {unit,..}=&parameter.kind {
+                    let expected=match unit.as_ref() {"deg"=>Some(crate::authored::Dimension::Angle),"s"=>Some(crate::authored::Dimension::Time),"px"=>Some(crate::authored::Dimension::SourcePixels),_=>None};
+                    if let Some(dimension)=expected {assert_eq!(parameter.dimension,dimension,"{}.{}",filter.id(),parameter.key);}
+                }
+                if parameter.opaque {
+                    opaque+=1;
+                    let mut instance=EffectInstance::new(filter.program());
+                    let EffectValue::Color(mut color)=parameter.default else {panic!("opaque requires color")};
+                    assert_eq!(color.rgba[3],1.);
+                    color.rgba[3]=0.2;
+                    let index=instance.program.parameters.iter().position(|p|p.key==parameter.key).unwrap();
+                    instance.values[index]=EffectValue::Color(color);
+                    instance.validate().unwrap();
+                    instance.set(&parameter.key,EffectValue::Color(color)).unwrap();
+                    color.rgba[3]=1.;assert_eq!(instance.value(&parameter.key),Some(&EffectValue::Color(color)));
+                }
+            }
+        }
+        assert_eq!(opaque,9);
     }
     #[test]
     fn all_definitions_load_from_disk_and_share_module_storage() {
@@ -326,6 +372,7 @@ mod tests {
         );
         let mut custom = disk_catalog();
         custom.filters.retain(|f| f.id() == "gaussian_blur");
+        custom.filters[0].program=custom_program("gaussian_blur");
         let p = Arc::make_mut(&mut custom.filters[0].program);
         p.id = "user:custom".into();
         p.label = "Custom kernel".into();
@@ -360,36 +407,26 @@ mod tests {
         let original = disk_catalog();
         let mut resources = original.clone();
         let mut added = resources.get("gaussian_blur").unwrap().clone();
+        added.program=custom_program("gaussian_blur");
         Arc::make_mut(&mut added.program).id = "user:new_kernel".into();
         resources.filters.push(added);
-        Arc::make_mut(&mut resources.filters[0].program).label = "Updated filter".into();
         let merged = original.stage(resources, EffectInstallMode::Merge).unwrap();
         assert_eq!(merged.filters().len(), 53);
         assert!(merged.get("user:new_kernel").is_some());
-        assert_eq!(merged.filters()[0].label(), &ResourceLabel::from("Updated filter"));
+        assert_eq!(merged.filters()[0],original.filters()[0]);
         assert_eq!(original.filters().len(), 52);
         assert_ne!(original.filters()[0].label(), &ResourceLabel::from("Updated filter"));
     }
     #[test]
-    fn builtin_id_replacement_preserves_literal_metadata_and_round_trips() {
-        let original = disk_catalog();
-        let mut replacement = original.clone();
-        replacement.filters.retain(|f| f.id() == "curves");
-        let label = "自作 \"曲線\" { 名前 } 🎨";
-        let program = Arc::make_mut(&mut replacement.filters[0].program);
-        program.label = label.into();
-        let parameter = &mut Arc::make_mut(&mut program.parameters)[0];
-        parameter.label = "사용자 설정".into();
-        parameter.section = Some("我的分组".into());
-        let candidate = original.stage(replacement, EffectInstallMode::Replace).unwrap();
-        let definition = candidate.get("curves").unwrap();
-        assert_eq!(definition.label(), &ResourceLabel::from(label));
-        let instance = EffectInstance::new(definition.program());
-        let copy: EffectInstance = serde_json::from_str(&serde_json::to_string(&instance).unwrap()).unwrap();
-        assert_eq!(copy, instance);
-        assert!(matches!(original.get("curves").unwrap().label(), ResourceLabel::Message { .. }));
+    fn builtin_ids_reject_package_overrides_in_every_install_mode() {
+        let original=disk_catalog();
+        let mut replacement=original.clone();
+        replacement.filters.retain(|f|f.id()=="curves");
+        Arc::make_mut(&mut replacement.filters[0].program).label="Custom curves".into();
+        for mode in [EffectInstallMode::Add,EffectInstallMode::Replace,EffectInstallMode::Merge] {
+            assert!(original.stage(replacement.clone(),mode).is_err());
+        }
     }
-
     #[test]
     fn resource_message_references_are_explicit_and_structurally_bounded() {
         for value in [r#"{"message":"resources-filter-curves"}"#, r#""literal { text }""#] {

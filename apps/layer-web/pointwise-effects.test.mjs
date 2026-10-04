@@ -5,8 +5,8 @@ import {authoredIdentity,packageObject,packageOccurrences,packageResources,packa
 import {png} from './clone-journey.test.mjs';
 
 const selectedEffect=manifest=>packageObject(manifest,packageOccurrences(manifest).find(o=>o.data.content.effect).data.content.effect);
-const effectSlots=manifest=>packageObject(manifest,selectedEffect(manifest).data.definition).data.slots;
-const effectValues=manifest=>{const effect=selectedEffect(manifest),definition=packageObject(manifest,effect.data.definition);return Object.fromEntries(definition.data.slots.map(key=>[key,effect.data.values?.[key]??definition.data.parameters[key].default]));};
+const effectKeys=manifest=>Object.keys(effectValues(manifest));
+const effectValues=manifest=>selectedEffect(manifest).data.values??{};
 
 export async function checkPointwiseEffects({call,evaluate,settle,motion=true,widths=[640,1100],effects=['invert','threshold','desaturate','photo_filter'],colorPages=false,localAdjustments=false}) {
   const directory=process.env.LAYER_TEST_ARTIFACTS??'artifacts/photo-editing-color/p21-web';
@@ -134,7 +134,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await send({type:'set_theme',theme});const original=await canvasPixel();assert.ok(original[1]>original[0]+60&&original[3]===255);
           await send({type:'effect',action:{op:'insert',effect:'selective_color'}});assert.deepEqual(await canvasPixel(),original);
           const pages=['reds','yellows','greens','cyans','blues','magentas','whites','neutrals','blacks'];assert.deepEqual((await properties()).pages.map(p=>p.id),pages);
-          let owner=(await properties()).layer,before=await authored();assert.equal(effectSlots(await save()).length,37);
+          let owner=(await properties()).layer,before=await authored();assert.equal(effectKeys(await save()).length,37);
           for(const id of pages)await page(id);assert.deepEqual(await authored(),before);
           const inks=['cyan','magenta','yellow','black'];
           for(let i=0;i<pages.length;i++){await page(pages[i]);for(const [j,text] of [String((i+1)*2),'-1.25','1.5','0.5'].entries())await edit(`${pages[i]}_${inks[j]}`,text);}
@@ -144,7 +144,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           const after=await authored();await invoke('undo');assert.deepEqual(await authored(),before);await invoke('redo');assert.deepEqual(await authored(),after);
           await capture(`selective-absolute-${width}-${theme}`);await reopen(`selective-${width}-${theme}`);await send({type:'layer',action:{op:'delete_selected'}});
           await send({type:'effect',action:{op:'insert',effect:'channel_mixer'}});assert.deepEqual(await canvasPixel(),original);assert.deepEqual((await properties()).pages.map(p=>p.id),['red','green','blue']);
-          owner=(await properties()).layer;before=await authored();assert.equal(effectSlots(await save()).length,17);for(const id of ['red','green','blue'])await page(id);assert.deepEqual(await authored(),before);
+          owner=(await properties()).layer;before=await authored();assert.equal(effectKeys(await save()).length,17);for(const id of ['red','green','blue'])await page(id);assert.deepEqual(await authored(),before);
           for(const output of ['red','green','blue']){await page(output);for(const channel of ['red','green','blue'])await edit(`${output}_${channel}`,channel===output?'85':channel==='red'?'15':'-5');await edit(`${output}_constant`,'1.25');}
           const stored=effectValues(await save());const rgb=await canvasPixel();assert.notDeepEqual(rgb,original);await capture(`mixer-rgb-${width}-${theme}`);
           await evaluate(`document.querySelector('${selector('monochrome')} input').focus()`);await key(' ',32);assert.equal((await value('monochrome')).value,true);assert.equal((await properties()).page,'gray');assert.deepEqual((await properties()).pages.map(p=>p.id),['gray']);
@@ -174,7 +174,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         await send({type:'effect',action:{op:'insert',effect:'hue_saturation'}});
         let view=await properties();assert.deepEqual(view.pages.map(p=>p.id),['rgb','reds','yellows','greens','cyans','blues','magentas']);
         const beforePages=await save();
-        assert.equal(effectSlots(beforePages).length,42);
+        assert.equal(effectKeys(beforePages).length,42);
         for(const id of view.pages.map(p=>p.id))await page(id);
         assert.deepEqual(authoredIdentity(await save()),authoredIdentity(beforePages),'Page navigation never edits stored parameters or phases');
         await page('reds');
@@ -273,7 +273,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,windowsVirtualKeyCode:code});await settle();};
   const select=async index=>{await click('[data-property-resource]');await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();};
   const originalArchive=await save(),originalSources=sourceIdentity(originalArchive);
-  const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&packageObject(originalArchive,application.data.definition).data.key==='color_lookup'});assert.ok(lookupIndex>=0);
+  const lookupIndex=packageOccurrences(originalArchive).findIndex(occurrence=>{const application=occurrence.data.content.effect&&packageObject(originalArchive,occurrence.data.content.effect);return application&&packageObject(originalArchive,application.data.definition).data.builtin==='color_lookup'});assert.ok(lookupIndex>=0);
   const lookupOccurrence=packageOccurrences(originalArchive)[lookupIndex].id;
   const selectLookup=async manifest=>{
     const index=packageOccurrences(manifest).findIndex(occurrence=>occurrence.id===lookupOccurrence);assert.ok(index>=0,'Reopened archive retains the lookup occurrence');
@@ -323,7 +323,7 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   }
   await evaluate(`window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');
   const expected=await save();assert.equal(packageResources(expected,'capy.lut3d/1').length,1);assert.equal(packageOccurrences(expected).filter(o=>o.data.content.effect&&packageObject(expected,o.data.content.effect).data.values?.resource?.value?.resource).length,1);
-  const lookup=packageResources(expected,'capy.lut3d/1')[0];assert.ok(Number(lookup.data.decoded_bytes??lookup.bytes)>96);
+  const lookup=packageResources(expected,'capy.lut3d/1')[0];assert.equal(Number(lookup.data.decoded_bytes??lookup.bytes),lookup.data.size**3*12);
   const compare=async()=>{
     const actual=await save();assert.deepEqual(packageResourceIdentity(actual),packageResourceIdentity(expected),'Worker packages retain LUT resource identities, descriptors and checksums');
     const objects=structuredClone(actual.objects);
@@ -349,6 +349,6 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   await evaluate(`[...document.querySelectorAll('dialog[open].document-dialog button')].find(n=>n.textContent==='Recover').click()`);
   await wait(`layerApp.app.document_tabs(0).tabs.length===${recoveryTabs+1}&&layerApp.state().document_file.modified&&layerApp.app.brush_ready()`,true);await idle();
   assert.equal(await evaluate('layerApp.state().document_file.modified'),true);assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
-  await install();await invoke('fit_canvas');await compare();assert.deepEqual(await pixel(),samples.at(-1).pixel,'IndexedDB recovery retains resolved LUT pixels');
+  await install();await invoke('fit_canvas');await compare();const recoveredPixel=await pixel(),expectedPixel=samples.at(-1).pixel;assert.ok(recoveredPixel.every((value,i)=>Math.abs(value-expectedPixel[i])<=(i===3?0:1)),`IndexedDB recovery retains resolved LUT pixels within display quantization: ${recoveredPixel} versus ${expectedPixel}`);
   await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: native LUT selector/picker presets, cancel/error/stale-owner rejection and four layout/theme imports preserve source/history; worker save/open, GPU recreation and IndexedDB recovery retain resource payload and visible pixels');
 }

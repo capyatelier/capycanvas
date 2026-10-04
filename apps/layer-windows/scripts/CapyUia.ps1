@@ -90,9 +90,16 @@ function Invoke([string]$Value,[switch]$Name,$Within=$root){
     else{$item.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()}
 }
 function Read-Snapshot([string]$Path){
-    $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
-    $reader=[IO.StreamReader]::new($stream)
-    try{$reader.ReadToEnd()|ConvertFrom-Json}finally{$reader.Dispose()}
+    for($attempt=0;$attempt -lt 20;$attempt++){
+        try{
+            $stream=[IO.File]::Open($Path,[IO.FileMode]::Open,[IO.FileAccess]::Read,([IO.FileShare]::ReadWrite -bor [IO.FileShare]::Delete))
+            $reader=[IO.StreamReader]::new($stream)
+            try{return ($reader.ReadToEnd()|ConvertFrom-Json)}finally{$reader.Dispose()}
+        }catch{
+            if($attempt -eq 19 -or $_.Exception.GetBaseException() -isnot [IO.IOException]){throw}
+            Start-Sleep -Milliseconds 50
+        }
+    }
 }
 function Trace-File([string]$Kind='ui-state',[switch]$Isolated){
     $folder=if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory}

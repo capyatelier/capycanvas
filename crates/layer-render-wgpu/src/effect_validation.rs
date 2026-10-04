@@ -28,7 +28,7 @@ struct Validation {
     effects: effects::Effects,
     error: Option<String>,
     result: ValidationFuture,
-    namespace: Vec<Arc<layer_core::EffectProgram>>,
+    retained_programs: Vec<Arc<layer_core::EffectProgram>>,
 }
 impl WgpuRasterizer {
     pub fn effect_validation_pending(&self) -> bool {
@@ -41,12 +41,11 @@ impl WgpuRasterizer {
         if self.effect_validation.is_some() {
             return Ok(false);
         }
-        if request.programs.len() > 1024 || request.namespace.len() > 2048 {
+        if request.programs.len() > 1024 || request.retained_programs.len() > 2048 {
             return Err(GpuRasterError::Effect(
                 "Oversized validation request".into(),
             ));
         }
-        effects::validate_namespace(&request.namespace)?;
         // Reuse the established ABI layouts and compiled programs, but keep
         // candidate buffers/pipelines isolated until all device scopes resolve.
         let candidate = if let Some(scene) = &self.scene {
@@ -77,7 +76,7 @@ impl WgpuRasterizer {
                         EffectValidationRequest {
                             request_id: 0,
                             programs: vec![program],
-                            namespace: Vec::new(),
+                            retained_programs: Vec::new(),
                         },
                     );
                     #[cfg(not(target_arch = "wasm32"))]
@@ -117,7 +116,7 @@ impl WgpuRasterizer {
                 let errors = std::mem::take(&mut state.errors);
                 let value = Validation {
                     request_id: request.request_id,
-                    namespace: request.namespace,
+                    retained_programs: request.retained_programs,
                     effects: state.effects.take().unwrap(),
                     error: state.error.take(),
                     result: Box::pin(async move {
@@ -172,10 +171,10 @@ impl WgpuRasterizer {
             // fork discards temporary parameter buffers and unexecuted lookup
             // dispatches. Keep compilation caches even on a plain paint canvas.
             let mut cache = pending.effects.fork();
-            cache.retain_compilations(&pending.namespace);
+            cache.retain_compilations(&pending.retained_programs);
             if let Some(scene) = &mut self.scene {
                 scene.effects.merge_validated(cache.fork());
-                scene.effects.retain_compilations(&pending.namespace);
+                scene.effects.retain_compilations(&pending.retained_programs);
             }
             self.validated_effects = Some(cache);
         }
@@ -239,6 +238,6 @@ fn compile_candidate(
             let c = internal.await;
             compilation_error.or_else(|| a.or(b).or(c).map(|e| e.to_string()))
         }),
-        namespace: request.namespace,
+        retained_programs: request.retained_programs,
     }
 }

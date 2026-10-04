@@ -33,7 +33,7 @@ fn merge(engine:&mut CanvasEngine<WgpuRasterizer>)->SourceTarget {
 }
 
 fn adjustment(kind:&str,key:&str,value:f32)->EffectInstance {
-    let mut effect=EffectInstance::new(crate::tests::fixture(kind).program().for_depth(SampleDepth::F32));
+    let mut effect=EffectInstance::new(crate::tests::fixture(kind).program());
     effect.set(key,EffectValue::Number(value)).unwrap();effect
 }
 fn occurrence(document:&Document,name:&str)->OccurrenceHandle {

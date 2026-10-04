@@ -44,6 +44,11 @@ specific tasks.
   patches.
 - Write self-documenting code. No explanatory, narrative or temporal comments.
   No test-only switches in production types.
+- Artwork stores authored data, not built-in shaders, UI metadata or GPU layouts.
+  Keep stable filter/parameter/choice IDs and all values, including defaults.
+  A concrete data conversion needs a fixed-file regression test; do not add
+  shader generations or generic schema migration machinery. Follow the
+  [package contract](docs/reference/capy-package.md).
 - The app is pre-release: no backward compatibility, migrations or readers for
   old formats unless the task asks for them.
 - Add dependencies or vendored code only when necessary, and never copy GPL code

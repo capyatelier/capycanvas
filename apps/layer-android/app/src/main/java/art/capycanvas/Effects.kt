@@ -251,7 +251,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                     Text(label,Modifier.weight(1f))
                     Box(Modifier.weight(2f)){PropertyChoice(label,kind.array("options").values().map{it.toString()},(value as Number).toInt(),enabled){change(it)}}
                 }
-                "color" -> ManagedColorButton(host,label,value as JSONObject,enabled,trailing = {
+                "color" -> ManagedColorButton(host,label,value as JSONObject,enabled,opaque = kind.optBoolean("opaque"),trailing = {
                     if(!control.isNull("color_action")) Box(Modifier.size(40.dp,36.dp).testTag("${key.replace('_','-')}-bucket")
                         .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill",host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_selected")) }
                 }) { change(it) }

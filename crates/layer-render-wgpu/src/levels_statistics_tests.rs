@@ -4,7 +4,7 @@ use layer_core::color::{DocumentColor,RgbSpace,SampleDepth};
 
 fn fixture(space:RgbSpace,depth:SampleDepth,pixels:&[[f32;4]])->Document {
     let mut doc=generated([pixels.len() as u32,1],DocumentColor {space,depth},pixels);
-    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program().for_depth(depth)),0);doc
+    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program()),0);doc
 }
 fn stats(doc:&Document,channels:bool)->Result<layer_core::levels::LevelsStatistics,String> {
     let source=if channels {ArtworkSource::EffectChannels(doc.scene().children(None)[0])}else{ArtworkSource::EffectInput(doc.scene().children(None)[0])};
@@ -16,7 +16,7 @@ fn close(a:f64,b:f64,tolerance:f64) {assert!((a-b).abs()<=tolerance,"{a} != {b},
 fn levels_statistics_full_tiles_cover_every_pixel_across_window_edges() {
     let extent=[517,259];let pixels=[[0.02,0.11,0.33,1.],[0.27,0.39,0.51,1.],[0.83,0.72,0.61,1.]];
     let mut doc=generated(extent,DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::F32},&pixels);
-    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program().for_depth(SampleDepth::F32)),0);
+    insert_effect(&mut doc,EffectInstance::new(crate::tests::fixture("levels").program()),0);
     let result=stats(&doc,false).unwrap();let count=u64::from(extent[0])*u64::from(extent[1]);
     assert_eq!(result.pixels,count);
     for c in 0..3 {

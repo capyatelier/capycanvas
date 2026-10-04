@@ -1,5 +1,5 @@
 use crate::{bundled_effect_catalog,EffectInstance,EffectValue,EffectParameterKind};
-use crate::color::{RgbSpace,SampleDepth};
+use crate::color::{RgbSpace};
 
 fn color_effect(id:&str)->EffectInstance {EffectInstance::new(bundled_effect_catalog().get(id).unwrap().program())}
 
@@ -33,21 +33,11 @@ fn hue_angular_bounds_and_independent_range_limits_reject_invalid_values_atomica
 }
 
 #[test]
-fn threshold_depth_bounds_preserve_existing_float_schema_without_clamping() {
-    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
-        let mut threshold=EffectInstance::new(color_effect("threshold").program.for_depth(depth));
-        assert_eq!(threshold.value("threshold"),Some(&EffectValue::Number(0.5)));
-        let parameter=&threshold.program.parameters[0];assert_eq!(parameter.soft_bounds,Some([0.,1.]));
-        let EffectParameterKind::Number {min,max,..}=parameter.kind else {panic!("threshold must be numeric")};
-        assert_eq!((min,max),if depth.is_float(){(-65504.,65504.)}else{(0.,1.)});
-        if depth.is_float() {
-            threshold.set("threshold",EffectValue::Number(-32768.)).unwrap();
-            for integer in [SampleDepth::U8,SampleDepth::U16] {
-                let mut converted=threshold.clone();converted.program=converted.program.for_depth(integer);
-                assert_eq!(converted,threshold);assert!(converted.validate().is_ok());
-            }
-        } else {assert!(threshold.set("threshold",EffectValue::Number(-0.01)).is_err());}
-    }
+fn threshold_data_bounds_are_independent_of_slider_bounds() {
+    let mut threshold=color_effect("threshold");
+    assert_eq!(color_bounds(&threshold,"threshold"),(-65504.,65504.));
+    assert_eq!(threshold.program.parameters[0].soft_bounds,Some([0.,1.]));
+    for value in [-65504.,-0.01,8.,65504.] {threshold.set("threshold",EffectValue::Number(value)).unwrap();}
 }
 
 fn color_bounds(effect:&EffectInstance,key:&str)->(f64,f64) {

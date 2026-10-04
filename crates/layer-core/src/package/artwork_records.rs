@@ -1,6 +1,7 @@
 use super::{effect_records, selection_records, manifest::Manifest, resources::{ResourceInventory, ResourceReader, reference, reference_id}, values::{self as v, DecodeError, DecodeResult}};
+use super::RASTER_TILE_SIZE as TILE_SIZE;
 use crate::{authored::*, color::{DocumentColor, RgbColor, hdr::SdrRendition, source::{SourceImage, SourceKind, SourceChannels, SourceInterpretation}},
-    raster::{RasterData, RasterRevision, RasterPlane, RasterWatercolor, TileKey, TILE_SIZE},
+    raster::{RasterData, RasterRevision, RasterPlane, RasterWatercolor, TileKey},
     BlendSpace, LayerBlend, LayerPlacement, Point, Rect, PhotoMetadata, SelectionMaskProperties, RulerGeometry};
 use serde_json::{Map, Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
@@ -291,7 +292,9 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
         let data=fields(value,&["definition","domain","values","bindings","inputs"])?;
         for key in ["bindings","inputs"] {if let Some(value)=data.get(key) && !value.as_object().ok_or("Expected keyed effect map")?.is_empty() {return Err(DecodeError::Unsupported("Explicit effect inputs or bindings are unsupported".into()));}}
         let definition=handle(&art.definitions,v::required(data,"definition")?)?;let program=&art.definitions.get(definition).ok_or("Missing effect definition")?.program;
-        let values=effect_records::decode_values(program,data.get("values").unwrap_or(&json!({})),reader)?;
+        let definition_record=&manifest.objects[&art.definitions.id(definition).ok_or("Missing definition ID")?]["data"];
+        let version=definition_record.get("version").map(v::u32_value).transpose()?;
+        let values=effect_records::decode_values(program,data.get("values").unwrap_or(&json!({})),version,reader)?;
         let domain=dimension(v::required(data,"domain")?,reader)?;
         art.effects.install(art.effects.allocated(*identity).unwrap(),EffectApplication {definition,values,domain})?;
     }}

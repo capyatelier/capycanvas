@@ -110,6 +110,8 @@ or build scripts require rebuilding.
 
 Each run writes its expected variants to `plan.json`. Empty selections, missing
 results, a stopped desktop task and startup or fixture deadlines fail the run.
+The shared fixture reader uses bounded retries for brief trace-file I/O locks;
+malformed snapshots still fail immediately.
 Results, logs, desktop failure screenshots and per-fixture evidence are copied to
 `artifacts/windows-vm/<vm>/<run>/`. Evidence includes the disposable profile,
 fixture captures and owned process traces. `provenance.json` records the source

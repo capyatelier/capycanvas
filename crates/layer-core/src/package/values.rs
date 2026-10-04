@@ -61,16 +61,10 @@ fn insert_float(fields: &mut Map<String, Value>, key: &str, value: f32, default:
 }
 
 pub fn parse_rgb_space(value: &Value) -> DecodeResult<RgbSpace> {
-    Ok(match string(value)? {
-        "srgb" => RgbSpace::Srgb, "display_p3" => RgbSpace::DisplayP3,
-        "adobe_rgb" => RgbSpace::AdobeRgb, "pro_photo" => RgbSpace::ProPhoto,
-        name => return Err(unsupported("RGB space", name)),
-    })
+    let name=string(value)?;
+    RgbSpace::from_id(name).ok_or_else(||unsupported("RGB space",name))
 }
-pub fn encode_rgb_space(value: RgbSpace) -> Value {
-    Value::from(match value { RgbSpace::Srgb => "srgb", RgbSpace::DisplayP3 => "display_p3",
-        RgbSpace::AdobeRgb => "adobe_rgb", RgbSpace::ProPhoto => "pro_photo" })
-}
+pub fn encode_rgb_space(value: RgbSpace) -> Value { Value::from(value.id()) }
 pub fn parse_depth(value: &Value) -> DecodeResult<SampleDepth> {
     Ok(match string(value)? { "u8" => SampleDepth::U8, "u16" => SampleDepth::U16,
         "f16" => SampleDepth::F16, "f32" => SampleDepth::F32, name => return Err(unsupported("depth", name)) })

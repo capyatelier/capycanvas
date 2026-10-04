@@ -51,7 +51,7 @@ fn fixture(space: RgbSpace, depth: SampleDepth, rgb: [f32;3], alpha: f32, master
     let pixels=[[rgb[0]*alpha*0.5,rgb[1]*alpha*0.5,rgb[2]*alpha*0.5,alpha]];
     let mut doc=generated([1,1],DocumentColor {space,depth},&pixels);
     insert_effect(&mut doc,doubled_effect(),0);
-    let mut effect=EffectInstance::new(crate::tests::fixture("curves").program().for_depth(depth));
+    let mut effect=EffectInstance::new(crate::tests::fixture("curves").program());
     if log {effect.set("domain",EffectValue::Choice(1)).unwrap();effect.set("hdr_stops",EffectValue::Number(4.)).unwrap();}
     set_curve(&mut effect,0,master);
     for (page,points) in [(1,[[0.,0.],[1.,0.7]]),(2,[[0.,0.1],[1.,0.9]]),(3,[[0.,0.25],[1.,1.]])] {set_curve(&mut effect,page,&points);}

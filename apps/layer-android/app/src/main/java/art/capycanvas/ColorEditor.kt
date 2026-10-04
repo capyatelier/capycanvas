@@ -39,7 +39,7 @@ internal fun documentRgbSpace(host: CanvasHost): String =
 private fun colorEpoch(host: CanvasHost): Long =
     host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
 
-@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, renderedPreview: JSONObject? = null, compact: Boolean = false, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
+@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, renderedPreview: JSONObject? = null, compact: Boolean = false, opaque: Boolean = false, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     val preview = renderedPreview ?: remember(value.toString()) {
         JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString(), host.languageTag)).getJSONObject(0)
@@ -52,15 +52,15 @@ private fun colorEpoch(host: CanvasHost): Long =
         trailing()
     }
     if (!compact && !preview.getBoolean("in_gamut")) Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("outside_srgb"), style = MaterialTheme.typography.labelSmall)
-    editing?.let { color -> ColorEditorDialog(host, color, { editing = null }) { selected -> editing = null; onChange(selected) } }
+    editing?.let { color -> ColorEditorDialog(host, color, { editing = null }, opaque = opaque) { selected -> editing = null; onChange(selected) } }
 }
 
-@Composable internal fun ColorEditorDialog(host: CanvasHost, initial: JSONObject, onDismiss: () -> Unit, initialIntensity:Float?=null, onIntensity:(Float?)->Unit={}, onUse: (JSONObject) -> Unit) {
+@Composable internal fun ColorEditorDialog(host: CanvasHost, initial: JSONObject, onDismiss: () -> Unit, initialIntensity:Float?=null, onIntensity:(Float?)->Unit={}, opaque: Boolean = false, onUse: (JSONObject) -> Unit) {
     val epoch = remember { colorEpoch(host) }
     val hdr=host.snapshot?.objectOrNull("color_panel")?.optBoolean("hdr")==true
     var form by remember {
         mutableStateOf(JSONObject(Native.colorUi(obj("type" to "form", "request" to obj(
-            "color" to initial, "document_depth" to host.snapshot?.objectOrNull("state")?.displayColors()?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdr)"linear_rgb" else "document_rgb"), "intensity" to initialIntensity, "rendition" to host.snapshot?.objectOrNull("color_panel")?.objectOrNull("rendition")
+            "opaque" to opaque, "color" to initial, "document_depth" to host.snapshot?.objectOrNull("state")?.displayColors()?.optString("hdr_depth"), "document_space" to documentRgbSpace(host), "model" to (if(hdr)"linear_rgb" else "document_rgb"), "intensity" to initialIntensity, "rendition" to host.snapshot?.objectOrNull("color_panel")?.objectOrNull("rendition")
         )).toString(), host.languageTag)))
     }
     var intensityText by remember {mutableStateOf(if(form.getJSONObject("draft").isNull("intensity"))"" else form.getJSONObject("draft").getDouble("intensity").toString())}

@@ -771,26 +771,26 @@ fn filter_insertion_search_keeps_admitted_literal_replacements_and_custom_labels
         let mut s = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Windows,
             Localizer::shared(language)).unwrap();
         s.frame(0, 0).unwrap();
-        let mut replacement = s.effect_catalog.get("exposure").unwrap().clone();
+        let mut replacement = custom_filter("exposure");
         std::sync::Arc::make_mut(&mut replacement.program).label = replacement_label.into();
-        let mut custom = s.effect_catalog.get("gaussian_blur").unwrap().clone();
+        let mut custom = custom_filter("gaussian_blur");
         let program = std::sync::Arc::make_mut(&mut custom.program);
         program.id = "test.literal-filter".into();
         program.label = custom_label.into();
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![replacement, custom]);
-        s.load_effect_library(&package, |_| panic!("inline program"), EffectInstallMode::Merge).unwrap();
+        s.load_effect_package(&package, |_| panic!("inline program"), EffectInstallMode::Merge).unwrap();
         s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
             request_id: s.state.filter_load.request_id, result: Ok(()),
         });
         s.frame(1, 1).unwrap();
         assert!(!s.state.filter_load.pending);
         let replacement_id = command_catalog::identity(&UiAction::Effect {
-            action: EffectAction::Insert { effect: "exposure".into() },
+            action: EffectAction::Insert { effect: "test:exposure".into() },
         });
         invoke(&mut s, CommandId::SearchCommands);
         search_action(&mut s, CommandSearchAction::Query { text: "Exposure".into() });
         assert!(s.state.command_search.as_ref().unwrap().results.iter().all(|row| row.id != replacement_id));
-        for (effect, literal) in [("exposure", replacement_label), ("test.literal-filter", custom_label)] {
+        for (effect, literal) in [("test:exposure", replacement_label), ("test.literal-filter", custom_label)] {
             let id = command_catalog::identity(&UiAction::Effect { action: EffectAction::Insert { effect: effect.into() } });
             search_action(&mut s, CommandSearchAction::Query { text: literal.into() });
             let row = s.state.command_search.as_ref().unwrap().results.iter().find(|row| row.id == id).unwrap();

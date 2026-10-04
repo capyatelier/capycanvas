@@ -49,7 +49,7 @@ impl SnapshotGpu {
         if validating {
             renderer.request_effect_validation(EffectValidationRequest {
                 request_id: 1,
-                namespace: programs.clone(),
+                retained_programs: programs.clone(),
                 programs,
             })?;
         }

@@ -105,7 +105,7 @@ impl OpenEnvironment {
         if validating {
             gpu.request_effect_validation(EffectValidationRequest {
                 request_id: 1,
-                namespace: programs.clone(),
+                retained_programs: programs.clone(),
                 programs,
             })
             .map_err(|e| e.to_string())?;

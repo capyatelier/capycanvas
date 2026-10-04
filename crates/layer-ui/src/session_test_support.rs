@@ -424,6 +424,21 @@ pub(crate) fn notice_text(s: &UiSession<Recorder>) -> Option<&str> {
     s.state.notice.as_ref().map(|n| n.text.as_str())
 }
 
+pub(crate) fn custom_filter(id: &str) -> layer_core::EffectDefinition {
+    fn literal(value: &mut serde_json::Value) {
+        if let Some(message)=value.get("message").and_then(serde_json::Value::as_str) {*value=serde_json::Value::String(message.into());}
+        else {match value {serde_json::Value::Object(fields)=>fields.values_mut().for_each(literal),
+            serde_json::Value::Array(items)=>items.iter_mut().for_each(literal),_=>{}}}
+    }
+    let original=layer_core::bundled_effect_catalog().get(id).unwrap();
+    let mut value=serde_json::to_value(original).unwrap();literal(&mut value);
+    value["program"]["id"]=serde_json::json!(format!("test:{id}"));
+    let mut definition:layer_core::EffectDefinition=serde_json::from_value(value).unwrap();
+    std::sync::Arc::make_mut(&mut definition.program).wgsl=original.program.wgsl.clone();
+    std::sync::Arc::make_mut(&mut definition.program).lookups=original.program.lookups.clone();
+    definition
+}
+
 pub(crate) fn package_json(categories: Vec<layer_core::EffectCategory>, filters: Vec<layer_core::EffectDefinition>) -> String {
     serde_json::to_string(&layer_core::EffectPackage { format: 2, categories, filters }).unwrap()
 }
@@ -433,9 +448,9 @@ pub(crate) fn insert_effect(s: &mut UiSession<Recorder>, effect: &str) {
 }
 
 pub(crate) fn stage_candidate_library(s: &mut UiSession<Recorder>, catalog: &layer_core::EffectCatalog, label: &str, missing: &str) {
-    let mut filters = catalog.filters().to_vec();
+    let mut filters = vec![custom_filter("unsharp_mask")];
     std::sync::Arc::make_mut(&mut filters[0].program).label = label.into();
-    s.load_effect_library(&package_json(catalog.categories().to_vec(), filters),
+    s.load_effect_package(&package_json(catalog.categories().to_vec(), filters),
         |_| panic!("{missing}"), layer_core::EffectInstallMode::Merge).unwrap();
 }
 

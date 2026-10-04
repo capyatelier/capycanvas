@@ -111,7 +111,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
             let states = match name { "photo_filter" => 3, "selective_color" | "channel_mixer" => 5, _ => 1 };
             for state in 0..states {
                 if let Some(handle) = adjustment_handle.take() { remove_occurrence(&mut doc, handle); }
-                let program = crate::tests::fixture(name).program().for_depth(SampleDepth::F32);
+                let program = crate::tests::fixture(name).program();
                 let mut program = (*program).clone(); program.resolution = EffectResolution::Display;
                 let mut effect = EffectInstance::new(Arc::new(program));
                 if name == "threshold" {

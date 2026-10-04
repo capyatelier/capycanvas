@@ -23,6 +23,16 @@ pub const BRADFORD: Matrix3 = [
 impl RgbSpace {
     pub const ALL: [Self; 4] = [Self::Srgb, Self::DisplayP3, Self::AdobeRgb, Self::ProPhoto];
 
+    pub fn id(self) -> &'static str {
+        match self { Self::Srgb => "srgb", Self::DisplayP3 => "display_p3", Self::AdobeRgb => "adobe_rgb", Self::ProPhoto => "pro_photo" }
+    }
+    pub fn from_id(id: &str) -> Option<Self> {
+        match id { "srgb" => Some(Self::Srgb), "display_p3" => Some(Self::DisplayP3), "adobe_rgb" => Some(Self::AdobeRgb), "pro_photo" => Some(Self::ProPhoto), _ => None }
+    }
+    pub fn shader_code(self) -> u32 {
+        match self { Self::Srgb => 0, Self::DisplayP3 => 1, Self::AdobeRgb => 2, Self::ProPhoto => 3 }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Self::Srgb => "sRGB",

@@ -160,7 +160,7 @@ fn levels_quantile_ceil_ranks_do_not_round_the_upper_tail_down() {
 
 #[test]
 fn levels_ordered_anchor_gap_remains_distinct_at_large_f32_magnitudes() {
-    let mut effect=EffectInstance::new(bundled_effect_catalog().get("levels").unwrap().program().for_depth(crate::color::SampleDepth::F32));
+    let mut effect=EffectInstance::new(bundled_effect_catalog().get("levels").unwrap().program());
     for page in 0..4 {
         let prefix=["","red_","green_","blue_"][page];
         let white=format!("{prefix}white");let black=format!("{prefix}black");
@@ -178,27 +178,15 @@ fn levels_ordered_anchor_gap_remains_distinct_at_large_f32_magnitudes() {
 }
 
 #[test]
-fn levels_anchor_bounds_follow_document_depth_without_widening_gamma() {
-    use crate::color::SampleDepth;
-    for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
-        let program=bundled_effect_catalog().get("levels").unwrap().program().for_depth(depth);
-        let expected=if depth.is_float() {(-65504.,65504.)}else{(0.,1.)};
-        for parameter in program.parameters.iter() {
-            if let crate::EffectParameterKind::Number {min,max,..}=&parameter.kind {
-                if parameter.key.ends_with("gamma") {assert_eq!((*min,*max),(0.1,10.));}
-                else {assert_eq!((*min,*max),expected,"{depth:?} {}",parameter.key);}
-            }
+fn levels_data_bounds_are_independent_of_slider_bounds_and_document_depth() {
+    let mut effect=effect();
+    for parameter in effect.program.parameters.iter() {
+        if let crate::EffectParameterKind::Number {min,max,..}=parameter.kind {
+            if parameter.key.ends_with("gamma") {assert_eq!((min,max),(0.1,10.));}
+            else {assert_eq!((min,max),(-65504.,65504.));assert_eq!(parameter.soft_bounds,Some([0.,1.]));}
         }
-        let original=effect();let mut resolved=EffectInstance::new(program);
-        assert_eq!(resolved.values,original.values);
-        if depth.is_float() {
-            resolved.set("red_output_black",EffectValue::Number(-65504.)).unwrap();
-            resolved.set("blue_output_white",EffectValue::Number(32768.)).unwrap();
-            for integer in [SampleDepth::U8,SampleDepth::U16] {
-                let mut retained=resolved.clone();retained.program=resolved.program.for_depth(integer);
-                assert_eq!(retained,resolved);assert!(retained.validate().is_ok());
-            }
-        }
-        else {assert!(resolved.set("red_output_black",EffectValue::Number(-0.01)).is_err());}
     }
+    effect.set("red_output_black",EffectValue::Number(-65504.)).unwrap();
+    effect.set("blue_output_white",EffectValue::Number(32768.)).unwrap();
+    effect.validate().unwrap();
 }

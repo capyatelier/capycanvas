@@ -132,6 +132,8 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorFormRequest {
+    #[serde(default)]
+    pub opaque: bool,
     pub color: RgbColor,
     pub document_space: RgbSpace,
     #[serde(default)]
@@ -231,6 +233,8 @@ impl ColorValidationCopy {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorFormCopy {
+    #[serde(default)]
+    pub opaque: bool,
     pub model: ColorInputModel,
     pub document_space: RgbSpace,
     pub validation: Option<ColorValidationCopy>,
@@ -249,7 +253,7 @@ impl ColorFormCopy {
         if self.error.as_ref().is_some_and(|reason| !reason.valid()) { return Err("Invalid color form copy".into()); }
         Ok(ColorFormCopyView {
             models:ColorInputModel::ALL.into_iter().map(|model|(model,model.localized_name(localizer))).collect(),
-            labels:self.model.localized_labels(localizer),
+            labels:{let mut labels=self.model.localized_labels(localizer);if self.opaque {labels[3]="".into();}labels},
             description:self.model.localized_description(self.document_space, localizer),
             validation:self.validation.as_ref().map(|copy|copy.message(localizer)),
             error:self.error.as_ref().map(|reason|reason.message(self.model, localizer)),
@@ -266,6 +270,7 @@ fn color_form(request: ColorFormRequest) -> Result<ColorFormView, String> { colo
 
 pub fn color_form_localized(request: ColorFormRequest, localizer: &crate::localization::Localizer) -> Result<ColorFormView, String> {
     let mut editor = ColorEditor::new(request.color, request.document_space)?;
+    editor.set_opaque(request.opaque);
     if let Some(depth)=request.document_depth {editor.set_document_depth(depth);}
     editor.set_model(request.model).map_err(|reason|reason.message(editor.model(),localizer))?;
     let intensity=request.intensity.or_else(||request.document_depth.filter(|d|d.is_float()).map(|_|request.color.brightness_ev(request.document_space).ok().flatten().unwrap_or(0.).max(0.)));
@@ -305,6 +310,7 @@ pub fn color_form_localized(request: ColorFormRequest, localizer: &crate::locali
         .transpose()?;
     let has_error = error.is_some();
     let copy = ColorFormCopy {
+        opaque:request.opaque,
         model:editor.model(), document_space:request.document_space,
         validation:value.map(|color|ColorValidationCopy::new(color, request.document_space, request.display_space, editor.intensity().is_some())).transpose()?,
         error,
@@ -313,6 +319,7 @@ pub fn color_form_localized(request: ColorFormRequest, localizer: &crate::locali
     Ok(ColorFormView {
         copy,
         draft: ColorFormRequest {
+            opaque:request.opaque,
             color: editor.definition(),
             document_space: request.document_space,
             document_depth: request.document_depth,
@@ -342,7 +349,7 @@ mod tests {
     use super::*;
     fn request(color: RgbColor) -> ColorFormRequest {
         ColorFormRequest {
-            color,
+            opaque:false,            color,
             document_space: RgbSpace::ProPhoto,
             document_depth: None,
             display_space: RgbSpace::Srgb,
@@ -433,7 +440,7 @@ mod tests {
         ];
         for model in ColorInputModel::ALL {
             for error in &errors {
-                let copy=ColorFormCopy {model,document_space:RgbSpace::AdobeRgb,validation:None,error:Some(error.clone())};
+                let copy=ColorFormCopy {opaque:false,model,document_space:RgbSpace::AdobeRgb,validation:None,error:Some(error.clone())};
                 let wire=serde_json::json!({"type":"form_copy","copy":copy});
                 for language in crate::UiLanguage::ALL {
                     let localizer=crate::Localizer::shared(language);
@@ -451,10 +458,10 @@ mod tests {
             ColorEditorError::Numeric {field:0,reason:crate::NumericError::WholePixels {label:layer_core::ResourceLabel::Message {message:"unknown-color-label".into()}}},
         ] {
             assert!(!error.valid());
-            let copy=ColorFormCopy {model:ColorInputModel::DocumentRgb,document_space:RgbSpace::Srgb,validation:None,error:Some(error)};
+            let copy=ColorFormCopy {opaque:false,model:ColorInputModel::DocumentRgb,document_space:RgbSpace::Srgb,validation:None,error:Some(error)};
             assert!(color_ui_localized(ColorUiRequest::FormCopy {copy},&localizer).is_err());
         }
-        let copy=ColorFormCopy {model:ColorInputModel::Hls,document_space:RgbSpace::Srgb,validation:None,error:None};
+        let copy=ColorFormCopy {opaque:false,model:ColorInputModel::Hls,document_space:RgbSpace::Srgb,validation:None,error:None};
         let valid=serde_json::json!({"type":"form_copy","copy":copy});
         let mut malformed=valid.clone();malformed["copy"]["fields"]=serde_json::json!(["bad","bad","bad","bad"]);
         assert!(serde_json::from_value::<ColorUiRequest>(malformed).is_err());
@@ -580,4 +587,24 @@ mod tests {
         for (actual,expected) in color.linear_in(RgbSpace::DisplayP3).unwrap().into_iter().zip([4.,2.,0.5,0.5]) {assert!((actual-expected).abs()<1e-6);}
     }
 
+}
+
+#[cfg(test)]
+mod opaque_tests {
+    use super::*;
+    #[test]
+    fn opaque_forms_hide_alpha_in_every_language_and_keep_it_opaque_after_edits() {
+        let color=RgbColor::new(RgbSpace::DisplayP3,[0.6,0.1,0.2,0.25]).unwrap();
+        let request:ColorFormRequest=serde_json::from_value(serde_json::json!({"color":color,"document_space":"Srgb","opaque":true})).unwrap();
+        let mut view=color_form(request).unwrap();
+        for language in crate::UiLanguage::ALL {
+            let copy=view.copy.localized(&crate::Localizer::shared(language)).unwrap();
+            assert!(copy.labels[3].is_empty());
+        }
+        assert_eq!(view.value.unwrap().rgba[3],1.);
+        view.draft.fields.as_mut().unwrap()[3]="25".into();
+        let view=color_form(view.draft).unwrap();
+        assert_eq!(view.value.unwrap().rgba[3],1.);
+        assert!(view.labels[3].is_empty());
+    }
 }

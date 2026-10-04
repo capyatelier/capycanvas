@@ -135,8 +135,7 @@ try {
     Invoke 'filter-example:tent_blur'
     Wait-Until {(Model).state.layer_properties.description -eq 'Tent Blur'} 'Runtime filter did not insert'
     Select-Panel 'properties'
-    $radius=Control 'Radius' -Name -Type ([System.Windows.Automation.ControlType]::Edit)
-    $radius.SetFocus();$radius.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('7')
+    Edit 'property-radius' '7'
     (Control 'drawing-canvas').SetFocus()
     Wait-Until {(Property 'radius').value.value -eq 7} 'Runtime parameter did not use shared numeric controls'
     Capture 'tent-controls'
@@ -152,9 +151,11 @@ try {
     $changed=$shader.Replace('return value;','return vec4<f32>(value.r*0.5,value.g,value.b,value.a);')
     [IO.File]::WriteAllText($shaderPath,$changed)
     $catalog=(Model).state.filter_catalog_revision
+    $revision=(Model).state.document_file.revision
     Reload
-    Wait-Until {(Model).state.filter_catalog_revision -gt $catalog -and (Model).state.layer_properties.description -eq 'Tinted Tent'} 'Runtime metadata/program replacement did not publish'
-    if((Property 'radius').value.value -ne 7){throw 'Replacement reset a compatible parameter value'}
+    Wait-Until {(Model).state.filter_catalog_revision -gt $catalog} 'Runtime catalog replacement did not publish'
+    if((Model).state.layer_properties.description -ne 'Tent Blur' -or (Model).state.document_file.revision -ne $revision){throw 'Catalog replacement changed an existing application'}
+    if((Property 'radius').value.value -ne 7){throw 'Catalog replacement changed an authored parameter'}
     Capture 'replacement-controls'
     $catalog=(Model).state.filter_catalog_revision
     $revision=(Model).state.document_file.revision
@@ -164,7 +165,7 @@ try {
     if((Load-State).error -cne 'These filters cannot run on the graphics device.'){throw 'Invalid WGSL did not report the shared validation reason'}
     $parserMessage='expected global item (`struct`, `const`, `var`, `alias`, `fn`, `diagnostic`, `enable`, `requires`, `;`) or the end of the file'
     $escapedMessage=[regex]::Escape($parserMessage)
-    $diagnosticPattern='\AFilter validation request: effect shader: error: '+$escapedMessage+', found "this"\r?\n     ┌─ wgsl:(?<line>[1-9][0-9]*):1\r?\n     │\r?\n\k<line> │ this is not valid WGSL\r?\n     │ \^\^\^\^ '+$escapedMessage+'\r?\n\r?\n\r?\n\z'
+    $diagnosticPattern='\AFilter validation: effect shader: error: '+$escapedMessage+', found "this"\r?\n +┌─ wgsl:(?<line>[1-9][0-9]*):1\r?\n +│\r?\n\k<line> │ this is not valid WGSL\r?\n +│ \^\^\^\^ '+$escapedMessage+'\r?\n\r?\n\r?\n\z'
     Wait-Until {[regex]::IsMatch(([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8)),$diagnosticPattern)} 'Rejected WGSL did not produce exactly one matching parser diagnostic'
     $expectedDiagnostic=([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8))
     if(![regex]::IsMatch($expectedDiagnostic,$diagnosticPattern)){throw 'Unexpected diagnostics while retaining rejected WGSL evidence'}
@@ -194,7 +195,7 @@ try {
     if((Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash -ne $beforeBinary){throw 'Executable changed during runtime package checks'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if(![string]::Equals(([string](Get-Content -LiteralPath $stderr -Raw -Encoding utf8)),$expectedDiagnostic,[StringComparison]::Ordinal)){throw 'Unexpected native diagnostics after rejected WGSL'}
-    [pscustomobject]@{startup_package='passed';native_picker_and_properties='passed';live_wgsl_and_metadata='passed';compatible_values='passed';invalid_wgsl_preserves_work='passed';missing_module_preserves_work='passed';retry='passed';changed_gpu_preview='passed';unchanged_executable='passed';scope='native D3D12/UI Automation and controlled drawing; full-image GPU assertions and physical/performance acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{startup_package='passed';native_picker_and_properties='passed';catalog_wgsl_and_metadata='passed';unchanged_document='passed';invalid_wgsl_preserves_work='passed';missing_module_preserves_work='passed';retry='passed';changed_gpu_preview='passed';unchanged_executable='passed';scope='native D3D12/UI Automation and controlled drawing; full-image GPU assertions and physical/performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

@@ -87,7 +87,7 @@ The initial registry is:
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference and pixel `domain`; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
-| `capy.effect-definition/1` | Required stable program `key`, evaluation `contract`, shader `abi`, `kind`, `code` resource references, `entry` and keyed `parameters`; ordered ABI `slots`, optional `constant_color` parameter key, passes, lookups, constraints and presentation declarations. |
+| `capy.effect-definition/1` | Built-in: required `builtin` ID and parameter-data `version`. Custom: stable `key`, evaluation `contract`, shader `abi`, `kind`, `code`, `entry`, keyed `parameters`, ordered `slots` and literal presentation metadata. |
 | `capy.selection/1` | Required `shape`; placement/inversion and saved display `color`/`opacity`. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
 | `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and optional `representation`. |
@@ -124,7 +124,7 @@ The common frozen defaults are:
 | Original `profile_assumed` | False. |
 | Paint overrides/material tiles | No override at absent coordinates; an imported base is revealed. |
 | Coverage `default_coverage` | One; supplied `initial` coverage takes precedence before painted overrides. |
-| Effect parameter value | The definition's frozen keyed default, not the current catalog default. |
+| Effect parameter value | Required for every parameter, including a value equal to the insertion default. |
 | Effect alpha/space/resolution/time | `preserve`, `linear`, `native`, false. |
 | Output context | Elapsed coordinate zero; animated effect opening phase zero. |
 | Output representation | Unavailable. |
@@ -142,13 +142,38 @@ invalid; the cycle rule does not apply indiscriminately to ancillary or resource
 references. Relationship semantics and field ownership are specified with the
 [authored model](authored-model.md).
 
-Parameter keys and choice option values are strings; array positions are never
-saved choices. The definition's `slots` fixes positional shader ABI layout
-independently of parameter display order. Parameter dimensions use `scalar`,
-`angle`, `time`, or `length`; a length additionally names `source_pixels`,
-`composition_pixels` or `normalized` reference space. A displayed unit label does
-not control resizing. Evaluation contract `capy.filter/1` is distinct from shader
-ABI `4`. Unknown future contracts/ABIs remain preserved without compilation.
+Built-in definitions contain only `{"builtin":"exposure","version":1}`. The
+version describes parameter data, not shader code. Gradient Map and Gradient Fill
+use data version 2: version 1 stop arrays load with Classic interpolation, and
+Reverse is applied to the stops. The reader converts these values once; saves
+write the current data version. Opening resolves the current bundled
+implementation and editor schema once. Labels, ranges used by sliders,
+shader ABI, modules, passes, GPU preparation and fusion policy are app code;
+they are not saved for built-ins. Slight rendering changes from shader fixes
+are allowed. Built-in IDs are reserved; imported packages cannot replace them.
+
+Every application saves all keyed values, including defaults. Parameter keys,
+choice IDs, units and accepted data ranges form the lasting contract. Reordering
+controls or choices and changing insertion defaults must leave saved values
+unchanged. A UI range uses `soft_bounds`; it must not narrow accepted saved data.
+Unknown IDs, data versions, parameter keys or choices preserve the package as
+unsupported, without guessing, dropping values or substituting defaults.
+
+When a concrete parameter change requires conversion, add a small explicit
+converter for that filter and old data version, with a fixed-file test. Do not
+add historical shaders, shader generations, generic schema rebinding or a
+migration framework. If a setting cannot be converted faithfully, keep supporting
+its meaning in the current implementation. New fields must represent authored
+intent; runtime layouts, caches, preview settings and editor organization stay
+outside the file.
+
+Custom definitions embed code and their schema, use literal labels, and execute
+independently of built-in shader fusion. Their `slots` fixes the shader layout.
+Their parameter dimensions use `scalar`, `angle`, `time`, or `length` with a
+`source_pixels`, `composition_pixels` or `normalized` reference. Built-in dimensions
+come from the current catalog; a displayed unit never controls resizing.
+The custom evaluation contract `capy.filter/1` and shader ABI `5` are independent
+of built-in parameter versions. Unknown custom contracts remain preserved.
 
 ### Nested values
 
@@ -193,12 +218,12 @@ simulation; absolute colorimetric intent forbids black-point compensation.
 
 Effect `values` maps stable parameter keys to `{kind,value}` values: `number`
 (F32), `toggle` (boolean), `choice` (stable option string), `color` (portable
-color), `curve` (ordered `[x,y]` pairs), `gradient` (ordered
-`{position,color}` stops), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
-null). Omission means the definition default; null LUT means intentionally empty.
-Definition parameters are a map keyed by stable keys, with required `kind`,
+color), `curve` (ordered `[x,y]` pairs), `gradient` (`stops`, an ordered array of
+`{position,color}`, and `interpolation`: `Classic`, `LinearRgb` or `Oklab`), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
+null). Every parameter is required; null LUT means intentionally empty.
+Custom definition parameters are a map keyed by stable keys, with required `kind`,
 `default`, `label`, and optional `section`, `page`, `visible_when`, `soft_bounds`,
-`mapping` and dimensional declarations. Parameter `kind` is an object tagged by `kind`. Number adds
+`mapping`, `opaque` (default false, color only) and dimensional declarations. Parameter `kind` is an object tagged by `kind`. Number adds
 required finite `min`,`max`,`step`, U8 `decimals`, and optional presentation `unit`
 (default empty); `min<=max`, `step>0`, decimals at most 6. Choice adds required
 `options`, a nonempty array of unique stable literal strings or `{value,label}`
@@ -208,12 +233,12 @@ increasing points/stops in `[0,1]` with endpoints zero and one. Curve ordinates
 are within `[0,1]`. LUT resource type and declared working-color binding are
 validated together. Optional soft bounds lie within hard bounds; mapping is
 permitted only for number, logarithmic mapping requires positive minimum and
-power exponent is within `[0.125,8]`. Labels are literal strings or `{"message":"catalog-key"}`.
+power exponent is within `[0.125,8]`. Custom labels are literal strings. Built-in translation keys are never saved.
 `visible_when` addresses a local parameter `key` and typed `value`. Mapping is
 `{"type":"linear"}`, `{"type":"log"}` or
 `{"type":"power","exponent":number}`, with linear omitted.
 
-Definition `passes` retain `entry` and `sampling` (`neighborhood` with `radius`,
+Custom definition `passes` retain `entry` and `sampling` (`neighborhood` with `radius`,
 `parameter` with `key`,`scale`,`padding`, or `document`). `lookups` retain code
 resource refs, `entry`, ordered parameter `dependencies`, `values`,
 `workgroup_size`, `workgroups`. `auxiliary` is `lut3d` with local `resource` and
@@ -254,7 +279,7 @@ Pack partition and range changes never change source or resource identity.
 | `capy.icc/1` | `raw`; exact profile bytes, profile interpretation validated by the color subsystem. |
 | `capy.photo-metadata/1` | `raw`; `kind` is `exif`, `xmp` or `iptc`; retain exact supplied bytes. |
 | `capy.wgsl/1` | `utf8`; resolved shader text, local dependency slots only. |
-| `capy.lut3d/1` | `capy.lut3d-block/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain. Titles belong to individual parameter bindings. |
+| `capy.lut3d/1` | `capy.rgb-f32/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain. Titles belong to individual parameter bindings. |
 
 ICC, photo metadata, WGSL and LUT resources may use `capy.lz4-bytes/1` instead
 of their raw encoding. In that case `data.decoded_bytes` is required and gives
@@ -293,16 +318,20 @@ chunks, with zero padding in the final chunk, compressed as raw LZ4 without byte
 shuffle. Bounds cannot omit nonzero coverage; unused padding is validated.
 Contours are not converted to pixel coverage for convenience.
 
-A LUT block retains the existing 96-byte header followed by `size^3` 16-byte
-records `[red,green,blue,0]`. Its six header vectors contain `[size,0,0,0]`,
-`[low_rgb,0]`, `[high_rgb,0]`, `[exponent_rgb,0]`, `[scaled_low_rgb,0]`, and
-`[inverse_scaled_width_rgb,0]`. Per axis, the integer exponent is
-`clamp(-floor(log2(max(abs(low),abs(high)))),-126,126)`; scaled low is
-`low*2^exponent` and inverse width is `1/(high*2^exponent-low*2^exponent)`, evaluated in
-F64 then rounded to F32. Domain, padding and header agreement are checked using
-the LUT validator; headers and samples are preserved byte-for-byte, not
-regenerated on each save. This freezes a resource encoding, not a requirement
-that future GPU implementations consume that header directly.
+A LUT resource stores `size`, input `domain`, and exactly `size^3` tightly
+packed RGB samples: three little-endian F32 numbers per sample, red varying
+fastest, then green, then blue. `capy.rgb-f32/1` has no header or padding.
+Samples, domain and title survive save/reopen without reinterpretation. The
+renderer derives normalization metadata and its GPU buffer layout at runtime.
+The selected color space uses the stable IDs `srgb`, `display_p3`, `adobe_rgb`,
+`pro_photo`; option order is unrelated to their explicit GPU codes.
+
+The 256-pixel raster tile and 65,536-byte selection chunk sizes belong to their
+wire encodings. Changing runtime storage must not change interpretation of these
+encodings. Watercolor coefficients and wetness planes remain authored material
+state; brush presets and input dynamics are not stored stroke recipes. SDR
+rendition coefficients retain their wire defaults independently of UI defaults.
+Current renderer math may evolve while retaining these authored values.
 
 Verify the manifest member CRC before interpreting the index. Verify resource
 CRC before decoding or copying bytes; decoding additionally validates sample and
@@ -548,6 +577,12 @@ Fixtures distinguish malformed content from unsupported content and preservation
 | Source capture succeeds and preview rendering/encoding fails | Source-only save succeeds; no representation/member survives. |
 | Interrupted/stale write, provider pipe, browser bounded ranges, ZIP64 size/offset/count threshold | Preserve original publication and newer work; no imprecise bridge integers or unbounded whole-package copy. |
 | Save after rate change; renderer recreation; retained analysis/bake during later painting | Saved/reopened output uses captured roots and integrated phase; old resources live through accepted jobs. |
+
+The checked-in `codec/fixtures/authored-v1.capy` covers all 52 built-ins, exact
+raster samples, watercolor state, LUT samples and SDR rendition. Read it directly;
+do not regenerate it to make a changed reader pass. `parameter-bounds-v1.json`
+protects accepted numeric data independently of sliders. Add fixtures for each
+concrete conversion and test opening, editing, saving and reopening.
 
 Retain exact-byte/source/material/profile/LUT/selection assertions from the existing
 codec tests when replacing their envelope fixtures. Retain the integrated-phase

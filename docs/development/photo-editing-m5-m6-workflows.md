@@ -24,7 +24,7 @@ task framework.
 | Picker/property gestures | `crates/layer-ui/src/{color_picker_session.rs,eyedropper.rs,effects.rs,numeric.rs}` |
 | Panels/bars/holds | `crates/layer-ui/src/{session.rs,layout.rs,layout_presets.rs,customization.rs,canvas_bar.rs,toolbar_components.rs,shortcuts.rs}` |
 | Proof/presentation | `crates/layer-ui/src/{proof_workflow.rs,screen_status.rs}`; `crates/layer-render-wgpu/src/{present.rs,proof_view.wgsl}`; `crates/layer-host/src/scene.rs` |
-| Presets/admission | `crates/layer-core/src/effects.rs`; `crates/layer-ui/src/{effects.rs,filter_loading.rs,export_presets.rs}`; renderer `effects.rs::validate_namespace` |
+| Presets/admission | `crates/layer-core/src/effects.rs`; `crates/layer-ui/src/{effects.rs,filter_loading.rs,export_presets.rs}`; renderer `effect_validation.rs` |
 | Export | `crates/layer-ui/src/{export.rs,export_presets.rs}`; `crates/layer-host/src/export.rs`; `crates/layer-color/src/{resize.rs,output_rows.rs}`; renderer `snapshot/output.rs` |
 
 New type/action names below are **proposed API sketches**, not existing symbols. Use neighboring
@@ -286,12 +286,13 @@ switch; it does not replace pixel/system clipboard. Proposed
 `EffectSettings={instance:Arc<EffectInstance>,source_color}` retains complete program/immutable LUT
 payloads, no live layer or baked pixels.
 
-Preserve numeric/curve values verbatim and tagged color/gradient defining spaces. Numbers remain
-relative to destination working space, with no appearance promise or conversion wrapper. Equal program
-can be shared; otherwise retain embedded program. Never use `rebind` to silently default incompatible
-values. Apply the destination admissibility contract, including bundled F32 widened ranges; refuse the
-whole application with parameter/reason if unsupported. Custom declared contracts and
-shader/resource/finite-output admission remain effective.
+Preserve numeric/curve values verbatim and tagged color/gradient defining spaces.
+Numbers remain relative to the destination working space. Built-in presets retain
+a stable filter ID, parameter-data version and every keyed value; current code and
+controls come from the bundled catalog. Custom presets retain their immutable
+program. Apply shared accepted bounds independently of UI slider ranges and refuse
+the whole application with a parameter/reason if unsupported. Shader, resource
+and finite-output admission remain effective.
 
 Saved category reuses Filter Types search/eight-item preview cache. Shared Save as new/Rename/Remove
 uses stable IDs. Choosing a preset factors `EffectAction::Insert`: existing drawer
@@ -301,12 +302,11 @@ names unique by shared Rust lowercase comparison, 64 MiB serialized bytes includ
 programs/payloads and existing per-program limits. Do not put saved programs in EffectCatalog. Preview
 key includes library generation/stable ID/full settings; no previews during an effect gesture.
 
-Validate structure/shader/resources before library publication, and combined **live WGSL namespace**
-before application. Same ID and equal program shares it; same ID unequal source or different IDs with
-conflicting declarations refuses atomically with This filter uses a different version of a filter in
-this drawing. Hash IDs cannot solve declarations. Source/library and destination remain untouched. A
-valid stored preset may be inapplicable to this drawing without being deleted. No text namespacer or
-catalog substitution.
+Validate structure, shaders and resources before preset publication and
+application. Custom programs compile separately, so different implementations
+with the same ID or WGSL declarations can coexist. Catalog loading changes only
+future insertions; it never rewrites a stored preset or an existing application.
+Built-in IDs are reserved. Failed validation leaves source and destination intact.
 
 One pending validation carries request/epoch/target/effect identity/candidate/intent.
 Deleted/locked/changed target, cancellation or stale document drops the result; explicit reinvocation

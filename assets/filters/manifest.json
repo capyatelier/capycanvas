@@ -61,10 +61,11 @@
             "label": {"message":"resources-parameter-curves-domain"}
           },
           {
+            "soft_bounds":[0,15],
             "default": {"kind":"number","value":4},
             "key": "hdr_stops",
             "visible_when": {"key":"domain","value":{"kind":"choice","value":1}},
-            "kind": {"kind":"number","min":0,"max":15,"step":1,"decimals":0,"unit":"EV"},
+            "kind": {"kind":"number","min":0,"max":127,"step":1,"decimals":0,"unit":"EV"},
             "label": {"message":"resources-parameter-curves-hdr-stops"}
           }
         ],
@@ -85,28 +86,28 @@
         "label": {"message":"resources-filter-levels"},
         "pages": [{"id":"rgb","label":{"message":"resources-parameter-curves-curve-0"}},{"id":"red","label":{"message":"resources-parameter-curves-curve-1"}},{"id":"green","label":{"message":"resources-parameter-curves-curve-2"}},{"id":"blue","label":{"message":"resources-parameter-curves-curve-3"}}],
         "parameters": [
-          {"default":{"kind":"number","value":0},"key":"black","page":"rgb","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"white","page":"rgb","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"black","page":"rgb","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"white","page":"rgb","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
           {"default":{"kind":"number","value":1},"key":"gamma","page":"rgb","kind":{"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},"label":{"message":"resources-parameter-levels-gamma"},"section":{"message":"resources-section-levels-input"}},
-          {"default":{"kind":"number","value":0},"key":"output_black","page":"rgb","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"output_white","page":"rgb","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"output_black","page":"rgb","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"output_white","page":"rgb","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
           {"default":{"kind":"toggle","value":false},"key":"clamp_input","kind":{"kind":"toggle"},"label":{"message":"resources-parameter-levels-clamp-input"},"section":{"message":"resources-section-levels-clipping"}},
           {"default":{"kind":"toggle","value":false},"key":"clamp_output","kind":{"kind":"toggle"},"label":{"message":"resources-parameter-levels-clamp-output"},"section":{"message":"resources-section-levels-clipping"}},
-          {"default":{"kind":"number","value":0},"key":"red_black","page":"red","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"red_white","page":"red","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"red_black","page":"red","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"red_white","page":"red","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
           {"default":{"kind":"number","value":1},"key":"red_gamma","page":"red","kind":{"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},"label":{"message":"resources-parameter-levels-gamma"},"section":{"message":"resources-section-levels-input"}},
-          {"default":{"kind":"number","value":0},"key":"red_output_black","page":"red","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"red_output_white","page":"red","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":0},"key":"green_black","page":"green","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"green_white","page":"green","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"red_output_black","page":"red","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"red_output_white","page":"red","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"green_black","page":"green","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"green_white","page":"green","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
           {"default":{"kind":"number","value":1},"key":"green_gamma","page":"green","kind":{"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},"label":{"message":"resources-parameter-levels-gamma"},"section":{"message":"resources-section-levels-input"}},
-          {"default":{"kind":"number","value":0},"key":"green_output_black","page":"green","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"green_output_white","page":"green","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":0},"key":"blue_black","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"blue_white","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"green_output_black","page":"green","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"green_output_white","page":"green","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":0},"key":"blue_black","page":"blue","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-black"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"blue_white","page":"blue","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-white"},"section":{"message":"resources-section-levels-input"},"soft_bounds":[0,1]},
           {"default":{"kind":"number","value":1},"key":"blue_gamma","page":"blue","kind":{"decimals":2,"kind":"number","max":10,"min":0.1,"step":0.05,"unit":""},"label":{"message":"resources-parameter-levels-gamma"},"section":{"message":"resources-section-levels-input"}},
-          {"default":{"kind":"number","value":0},"key":"blue_output_black","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
-          {"default":{"kind":"number","value":1},"key":"blue_output_white","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]}
+          {"default":{"kind":"number","value":0},"key":"blue_output_black","page":"blue","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
+          {"default":{"kind":"number","value":1},"key":"blue_output_white","page":"blue","kind":{"decimals":3,"kind":"number","max":65504,"min":-65504,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]}
         ],
         "wgsl": ["color.wgsl","effects.wgsl"]
       }
@@ -224,7 +225,7 @@
         "kind": "adjustment",
         "label": {"message":"resources-filter-threshold"},
         "parameters": [
-          {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":0,"max":1,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]}
+          {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":-65504,"max":65504,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]}
         ],
         "wgsl": ["color.wgsl","effects.wgsl"]
       }
@@ -360,7 +361,7 @@
         "auxiliary":{"kind":"lut3d","resource":"resource","color_space":"color_space"},
         "parameters":[
           {"key":"resource","label":{"message":"resources-lookup-table"},"kind":{"kind":"lut3d"},"default":{"kind":"lut3d","value":null}},
-          {"key":"color_space","label":{"message":"resources-lookup-space"},"kind":{"kind":"choice","options":["sRGB","Display P3","Adobe RGB (1998)","ProPhoto RGB"]},"default":{"kind":"choice","value":0}},
+          {"key":"color_space","label":{"message":"resources-lookup-space"},"kind":{"kind":"choice","options":[{"value":"srgb","label":"sRGB"},{"value":"display_p3","label":"Display P3"},{"value":"adobe_rgb","label":"Adobe RGB (1998)"},{"value":"pro_photo","label":"ProPhoto RGB"}]},"default":{"kind":"choice","value":0}},
           {"key":"intensity","label":{"message":"resources-lookup-intensity"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":100}}
         ],
         "wgsl":["color-lookup.wgsl"]
@@ -465,9 +466,10 @@
         "label": {"message":"resources-filter-exposure"},
         "parameters": [
           {
+            "soft_bounds":[-10,10],
             "default": {"kind":"number","value":0},
             "key": "exposure",
-            "kind": {"decimals":2,"kind":"number","max":10,"min":-10,"step":0.1,"unit":"EV"},
+            "kind": {"decimals":2,"kind":"number","max":126,"min":-126,"step":0.1,"unit":"EV"},
             "label": {"message":"resources-parameter-exposure-exposure"}
           },
           {
@@ -574,6 +576,7 @@
             "label": {"message":"resources-parameter-black-white-tint"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.75,0.53,0.3,1]}},
             "key": "tint_color",
             "kind": {"kind":"color"},
@@ -941,12 +944,14 @@
         "label": {"message":"resources-filter-split-tone"},
         "parameters": [
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.16,0.33,0.58,1]}},
             "key": "shadows",
             "kind": {"kind":"color"},
             "label": {"message":"resources-parameter-split-tone-shadows"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.68,0.34,1]}},
             "key": "highlights",
             "kind": {"kind":"color"},
@@ -1058,6 +1063,7 @@
             "section": {"message":"resources-section-film-grain-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1203,12 +1209,14 @@
             "label": {"message":"resources-parameter-halftone-contrast"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.05,0.07,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": {"message":"resources-parameter-halftone-ink"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.96,0.94,0.87,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
@@ -1255,12 +1263,14 @@
             "label": {"message":"resources-parameter-crosshatch-angle"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.08,0.09,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": {"message":"resources-parameter-crosshatch-ink"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.91,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
@@ -1467,12 +1477,14 @@
             "label": {"message":"resources-parameter-pencil-contrast"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.07,0.06,0.05,1]}},
             "key": "ink",
             "kind": {"kind":"color"},
             "label": {"message":"resources-parameter-pencil-ink"}
           },
           {
+            "opaque":true,
             "default": {"kind":"color","value":{"space":"Srgb","rgba":[0.97,0.95,0.9,1]}},
             "key": "paper",
             "kind": {"kind":"color"},
@@ -1627,6 +1639,7 @@
             "section": {"message":"resources-section-ripple-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1731,6 +1744,7 @@
             "section": {"message":"resources-section-rainy-glass-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1793,6 +1807,7 @@
             "section": {"message":"resources-section-vhs-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1855,6 +1870,7 @@
             "section": {"message":"resources-section-crt-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1913,6 +1929,7 @@
             "section": {"message":"resources-section-heat-haze-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -1968,6 +1985,7 @@
             "section": {"message":"resources-section-iridescence-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},
@@ -2025,6 +2043,7 @@
             "section": {"message":"resources-section-domain-warp-animation"}
           },
           {
+            "dimension":"time",
             "default": {"kind":"number","value":0},
             "key": "time",
             "kind": {"decimals":2,"kind":"number","max":3600,"min":0,"step":0.1,"unit":"s"},

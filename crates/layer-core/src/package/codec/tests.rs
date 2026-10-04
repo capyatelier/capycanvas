@@ -148,7 +148,7 @@ fn full_archives_preserve_authored_graph_exact_samples_material_and_resource_byt
         assert_eq!(zip.by_name("mimetype").unwrap().compression(),zip::CompressionMethod::Stored);
         assert!(prepared.resources().entries.iter().any(|entry|entry.record["type"]=="capy.icc/1"));
         assert!(prepared.resources().entries.iter().any(|entry|entry.record["type"]=="capy.lut3d/1"));
-        assert!(prepared.resources().entries.iter().any(|entry|entry.record["type"]=="capy.wgsl/1"));
+        assert!(!prepared.resources().entries.iter().any(|entry|entry.record["type"]=="capy.wgsl/1"));
     }
 }
 
@@ -326,7 +326,7 @@ fn reopened_effects_resize_by_declared_dimension_independently_of_display_units(
             let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
             let effect=document.scene().effect_handle(document.scene().order()[1]).unwrap();
             let definition=document.artwork.effects.get(effect).unwrap().definition;
-            let mut program=crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
+            let mut program=crate::effect_catalog::custom_program("gaussian_blur");
             let parameters=Arc::make_mut(&mut Arc::make_mut(&mut program).parameters);
             let sigma=parameters.iter().position(|p|p.key.as_ref()=="sigma").unwrap();
             parameters[sigma].dimension=dimension;
@@ -431,3 +431,6 @@ fn valid_preview_remains_independent_when_its_png_is_corrupt_or_mismatched() {
 
 #[path = "roundtrip_semantics.rs"]
 mod roundtrip_semantics;
+
+#[path="compatibility.rs"]
+mod compatibility;

@@ -1,4 +1,4 @@
-use crate::{EffectInstance, EffectValue, bundled_effect_catalog, color::{RgbSpace, SampleDepth}, curve_inverse, curve_value};
+use crate::{EffectInstance, EffectValue, bundled_effect_catalog, color::{RgbSpace}, curve_inverse, curve_value};
 use crate::curves::{calibrate_curves, curve_place_knot, curve_point_between, curve_reusable_knot, targeted_curve_point};
 use crate::levels::CalibrationRole;
 
@@ -57,7 +57,7 @@ fn luminance(rgb: [f64; 3], space: RgbSpace) -> f64 {
     let w = space.to_xyz()[1]; rgb[1]+w[0]*(rgb[0]-rgb[1])+w[2]*(rgb[2]-rgb[1])
 }
 fn log_effect(stops: f32) -> EffectInstance {
-    let mut effect = EffectInstance::new(bundled_effect_catalog().get("curves").unwrap().program().for_depth(SampleDepth::F32));
+    let mut effect = EffectInstance::new(bundled_effect_catalog().get("curves").unwrap().program());
     let crate::EffectParameterKind::Choice {options} = &effect.program.parameters.iter().find(|p| p.key.as_ref() == "domain").unwrap().kind else {panic!("missing domain")};
     let index = options.iter().position(|o| o.value() == "Log HDR").unwrap();
     effect.set("domain", EffectValue::Choice(index as u32)).unwrap();

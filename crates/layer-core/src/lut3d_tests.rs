@@ -1,11 +1,10 @@
 fn lookup_effect() -> crate::EffectInstance {
-    let mut program=(*crate::bundled_effect_catalog().get("color_lookup").unwrap().program()).clone();
+    let mut program=(*crate::effect_catalog::custom_program("color_lookup")).clone();
     for parameter in Arc::make_mut(&mut program.parameters) {match parameter.key.as_ref() {"resource"=>parameter.key="table".into(),"color_space"=>parameter.key="space".into(),_=>()}}
     program.auxiliary=Some(crate::EffectAuxiliary::Lut3d {resource:"table".into(),color_space:"space".into()});
     crate::EffectInstance::new(Arc::new(program))
 }
 use crate::{color::RgbSpace, Lut3d};
-use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
 fn cube() -> String {
@@ -27,25 +26,35 @@ fn cube_parser_orders_headers_and_samples_and_refuses_malformed_input() {
 }
 
 #[test]
-fn canonical_payload_checks_all_six_headers_padding_and_digest() {
-    let lut=Lut3d::parse_cube(cube().as_bytes()).unwrap();assert_eq!(Lut3d::HEADER_BYTES,96);assert_eq!(lut.bytes(),224);let bytes=lut.payload().unwrap();
-    for record in 0..6 { for component in 0..4 { let mut corrupted=bytes.to_vec();corrupted[record*16+component*4]^=1;let mut json=serde_json::to_value(&lut).unwrap();json["digest"]=serde_json::json!(Vec::from(<[u8;32]>::from(Sha256::digest(&corrupted))));let reference:Lut3d=serde_json::from_value(json).unwrap();assert!(reference.with_payload(&corrupted).is_err(),"header {record}/{component}"); } }
-    let mut padding=bytes.to_vec();padding[96+12]=1;assert!(lut.with_payload(&padding).is_err());let mut sample=bytes.to_vec();sample[100]^=1;assert!(lut.with_payload(&sample).is_err());assert!(lut.with_payload(&bytes[..bytes.len()-1]).is_err());
-    let owned:Arc<[u8]>=bytes.into();let address=owned.as_ptr();assert_eq!(descriptor(&lut).with_owned_payload(owned).unwrap().payload().unwrap().as_ptr(),address);
-    let debug=format!("{lut:?}");assert!(!debug.contains("samples"));assert!(debug.len()<512);
+fn canonical_payload_is_tightly_packed_rgb_and_checks_digest() {
+    let lut=Lut3d::parse_cube(cube().as_bytes()).unwrap();
+    assert_eq!(lut.bytes(),8*3*4);
+    let bytes=lut.payload().unwrap();
+    let expected:Vec<_>=lut.samples().unwrap().flatten().flat_map(f32::to_le_bytes).collect();
+    assert_eq!(bytes,expected);
+    let mut sample=bytes.to_vec();sample[4]^=1;
+    assert!(lut.with_payload(&sample).is_err());
+    assert!(lut.with_payload(&bytes[..bytes.len()-1]).is_err());
+    sample[..4].copy_from_slice(&f32::NAN.to_le_bytes());
+    assert!(Lut3d::from_resource(2,lut.domain(),"bad".into(),sample.into()).is_err());
+    let owned:Arc<[u8]>=bytes.into();let address=owned.as_ptr();
+    assert_eq!(descriptor(&lut).with_owned_payload(owned).unwrap().payload().unwrap().as_ptr(),address);
 }
 
 #[test]
 fn aliases_share_verified_storage_but_keep_titles_and_geometry_identity() {
     let donor=Lut3d::parse_cube(cube().as_bytes()).unwrap();let mut json=serde_json::to_value(&donor).unwrap();assert!(json.get("payload").is_none());assert!(json.get("spaces").is_none());json["title"]=serde_json::json!("Alias");let alias:Lut3d=serde_json::from_value(json.clone()).unwrap();assert!(!alias.accepts(RgbSpace::Srgb));let ready=alias.with_shared_payload(&donor).unwrap();assert!(Arc::ptr_eq(ready.storage().unwrap(),donor.storage().unwrap()));assert_eq!(ready.title(),"Alias");assert_eq!(ready.digest(),donor.digest());for space in RgbSpace::ALL {assert_eq!(ready.accepts(space),donor.accepts(space));}
     assert!(alias.with_shared_payload(&descriptor(&donor)).is_err());
-    for (key,value) in [("size",serde_json::json!(3)),("domain",serde_json::json!([[0,0,0],[2,1,1]])),("digest",serde_json::json!(vec![0;32])),("title",serde_json::json!("bad\u{1}"))] {let mut changed=json.clone();changed[key]=value;let changed:Lut3d=serde_json::from_value(changed).unwrap();assert!(changed.with_shared_payload(&donor).is_err());}
+    for (key,value) in [("size",serde_json::json!(3)),("domain",serde_json::json!([[0,0,0],[0,1,1]])),("digest",serde_json::json!(vec![0;32])),("title",serde_json::json!("bad\u{1}"))] {let mut changed=json.clone();changed[key]=value;let changed:Lut3d=serde_json::from_value(changed).unwrap();assert!(changed.with_shared_payload(&donor).is_err());}
     let renamed= Lut3d::from_samples(2,donor.domain(),"other".into(),donor.samples().unwrap().collect::<Vec<_>>().into()).unwrap();assert_eq!(renamed.digest(),donor.digest());
 }
 
 #[test]
 fn domain_admission_preserves_normal_adjacent_ranges_and_rejects_ftz_loss() {
-    for minimum in [f32::MIN_POSITIVE,1e-30,1.,1e30,-1e-30] {let maximum=minimum.next_up();let lut=constant([[minimum;3],[maximum;3]],[0.;3]).unwrap();let read=|record:usize| f32::from_le_bytes(lut.payload().unwrap()[record*16..record*16+4].try_into().unwrap());let exponent=read(3) as i32;let scale=2f64.powi(exponent);let low=read(4);let reciprocal=read(5);assert!(reciprocal.is_finite());for (x,expected) in [(minimum,0.),(maximum,1.)] {assert_eq!(((f64::from(x)*scale) as f32-low)*reciprocal,expected);} }
+    for minimum in [f32::MIN_POSITIVE,1e-30,1.,1e30,-1e-30] {
+        let domain=[[minimum;3],[minimum.next_up();3]];
+        assert_eq!(constant(domain,[0.;3]).unwrap().domain(),domain);
+    }
     for domain in [[[0.;3],[1e-40;3]],[[1.;3],[1.;3]],[[-1e-40;3],[1e-40;3]]] {assert!(constant(domain,[0.;3]).is_err());}
     assert!(constant([[-1e37;3],[1e37;3]],[0.;3]).is_ok());
     let collapsed=cube().replace("DOMAIN_MIN 0 0 0","DOMAIN_MIN 1 1 1").replace("DOMAIN_MAX 1 1 1","DOMAIN_MAX 1.00000001 1.00000001 1.00000001");assert!(Lut3d::parse_cube(collapsed.as_bytes()).is_err());
@@ -68,12 +77,13 @@ fn typed_resource_schema_requires_one_declared_resource_and_atomic_space_admissi
     let before=effect.clone();assert!(effect.set("table",EffectValue::Lut3d(Some(Arc::new(descriptor(&valid))))).is_err());assert_eq!(effect,before);
     let mut undeclared=effect.clone();Arc::make_mut(&mut undeclared.program).auxiliary=None;assert!(undeclared.validate().is_err());
     let mut duplicated=effect.clone();let parameter=duplicated.program.parameters[0].clone();let mut parameters=duplicated.program.parameters.to_vec();let mut second=parameter;second.key="second_table".into();parameters.push(second);Arc::make_mut(&mut duplicated.program).parameters=parameters.into();duplicated.values.push(EffectValue::Lut3d(None));assert!(duplicated.validate().is_err());
-    let mut wrong_space=effect.clone();let parameters=Arc::make_mut(&mut Arc::make_mut(&mut wrong_space.program).parameters);let EffectParameterKind::Choice {options}=&mut parameters[1].kind else {panic!()};let options=Arc::make_mut(options);options.swap(0,1);assert!(wrong_space.validate().is_err());
+    let mut wrong_space=effect.clone();let parameters=Arc::make_mut(&mut Arc::make_mut(&mut wrong_space.program).parameters);let EffectParameterKind::Choice {options}=&mut parameters[1].kind else {panic!()};let options=Arc::make_mut(options);options.swap(0,1);wrong_space.validate().unwrap();
+    assert_eq!(wrong_space.gpu_parameters(RgbSpace::Srgb).unwrap()[2][0],RgbSpace::DisplayP3.shader_code() as f32);
 }
 
 #[test]
 fn maximum_table_has_bounded_canonical_storage_and_descriptor_only_json() {
-    let lut=Lut3d::from_samples(65,[[0.;3],[1.;3]],"maximum".into(),vec![[0.25,0.5,0.75];65usize.pow(3)].into()).unwrap();assert_eq!(lut.bytes(),96+65usize.pow(3)*16);assert_eq!(lut.samples().unwrap().count(),65usize.pow(3));assert!(serde_json::to_vec(&lut).unwrap().len()<512);assert!(RgbSpace::ALL.into_iter().all(|s|lut.accepts(s)));assert!(Lut3d::from_samples(65,[[0.;3],[1.;3]],"missing".into(),vec![[0.;3];8].into()).is_err());
+    let lut=Lut3d::from_samples(65,[[0.;3],[1.;3]],"maximum".into(),vec![[0.25,0.5,0.75];65usize.pow(3)].into()).unwrap();assert_eq!(lut.bytes(),65usize.pow(3)*12);assert_eq!(lut.samples().unwrap().count(),65usize.pow(3));assert!(serde_json::to_vec(&lut).unwrap().len()<512);assert!(RgbSpace::ALL.into_iter().all(|s|lut.accepts(s)));assert!(Lut3d::from_samples(65,[[0.;3],[1.;3]],"missing".into(),vec![[0.;3];8].into()).is_err());
 }
 
 use crate::{Document, DocumentNames, Edit, Editor, EffectValue, Point};
@@ -145,7 +155,7 @@ fn archive_restores_values_defaults_and_deduplicates_aliases() {
     let a=effect(&reopened,0);let b=effect(&reopened,1);assert_ne!(a.lut3d().unwrap().title(),b.lut3d().unwrap().title());
     assert!(Arc::ptr_eq(a.lut3d().unwrap().storage().unwrap(),b.lut3d().unwrap().storage().unwrap()));assert_eq!(a.resources().count(),2);
     for resource in a.resources(){assert!(Arc::ptr_eq(resource.storage().unwrap(),a.lut3d().unwrap().storage().unwrap()));}
-    let budget=code_bytes(&document)+224;
+    let budget=code_bytes(&document)+96;
     assert!(open_document(&bytes,crate::ProjectLimits {asset_bytes:budget-1,..Default::default()}).is_err());
     assert!(open_document(&bytes,crate::ProjectLimits {asset_bytes:budget,..Default::default()}).is_ok());
     let mut corrupted=bytes.clone();*corrupted.last_mut().unwrap()^=1;assert!(open_document(&corrupted,Default::default()).is_err());assert!(open_document(&bytes[..bytes.len()-1],Default::default()).is_err());
@@ -163,7 +173,7 @@ fn malformed_resource_bindings_are_rejected_before_editable_adoption() {
                 1=>{m["objects"][application]["data"]["definition"]=serde_json::json!({"ref":PortableId::random()});}
                 2=>{m["objects"][application]["data"]["values"]["missing"]=serde_json::json!({"kind":"number","value":0});}
                 3=>{let duplicate=m["resources"][lut].clone();m["resources"].as_array_mut().unwrap().push(duplicate);}
-                4=>{m["resources"][lut]["data"]["domain"]=serde_json::json!([[0,0,0],[2,1,1]]);}
+                4=>{m["resources"][lut]["data"]["domain"]=serde_json::json!([[0,0,0],[0,1,1]]);}
                 5=>{m["resources"][lut]["bytes"]=u64::MAX.to_string().into();}
                 6=>{m["resources"][lut]["location"]["offset"]=u64::MAX.to_string().into();}
                 _=>{m["objects"][application]["data"]["values"]=serde_json::json!([]);}
@@ -185,7 +195,7 @@ fn undo_and_pending_operations_retain_and_charge_shared_resources_once() {
     let mut definition=editor.document().artwork.definitions.get(definition_handle).unwrap().clone();Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters)[0].default=EffectValue::Lut3d(None);
     let change=Edit::Batch(vec![application_edit(editor.document(),0,EffectValue::Lut3d(None)),Edit::Definition(RecordChange::replace(&editor.document().artwork.definitions,definition_handle,Some(definition)).unwrap())]);
     editor.perform(change).unwrap();assert!(weak.upgrade().is_some());assert!(editor.undo().unwrap());assert_eq!(effect(editor.document(),0).lut3d().unwrap().storage().unwrap().as_ptr(),weak.upgrade().unwrap().as_ptr());assert!(editor.redo().unwrap());assert!(weak.upgrade().is_some());drop(editor);assert!(weak.upgrade().is_none());
-    let captured=resource_document();let budget=code_bytes(&captured)+224;
+    let captured=resource_document();let budget=code_bytes(&captured)+96;
     let mut pending=Document::new(PortableId::random(),64,48,DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
     pending.target_operations_mut(pending.working.target.unwrap()).unwrap().push(crate::RasterOperation {placement:crate::Affine::default(),coverage:crate::CoverageSnapshot::reveal_all(CoverageHandle::from_index(50),[64,48],Point::default()),kind:crate::RasterOperationKind::Bake {scene:captured.snapshot(),scope:SceneScope::Members(captured.scene().order()[..2].to_vec().into()),offset:Point::default()}});
     assert!(pending.validate(crate::ProjectLimits {asset_bytes:budget-1,..Default::default()}).is_err());pending.validate(crate::ProjectLimits {asset_bytes:budget,..Default::default()}).unwrap();
@@ -206,13 +216,13 @@ fn resource_ownership_edits_require_admission_but_intensity_and_title_aliases_do
 
 #[test]
 fn asset_budget_deduplicates_physical_resource_and_source_ownership() {
-    let mut document=resource_document();let base=code_bytes(&document)+224;
+    let mut document=resource_document();let base=code_bytes(&document)+96;
     assert!(document.validate(crate::ProjectLimits {asset_bytes:base-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:base,..Default::default()}).unwrap();
     let source=crate::color::source::rgba8_source([2,1],|_,_|[40,50,60,255]);let source_bytes=std::mem::size_of::<crate::color::source::SourceImage>()+source.tiles.len()*96+source.tiles.values().map(|t|t.compressed_len()).sum::<usize>();
     for _ in 0..2 {document.artwork.paint.insert(PortableId::random(),PaintSource {domain:[64,48],original:Some(source.clone()),raster:Default::default(),operations:Default::default()}).unwrap();}
     let total=base+source_bytes as u64;assert!(document.validate(crate::ProjectLimits {asset_bytes:total-1,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total,..Default::default()}).unwrap();
     let independent=Arc::new(Lut3d::parse_cube(cube().as_bytes()).unwrap());document.apply(application_edit(&document,0,EffectValue::Lut3d(Some(independent)))).unwrap();
-    assert!(document.validate(crate::ProjectLimits {asset_bytes:total+223,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total+224,..Default::default()}).unwrap();
+    assert!(document.validate(crate::ProjectLimits {asset_bytes:total+95,..Default::default()}).is_err());document.validate(crate::ProjectLimits {asset_bytes:total+96,..Default::default()}).unwrap();
 }
 
 #[test]
@@ -263,6 +273,15 @@ fn lookup_resource_identity_survives_aliases_and_saved_payload_installation() {
     let alias = descriptor(&original).with_shared_payload(&restored).unwrap();
     assert!(alias.resource().unwrap().same_owner(restored.resource().unwrap()));
     let mut damaged = original.payload().unwrap().to_vec();
-    damaged[Lut3d::HEADER_BYTES + 12] = 1;
+    damaged[..4].copy_from_slice(&f32::NAN.to_le_bytes());
     assert!(Lut3d::from_resource(original.size(), original.domain(), original.title().into(), damaged.into()).is_err());
+}
+
+#[test]
+fn builtin_look_matching_includes_domain_as_well_as_samples() {
+    let original=crate::lut3d::Look::Warm.resource();
+    let changed=Lut3d::from_samples(original.size(),[[0.;3],[2.;3]],original.title().into(),original.samples().unwrap().collect::<Vec<_>>().into()).unwrap();
+    assert_eq!(changed.digest(),original.digest());
+    assert_eq!(crate::lut3d::Look::for_resource(&changed),None);
+    assert_eq!(crate::lut3d::Look::for_resource(&original),Some(crate::lut3d::Look::Warm));
 }

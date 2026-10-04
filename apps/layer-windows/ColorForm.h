@@ -48,6 +48,7 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
         for(uint32_t i=0;i<choices.Size();++i)if(choices.GetArrayAt(i).GetStringAt(0)==str(draft,L"model")&&model.SelectedIndex()!=int32_t(i))model.SelectedIndex(i);
         auto fields=array(draft,L"fields"),labels=array(view,L"labels");
         for(uint32_t i=0;i<4;++i){
+            entries[i].Visibility(labels.GetStringAt(i).empty()?Visibility::Collapsed:Visibility::Visible);
             entries[i].Header(box_value(labels.GetStringAt(i)));
             AutomationProperties::SetName(entries[i],labels.GetStringAt(i));
             if(fieldsChanged&&entries[i].FocusState()==FocusState::Unfocused&&entries[i].Text()!=fields.GetStringAt(i))entries[i].Text(fields.GetStringAt(i));
@@ -80,8 +81,8 @@ struct ColorForm : std::enable_shared_from_this<ColorForm> {
         return true;
     }
     J draft(){auto request=J::Parse(object(view,L"draft").Stringify());A fields;for(auto entry:entries)fields.Append(S(entry.Text()));request.Insert(L"fields",fields);if(intensity.Visibility()==Visibility::Visible)request.Insert(L"change_intensity_text",S(intensity.Text()));return request;}
-    void load(J const& color,hstring const& space,J const& panel=J{},bool paint=false){
-        auto request=O({{L"color",color},{L"document_space",S(space)}});
+    void load(J const& color,hstring const& space,J const& panel=J{},bool paint=false,bool opaque=false){
+        auto request=O({{L"color",color},{L"document_space",S(space)},{L"opaque",B(opaque)}});
         if(flag(panel,L"hdr")){request.Insert(L"document_depth",S(str(panel,L"document_depth")));if(paint)request.Insert(L"intensity",N(num(panel,L"intensity")));request.Insert(L"rendition",object(panel,L"rendition"));}
         auto next=request.Stringify();if(next==source){relocalize();return;}source=next;
         if(view.HasKey(L"draft"))request.Insert(L"model",S(str(object(view,L"draft"),L"model")));

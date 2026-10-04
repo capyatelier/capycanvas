@@ -129,7 +129,7 @@ fn input_reference(rgb: [f32; 3], alpha: f32) -> [f64; 3] {
 fn threshold(image: bool, value: f32) -> EffectInstance {
     let mut layer = effect(2, "threshold", image);
     let instance = &mut layer;
-    instance.program = instance.program.for_depth(SampleDepth::F32);
+    instance.program = instance.program.clone();
     set(&mut layer, "threshold", EffectValue::Number(value)); layer
 }
 

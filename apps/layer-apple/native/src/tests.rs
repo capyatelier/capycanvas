@@ -962,7 +962,7 @@ fn new_canvas_dimensions_and_worker_png_export_preserve_captured_pixels() {
 }
 
 #[test]
-fn bundled_library_refresh_waits_without_migrating_document_filters() {
+fn custom_catalog_load_preserves_document_filters() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 =
@@ -971,19 +971,15 @@ fn bundled_library_refresh_waits_without_migrating_document_filters() {
         app.draw_frame();
         let before = unsafe { &*app.0 }.host.session.engine().document().clone();
         let checkpoint = unsafe { &*app.0 }.host.session.engine().document().revision;
-        let catalog = layer_core::bundled_effect_catalog();
-        let mut definition = catalog.get("unsharp_mask").unwrap().clone();
-        std::sync::Arc::make_mut(&mut definition.program).label = "Updated library".into();
-        let package = layer_core::EffectPackage {
-            format: 2,
-            categories: catalog.categories().to_vec(),
-            filters: vec![definition],
-        };
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../../examples/filters/tent-blur");
+        let manifest = std::fs::read_to_string(directory.join("manifest.json")).unwrap();
         let host = &mut unsafe { &mut *app.0 }.host;
-        let change = host.session.load_effect_library(
-            &serde_json::to_string(&package).unwrap(),
-            |name| Err(format!("Missing filter module: {name}")),
-            layer_core::EffectInstallMode::Replace,
+        let change = host.session.load_effect_package(
+            &manifest,
+            |name| std::fs::read_to_string(directory.join(name))
+                .map(std::sync::Arc::from).map_err(|error| error.to_string()),
+            layer_core::EffectInstallMode::Add,
         ).unwrap();
         host.dirty |= change.canvas_wake;
         assert_eq!(unsafe { capy_apple_project_ready(app.0) }, 1);

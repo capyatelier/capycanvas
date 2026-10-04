@@ -358,7 +358,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
 
     pub fn new_localized(renderer: R, document: Document, viewport: [u32; 2], platform: Platform, localization: std::sync::Arc<Localizer>) -> Result<Self, String> {
-        effects::validate_document_labels(&document, &localization)?;
         if document.artwork.paint.iter().any(|(_, _, source)| source.original.is_some()) && !renderer.supports_tiled_sources() {
             return Err("This renderer does not support tiled photo documents".into());
         }
@@ -6188,21 +6187,13 @@ mod tests {
                         }
                     }
                 }
-                if field != 0 {
-                    let mut document = NewDocumentOptions::default().project(&localization).unwrap();
-                    let (_,edit)=effect_insertion(&document,layer_core::EffectInstance::new(definition.program.clone()),"Invalid resource filter");
-                    document.apply(edit).unwrap();
-                    let result = UiSession::new_localized(Recorder::default(), document, [256, 256], Platform::Gtk, localization.clone());
-                    assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "embedded field {field}: {key}");
-                }
-                for library in [false, true] {
+                {
                     let mut session = UiSession::blank_localized(Recorder::default(), [256, 256], Platform::Gtk, localization.clone()).unwrap();
                     let document = session.engine().document().clone();
                     let catalog_revision = session.state().filter_catalog_revision;
                     let package = package_json(categories.clone(), vec![definition.clone()]);
-                    let result = if library { session.load_effect_library(&package, |_| panic!("inline program"), EffectInstallMode::Replace) }
-                        else { session.load_effect_package(&package, |_| panic!("inline program"), EffectInstallMode::Replace) };
-                    assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "package field {field}, library {library}: {key}");
+                    let result = session.load_effect_package(&package, |_| panic!("inline program"), EffectInstallMode::Replace);
+                    assert!(matches!(result, Err(error) if error == localization.text(MessageId::RESOURCES_INVALID_MESSAGE).as_ref()), "package field {field}: {key}");
                     assert_eq!(session.engine().document(), &document);
                     assert_eq!(session.state().filter_catalog_revision, catalog_revision);
                     assert!(!session.state().filter_load.pending);
@@ -9241,7 +9232,7 @@ mod tests {
         let revision = s.state.filter_catalog_revision;
         let commands = [CommandId::NewDocument, CommandId::OpenDocument, CommandId::ExportDocument];
         let enabled = commands.map(|id| s.command(id).enabled);
-        let change = s.load_effect_library(&package,
+        let change = s.load_effect_package(&package,
             |_| panic!("inline sources"), EffectInstallMode::Merge).unwrap();
         assert!(!change.canvas_wake);
         assert_eq!(s.state.filter_catalog_revision, revision);
@@ -9261,11 +9252,11 @@ mod tests {
         s.pen(event(&s, 2, PenPhase::Up, 1.0)).unwrap();
         s.frame(1, 1).unwrap();
         assert!(s.background_readback_idle());
-        let package = package_json(s.effect_catalog.categories().to_vec(), vec![s.effect_catalog.get("unsharp_mask").unwrap().clone()]);
+        let package = package_json(s.effect_catalog.categories().to_vec(), vec![custom_filter("unsharp_mask")]);
         s.load_effect_package(
             &package,
             |_| panic!("inline sources"),
-            EffectInstallMode::Replace,
+            EffectInstallMode::Merge,
         )
         .unwrap();
         assert!(s.state.filter_load.pending && s.filter_previews_idle());
@@ -9281,7 +9272,7 @@ mod tests {
         s.frame(0, 0).unwrap();
         let id = s.engine.document().working.occurrence.unwrap();
         let original = effects::effect_draft(s.engine.document(),id).unwrap();
-        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        let mut definition = custom_filter("unsharp_mask");
         Arc::make_mut(&mut definition.program).label = "Runtime sharpness".into();
         let parameters = Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters);
         parameters[0].label = "Runtime radius".into();
@@ -9291,7 +9282,7 @@ mod tests {
             .load_effect_package(
                 &json,
                 |_| panic!("inline sources"),
-                EffectInstallMode::Replace,
+                EffectInstallMode::Merge,
             )
             .unwrap();
         assert!(change.canvas_wake);
@@ -9301,7 +9292,7 @@ mod tests {
             original
         );
         assert!(
-            s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Replace)
+            s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Merge)
                 .is_err()
         );
         s.dispatch(UiAction::Effect {
@@ -9330,14 +9321,16 @@ mod tests {
         assert!(s.state.filter_load.error.is_none());
         assert_eq!(s.state.filter_catalog_revision, 1);
         let current = effects::effect_draft(s.engine.document(),id).unwrap();
-        assert_eq!(current.program.label, layer_core::ResourceLabel::from("Runtime sharpness"));
+        assert_eq!(current.program,original.program);
+        assert_eq!(s.effect_catalog.get("test:unsharp_mask").unwrap().label(),&layer_core::ResourceLabel::from("Runtime sharpness"));
         assert_eq!(current.value("amount"), Some(&EffectValue::Number(175.)));
-        assert_eq!(s.state.layer_properties.controls[0].label, "Runtime radius");
+        assert_ne!(s.state.layer_properties.controls[0].label, "Runtime radius");
         assert_eq!(s.filter_preview_revision().2, 1);
         s.frame(4, 4).unwrap();
         // Device-side compilation failure must not publish any metadata or layers.
-        s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Replace)
-            .unwrap();
+        let mut changed:serde_json::Value=serde_json::from_str(&json).unwrap();
+        changed["filters"][0]["program"]["label"]=serde_json::json!("Rejected update");
+        s.load_effect_package(&changed.to_string(), |_| panic!(), EffectInstallMode::Merge).unwrap();
         let request_id = s.state.filter_load.request_id;
         s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
             request_id,
@@ -9350,6 +9343,18 @@ mod tests {
             effects::effect_draft(s.engine.document(),id).unwrap(),
             current
         );
+        let document = s.engine.document().clone();
+        let checkpoint = s.engine.checkpoint();
+        s.renderer_mut().validation = None;
+        let change = s.load_effect_package(&json, |_| panic!(), EffectInstallMode::Merge).unwrap();
+        assert_ne!(change.regions & regions::DOCUMENT, 0);
+        assert!(!s.state.filter_load.pending);
+        assert!(s.renderer_mut().validation.is_none());
+        s.set_localization(Localizer::shared(crate::UiLanguage::Japanese));
+        assert!(s.state.filter_load.error.is_none());
+        assert_eq!(s.state.filter_catalog_revision, 1);
+        assert_eq!(s.engine.document(), &document);
+        assert_eq!(s.engine.checkpoint(), checkpoint);
     }
 
     #[test]
@@ -9358,7 +9363,7 @@ mod tests {
         use std::sync::Arc;
         for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
             let mut s = session(platform);
-            let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
+            let mut definition = custom_filter("brightness_contrast");
             s.frame(0, 0).unwrap();
             let program = Arc::make_mut(&mut definition.program);
             program.id = "test:runtime".into();
@@ -9396,11 +9401,11 @@ mod tests {
         }
     }
     #[test]
-    fn runtime_filter_add_cannot_replace_a_document_only_program() {
+    fn runtime_filter_add_preserves_a_document_only_program() {
         use layer_core::{EffectInstallMode, EffectInstance};
         use std::sync::Arc;
         let mut s = session(Platform::Gtk);
-        let mut definition = s.effect_catalog.get("brightness_contrast").unwrap().clone();
+        let mut definition = custom_filter("brightness_contrast");
         Arc::make_mut(&mut definition.program).id = "document:custom".into();
         let (id,edit)=effect_insertion(s.engine.document(),EffectInstance::new(definition.program()),"Document-only filter");
         s.layer_edit(edit).unwrap();
@@ -9408,23 +9413,17 @@ mod tests {
         let original = effects::effect_draft(s.engine.document(),id).unwrap();
         Arc::make_mut(&mut definition.program).label = "Different definition".into();
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
-        let error = s
-            .load_effect_package(
-                &package,
-                |_| panic!(),
-                EffectInstallMode::Add,
-            )
-            .unwrap_err();
-        assert_eq!(error, s.localization().text(MessageId::RESOURCES_DOCUMENT_FILTER_CONFLICT).as_ref());
-        assert!(s.renderer_mut().validation.is_none());
-        assert_eq!(effects::effect_draft(s.engine.document(),id).unwrap(), original);
-        assert!(s.effect_catalog.get("document:custom").is_none());
+        s.load_effect_package(&package, |_| panic!(), EffectInstallMode::Add).unwrap();
+        s.renderer_mut().validation_result=Some(layer_render::EffectValidationResult {request_id:s.state.filter_load.request_id,result:Ok(())});
+        s.frame(1,1).unwrap();
+        assert_eq!(effects::effect_draft(s.engine.document(),id).unwrap(),original);
+        assert_eq!(s.effect_catalog.get("document:custom").unwrap().label(),&layer_core::ResourceLabel::from("Different definition"));
     }
 
     #[test]
     fn clean_close_during_library_warmup_preserves_document_and_input_guards() {
         use layer_core::{EffectInstallMode};
-        for library in [false, true] {
+        {
             for dirty in [false, true] {
                 for interaction in [false, true] {
                     let mut s = session(Platform::Web);
@@ -9434,17 +9433,11 @@ mod tests {
                         s.frame(0, 0).unwrap();
                     }
                     s.frame(0, 0).unwrap();
-                    let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+                    let mut definition = custom_filter("unsharp_mask");
                     std::sync::Arc::make_mut(&mut definition.program).label = "Changed library program".into();
                     let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
                     let manifest = package;
-                    if library {
-                        s.load_effect_library(&manifest, |_| panic!(), EffectInstallMode::Merge)
-                            .unwrap();
-                    } else {
-                        s.load_effect_package(&manifest, |_| panic!(), EffectInstallMode::Merge)
-                            .unwrap();
-                    }
+                    s.load_effect_package(&manifest, |_| panic!(), EffectInstallMode::Merge).unwrap();
                     assert!(s.state.filter_load.pending);
                     // A pending read-only library does not make document
                     // replacement safe: its validation still belongs to this session.
@@ -9452,8 +9445,8 @@ mod tests {
                     assert!(s.request_document_open(true).is_err());
                     let checkpoint = s.engine.checkpoint();
                     s.input_pending = interaction;
-                    assert_eq!(s.require_workspace_idle().is_ok(), library && !interaction);
-                    let accepted = library && !interaction;
+                    assert_eq!(s.require_workspace_idle().is_ok(), !interaction);
+                    let accepted = !interaction;
                     let can_close = accepted && !dirty;
                     s.refresh_commands();
                     assert_eq!(s.command(CommandId::CloseDocument).enabled, accepted);
@@ -9504,10 +9497,10 @@ mod tests {
         invoke(&mut s, CommandId::AddLayer);
         s.frame(0, 0).unwrap();
         let document = s.engine.document().clone();
-        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        let mut definition = custom_filter("unsharp_mask");
         Arc::make_mut(&mut definition.program).label = "New library version".into();
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
-        s.load_effect_library(
+        s.load_effect_package(
             &package,
             |_| panic!(),
             EffectInstallMode::Merge,
@@ -9552,13 +9545,13 @@ mod tests {
         let (_,application)=effects::effect_application(&document,handle).unwrap();
         let original=document.artwork.definitions.get(application.definition).unwrap().program.clone();
         let checkpoint = s.engine.checkpoint();
-        let mut definition = s.effect_catalog.get("unsharp_mask").unwrap().clone();
+        let mut definition = custom_filter("unsharp_mask");
         Arc::make_mut(&mut definition.program).label = "New library version".into();
         let package = package_json(s.effect_catalog.categories().to_vec(), vec![definition]);
-        s.load_effect_library(
+        s.load_effect_package(
             &package,
             |_| panic!(),
-            EffectInstallMode::Replace,
+            EffectInstallMode::Merge,
         )
         .unwrap();
         assert!(
@@ -9566,7 +9559,7 @@ mod tests {
                 .validation
                 .as_ref()
                 .unwrap()
-                .namespace
+                .retained_programs
                 .contains(&original)
         );
         s.renderer_mut().validation_result = Some(layer_render::EffectValidationResult {
@@ -9577,7 +9570,7 @@ mod tests {
         assert_eq!(s.engine.document(), &document);
         assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_eq!(
-            s.effect_catalog.get("unsharp_mask").unwrap().label(),
+            s.effect_catalog.get("test:unsharp_mask").unwrap().label(),
             &layer_core::ResourceLabel::from("New library version")
         );
     }

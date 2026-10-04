@@ -120,7 +120,7 @@ class AndroidHostTest {
         compose.onNodeWithTag("effect-gradient").assertIsDisplayed()
         compose.onNodeWithTag("effect-gradient").performTouchInput { click(androidx.compose.ui.geometry.Offset(width - 8f, height - 4f)) }
         val before = state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").toString()
-        compose.onNodeWithTag("property-color-Color").performClick()
+        compose.onNodeWithTag("property-color-Color").performScrollTo().performClick()
         compose.onNodeWithText("Edit Color").assertIsDisplayed()
         compose.onNodeWithTag("color-input-model").performClick()
         compose.onNodeWithText("sRGB hex").performClick()
@@ -395,6 +395,25 @@ class AndroidHostTest {
             val replacement=definition().toString()
             action(obj("type" to "effect","action" to obj("op" to "gradient","target" to destination,"edit" to obj("kind" to "interpolation","value" to "Classic"))));assertEquals(replacement,definition().toString())
             assertNull(host.failure);assertNull(host.actionError)
+        }
+    }
+
+    @Test fun opaqueFilterColorsHideAlphaInBothThemes() {
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "black_white")))
+            val layer = state().getJSONObject("layer_properties").getLong("layer")
+            val color = obj("space" to "DisplayP3", "rgba" to JSONArray(listOf(.8, .2, .1, .25)))
+            action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer, "key" to "tint_color", "value" to obj("kind" to "color", "value" to color))))
+            val control = state().getJSONObject("layer_properties").array("controls").objects().single { it.getString("key") == "tint_color" }
+            assertTrue(control.getJSONObject("kind").getBoolean("opaque"))
+            assertEquals(1.0, control.getJSONObject("value").getJSONObject("value").getJSONArray("rgba").getDouble(3), 0.0)
+            compose.onNodeWithTag("property-color-Tint color").performScrollTo().performClick()
+            compose.onNodeWithText("Edit Color").assertIsDisplayed()
+            compose.onNodeWithTag("color-input-3").assertDoesNotExist()
+            compose.onNodeWithText("Use Color").performClick()
+            assertNull(host.failure)
+            assertNull(host.actionError)
         }
     }
 

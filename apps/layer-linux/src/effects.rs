@@ -848,8 +848,9 @@ impl EffectPanels {
                             self.append_property_row(index, &control.label, &input);
                             Field::Choice(input)
                         }
-                        PropertyKind::Color => {
+                        PropertyKind::Color {opaque} => {
                             let input = crate::color_editor::ColorButton::new();
+                            input.opaque.set(*opaque);
                             input.widget.set_widget_name(&format!("effect-color-{}", control.key));
                             input.bind(w, move |_, color| dispatch(EffectValue::Color(color)));
                             if let Some(action) = &control.color_action {

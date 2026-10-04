@@ -85,7 +85,7 @@ impl GpuCanvas {
             let mode = std::env::var("CAPY_FILTERS_MODE").unwrap_or_else(|_| "merge".into());
             let result = serde_json::from_value(serde_json::Value::String(mode))
                 .map_err(|e| e.to_string())
-                .and_then(|mode| load_filter_directory(&mut session, &directory, mode, false));
+                .and_then(|mode| load_filter_directory(&mut session, &directory, mode));
             if let Err(error) = result {
                 eprintln!("{error}; using bundled filters");
             }
@@ -112,7 +112,7 @@ impl GpuCanvas {
         let mut validating = !programs.is_empty();
         let renderer = self.session.renderer_mut();
         if validating {
-            renderer.request_effect_validation(layer_render::EffectValidationRequest {request_id:1,namespace:programs.clone(),programs}).map_err(|error|error.to_string())?;
+            renderer.request_effect_validation(layer_render::EffectValidationRequest {request_id:1,retained_programs:programs.clone(),programs}).map_err(|error|error.to_string())?;
         }
         renderer.prepare_import(document, brush)?;
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
@@ -215,7 +215,6 @@ pub(super) fn load_filter_directory(
     session: &mut UiSession<RenderWorker>,
     directory: &std::path::Path,
     mode: layer_core::EffectInstallMode,
-    migrate: bool,
 ) -> Result<UiChange, String> {
     let manifest =
         std::fs::read_to_string(directory.join("manifest.json")).map_err(|e| e.to_string())?;
@@ -224,11 +223,7 @@ pub(super) fn load_filter_directory(
             .map(std::sync::Arc::from)
             .map_err(|e| e.to_string())
     };
-    if migrate {
-        session.load_effect_package(&manifest, read, mode)
-    } else {
-        session.load_effect_library(&manifest, read, mode)
-    }
+    session.load_effect_package(&manifest, read, mode)
 }
 fn extent(area: &gtk::Picture) -> [u32; 2] {
     let scale = area.scale_factor() as u32;

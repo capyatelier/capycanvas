@@ -6,8 +6,8 @@ use std::sync::Arc;
 use crate::tests::native_effects::{effect_document,empty_document,insert_effect,insert_source,set_effect,mask,roundtrip};
 
 fn set(effect:&mut EffectInstance,key:&str,value:EffectValue) {effect.set(key,value).unwrap();}
-fn lookup(_id:u64,resource:Arc<Lut3d>,space:usize,intensity:f32,depth:SampleDepth)->EffectInstance {
-    let mut effect=EffectInstance::new(fixture("color_lookup").program().for_depth(depth));
+fn lookup(resource:Arc<Lut3d>,space:usize,intensity:f32)->EffectInstance {
+    let mut effect=EffectInstance::new(fixture("color_lookup").program());
     set(&mut effect,"color_space",EffectValue::Choice(space as u32));set(&mut effect,"resource",EffectValue::Lut3d(Some(resource)));set(&mut effect,"intensity",EffectValue::Number(intensity));effect
 }
 fn pattern(colors:&[[f32;4]])->EffectInstance {
@@ -92,7 +92,7 @@ fn builtin_looks_preserve_alpha_hdr_and_match_known_srgb_knots_in_every_working_
             let resource=look.resource();
             if working==0 {println!("builtin {look:?} first-resource={:?} bytes={}",generation.elapsed(),resource.bytes());}
             let started=std::time::Instant::now();
-            let first=render(&mut renderer,&[lookup(2,resource.clone(),0,100.,SampleDepth::F32),original.clone()]);
+            let first=render(&mut renderer,&[lookup(resource.clone(),0,100.),original.clone()]);
             println!("builtin {look:?} working={working} first-render={:?}",started.elapsed());
             for (index,input) in inputs.iter().copied().enumerate() {
                 let encoded=points[index/4];
@@ -113,7 +113,7 @@ fn builtin_looks_preserve_alpha_hdr_and_match_known_srgb_knots_in_every_working_
                 };
                 close(first[index],expected,&format!("builtin {look:?} profile={working} sample={index}"));
             }
-            let neutral=render(&mut renderer,&[lookup(2,resource,0,0.,SampleDepth::F32),original.clone()]);
+            let neutral=render(&mut renderer,&[lookup(resource,0,0.),original.clone()]);
             assert_eq!(&neutral[..inputs.len()],inputs.as_slice());
         }
     }
@@ -135,7 +135,7 @@ fn tetrahedra_ties_profiles_depths_alpha_and_intensity_match_independent_referen
         for selected in 0..4{
             let inputs=points.into_iter().flat_map(|p|[0.,8e-8,0.37,1.].map(|a|encoded_input(p,working,selected,a))).collect::<Vec<_>>();let original=pattern(&inputs);
             for resource in &resources{for intensity in [0.,50.,100.]{
-                let layers=[lookup(2,resource.clone(),selected,intensity,depth),original.clone()];let pixels=render(&mut r,&layers);
+                let layers=[lookup(resource.clone(),selected,intensity),original.clone()];let pixels=render(&mut r,&layers);
                 for (i,input) in inputs.iter().copied().enumerate(){let error=close(pixels[i],reference(resource,input,working,selected,intensity),&format!("{working}/{selected}/{depth:?}/N{}/i{intensity}/pixel{i}",resource.size()));for j in 0..2{maximum[j]=maximum[j].max(error[j]);}if intensity==0. || input[3]==0.{assert_eq!(pixels[i],input);}}
             }}
         }
@@ -151,7 +151,7 @@ fn identity_empty_resources_and_extended_residuals_preserve_original_pixels() {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::ALL[working],depth:SampleDepth::F32}).unwrap();
         for selected in 0..4{
             let inputs=[[-1.,0.25,3.],[0.,0.5,1.],[2.,-0.5,0.125]].into_iter().flat_map(|p|[8e-8,0.37,1.].map(|a|encoded_input(p,working,selected,a))).collect::<Vec<_>>();let original=pattern(&inputs);
-            let mut layer=lookup(2,resource.clone(),selected,100.,SampleDepth::F32);
+            let mut layer=lookup(resource.clone(),selected,100.);
             for input in inputs.iter().copied().zip(render(&mut r,&[layer.clone(),original.clone()])){close(input.1,input.0.map(f64::from),"identity residual");}
             set(&mut layer,"resource",EffectValue::Lut3d(None));let empty=render(&mut r,&[layer,original]);assert_eq!(&empty[..inputs.len()],inputs.as_slice());
         }
@@ -164,7 +164,7 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
     let colors=[[0.24,0.41,0.69,0.37],[0.12,0.31,0.19,0.8],[0.,0.,0.,0.]];
     for working in 0..4{
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::ALL[working],depth:SampleDepth::F32}).unwrap();
-        let bottom=lookup(2,first.clone(),0,65.,SampleDepth::F32);let top=lookup(3,second.clone(),3,40.,SampleDepth::F32);
+        let bottom=lookup(first.clone(),0,65.);let top=lookup(second.clone(),3,40.);
 
         for clipped in [false,true]{let mut document=effect_document(&[top.clone(),bottom.clone(),pattern(&colors)],[256;2],r.document_color);
             let handles=document.scene().order().to_vec();let top_h=handles[0];let bottom_h=handles[1];
@@ -187,9 +187,9 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
 
 #[test]
 fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
-    let resource=table(17,[[0.;3],[1.;3]],false);let bytes=resource.bytes() as u64;
+    let resource=table(17,[[0.;3],[1.;3]],false);let bytes=(96+resource.bytes() as u64).next_multiple_of(16);
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let cache=r.device.effect_resources.clone();
-    let source=pattern(&[[0.24,0.41,0.69,0.37]]);let layer=lookup(2,resource.clone(),0,100.,SampleDepth::F32);
+    let source=pattern(&[[0.24,0.41,0.69,0.37]]);let layer=lookup(resource.clone(),0,100.);
     let mut document=effect_document(&[layer,source],[256;2],r.document_color);
     let handles=document.scene().order().to_vec();let target=handles[0];let source=handles[1];let stack=document.composition().result;
     document.artwork.stacks.get_mut(stack).unwrap().entries=vec![source];crate::tests::native_effects::refresh(&mut document);
@@ -201,7 +201,7 @@ fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
     set_effect(&mut document,target,"resource",EffectValue::Lut3d(Some(Arc::new(resource.with_title("Retitled use".into()).unwrap()))));
     render_document(&mut r,&document);assert_eq!(residency(&r),initial);
     let alias=Arc::new(Lut3d::from_samples(resource.size(),resource.domain(),"Alias".into(),resource.samples().unwrap().collect::<Vec<_>>().into()).unwrap());assert_eq!(alias.digest(),resource.digest());
-    let duplicate=insert_effect(&mut document,lookup(3,alias,0,100.,SampleDepth::F32));
+    let duplicate=insert_effect(&mut document,lookup(alias,0,100.));
     document.artwork.stacks.get_mut(stack).unwrap().entries=vec![duplicate,target,source];crate::tests::native_effects::refresh(&mut document);
     render_document(&mut r,&document);assert_eq!(residency(&r),initial);
     r.submit(FramePacket{composite_all:false,..packet(document.scene().with_owner(0,0),[256;2])}).unwrap();assert_eq!(residency(&r),initial);
@@ -216,24 +216,24 @@ fn hundred_intensity_edits_aliases_and_resource_removal_keep_uploads_bounded() {
 #[test]
 fn archive_reopen_owns_resource_without_original_file_and_restores_editable_pixels() {
     let resource=table(3,[[0.;3],[1.;3]],false);let color=DocumentColor{space:RgbSpace::ProPhoto,depth:SampleDepth::F32};
-    let mut document=empty_document([256;2],color);insert_effect(&mut document,lookup(2,resource.clone(),0,67.,SampleDepth::F32));
+    let mut document=empty_document([256;2],color);insert_effect(&mut document,lookup(resource.clone(),0,67.));
     let source=insert_source(&mut document,"Retained pixels",crate::test_support::depth_source([256;2],SampleDepth::F32,color.space,4*1024*1024,|x,y|[(x as f32+1.)/257.,(y as f32+1.)/257.,0.24,0.37]));
     document.working.occurrence=Some(source);document.working.target=document.scene().source_target(source);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();let original=render_document(&mut r,&document);
     let mut reopened=roundtrip(document);drop(resource);drop(r);let target=reopened.scene().order()[0];let ready=reopened.scene().effect(target).unwrap().lut3d().unwrap().clone();assert!(ready.accepts(RgbSpace::Srgb));
     let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();assert_eq!(render_document(&mut fresh,&reopened),original);
     set_effect(&mut reopened,target,"intensity",EffectValue::Number(0.));let neutral=render_document(&mut fresh,&reopened);assert_ne!(neutral,original);
-    set_effect(&mut reopened,target,"intensity",EffectValue::Number(67.));assert_eq!(render_document(&mut fresh,&reopened),original);assert_eq!(residency(&fresh),(1,ready.bytes() as u64));
+    set_effect(&mut reopened,target,"intensity",EffectValue::Number(67.));assert_eq!(render_document(&mut fresh,&reopened),original);assert_eq!(residency(&fresh),(1,(96+ready.bytes() as u64).next_multiple_of(16)));
 }
 
 #[test]
 fn unsafe_selected_space_is_refused_and_unrepresentable_residual_returns_source() {
     let unsafe_resource=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],"Near maximum".into(),vec![[1.1972514e16;3];8].into()).unwrap());assert!(!unsafe_resource.accepts(RgbSpace::Srgb));
-    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let before=layer.clone();assert!(layer.set("resource",EffectValue::Lut3d(Some(unsafe_resource))).is_err());assert_eq!(layer,before);
+    let mut layer=lookup(table(2,[[0.;3],[1.;3]],false),0,100.);let before=layer.clone();assert!(layer.set("resource",EffectValue::Lut3d(Some(unsafe_resource))).is_err());assert_eq!(layer,before);
     let encoded=RgbSpace::Srgb.encode(f64::from(f32::MAX)*0.1) as f32;let resource=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],"Large but admitted".into(),vec![[encoded;3];8].into()).unwrap());assert!(resource.accepts(RgbSpace::Srgb));
     let source=[f32::MAX*0.9,f32::MAX*0.9,f32::MAX*0.9,1.];let expected=reference(&resource,source,0,0,100.);assert_eq!(expected,source.map(f64::from));
     let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();let original=pattern(&[source]);assert_eq!(render(&mut r,std::slice::from_ref(&original))[0],source,"finite original reaches LUT stage unchanged");
-    let result=render(&mut r,&[lookup(2,resource,0,100.,SampleDepth::F32),original]);assert_eq!(result[0],source,"unrepresentable extended encoded result returns original pixel");
+    let result=render(&mut r,&[lookup(resource,0,100.),original]);assert_eq!(result[0],source,"unrepresentable extended encoded result returns original pixel");
 }
 
 #[test]
@@ -242,13 +242,13 @@ fn literal_domain_coordinates_preserve_adjacent_normal_interiors_and_tetra_ties(
     for minimum in [f32::MIN_POSITIVE,f32::MIN_POSITIVE*2.,1e-30,1.,1e30,-1e-30]{
         let maximum=f32::from_bits(if minimum.is_sign_negative(){minimum.to_bits()-8}else{minimum.to_bits()+8});
         let resource=Arc::new(Lut3d::from_samples(2,[[minimum;3],[maximum;3]],"Normal precision probe".into(),vec![[0.;3];8].into()).unwrap());
-        let mut layer=lookup(2,resource,0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut layer.program);
+        let mut layer=lookup(resource,0,100.);let program=Arc::make_mut(&mut layer.program);
         let code=program.wgsl.sources().unwrap().iter().map(|v|v.as_ref()).collect::<Vec<_>>().join("\n");
         program.entry="cube_coordinate_probe".into();program.wgsl=format!("{code}\nfn cube_coordinate_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return vec4<f32>(fx_cube_coordinate(c.r,0u),fx_cube_coordinate(c.g,1u),fx_cube_coordinate(c.b,2u),1.);}}").into();
         let inputs=(0..=8).map(|i|{let v=f32::from_bits(if minimum.is_sign_negative(){minimum.to_bits()-i}else{minimum.to_bits()+i});[v,v,v,1.]}).collect::<Vec<_>>();
         let actual=render(&mut r,&[layer,pattern(&inputs)]);for i in 0..9{assert_eq!(actual[i],[i as f32/8.,i as f32/8.,i as f32/8.,1.],"normal coordinate {minimum:e}/{maximum:e}/step{i}");}
     }
-    let mut layer=lookup(2,table(2,[[0.;3],[1.;3]],false),0,100.,SampleDepth::F32);let program=Arc::make_mut(&mut layer.program);
+    let mut layer=lookup(table(2,[[0.;3],[1.;3]],false),0,100.);let program=Arc::make_mut(&mut layer.program);
     let code=program.wgsl.sources().unwrap().iter().map(|v|v.as_ref()).collect::<Vec<_>>().join("\n");program.entry="tetra_offset_probe".into();program.wgsl=format!("{code}\nfn tetra_offset_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let t=tetrahedron(c.rgb);return vec4<f32>(vec3<f32>(select(t.first,t.second,fx_parameter(b,2u).x<50.)),1.);}}").into();
     let inputs=[[0.8,0.5,0.2,1.],[0.8,0.2,0.5,1.],[0.5,0.8,0.2,1.],[0.2,0.8,0.5,1.],[0.5,0.2,0.8,1.],[0.2,0.5,0.8,1.],[0.3,0.3,0.3,1.],[0.3,0.3,0.1,1.],[0.3,0.1,0.3,1.],[0.1,0.3,0.3,1.]];
     for (intensity,offset) in [(100.,0),(0.,1)]{set(&mut layer,"intensity",EffectValue::Number(intensity));let actual=render(&mut r,&[layer.clone(),pattern(&inputs)]);for (i,c) in inputs.iter().enumerate(){let mut axes=[0usize,1,2];axes.sort_by(|a,b|c[*b].total_cmp(&c[*a]));let mut expected=[0.,0.,0.,1.];expected[axes[offset]]=1.;assert_eq!(actual[i],expected,"tetra offset {offset}, {c:?}");}}
@@ -273,7 +273,7 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
                 let gray=if hdr && (x/67+y/43)%5==0 {if x%2==0{-0.125}else{4.}} else {RgbSpace::Srgb.decode(if (x/3+y/2)%2==0{126./255.}else{130./255.}) as f32};
                 let alpha=if hdr{match (x/67+y/43)%3{0=>8e-8,1=>0.37,_=>1.}}else{1.};[gray,gray,gray,alpha]
             });
-            let mut adjustment=lookup(2,resource.clone(),0,100.,SampleDepth::F32);Arc::make_mut(&mut adjustment.program).resolution=EffectResolution::Display;
+            let mut adjustment=lookup(resource.clone(),0,100.);Arc::make_mut(&mut adjustment.program).resolution=EffectResolution::Display;
             let mut document=empty_document(extent,color);let target=insert_effect(&mut document,adjustment);insert_source(&mut document,"Correlated LUT edges",original);
             if !hdr {
                 mask(&mut document,target,1.);let coverage=document.scene().mask(target).unwrap().0.source;
@@ -318,7 +318,7 @@ fn near_maximum_admitted_tables_and_physical_profile_transforms_remain_finite() 
                 [(linear[0]*f64::from(alpha)) as f32,(linear[1]*f64::from(alpha)) as f32,(linear[2]*f64::from(alpha)) as f32,alpha]
             })).collect::<Vec<_>>();let original=pattern(&inputs);
             for intensity in [0.,50.,100.] {
-                let actual=render(&mut r,&[lookup(2,resource.clone(),selected,intensity,SampleDepth::F32),original.clone()]);
+                let actual=render(&mut r,&[lookup(resource.clone(),selected,intensity),original.clone()]);
                 for (i,input) in inputs.iter().copied().enumerate() {
                     let expected=reference(&resource,input,working,selected,intensity);
                     let scale=expected[..3].iter().map(|v|v.abs()).fold(1_f64,f64::max);
@@ -338,7 +338,7 @@ fn near_maximum_admitted_tables_and_physical_profile_transforms_remain_finite() 
 
 #[test]
 fn auxiliary_lookup_is_pointwise_and_stays_out_of_neighbor_fusion_chains() {
-    let resource=table(2,[[0.;3],[1.;3]],false);let lut=lookup(2,resource,0,100.,SampleDepth::F32);
+    let resource=table(2,[[0.;3],[1.;3]],false);let lut=lookup(resource,0,100.);
     assert!(!lut.program.image_boundary());assert!(lut.program.fusion_boundary());
     let exposure=EffectInstance::new(fixture("exposure").program());let invert=EffectInstance::new(fixture("invert").program());let source=pattern(&[[0.2,0.4,0.6,1.]]);
     let document=effect_document(&[exposure.clone(),lut.clone(),invert.clone(),source.clone()],[256;2],Default::default());let lut_h=document.scene().order()[1];
@@ -357,7 +357,7 @@ fn resident_lookup_tiles_batch_with_immutable_auxiliary_and_bounded_sources() {
     let resource=table(3,[[0.;3],[1.;3]],false);
     let codes=|id:u32|[20+id*5,40+id*3,220-id*4];
     let original=layer_core::color::source::rgba8_source(extent,|x,y|{let c=codes(y/256*8+x/256);[c[0] as u8,c[1] as u8,c[2] as u8,255]});
-    let mut document=empty_document(extent,color);let target=insert_effect(&mut document,lookup(2,resource.clone(),0,100.,SampleDepth::F32));insert_source(&mut document,"Distinct cold lookup tiles",original);
+    let mut document=empty_document(extent,color);let target=insert_effect(&mut document,lookup(resource.clone(),0,100.));insert_source(&mut document,"Distinct cold lookup tiles",original);
     let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.native_edit.as_mut().unwrap().display_complete_bytes=u64::MAX;
     drop(r.device.effect_resources.lock().unwrap().get(&r.device,&r.queue,None).unwrap());
     let baseline=residency(&r);assert_eq!(baseline,(0,16));
@@ -376,6 +376,19 @@ fn resident_lookup_tiles_batch_with_immutable_auxiliary_and_bounded_sources() {
         let error=quality(&display_pixels(&r),&independent,cache.plan);assert!(error[2]<2e-5,"batched LUT independent odd-edge/mask/clip pixels {error:?}");
         println!("Resident LUT state={state} pages=32 effect_passes={passes} error={error:?}");
         let bytes=r.source_tiles.borrow().gpu_bytes();if let Some(expected)=source_bytes{assert_eq!(bytes,expected);}else{source_bytes=Some(bytes);}
-        assert_eq!(residency(&r),(1,resource.bytes() as u64+baseline.1));
+        assert_eq!(residency(&r),(1,(96+resource.bytes() as u64).next_multiple_of(16)+baseline.1));
     }
+}
+
+#[test]
+fn shared_samples_with_different_domains_have_distinct_gpu_headers() {
+    let first=table(3,[[0.;3],[1.;3]],false);
+    let second=Lut3d::from_samples(3,[[0.;3],[2.;3]],"Different domain".into(),first.samples().unwrap().collect::<Vec<_>>().into()).unwrap();
+    assert_eq!(first.digest(),second.digest());
+    let renderer=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    let mut cache=renderer.device.effect_resources.lock().unwrap();
+    let a=cache.get(&renderer.device,&renderer.queue,Some(&first)).unwrap();
+    let b=cache.get(&renderer.device,&renderer.queue,Some(&second)).unwrap();
+    assert!(!Arc::ptr_eq(&a,&b));
+    assert!(Arc::ptr_eq(&a,&cache.get(&renderer.device,&renderer.queue,Some(&first)).unwrap()));
 }

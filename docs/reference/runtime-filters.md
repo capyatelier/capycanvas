@@ -2,7 +2,10 @@
 
 [Technical documentation](../README.md)
 
-Built-in and custom filters use one runtime JSON/WGSL format and shared renderer.
+Built-in filters use the current bundled JSON/WGSL catalog. Artwork stores their
+stable IDs, parameter-data versions and all authored keyed values. Custom filters
+embed their own code and schema. Both use the shared renderer; custom filters
+execute separately and do not join built-in fusion.
 **Curves and Gradient Map are
 the agreed exceptions:** their custom controls and parameter preparation remain
 in Rust; GPU shaders evaluate the prepared segments/stops. Generic preparation,
@@ -160,30 +163,21 @@ extended input retains its out-of-domain residual. A result whose conversion
 would overflow Float32 preserves its source pixel. Matrix normalization bounds
 its divisor at 2^126 so GPU reciprocal flushing cannot erase extreme inputs.
 
-A `lut3d` parameter stores an optional immutable resource. A program declares
-`auxiliary: {"kind":"lut3d","resource":"resource","color_space":"color_space"}`;
-the referenced choice lists sRGB, Display P3, Adobe RGB (1998), ProPhoto RGB in
-that order. The auxiliary binding is group 2, binding 1, read-only storage.
-`fx_auxiliary(index)` reads a Float32 vec4 record;
-`fx_auxiliary_words(index)` reads its unsigned integer words without Float32 conversion. Resource consumers stop fusion so each
-stage owns one binding. Pointwise consumers retain tiled batching without a
-spatial image cache; ordinary pointwise fusion is unchanged. The empty binding holds one
-zero record. Parameter data contains only a presence flag, never table samples.
+A `lut3d` parameter stores an optional immutable resource. Its `auxiliary`
+declaration names the resource and color-space parameters. Color-space choices
+use stable IDs (`srgb`, `display_p3`, `adobe_rgb`, `pro_photo`), mapped explicitly
+to RGB spaces and GPU codes. Adding or reordering choices cannot retarget a saved
+selection. `.cube` parsing, verification and hashing run on file workers.
 
-The canonical table has six vec4 headers (size, minimum, maximum, normalization
-exponents, scaled minima, reciprocal spans), then R-fastest RGB0 records.
-CPU parsing/hashing/admission runs on file workers. A single bounds scan checks
-finite samples; eight component-box corners validate signed decoding and every
-supported working-space transform, including Float32 partial sums. A
-2048×Float32-epsilon margin covers transfer/interpolation rounding near overflow.
-Power-of-two `ldexp` normalization avoids cancellation on tight normal domains.
-Domains whose possible subnormal flush loses more than one Float32 epsilon of
-a table cell are rejected. These restrictions are conservative; they do not
-claim support for camera-log shapers or arbitrary near-overflow tables.
+Canonical storage is tightly packed RGB F32 samples plus semantic size/domain
+metadata. The renderer derives normalization headers and uploads the samples
+without repacking them on the input thread. Derived headers and alignment
+padding never enter artwork resources. Extreme sample admission protects GPU
+arithmetic; it does not clamp samples into SDR values.
 
 Projects deduplicate binary payloads by digest. Undo, pending operations and
 snapshots share immutable CPU storage; accounting charges each physical payload
-once. Device-local GPU buffers use weak digest caches and live stage leases.
+once. Device-local GPU buffers use weak caches keyed by sample digest and domain, with live stage leases.
 Parameter edits and resolution variants reuse uploads. Admission checks storage
 limits and measured available memory; Web's unavailable memory query uses a
 bounded 64 MiB resource allowance. Loading a project restores its table without
@@ -196,20 +190,24 @@ loaded tables and generic controls are preserved across hosts.
 icons, parameters, constraints, ordered passes, sampling bounds, animation and
 preview presets. WGSL modules live beside it. `BuiltinEffect`, built-in category
 switches, Rust filter constructors and the Rust Gaussian algorithm are removed.
-The same parser resolves external packages and the embedded startup fallback.
+The same parser resolves custom packages and the bundled catalog. Built-in IDs
+and metadata belong to the app and cannot be overridden by imported packages.
 
 Each parameter declares its semantic `dimension`: `scalar` (the default),
 `angle`, `time`, `source_pixels`, `composition_pixels` or `normalized`.
 Image resize scales pixel lengths; displayed `unit` labels affect presentation
-only. The bundled catalog declares its pixel lengths explicitly, and authored
-packages retain the same parameter dimensions.
+only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
+Custom packages retain their own declarations; built-in files omit the schema.
+Percentages keep their existing meanings: center coordinates use the respective
+source width/height, radial controls use the documented filter extent, and color
+amounts are scalar strengths. They are not rescaled as pixel lengths.
 
 | Owner | Responsibility |
 | --- | --- |
 | `layer-core/effect_catalog.rs` | Parse/resolve packages, validate metadata and stage catalogs |
 | `layer-core/effects.rs` | Generic parameter/layout validation; the two custom-editor exceptions |
-| `layer-ui/filter_loading.rs` | Transactional publication, compatible values, catalog and preview revisions |
-| `layer-render-wgpu/effect_validation.rs` | Namespace/interface checks and device compilation |
+| `layer-ui/filter_loading.rs` | Catalog publication and preview revisions; existing artwork stays unchanged |
+| `layer-render-wgpu/effect_validation.rs` | Per-program interface checks and device compilation |
 | `layer-render-wgpu/effects.rs`, `effect_preparation.rs` | Shared storage, compilation reuse, ordered preparation/render work |
 | GTK, web, Android, Windows hosts | Obtain bytes and render the shared schema |
 
@@ -217,17 +215,15 @@ A package has `format: 2`, `categories` and `filters`. Other package versions ar
 rejected; there is no compatibility reader. Each filter contains a
 `program`, category, icon and optional preview overrides. A shader accepts inline
 WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
-shared source chunks, so fused filters include common helpers once. Serialized
+shared source chunks, so fused filters include common helpers once. Custom
 document programs contain resolved code and do not need their original package.
+Built-in document records contain only ID and parameter-data version.
 
-Category, program and parameter labels, parameter sections and choice labels use
-`ResourceLabel`: a literal JSON string, or an explicit message reference such as
-`{"message":"resources-filter-curves"}`. Bundled labels carry references from
-`assets/locales/en/resources.ftl`; external labels may remain literal. Reusing a
-built-in filter ID never translates a supplied literal label. References must
-name known parameterless catalog messages. Core validates their structure;
-shared UI validates and resolves them through its active cached `Localizer`
-before admitting packages or embedded document programs.
+Bundled category, program and parameter labels, sections and choice labels use
+explicit `ResourceLabel` references from the current localization catalog.
+Custom program labels must be ordinary literal strings, including Unicode and
+braces. Artwork never depends on a historical translation-key registry. User
+layer names remain literal authored text.
 
 A choice option is a literal string, whose stable value and display label both
 remain that supplied text, or an explicit object separating them:
@@ -240,8 +236,9 @@ remain that supplied text, or an explicit object separating them:
 ```
 
 Option values are nonempty and unique within a parameter. Display labels may
-match. The stored `EffectValue::Choice` and GPU parameter remain an index into
-this ordered list; hosts forward that index. Category IDs, parameter keys and
+match. Runtime `EffectValue::Choice` values and host actions use indices. Files store
+stable option strings. GPU indices are derived from the current schema; LUT
+color-space codes use an explicit mapping independent of that order. Category IDs, parameter keys and
 shader identities are independent of labels. Property views supply raw
 `section_id` metadata alongside the resolved `section` heading, so hosts group
 controls by identity even when translated headings match. User layer names and
@@ -313,6 +310,10 @@ depths bypass it. Document coordinates keep noise stable across tiles and export
 regions. Gradient Map uses stop alpha as mapping strength; Gradient Fill uses it
 as coverage. The same evaluator drives raster tool operations. Masks use scalar
 value and opacity stops derived by shared editor policy.
+
+The nine tint/ink/paper parameters that use RGB only declare `opaque:true`.
+Shared color forms hide alpha and author opaque colors; old ignored alpha remains
+valid data.
 
 A `"kind":"generator"` program ignores its input and supplies color and coverage.
 The Fill category's Solid Color (`solid_color`, the color's alpha is coverage)
@@ -412,20 +413,18 @@ choice adds no per-pixel branch.
 ## Transactional loading
 
 `UiSession::load_effect_package` stages the candidate while keeping the current
-catalog and document live. The renderer checks the combined namespace and all
-changed preparation/render interfaces. Device error scopes are popped immediately
-and polled without a blocking wait. Validation does not dispatch preparation or
-allocate canvas image intermediates. Accepted compilation results are reused.
+catalog and document live. The renderer validates each changed program separately
+and compiles its preparation/render interfaces. Device error scopes are polled
+without blocking. Validation does not dispatch preparation or allocate canvas
+image intermediates; accepted compilation results are reused.
 
-Publication waits until input, the active stroke and pending document edits are
-settled. Live values are matched by parameter key, including edits made while
-validation was pending. Choices preserve the selected stable option value and
-use its new index when options are reordered. A removed choice or another
-incompatible field uses the new declared default; display labels do not affect
-rebinding. Conflicting joint constraints reject the replacement rather than
-silently altering valid values.
-A single document edit replaces affected live programs. Unrelated layers and
-paint history remain unchanged. Invalid replacement retains the working state.
+Publication waits for idle input and pending document edits, then updates the
+catalog for future insertions. It never rebinds or rewrites existing applications,
+drops removed parameters, or substitutes new defaults. Existing custom filters
+keep their embedded definitions; built-ins change only with the application.
+An unchanged catalog refresh clears any previous validation error without
+recompiling or editing artwork. Failed validation retains the working
+catalog and artwork.
 
 `UiState.filter_load` reports request ID, pending and error. Catalog revision
 refreshes picker categories, rows and controls, and participates in preview
@@ -440,18 +439,18 @@ safety from GPU watchdog resets, or a particular execution time.
 ## Windows file transport
 
 Windows uses the embedded catalog and does not stage a duplicate resource copy.
-`CAPY_FILTERS_DIR` and `CAPY_FILTERS_MODE` select a startup library override. The
-render-owner API `capy_load_filter_directory` accepts an optional directory,
-installation mode and `library` flag; the default explicit load can migrate live
-instances, while startup/library refresh preserves embedded document programs.
+`CAPY_FILTERS_DIR` and `CAPY_FILTERS_MODE` select a startup custom package. The
+render-owner API `capy_load_filter_directory` accepts an optional directory and
+installation mode. Loading updates the catalog for future insertions and
+preserves embedded document programs.
 An owned background worker reads only manifest-approved flat module names before
 passing bytes to the shared loader. `windows_filter_load` adds transport progress
 and errors to the native snapshot. There is no filter-import or shader-editor UI.
 
-The native UI fixture validates edited WGSL and metadata without rebuilding, live
-values, picker previews and recovery from missing/invalid files. A separate
-hardware D3D12 full-image test verifies atomic replacement/rejection and compatible
-library refresh without altering the current document. These scoped checks do not
+The native UI fixture validates edited WGSL and metadata without rebuilding, retained document
+values, updated picker previews and recovery from missing/invalid files. A separate
+hardware D3D12 full-image test verifies atomic catalog replacement/rejection and
+catalog refresh without altering the current document. These scoped checks do not
 resolve the strict v4 reference discrepancy recorded below or establish performance.
 See [Windows host commands](../development/windows.md#runtime-filter-packages).
 
@@ -511,14 +510,14 @@ apply to final output, not independently to every intermediate pass.
 ## Use without rebuilding
 
 - GTK checks `CAPY_FILTERS_DIR`, then `filters` beside the executable, then
-  development `assets/filters`, with the embedded catalog as fallback.
+  development `assets/filters`, alongside the bundled catalog. Built-in changes require rebuilding the app.
   `CAPY_FILTERS_MODE` defaults to `merge`. For an isolated custom package:
   `CAPY_FILTERS_DIR=examples/filters/tent-blur CAPY_FILTERS_MODE=add
   ./target/debug/layer-linux`. The native transport also accepts directories
   for live add/replace/merge. There is no automatic file watcher.
 - The native packager ships editable resources in
-  `dist/capycanvas-linux/bin/filters`; editing those resources does not require
-  rebuilding `bin/capycanvas`.
+  `dist/capycanvas-linux/bin/filters`; custom packages can be added without rebuilding.
+  Shipped built-in resources must match the executable.
 - Web and Android use the shared embedded catalog, without duplicate filter
   manifests or shaders in the Web asset tree; runtime packages load on GTK
   and Windows (`CAPY_FILTERS_DIR`) and from the Apple bundle.
@@ -529,27 +528,13 @@ no third-party shader implementation was imported.
 
 ## Validation
 
-Final checks pass: 59 GPU tests (six opt-in benchmarks excluded), 21 core tests,
-23 engine tests, 145 UI tests, six Android bridge tests, 19 packaging/launcher
-tests, Clippy and the Wasm build. Native and static web staging bundles build;
-the native bundle's forty definitions and WGSL files match the source resources.
-
-| Requirement | Evidence |
-| --- | --- |
-| Same format for all forty filters | Disk/bundled catalogs match; shared modules and self-contained document round trips |
-| Runtime non-Gaussian algorithm | Tent Blur loaded on GTK |
-| New IDs without rebuilding | Mixed existing/new catalog merge test |
-| Last working program | Invalid WGSL/resource access/namespace or ID collision rejected; image, values and catalog retained |
-| Efficient preparation | Dependency-count tests: paint, pan, time, opacity and unrelated edits reuse; relevant/code edits run once |
-| Reuse across passes/fusion | Stable storage size, shared multipass tables, prepared pointwise fusion, accepted pipeline reuse |
-| Correct pixels | Original forty-filter reference × four scopes, at most one byte difference; Gaussian sigma 0–21 |
-| Incremental correctness | Every filter and expensive chains match forced rebuild at tile/document boundaries; clipped backdrop edits remain local |
-| Shared controls and rendering | All-filter UI suites on GTK/private Wayland, packaged Chrome and API-35 tablet emulator; runtime load/replacement tests on each |
-
-Runtime screenshots are under `artifacts/ui/runtime-filters-{gtk,web,android}`;
-the GTK, web and Android custom-filter results were visually inspected.
-Forty-filter review captures are under `artifacts/ui/adjustments-{gtk,web}` and
-the emulator's generated `Pictures/CapyCanvasValidation` directories.
+Run the changed-layer checks in [Testing](../development/testing.md). Core tests
+cover reserved IDs, explicit keyed values, dimensions, opaque colors and stable
+color-space choices. Fixed artwork fixtures protect data compatibility; renderer
+tests compile all current built-ins and custom programs with overlapping function
+names separately. UI tests cover atomic catalog publication without document
+mutation and shared property controls. Native journeys verify open/edit/save/reopen
+and alpha controls in both themes.
 
 ## Performance
 

@@ -54,7 +54,7 @@ export function updatePaintPairIcon(svg, view) {
   if (svg.lastElementChild !== front) svg.append(front);
 }
 
-export function chooseColor({app, color, element, button, intensity, onIntensity}) {
+export function chooseColor({app, color, element, button, intensity, onIntensity, opaque = false}) {
   const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common;
   const epoch = app.state().document_file.epoch;
   return new Promise(resolve => {
@@ -118,17 +118,17 @@ export function chooseColor({app, color, element, button, intensity, onIntensity
     model.onchange = () => query({...view.draft, change_model: model.value});
     form.onsubmit = e => { e.preventDefault(); apply.click(); };
     root.addEventListener('close', () => { root.remove(); resolve(result); }, {once: true});
-    const panel=app.color_panel();query({color,document_depth:(app.state().layer_tools.mask_editing?.colors??app.state().colors).hdr_depth, document_space: panel.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??null):null,rendition:panel.rendition});
+    const panel=app.color_panel();query({color,opaque,document_depth:(app.state().layer_tools.mask_editing?.colors??app.state().colors).hdr_depth, document_space: panel.rgb_space, display_space:'Srgb',model:panel.hdr?'linear_rgb':'document_rgb',intensity:panel.hdr?(intensity??null):null,rendition:panel.rendition});
     Object.defineProperty(form,'language',{set(){if(view)project(app.color_ui({type:'form_copy',copy:view.copy}));}});
     bindCopy(form,()=>app.language_tag(),'language');
     root.showModal(); fields[0].input.focus();
   });
 }
 
-export function colorButton({app, label, element, button, change, current = () => ''}) {
+export function colorButton({app, label, element, button, change, current = () => '', opaque = false}) {
   let color, previewKey, inGamut=true,disposed=false;
   const node = button(label, async () => {
-    const context = current(), selected = await chooseColor({app, color, element, button});
+    const context = current(), selected = await chooseColor({app, color, element, button, opaque});
     if (selected && !disposed && current() === context) change(selected);
   }, 'property-color');
   const read=()=>typeof label==='function'?label():label;bindCopy(node,read,'ariaLabel');

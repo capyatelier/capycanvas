@@ -33,7 +33,7 @@ pub(super) fn properties(
             ..PropertyControl::new(
                 "mask_color",
                 &l.text(MessageId::RESOURCES_MASK_OVERLAY_COLOR),
-                PropertyKind::Color,
+                PropertyKind::Color {opaque:false},
                 EffectValue::Color(p.color),
                 EffectValue::Color(defaults.color),
             )

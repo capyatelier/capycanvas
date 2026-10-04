@@ -147,33 +147,34 @@ fn native_effect_colors_gradients_and_retained_controls() {
         depth: SampleDepth::U16,
     };
     let w = Workspace::with_project(&app, Some((project, None)));
+    w.window.maximize();
     w.window.present();
     ready(&w);
     let original =
         RgbColor::new(RgbSpace::DisplayP3, [0.95, 0.12, 0.234567, 123. / 65535.]).unwrap();
     w.dispatch(UiAction::Effect {
         action: EffectAction::Insert {
-            effect: "black_white".into(),
+            effect: "photo_filter".into(),
         },
     });
-    let bucket = find_named(w.window.upcast_ref(), "tint-color-bucket").expect("each color parameter has its bucket");
+    let bucket = find_named(w.window.upcast_ref(), "color-bucket").expect("each color parameter has its bucket");
     let label = bucket.parent().and_then(|line| line.parent()).and_then(|row| row.first_child());
-    assert_eq!(label.and_downcast::<gtk::Label>().map(|l| l.text()).as_deref(), Some("Tint color"));
+    assert_eq!(label.and_downcast::<gtk::Label>().map(|l| l.text()).as_deref(), Some("Color"));
     w.dispatch(UiAction::SetColor { rgba: [0.2, 0.5, 0.1, 1.] });
     bucket.downcast::<gtk::Button>().unwrap().emit_clicked();
     ready(&w);
-    assert_eq!(value(&w, "tint_color"), EffectValue::Color(state(&w).colors.definition()));
-    set(&w, "tint_color", EffectValue::Color(original));
+    assert_eq!(value(&w, "color"), EffectValue::Color(state(&w).colors.definition()));
+    set(&w, "color", EffectValue::Color(original));
     let before = snapshot(&w);
-    press(&w, "effect-color-tint_color");
+    press(&w, "effect-color-color");
     for i in 0..ColorInputModel::ALL.len() {
         combo(&w, "edit-color-model").set_selected(i as u32);
     }
     response(&w, "apply");
     ready(&w);
-    assert_eq!(value(&w, "tint_color"), EffectValue::Color(original));
+    assert_eq!(value(&w, "color"), EffectValue::Color(original));
     assert!(snapshot(&w) == before, "untouched models create no edit");
-    press(&w, "effect-color-tint_color");
+    press(&w, "effect-color-color");
     field(&w, 0, "NaN");
     assert!(
         !w.window
@@ -185,11 +186,11 @@ fn native_effect_colors_gradients_and_retained_controls() {
     );
     response(&w, "cancel");
     assert_eq!(snapshot(&w), before);
-    press(&w, "effect-color-tint_color");
+    press(&w, "effect-color-color");
     field(&w, 0, "0.1234567");
     response(&w, "apply");
     ready(&w);
-    let edited = value(&w, "tint_color");
+    let edited = value(&w, "color");
     assert!(
         matches!(&edited, EffectValue::Color(c) if c.space == RgbSpace::ProPhoto && c.rgba[0] == 0.1234567 && c.rgba[3] == original.rgba[3])
     );
@@ -209,7 +210,7 @@ fn native_effect_colors_gradients_and_retained_controls() {
         command: CommandId::Redo,
     });
     ready(&w);
-    assert_eq!(value(&w, "tint_color"), edited);
+    assert_eq!(value(&w, "color"), edited);
 
     w.dispatch(UiAction::Effect {
         action: EffectAction::Insert {
@@ -273,6 +274,12 @@ fn native_effect_colors_gradients_and_retained_controls() {
     );
     reopened.window.present();
     ready(&reopened);
+    let layer = {
+        let session=ui_session(&reopened);
+        let scene=session.engine().document().scene();
+        *scene.order().iter().find(|handle|scene.effect(**handle).is_some_and(|e|e.program.id.as_ref()=="gradient_map")).unwrap()
+    };
+    reopened.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(layer)});ready(&reopened);
     assert_eq!(snapshot(&reopened), saved);
     assert_eq!(
         value(&reopened, "gradient"),
@@ -955,4 +962,33 @@ fn native_gradient_color_completion_keeps_its_original_destination() {
         retained.close();w.window.close();pump(100);
     }
     input.finish();
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+fn native_opaque_filter_colors_hide_alpha_in_both_themes() {
+    let app=native_test_app("art.capycanvas.OpaqueFilterColors");
+    let w=fixture_workspace(&app);w.window.present();ready(&w);
+    for theme in [layer_ui::Theme::Light,layer_ui::Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});
+        w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"black_white".into()}});
+        ready(&w);
+        let color=RgbColor::new(RgbSpace::DisplayP3,[0.8,0.2,0.1,0.25]).unwrap();
+        set(&w,"tint_color",EffectValue::Color(color));
+        let EffectValue::Color(authored)=value(&w,"tint_color") else {panic!()};
+        assert_eq!(authored.rgba[3],1.);
+        press(&w,"effect-color-tint_color");
+        for i in 0..ColorInputModel::ALL.len() {
+            combo(&w,"edit-color-model").set_selected(i as u32);
+            let alpha=find_named(w.window.upcast_ref(),"edit-color-value-3").unwrap();
+            assert!(!alpha.is_visible());
+        }
+        response(&w,"apply");ready(&w);
+        assert_eq!(value(&w,"tint_color"),EffectValue::Color(authored));
+        let saved=snapshot(&w);let reopened=open_native_document(std::io::Cursor::new(saved));
+        let scene=reopened.scene();
+        let effect=scene.order().iter().find_map(|handle|scene.effect(*handle).filter(|e|e.program.id.as_ref()=="black_white")).unwrap();
+        assert_eq!(effect.value("tint_color"),Some(&EffectValue::Color(authored)));
+    }
+    w.window.close();
 }

@@ -60,7 +60,13 @@ retain pressure axes, sequence numbers, cadence and GPU-wait policy.
 Retouch replay fixtures keep each brush's path and pen-up position. Check source
 readiness and healing counts after replay settles, before collecting result pages.
 Mesh fixtures pass a previously constructed projective map to `MeshMap::fit`.
-Raster corruption fixtures retain their exact pixel descriptor.
+Raster corruption fixtures retain their exact pixel descriptor. File-format
+changes must read the checked-in `layer-core/src/package/codec/fixtures` files,
+then edit/save/reopen them and compile their current filter implementations.
+Keep historical fixture inputs fixed. Add a fixture for a concrete conversion;
+do not regenerate old inputs from the current writer. Protect stable keys,
+choice IDs, accepted bounds, all explicit default-valued parameters, LUT samples,
+watercolor state and SDR settings independently of editor defaults and GPU layouts.
 Renderer float fixtures share readback and presenter setup. Keep pooled and
 unpooled memory accounting separate, with each test's pixel and memory limits.
 Partial-region fixtures keep their damage bounds; transform oracles keep source

@@ -31,7 +31,7 @@ impl Look {
         }).clone()
     }
     pub fn for_resource(resource:&Lut3d)->Option<Self> {
-        Self::ALL.into_iter().find(|look|resource.title()==look.title() && resource.digest()==look.resource().digest())
+        Self::ALL.into_iter().find(|look|resource.title()==look.title() && resource==look.resource().as_ref())
     }
 }
 
@@ -66,7 +66,6 @@ impl std::fmt::Debug for Lut3d {
 impl Lut3d {
     pub const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
     pub const MAX_SIZE: u32 = 65;
-    pub const HEADER_BYTES: usize = 96;
 
     pub fn size(&self) -> u32 { self.descriptor.size }
     pub fn domain(&self) -> [[f32; 3]; 2] { self.descriptor.domain }
@@ -86,13 +85,13 @@ impl Lut3d {
         let payload = payload.alias(id);
         Ok(Self { descriptor: self.descriptor.clone(), payload: Some(payload), spaces: self.spaces })
     }
-    pub fn expected_bytes(&self) -> usize { Self::HEADER_BYTES + (self.size() as usize).pow(3) * 16 }
+    pub fn expected_bytes(&self) -> usize { (self.size() as usize).pow(3) * 12 }
     pub fn samples(&self) -> Option<impl Iterator<Item = [f32; 3]> + '_> {
-        self.payload.as_deref().map(|bytes| bytes[Self::HEADER_BYTES..].chunks_exact(16).map(|record| std::array::from_fn(|i| f32::from_le_bytes(record[i*4..i*4+4].try_into().unwrap()))))
+        self.payload.as_deref().map(|bytes| bytes.as_chunks::<12>().0.iter().map(|record| std::array::from_fn(|i| f32::from_le_bytes(record[i*4..i*4+4].try_into().unwrap()))))
     }
     pub fn bytes(&self) -> usize { self.payload.as_ref().map_or(0, |payload| payload.len()) }
     pub fn accepts(&self, space: RgbSpace) -> bool {
-        self.payload.is_some() && self.spaces & (1 << RgbSpace::ALL.iter().position(|s| *s == space).unwrap()) != 0
+        self.payload.is_some() && self.spaces & (1 << space.shader_code()) != 0
     }
     pub fn validate_descriptor(&self) -> Result<(), &'static str> {
         let d = &self.descriptor;
@@ -112,21 +111,6 @@ impl Lut3d {
         }
         Ok(())
     }
-    fn headers(&self) -> [[f32;4];6] {
-        let domain = self.domain();
-        let mut records = [[0.;4];6];
-        records[0][0] = self.size() as f32;
-        records[1][..3].copy_from_slice(&domain[0]); records[2][..3].copy_from_slice(&domain[1]);
-        for axis in 0..3 {
-            let lo = f64::from(domain[0][axis]); let hi = f64::from(domain[1][axis]);
-            let exponent = (-(lo.abs().max(hi.abs()).log2().floor() as i32)).clamp(-126,126);
-            let scale = 2f64.powi(exponent);
-            records[3][axis] = exponent as f32;
-            records[4][axis] = (lo*scale) as f32;
-            records[5][axis] = (1./(hi*scale-lo*scale)) as f32;
-        }
-        records
-    }
     pub fn from_samples(size: u32, domain: [[f32; 3]; 2], title: Arc<str>, samples: Arc<[[f32; 3]]>) -> Result<Self, &'static str> {
         let mut value = Self { descriptor: Descriptor { size, domain, title, digest: [0; 32] }, payload: None, spaces: 0 };
         value.validate_descriptor()?;
@@ -135,10 +119,7 @@ impl Lut3d {
         }
         value.spaces = Self::space_bits(samples.iter().copied())?;
         let mut payload = Vec::with_capacity(value.expected_bytes());
-        for header in value.headers() {
-            for component in header { payload.extend(component.to_le_bytes()); }
-        }
-        for sample in samples.iter() { for component in sample.iter().copied().chain([0.]) { payload.extend(component.to_le_bytes()); } }
+        for sample in samples.iter() { for component in sample.iter().copied() { payload.extend(component.to_le_bytes()); } }
         drop(samples);
         value.descriptor.digest = Sha256::digest(&payload).into();
         value.payload = Some(payload.into());
@@ -156,7 +137,7 @@ impl Lut3d {
         let limit = f32::MAX * (1. - 2048. * f32::EPSILON);
         let admitted = |v:f32| v.is_finite() && v.abs() <= limit;
         let mut spaces = 0;
-        for (index, space) in RgbSpace::ALL.into_iter().enumerate() {
+        for space in RgbSpace::ALL {
             let transforms = RgbSpace::ALL.map(|destination| space.linear_transform(destination));
             let valid = (0..8).all(|corner| {
                 let sample: [f32;3] = std::array::from_fn(|i| bounds[(corner >> i) & 1][i]);
@@ -173,7 +154,7 @@ impl Lut3d {
                         })
                 })
             });
-            if valid { spaces |= 1 << index; }
+            if valid { spaces |= 1 << space.shader_code(); }
         }
         Ok(spaces)
     }
@@ -271,11 +252,6 @@ impl Lut3d {
         if payload.len() != self.expected_bytes() || spaces == 0 || spaces & !15 != 0 {
             return Err("Invalid verified color lookup payload");
         }
-        for (record, values) in self.headers().iter().enumerate() {
-            for (i, value) in values.iter().enumerate() {
-                if payload[record*16+i*4..record*16+i*4+4] != value.to_le_bytes() { return Err("Invalid verified color lookup header"); }
-            }
-        }
         Ok(Self {descriptor: self.descriptor.clone(), payload: Some(payload), spaces})
     }
     pub fn from_verified_resource(size:u32,domain:[[f32;3];2],title:Arc<str>,digest:[u8;32],payload:Resource<[u8]>,spaces:u8)->Result<Self,&'static str> {
@@ -300,12 +276,7 @@ impl Lut3d {
     fn payload_spaces(&self, bytes: &[u8]) -> Result<u8, &'static str> {
         self.validate_descriptor()?;
         if bytes.len() != self.expected_bytes() { return Err("Invalid color lookup payload length"); }
-        let component = |record:usize,index:usize| f32::from_le_bytes(bytes[record*16+index*4..record*16+index*4+4].try_into().unwrap());
-        if self.headers().iter().enumerate().any(|(record,values)| values.iter().enumerate().any(|(i,v)|component(record,i).to_bits()!=v.to_bits()))
-            || (6..bytes.len()/16).any(|record| component(record,3).to_bits() != 0) {
-            return Err("Invalid color lookup payload header or padding");
-        }
-        let samples = bytes[Self::HEADER_BYTES..].chunks_exact(16).map(|sample| std::array::from_fn(|i| f32::from_le_bytes(sample[i*4..i*4+4].try_into().unwrap())));
+        let samples = bytes.as_chunks::<12>().0.iter().map(|sample| std::array::from_fn(|i| f32::from_le_bytes(sample[i*4..i*4+4].try_into().unwrap())));
         Self::space_bits(samples)
     }
 }

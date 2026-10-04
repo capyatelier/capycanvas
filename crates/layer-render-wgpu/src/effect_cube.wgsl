@@ -13,7 +13,11 @@ fn fx_cube_coordinate(value:f32,axis:u32)->f32 {
     if value<=lo {return 0.;} if value>=hi {return 1.;}
     return clamp((ldexp(value,i32(fx_auxiliary(3u)[axis]))-fx_auxiliary(4u)[axis])*fx_auxiliary(5u)[axis],0.,1.);
 }
-fn fx_cube_at(p:vec3<u32>,size:u32)->vec3<f32> {return fx_auxiliary(6u+(p.z*size+p.y)*size+p.x).rgb;}
+fn fx_cube_component(index:u32)->f32 {return fx_auxiliary(6u+index/4u)[index%4u];}
+fn fx_cube_at(p:vec3<u32>,size:u32)->vec3<f32> {
+    let index=((p.z*size+p.y)*size+p.x)*3u;
+    return vec3(fx_cube_component(index),fx_cube_component(index+1u),fx_cube_component(index+2u));
+}
 fn fx_cube(encoded:vec3<f32>)->vec3<f32> {
     let size=u32(fx_auxiliary(0u).x);
     let coordinate=vec3(fx_cube_coordinate(encoded.x,0u),fx_cube_coordinate(encoded.y,1u),fx_cube_coordinate(encoded.z,2u))*f32(size-1u);

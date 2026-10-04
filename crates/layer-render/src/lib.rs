@@ -356,12 +356,12 @@ pub struct FilterPreviewImage {
 }
 
 /// Cold-path validation, separate from painting. `programs` are changed
-/// definitions; `namespace` includes programs they may be composed alongside.
+/// definitions; `retained_programs` keeps their existing compiled pipelines alive.
 #[derive(Clone, Debug)]
 pub struct EffectValidationRequest {
     pub request_id: u64,
     pub programs: Vec<std::sync::Arc<layer_core::EffectProgram>>,
-    pub namespace: Vec<std::sync::Arc<layer_core::EffectProgram>>,
+    pub retained_programs: Vec<std::sync::Arc<layer_core::EffectProgram>>,
 }
 #[derive(Clone, Debug)]
 pub struct EffectValidationResult {

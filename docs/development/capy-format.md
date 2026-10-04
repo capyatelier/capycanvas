@@ -145,17 +145,19 @@ values now; new typed sources and operations add those later. Absence of a port
 must have a frozen type-defined default or be invalid, not silently select the
 first output. Unknown ports or semantic values are unsupported content.
 
-Effect parameter keys and Choice values are durable; GPU offsets are not. Load
-keyed values once into the definition's compact slot layout, then reuse it during
-painting. The embedded program's positional ABI must agree with that layout;
-renaming/reordering UI controls cannot reorder shader slots. Preserve program
-sharing across load, save and undo. Authored effect applications retain compact
-values resolved against their immutable definition layout; portable adapters
-persist stable parameter keys and Choice strings. [`EffectView` and the owned
-`EffectInstance` draft](../../crates/layer-core/src/effects.rs) support reads and
-explicit editing without becoming an alternate authored owner. Dimension records
-carry semantic length/reference-space declarations. Keep evaluation semantics
-separate from the shader ABI and UI schema.
+Built-in effects persist a stable ID, a parameter-data version and every keyed
+value, including defaults. The current catalog supplies their implementation and
+controls. Shader fixes do not introduce generations or retain old shaders.
+Parameter meaning changes use a small explicit converter for the affected ID and
+version; unknown semantics enter preservation mode. Custom effects retain their
+literal labels, code and schema, and execute separately from other effects.
+
+Parameter keys and Choice values are durable; GPU offsets and UI order are not.
+Load keyed values once into the current definition's compact slot layout. Reuse
+that layout during painting without making it a file contract. Accepted numeric
+bounds remain separate from slider bounds. Dimensions describe units and the
+reference space. See the current [package grammar](../reference/capy-package.md)
+and [runtime filter contract](../reference/runtime-filters.md) for these rules.
 The current filter ABI is not a general multi-input node ABI. New definitions can
 declare additional typed ports without changing existing effect meanings or
 requiring all old programs to be rewritten.

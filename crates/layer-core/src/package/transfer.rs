@@ -172,7 +172,7 @@ impl PreparedTransfer {
             let record=&manifest.resources[id].value;if record["type"]!="capy.raster-tile/1"{return Err("Transfer tile type mismatch".into());}
             let descriptor=resources::parse_descriptor(&record["data"]).map_err(|e|e.to_string())?;
             let profile=record["data"].get("profile").map(|r|{let id=resources::reference_id(r).map_err(|e|e.to_string())?;reader.bytes.get(&id).cloned().ok_or_else(||"Missing verified tile profile".to_string())}).transpose()?;
-            decoded=decoded.saturating_add(descriptor.byte_len([crate::raster::TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64);
+            decoded=decoded.saturating_add(descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64);
             reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource(*id,descriptor,self.bytes(*payload)?,profile)?));
         }}
         for selection in &self.descriptor.selections {

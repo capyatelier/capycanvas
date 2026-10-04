@@ -26,14 +26,11 @@ pub(crate) struct Request {
     directory: Option<PathBuf>,
     #[serde(default = "merge_mode")]
     mode: EffectInstallMode,
-    #[serde(default)]
-    library: bool,
 }
 struct Package {
     manifest: String,
     modules: BTreeMap<Arc<str>, Arc<str>>,
     mode: EffectInstallMode,
-    library: bool,
 }
 fn read_text(path: &Path, limit: usize) -> Result<String, String> {
     let mut options = OpenOptions::new();
@@ -77,7 +74,6 @@ fn read_text(path: &Path, limit: usize) -> Result<String, String> {
 fn read_directory(
     directory: &Path,
     mode: EffectInstallMode,
-    library: bool,
 ) -> Result<Package, String> {
     let root = directory
         .canonicalize()
@@ -96,7 +92,6 @@ fn read_directory(
         manifest,
         modules,
         mode,
-        library,
     })
 }
 fn resources(request: Request) -> Result<Package, String> {
@@ -104,7 +99,7 @@ fn resources(request: Request) -> Result<Package, String> {
         .directory
         .or_else(|| std::env::var_os("CAPY_FILTERS_DIR").map(PathBuf::from))
         .ok_or("No filter package directory was selected.")?;
-    read_directory(&directory, request.mode, request.library)
+    read_directory(&directory, request.mode)
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -128,7 +123,6 @@ pub(crate) struct FilterService {
     task: AsyncTask<Result<Package, String>>,
     acquired: Option<Package>,
     validating: Option<u64>,
-    document_epoch: Option<u64>,
     status: Status,
     failure: Option<layer_ui::FilterLoadState>,
     localization_generation: u64,
@@ -139,7 +133,6 @@ impl FilterService {
             task: AsyncTask::new(wake),
             acquired: None,
             validating: None,
-            document_epoch: None,
             status: Status::default(),
             failure: None,
             localization_generation: 0,
@@ -162,7 +155,6 @@ impl FilterService {
                     Request {
                         directory: None,
                         mode,
-                        library: true,
                     },
                 ) {
                     self.failed(native, error);
@@ -188,8 +180,6 @@ impl FilterService {
             .request_id
             .checked_add(1)
             .ok_or("Filter request identity exhausted.")?;
-        let document_epoch =
-            (!request.library).then_some(native.session.state().document_file.epoch);
         self.task
             .start(async move {
                 let job = BlockingTask::start(move || resources(request)).map_err(|e| {
@@ -199,7 +189,6 @@ impl FilterService {
             })
             .map_err(|_| "Filter file transport is unavailable.")?;
         self.failure = None;
-        self.document_epoch = document_epoch;
         self.status = Status {
             request_id: id,
             pending: true,
@@ -252,16 +241,6 @@ impl FilterService {
             }
             native.invalidate_snapshot();
         }
-        if self.acquired.is_some()
-            && self
-                .document_epoch
-                .is_some_and(|epoch| epoch != native.session.state().document_file.epoch)
-        {
-            self.failed(
-                native,
-                "The document changed while reading filters. Load the package again.".into(),
-            );
-        }
         if self.acquired.is_some() && native.session.can_stage_effect_package() {
             let gpu = native.session.engine().backend().0.as_ref();
             let available = gpu.is_some();
@@ -279,15 +258,7 @@ impl FilterService {
                     .cloned()
                     .ok_or_else(|| format!("Missing filter module: {name}"))
             };
-            let result = if package.library {
-                native
-                    .session
-                    .load_effect_library(&package.manifest, read, package.mode)
-            } else {
-                native
-                    .session
-                    .load_effect_package(&package.manifest, read, package.mode)
-            };
+            let result = native.session.load_effect_package(&package.manifest, read, package.mode);
             match result {
                 Ok(change) => {
                     native.dirty |= change.canvas_wake;

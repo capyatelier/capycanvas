@@ -3,7 +3,7 @@ use super::*;
 use crate::authored::Resource;
 use std::sync::OnceLock;
 
-pub(crate) const SELECTION_CHUNK_BYTES: usize = 65536;
+use crate::package::SELECTION_CHUNK_BYTES;
 
 /// Painting changes coverage independently of artwork colors and compositing.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]

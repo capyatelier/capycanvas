@@ -69,7 +69,7 @@ fn threshold_properties_use_depth_bounds_and_soft_slider_limits_on_each_host() {
         let mut s=UiSession::new(renderer,document,[800,800],platform).unwrap();
         s.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:"threshold".into()}}).unwrap();
         let PropertyKind::Number {numeric}=&s.state.layer_properties.controls[0].kind else {panic!("missing threshold number")};
-        assert_eq!((numeric.min,numeric.max),if depth.is_float(){(-65504.,65504.)}else{(0.,1.)});
+        assert_eq!((numeric.min,numeric.max),(-65504.,65504.));
         assert_eq!((numeric.soft_min,numeric.soft_max),(0.,1.));
     }}
 }

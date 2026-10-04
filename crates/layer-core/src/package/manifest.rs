@@ -125,7 +125,7 @@ fn resource_supported(record: &Value) -> Result<bool, String> {
     let name = kind(record)?;
     let compressed = encoding == "capy.lz4-bytes/1";
     if compressed { decimal_u64(required(data, "decoded_bytes")?)?; }
-    else if matches!(encoding, "raw" | "utf8" | "capy.lut3d-block/1" | "capy.lz4-tile/1" | "capy.lz4-coverage/1") && data.contains_key("decoded_bytes") {
+    else if matches!(encoding, "raw" | "utf8" | "capy.rgb-f32/1" | "capy.lz4-tile/1" | "capy.lz4-coverage/1") && data.contains_key("decoded_bytes") {
         return Err("Decoded length on an unwrapped resource".into());
     }
     let (encoding_supported, keys): (bool, &[&str]) = match name {
@@ -133,7 +133,7 @@ fn resource_supported(record: &Value) -> Result<bool, String> {
         "capy.selection-coverage/1" => (encoding == "capy.lz4-coverage/1", &["depth", "extent", "bounds", "chunk"]),
         "capy.icc/1" | "capy.wgsl/1" => (compressed || encoding == if name == "capy.icc/1" { "raw" } else { "utf8" }, &["decoded_bytes"]),
         "capy.photo-metadata/1" => (compressed || encoding == "raw", &["kind", "decoded_bytes"]),
-        "capy.lut3d/1" => (compressed || encoding == "capy.lut3d-block/1", &["size", "domain", "title", "decoded_bytes"]),
+        "capy.lut3d/1" => (compressed || encoding == "capy.rgb-f32/1", &["size", "domain", "title", "decoded_bytes"]),
         _ => return Ok(false),
     };
     let mut values_supported = true;

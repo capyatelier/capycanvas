@@ -15,7 +15,7 @@ use std::{
     },
 };
 
-pub const TILE_SIZE: u32 = 256;
+pub const TILE_SIZE: u32 = crate::package::RASTER_TILE_SIZE;
 pub const MAX_TILE_BYTES: usize = (TILE_SIZE * TILE_SIZE * 16) as usize;
 pub(crate) const MAX_COMPRESSED_TILE_BYTES: usize =
     lz4_flex::block::get_maximum_output_size(MAX_TILE_BYTES);

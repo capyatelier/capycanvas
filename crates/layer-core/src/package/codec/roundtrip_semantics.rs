@@ -71,7 +71,7 @@ fn native(color: DocumentColor) -> Artwork {
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);
     artwork
 }
-fn exact_rasters(expected: &Artwork, actual: &Artwork) {
+pub(super) fn exact_rasters(expected: &Artwork, actual: &Artwork) {
     let expected = Document::from_artwork(expected.clone()).unwrap();
     let actual = Document::from_artwork(actual.clone()).unwrap();
     for ((_, id, source), (_, actual_id, restored)) in expected.artwork.paint.iter().zip(actual.artwork.paint.iter()) {
@@ -99,7 +99,7 @@ fn exact_tiles(expected: &RasterRevision, actual: &RasterRevision) {
 #[test]
 fn literal_choices_and_pixels_resave_unchanged() {
     let mut artwork=fixture(SampleDepth::U16);
-    let original_program=crate::bundled_effect_catalog().get("curves").unwrap().program();
+    let original_program=crate::effect_catalog::custom_program("curves");
     let mut program=(*original_program).clone();program.label=crate::ResourceLabel::from("Curves");
     let parameter=Arc::make_mut(&mut program.parameters).iter_mut().find(|p|p.key.as_ref()=="domain").unwrap();
     let crate::EffectParameterKind::Choice{options}=&mut parameter.kind else{panic!()};

@@ -25,7 +25,7 @@ fn write_manifest(directory: &TempDir, value: serde_json::Value) {
     .unwrap();
 }
 fn read_package(directory: &TempDir) -> Result<Package, String> {
-    read_directory(&directory.path, EffectInstallMode::Merge, false)
+    read_directory(&directory.path, EffectInstallMode::Merge)
 }
 fn error(directory: &TempDir) -> String {
     match read_package(directory) {
@@ -174,7 +174,6 @@ fn asynchronous_read_retains_bytes_until_gpu_attachment_and_rejects_overlap() {
     let request = || Request {
         directory: Some(directory.path.clone()),
         mode: EffectInstallMode::Add,
-        library: false,
     };
     service.load(&mut native, request()).unwrap();
     assert!(service.load(&mut native, request()).is_err());
@@ -199,7 +198,6 @@ fn asynchronous_failure_is_visible_and_a_later_read_can_retry() {
     let request = || Request {
         directory: Some(directory.path.clone()),
         mode: EffectInstallMode::Merge,
-        library: true,
     };
     service.load(&mut native, request()).unwrap();
     finish_read(&mut service, &mut native);
@@ -217,59 +215,43 @@ fn asynchronous_failure_is_visible_and_a_later_read_can_retry() {
 }
 
 #[test]
-fn delayed_explicit_import_cannot_migrate_a_replacement_document() {
-    for library in [false, true] {
-        let directory = TempDir::new();
-        copy_example(&directory);
-        let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
-        let mut service = FilterService::new(|| {});
-        service
-            .load(
-                &mut native,
-                Request {
-                    directory: Some(directory.path.clone()),
-                    mode: EffectInstallMode::Merge,
-                    library,
-                },
-            )
-            .unwrap();
-        finish_read(&mut service, &mut native);
-        let mut replacement = layer_ui::UiSession::from_project(
-            layer_host::Renderer(None),
-            layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
-            None,
-            [32, 24],
-            layer_ui::Platform::Windows,
+fn delayed_catalog_import_survives_document_replacement() {
+    let directory = TempDir::new();
+    copy_example(&directory);
+    let mut native = NativeHost::new(layer_ui::Platform::Windows).unwrap();
+    let mut service = FilterService::new(|| {});
+    service
+        .load(
+            &mut native,
+            Request {
+                directory: Some(directory.path.clone()),
+                mode: EffectInstallMode::Merge,
+            },
         )
         .unwrap();
-        let epoch = native.session.state().document_file.epoch;
-        replacement.inherit_window_state(&native.session).unwrap();
-        drop(std::mem::replace(&mut native.session, replacement));
-        assert_ne!(native.session.state().document_file.epoch, epoch);
-        service.poll(&mut native);
-        if library {
-            assert_eq!(service.status.phase, "waiting_for_canvas");
-        } else {
-            assert_eq!(service.status.phase, "failed");
-            assert!(
-                service
-                    .status
-                    .error
-                    .as_ref()
-                    .unwrap()
-                    .contains("document changed")
-            );
-            assert!(service.acquired.is_none());
-        }
-        assert_eq!(native.session.state().filter_catalog_revision, 0);
-        service.stop();
-    }
+    finish_read(&mut service, &mut native);
+    let mut replacement = layer_ui::UiSession::from_project(
+        layer_host::Renderer(None),
+        layer_ui::new_drawing(32, 24, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),
+        None,
+        [32, 24],
+        layer_ui::Platform::Windows,
+    )
+    .unwrap();
+    let epoch = native.session.state().document_file.epoch;
+    replacement.inherit_window_state(&native.session).unwrap();
+    drop(std::mem::replace(&mut native.session, replacement));
+    assert_ne!(native.session.state().document_file.epoch, epoch);
+    service.poll(&mut native);
+    assert_eq!(service.status.phase,"waiting_for_canvas");
+    assert_eq!(native.session.state().filter_catalog_revision, 0);
+    service.stop();
 }
 
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
-fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
+fn d3d12_file_packages_update_catalog_without_rewriting_live_filters() {
     use layer_ui::{EffectAction, UiAction};
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::DX12;
@@ -322,13 +304,12 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     copy_example(&directory);
     let shader = fs::read_to_string(directory.path.join("tent.wgsl")).unwrap();
     let mut service = FilterService::new(|| {});
-    let request = |mode, library| Request {
+    let request = |mode| Request {
         directory: Some(directory.path.clone()),
         mode,
-        library,
     };
     service
-        .load(&mut native, request(EffectInstallMode::Add, false))
+        .load(&mut native, request(EffectInstallMode::Add))
         .unwrap();
     finish(&mut service, &mut native);
     assert_eq!(service.status.phase, "ready", "{:?}", service.status);
@@ -352,7 +333,7 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     let before = image(&mut native);
     let revision = native.session.state().filter_catalog_revision;
     service
-        .load(&mut native, request(EffectInstallMode::Add, false))
+        .load(&mut native, request(EffectInstallMode::Add))
         .unwrap();
     finish(&mut service, &mut native);
     assert_eq!(service.status.phase, "failed");
@@ -366,21 +347,18 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     assert_ne!(changed, shader);
     fs::write(directory.path.join("tent.wgsl"), &changed).unwrap();
     service
-        .load(&mut native, request(EffectInstallMode::Replace, false))
+        .load(&mut native, request(EffectInstallMode::Replace))
         .unwrap();
     finish(&mut service, &mut native);
     assert_eq!(service.status.phase, "ready", "{:?}", service.status);
     assert_eq!(radius(&native), layer_core::EffectValue::Number(7.));
     let replaced = image(&mut native);
-    assert_ne!(
-        replaced, before,
-        "Live WGSL replacement did not change rendered pixels"
-    );
+    assert_eq!(replaced,before);
     let revision = native.session.engine().document().revision;
     let catalog = native.session.state().filter_catalog_revision;
     fs::write(directory.path.join("tent.wgsl"), "not valid WGSL").unwrap();
     service
-        .load(&mut native, request(EffectInstallMode::Replace, false))
+        .load(&mut native, request(EffectInstallMode::Replace))
         .unwrap();
     finish(&mut service, &mut native);
     assert_eq!(service.status.phase, "failed");
@@ -389,20 +367,13 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
     assert_eq!(radius(&native), layer_core::EffectValue::Number(7.));
     assert_eq!(image(&mut native), replaced);
 
-    // Different definitions of the same WGSL symbol cannot coexist with an
-    // embedded document program. Reject that library update without migration.
     fs::write(directory.path.join("tent.wgsl"), &shader).unwrap();
-    service
-        .load(&mut native, request(EffectInstallMode::Merge, true))
-        .unwrap();
+    service.load(&mut native, request(EffectInstallMode::Merge)).unwrap();
     finish(&mut service, &mut native);
-    assert_eq!(service.status.phase, "failed", "{:?}", service.status);
-    assert_eq!(native.session.engine().document().revision, revision);
-    assert_eq!(native.session.state().filter_catalog_revision, catalog);
-    assert_eq!(image(&mut native), replaced);
+    assert_eq!(service.status.phase,"ready");
+    assert_eq!(native.session.engine().document().revision,revision);
+    assert_eq!(image(&mut native),before);
 
-    // A compatible namespace can refresh the library while preserving the
-    // older program and values embedded in the current document.
     fs::write(
         directory.path.join("tent.wgsl"),
         shader.replace("tent_", "library_tent_"),
@@ -416,7 +387,7 @@ fn d3d12_file_packages_replace_pixels_atomically_and_preserve_live_values() {
         serde_json::json!("library_tent_vertical");
     write_manifest(&directory, manifest);
     service
-        .load(&mut native, request(EffectInstallMode::Merge, true))
+        .load(&mut native, request(EffectInstallMode::Merge))
         .unwrap();
     finish(&mut service, &mut native);
     assert_eq!(service.status.phase, "ready", "{:?}", service.status);
@@ -469,7 +440,6 @@ fn suspension_finishes_pending_reads_and_rejects_new_loads() {
         let request = || Request {
             directory: Some(directory.path.clone()),
             mode: EffectInstallMode::Merge,
-            library: false,
         };
         service.load(&mut native, request()).unwrap();
         if acquired {

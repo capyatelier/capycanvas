@@ -3759,7 +3759,6 @@ fn native_runtime_filter_packages() {
             &mut ui_session_mut(&w),
             &std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(path),
             mode,
-            true,
         )
         .unwrap();
         w.wake();

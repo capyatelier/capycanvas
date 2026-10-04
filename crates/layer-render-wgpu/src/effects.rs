@@ -1,7 +1,7 @@
 //! Validated WGSL execution for built-ins and programmable effects. Compatible
 //! pointwise chains are fused; declared image passes share the same ABI helpers.
 use super::*;
-use layer_core::{EffectInstance, EffectKind, EffectProgram, EffectView};
+use layer_core::{EffectKind, EffectProgram, EffectView};
 use std::{collections::HashMap, sync::Arc};
 #[path = "effect_preparation.rs"]
 mod preparation;
@@ -586,45 +586,6 @@ fn validate_source(source: &str) -> Result<(), GpuRasterError> {
     Ok(())
 }
 
-/// Linking all library modules checks conflicting declarations without
-/// generating a giant executable chain or allocating image intermediates.
-pub(super) fn validate_namespace(programs: &[Arc<EffectProgram>]) -> Result<(), GpuRasterError> {
-    let Some(first) = programs.first() else {
-        return Ok(());
-    };
-    let mut linked = (**first).clone();
-    let mut parts = Vec::new();
-    for program in programs {
-        EffectInstance::new(program.clone())
-            .validate()
-            .map_err(|e| GpuRasterError::Effect(e.into()))?;
-        for source in program
-            .wgsl
-            .sources()
-            .map_err(|e| GpuRasterError::Effect(e.into()))?
-        {
-            if !parts.contains(source) {
-                parts.push(source.clone());
-            }
-        }
-    }
-    if parts.iter().map(|s| s.len()).sum::<usize>() > 16 * 1024 * 1024 {
-        return Err(GpuRasterError::Effect(
-            "Filter namespace exceeds source limits".into(),
-        ));
-    }
-    linked.wgsl = layer_core::EffectShader::Linked {
-        sources: parts.into(),
-    };
-    validate_source(&shader_source(
-        &[Arc::new(linked)],
-        &[0],
-        Execution::Preview,
-        Default::default(),
-        false,
-        Default::default(),
-    )?)
-}
 fn shader_source(
     programs: &[Arc<EffectProgram>],
     offsets: &[u32],
@@ -713,7 +674,8 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
     );
     source.push_str(include_str!("effect_tables.wgsl"));
     source.push_str(include_str!("tetrahedron.wgsl"));
-    for (index, chosen) in layer_core::color::RgbSpace::ALL.into_iter().enumerate() {
+    for chosen in layer_core::color::RgbSpace::ALL {
+        let index = chosen.shader_code();
         source.push_str(&crate::view_color::transform(&format!("cube_to_{index}"), space, chosen));
         source.push_str(&crate::view_color::transform(&format!("cube_from_{index}"), chosen, space));
         source.push_str(&format!("const CUBE_LIMIT_{index}:f32={:.12e};\n", chosen.encode(f64::from(f32::MAX) * (1.-2048.*f64::from(f32::EPSILON)))));
@@ -815,8 +777,14 @@ mod tests {
     use super::*;
     use crate::tests::fixtures;
     #[test]
-    fn builtin_shaders_and_fused_chain_validate() {
-        let programs: Vec<_> = fixtures().iter().map(|b| b.program()).collect();
+    fn builtin_shaders_and_saved_fixture_compile_with_the_current_catalog() {
+        use layer_core::package::{codec::{open,OpenOutcome},ImmutableBacking,transport::ChunkedBytes};
+        let bytes=include_bytes!("../../layer-core/src/package/codec/fixtures/authored-v1.capy");
+        let backing=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();
+        let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() else {panic!("saved fixture must be editable")};
+        let mut programs:std::collections::BTreeMap<_,_>=fixtures().iter().map(|f|(f.id().to_string(),f.program())).collect();
+        for (_,_,definition) in artwork.definitions.iter() {programs.insert(definition.program.id.to_string(),definition.program.clone());}
+        let programs:Vec<_>=programs.into_values().collect();
         for p in &programs {
             validate(std::slice::from_ref(p), Execution::Preview);
             if p.image_boundary() {
@@ -836,17 +804,14 @@ mod tests {
         );
     }
     #[test]
-    fn runtime_namespace_rejects_conflicting_declarations() {
-        let programs: Vec<_> = fixtures().iter().map(|f| f.program()).collect();
-        validate_namespace(&programs).unwrap();
-        let mut changed = (*programs[0]).clone();
-        changed.id = "conflicting_filter".into();
-        changed.wgsl = format!(
-            "{}\n// different module with the same declarations",
-            changed.wgsl.sources().unwrap().join("\n")
-        )
-        .into();
-        assert!(validate_namespace(&[programs[0].clone(), Arc::new(changed)]).is_err());
+    fn custom_filters_with_shared_function_names_compile_independently() {
+        let builtin=fixtures()[0].program();
+        let mut custom=(*builtin).clone();
+        custom.id="custom_filter".into();
+        custom.wgsl=format!("{}\n",custom.wgsl.sources().unwrap().join("\n")).into();
+        assert!(custom.fusion_boundary());
+        validate(&[builtin],Execution::Fused);
+        validate(&[Arc::new(custom)],Execution::Fused);
     }
     fn validate(p: &[Arc<EffectProgram>], execution: Execution) {
         for blend in layer_core::BlendSpace::ALL {

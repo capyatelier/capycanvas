@@ -41,7 +41,6 @@ impl Fixture {
                 Request {
                     directory: Some(directory.path.clone()),
                     mode: EffectInstallMode::Add,
-                    library: false,
                 },
             )
             .unwrap();
@@ -87,7 +86,6 @@ impl Fixture {
                 Request {
                     directory: Some(self.directory.path.clone()),
                     mode: EffectInstallMode::Replace,
-                    library: false,
                 },
             )
             .unwrap();

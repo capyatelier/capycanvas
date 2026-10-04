@@ -111,8 +111,8 @@ pub enum EffectResolution {
 }
 
 /// WGSL functions take premultiplied color in the program's `space`, document
-/// position and a parameter offset. Empty `passes` means pointwise and permits
-/// shader fusion.
+/// position and a parameter offset. Empty `passes` means pointwise. Only
+/// built-in pointwise programs without auxiliary resources permit fusion.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectProgram {
     pub abi: u32,
@@ -127,7 +127,7 @@ pub struct EffectProgram {
     pub space: EffectSpace,
     #[serde(default)]
     pub resolution: EffectResolution,
-    /// Ordinary WGSL library with a uniquely named function matching the ABI.
+    /// WGSL source with an entry function matching the ABI.
     pub wgsl: EffectShader,
     pub entry: Arc<str>,
     /// Ordered image passes. Each reads the previous pass and original input
@@ -224,7 +224,15 @@ impl EffectProgram {
             || self.time
             || (self.kind == EffectKind::Adjustment && self.alpha == EffectAlpha::Filter)
     }
-    pub fn fusion_boundary(&self) -> bool { self.image_boundary() || self.auxiliary.is_some() }
+    pub fn literal_labels(&self) -> bool {
+        let literal = |label: &ResourceLabel| matches!(label, ResourceLabel::Literal(_));
+        literal(&self.label) && self.pages.iter().all(|p| literal(&p.label))
+            && self.parameters.iter().all(|p| literal(&p.label) && p.section.as_ref().is_none_or(literal)
+                && match &p.kind { EffectParameterKind::Choice {options} => options.iter().all(|option| match option {
+                    EffectOption::Literal(_) => true, EffectOption::Labeled {label,..} => literal(label),
+                }), _ => true })
+    }
+    pub fn fusion_boundary(&self) -> bool { self.image_boundary() || self.auxiliary.is_some() || crate::bundled_effect_catalog().get(&self.id).is_none() }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -251,6 +259,8 @@ pub struct EffectVisibility {
 pub struct EffectParameter {
     #[serde(default)]
     pub dimension: Dimension,
+    #[serde(default)]
+    pub opaque: bool,
     pub key: Arc<str>,
     pub label: ResourceLabel,
     /// Consecutive parameters in the same section share one heading/divider.
@@ -376,18 +386,19 @@ impl<'a> EffectView<'a> {
         let space = self.program.parameters.iter().position(|p| p.key == *color_space)
             .ok_or("Missing color lookup color space parameter")?;
         if count != 1 || !matches!(&self.program.parameters[space].kind,
-            EffectParameterKind::Choice {options} if options.iter().map(EffectOption::value).eq(RgbSpace::ALL.map(RgbSpace::name))) {
+            EffectParameterKind::Choice {options} if !options.is_empty() && options.iter().all(|option| RgbSpace::from_id(option.value()).is_some())) {
             return Err("Invalid color lookup resource or color spaces");
         }
         Ok(Some((parameter,space)))
     }
     fn validate_resource<'v>(&self, value: impl Fn(usize) -> &'v EffectValue) -> Result<(), &'static str> {
         let Some((resource,space)) = self.auxiliary_indices()? else { return Ok(()); };
-        let (EffectValue::Lut3d(resource),EffectValue::Choice(space)) = (value(resource),value(space)) else {
+        let (EffectValue::Lut3d(resource),EffectValue::Choice(choice)) = (value(resource),value(space)) else {
             return Err("Invalid color lookup resource values");
         };
-        let space = RgbSpace::ALL.get(*space as usize).ok_or("Invalid color lookup color space")?;
-        if resource.as_ref().is_some_and(|r| !r.accepts(*space)) { return Err("Color lookup exceeds the selected color space range"); }
+        let EffectParameterKind::Choice {options} = &self.program.parameters[space].kind else { return Err("Invalid color lookup color space"); };
+        let space = options.get(*choice as usize).and_then(|option| RgbSpace::from_id(option.value())).ok_or("Invalid color lookup color space")?;
+        if resource.as_ref().is_some_and(|r| !r.accepts(space)) { return Err("Color lookup exceeds the selected color space range"); }
         Ok(())
     }
     pub fn playback_rate(&self) -> f32 {
@@ -581,11 +592,16 @@ impl<'a> EffectView<'a> {
     pub fn gpu_parameters(&self, space: RgbSpace) -> Result<Vec<[f32; 4]>, String> {
         self.validate()?;
         let mut data = vec![[0.; 4]];
-        for value in self.values {
+        for (parameter,value) in self.program.parameters.iter().zip(self.values) {
             match value {
                 EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
                 EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
-                EffectValue::Choice(v) => data.push([*v as f32, 0., 0., 0.]),
+                EffectValue::Choice(v) => {
+                    let code = if matches!(&self.program.auxiliary, Some(EffectAuxiliary::Lut3d {color_space,..}) if color_space == &parameter.key) {
+                        RgbSpace::from_id(self.choice(&parameter.key).ok_or("Invalid color lookup color space")?).ok_or("Invalid color lookup color space")?.shader_code()
+                    } else { *v };
+                    data.push([code as f32, 0., 0., 0.]);
+                },
                 EffectValue::Color(v) => data.push(v.encoded_in(space)?),
                 EffectValue::Curve(points) => data.extend(curve_parameters(points)),
                 EffectValue::Gradient(stops) => data.extend(stops.parameters(space)?),
@@ -644,28 +660,6 @@ impl EffectInstance {
             program,
         }
     }
-    /// Runtime schema replacement preserves parameters by key and choices by
-    /// stable value. New or individually incompatible fields use their defaults.
-    /// Conflicting joint constraints reject publication instead of silently
-    /// changing otherwise valid user values.
-    pub fn rebind(&self, program: Arc<EffectProgram>) -> Result<Self, &'static str> {
-        let mut next = Self::new(program);
-        for (parameter, value) in next.program.parameters.iter().zip(&mut next.values) {
-            if let EffectParameterKind::Choice { options } = &parameter.kind {
-                if let Some(index) = self.choice(&parameter.key)
-                    .and_then(|selected| options.iter().position(|option| option.value() == selected))
-                {
-                    *value = EffectValue::Choice(index as u32);
-                }
-            } else if let Some(old) = self.value(&parameter.key)
-                && parameter.validate(old).is_ok()
-            {
-                *value = old.clone();
-            }
-        }
-        next.validate()?;
-        Ok(next)
-    }
     pub fn set(&mut self, key: &str, mut value: EffectValue) -> Result<(), &'static str> {
         let i = self
             .program
@@ -674,6 +668,7 @@ impl EffectInstance {
             .position(|p| p.key.as_ref() == key)
             .ok_or("Unknown effect parameter")?;
         self.program.parameters[i].validate(&value)?;
+        if self.program.parameters[i].opaque && let EffectValue::Color(color) = &mut value { color.rgba[3] = 1.; }
         if let EffectValue::Number(v) = &mut value {
             let mut low = f32::NEG_INFINITY;
             let mut high = f32::INFINITY;
@@ -726,6 +721,7 @@ impl EffectParameter {
         } else if self.soft_bounds.is_some() || self.mapping!=NumericMapping::Linear {
             return Err("Numeric presentation on nonnumeric effect parameter");
         }
+        if self.opaque && self.kind != EffectParameterKind::Color { return Err("Opaque requires a color parameter"); }
         let valid = match (&self.kind, value) {
             (
                 EffectParameterKind::Number {
@@ -915,7 +911,7 @@ mod tests {
     }
     #[test]
     fn tagged_effect_colors_upload_document_coordinates_and_preserve_definitions() {
-        let red = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 123. / 65535.]).unwrap();
+        let red = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 1.]).unwrap();
         let mut effect = EffectInstance::new(fixture("black_white").program());
         effect.set("tint_color", EffectValue::Color(red)).unwrap();
         let original = serde_json::to_vec(&effect).unwrap();
@@ -1102,34 +1098,6 @@ mod tests {
         fx.validate().unwrap();
     }
     #[test]
-    fn schema_rebinding_uses_keys_and_rejects_conflicting_constraints() {
-        let mut instance = EffectInstance::new(fixture("levels").program());
-        instance.set("black", EffectValue::Number(0.4)).unwrap();
-        instance.set("white", EffectValue::Number(0.8)).unwrap();
-        let mut program = (*instance.program).clone();
-        Arc::make_mut(&mut program.parameters).swap(0, 1);
-        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
-        assert_eq!(rebound.value("black"), instance.value("black"));
-        assert_eq!(rebound.value("white"), instance.value("white"));
-        let EffectConstraint::OrderedNumbers { gap, .. } =
-            &mut Arc::make_mut(&mut program.constraints)[0];
-        *gap = 0.5;
-        assert!(
-            instance.rebind(Arc::new(program)).is_err(),
-            "do not silently clamp compatible user values on reload"
-        );
-        let mut program = (*instance.program).clone();
-        let black = &mut Arc::make_mut(&mut program.parameters)[0];
-        let EffectParameterKind::Number { max, .. } = &mut black.kind else {
-            panic!()
-        };
-        *max = 0.2;
-        black.soft_bounds=Some([0.,0.2]);
-        let rebound = instance.rebind(Arc::new(program)).unwrap();
-        assert_eq!(rebound.value("black"), Some(&EffectValue::Number(0.)));
-        assert_eq!(rebound.value("white"), instance.value("white"));
-    }
-    #[test]
     fn literal_choice_metadata_preserves_its_value_and_wire_shape() {
         let mut program = (*fixture("curves").program()).clone();
         let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
@@ -1147,33 +1115,6 @@ mod tests {
         let literal: EffectOption = serde_json::from_str(r#""我的 { $name } 🎨""#).unwrap();
         assert_eq!(literal.value(), "我的 { $name } 🎨");
         assert_eq!(serde_json::to_string(&literal).unwrap(), r#""我的 { $name } 🎨""#);
-    }
-    #[test]
-    fn choice_rebinding_preserves_stable_values_and_defaults_when_values_are_removed() {
-        let mut instance = EffectInstance::new(fixture("curves").program());
-        instance.set("domain", EffectValue::Choice(1)).unwrap();
-        let mut program = (*instance.program).clone();
-        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
-        let option = |value: &str| EffectOption::Labeled { value: value.into(), label: "同じ表示名 🎨".into() };
-        parameter.kind = EffectParameterKind::Choice { options: [option("Log HDR"), option("Encoded RGB")].into() };
-        parameter.default = EffectValue::Choice(1);
-        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
-        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(0)));
-        assert_eq!(rebound.choice("domain"), Some("Log HDR"));
-        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
-        parameter.kind = EffectParameterKind::Choice { options: [option("Encoded RGB"), option("Linear HDR")].into() };
-        parameter.default = EffectValue::Choice(0);
-        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
-        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(0)));
-        assert_eq!(rebound.choice("domain"), Some("Encoded RGB"));
-        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
-        parameter.default = EffectValue::Choice(1);
-        let rebound = instance.rebind(Arc::new(program.clone())).unwrap();
-        assert_eq!(rebound.value("domain"), Some(&EffectValue::Choice(1)));
-        assert_eq!(rebound.choice("domain"), Some("Linear HDR"));
-        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
-        parameter.kind = EffectParameterKind::Choice { options: [option("Encoded RGB"), option("Encoded RGB")].into() };
-        assert!(instance.rebind(Arc::new(program)).is_err());
     }
     #[test]
     fn pages_shorten_labels_without_changing_shader_parameters() {
@@ -1313,27 +1254,4 @@ pub fn log_curve_encode(value:f64, stops:f64)->f64 {
 pub fn log_curve_decode(x:f64, stops:f64)->f64 {
     let span=stops+8.;let toe=(-8f64).exp2()*std::f64::consts::E;let knee=1./(std::f64::consts::LN_2*span);
     if x<=knee {x*toe*std::f64::consts::LN_2*span}else{(x*span-8.).exp2()}
-}
-
-impl EffectProgram {
-    pub fn for_depth(self:&Arc<Self>,depth:crate::color::SampleDepth)->Arc<Self> {
-        let selected=match self.id.as_ref() {
-            "levels" if depth.is_float()=>None,
-            "threshold" if depth.is_float()=>Some(("threshold",-65504.,65504.)),
-            "curves" if depth==crate::color::SampleDepth::F32=>Some(("hdr_stops",0.,127.)),
-            "exposure" if depth==crate::color::SampleDepth::F32=>Some(("exposure",-126.,126.)),
-            _=>return self.clone(),
-        };
-        let Some(bundled)=crate::bundled_effect_catalog().get(&self.id) else {return self.clone();};
-        if self.wgsl!=bundled.program().wgsl || self.entry!=bundled.program().entry {return self.clone();}
-        let mut result=self.clone();
-        for parameter in Arc::make_mut(&mut Arc::make_mut(&mut result).parameters) {
-            if let EffectParameterKind::Number {min,max,..}=&mut parameter.kind {
-                if let Some((key,lower,upper))=selected {
-                    if parameter.key.as_ref()==key {*min=lower;*max=upper;}
-                } else if !parameter.key.ends_with("gamma") {*min= -65504.;*max=65504.;}
-            }
-        }
-        result
-    }
 }

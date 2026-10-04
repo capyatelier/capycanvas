@@ -36,7 +36,7 @@ impl Form {
     fn populate(&self) {
         self.updating.set(true);
         let editor = self.editor.borrow();
-        let labels = editor.model().localized_labels(&self.localization.borrow());
+        let labels = editor.localized_labels(&self.localization.borrow());
         self.model.set_selected(
             ColorInputModel::ALL
                 .iter()
@@ -57,7 +57,7 @@ impl Form {
         let view = self.view.get();
         let editor = self.editor.borrow();
         let color = self.intensity_error.borrow().clone().map_or_else(|| editor.colors(), Err);
-        let mut copy = ColorFormCopy { model:editor.model(), document_space:self.space, validation:None, error:None };
+        let mut copy = ColorFormCopy { opaque:editor.opaque(), model:editor.model(), document_space:self.space, validation:None, error:None };
         match color {
             Ok((color, base)) => {
                 copy.validation = Some(ColorValidationCopy::new(color, self.space, view.space(), self.hdr).unwrap());
@@ -121,7 +121,7 @@ pub fn show(workspace: &Rc<Workspace>, slot: ColorSlot) {
     };
     let mut selected = colors.clone();
     selected.apply(ColorAction::Select { slot }).unwrap();
-    choose_with_intensity(workspace, definition, Some(selected.hdr_intensity()), move |workspace, color, intensity| {
+    choose_with_intensity(workspace, definition, Some(selected.hdr_intensity()), false, move |workspace, color, intensity| {
         workspace.dispatch(UiAction::Color {
             action: if let Some(stops) = intensity { ColorAction::SetSlotIntensity { slot, color, stops } }
                 else { ColorAction::SetSlot { slot, color } },
@@ -134,12 +134,13 @@ pub fn choose(
     definition: RgbColor,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor) + 'static,
 ) {
-    choose_with_intensity(workspace, definition, None, move |w, color, _| accepted(w, color));
+    choose_with_intensity(workspace, definition, None, false, move |w, color, _| accepted(w, color));
 }
 fn choose_with_intensity(
     workspace: &Rc<Workspace>,
     definition: RgbColor,
     intensity: Option<f32>,
+    opaque: bool,
     accepted: impl FnOnce(&Rc<Workspace>, RgbColor, Option<f32>) + 'static,
 ) {
     let Some((space, epoch, depth)) = workspace.gpu.borrow().as_ref().map(|g| {
@@ -158,6 +159,7 @@ fn choose_with_intensity(
             return;
         }
     };
+    editor.set_opaque(opaque);
     let hdr = depth.is_float();
     editor.set_document_depth(depth);
     if hdr {
@@ -243,7 +245,7 @@ fn choose_with_intensity(
     dialog.set_extra_child(Some(&body));
     let form = Rc::new(Form {
         localization: RefCell::new(workspace.localization()),
-        copy: RefCell::new(ColorFormCopy { model:editor.model(), document_space:space, validation:None, error:None }),
+        copy: RefCell::new(ColorFormCopy { opaque:editor.opaque(), model:editor.model(), document_space:space, validation:None, error:None }),
         editor: RefCell::new(editor),
         updating: Cell::new(false),
         composing: std::array::from_fn(|_| Cell::new(false)),
@@ -394,6 +396,7 @@ fn choose_with_intensity(
 pub struct ColorButton {
     pub widget: gtk::Button,
     definition: Cell<RgbColor>,
+    pub opaque: Cell<bool>,
     patch: ColorPatch,
 }
 impl ColorButton {
@@ -406,6 +409,7 @@ impl ColorButton {
         Rc::new(Self {
             widget,
             definition: Cell::new(RgbColor::BLACK),
+            opaque: Cell::new(false),
             patch,
         })
     }
@@ -435,7 +439,7 @@ impl ColorButton {
             let original = button.color();
             let weak = weak.clone();
             let accepted = accepted.clone();
-            choose(&workspace, original, move |workspace, color| {
+            choose_with_intensity(&workspace, original, None, button.opaque.get(), move |workspace, color, _| {
                 let Some(button) = weak.upgrade() else {
                     return;
                 };

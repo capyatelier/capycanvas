@@ -74,12 +74,6 @@ pub(super) fn validate_catalog_labels(catalog: &layer_core::EffectCatalog, l: &L
     for filter in catalog.filters() { validate_program_labels(&filter.program, l)?; }
     Ok(())
 }
-pub(super) fn validate_document_labels(document: &Document, l: &Localizer) -> Result<(), String> {
-    for (_, _, definition) in document.artwork.definitions.iter() {
-        validate_program_labels(&definition.program, l)?;
-    }
-    Ok(())
-}
 
 impl<B: CanvasRenderer> UiSession<B> {
     pub(crate) fn update_shader_idle(&mut self) {
@@ -466,7 +460,7 @@ pub enum PropertyKind {
     Number { numeric: NumericControl },
     Toggle,
     Choice { options: Arc<[Arc<str>]> },
-    Color,
+    Color { opaque: bool },
     Curve,
     Gradient,
 }
@@ -498,7 +492,7 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
                 layer_core::EffectOption::Labeled { label, .. } => resource_label(label, l),
             }).collect(),
         },
-        EffectParameterKind::Color => PropertyKind::Color,
+        EffectParameterKind::Color => PropertyKind::Color {opaque:p.opaque},
         EffectParameterKind::Curve => PropertyKind::Curve,
         EffectParameterKind::Gradient => PropertyKind::Gradient,
         EffectParameterKind::Lut3d => return None,
@@ -513,7 +507,7 @@ fn control(layer: u64, p: &layer_core::EffectParameter, value: EffectValue, l: &
     } else {
         Vec::new()
     };
-    let color_action = matches!(kind, PropertyKind::Color).then(|| UiAction::Effect {
+    let color_action = matches!(kind, PropertyKind::Color {..}).then(|| UiAction::Effect {
         action: EffectAction::UseCurrentColor { layer, key: p.key.to_string() },
     });
     Some(PropertyControl {
@@ -588,7 +582,7 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
     let mut curve_white = None;
     let description = if let Some(effect) = property_effect(doc, handle) {
         let application = effect_application(doc, handle).unwrap().1;
-        let program = doc.artwork.definitions.get(application.definition).unwrap().program.for_depth(doc.composition().color.depth);
+        let program = &doc.artwork.definitions.get(application.definition).unwrap().program;
         controls.extend(
             program
                 .parameters
@@ -653,10 +647,9 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
     });
     if let Some(effect) = effect.filter(|effect| matches!(effect.program.auxiliary, Some(layer_core::EffectAuxiliary::Lut3d {..}))) {
         view.resource_label = Some(l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string());
-        if let Some(layer_core::EffectAuxiliary::Lut3d {color_space,..})=&effect.program.auxiliary {
-            if effect.lut3d().is_none_or(|resource|layer_core::lut3d::Look::for_resource(resource).is_some()
-                && effect.value(color_space)==Some(&EffectValue::Choice(0))) {view.controls.retain(|control|control.key!=color_space.as_ref());}
-        }
+        if let Some(layer_core::EffectAuxiliary::Lut3d {color_space,..})=&effect.program.auxiliary
+            && effect.lut3d().is_none_or(|resource|layer_core::lut3d::Look::for_resource(resource).is_some()
+                && effect.choice(color_space)==Some("srgb")) {view.controls.retain(|control|control.key!=color_space.as_ref());}
         if let Some(resource) = effect.lut3d() {
             let name = layer_core::lut3d::Look::for_resource(resource).map(|look|lookup_preset_label(Some(look),l))
                 .unwrap_or_else(|| if resource.title().is_empty() {l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string()} else {resource.title().to_string()});
@@ -667,7 +660,7 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
             let selected=match (preset,effect.lut3d()) {
                 (None,None)=>true,
                 (Some(look),Some(resource))=>layer_core::lut3d::Look::for_resource(resource)==Some(look)
-                    && matches!(&effect.program.auxiliary,Some(layer_core::EffectAuxiliary::Lut3d {color_space,..}) if effect.value(color_space)==Some(&EffectValue::Choice(0))),
+                    && matches!(&effect.program.auxiliary,Some(layer_core::EffectAuxiliary::Lut3d {color_space,..}) if effect.choice(color_space)==Some("srgb")),
                 _=>false,
             };
             if selected {view.resource_selection=Some(view.actions.len());}
@@ -1096,7 +1089,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
                 let index = stack.entries.iter().position(|handle| *handle == top).ok_or("Missing insertion position")?;
                 let depth = doc.composition().color.depth;
-                let mut instance = EffectInstance::new(catalog.program().for_depth(depth));
+                let mut instance = EffectInstance::new(catalog.program());
                 if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
                 if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
                     instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
@@ -1168,7 +1161,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
                 let original = document.scene().effect(handle).ok_or("Missing adjustment")?;
                 let mut draft = effect_draft(document, handle)?;
-                draft.program = draft.program.for_depth(document.composition().color.depth);
                 draft.set(&key, value).map_err(str::to_string)?;
                 if draft.view() == original { return Ok(()); }
                 let edit = effect_edit(document, handle, draft)?;
@@ -1258,23 +1250,24 @@ mod resource_tests {
     }
 
     #[test]
-    fn resource_builtin_id_literal_replacement_survives_localization_and_serialization() {
+    fn resource_custom_literal_definition_survives_localization_and_serialization() {
         let l = Localizer::shared(UiLanguage::Japanese);
         let mut replacement = package();
-        replacement.filters.retain(|f| f.id() == "curves");
+        replacement.filters=vec![crate::session::test_support::custom_filter("curves")];
         let program = Arc::make_mut(&mut replacement.filters[0].program);
         program.label = "私の \"曲線\" {名前} 🎨".into();
         let parameters = Arc::make_mut(&mut program.parameters);
         parameters[0].label = "한글 설정".into();
         parameters[0].section = Some("我的分组".into());
         let candidate = layer_core::bundled_effect_catalog()
-            .stage(resolve(replacement), EffectInstallMode::Replace).unwrap();
+            .stage(resolve(replacement), EffectInstallMode::Add).unwrap();
         validate_catalog_labels(&candidate, &l).unwrap();
         let picker = FilterPickerState { search: Some("曲".into()), ..FilterPickerState::new(&l) };
         let choices = catalog(&candidate, &picker, &l);
+        let choices:Vec<_>=choices.into_iter().filter(|c|c.id.as_ref()=="test:curves").collect();
         assert_eq!(choices.len(), 1);
         assert_eq!(&*choices[0].label, "私の \"曲線\" {名前} 🎨");
-        let instance = EffectInstance::new(candidate.get("curves").unwrap().program());
+        let instance = EffectInstance::new(candidate.get("test:curves").unwrap().program());
         let copy: EffectInstance = serde_json::from_str(&serde_json::to_string(&instance).unwrap()).unwrap();
         assert_eq!(copy, instance);
         let control = control(7, &copy.program.parameters[0], copy.values[0].clone(), &l).unwrap();
@@ -1341,15 +1334,7 @@ mod resource_tests {
                 }
                 let custom = resolve(custom);
                 assert!(validate_catalog_labels(&custom, &l).is_err(), "field {field}: {key}");
-                if field != 0 {
-                    let mut document = Document::new(layer_core::authored::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-                    let handle=document.working.occurrence.unwrap();
-                    let draft=EffectInstance::new(custom.get("curves").unwrap().program());
-                    let definition=document.artwork.definitions.insert(layer_core::authored::PortableId::random(),layer_core::authored::Definition {program:draft.program}).unwrap();
-                    let effect=document.artwork.effects.insert(layer_core::authored::PortableId::random(),EffectApplication {definition,values:draft.values,domain:[32;2]}).unwrap();
-                    document.artwork.occurrences.get_mut(handle).unwrap().content=OccurrenceContent::Effect(effect);
-                    assert!(validate_document_labels(&document, &l).is_err(), "embedded field {field}: {key}");
-                }
+
             }
         }
     }

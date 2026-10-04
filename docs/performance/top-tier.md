@@ -64,8 +64,8 @@ current-source results.
 | Threshold slider, exact native resolution | 120, soft | **Not met.** 4.75–4.79 presents/s, interval p99 241.67 ms | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Selective Color, neutral and red-family corrections | 120, soft | **Not met.** 110.35–113.31 and 113.89–114.09 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
 | Channel Mixer, coefficient and Constant | 120, soft | **Not met.** 112.20–115.25 and 109.06–112.53 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
-| Color Lookup Intensity, native 65³ table | 120, soft | **Not met.** 2.72–2.99 presents/s; interval p99 341.68–366.68 ms | [Color Lookup](#color-lookup), 2026-10-03 |
-| Navigation with Color Lookup, native 65³ table | 120 | **Not met.** 41.34–51.29 presents/s; interval p99 25.00–33.33 ms | [Color Lookup](#color-lookup), 2026-10-03 |
+| Color Lookup Intensity, native 65³ table | 120, soft | Current packed LUT path unmeasured; previous path **not met** at 2.72–2.99 presents/s; interval p99 341.68–366.68 ms | [Color Lookup](#color-lookup), 2026-10-03 |
+| Navigation with Color Lookup, native 65³ table | 120 | Current packed LUT path unmeasured; previous path **not met** at 41.34–51.29 presents/s; interval p99 25.00–33.33 ms | [Color Lookup](#color-lookup), 2026-10-03 |
 | Shadows and Highlights sliders, native | 120, soft | **Not met.** Shadows 2.99–3.99, Highlights 1.20–1.40 presents/s | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Clarity slider, native | 120, soft | **Not met.** 1.76–1.99 presents/s; interval p99 533.35–741.69 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Navigation with Shadows/Highlights or Clarity | 120 | **Not met.** 40.14–44.71 presents/s; interval p99 25.00–33.33 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |

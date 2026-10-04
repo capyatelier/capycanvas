@@ -745,10 +745,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.operation.active()
             || (self.region_tools.busy() && !self.refine_previewing())
             || !self.layer_interaction.path.is_empty()
-            || self
-                .pending_filters
-                .as_ref()
-                .is_some_and(|p| !p.library_only())
         {
             Err(FileFailure::CanvasOperation.message(self.localization()))
         } else {
@@ -777,21 +773,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.document_idle_reason().map_or(Ok(()), |reason| Err(reason.into()))
     }
 
-    /// Library-only validation owns private GPU work and cannot change document
+    /// Catalog validation owns private GPU work and cannot change document
     /// or workspace values. Closing and immutable saves may proceed, including
     /// their unsaved-changes decisions. Replacing the document still waits.
     pub fn require_document_snapshot_idle(&self) -> Result<(), String> {
         if self.painted_selections.busy() { return Err(FileFailure::SelectionCapture.message(self.localization())); }
         self.require_document_interaction_idle()?;
-        if self
-            .pending_filters
-            .as_ref()
-            .is_some_and(|p| !p.library_only())
-        {
-            Err(FileFailure::CanvasOperation.message(self.localization()))
-        } else {
-            Ok(())
-        }
+        Ok(())
     }
 
     pub fn require_document_idle(&self) -> Result<(), String> {

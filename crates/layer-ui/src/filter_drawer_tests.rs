@@ -469,7 +469,7 @@ fn every_effect_color_control_offers_the_current_color() {
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: id.as_str().into() } }).unwrap();
         let layer = occurrence_token(s.engine.document().working.occurrence.unwrap());
         let colors: Vec<_> = s.state.layer_properties.controls.iter()
-            .filter(|c| c.kind == PropertyKind::Color).cloned().collect();
+            .filter(|c| matches!(c.kind,PropertyKind::Color {..})).cloned().collect();
         assert!(!colors.is_empty(), "{id}");
         for control in colors {
             let action = UiAction::Effect { action: EffectAction::UseCurrentColor { layer, key: control.key.clone() } };

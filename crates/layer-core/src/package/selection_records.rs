@@ -1,6 +1,6 @@
 use super::values::{self, DecodeError, DecodeResult};
 use crate::{Affine, ProjectLimits, Selection, SelectionPixels, SelectionShape,
-    authored::{PortableId, Resource}, selection::SELECTION_CHUNK_BYTES};
+    authored::{PortableId, Resource}, package::SELECTION_CHUNK_BYTES};
 use serde_json::{Map, Value, json};
 use std::sync::Arc;
 

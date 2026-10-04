@@ -124,6 +124,14 @@ export async function checkPhotoEdit({call,evaluate,settle,device=false}) {
       assert.deepEqual(row,{label:'Tint color',swatch:'Tint color',title:'Use selected color',order:true,line:true},`${kind}: Tint keeps a labelled row with its swatch and bucket on one line`);
       if(kind==='mouse')for(const name of ['light','dark']) {
         await send({type:'set_theme',theme:name});await pause(150);
+        assert.equal((await control('tint_color')).kind.opaque,true);
+        await tap(await middle('.effect-properties .property-color'),kind);
+        await wait(`!!document.querySelector('.color-dialog[open]')`);
+        assert.equal(await evaluate(`document.querySelector('.color-dialog [data-color-field="3"]').closest('label').hidden`),true,`${name}: Tint has no alpha control`);
+        await evaluate(`[...document.querySelectorAll('.color-dialog button')].find(b=>b.textContent==='Use Color').click()`);
+        await wait(`!document.querySelector('.color-dialog[open]')`);
+        assert.equal((await control('tint_color')).value.value.rgba[3],1);
+
         const r=await evaluate(`(()=>{const r=document.querySelector('${bucket}').closest('.property-row').getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()`);
         await writeFile(`${directory}/tint-row-${name}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png',clip:{x:r.x-8,y:r.y-120,width:r.width+16,height:r.height+128,scale:1}})).data,'base64'));
       }

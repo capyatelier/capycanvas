@@ -1,5 +1,6 @@
 use super::{ImmutableBacking, RangeState, MAX_RANGE_BYTES, manifest::{Manifest, decimal_u64}, values::{self, DecodeError, DecodeResult}};
-use crate::{authored::{PortableId, Resource, ResourceEncoding, EncodedBytes, EncodedIntegrity}, color::{PixelDescriptor, SampleType, TransferEncoding, AlphaAssociation, ColorProfile}, raster::{TileBlob, TILE_SIZE}, Lut3d};
+use super::RASTER_TILE_SIZE as TILE_SIZE;
+use crate::{authored::{PortableId, Resource, ResourceEncoding, EncodedBytes, EncodedIntegrity}, color::{PixelDescriptor, SampleType, TransferEncoding, AlphaAssociation, ColorProfile}, raster::{TileBlob}, Lut3d};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
@@ -290,7 +291,7 @@ impl<'a> ResourceReader<'a> {
         if let Some(bytes) = self.bytes.get(&id) { return Ok(bytes.clone()); }
         let encoding = record["encoding"].as_str().ok_or("Missing resource encoding")?;
         let compressed = encoding == "capy.lz4-bytes/1";
-        let expected_raw = match kind {"capy.wgsl/1"=>"utf8","capy.lut3d/1"=>"capy.lut3d-block/1",_=>"raw"};
+        let expected_raw = match kind {"capy.wgsl/1"=>"utf8","capy.lut3d/1"=>"capy.rgb-f32/1",_=>"raw"};
         if !compressed && encoding != expected_raw { return Err(DecodeError::Unsupported("Unknown resource encoding".into())); }
         let expected = if compressed { decimal_u64(&record["data"]["decoded_bytes"])? } else { self.manifest.resources[&id].bytes };
         if expected > limit as u64 { return Err("Resource exceeds decoded size bound".into()); }
@@ -349,7 +350,7 @@ impl super::effect_records::ResourceWriter for ResourceInventory {
     }
     fn lut(&mut self, lut: &Lut3d) -> Result<Value, String> {
         let payload=lut.resource().ok_or("Unresolved color lookup resource")?;
-        let resource=self.insert(ResourceEntry {kind:"capy.lut3d/1",data:json!({"size":lut.size(),"domain":lut.domain()}),raw_encoding:"capy.lut3d-block/1",payload:Payload::Bytes(payload.clone())})?;
+        let resource=self.insert(ResourceEntry {kind:"capy.lut3d/1",data:json!({"size":lut.size(),"domain":lut.domain()}),raw_encoding:"capy.rgb-f32/1",payload:Payload::Bytes(payload.clone())})?;
         Ok(json!({"resource":resource,"title":lut.title()}))
     }
 }
@@ -382,7 +383,7 @@ impl super::effect_records::ResourceReader for ResourceReader<'_> {
         let domain=values::array(values::required(data,"domain")?,2)?;
         let mut bounds=[[0.;3];2];
         for (out,row) in bounds.iter_mut().zip(domain) { for (component,value) in out.iter_mut().zip(values::array(row,3)?) { *component=values::finite_f32(value)?; } }
-        let bytes=self.bytes(resource,"capy.lut3d/1",Lut3d::HEADER_BYTES+(Lut3d::MAX_SIZE as usize).pow(3)*16)?;
+        let bytes=self.bytes(resource,"capy.lut3d/1",(Lut3d::MAX_SIZE as usize).pow(3)*12)?;
         let lut=Arc::new(Lut3d::from_resource(size,bounds,title,bytes).map_err(|e|self.backing.fail(e.into()))?);
         self.luts.insert(id,lut.clone()); Ok(lut)
     }
