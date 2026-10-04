@@ -73,7 +73,12 @@ pub fn references(value: &Value, limit: usize) -> DecodeResult<Vec<PortableId>> 
                     result.push(reference.as_str().ok_or("Invalid reference identity")?.parse()?);
                 } else {
                     if fields.len() > limit.saturating_sub(visited + pending.len()) { return Err(DecodeError::Unsupported("Reference traversal exceeds limit".into())); }
-                    pending.extend(fields.values().map(|value| (value, depth + 1)));
+                    for (key,value) in fields {
+                        if key == "data" && fields.get("type").and_then(Value::as_str) == Some("capy.output/1")
+                            && let Some(data) = value.as_object() {
+                            pending.extend(data.iter().filter(|(key,_)|key.as_str()!="representation").map(|(_,value)|(value,depth+2)));
+                        } else { pending.push((value,depth+1)); }
+                    }
                 }
             }
             Value::Array(values) => {

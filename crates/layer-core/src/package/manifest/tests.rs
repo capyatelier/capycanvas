@@ -172,7 +172,7 @@ fn standalone_inventory_checks_lengths_checksums_and_namespace() {
         assert!(parse(&value,&dir).is_err());
     }
     assert!(parse(&value,&directory(&[])).is_err());
-    assert!(parse(&fixture("empty"),&directory(&[("readme.txt",b"hidden")])).is_err());
+    assert_eq!(known(&fixture("empty"),&directory(&[("readme.txt",b"hidden")])).support,Support::Editable);
     assert!(parse(&fixture("empty"),&directory(&[("data/tiles-01.bin",b"hidden")])).is_err());
     assert_eq!(known(&fixture("empty"),&directory(&[("META-INF/content_credential.c2pa",b"opaque")])).support,Support::Editable);
 }

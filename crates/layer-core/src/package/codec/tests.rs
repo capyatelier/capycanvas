@@ -8,6 +8,8 @@ use std::{collections::BTreeSet, sync::{Mutex, atomic::AtomicUsize}};
 
 #[path="admission.rs"]
 mod admission;
+#[path="optional.rs"]
+mod optional;
 
 fn identity(n: u128) -> PortableId { PortableId::from_bytes(n.to_be_bytes()) }
 fn checkpoint(artwork: &Artwork) -> CaptureCheckpoint {

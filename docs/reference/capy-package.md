@@ -90,7 +90,7 @@ The initial registry is:
 | `capy.effect-definition/1` | Required `builtin` ID and parameter-data `version`. Custom definitions belong only to the private session and worker formats. |
 | `capy.selection/1` | Required `shape`; placement/inversion. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
-| `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and optional `representation`. |
+| `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and disposable optional `representation`; unfamiliar caches are ignored. |
 
 `content` is one of `{"paint":{"ref":"…"}}`,
 `{"stack":{"ref":"…"}}`, `{"effect":{"ref":"…"}}`,
@@ -128,9 +128,9 @@ The common frozen defaults are:
 | Effect parameter value | Required for every parameter, including a value equal to the insertion default. |
 | Custom effect alpha/space/time | `preserve`, `linear`, false. |
 | Output context | Animated effect opening phase zero. |
-| Output representation | Unavailable. |
+| Output representation | Unavailable; unfamiliar or unusable cached representations are ignored. |
 
-Unknown fields, variants, parameter keys, choice values, ports, resource encodings
+Except for the disposable output `representation`, unknown fields, variants, parameter keys, choice values, ports, resource encodings
 or evaluation contracts in a required record make the entire artwork unsupported.
 Do not deserialize them away. Malformed data for understood fields is invalid.
 Invalid is reserved for data that can never become valid: malformed JSON, IDs,
@@ -469,6 +469,10 @@ are reserved for signatures and do not establish authenticity. Only the exact
 member `META-INF/content_credential.c2pa` may have zero CRC fields without the
 usual CRC comparison; its bounds and header agreement are still checked. Edited
 saves drop signatures. Signing and verification are not baseline features.
+Unreferenced members outside `data/` are optional: readers ignore their content
+while enforcing transport bounds and header rules. Edited saves omit them; Copy
+Original preserves every original byte. Every `data/` member must be indexed by
+a resource record, including packs; unindexed data is invalid.
 
 Local members occupy consecutive ranges beginning at byte zero. Their central
 directory follows immediately, with one entry per member in physical order and
@@ -512,7 +516,11 @@ status remain explicit when it is displayed as the only available representation
 
 The default output's `representation` is
 `{"member":"preview.png","size":[width,height],"color":"srgb"}`. It
-exists if and only if the member exists in a supported envelope. Its pixels
+is emitted together with the member by current writers. Readers adopt it only
+when its fields, member, size and color exactly match an independently verified
+preview. Unknown fields, future colors or members, oversized dimensions and
+other unusable representations mean no preview; they never change artwork
+support or contribute authored references. Its pixels
 represent that output's captured source roots and context exactly. A source save
 may omit both the representation and member when preview evaluation/encoding
 fails or exceeds its budget; never retain an older preview as current. Missing

@@ -358,12 +358,6 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
         }
         let scale=if let Some(scale)=data.get("scale") {let pair=v::array(scale,2)?;[v::finite_f32(&pair[0])?,v::finite_f32(&pair[1])?]}else{[1.;2]};
         if scale.iter().any(|n|*n<=0.) {return Err("Invalid output scale".into());}
-        if let Some(representation)=data.get("representation") {
-            let rep=fields(representation,&["member","size","color"])?;
-            if v::string(v::required(rep,"member")?)?!="preview.png" {return Err(DecodeError::Unsupported("Unknown output representation".into()));}
-            let size=v::parse_size(v::required(rep,"size")?)?;if size.iter().any(|n|*n>1024) {return Err("Oversized output representation".into());}
-            if v::string(v::required(rep,"color")?)?!="srgb" {return Err(DecodeError::Unsupported("Unknown representation color".into()));}
-        }
         let output=Output {composition,name:name(data)?,context,scale,frame:data.get("frame").map(v::parse_frame).transpose()?,sdr:data.get("sdr").map(v::parse_sdr).transpose()?.unwrap_or(SdrRendition {exposure:0.,contrast:1.,headroom:2.3004484,highlight_color:0.3,balance:0.}),proof:data.get("proof").map(|v|v::parse_proof(v,|profile|reader.profile(profile))).transpose()?};
         art.outputs.install(art.outputs.allocated(*identity).unwrap(),output)?;
     }}

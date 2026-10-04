@@ -190,6 +190,10 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
         Err(super::values::DecodeError::Unsupported(reason))=>return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason}),
         Err(super::values::DecodeError::Invalid(reason))=>return Ok(failed(source,preview,reason)),
     };
+    let indexed=manifest.resources.values().filter_map(|resource|resource.range.map(|range|range.member)).collect::<std::collections::BTreeSet<_>>();
+    if directory.members.iter().enumerate().any(|(index,member)|member.name.starts_with("data/") && !indexed.contains(&index)) {
+        return Ok(failed(source,preview,"Unindexed data member".into()));
+    }
     let mut resources=resources::ResourceReader::new(&manifest,&source,cancelled,limits);
     let decoded=super::artwork_records::decode(&manifest,&mut resources);
     active(cancelled)?;

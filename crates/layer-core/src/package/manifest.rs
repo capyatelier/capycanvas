@@ -59,8 +59,8 @@ fn pack_name(name: &str) -> bool {
 }
 fn data_name(name: &str) -> bool { name.strip_prefix("data/").is_some_and(|id| id.parse::<PortableId>().is_ok()) }
 fn namespace(directory: &Directory) -> Result<(), String> {
-    if directory.members.iter().any(|member| !matches!(member.name.as_str(), "mimetype" | "manifest.json" | "preview.png")
-        && !pack_name(&member.name) && !data_name(&member.name) && !member.name.starts_with("META-INF/")) {
+    if directory.members.iter().any(|member| member.name.starts_with("data/")
+        && !pack_name(&member.name) && !data_name(&member.name)) {
         return Err("Invalid package member namespace".into());
     }
     Ok(())
