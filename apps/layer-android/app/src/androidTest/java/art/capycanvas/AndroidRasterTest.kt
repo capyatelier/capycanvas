@@ -191,13 +191,13 @@ class AndroidRasterTest {
         } finally {Native.projectFree(job.first)}
     }
     private fun save(name: String)=finishSave(saveTask(),name)
-    private fun open(file: File, corrupt: Boolean=false) {
+    private fun open(file: File, corrupt: Boolean=false, input: (() -> ParcelFileDescriptor)?=null) {
         val job=native {handle -> val (id,state)=request(handle,"open_document")
             Native.projectTask(handle,id,"null",state.getLong("epoch"),state.getLong("revision")) to id }
         val incumbent=native {state(it).getJSONObject("document_file")}
         try {
             val prepared=try {
-                Native.projectWork(job.first,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
+                Native.projectWork(job.first,(input?.invoke() ?: ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY)).detachFd(),0,0)
                 true
             } catch(e: Exception) {
                 if(!corrupt)throw e
@@ -3480,7 +3480,21 @@ class AndroidRasterTest {
         history("redo")
         assertTrue("Redo retains newer unsaved paint",native { state(it).getJSONObject("document_file").getBoolean("modified") })
         assertEquals(hash(secondPng),hash(png("redo.png")))
-        open(File(files,"first.capy"))
+        val pipe=ParcelFileDescriptor.createPipe()
+        val writer=java.util.concurrent.CompletableFuture.runAsync {
+            ParcelFileDescriptor.AutoCloseOutputStream(pipe[1]).use { output ->
+                File(files,"first.capy").inputStream().use { it.copyTo(output) }
+            }
+        }
+        try {
+            val seekFailure=runCatching { android.system.Os.lseek(pipe[0].fileDescriptor,0,android.system.OsConstants.SEEK_CUR) }.exceptionOrNull()
+            assertTrue("Provider input is a real non-seekable pipe",seekFailure is android.system.ErrnoException && seekFailure.errno==android.system.OsConstants.ESPIPE)
+            open(File(files,"first.capy"),input={pipe[0]})
+            writer.get(30,java.util.concurrent.TimeUnit.SECONDS)
+        } finally {
+            pipe.forEach { runCatching { it.close() } }
+            writer.cancel(true)
+        }
         assertEquals(hash(firstPng),hash(png("opened.png")))
         assertEquals(manifest(first).rasterResources().toString(),manifest(save("roundtrip.capy")).rasterResources().toString())
         val corrupt=File(files,"corrupt.capy");corrupt.writeBytes(first.copyOf().also {it[it.lastIndex]=(it.last().toInt() xor 1).toByte()})

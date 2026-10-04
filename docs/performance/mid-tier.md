@@ -301,6 +301,39 @@ trace supports CPU attribution, not full GPU p95 or untraced tier qualification.
 Exact joins, missing IDs and per-contact results are under
 `artifacts/format/m3-mid-stack-trace-37/trace-diagnosis/`.
 
+### Complete GPU timing diagnostic
+
+A separate BUILD29/32 comparison uses six three-second contacts in the same
+sixteen-photo middle-layer workload. Short contacts fit the existing GPU timing
+queue: all 1,157 baseline and 1,162 candidate selected submissions have elapsed,
+paint, prediction and composition timings. They do not satisfy the sustained
+stroke duration required for tier qualification.
+
+| Contact | GPU elapsed p95, ms, baseline → candidate | GPU elapsed p99, ms, baseline → candidate |
+| --- | ---: | ---: |
+| 1 | 17.903 → 17.743 | 23.696 → 22.720 |
+| 2 | 18.677 → 17.905 | 25.848 → 22.846 |
+| 3 | 17.955 → 17.847 | 26.066 → 21.994 |
+| 4 | 18.418 → 17.581 | 25.683 → 22.169 |
+| 5 | 18.038 → 17.934 | 25.839 → 18.950 |
+| 6 | 17.744 → 18.401 | 26.269 → 26.895 |
+
+Elapsed p95 improves in five contacts and rises 3.70% in the sixth. Paint p95
+rises in five contacts, by at most 0.207 ms (4.04%). Individual phase tails
+remain: composition p99 rises 1.346 ms in contact 1, and paint p99 rises
+1.439 ms in contact 6. No contacts or tails are pooled away.
+
+Settings and retained source residency match. Dynamic budgets differ; the
+candidate starts with the GPU 1.30°C warmer, and per-frame dab counts vary.
+Both runs report zero thermal and cooling status. Only baseline-first order
+was measured. Contact 6 input-to-completion p99 rises 5.627 ms; different
+input ages, GPU spans and completion service all contribute to the selected
+observations, without establishing a causal matched-frame regression.
+This diagnostic fills the timing-coverage gap for these short contacts; it
+does not clear the sustained response failures, presentation or 90/s target.
+Raw traces, complete ID joins, per-phase quantiles and limitations are in
+`artifacts/format/m3-mid-gpu-trace-49/`.
+
 ## Brushes
 
 Target: **90 completed updates/s** at the guaranteed size, on the 24 MP canvas.

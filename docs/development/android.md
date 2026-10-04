@@ -52,7 +52,9 @@ method on the file worker before preparing the candidate session.
 
 Artwork files use shared immutable capture and the final package reader/writer.
 The render owner supplies captured effect phases before file work starts. Provider
-input can be non-seekable; package parsing uses private spooled backing. Saves
+input can be non-seekable; package parsing uses private spooled backing.
+`AndroidRasterTest#exactSnapshotsSurviveFilesGpuReplacementAndRecovery` reopens
+a saved drawing through a real pipe and compares its pixels and resource records. Saves
 finish the private package before opening the provider destination for replacement,
 so encoding failure cannot truncate the previous file. Provider publication still
 has the provider's durability guarantees. Shared completion checks reject stale

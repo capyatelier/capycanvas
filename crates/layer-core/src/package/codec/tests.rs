@@ -276,6 +276,7 @@ fn opaque_attachment_ranges_are_bounded_and_live_until_the_last_captured_save_ow
     let drops=Arc::new(AtomicUsize::new(0));
     let source=Arc::new(CountingSource {bytes:ChunkedBytes::new(payload.chunks(MAX_RANGE_BYTES).map(Arc::<[u8]>::from).collect()).unwrap(),
         requests:Mutex::new(Vec::new()),drops:drops.clone()});
+    let source_owner=Arc::downgrade(&source);
     let attachment=Arc::new(OpaqueResource {id:identity(701),kind:"future.samples/1".into(),data:json!({"mode":3}),encoding:"future.binary/1".into(),
         extra_fields:[("future_descriptor".into(),json!([1,2,3]))].into_iter().collect(),backing:ImmutableBacking::new(source.clone()).unwrap(),offset:0,
         length:payload.len() as u64,crc32:crc32fast::hash(&payload)});
@@ -283,7 +284,8 @@ fn opaque_attachment_ranges_are_bounded_and_live_until_the_last_captured_save_ow
     Arc::make_mut(&mut artwork.extensions).records.insert(identity(700),json!({"id":identity(700),"type":"future.note/1","ancillary":true,"copy_safe":true,
         "data":{"subject":resources::reference(identity(10)),"payload":resources::reference(attachment.id)}}));
     let capture=capture(&artwork); let prepared=PreparedPackage::prepare(&capture,None,&AtomicBool::new(false)).unwrap();
-    drop(artwork); drop(capture); drop(attachment); assert_eq!(drops.load(Ordering::Relaxed),0);
+    drop(artwork); drop(capture); drop(attachment); drop(source);
+    assert_eq!(drops.load(Ordering::Relaxed),0); assert!(source_owner.upgrade().is_some());
     let bytes=serialize(&prepared);
     let reopened=editable(bytes);
     assert_eq!(reopened.extensions.resources.len(),1);
@@ -296,8 +298,8 @@ fn opaque_attachment_ranges_are_bounded_and_live_until_the_last_captured_save_ow
         emitted.extend_from_slice(&loaded.read_chunk(start as u64,(payload.len()-start).min(MAX_RANGE_BYTES),&AtomicBool::new(false)).unwrap());
     }
     assert_eq!(emitted,&*payload);
-    assert!(source.requests.lock().unwrap().iter().all(|(_,length)|*length<=MAX_RANGE_BYTES));
-    drop(prepared); assert_eq!(drops.load(Ordering::Relaxed),0); drop(source); assert_eq!(drops.load(Ordering::Relaxed),1);
+    assert!(source_owner.upgrade().unwrap().requests.lock().unwrap().iter().all(|(_,length)|*length<=MAX_RANGE_BYTES));
+    drop(prepared); assert_eq!(drops.load(Ordering::Relaxed),1); assert!(source_owner.upgrade().is_none());
 }
 
 #[test]
