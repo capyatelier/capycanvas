@@ -165,7 +165,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             host.reportActionError(e.message ?: actionFailed)
         }
     }
-    fun acceptsDrop(event:android.view.DragEvent)=event.localState==null&&!working&&picker==null&&!host.drawingTabs.switching&&event.clipDescription?.let{it.hasMimeType("image/*")||it.hasMimeType("application/octet-stream")||it.hasMimeType("application/x-capy")||it.hasMimeType("text/uri-list")}==true
+    fun acceptsDrop(event:android.view.DragEvent)=event.localState==null&&!working&&picker==null&&!host.drawingTabs.switching&&event.clipDescription?.let{it.hasMimeType("image/*")||it.hasMimeType("application/octet-stream")||it.hasMimeType("application/vnd.capycanvas")||it.hasMimeType("text/uri-list")}==true
     fun drop(activity:Activity,event:android.view.DragEvent):Boolean {
         if(!acceptsDrop(event))return false
         val permission=activity.requestDragAndDropPermissions(event)
@@ -408,7 +408,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             }
         }
     }
-    val packageCopy = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/x-capycanvas")) {uri -> controller.choosePackageCopy(uri)}
+    val packageCopy = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/vnd.capycanvas")) {uri -> controller.choosePackageCopy(uri)}
     val packagePreviewExport = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("image/png")) {uri -> controller.choosePackageCopy(uri,true)}
     controller.packagePrompt?.let {summary ->
         AlertDialog(onDismissRequest = {if(!controller.packageCopying)controller.choosePackageCopy(null)},
@@ -469,9 +469,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             val opening = lookup || document.getString("type") in listOf("open", "place")
             val intent = Intent(if (opening) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
-                type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/octet-stream"
+                type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/vnd.capycanvas"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                if (opening && !lookup) putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes + "application/octet-stream")
+                if (opening && !lookup) putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes + arrayOf("application/vnd.capycanvas", "application/octet-stream"))
                 if(lookup) putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,controller.lookupLocation ?: android.provider.DocumentsContract.buildRootUri("com.android.providers.downloads.documents","downloads"))
                 if (document.getString("type") == "open") putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 if (!opening) putExtra(Intent.EXTRA_TITLE, document.getString("name"))

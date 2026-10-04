@@ -1,7 +1,7 @@
 use std::{collections::BTreeSet, io::{Read, Seek, SeekFrom, Write}};
 use super::values::{DecodeError, DecodeResult};
 
-pub const MIMETYPE: &[u8] = b"application/x-capy-canvas";
+pub const MIMETYPE: &[u8] = b"application/vnd.capycanvas";
 const LIMIT32: u64 = u32::MAX as u64;
 const LIMIT16: u64 = u16::MAX as u64;
 const CREDENTIAL: &str = "META-INF/content_credential.c2pa";

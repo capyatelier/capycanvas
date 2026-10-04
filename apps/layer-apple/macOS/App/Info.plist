@@ -105,7 +105,7 @@
 					<string>capy</string>
 				</array>
 				<key>public.mime-type</key>
-				<string>application/x-capycanvas-project</string>
+				<string>application/vnd.capycanvas</string>
 			</dict>
 		</dict>
 		<dict>

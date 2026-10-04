@@ -208,7 +208,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
 
     }
     if(window.showSaveFilePicker) {
-      const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream"];
+      const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/vnd.capycanvas"];
       const description=recipe?formatLabels()[recipe.format]:delivery.drawing_type;
       const name=recipe?request.name.replace(/\.[^.]+$/,"")+"."+extension:request.name;
       const handle=await window.showSaveFilePicker({suggestedName:name,types:[{description,accept:{[mime]:["."+extension]}}]});
@@ -457,7 +457,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             }else await download(bytes,filename,mime);
           }catch(error){if(error?.name!=="AbortError")message(String(error));}
         };
-        if(model.capabilities.copy_original)footer.append(button(()=>model.copy_original,()=>savePart(original,name,"application/x-capy-canvas",false)));
+        if(model.capabilities.copy_original)footer.append(button(()=>model.copy_original,()=>savePart(original,name,"application/vnd.capycanvas",false)));
         if(model.capabilities.export&&preview)footer.append(button(()=>model.export_preview,()=>savePart(new Blob([preview],{type:"image/png"}),name.replace(/\.[^.]+$/,"")+".png","image/png",true)));
         footer.append(button(()=>model.close,()=>finish(null)));form.append(footer);
       });

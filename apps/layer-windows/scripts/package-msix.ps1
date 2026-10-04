@@ -72,7 +72,7 @@ $xml=@"
  <Applications><Application Id="App" Executable="CapyCanvas.exe" uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
   <uap:VisualElements DisplayName="$displayXml" Description="Native drawing and painting" Square150x150Logo="PackageAssets\Logo150.png" Square44x44Logo="PackageAssets\Logo44.png" BackgroundColor="transparent" />
   <Extensions><uap:Extension Category="windows.fileTypeAssociation"><uap:FileTypeAssociation Name="capycanvas">
-   <uap:DisplayName>Capy Canvas drawing</uap:DisplayName><uap:SupportedFileTypes><uap:FileType>.capy</uap:FileType></uap:SupportedFileTypes>
+   <uap:DisplayName>Capy Canvas drawing</uap:DisplayName><uap:SupportedFileTypes><uap:FileType ContentType="application/vnd.capycanvas">.capy</uap:FileType></uap:SupportedFileTypes>
   </uap:FileTypeAssociation></uap:Extension></Extensions>
  </Application></Applications>
  <Capabilities><rescap:Capability Name="runFullTrust" /></Capabilities>

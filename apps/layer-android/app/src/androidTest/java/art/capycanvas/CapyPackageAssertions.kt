@@ -14,7 +14,7 @@ internal fun packageMember(bytes: ByteArray, name: String): ByteArray = ZipInput
 }
 
 internal fun packageManifest(bytes: ByteArray): JSONObject {
-    check(packageMember(bytes, "mimetype").decodeToString() == "application/x-capy-canvas")
+    check(packageMember(bytes, "mimetype").decodeToString() == "application/vnd.capycanvas")
     return JSONObject(packageMember(bytes, "manifest.json").decodeToString()).also {
         check(it.getString("format") == "capy.canvas")
         check(it.getInt("version") == 1)

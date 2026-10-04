@@ -10,7 +10,7 @@ Library tests do not qualify host journeys, device admission or frame performanc
 
 ## Envelope and references
 
-The package identity is `application/x-capy-canvas`. Its UTF-8 `manifest.json`
+The package identity is `application/vnd.capycanvas`. Its UTF-8 `manifest.json`
 contains one JSON object with these fields:
 
 | Field | Meaning |

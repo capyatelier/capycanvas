@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <mime-info xmlns="http://www.freedesktop.org/standards/shared-mime-info">
-  <mime-type type="application/x-capycanvas">
+  <mime-type type="application/vnd.capycanvas">
     <comment>Capy Canvas drawing</comment>
     <glob pattern="*.capy"/>
     <magic priority="60">

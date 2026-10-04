@@ -63,7 +63,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
         selection?.complete(uris)
     }
     fun accepts(event: DragEvent): Boolean = event.localState == null && event.clipDescription?.let { description ->
-        mimeTypes.any(description::hasMimeType) || description.hasMimeType("text/uri-list") || description.hasMimeType("application/octet-stream") || description.hasMimeType("application/x-capy")
+        mimeTypes.any(description::hasMimeType) || description.hasMimeType("text/uri-list") || description.hasMimeType("application/octet-stream") || description.hasMimeType("application/vnd.capycanvas")
     } == true && !working && !receiving && incoming == null && host.snapshot?.getJSONObject("state")?.array("commands")?.objects()
         ?.any { it.getString("id") == "import_image" && it.getBoolean("enabled") } == true
 

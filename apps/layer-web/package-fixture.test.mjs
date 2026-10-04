@@ -41,7 +41,7 @@ export async function packageManifest(bytes) {
     if (method === 0 ? length !== decodedLength : method !== 8 || name !== 'manifest.json' || length >= decodedLength)
       throw Error('Unsupported package member compression');
     if (at === 0 && (name !== 'mimetype' || method !== 0
-        || text.decode(bytes.subarray(start, end)) !== 'application/x-capy-canvas')) throw Error('Missing Capy package mimetype');
+        || text.decode(bytes.subarray(start, end)) !== 'application/vnd.capycanvas')) throw Error('Missing Capy package mimetype');
     if (name === 'manifest.json') {
       if (decodedLength > maxMetadata) throw Error('Authored manifest exceeds metadata limit');
       let decoded = bytes.subarray(start, end);
