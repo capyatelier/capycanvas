@@ -309,21 +309,42 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             Border outline;outline.IsHitTestVisible(false);outline.BorderThickness({1,1,1,1});outline.CornerRadius({6,6,6,6});canvas.Children().Append(outline);zones.push_back(outline);
             auto more=button(data,data->copyCaption(L"header",L"more_items"),[]{});style(more,data);more.Padding({0});
             AutomationProperties::SetAutomationId(more,L"header-overflow-"+to_hstring(zone));
-            more.Flyout(menu([weak=weak_from_this(),zone](auto target){if(auto self=weak.lock()){
-                auto hidden=array(self->geometry,L"hidden");if(uint32_t(zone)>=hidden.Size())return;
-                for(auto value:hidden.GetArrayAt(zone)){
-                    auto id=uint32_t(value.GetNumber());auto spec=findId(array(self->view,L"items"),id);MenuFlyoutItem row;row.Text(str(spec,L"label"));
-                    AutomationProperties::SetAutomationId(row,L"header-overflow-item-"+to_hstring(id));
-                    row.Click([weak,id,zone](auto&&,auto&&){if(auto self=weak.lock()){
-                        if(self->editing)self->input->Select(id);else self->activate(id,self->overflow[zone]);
-                    }});target.Append(row);
-                }
-            }}));
+            Flyout rows;TrackPopup(rows,data);
+            rows.Opening([weak=weak_from_this(),zone](auto const& sender,auto&&){if(auto self=weak.lock())self->overflowRows(sender.template as<Flyout>(),zone);});
+            more.Flyout(rows);
             canvas.Children().Append(more);Canvas::SetZIndex(more,10);overflow.push_back(more);
         }
         recovery=button(data,data->copyCaption(L"header",L"main_menu"),[]{});style(recovery,data);recovery.Padding({0});recovery.Flyout(menu(primaryMenu));
         AutomationProperties::SetAutomationId(recovery,L"header-recovery-menu");canvas.Children().Append(recovery);Canvas::SetZIndex(recovery,10);
         built=true;
+    }
+    void overflowRows(Flyout const& list,int zone){
+        StackPanel rows;rows.MinWidth(168);rows.XYFocusKeyboardNavigation(XYFocusKeyboardNavigationMode::Enabled);
+        auto overflowed=array(geometry,L"hidden");auto weak=weak_from_this();auto popup=make_weak(list);
+        if(uint32_t(zone)<overflowed.Size())for(auto value:overflowed.GetArrayAt(zone)){
+            auto id=uint32_t(value.GetNumber());auto spec=findId(array(view,L"items"),id);
+            auto found=items.find(id);auto kind=found==items.end()?hstring():str(object(found->second.entry,L"item"),L"kind");
+            auto row=button(data,str(spec,L"label"),[weak,popup,id,zone]{if(auto self=weak.lock()){
+                if(auto list=popup.get())list.Hide();
+                if(self->editing)self->input->Select(id);else self->activate(id,self->overflow[zone]);
+            }});
+            row.FontWeight(winrt::Windows::UI::Text::FontWeights::Normal());row.MinHeight(34);row.Padding({10,0,10,0});
+            row.HorizontalAlignment(HorizontalAlignment::Stretch);row.HorizontalContentAlignment(HorizontalAlignment::Stretch);
+            row.VerticalContentAlignment(VerticalAlignment::Stretch);row.IsEnabled(editing||flag(spec,L"enabled",true));
+            Grid content;auto text=label(data,str(spec,L"label"));text.VerticalAlignment(VerticalAlignment::Center);
+            text.TextTrimming(TextTrimming::CharacterEllipsis);content.Children().Append(text);
+            if(kind==L"tool"&&!editing&&flag(spec,L"has_variants")){
+                auto marker=ToolGroupMarker(data);marker.Margin({0,0,-10,0});text.Margin({0,0,12,0});content.Children().Append(marker);
+            }
+            row.Content(content);AutomationProperties::SetAutomationId(row,L"header-overflow-item-"+to_hstring(id));
+            row.ContextRequested([weak,popup,id,zone](auto&&,ContextRequestedEventArgs const& e){
+                e.Handled(true);auto self=weak.lock();if(!self)return;
+                if(auto list=popup.get())list.Hide();
+                self->input->Context(id,self->overflow[zone]);
+            });
+            rows.Children().Append(row);
+        }
+        list.Content(rows);
     }
     FrameworkElement control(uint32_t id,J const& item){
         auto kind=str(item,L"kind");

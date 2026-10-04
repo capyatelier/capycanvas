@@ -171,6 +171,26 @@ function Invoke-Id([string]$Id){
     Wait-Until {$hit.item=Find $Id;$hit.item -and $hit.item.Current.IsEnabled} "Missing enabled control: $Id"
     Invoke $Id
 }
+function Tool-Tile([string]$Command){
+    $target=@{id=$null}
+    Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){
+        if($tile.control.command -eq $Command -or $tile.resolved_control.command -eq $Command){$target.id="tile-$($panel.id)-$($tile.id)";return $true}
+    }};$false} "No $Command tile"
+    $target.id
+}
+function Tool-Choice([string]$Command){
+    $target=@{id=$null;list=$null;index=-1}
+    Wait-Until {
+        $set=(Model).state.tool_set
+        foreach($list in @(@('groups','tool-group-'),@('subtools','tool-subtool-'))){
+            $items=@($set.($list[0]))
+            for($i=0;$i -lt $items.Count;$i++){$action=$items[$i].action
+                if($action.command -eq $Command -or $action.variant.command -eq $Command){$target.id=$list[1]+$i;$target.list=$list[0];$target.index=$i;return $true}}
+        }
+        $false
+    } "No $Command tool choice"
+    $target
+}
 function Invoke-PickerButton($Picker,[string]$Id='1'){
     if($Picker.Current.ClassName -ne '#32770' -or $Picker.Current.ProcessId -ne $review.Id){throw 'Picker does not belong to the isolated review'}
     $window=[IntPtr]$Picker.Current.NativeWindowHandle;$hit=@{item=$null}

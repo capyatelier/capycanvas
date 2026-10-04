@@ -15,14 +15,6 @@ namespace NativeInput=Microsoft::UI::Input;
 using winrt::Windows::Foundation::Point;
 
 namespace {
-V toolbarUi(CapyLocalization const* localization,J const& request){
-    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_toolbar_ui(localization,to_string(request.Stringify()).c_str()),capy_string_free);
-    if(!result)throw hresult_invalid_argument(L"Toolbar request failed");
-    auto value=JsonValue::Parse(to_hstring(result.get()));
-    if(value.ValueType()==JsonValueType::Object&&value.GetObject().HasKey(L"error"))
-        throw hresult_invalid_argument(value.GetObject().GetNamedString(L"error"));
-    return value;
-}
 J copy(J const& value){return J::Parse(value.Stringify());}
 double textWidth(std::shared_ptr<WorkspaceData> const& data,hstring const& text){
     auto measure=label(data,text,false,false);measure.Measure({std::numeric_limits<float>::infinity(),32});

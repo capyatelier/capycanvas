@@ -35,28 +35,6 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
     hstring structure;
     ~Impl(){if(menu)menu.Hide();}
     void customize(J const& action){data->dispatch(O({{L"type",S(L"customize")},{L"action",action}}));}
-    Grid presets(){
-        Grid grid;grid.ColumnSpacing(6);grid.RowSpacing(6);
-        for(auto value:array(data->catalog,L"brush_sizes")){
-            auto preset=value.GetObject();double size=num(preset,L"value");
-            auto pick=button(data,str(preset,L"label"),[data=data,size]{data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(size)}}));});
-            pick.Width(52);pick.Height(34);pick.Background(buttonBackground(data));grid.Children().Append(pick);
-            AutomationProperties::SetAutomationId(pick,L"configure-size-"+str(preset,L"label"));
-        }
-        auto last=std::make_shared<int>(0);auto weak=make_weak(grid);
-        auto layout=[weak,last](double width){if(auto grid=weak.get()){
-            int columns=std::max(1,int((width+6)/58));if(columns==*last)return;*last=columns;
-            grid.ColumnDefinitions().Clear();grid.RowDefinitions().Clear();
-            for(int i=0;i<columns;++i){ColumnDefinition c;c.Width({52,GridUnitType::Pixel});grid.ColumnDefinitions().Append(c);}
-            for(uint32_t i=0;i<grid.Children().Size();++i){
-                if(i%columns==0){RowDefinition r;r.Height({34,GridUnitType::Pixel});grid.RowDefinitions().Append(r);}
-                auto child=grid.Children().GetAt(i).as<FrameworkElement>();
-                Grid::SetColumn(child,int(i)%columns);Grid::SetRow(child,int(i)/columns);
-            }
-        }};
-        grid.SizeChanged([layout](auto&& sender,auto&&){layout(sender.template as<Grid>().ActualWidth());});layout(356);
-        return grid;
-    }
     FrameworkElement layerSelector(){
         ComboBox choice;choice.HorizontalAlignment(HorizontalAlignment::Stretch);
         choice.FontSize(data->textSize());choice.MinHeight(34);
@@ -116,7 +94,7 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
         if(kind==L"stats")return StatsPanel(data,bindings);
         if(kind==L"layers")return layerSelector();
         if(kind==L"layer_opacity")return layerOpacity();
-        if(kind==L"size_presets")return presets();
+        if(kind==L"size_presets")return BrushSizePanel(data,bindings);
         if(kind==L"adjustments"){auto body=FiltersPanel(data,bindings);body.Height(480);return body;}
         if(kind==L"navigator"){
             navigator=std::make_unique<NavigatorView>(data,[weak=weak_from_this()]{if(auto self=weak.lock())self->measured();});

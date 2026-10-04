@@ -34,8 +34,7 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path;$directory=Split-Path -
 $run=Join-Path $repo ('artifacts/windows/canvas-editing/'+[Guid]::NewGuid().ToString('N'));[IO.Directory]::CreateDirectory($run)|Out-Null
 function Select-Tool([string]$Id){
  if(((Model).state.commands|Where-Object id -eq $Id).selected){return}
- $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Id){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No native $Id tile"
- Invoke $target.id;Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
+ Invoke (Tool-Tile $Id);Wait-Until {$ready=Model;if(!$ready.canvas_ready -or !$ready.brush_ready){return $false};if($Id -eq 'scale_rotate'){return $ready.state.layer_tools.tool -eq 'transform'};($ready.state.commands|Where-Object id -eq $Id).selected} "Tool did not activate: $Id"
 }
 function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id).value}
 function Body-Point{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle

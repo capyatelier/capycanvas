@@ -81,7 +81,9 @@ filter row compression and expansion; `--tooltips` checks captions across the wh
 Web uses `workspace-motion.sh web --tool-variations`, and Apple runs
 `EditorLaunchTests/testToolGroups` and `testToolGroupsDark`. Run
 native popup journeys without `--tablet`, whose synthetic pen serials cannot
-authorize popup grabs.
+authorize popup grabs. Windows uses `exercise-tool-variations.ps1`, including the
+title-bar overflow, `exercise-tools.ps1` for the Tool Set divider and
+`exercise-expansion.ps1` for the Brush Sizes grid.
 
 ## Interaction contract
 

@@ -33,8 +33,7 @@ function Copied([scriptblock]$Action,[string]$Message){
 }
 function Settled{Wait-Until {(Requests) -eq 0 -and !(Model).state.document_file.busy} 'The clipboard request did not finish'}
 function Tool([string]$Command){
- $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Command){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No $Command tile"
- Invoke-Id $target.id
+ Invoke-Id (Tool-Tile $Command)
 }
 function Menu-Item([string]$Name){
  $condition=[System.Windows.Automation.AndCondition]::new(

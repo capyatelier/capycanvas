@@ -321,6 +321,11 @@ void HeaderInput::WorkspaceOptions(FrameworkElement const& invoking){
     auto box=visibleBounds(invoking,impl->root);
     impl->showMenu(object(object(impl->data->model,L"windows_workspace"),L"switcher_options"),{box.X,box.Y+box.Height},false,invoking,true);
 }
+void HeaderInput::Context(uint32_t id,FrameworkElement const& invoking){
+    if(impl->active())return;
+    impl->hideMenu();auto box=visibleBounds(invoking,impl->root);
+    impl->selected=id;impl->context(id,{box.X,box.Y+box.Height},false,invoking);impl->notify();
+}
 void HeaderInput::Configure(J const& model,bool editing,J const& request){
     auto identity=model.Stringify()+request.Stringify();
     if(impl->identity!=identity||impl->editing!=editing)impl->cancel(L"configuration_changed");

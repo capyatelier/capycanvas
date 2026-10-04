@@ -61,6 +61,34 @@ function Choose([string]$Id,[scriptblock]$View,[string]$Device){
     Wait-Until {@(Menus).Count -eq 0} 'Escape did not dismiss the variation menu'
     @{device=$Device;button=$Id;label=$name;options=$names}
 }
+function Hidden-Zone([int]$Id){
+    try{$presentation=(Control 'title-bar').Current.ItemStatus|ConvertFrom-Json}catch{return $null}
+    $zones=@($presentation.geometry.hidden)
+    for($zone=0;$zone -lt $zones.Count;$zone++){if(@($zones[$zone]) -contains $Id){return $zone}}
+    $null
+}
+function Overflow-Variation([int]$Id,[int]$Zone,[string]$Device){
+    $view={@((Model).header.items|Where-Object id -eq $Id)[0]};$before=& $view
+    Invoke "header-overflow-$Zone"
+    $row=Control "header-overflow-item-$Id" -Arranged
+    $image=[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Image)
+    if(!$row.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$image)){throw 'Overflowed grouped tool lost its marker'}
+    if($Device -eq 'mouse'){Capture 'header-overflow-list' -Composed}
+    $box=$row.Current.BoundingRectangle;$x=[int]($box.X+$box.Width/2);$y=[int]($box.Y+$box.Height/2)
+    if($Device -eq 'mouse'){[CapyRowPointer]::RightClick($x,$y)}else{[CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 1200;[CapyRowPointer]::Up()}
+    Wait-Until {@(Menus).Count -ge 2} "$Device did not open variations from the title-bar overflow"
+    if(Find "header-overflow-item-$Id" -Visible){throw 'Overflow list stayed open under the variation menu'}
+    $choice=$null
+    foreach($option in @(Menus)){
+        $toggle=$null
+        if($option.Current.IsEnabled -and $option.TryGetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern,[ref]$toggle) -and $toggle.Current.ToggleState -eq [System.Windows.Automation.ToggleState]::Off){$choice=$option;break}
+    }
+    if(!$choice){throw 'Overflow variation menu has no alternate enabled choice'}
+    $name=$choice.Current.Name;$choice.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
+    Wait-Until {$current=& $view;($current.label -eq $name -or $current.label.StartsWith($name+' ')) -and $current.icon -ne $before.icon} 'Overflow variation did not reach the hidden tool'
+    Wait-Until {@(Menus).Count -eq 0} 'Overflow variation menu did not close'
+    @{device=$Device;overflow=$Zone;label=$name}
+}
 function Workspace([string]$Id){
     $choice=@((Model).windows_workspace.switcher|Where-Object id -eq $Id)[0]
     if((Model).windows_workspace.id -eq $Id){return}
@@ -131,9 +159,17 @@ try{
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header customization did not finish'
     foreach($device in @('mouse','pen','touch')){$results+=Choose "header-item-$($entry.id)" {@((Model).header.items|Where-Object id -eq $entry.id)[0]} $device}
     Capture 'header-variations' -WithModel -Composed
+    $zone=$null
+    foreach($width in 1100,1000,900,800,700,600,520){
+        & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width $width -Height 760
+        try{Wait-Until {$null -ne ($script:hiddenZone=Hidden-Zone $entry.id)} 'Not hidden' 3;$zone=$script:hiddenZone;break}catch{}
+    }
+    if($null -eq $zone){throw 'The grouped title-bar tool never overflowed'}
+    Capture 'header-overflow' -WithModel -Composed
+    foreach($device in @('mouse','pen','touch')){$results+=Overflow-Variation $entry.id $zone $device}
     $results|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run 'results.json')
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
-    [pscustomobject]@{theme=$Theme;toolbar='passed';header='passed';devices=@('mouse','pen','touch');eraser_group='passed';checked_choices='passed';layout_unchanged='passed';evidence=$run}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;toolbar='passed';header='passed';header_overflow='passed';devices=@('mouse','pen','touch');eraser_group='passed';checked_choices='passed';layout_unchanged='passed';evidence=$run}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{Exit-CapyEnvironment}

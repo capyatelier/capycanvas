@@ -30,5 +30,4 @@ private:
     std::map<uint32_t,std::shared_ptr<ToolbarComponent>> components;
     winrt::Microsoft::UI::Xaml::FrameworkElement tileGrip{nullptr};
     winrt::Microsoft::UI::Xaml::Controls::Image tileGripMark{nullptr};
-    winrt::Microsoft::UI::Xaml::Controls::Grid sizes(double width);
 };

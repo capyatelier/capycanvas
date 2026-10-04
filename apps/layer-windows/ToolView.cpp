@@ -3,6 +3,7 @@
 #include "RangeControl.h"
 #include "NativeMenus.h"
 #include "WorkspaceQuery.h"
+#include "WorkspaceGeometry.h"
 
 using namespace CapyUi;
 namespace {
@@ -36,6 +37,7 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     std::shared_ptr<WorkspaceData> data;
     StackPanel root,list;
     Canvas groups;
+    Border divider;
     std::vector<Button> groupButtons,subtoolButtons;
     std::vector<TextBlock> groupTitles,subtoolTitles;
     hstring groupKey,subtoolKey;
@@ -47,7 +49,9 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
     void init(){
         root.Spacing(6);list.Spacing(2);
         auto weak=weak_from_this();
-        root.Children().Append(groups);root.Children().Append(list);
+        divider.Height(1);divider.Margin({4,0,4,0});divider.Background(data->brush(L"settings_secondary"));divider.Opacity(.3);
+        AutomationProperties::SetAutomationId(divider,L"tool-set-divider");
+        root.Children().Append(groups);root.Children().Append(divider);root.Children().Append(list);
         groups.Visibility(panel==L"tools"?Visibility::Collapsed:Visibility::Visible);
         list.Visibility(media()?Visibility::Collapsed:Visibility::Visible);
         groups.SizeChanged([weak](auto&&,auto&&){if(auto self=weak.lock())self->arrange();});
@@ -124,7 +128,8 @@ struct ToolSetView : std::enable_shared_from_this<ToolSetView> {
                 AutomationProperties::SetItemStatus(buttons[i],active?data->caption(L"search",L"selected"):hstring());
             }
         }
-
+        bool both=groups.Visibility()==Visibility::Visible&&list.Visibility()==Visibility::Visible&&!groupButtons.empty()&&!subtoolButtons.empty();
+        divider.Visibility(both?Visibility::Visible:Visibility::Collapsed);
     }
 };
 struct SettingsView : std::enable_shared_from_this<SettingsView> {
@@ -411,4 +416,47 @@ FrameworkElement ToolSetPanel(std::shared_ptr<WorkspaceData> const& data,Binding
 }
 FrameworkElement ToolSettingsPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<SettingsView>(data);bindings.emplace_back([view]{view->refresh();});return view->root;
+}
+FrameworkElement BrushSizePanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
+    auto style=toolbarUi(data->localization.get(),O({{L"type",S(L"style")},{L"style",S(L"small")}})).GetObject();
+    auto tile=array(data->catalog,L"brush_size_tile");
+    float width=float(tile.GetNumberAt(0)),height=float(tile.GetNumberAt(1));double gap=num(style,L"gap");
+    double radius=array(style,L"size").GetNumberAt(0)/2*CornerFit;
+    auto ink=data->brush(L"text").Color();
+    Media::LinearGradientBrush fade;fade.MappingMode(BrushMappingMode::Absolute);fade.StartPoint({0,0});fade.EndPoint({0,height});
+    for(auto [offset,alpha]:{std::pair{.4,1.},std::pair{.65,.2},std::pair{1.,0.}}){
+        Media::GradientStop stop;stop.Offset(offset);auto color=ink;color.A=uint8_t(std::lround(ink.A*alpha));stop.Color(color);fade.GradientStops().Append(stop);
+    }
+    Canvas grid;auto tiles=std::make_shared<std::vector<Button>>();
+    for(auto value:array(data->catalog,L"brush_sizes")){
+        auto preset=value.GetObject();double size=num(preset,L"value");auto text=str(preset,L"label");
+        auto action=O({{L"type",S(L"set_brush_size")},{L"value",N(size)}});
+        auto pick=button(data,text+L" px",[data,action]{data->dispatch(action);});
+        pick.Width(width);pick.Height(height);pick.CornerRadius({radius,radius,radius,radius});
+        pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.VerticalContentAlignment(VerticalAlignment::Stretch);
+        Grid content;double diameter=num(preset,L"preview_diameter");
+        Microsoft::UI::Xaml::Shapes::Path dot;Media::EllipseGeometry circle;circle.Center({width/2,width/2});
+        circle.RadiusX(diameter/2);circle.RadiusY(diameter/2);dot.Data(circle);dot.Fill(fade);
+        dot.HorizontalAlignment(HorizontalAlignment::Left);dot.VerticalAlignment(VerticalAlignment::Top);content.Children().Append(dot);
+        auto caption=label(data,text);caption.FontWeight(Windows::UI::Text::FontWeights::Normal());caption.LineHeight(data->textSize());
+        caption.HorizontalAlignment(HorizontalAlignment::Center);caption.VerticalAlignment(VerticalAlignment::Bottom);caption.Margin({0,0,0,2});
+        content.Children().Append(caption);pick.Content(content);
+        AutomationProperties::SetAutomationId(pick,L"size-preset-"+text);actionTooltip(data,pick,[action]{return action;});
+        grid.Children().Append(pick);tiles->push_back(pick);
+        bindings.emplace_back([data,pick,size]{
+            bool chosen=num(object(data->state,L"brush"),L"diameter")==size;pick.Background(chosen?selected(data):clear());
+            AutomationProperties::SetItemStatus(pick,chosen?data->caption(L"search",L"selected"):hstring());
+        });
+    }
+    grid.SizeChanged([tiles,width,height,gap](auto const& sender,auto&&){
+        auto canvas=sender.template as<Canvas>();double available=canvas.ActualWidth();
+        int columns=std::max(1,int((available+gap)/(width+gap)));double cell=std::min(double(width),available);
+        for(size_t i=0;i<tiles->size();++i){
+            auto const& pick=(*tiles)[i];pick.Width(cell);
+            Canvas::SetLeft(pick,double(i%columns)*(cell+gap));Canvas::SetTop(pick,double(i/columns)*(height+gap));
+        }
+        size_t rows=(tiles->size()+columns-1)/columns;
+        canvas.Height(rows?rows*height+(rows-1)*gap:0);
+    });
+    return grid;
 }

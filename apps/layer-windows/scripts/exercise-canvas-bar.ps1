@@ -35,14 +35,11 @@ function Tap([string]$Id,[string]$Device){
  $at=Center (Control $Id -Arranged);[CapyRowPointer]::Down($Device,$at[0],$at[1]);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
 }
 function Tool([string]$Command){
- $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Command){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No $Command tile"
- Invoke-Id $target.id
+ Invoke-Id (Tool-Tile $Command)
 }
 function Subtool([string]$Command){
- $index=@{value=-1}
- Wait-Until {$subtools=@((Model).state.tool_set.subtools);for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].action.command -eq $Command){$index.value=$i;return $true}};$false} "No $Command subtool"
- Invoke-Id ('tool-subtool-'+$index.value)
- Wait-Until {@((Model).state.tool_set.subtools)[$index.value].selected} "$Command did not activate"
+ $choice=Tool-Choice $Command;Invoke-Id $choice.id
+ Wait-Until {@((Model).state.tool_set.($choice.list))[$choice.index].selected} "$Command did not activate"
 }
 function Drag([string]$Device,[int[]]$From,[int[]]$To){
  [CapyRowPointer]::Down($Device,$From[0],$From[1])
@@ -67,7 +64,8 @@ try {
  Fit-Canvas;Start-Sleep -Milliseconds 300
  (Find 'Test stroke' -Name).GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
  Wait-Until {(Model).state.document_file.modified} 'Controlled drawing did not finish'
- $canvas=(Find 'drawing-canvas').Current.BoundingRectangle
+ $settled=@{rect=$null};Wait-Until {$settled.rect=(Find 'drawing-canvas').Current.BoundingRectangle;$settled.rect.Width -gt 1200} 'The canvas bounds did not settle after drawing' 10
+ $canvas=$settled.rect
  $cx=[int]($canvas.X+$canvas.Width*.5);$cy=[int]($canvas.Y+$canvas.Height*.45)
  if(Bar){throw 'The bar showed before any selection or transform'}
 

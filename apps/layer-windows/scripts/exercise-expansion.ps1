@@ -79,6 +79,34 @@ function Check-OverviewOverlap($Configuration){
     }finally{$before.Dispose();$after.Dispose()}
 }
 function Shown([string]$Panel,[string]$Control){((Model).panels|Where-Object id -eq $Panel).controls|Where-Object control -eq $Control|Select-Object -ExpandProperty visible_in_panel}
+function Check-SizeGrid($Within,[string]$Device,[string]$Label){
+    $found=@{tiles=@()}
+    Wait-Until {
+        $buttons=$Within.FindAll([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new(
+            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,[System.Windows.Automation.ControlType]::Button))
+        $found.tiles=@($buttons|Where-Object {$_.Current.AutomationId -like 'size-preset-*'})
+        $found.tiles.Count -eq 40
+    } "Size grid shows $($found.tiles.Count) of 40 presets"
+    $tiles=$found.tiles
+    $scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.;$tile=@(36,44)
+    $first=$tiles[0].Current.BoundingRectangle
+    $row=@($tiles|Where-Object {[Math]::Abs($_.Current.BoundingRectangle.Top-$first.Top) -lt 1})
+    foreach($item in $row){$box=$item.Current.BoundingRectangle
+        if([Math]::Abs($box.Width-$tile[0]*$scale) -gt 1.5 -or [Math]::Abs($box.Height-$tile[1]*$scale) -gt 1.5){throw "Size tile $($item.Current.AutomationId) is not $($tile[0]) x $($tile[1]) DIP"}}
+    if($row.Count -lt 6){throw "Size grid fits only $($row.Count) presets in a row"}
+    $pitch=($row[1].Current.BoundingRectangle.Left-$first.Left)/$scale
+    if([Math]::Abs($pitch-$tile[0]-2) -gt 1){throw "Size tiles are $pitch DIP apart"}
+    $rows=[Math]::Ceiling($tiles.Count/$row.Count)
+    $whole=[Math]::Abs($tiles[-1].Current.BoundingRectangle.Height-$tile[1]*$scale) -le 1.5
+    if($whole -and [Math]::Abs(($tiles[-1].Current.BoundingRectangle.Bottom-$first.Top)/$scale-($rows*$tile[1]+($rows-1)*2)) -gt 2){throw 'Size grid rows do not wrap at the shared spacing'}
+    $target=$tiles|Where-Object {$_.Current.AutomationId -eq "size-preset-$Label"}
+    $value=[double]::Parse($Label,[Globalization.CultureInfo]::InvariantCulture)
+    $box=$target.Current.BoundingRectangle;$x=[int]($box.Left+$box.Width/2);$y=[int]($box.Top+$box.Height/2)
+    [CapyRowPointer]::Down($Device,$x,$y);Start-Sleep -Milliseconds 40;[CapyRowPointer]::Up()
+    Wait-Until {[Math]::Abs((Model).state.brush.diameter-$value) -lt .001} "$Device tap on size $Label did not set the brush size"
+    Wait-Until {$target.Current.ItemStatus -ne ''} "Size $Label did not show as selected"
+    @{presets=$tiles.Count;columns=$row.Count;rows=$rows;wrap_checked=$whole;device=$Device;size=$Label}
+}
 try{
     Enter-CapyEnvironment
     $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
@@ -91,7 +119,12 @@ try{
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready} 'Review did not start' 45
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
     $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    [CapyRowPointer]::SetForegroundWindow($review.MainWindowHandle)|Out-Null;[CapyRowPointer]::Initialize([uint32]$review.Id)
+    if(Shown 'sizes' 'brush_size'){throw 'Sizes shows the Brush Size slider by default'}
+    if((Model).state.customization.drawer -or !@((Model).layout.groups|Where-Object active -eq 'sizes').Count){Invoke-Id 'panel-tab-sizes'}
+    $docked=Check-SizeGrid $root 'mouse' '1.5'
     $configuration=Configure 'sizes'
+    $configured=@((Check-SizeGrid $configuration 'pen' '25'),(Check-SizeGrid $configuration 'touch' '0.7'))
     $identity=(Control 'configure-show-brush_size').GetRuntimeId() -join ':'
     $scale=(Control 'panel-tab-sizes').Current.BoundingRectangle.Height/36
     if([Math]::Abs($configuration.Current.BoundingRectangle.Width-380*$scale) -gt 2){throw 'Configuration does not use the shared 380 DIP width'}
@@ -99,10 +132,10 @@ try{
     (Control 'configure-brush_size-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.35)
     Wait-Until {(Model).state.brush.diameter -ne $before} 'Configuration slider did not update shared brush size'
     Toggle 'configure-show-brush_size'
-    Wait-Until {!(Shown 'sizes' 'brush_size')} 'Visibility checkbox did not hide the main brush size control'
+    Wait-Until {Shown 'sizes' 'brush_size'} 'Visibility checkbox did not show the main brush size control'
     if(((Control 'configure-show-brush_size').GetRuntimeId() -join ':') -ne $identity){throw 'Visibility change replaced configuration controls'}
     Toggle 'configure-show-brush_size'
-    Wait-Until {Shown 'sizes' 'brush_size'} 'Visibility checkbox did not restore the main brush size control'
+    Wait-Until {!(Shown 'sizes' 'brush_size')} 'Visibility checkbox did not hide the main brush size control again'
     Capture 'sizes'
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Resize -Width 1500 -Height 1000
     Wait-Until {(Model).state.customization.expanded -eq 'sizes'} 'Resize dismissed configuration'
@@ -180,10 +213,11 @@ try{
     if((Model).state.customization.expanded){Dismiss 'toolbar' 'ribbon-grip-toolbar'}
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
-    [pscustomobject]@{shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
+    [pscustomobject]@{size_grid=@($docked)+$configured;shared_expansion_width='passed';live_brush_size='passed';control_visibility='passed';retained_configuration='passed';resize='passed';escape_close='passed';layers='passed';editing_layer_selection='passed';targeted_opacity='passed';navigator_configuration='passed';gpu_preview_occlusion_and_restore='passed';theme='passed';toolbar_add_tools='passed';zero_exit='passed';scope='native configuration projection; full visual parity, physical input and presentation are separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{
+    [CapyRowPointer]::Dispose()
     Exit-CapyEnvironment
 }

@@ -108,8 +108,7 @@ try {
     if(!$options -or !$options.component){throw 'Photo lacks Tool Options'}
     $commands=@((Model).panels|Where-Object id -eq 'commands')[0]
     if(@($commands.tiles)[-1].control.kind -ne 'tool_options'){throw 'Tool Options is not the last Photo command'}
-    $pen=@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.command -eq 'pen'})[0]
-    Invoke "tile-toolbar-$($pen.id)"
+    Invoke (Tool-Tile 'pen')
     Wait-Until {$null -ne (Find 'toolbar-setting-size')} 'Brush Tool Options did not show a size field'
     $entry=Control 'toolbar-setting-size'
     $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('37')

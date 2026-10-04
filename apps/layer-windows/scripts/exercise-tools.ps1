@@ -2,6 +2,7 @@ param([Parameter(Mandatory)][int]$ProcessId,[Parameter(Mandatory)][string]$State
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
 if(!('CapyRowPointer' -as [type])){Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')}
+[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null
 $app=Get-Process -Id $ProcessId
 if($app.ProcessName -ne 'CapyCanvas'){throw 'Expected an isolated CapyCanvas review process'}
 function Model {
@@ -41,7 +42,7 @@ function Select-Tool([string]$Id,[switch]$Cancel){
     $target=@{id=$null}
     Wait-Until {
         foreach($panel in (Model).panels){
-            $tile=$panel.tiles|Where-Object {$_.control.kind -eq 'command' -and $_.control.command -eq $Id}|Select-Object -First 1
+            $tile=$panel.tiles|Where-Object {$_.control.command -eq $Id -or $_.resolved_control.command -eq $Id}|Select-Object -First 1
             if($tile){$target.id="tile-$($panel.id)-$($tile.id)";return $true}
         }
         $false
@@ -67,6 +68,12 @@ function Check-Projection {
                     if(!$native -or $native.Current.Name -ne $item.label -or (($native.Current.ItemStatus -eq 'Selected') -ne $item.selected)){return $false}
                 }
                 if(Find ($set[1]+$items.Count) -Id){return $false}
+            }
+            $groups=@($state.tool_set.groups);$subtools=@($state.tool_set.subtools)
+            if($groups.Count -and $subtools.Count){
+                $above=(Find ('tool-group-'+($groups.Count-1)) -Id).Current.BoundingRectangle;$below=(Find 'tool-subtool-0' -Id).Current.BoundingRectangle
+                $scale=[CapyRowPointer]::GetDpiForWindow($app.MainWindowHandle)/96
+                if(($below.Top-$above.Bottom)/$scale -lt 12){return $false}
             }
             foreach($setting in $state.tool_settings){
                 $native=Find ('tool-setting-'+$setting.id) ([System.Windows.Automation.ControlType]::Edit) -Id
@@ -228,8 +235,9 @@ $range.SetValue($(if($range.Current.Value -gt .5){.2}else{.8}))
 Wait-Until {(Value $sliderId) -ne $sliderBefore} "Tool slider did not update shared $sliderId"
 if(($cursor.GetRuntimeId() -join ':') -ne $scrollIdentity -or [Math]::Abs($scroll.Current.VerticalScrollPercent-$percent) -gt .01){throw 'Tool edit replaced or reset scrolling'}
 Select-Tool 'gradient'
-Invoke-Id 'tool-subtool-3'
-Wait-Until {(Model).state.tool_set.subtools[3].selected} 'Radial transparent gradient did not select'
+if(@((Model).state.tool_set.groups).Count){throw 'Gradient shapes kept category buttons'}
+Invoke-Id 'tool-subtool-1'
+Wait-Until {(Model).state.tool_set.subtools[1].selected} 'Radial gradient did not select'
 Check-Projection
 Select-Tool 'figure'
 Invoke-Id 'tool-group-1'

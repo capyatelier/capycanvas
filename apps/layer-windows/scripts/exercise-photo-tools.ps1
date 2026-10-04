@@ -64,15 +64,12 @@ function Drag([string]$Device,[int[]]$From,[int[]]$To){
  [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
 }
 function Tool([string]$Command){
- $target=@{id=$null};Wait-Until {foreach($panel in (Model).panels){foreach($tile in $panel.tiles){if($tile.control.command -eq $Command){$target.id="tile-$($panel.id)-$($tile.id)";return $true}}};$false} "No $Command tile"
- Invoke-Id $target.id
- $target.id
+ $id=Tool-Tile $Command;Invoke-Id $id
+ $id
 }
 function Subtool([string]$Command){
- $index=@{value=-1}
- Wait-Until {$subtools=@((Model).state.tool_set.subtools);for($i=0;$i -lt $subtools.Count;$i++){if($subtools[$i].action.command -eq $Command){$index.value=$i;return $true}};$false} "No $Command subtool"
- Invoke-Id ('tool-subtool-'+$index.value)
- Wait-Until {@((Model).state.tool_set.subtools)[$index.value].selected} "$Command did not activate"
+ $choice=Tool-Choice $Command;Invoke-Id $choice.id
+ Wait-Until {@((Model).state.tool_set.($choice.list))[$choice.index].selected} "$Command did not activate"
 }
 function Run([string]$Label){
  (Control 'drawing-canvas').SetFocus()

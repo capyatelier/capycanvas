@@ -330,14 +330,19 @@ to a fresh absolute folder. In Debug builds the HDR test needs
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
 
 Grouped toolbar and header tools retain their shared slot identity while presenting
-`resolved_control`, label, icon and selection from the current snapshot. The corner
-button opens the shared `tool_variants` context menu; ordinary tile and header
-context menus include the same choices. Tool picker identifiers include the slot
-name so independent groups remain independently selectable.
+`resolved_control`, label, icon and selection from the current snapshot. Secondary
+click, the keyboard context key, and touch or pen holds open the tile or header
+context menu, which starts with the shared variations. Title-bar overflow rows are
+buttons that keep the group marker and open the same menu after closing the list.
+Tool picker identifiers include the slot name, or the size in tenths of a pixel,
+so independent choices remain independently selectable. Fixtures find tools with
+`Tool-Tile` in `CapyUia.ps1`, which matches a tile's command or its slot's
+current variation.
 
 `exercise-tool-variations.ps1 -Executable <path> -Theme dark` walks grouped Paint
-and Photo selection tools, pinned Eraser, and a drawing group added to the header
-through customization, with injected mouse, pen and touch. Repeat with `-Theme light`.
+and Photo selection tools, the Eraser category, and a drawing group added to the
+header through customization, then narrows the window until that group overflows,
+with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
 
 Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool

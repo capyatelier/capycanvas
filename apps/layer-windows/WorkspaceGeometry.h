@@ -12,6 +12,14 @@ inline Rect rectangle(J const& value){
 inline J rectangle(Rect value){
     return O({{L"x",N(value.X)},{L"y",N(value.Y)},{L"width",N(value.Width)},{L"height",N(value.Height)}});
 }
+inline V toolbarUi(CapyLocalization const* localization,J const& request){
+    std::unique_ptr<char,decltype(&capy_string_free)> result(capy_toolbar_ui(localization,to_string(request.Stringify()).c_str()),capy_string_free);
+    if(!result)throw hresult_invalid_argument(L"Toolbar request failed");
+    auto value=JsonValue::Parse(to_hstring(result.get()));
+    if(value.ValueType()==JsonValueType::Object&&value.GetObject().HasKey(L"error"))
+        throw hresult_invalid_argument(value.GetObject().GetNamedString(L"error"));
+    return value;
+}
 inline Rect intersect(Rect a,Rect b){
     float x=std::max(a.X,b.X),y=std::max(a.Y,b.Y);
     return {x,y,std::max(0.f,std::min(a.X+a.Width,b.X+b.Width)-x),std::max(0.f,std::min(a.Y+a.Height,b.Y+b.Height)-y)};

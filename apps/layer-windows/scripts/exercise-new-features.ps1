@@ -54,10 +54,9 @@ function Preference-Switch([string]$Title){Control $Title -Name -Type ([System.W
 function Check-InputPreferences {
     & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit'
     Invoke 'Preferences' -Name;Invoke 'Pen & Input' -Name
-    $expected=@('None','Cross','Triangle','Dot','Single-pixel dot','Sight','Brush size','Brush size and cross','Brush size and dot','Brush size and single-pixel dot')
     Wait-Until {$null -ne (Find 'Cursor shape' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox))} 'Cursor shape setting missing'
-    if(((Preference 'Cursor shape').kind.options -join ',') -ne ($expected -join ',')){throw 'Cursor choices differ from shared model'}
-    foreach($index in 0..9){
+    $expected=@((Preference 'Cursor shape').kind.options)
+    foreach($index in 0..($expected.Count-1)){
         (Control 'Cursor shape' -Name -Type ([System.Windows.Automation.ControlType]::ComboBox)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
         (Control $expected[$index] -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
         Wait-Until {(Preference 'Cursor shape').kind.selected -eq $index} 'Cursor choice did not apply';Start-Sleep -Milliseconds 200

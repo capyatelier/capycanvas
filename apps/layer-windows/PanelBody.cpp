@@ -11,48 +11,11 @@
 #include "WorkspaceQuery.h"
 #include "ColorPair.h"
 #include "NativeMenus.h"
-#include <winrt/Microsoft.UI.Xaml.Shapes.h>
 
 using namespace CapyUi;
 namespace {
 bool shows(J const& panel,wchar_t const* control){return flag(find(array(panel,L"controls"),L"control",control),L"visible_in_panel");}
 }
-Grid PanelBody::sizes(double width){
-        Grid grid;int columns=width<130?2:width<174?3:4;
-        for(int i=0;i<columns;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});grid.ColumnDefinitions().Append(column);}
-        auto choices=array(data->catalog,L"brush_sizes");
-        for(uint32_t i=0;i<choices.Size();i++){
-            int row=int(i)/columns;if(i%columns==0){RowDefinition def;def.Height({1,GridUnitType::Auto});grid.RowDefinitions().Append(def);}
-            auto preset=choices.GetObjectAt(i);double value=num(preset,L"value");
-            auto pick=button(data,str(preset,L"label")+L" px",[data=data,value]{
-                data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(value)}}));
-            });
-            pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Margin(Thickness{1,2,1,2});pick.Padding(Thickness{2,2,2,2});
-            actionTooltip(data,pick,[value]{return O({{L"type",S(L"set_brush_size")},{L"value",N(value)}});});
-            StackPanel content;content.Spacing(4);
-            Grid dotBox;dotBox.Height(28);
-            Microsoft::UI::Xaml::Shapes::Ellipse dot;double diameter=std::min(27.,2.+std::sqrt(value)*1.2);
-            dot.Width(diameter);dot.Height(diameter);dot.Fill(data->brush(L"text"));
-            dotBox.Children().Append(dot);content.Children().Append(dotBox);
-            auto text=label(data,str(preset,L"label"));text.TextAlignment(TextAlignment::Center);content.Children().Append(text);
-            pick.Content(content);Grid::SetColumn(pick,int(i)%columns);Grid::SetRow(pick,row);grid.Children().Append(pick);
-            bindings.emplace_back([data=data,pick,value]{
-                pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected(data):clear());
-            });
-        }
-        auto weak=make_weak(grid);auto last=std::make_shared<int>(columns);
-        grid.SizeChanged([weak,last](auto&&,auto&&){if(auto grid=weak.get()){
-            double width=grid.ActualWidth();int columns=width<130?2:width<174?3:4;
-            if(columns==*last)return;*last=columns;grid.ColumnDefinitions().Clear();grid.RowDefinitions().Clear();
-            for(int i=0;i<columns;++i){ColumnDefinition c;c.Width({1,GridUnitType::Star});grid.ColumnDefinitions().Append(c);}
-            for(uint32_t i=0;i<grid.Children().Size();++i){
-                if(i%columns==0){RowDefinition r;r.Height({1,GridUnitType::Auto});grid.RowDefinitions().Append(r);}
-                auto child=grid.Children().GetAt(i).as<FrameworkElement>();
-                Grid::SetColumn(child,int(i)%columns);Grid::SetRow(child,int(i)/columns);
-            }
-        }});
-        return grid;
-    }
 PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J const& geometry,
     std::function<void()> layoutChanged,std::shared_ptr<WorkspaceGestures> const& gestures,bool scrollable,std::function<J()> tools):data(std::move(source)){
         auto tileGeometry=object(geometry,L"tiles");
@@ -195,7 +158,7 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 auto control=value.GetObject();if(!flag(control,L"visible_in_panel"))continue;
                 auto kind=str(control,L"control");
                 if(kind==L"brushes"||kind==L"brush_sets"||kind==L"sculpt_sets"||kind==L"tools")content.Children().Append(ToolSetPanel(data,bindings,kind,tools));
-                else if(kind==L"size_presets")content.Children().Append(sizes(num(object(geometry,L"bounds"),L"width")-16));
+                else if(kind==L"size_presets")content.Children().Append(BrushSizePanel(data,bindings));
                 else if(kind==L"tool_settings")content.Children().Append(ToolSettingsPanel(data,bindings));
                 else if(kind==L"color_wheel"){
                     auto picker=ColorPanel(data,bindings,visibleControls==1);
