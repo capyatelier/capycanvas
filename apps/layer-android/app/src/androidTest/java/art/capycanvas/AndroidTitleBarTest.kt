@@ -1370,16 +1370,44 @@ class AndroidTitleBarTest {
             }
             shot("paper-properties-$theme")
         }
+        fun waitThumbnail(label: String, matches: (List<Int>) -> Boolean) {
+            waitFor(label) { node("layer-thumbnail-2-false") != null }
+            val deadline=SystemClock.uptimeMillis()+15000
+            while(true) {
+                val bounds=screenBounds("layer-thumbnail-2-false")
+                val image=instrumentation.uiAutomation.takeScreenshot()
+                val colors=listOf(.2f,.5f,.8f).map { image.getPixel((bounds.left+bounds.width*it).toInt(),bounds.center.y.toInt()) }
+                image.recycle()
+                if(matches(colors)) return
+                assertTrue("$label: $colors", SystemClock.uptimeMillis()<deadline)
+                SystemClock.sleep(100)
+            }
+        }
         tap(header("layers"))
         for(theme in listOf("light","dark")) {
             action(obj("type" to "set_theme","theme" to theme))
-            waitFor("Paper fill thumbnail") { node("layer-thumbnail-2-false") != null }
-            val center=screenBounds("layer-thumbnail-2-false").center
-            val image=instrumentation.uiAutomation.takeScreenshot()
-            val color=image.getPixel(center.x.toInt(),center.y.toInt())
-            image.recycle()
-            assertTrue("$theme: fill thumbnail is red: $color", android.graphics.Color.red(color)>240 && android.graphics.Color.green(color)<10 && android.graphics.Color.blue(color)<10)
+            waitThumbnail("$theme red fill thumbnail") { colors ->
+                val color=colors[1]
+                android.graphics.Color.red(color)>240 && android.graphics.Color.green(color)<10 && android.graphics.Color.blue(color)<10
+            }
             shot("fill-thumbnail-$theme")
+        }
+        tap(filters)
+        tap("filter-type-fill")
+        tap("adjustment-gradient_fill")
+        action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "angle", "value" to obj("kind" to "number", "value" to 0))))
+        tap(header("layers"))
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for((step, reverse) in listOf(false,true,false).withIndex()) {
+                if(reverse) action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "reverse", "value" to obj("kind" to "toggle", "value" to true))))
+                else if(step==2) action(obj("type" to "invoke", "command" to "undo"))
+                waitThumbnail("$theme gradient thumbnail reverse=$reverse") { colors ->
+                    val left=android.graphics.Color.red(colors[0]);val right=android.graphics.Color.red(colors[2])
+                    if(reverse) left>180 && right<80 else left<80 && right>180
+                }
+                shot("gradient-thumbnail-$theme-$reverse")
+            }
         }
         fun swipe(id: Long, dx: Float) {
             down("layer-row-$id");val start=point

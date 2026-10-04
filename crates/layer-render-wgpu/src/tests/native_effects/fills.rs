@@ -41,10 +41,13 @@ impl Gradient {
     }
     /// Position along the gradient of the pixel centre at `[x, y]`.
     fn t(&self, [x, y]: [u32; 2]) -> f64 {
+        self.position([f64::from(x) + 0.5, f64::from(y) + 0.5])
+    }
+    fn position(&self, [x, y]: [f64; 2]) -> f64 {
         let extent = EXTENT.map(f64::from);
         let d = [
-            f64::from(x) + 0.5 - extent[0] * f64::from(self.center[0]) / 100.,
-            f64::from(y) + 0.5 - extent[1] * f64::from(self.center[1]) / 100.,
+            x - extent[0] * f64::from(self.center[0]) / 100.,
+            y - extent[1] * f64::from(self.center[1]) / 100.,
         ];
         let scale = f64::from(self.scale) / 100.;
         let t = if self.radial {
@@ -55,6 +58,61 @@ impl Gradient {
             (d[0] * axis[0] + d[1] * axis[1]) / ((axis[0].abs() * extent[0] + axis[1].abs() * extent[1]) * scale) + 0.5
         };
         (if self.reverse { 1. - t } else { t }).clamp(0., 1.)
+    }
+}
+
+#[test]
+fn fill_thumbnails_render_gradient_parameters_and_future_multipass_generators() {
+    let points = [[4usize, 8usize], [15, 16], [27, 23]];
+    for depth in DEPTHS {
+        let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
+        r.set_ui_rendition(None).unwrap();
+        let mut previous = Vec::new();
+        for gradient in [
+            Gradient { radial: false, reverse: false, angle: 0., scale: 100., center: [50.; 2] },
+            Gradient { radial: false, reverse: true, angle: 90., scale: 60., center: [40., 60.] },
+            Gradient { radial: true, reverse: false, angle: 0., scale: 80., center: [30., 70.] },
+        ] {
+            let mut layer = gradient.layer(RgbSpace::Srgb, [1.; 3]);
+            layer.opacity = 0.1;
+            let mut mask = layer_core::LayerMask::reveal_all(LayerId(4), Default::default());
+            mask.default_coverage = 0.;
+            layer.mask = Some(mask);
+            r.submit(packet(&[layer], EXTENT)).unwrap();
+            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, LayerId(3));
+            assert_ne!(bytes, previous, "edited parameters must replace the gradient thumbnail");
+            for [x, y] in points {
+                let expected = (gradient.position([(x as f64 + 0.5) * 8., (y as f64 + 0.5) * 8.]) * 255.).round() as i32;
+                let pixel = &bytes[(y * 32 + x) * 4..][..4];
+                assert_eq!(pixel[3], 255);
+                for value in &pixel[..3] { assert!((i32::from(*value) - expected).abs() <= 2, "{depth:?} {x},{y}: {pixel:?} expected {expected}"); }
+            }
+            previous = bytes;
+        }
+        let mut layer = effect(5, "solid_color", false);
+        let program = Arc::make_mut(&mut Arc::make_mut(layer.effect.as_mut().unwrap()).program);
+        program.id = "future_fill".into();
+        program.constant_color = None;
+        program.entry = "future_first".into();
+        program.wgsl = "fn future_first(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(p/fx_extent(),.25,1.)*.5;}\nfn future_second(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return vec4<f32>(c.bgr,c.a);}".into();
+        program.passes = vec![
+            EffectPass { entry: "future_first".into(), sampling: EffectSampling::Neighborhood { radius: 0 } },
+            EffectPass { entry: "future_second".into(), sampling: EffectSampling::Document },
+        ].into();
+        layer.visible = false;
+        layer.opacity = 0.1;
+        for extent in [[96, 64], [2040, 1360]] {
+            r.submit(packet(std::slice::from_ref(&layer), extent)).unwrap();
+            let bytes = crate::source_thumbnails::tests::thumbnail(&mut r, layer.id);
+            for [x, y] in points {
+                let checker = if (x / 4 + y / 4) % 2 == 0 { 0.855 } else { 0.497 };
+                let expected = [0.25, (y as f64 + 0.5 - 16. / 3.) / (64. / 3.), (x as f64 + 0.5) / 32.]
+                    .map(|value| (RgbSpace::Srgb.encode(value * 0.5 + checker * 0.5) * 255.).round() as i32);
+                let pixel = &bytes[(y * 32 + x) * 4..][..4];
+                for c in 0..3 { assert!((i32::from(pixel[c]) - expected[c]).abs() <= 2, "{depth:?} {extent:?} {x},{y}: {pixel:?} expected {expected:?}"); }
+            }
+            assert!(r.thumbnails.storage_bytes() < 1024 * 1024, "fill thumbnail storage is bounded independently of canvas extent");
+        }
     }
 }
 

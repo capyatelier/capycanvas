@@ -281,10 +281,13 @@ bottom, without a mask. It has no special layer role or restrictions.
 A static pointwise generator can declare `"constant_color":"color"`, naming a
 Color parameter whose tagged RGB and alpha define its entire output. It must
 have no time input, passes, lookups or auxiliary resources. The renderer uses
-that value directly for composition, queries and thumbnails, avoiding a filter
-pass. The declaration is an execution contract; its shader must produce the
-same color. Thumbnails show raw fill color over the transparency checker,
-independent of layer opacity or masks.
+that value directly for composition and queries, avoiding a filter pass. The
+declaration is an execution contract; its shader must produce the same color.
+
+Every generator thumbnail renders its program with the current parameters in
+document coordinates, including all passes. The result fits inside 32 × 32 pixels
+over the transparency checker, independent of layer opacity, visibility and masks.
+Parameter edits, filter replacement and undo refresh the thumbnail.
 
 The Filter menu and the selection bar's Adjust menu list
 adjustments only; the effect browser lists both. The Filter menu ends with

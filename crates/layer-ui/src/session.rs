@@ -255,7 +255,7 @@ pub struct UiSession<R: CanvasRenderer> {
     cursor: cursor::Cursor,
     next_request: u32,
     layer_interaction: art_layers::LayerInteraction,
-    source_preview_revisions: source_edit::PreviewRevisions,
+    layer_preview_revisions: art_layers::PreviewRevisions,
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::ToolMemory,
@@ -434,7 +434,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             cursor: cursor::Cursor::default(),
             next_request: 1,
             layer_interaction: Default::default(),
-            source_preview_revisions: Default::default(),
+            layer_preview_revisions: Default::default(),
             tools: tools::ToolMemory::default(),
             pending_tool_drawer: None,
             tool_origin: None,
@@ -5657,7 +5657,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.gamut_warning = false;
         }
         self.reconcile_transform();
-        self.source_preview_revisions.update(&self.engine.document().layers);
+        self.layer_preview_revisions.update(self.engine.document());
         if self
             .rulers
             .selected
@@ -5691,7 +5691,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection_layer: l.kind == LayerKind::Selection,
             quick_mask: false,
             can_rename: !doc.is_locked(l.id),
-            content_icon: l.effect.as_ref().filter(|fx| fx.constant_color().is_none()).map(|fx| {
+            content_icon: l.effect.as_ref().filter(|fx| fx.program.kind != layer_core::EffectKind::Generator).map(|fx| {
                 format!(
                     "layer-{}-symbolic",
                     self.effect_catalog
@@ -5748,17 +5748,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     ui_rendition.parameters().into_iter().fold(0u64, |h,v| h.wrapping_mul(1099511628211).wrapping_add(u64::from(v.to_bits())))
                 } else { 0 })
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
-                .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
+                .wrapping_add(self.layer_preview_revisions.id(l.id).wrapping_mul(65537))
                 .wrapping_add(self.selection_masks.preview_revision(l.id).wrapping_mul(65539))
-                .wrapping_add(l.effect.as_ref().and_then(|fx| fx.constant_color()).map_or(0, |color| {
-                    color.linear_in(doc.color.space).expect("validated fill color").iter()
-                        .fold(0u64, |h, c| h.wrapping_mul(4099).wrapping_add(u64::from(c.to_bits())))
-                })) & ((1u64 << 53) - 1),
+                & ((1u64 << 53) - 1),
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)
                     .wrapping_add(m.raster.identity().wrapping_mul(2))
-                    .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65539))
+                    .wrapping_add(self.layer_preview_revisions.id(l.id).wrapping_mul(65539))
                     .wrapping_add(u64::from(m.inverted))
             }),
             mask_id: l.mask.as_ref().map(|m| m.id.0),

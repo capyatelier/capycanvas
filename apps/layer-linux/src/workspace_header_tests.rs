@@ -1557,6 +1557,39 @@ fn native_filter_drawer_input() {
         assert!(pixel[1] > 240 && pixel[0] < 10 && pixel[2] < 10, "{theme:?}: fill thumbnail {pixel:?}");
         shot.save_to_png(output.join(format!("fill-thumbnail-{theme:?}.png"))).unwrap();
     }
+    d.click_name(&opener);
+    d.click_name("filter-type-fill");
+    d.click_name("adjustment-gradient_fill");
+    d.number(&d.named("property-angle"), "0");
+    d.click_name(&layers);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for (step, reverse) in [false, true, false].into_iter().enumerate() {
+            if reverse {
+                d.w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set { layer: 2, key: "reverse".into(), value: layer_core::EffectValue::Toggle(true) } });
+            } else if step == 2 {
+                d.w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            }
+            super::place_source::wait_layer_thumbnail(&d.w, 2);
+            pump(350);
+            let shot = crate::snapshot(&d.w);
+            let row = d.named("art-layer-2");
+            let thumb = find_css(&row, "layer-thumbnail").unwrap();
+            let p = thumb.compute_bounds(&d.w.surface).unwrap();
+            let mut download = gdk::TextureDownloader::new(&shot);
+            download.set_format(gdk::MemoryFormat::R8g8b8a8);
+            let (bytes, stride) = download.download_bytes();
+            let scale = shot.width() as f32 / d.w.surface.width() as f32;
+            let sample = |fraction| {
+                let x = ((p.x() + p.width() * fraction) * scale) as usize;
+                let y = ((p.y() + p.height() * 0.5) * scale) as usize;
+                bytes[y * stride + x * 4]
+            };
+            let (left, right) = (sample(0.2), sample(0.8));
+            assert!(if reverse { left > 180 && right < 80 } else { left < 80 && right > 180 }, "{theme:?} reverse={reverse}: {left}, {right}");
+            shot.save_to_png(output.join(format!("gradient-thumbnail-{theme:?}-{reverse}.png"))).unwrap();
+        }
+    }
     d.click_name(&layers);
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let removable = state(&d.w).layer_properties.layer.unwrap();

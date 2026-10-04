@@ -72,6 +72,21 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
     await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const p=c.getContext('2d').getImageData(16,16,1,1).data;return p[0]>240&&p[1]<10&&p[2]<10&&p[3]===255;})()`);
     await capture(`fill-thumbnail-${theme}`);
   }
+  await contact(filters);
+  await send({type:'effect',action:{op:'insert',effect:'gradient_fill'}});
+  await send({type:'effect',action:{op:'set',layer:2,key:'angle',value:{kind:'number',value:0}}});
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),undefined);
+  await contact(layers);
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const d=c.getContext('2d');return d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);
+    await capture(`gradient-thumbnail-${theme}`);
+  }
+  await send({type:'effect',action:{op:'set',layer:2,key:'reverse',value:{kind:'toggle',value:true}}});
+  await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]>200&&d.getImageData(27,16,1,1).data[0]<60;})()`);
+  await send({type:'invoke',command:'undo'});
+  await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);
+  console.log('PASS: gradient thumbnails, parameter changes and undo in both themes');
   await swipe(row(1),-90,0,'mouse');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(1))}).parentElement.style.getPropertyValue('--swipe')`),'0px');
   for(const [id,device] of [[1,'pen'],[2,'touch']]) {

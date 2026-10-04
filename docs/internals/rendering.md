@@ -330,7 +330,7 @@ the upper one reads the composite as it is.
 | Merges | [`scene/bake.rs`](../../crates/layer-render-wgpu/src/scene/bake.rs) | composed in the document space, stored decoded |
 | Image filter input windows | `capture_tile` in [`scene_images.rs`](../../crates/layer-render-wgpu/src/scene_images.rs) | decoded, or composite values for filters that follow the document's Blending |
 | Layered display during drags | [`scene/scale/compose.wgsl`](../../crates/layer-render-wgpu/src/scene/scale/compose.wgsl) | composite values; blends with the document's blend code |
-| Layer and paper thumbnails, brushes | layer pages | linear layer pixels, not the composite; brushes encode them to lay dabs over them ([brushes](#brushes-and-healing)) |
+| Layer thumbnails, brushes | layer pages | linear layer pixels, not the composite; brushes encode them to lay dabs over them ([brushes](#brushes-and-healing)) |
 
 The export matte, and resizing on export, apply to the decoded rows in linear
 light.
@@ -731,7 +731,11 @@ Incomplete images stay private. Artwork revisions, selection paint and SDR
 rendition changes invalidate prepared work; discarded command buffers invalidate
 their cache entries. Each host poll advances one request; up to eight partial
 requests can be retained, and layers sharing a photo reuse its integrated
-original contributions.
+original contributions. Generator thumbnails share the filter-picker
+preview execution path, sampling document coordinates on a grid of at most
+32 × 32 pixels. They compile asynchronously and retain at most two temporary
+images per request. Shared layer revisions include generator parameters, so all
+hosts request new pixels after a parameter edit or undo.
 
 On unified-memory hardware, CPU and GPU share physical RAM. Keeping separate
 copies solely to move an image between processors can waste both memory and

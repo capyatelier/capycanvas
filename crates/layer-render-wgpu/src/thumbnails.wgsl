@@ -37,15 +37,20 @@ struct Vertex { @builtin(position) position: vec4<f32>, @location(0) uv: vec2<f3
 @vertex fn vertex_main(@builtin(vertex_index) i: u32) -> Vertex {
     let uv = array<vec2<f32>, 3>(vec2<f32>(0.,0.),vec2<f32>(2.,0.),vec2<f32>(0.,2.))[i];
     var p = uv * 32.;
-    if record.options.x < 2u {
+    if record.options.x < 2u || record.options.x == 4u {
         let low = vec2<f32>(bounds.xy);
         let size = max(vec2<f32>(bounds.zw) - low, vec2<f32>(1.));
         let scale = 32. / max(size.x, size.y);
-        p = (vec2<f32>(record.tile.xy) + uv * 256. - low) * scale + (32. - size * scale) * .5;
+        let source_size = select(vec2(256.), vec2<f32>(record.tile.zw), record.options.x == 4u);
+        p = (vec2<f32>(record.tile.xy) + uv * source_size - low) * scale + (32. - size * scale) * .5;
     }
     return Vertex(vec4<f32>(p.x/16.-1., 1.-p.y/16., 0., 1.), uv);
 }
 @fragment fn fragment_main(v: Vertex) -> @location(0) vec4<f32> {
+    if record.options.x == 4u {
+        let size = vec2<f32>(record.tile.zw) / f32(record.options.z);
+        return hdr_map_sdr(mip_sample(pixels,sampling,size,0.,v.uv*size,0u),record.rendition,record.highlight);
+    }
     if record.options.x >= 2u {
         // Neutral checker colors in linear light (sRGB #bbb / #eee).
         let square = (u32(v.position.x)/4u + u32(v.position.y)/4u) % 2u;

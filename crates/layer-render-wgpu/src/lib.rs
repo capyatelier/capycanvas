@@ -5805,16 +5805,7 @@ mod tests {
                 })
                 .unwrap();
             };
-        let preview = |r: &mut WgpuRasterizer, id| {
-            r.request_thumbnail(7, LayerId(id)).unwrap();
-            r.device
-                .poll(wgpu::PollType::Wait {
-                    submission_index: None,
-                    timeout: Some(READBACK_TIMEOUT),
-                })
-                .unwrap();
-            r.take_thumbnail().expect("mapped thumbnail").unwrap().bytes
-        };
+        let preview = |r: &mut WgpuRasterizer, id| crate::source_thumbnails::tests::thumbnail(r, LayerId(id));
         frame(&mut r, &layers, &[dab], std::slice::from_ref(&batch));
         let image = preview(&mut r, 1);
         let red = image

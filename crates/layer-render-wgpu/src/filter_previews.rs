@@ -597,27 +597,9 @@ impl FilterPreviews {
                     "reused preview crop",
                 ));
             }
-            let mut previous = source.clone();
             let grid = display_mips::Plan::window(extent, 0,
                 PixelRect::new(crop[0], crop[1], crop[0] + size[0], crop[1] + size[1]));
-            for stage in 0..count {
-                let target = self.scratch[stage % 2].1.clone();
-                let mut data = effects::image_grid(grid, if stage == 0 { source_grid } else { grid }, source_grid);
-                data[4..8].copy_from_slice(&[
-                    self.scratch_size[0] as f32,
-                    self.scratch_size[1] as f32,
-                    0.,
-                    stage as f32,
-                ]);
-                self.scene.jobs.push(Job::Effect {
-                    target: target.clone(),
-                    sources: [previous, source.clone(), r.empty_view.clone()],
-                    data,
-                    prepared: prepared.clone(),
-                    masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())),
-                });
-                previous = target;
-            }
+            let previous = self.scene.preview_passes(r, prepared, grid, (source, source_grid), &self.scratch, count);
             let mut data = [0.; 32];
             data[..6].copy_from_slice(&[
                 0.,
@@ -747,6 +729,45 @@ impl FilterPreviews {
                 .map(|f| f.program.id.clone())
                 .collect(),
         }))
+    }
+}
+
+impl Scene {
+    fn preview_passes(&mut self, r: &WgpuRasterizer, prepared: effects::PreparedEffect,
+        grid: display_mips::Plan, (source, source_grid): (wgpu::TextureView, display_mips::Plan),
+        targets: &[Image], count: usize,
+    ) -> wgpu::TextureView {
+        let mut previous = source.clone();
+        for stage in 0..count {
+            let (texture, target) = &targets[stage % targets.len()];
+            let mut data = effects::image_grid(grid, if stage == 0 { source_grid } else { grid }, source_grid);
+            data[4..8].copy_from_slice(&[texture.width() as f32, texture.height() as f32, 0., stage as f32]);
+            self.jobs.push(Job::Effect { target: target.clone(), sources: [previous, source.clone(), r.empty_view.clone()],
+                data, prepared: prepared.clone(), masks: Box::new(std::array::from_fn(|_| r.empty_view.clone())) });
+            previous = target.clone();
+        }
+        previous
+    }
+
+    pub(crate) fn generator_preview(&mut self, r: &mut WgpuRasterizer, layer: &Layer, grid: display_mips::Plan,
+        encoder: &mut crate::submission::CommandEncoder,
+    ) -> Result<Option<Vec<Image>>, GpuRasterError> {
+        self.begin_frame();
+        self.jobs.clear();
+        let frame = r.artwork_frame.as_ref().ok_or(GpuRasterError::InvalidExtent)?;
+        self.effects.retain(&frame.layers);
+        let prepared = self.effects.prepare(r, &[layer], effects::Execution::Preview, frame.time, grid.level,
+            preview_space(layer.effect.as_ref().unwrap(), frame.blend_space))?;
+        if let Some(startup) = &r.startup {
+            let ready = self.effects.enqueue(&startup.compiler, startup::VALIDATION);
+            startup.compiler.start();
+            if !ready { return Ok(None); }
+        }
+        let count = layer.effect.as_ref().unwrap().program.passes.len().max(1);
+        let targets: Vec<_> = (0..count.min(2)).map(|_| create_color_target(&r.device, grid.size, "generator thumbnail")).collect();
+        self.preview_passes(r, prepared, grid, (r.empty_view.clone(), grid), &targets, count);
+        self.encode_jobs(r, encoder)?;
+        Ok(Some(targets))
     }
 }
 /// The blend space a filter's preview compiles for: the document's when the

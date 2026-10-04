@@ -200,6 +200,42 @@ fn fill_color_lock_history_and_blocked_cursor_share_document_policy() {
 }
 
 #[test]
+fn every_generator_has_a_thumbnail_revision_for_its_parameters_and_history() {
+    let mut s = session(Platform::Gtk);
+    insert_effect(&mut s, "gradient_fill");
+    let id = s.engine.document().active_layer;
+    let row = |s: &UiSession<Recorder>| s.state.layers.iter().find(|layer| layer.id == id.0).unwrap().clone();
+    assert!(row(&s).content_icon.is_none());
+    let original = row(&s).paint_revision;
+    s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: id.0, key: "angle".into(), value: layer_core::EffectValue::Number(30.) } }).unwrap();
+    let changed = row(&s).paint_revision;
+    assert_ne!(original, changed);
+    invoke(&mut s, CommandId::Undo);
+    assert_ne!(row(&s).paint_revision, changed);
+    let undone = row(&s).paint_revision;
+    invoke(&mut s, CommandId::Redo);
+    assert_ne!(row(&s).paint_revision, undone);
+    let mut future = s.engine.document().layer(id).unwrap().clone();
+    Arc::make_mut(&mut Arc::make_mut(future.effect.as_mut().unwrap()).program).id = "future_fill".into();
+    s.layer_edit(layer_core::Edit::ReplaceLayer(Box::new(future))).unwrap();
+    assert!(row(&s).content_icon.is_none());
+    assert_ne!(row(&s).paint_revision, changed);
+    let mut document = s.engine.document().clone();
+    let mut revisions = art_layers::PreviewRevisions::default();
+    revisions.update(&document);
+    let initial = revisions.id(id);
+    document.width *= 2;
+    revisions.update(&document);
+    assert_ne!(revisions.id(id), initial);
+    let resized = revisions.id(id);
+    document.blend_space = if document.blend_space == layer_core::BlendSpace::Linear {
+        layer_core::BlendSpace::Perceptual
+    } else { layer_core::BlendSpace::Linear };
+    revisions.update(&document);
+    assert_ne!(revisions.id(id), resized);
+}
+
+#[test]
 fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
     let mut s = session(Platform::Gtk);
     for id in [1, 2] {

@@ -30,7 +30,9 @@ impl Thumbnails {
     }
     pub fn storage_bytes(&self) -> u64 {
         let paint = self.gpu.as_ref().map_or(0, |gpu| gpu.prepared.iter()
-            .map(|p| p.records.size() + 16 + texture_bytes(&p.result.texture)).sum());
+            .map(|p| p.records.size() + 16 + texture_bytes(&p.result.texture)
+                + p.generated.iter().map(|(texture, _)| texture_bytes(texture)).sum::<u64>()).sum::<u64>()
+            + gpu.generators.as_ref().map_or(0, scene::Scene::scratch_bytes));
         #[cfg(not(target_arch = "wasm32"))]
         return paint + self.sources.as_ref().map_or(0, |s| s.storage_bytes());
         #[cfg(target_arch = "wasm32")]
@@ -311,6 +313,7 @@ struct PreviewPipeline {
     draw: wgpu::RenderPipeline,
     prepared: std::collections::VecDeque<PreparedPreview>,
     capture: artwork::Capture,
+    generators: Option<scene::Scene>,
 }
 struct PreparedPreview {
     id: LayerId,
@@ -319,6 +322,8 @@ struct PreparedPreview {
     sources: Vec<Option<[u32; 2]>>,
     mask: bool,
     placed: bool,
+    generator: Option<Layer>,
+    generated: Vec<(wgpu::Texture, wgpu::TextureView)>,
     records: wgpu::Buffer,
     stride: u32,
     read: wgpu::BindGroup,
@@ -372,6 +377,7 @@ impl PreviewPipeline {
             draw,
             prepared: Default::default(),
             capture: Default::default(),
+            generators: None,
         }
     }
     fn begin(
@@ -387,11 +393,10 @@ impl PreviewPipeline {
                 m.default_coverage
             }
         });
-        let color = r.artwork_frame.as_ref().and_then(|frame| frame.layers.iter().find(|layer| layer.id == id))
-            .and_then(|layer| layer.effect.as_ref()).and_then(|effect| effect.constant_color())
-            .map(|color| color.linear_in(r.device.working_space()).expect("validated fill color"));
-        let background = color.unwrap_or([gray, gray, gray, f32::from(mask.is_some())]);
-        let full = color.is_some() || gray > 0.;
+        let generator = r.artwork_frame.as_ref().and_then(|frame| frame.layers.iter().find(|layer| layer.id == id))
+            .filter(|layer| layer.effect.as_ref().is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Generator)).cloned();
+        let background = [gray, gray, gray, f32::from(mask.is_some())];
+        let full = generator.is_some() || gray > 0.;
         let bounds = r
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -427,12 +432,14 @@ impl PreviewPipeline {
                     .filter(|((target, _), _)| *target == id)
                     .map(|((_, c), _)| *c),
             );
+        } else if generator.is_some() {
+            coordinates.insert([0; 2]);
         } else if let Some(layer) = r.paint_layers.iter().find(|l| l.id == id) {
             coordinates.extend(layer.pages.iter().map(|p| p.coordinate));
             coordinates.extend(r.native_color_coordinates(id));
         }
         let geometry = r.artwork_frame.as_ref().map(|frame| layer_core::target_geometry(&frame.layers,id));
-        let placed = geometry.as_ref().is_some_and(|geometry| !geometry.is_identity());
+        let placed = generator.is_none() && geometry.as_ref().is_some_and(|geometry| !geometry.is_identity());
         if let Some(geometry) = geometry.filter(|_| placed) {
             let mut local = coordinates.iter().fold(PixelRect::EMPTY, |bounds,c| bounds.union(page_rect(*c)));
             if let Some(source) = r.tiled_sources.get(&id) { local = local.union(PixelRect::full(source.extent)); }
@@ -447,6 +454,7 @@ impl PreviewPipeline {
             .min_uniform_buffer_offset_alignment as usize;
         let stride = 80usize.div_ceil(alignment) * alignment;
         let mut bytes = vec![0u8; stride * sources.len()];
+        let footprint = if generator.is_some() { 1 << generator_grid(r.document_extent).level } else { 0 };
         for (i, coordinate) in sources.iter().enumerate() {
             let c = coordinate.unwrap_or([0; 2]);
             let mut record = [0u32; 20];
@@ -456,8 +464,9 @@ impl PreviewPipeline {
                 r.document_extent[0],
                 r.document_extent[1],
             ]);
-            record[4] = if i == 0 { 2 } else { u32::from(mask.is_some()) };
+            record[4] = if i == 0 { 2 } else if generator.is_some() { 4 } else { u32::from(mask.is_some()) };
             record[5] = u32::from(!placed && mask.as_ref().is_some_and(|m| m.inverted));
+            record[6] = footprint;
             record[8..12].copy_from_slice(&background.map(f32::to_bits));
             if mask.is_none() { record[12..20].copy_from_slice(&r.ui_rendition_parameters().map(f32::to_bits)); }
             for (dst, value) in bytes[i * stride..i * stride + 80]
@@ -480,7 +489,7 @@ impl PreviewPipeline {
             r.device.working_format(), "layer thumbnail");
         PreparedPreview { id, revision: (r.artwork_revision, r.selection_paint_revision),
             rendition: r.ui_rendition_parameters(), measure: if full { sources.len() } else { 1 },
-            sources, mask: mask.is_some(), placed, records, stride: stride as u32, read, write, result, draw: 0,
+            sources, mask: mask.is_some(), placed, generator, generated: Vec::new(), records, stride: stride as u32, read, write, result, draw: 0,
             valid: Arc::new(std::sync::atomic::AtomicBool::new(true)) }
     }
     fn prepare(&mut self, r: &mut WgpuRasterizer, id: LayerId,
@@ -492,6 +501,16 @@ impl PreviewPipeline {
             && p.valid.load(std::sync::atomic::Ordering::Acquire));
         let cached = self.prepared.iter().position(|p| p.id == id);
         let mut prepared = if let Some(i) = cached { self.prepared.remove(i).unwrap() } else { self.begin(r, id) };
+        if let Some(layer) = &prepared.generator && prepared.generated.is_empty() {
+            let scene = self.generators.get_or_insert_with(|| scene::Scene::new(r));
+            let grid = generator_grid(r.document_extent);
+            let Some(images) = scene.generator_preview(r, layer, grid, encoder)? else {
+                self.prepared.push_back(prepared);
+                while self.prepared.len() > 8 { self.prepared.pop_front(); }
+                return Ok(false);
+            };
+            prepared.generated = images;
+        }
         let write = crate::submission::CacheWrite::new();
         let capture = &mut self.capture;
         let mut inputs = |r: &mut WgpuRasterizer,
@@ -503,6 +522,10 @@ impl PreviewPipeline {
                 .map(|coordinate| {
                     let view = match coordinate {
                         None => r.empty_view.clone(),
+                        Some(_) if prepared.generator.is_some() => {
+                            let count = prepared.generator.as_ref().unwrap().effect.as_ref().unwrap().program.passes.len().max(1);
+                            prepared.generated[(count - 1) % prepared.generated.len()].1.clone()
+                        }
                         Some(c) if prepared.placed => capture.layer_tile(r,id,*c,encoder)?.view,
                         Some(c) if prepared.mask => r.layer_masks.pages[&(id, *c)].view.clone(),
                         Some(c) => {
@@ -580,9 +603,13 @@ impl PreviewPipeline {
     fn render(&mut self, r: &mut WgpuRasterizer, id: LayerId,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<PageSurface, GpuRasterError> {
-        self.prepare(r, id, encoder, usize::MAX)?;
+        if !self.prepare(r, id, encoder, usize::MAX)? { return Err(GpuRasterError::Effect("Thumbnail shader preparation pending".into())); }
         Ok(self.prepared.pop_back().unwrap().result)
     }
+}
+
+fn generator_grid(extent: [u32; 2]) -> display_mips::Plan {
+    display_mips::Plan::at(extent, extent.into_iter().max().unwrap().div_ceil(32).next_power_of_two().ilog2())
 }
 
 
@@ -595,7 +622,8 @@ pub(super) struct BoundsPipeline {
 }
 impl BoundsPipeline {
     fn shader() -> String {
-        format!("{}\n{}", include_str!("selection_clip.wgsl").replace("@binding(1)", "@binding(3)"), include_str!("thumbnails.wgsl"))
+        format!("{}\n{}\n{}", include_str!("selection_clip.wgsl").replace("@binding(1)", "@binding(3)"),
+            include_str!("area_sample.wgsl"), include_str!("thumbnails.wgsl"))
     }
     pub fn new(device: &PipelineDevice) -> Arc<Self> {
         device.bounds_pipeline.get_or_init(|| Arc::new(Self::build(device))).clone()

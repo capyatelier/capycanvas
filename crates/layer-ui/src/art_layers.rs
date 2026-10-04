@@ -3,6 +3,47 @@ use super::*;
 use layer_core::{Edit, Layer, LayerBlend, LayerMask, Point, Selection};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
+use std::sync::Arc;
+
+type PreviewGeometry = (layer_core::Projective, layer_core::Interpolation, Point, Option<[u32; 2]>,
+    Option<(LayerId, layer_core::Projective, Point, Option<[u32; 2]>, bool)>);
+type GeneratorPreview = (Arc<layer_core::EffectInstance>, ([u32; 2], layer_core::BlendSpace, layer_core::color::DocumentColor));
+type PreviewRevision = (Option<std::sync::Weak<layer_core::color::source::SourceImage>>, Option<std::sync::Weak<layer_core::MeshMap>>,
+    Option<GeneratorPreview>, PreviewGeometry, u64);
+
+#[derive(Default)]
+pub(super) struct PreviewRevisions {
+    layers: std::collections::BTreeMap<LayerId, PreviewRevision>,
+    next: u64,
+}
+impl PreviewRevisions {
+    pub(super) fn update(&mut self, document: &Document) {
+        let layers = &document.layers;
+        for layer in layers {
+            let source = layer.source.as_ref().map(Arc::downgrade);
+            let placement = &layer.properties.placement;
+            let mesh = placement.mesh.as_ref().map(Arc::downgrade);
+            let generator = layer.effect.as_ref().filter(|fx| fx.program.kind == layer_core::EffectKind::Generator)
+                .map(|fx| (fx.clone(), ([document.width, document.height], document.blend_space, document.color)));
+            let geometry = (placement.outer, placement.interpolation, layer.properties.offset, layer.properties.extent,
+                layer.mask.as_ref().map(|m| (m.id, m.placement, m.offset, m.extent, m.linked)));
+            let same = self.layers.get(&layer.id).is_some_and(|(a, b, c, previous, _)| {
+                let source = match (a, &source) { (Some(a), Some(b)) => a.ptr_eq(b), (None, None) => true, _ => false };
+                let mesh = match (b, &mesh) { (Some(a), Some(b)) => a.ptr_eq(b), (None, None) => true, _ => false };
+                let generator = match (c, &generator) { (Some(a), Some(b)) => (Arc::ptr_eq(&a.0, &b.0) || a.0 == b.0) && a.1 == b.1, (None, None) => true, _ => false };
+                source && mesh && generator && *previous == geometry
+            });
+            if !same {
+                self.next = self.next.wrapping_add(1);
+                self.layers.insert(layer.id, (source, mesh, generator, geometry, self.next));
+            }
+        }
+        if self.layers.len() != layers.len() {
+            self.layers.retain(|id, _| layers.iter().any(|l| l.id == *id));
+        }
+    }
+    pub(super) fn id(&self, id: LayerId) -> u64 { self.layers.get(&id).map_or(0, |value| value.4) }
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -161,6 +161,19 @@ try {
         Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Fill thumbnail did not finish' 30
         Capture ('fill-thumbnail-'+$theme.ToLowerInvariant()) -WithModel
     }
+    Tap $filters;Drawer @('filter_types','adjustments','properties')
+    Tap 'filter-type-fill';Tap 'filter-gradient_fill'
+    Wait-Until {(Model).state.filter_picker.selected -eq 'gradient_fill'} 'Gradient did not select'
+    (Control 'property-angle').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('0')
+    Tap $layers;Drawer @('layers')
+    foreach($theme in @('Light','Dark')){
+        Set-Theme $theme;if(!(Model).state.customization.drawer){Tap $layers};Drawer @('layers')
+        Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Gradient thumbnail did not finish' 30
+        $fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0]
+        if($fill.content_icon){throw 'Gradient has a glyph instead of a thumbnail'}
+        Capture ('gradient-thumbnail-'+$theme.ToLowerInvariant()) -WithModel
+    }
+    Write-Output 'PASS: Gradient thumbnails in both themes'
     if($InputMode -eq 'Pointer'){
         foreach($device in @('pen','touch')){
             $id=@((Model).state.layers)[0].id;Swipe $id -90 $device
