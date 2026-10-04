@@ -5905,3 +5905,6 @@ mod lut3d_tests;
 impl WgpuRasterizer {
     pub fn set_snapshot_worker(&mut self, worker: snapshot::BrowserSnapshot) { self.snapshot_worker_callback = Some(worker); }
 }
+
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod package_render_tests;

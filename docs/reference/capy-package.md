@@ -336,8 +336,10 @@ strength normalization, clipping decisions, seeds and neutral behavior belong to
 the data version. Tap packing, pass fusion, workgroup sizes, precision improvements
 and numerical approximations may change. Tests compare independent equations and
 authored values with operation-specific tolerances; rendered GPU bytes are not the
-portable contract. Correcting a shader that violates these meanings does not
-require a new file version.
+portable contract. Fixed linear-float hardware renders protect the appearance of
+saved values. A change beyond its recorded tolerance is a regression to fix, or
+requires a new data version with a concrete converter and a fixed-file regression
+test. Never regenerate a baseline merely to make a failing test pass.
 
 ## Resources and packs
 

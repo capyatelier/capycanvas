@@ -54,6 +54,23 @@ every wire name it lists in the [package contract](../reference/capy-package.md#
 Keep resize precision, whole-count controls, choice reordering and private
 selection-overlay recovery assertions. Replace superseded pre-release fixtures
 without conversion readers; retain the pixel and authored-value checks.
+Run `cargo test --locked -p layer-render-wgpu saved_artwork_render_contracts -- --nocapture`
+on a hardware GPU for saved rendering semantics. The fixed 32×24 linear RGBA F32
+[images](../../crates/layer-render-wgpu/src/fixtures/authored-renders.rgba32f)
+and [index](../../crates/layer-render-wgpu/src/fixtures/authored-renders.tsv) cover
+all 52 saved built-ins in unsigned and HDR compositions, every blend mode,
+placement kernels with and without a mesh, watercolor material edges, authored
+SDR rendition and seeded FBM. Shadows/Highlights and Clarity use the real local
+tone guide. The index records each case's byte offset, length, maximum absolute
+error and RMS tolerance; pointwise color filters have tighter limits than spatial
+and procedural evaluation. The baseline was captured with Vulkan on an NVIDIA
+RTX PRO 6000 Blackwell GPU. Qualify other hardware backends with the same inputs
+and tolerances; a CPU adapter is rejected. Keep these baselines fixed. A change
+beyond tolerance requires a regression fix or a new authored data version,
+converter and unchanged-file regression. The suite has no baseline-update mode.
+A deliberate white-balance coefficient change from `.8` to `.7` must fail;
+restoring `.8` must pass.
+
 Spatial evaluation changes also run the renderer's `scene::scale::tests::effects::gaussian`
 references, including sigmas above editor bounds, source-edge mass, neutral
 values, HDR, native and reduced evaluation. Preserved-package tests cover future
