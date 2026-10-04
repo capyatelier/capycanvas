@@ -1,12 +1,18 @@
 # Packaged GTK runtime
 
 The Linux packager and development launcher invoke `build.sh BUILD_DIRECTORY PREFIX`
-and use the resulting GTK 4.22.4 library. `pad-event-surface.patch` retains the
-surface from Wayland tablet-pad entry and uses it for mode, button, ring, strip
-and dial events. Pad focus is independent of keyboard focus. Events without a
-live pad target or device are discarded before construction; mode state still
-updates. References are cleared on leave, removal and surface destruction.
-Protocol objects are checked for GTK ownership before reading their user data.
+and use the resulting GTK 4.22.4 library. `pad-event-surface.patch` backports
+[GTK !10171](https://gitlab.gnome.org/GNOME/gtk/-/merge_requests/10171) at commit
+`c6613dd0ad4e1bde77b6cd2e48cfcc80c8e63f33`, with its focus/device guard extended
+to button, ring, strip and dial events. One checked-in patch contains both changes;
+builds use the pinned release archive and do not fetch a moving branch or MR diff.
+
+Pad events use the surface from pad entry independently of keyboard focus.
+Events without a pad target or device are discarded before construction; mode
+state still updates. References are released on leave and pad removal. If a
+surface is destroyed before leave, the retained reference keeps it valid and
+normal GTK dispatch drops its unmapped events. If destruction precedes entry
+dispatch, the guards also handle the missing surface and device.
 `tablet-proximity-cursor.patch` waits for the pen's first positioned motion
 before delivering its window entry. A proximity-only frame must not choose a
 cursor using stale coordinates and briefly flash an arrow over the canvas.
@@ -38,10 +44,11 @@ tool axes and pad input together. It is unsuitable as the painting client's
 default workaround. System GTK is usable without the affected pad input, or
 with a distribution build that fixes this event path.
 
-The cursor patch addresses a separate visual glitch; it is not a crash fix.
-Remove the bundled-runtime requirement once the supported system GTK builds
-handle unfocused pad events safely. Verify pen entry separately before
-removing the cursor patch.
+Remove the pad patch when the pinned GTK release contains independent pad focus
+and guards every pad-event producer, then run the pad regression below and
+verify pad input while opening and closing windows. The cursor patch addresses
+a separate visual glitch; verify pen entry separately before removing it.
+The bundled runtime can be retired when supported system GTK builds contain both fixes.
 
 ## Build and validate
 
@@ -59,8 +66,8 @@ python3 tools/build/gtk-runtime/test-configure.py
 
 The pad check executes GTK's actual callbacks without a display, checking all
 event producers, independent keyboard/pad focus, retained mode state, missing
-devices, surface destruction before initial entry, foreign surfaces, tablet
-reassociation and balanced surface references.
+devices, surface destruction before initial entry, tablet reassociation and
+balanced surface references through destruction, leave and removal.
 It rejects the unpatched source and missing producer guards when an event has
 no target. Native pen journeys still run through the private compositor in the
 [Linux guide](../../../docs/development/linux.md#tests).

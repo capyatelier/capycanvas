@@ -8,7 +8,6 @@ import tempfile
 
 root = Path(sys.argv[1])
 seat_source = (root / "gdk/wayland/gdkseat-wayland.c").read_text()
-surface_source = (root / "gdk/wayland/gdksurface-wayland.c").read_text()
 
 
 def function(source, name):
@@ -23,6 +22,7 @@ header = r'''
 #include <stdio.h>
 #define GDK_SEAT_DEBUG(...) ((void)0)
 #define GDK_WAYLAND_SEAT(s) (s)
+#define GDK_IS_SURFACE(s) G_IS_OBJECT(s)
 #define GDK_SURFACE_DESTROYED(s) (g_object_get_data(G_OBJECT(s), "destroyed") != NULL)
 #define GDK_TYPE_WAYLAND_DEVICE_PAD G_TYPE_OBJECT
 #define GDK_SOURCE_TABLET_PAD 1
@@ -35,15 +35,13 @@ typedef struct _Pad GdkWaylandTabletPadData;
 typedef struct { GList *tablet_pads; GdkSurface *keyboard_focus; GdkDevice *logical_keyboard; } GdkWaylandSeat;
 typedef GdkWaylandSeat GdkSeat;
 typedef struct { const char *name; uint32_t vid, pid; GList *pads; } GdkWaylandTabletData;
-struct wl_proxy { const void *listener; void *data; };
-struct wl_surface { const void *listener; GdkSurface *data; };
-struct zwp_tablet_v2 { const void *listener; GdkWaylandTabletData *data; };
+struct wl_surface { GdkSurface *data; };
+struct zwp_tablet_v2 { GdkWaylandTabletData *data; };
 struct zwp_tablet_pad_v2 {};
 struct zwp_tablet_pad_group_v2 {};
 struct zwp_tablet_pad_ring_v2 {};
 struct zwp_tablet_pad_strip_v2 {};
 struct zwp_tablet_pad_dial_v2 {};
-static int tablet_listener, surface_listener, foreign_listener;
 typedef struct {
   GdkWaylandTabletPadData *pad;
   uint32_t mode_switch_serial, current_mode;
@@ -55,13 +53,13 @@ struct _Pad {
   GdkDevice *device;
   GdkWaylandTabletData *current_tablet;
   GdkSurface *focus;
+  uint32_t enter_serial;
   GList *mode_groups, *rings, *strips, *dials;
 };
 typedef struct { GdkSurface *surface; GdkDevice *device; uint32_t mode; } GdkEvent;
 static GdkSurface *expected_surface;
 static uint32_t expected_mode;
 static int delivered, added, removed;
-static const void *wl_proxy_get_listener(struct wl_proxy *proxy) { return proxy->listener; }
 static void *wl_surface_get_user_data(struct wl_surface *surface) { return surface->data; }
 static void *zwp_tablet_v2_get_user_data(struct zwp_tablet_v2 *tablet) { return tablet->data; }
 static void *gdk_seat_get_display(GdkSeat *seat) { return seat; }
@@ -87,21 +85,18 @@ static GdkEvent *gdk_pad_event_new_ring(GdkSurface *s, GdkDevice *d, uint32_t t,
 #define gdk_pad_event_new_dial gdk_pad_event_new_ring
 static GdkEvent *gdk_pad_event_new_button(int type, GdkSurface *s, GdkDevice *d, uint32_t t, uint32_t g, uint32_t b, uint32_t m) { return make_event(s,d,m); }
 static void _gdk_wayland_display_deliver_event(void *display, GdkEvent *event) {
-  delivered++;
+  if (!GDK_SURFACE_DESTROYED(event->surface)) delivered++;
   g_object_unref(event->surface);
   g_object_unref(event->device);
   g_free(event);
 }
 '''
 
-names = ["tablet_pad_has_focus", "tablet_pad_lookup_button_group", "tablet_pad_handle_enter",
+names = ["tablet_pad_lookup_button_group", "tablet_pad_handle_enter",
          "tablet_pad_handle_leave", "tablet_pad_group_handle_mode", "tablet_pad_handle_button",
          "tablet_pad_ring_handle_frame", "tablet_pad_strip_handle_frame", "tablet_pad_dial_handle_frame",
-         "gdk_wayland_seat_clear_pad_focus", "_gdk_wayland_seat_remove_tablet_pad"]
-callbacks = [function(surface_source, "gdk_wayland_surface_from_wl_surface")]
-callbacks += [function(seat_source, name) for name in names]
-if not callbacks[-2]:
-    callbacks[-2] = "static void gdk_wayland_seat_clear_pad_focus(GdkWaylandSeat *s, GdkSurface *w) {}"
+         "_gdk_wayland_seat_remove_tablet_pad", "tablet_pad_handle_removed"]
+callbacks = [function(seat_source, name) for name in names]
 
 main = r'''
 static void controls(GdkWaylandTabletPadGroupData *group, uint32_t mode) {
@@ -117,11 +112,9 @@ int main(void) {
   GdkSurface *a = new_object(), *b = new_object();
   GdkWaylandSeat seat = {0};
   GdkWaylandTabletData tablet = {.name="First"}, second = {.name="Second", .vid=1};
-  struct zwp_tablet_v2 protocol_tablet = {&tablet_listener, &tablet};
-  struct zwp_tablet_v2 protocol_second = {&tablet_listener, &second};
-  struct zwp_tablet_v2 foreign_tablet = {&foreign_listener, (void *) 1};
-  struct wl_surface wa = {&surface_listener, a}, wb = {&surface_listener, b};
-  struct wl_surface foreign = {&foreign_listener, (void *) 1};
+  struct zwp_tablet_v2 protocol_tablet = {&tablet};
+  struct zwp_tablet_v2 protocol_second = {&second};
+  struct wl_surface wa = {a}, wb = {b};
   GdkWaylandTabletPadData *pad = g_new0(GdkWaylandTabletPadData, 1);
   GdkWaylandTabletPadGroupData group = {.pad=pad};
   pad->seat = &seat;
@@ -133,10 +126,9 @@ int main(void) {
   controls(&group, 1);
   assert(delivered == 0 && group.current_mode == 1 && group.mode_switch_serial == 901);
   tablet_pad_handle_leave(pad, NULL, 0, NULL);
-  int devices_before_focus = added;
   tablet_pad_handle_enter(pad, NULL, 1, &protocol_tablet, &wa);
   controls(&group, 0);
-  assert(delivered == 6 && added == devices_before_focus + 1 && removed == devices_before_focus && a->ref_count == 2);
+  assert(delivered == 6 && added == 1 && a->ref_count == 2 && pad->enter_serial == 1);
   seat.keyboard_focus = b;
   controls(&group, 1);
   assert(delivered == 12);
@@ -150,20 +142,17 @@ int main(void) {
   expected_surface = b;
   tablet_pad_handle_enter(pad, NULL, 3, &protocol_second, &wb);
   controls(&group, 1);
-  assert(delivered == 24 && added == devices_before_focus + 2 && removed == devices_before_focus + 1 && b->ref_count == 2);
+  assert(delivered == 24 && added == 2 && removed == 1 && b->ref_count == 2 && pad->enter_serial == 3);
   g_object_set_data(G_OBJECT(b), "destroyed", GINT_TO_POINTER(1));
   controls(&group, 0);
   assert(delivered == 24);
-  gdk_wayland_seat_clear_pad_focus(&seat, b);
-  assert(b->ref_count == 1 && pad->focus == NULL);
-  tablet_pad_handle_enter(pad, NULL, 4, &protocol_tablet, &foreign);
-  controls(&group, 1);
+  assert(b->ref_count == 2);
+  tablet_pad_handle_leave(pad, NULL, 4, NULL);
+  assert(b->ref_count == 1 && pad->focus == NULL && second.pads == NULL);
   tablet_pad_handle_enter(pad, NULL, 5, &protocol_tablet, NULL);
   controls(&group, 0);
-  tablet_pad_handle_enter(pad, NULL, 5, &foreign_tablet, &wa);
-  controls(&group, 0);
   assert(delivered == 24);
-  assert(second.pads == NULL && g_list_length(tablet.pads) == 1);
+  tablet_pad_handle_leave(pad, NULL, 5, NULL);
   expected_surface = a;
   tablet_pad_handle_enter(pad, NULL, 6, &protocol_tablet, &wa);
   assert(g_list_length(tablet.pads) == 1);
@@ -176,12 +165,11 @@ int main(void) {
   pad->device = device;
   g_list_free(pad->mode_groups);
   g_list_free(group.buttons);
-  g_list_free(tablet.pads);
-  _gdk_wayland_seat_remove_tablet_pad(&seat, pad);
-  assert(seat.tablet_pads == NULL && a->ref_count == 1 && b->ref_count == 1);
+  tablet_pad_handle_removed(pad, NULL);
+  assert(seat.tablet_pads == NULL && tablet.pads == NULL && a->ref_count == 1 && b->ref_count == 1);
   g_object_unref(a);
   g_object_unref(b);
-  puts("PASS: all pad producers, destroyed surface before entry, independent focus, absent device, modes, foreign surfaces, reassociation and reference lifetime");
+  puts("PASS: all pad producers, destroyed surface before entry, independent focus, absent device, modes, reassociation and reference lifetime");
   return 0;
 }
 '''
