@@ -7,7 +7,6 @@ use super::*;
 use layer_core::{RetouchLayerRefusal, SeparationFilters};
 use layer_engine::ScenePreview;
 use layer_core::authored::*;
-use std::collections::BTreeSet;
 
 /// The radius Frequency Separation opens with.
 const DEFAULT_RADIUS: f32 = 4.;
@@ -83,8 +82,6 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     fn insert_retouch_layers(&mut self, plan: layer_core::RetouchLayerPlan) -> Result<(), String> {
         self.engine.insert_with_operations(plan.edits, plan.operations, None).map_err(error)?;
-        self.layer_interaction.editing = Some(plan.active);
-        self.layer_interaction.selected = BTreeSet::from([plan.active]);
         self.layer_interaction.changed = true;
         Ok(())
     }

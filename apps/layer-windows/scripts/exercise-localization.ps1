@@ -239,8 +239,8 @@ try{
  Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.label -eq $literalName -and $null -eq $view.state.layer_tools.rename_layer} 'Literal Unicode layer name did not commit at its existing focus boundary' 15
  Invoke-Id 'layer-add-mask'
  Wait-Until {$view=Model;$view -and @($view.state.layers|Where-Object {$_.id -eq $layer -and $_.has_mask}).Count -eq 1 -and (Find ('layer-'+$layer+'-mask')) -and (Find ('layer-'+$layer+'-mask-thumbnail'))} 'Private named layer did not expose its real mask controls' 30
- Invoke-Id ('layer-'+$layer+'-name')
- Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.id -eq $layer -and !(@($view.state.layers|Where-Object id -eq $layer)[0].mask_selected)} 'Native layer name did not restore the actual drawing target after mask setup' 15
+ Invoke-Id ('layer-'+$layer+'-content')
+ Wait-Until {$view=Model;$view -and $view.state.layer_tools.editing_layer.id -eq $layer -and !(@($view.state.layers|Where-Object id -eq $layer)[0].mask_selected)} 'Native content thumbnail did not select the drawing target after mask setup' 15
  Open-Search
  (Control 'command-search').GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('rectangle select')
  Wait-Until {(Search).query -eq 'rectangle select' -and (Find 'command-result-0').Current.Name -eq ((Model).state.commands|Where-Object id -eq 'rectangle_select').label} 'Rectangle Select did not resolve in native command search' 15

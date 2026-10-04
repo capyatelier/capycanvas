@@ -66,10 +66,10 @@ transparent color, and a pen's physical eraser. None stays invisible during cont
 The shared Rust cursor model and GPU presenter apply this behavior on every host.
 
 **Use Pass Through for new groups**, in the Canvas page's Layers group, is off by
-default: New Group and Group Selected Layers then make isolated Normal groups, as
-Clip Studio Paint, Krita and GIMP do. On, every new group is
-[Pass Through](../internals/documents.md#groups-and-pass-through), as in Photoshop
-and Affinity. It changes only groups made afterwards.
+default, so empty new groups use Normal. On, new groups use
+[Pass Through](../internals/documents.md#groups-and-pass-through). Grouping existing
+layers also uses Pass Through when their blend modes or standalone adjustments
+need the existing backdrop. The preference affects only groups made afterwards.
 
 ## Keyboard shortcuts
 

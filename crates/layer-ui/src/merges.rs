@@ -3,7 +3,6 @@
 //! new layer in one undo step; placed photos become document pixels.
 use super::*;
 use layer_core::{MergeDown, MergeKind, MergeRefusal};
-use std::collections::BTreeSet;
 
 pub(super) fn merge_kind(command: CommandId) -> Option<MergeKind> {
     Some(match command {
@@ -83,8 +82,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine
             .insert_with_operations(plan.edits, vec![(plan.target, plan.operation)], None)
             .map_err(error)?;
-        self.layer_interaction.editing = Some(plan.result);
-        self.layer_interaction.selected = BTreeSet::from([plan.result]);
         self.layer_interaction.changed = true;
         Ok(())
     }

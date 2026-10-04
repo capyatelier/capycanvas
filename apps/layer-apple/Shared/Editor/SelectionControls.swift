@@ -117,17 +117,19 @@ struct CanvasPreviewPanel: View {
 }
 
 enum ThumbnailSelectionLoad {
-    struct Modifiers { let shift: Bool; let alt: Bool }
+    struct Modifiers { let shift: Bool; let alt: Bool; let toggle: Bool }
     @MainActor static func current() -> Modifiers? {
+        let keys = modifiers()
+        return keys.toggle ? keys : nil
+    }
+    @MainActor static func modifiers() -> Modifiers {
         #if os(macOS)
         let flags = NSEvent.modifierFlags
-        guard flags.contains(.command) else { return nil }
-        return Modifiers(shift: flags.contains(.shift), alt: flags.contains(.option))
+        return Modifiers(shift: flags.contains(.shift), alt: flags.contains(.option), toggle: flags.contains(.command))
         #else
-        guard let keys = GCKeyboard.coalesced?.keyboardInput else { return nil }
+        guard let keys = GCKeyboard.coalesced?.keyboardInput else { return Modifiers(shift: false, alt: false, toggle: false) }
         func held(_ codes: GCKeyCode...) -> Bool { codes.contains { keys.button(forKeyCode: $0)?.isPressed == true } }
-        guard held(.leftGUI, .rightGUI) else { return nil }
-        return Modifiers(shift: held(.leftShift, .rightShift), alt: held(.leftAlt, .rightAlt))
+        return Modifiers(shift: held(.leftShift, .rightShift), alt: held(.leftAlt, .rightAlt), toggle: held(.leftGUI, .rightGUI))
         #endif
     }
 }

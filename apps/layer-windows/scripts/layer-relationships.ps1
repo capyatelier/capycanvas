@@ -1,6 +1,7 @@
 function Relationship-Layer([double]$Id){@((Model).state.layers|Where-Object id -eq $Id)[0]}
 function Relationship-Select([double]$Id){
-    Relationship-Reveal "layer-$Id-name";Invoke "layer-$Id-name"
+    $target=if((Relationship-Layer $Id).group){"layer-$Id-name"}else{"layer-$Id-content"}
+    Relationship-Reveal $target;Invoke $target
     Wait-Until {$l=(Model).state.layer_tools.editing_layer;$l.id -eq $Id -and !$l.mask_selected} 'Layer selection did not publish'
 }
 function Relationship-Visibility([double]$Id,[bool]$Visible){
@@ -93,7 +94,13 @@ function Relationship-Drop([double]$Id,[double]$Target,[string]$Surface,[double]
     Wait-Until {(Relationship-Rows) -ne $before} 'Layer drop did not change the shared model'
     $after=Relationship-Rows
     if(!(Relationship-Gesture).last_release.commit){throw 'Native release did not revalidate the drop'}
-    Relationship-Undo;Wait-Until {(Relationship-Rows) -eq $before} 'Drop requires more than one Undo'
+    Relationship-Undo
+    try{Wait-Until {(Relationship-Rows) -eq $before} 'Drop requires more than one Undo'}catch{
+        @{before=($before|ConvertFrom-Json);after=($after|ConvertFrom-Json);undone=((Relationship-Rows)|ConvertFrom-Json);
+          source=$Id;target=$Target;surface=$Surface;gesture=(Relationship-Gesture)}|ConvertTo-Json -Depth 12|
+          Set-Content (Join-Path $run 'relationships-drop-history-failure.json')
+        throw
+    }
     Invoke 'Redo' -Name;Wait-Until {(Relationship-Rows) -eq $after} 'Redo did not restore normalized drop'
 }
 function Relationship-Swipe([double]$Id,[string]$Device,[int]$Distance,[switch]$Cancel,[string]$CaptureName){

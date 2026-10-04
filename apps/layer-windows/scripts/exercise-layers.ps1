@@ -135,7 +135,9 @@ try {
     Invoke 'layer-add-mask';Wait-Until {(Model).state.layer_tools.editing_layer.has_mask} 'Layer mask not added'
     Wait-Until {(Find "layer-$created-mask-thumbnail").Current.ItemStatus -eq 'Ready'} 'Mask thumbnail not ready' 15
     Invoke "layer-$created-name"
-    Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content target not selected'
+    Wait-Until {(Model).state.layer_tools.editing_layer.mask_selected} 'Active row did not preserve mask editing'
+    Invoke "layer-$created-content"
+    Wait-Until {!(Model).state.layer_tools.editing_layer.mask_selected} 'Content thumbnail did not select pixels'
     foreach($target in @('name','content','mask')){foreach($shift in @($false,$true)){
         $isMask=$target -eq 'mask';$command=if($isMask){'layer_mask_enabled'}else{'menu-organize'}
         Focus "layer-$created-$target"
@@ -164,7 +166,7 @@ try {
     Wait-Until {!(Model).state.layer_tools.editing_layer.mask_linked} 'Mask unlink not applied'
     Invoke "layer-$created-link"
     Wait-Until {(Model).state.layer_tools.editing_layer.mask_linked} 'Mask link not applied'
-    Invoke "layer-$created-name"
+    Invoke "layer-$created-content"
     Toggle-Flag 'layer-attachment';Wait-Until {(Model).state.layer_tools.editing_layer.relationship.kind -eq 'clip'} 'Clipping not applied'
     Toggle-Flag 'layer-attachment';Wait-Until {$null -eq (Model).state.layer_tools.editing_layer.relationship} 'Clipping not cleared'
     Toggle-Flag 'layer-reference';Wait-Until {(Model).state.layer_tools.references_selected} 'Reference selection not applied'
@@ -179,16 +181,18 @@ try {
     Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-group_selected'
     Wait-Until {@((Model).state.layers|Where-Object {$_.group -and $_.selected}).Count -eq 1} 'Selected layers did not group'
     $group=((Model).state.layers|Where-Object {$_.group -and $_.selected}).id
-    if((Model).state.layer_tools.editing_layer.id -ne $duplicate){throw 'Grouping changed the editing target'}
+    if((Model).state.layer_tools.editing_layer.id -ne $group){throw 'Grouping did not activate the new folder'}
     if(@((Model).state.layers|Where-Object {$_.depth -eq 1}).Count -ne 2){throw 'Group children not indented'}
     Invoke "layer-$created-name";Invoke "layer-$group-content"
     Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $group -and $_.collapsed}).Count -eq 1} 'Group did not collapse'
-    if((Model).state.layer_tools.editing_layer.id -ne $created){throw 'Collapsing group changed the editing target'}
+    if((Model).state.layer_tools.editing_layer.id -ne $group -or @((Model).state.layers|Where-Object selected).Count -ne 1){throw 'Collapsing group did not replace hidden targets and checks with the folder'}
     Edit 'layer-opacity' '47';(Control 'layer-blend').SetFocus()
-    Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.47) -lt .000001} 'Hidden editing target lost opacity control'
+    Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.47) -lt .000001} 'Collapsed folder lost opacity control'
     Invoke "layer-$group-content"
     Wait-Until {$null -ne (Find "layer-$created-name")} 'Group did not expand'
     Invoke "layer-$group-name";Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $group} 'The group did not become the editing target'
+    Edit 'layer-opacity' '100';(Control 'layer-blend').SetFocus()
+    Wait-Until {(Model).state.layer_tools.editing_layer.opacity -eq 1} 'Folder opacity did not reset before ungrouping'
     Blend 'Pass Through' -Present @('Normal');Wait-Until {(Model).state.layer_tools.editing_layer.blend_label -eq 'Pass Through'} 'The group did not pass through'
     Invoke 'layer-actions';Expand 'menu-organize';Invoke 'layer-menu-ungroup'
     Wait-Until {@((Model).state.layers|Where-Object {$_.id -eq $group}).Count -eq 0} 'Ungroup did not remove container'
@@ -231,12 +235,19 @@ try {
     if((Model).state.layers.Count -ne 2 -or (Model).state.document_file.modified -or (Model).state.layer_tools.editing_layer.opacity -ne 1){throw 'Old layer state leaked into replacement'}
     Capture 'replacement'
     Edit 'layer-opacity' '55'
-    $review.CloseMainWindow()|Out-Null
-    Wait-Until {$null -ne (Find 'Discard Changes' -Name -Type ([System.Windows.Automation.ControlType]::Button))} 'Closing did not commit the focused draft'
-    if(!(Model).state.document_file.modified -or [Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -gt .000001){throw 'Close checked stale document state'}
-    Invoke 'Cancel' -Name
-    Wait-Until {(Control 'drawing-canvas').Current.IsEnabled} 'Cancel did not reopen the canvas'
-    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
+    if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
+    $stderr=Join-Path $run 'reopened.stderr.log'
+    $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+    $null=$review.Handle
+    Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'Restarted review did not start' 45
+    $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)
+    Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Layer session did not reopen' 120
+    if(!(Model).state.document_file.modified -or [Math]::Abs((Model).state.layer_tools.editing_layer.opacity-.55) -gt .000001){throw 'Window close lost the focused layer draft'}
+    Capture 'reopened-draft' -WithModel
+    Invoke 'Undo' -Name
+    Wait-Until {[Math]::Abs((Model).state.layer_tools.editing_layer.opacity-1) -lt .000001 -and !(Model).state.document_file.modified} 'Restored layer draft did not Undo to the clean checkpoint'
+    & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close
     if((Get-Item -LiteralPath $stderr).Length){throw 'Native stderr requires inspection'}
     [PSCustomObject]@{thumbnail_paint_and_exact_undo='passed';row_retention='passed';header_and_lock_controls='passed';native_toggle_states_and_history='passed';keyboard_layer_and_mask_menus='passed';independent_selection='passed';mask_thumbnail='passed';rename_duplicate_delete_undo='passed';mask_controls_clipping_references='passed';group_collapse_hidden_target_and_ungroup='passed';virtualized_rows_and_recycling='passed';theme_and_document_replacement='passed';focused_draft_committed_before_close='passed';zero_exit='passed'}|ConvertTo-Json
 }catch{

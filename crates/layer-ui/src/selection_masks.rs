@@ -299,8 +299,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             .into_iter()
             .chain(load)
             .collect();
-        let roots = doc.layer_roots(&self.layer_interaction.selected);
-        let multiple = roots.len() > 1 && self.layer_interaction.selected.contains(&id);
+        let roots = doc.layer_roots(self.selected_layers());
+        let multiple = roots.len() > 1 && self.selected_layers().contains(&id);
         let mut organize_items = vec![
             organize(self.localization().text(MessageId::RESOURCES_SELECTION_MENU_RENAME).as_ref(), LayerAction::BeginRename { id: occurrence_token(id) }, unlocked),
             organize(
@@ -337,7 +337,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.localization().text(MessageId::RESOURCES_SELECTION_MENU_GROUP_SELECTED_LAYERS).as_ref(),
                 LayerAction::GroupSelected,
                 doc.group_layers_edit(
-                    &doc.layer_roots(&self.layer_interaction.selected),
+                    &doc.layer_roots(self.selected_layers()),
                     layer_core::LayerBlend::Normal,
                     "",
                 )
@@ -535,7 +535,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         });
         if let SelectionTarget::Saved(id) = target {
             self.engine.set_active_layer(id).map_err(error)?;
-            self.layer_interaction.selected = std::collections::BTreeSet::from([id]);
         }
         self.layer_interaction.tool = if tonal {LayerCanvasTool::Selection {kind:SelectionTool::Tonal}} else {LayerCanvasTool::Paint};
         self.refresh_document();

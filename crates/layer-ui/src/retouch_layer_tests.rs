@@ -48,7 +48,7 @@ mod retouch_layer_checks {
             let layer = s.engine.document().scene().occurrence(id).unwrap();
             assert_eq!((&*layer.name, layer.blend), ("Dodge & Burn", LayerBlend::SoftLight));
             assert_eq!(s.engine.document().scene().order()[0], id, "above the active layer");
-            assert_eq!(s.layer_interaction.selected, [id].into());
+            assert_eq!(s.engine.document().working.layer_selection, [id].into());
             let source = s.engine.document().scene().source_target(id);
             let [(target, fill)] = &s.renderer_mut().pending_operations[..] else { panic!("one fill") };
             assert_eq!(Some(*target), source);
@@ -164,7 +164,7 @@ mod retouch_layer_checks {
         assert_eq!(doc.working.occurrence.unwrap(), doc.scene().order()[1], "High is active");
         assert!(!doc.scene().occurrence(photo).unwrap().visible);
         let (low, high) = (doc.scene().order()[2], doc.scene().order()[1]);
-        assert_eq!(s.layer_interaction.selected, [high].into());
+        assert_eq!(s.engine.document().working.layer_selection, [high].into());
         assert!(previewed(&mut s, 6).is_none(), "the preview ends");
         let low_target = s.engine.document().scene().source_target(low).unwrap();
         let high_target = s.engine.document().scene().source_target(high).unwrap();

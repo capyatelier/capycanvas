@@ -180,6 +180,11 @@ pub enum LayerAction {
         id: u64,
         mask: bool,
     },
+    SelectRow {
+        id: u64,
+        extend: bool,
+        toggle: bool,
+    },
     /// Toggle row selection without changing the content/mask editing target.
     ToggleSelection {
         id: u64,
@@ -361,12 +366,9 @@ pub struct GradientToolSettings {
 pub(super) struct LayerInteraction {
     pub tool: LayerCanvasTool,
     pub collapsed: BTreeSet<OccurrenceHandle>,
-    pub selected: BTreeSet<OccurrenceHandle>,
-    pub editing: Option<OccurrenceHandle>,
-    pub clipboard_mask: Option<(CoverageSnapshot, Point)>,
+    pub clipboard_mask: Option<(CoverageSnapshot, layer_core::ImageTransform)>,
     pub path: Vec<Point>,
     original: Option<(OccurrenceHandle, Occurrence)>,
-    solo: Option<Vec<(OccurrenceHandle, bool)>>,
     pub changed: bool,
     pub gradient: GradientToolSettings,
     pub gradient_before: Option<GradientToolSettings>,
@@ -394,12 +396,48 @@ impl LayerInteraction {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn selected_layers(&self) -> &BTreeSet<OccurrenceHandle> {
+        &self.engine.document().working.layer_selection
+    }
+    pub(super) fn set_selected_layers(&mut self, selected: BTreeSet<OccurrenceHandle>) -> Result<(), String> {
+        if self.selected_layers() == &selected { return Ok(()); }
+        let mut working = self.engine.document().working.clone();
+        working.layer_selection = selected;
+        self.layer_edit(Edit::Working(working))
+    }
+    fn select_layer_row(&mut self, id: u64, extend: bool, toggle: bool) -> Result<(), String> {
+        let handle = occurrence_handle(id)?;
+        let doc = self.engine.document();
+        if doc.scene().occurrence(handle).is_none() || self.layer_interaction.hidden_by_group(doc, handle) {
+            return Err(self.localization().text(MessageId::RESOURCES_ERROR_UNKNOWN_LAYER).to_string());
+        }
+        let mut working = doc.working.clone();
+        if toggle && !extend {
+            if !working.layer_selection.remove(&handle) { working.layer_selection.insert(handle); }
+            working.layer_anchor = Some(handle);
+        } else if extend {
+            let visible: Vec<_> = doc.ordered_layers().iter().copied()
+                .filter(|h| !self.layer_interaction.hidden_by_group(doc, *h)).collect();
+            let end = visible.iter().position(|h| *h == handle).unwrap();
+            let start = working.layer_anchor.and_then(|h| visible.iter().position(|v| *v == h)).unwrap_or(end);
+            working.layer_selection = visible[start.min(end)..=start.max(end)].iter().copied().collect();
+            working.layer_anchor = Some(visible[start]);
+        } else {
+            if working.occurrence == Some(handle) && working.layer_selection.contains(&handle) { return Ok(()); }
+            let selected = working.layer_selection;
+            self.layer_action(LayerAction::Select { id, mask: false })?;
+            if selected.contains(&handle) { self.set_selected_layers(selected)?; }
+            return Ok(());
+        }
+        self.layer_edit(Edit::Working(working))
+    }
     fn occurrence_change(&self, id: OccurrenceHandle, value: Occurrence) -> Result<Edit, String> {
         Ok(Edit::Occurrence(RecordChange::replace(&self.engine.document().artwork.occurrences, id, Some(value))?))
     }
     fn visibility_edit(&self, values: impl IntoIterator<Item = (OccurrenceHandle, bool)>) -> Result<Edit, String> {
         let doc = self.engine.document();
         let mut working = doc.working.clone();
+        working.solo_visibility = None;
         let mut edits = Vec::new();
         for (id, visible) in values {
             let mut occurrence = doc.scene().occurrence(id).ok_or("Unknown layer")?.clone();
@@ -411,6 +449,35 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         edits.push(Edit::Working(working));
         Ok(Edit::Batch(edits))
+    }
+    fn layer_deletion_ids(&self, selected: &BTreeSet<OccurrenceHandle>) -> Vec<OccurrenceHandle> {
+        let doc = self.engine.document();
+        let mut ids = selected.clone();
+        for &id in selected.intersection(&self.layer_interaction.collapsed) {
+            ids.extend(doc.scene().order().iter().copied().filter(|h| layer_core::descends_from(doc.scene(), *h, Some(id))));
+        }
+        ids.into_iter().collect()
+    }
+    pub(super) fn can_delete_layer_rows(&self, selected: &BTreeSet<OccurrenceHandle>) -> bool {
+        self.engine.document().can_delete_layers(&self.layer_deletion_ids(selected))
+    }
+    pub(super) fn layer_deletion_edit(&self, selected: &BTreeSet<OccurrenceHandle>) -> Result<Edit, layer_core::DocumentError> {
+        self.engine.document().delete_layers_edit(&self.layer_deletion_ids(selected))
+    }
+    pub(super) fn layer_step_edit(&self, raise: bool) -> Result<Edit, layer_core::DocumentError> {
+        use layer_core::DocumentError::InvalidLayerOperation;
+        let doc = self.engine.document();
+        let roots = doc.layer_roots(self.selected_layers());
+        let first = *roots.first().ok_or(InvalidLayerOperation("Select layers first"))?;
+        let parent = doc.scene().parent(first);
+        if roots.iter().any(|id| doc.scene().parent(*id) != parent) { return Err(InvalidLayerOperation("Select layers in the same group")); }
+        let moving = doc.relationship_roots(&roots);
+        let siblings = doc.scene().children(parent);
+        let at = siblings.iter().position(|id| moving.contains(id)).unwrap();
+        let end = siblings.iter().rposition(|id| moving.contains(id)).unwrap();
+        let target = if raise { at.checked_sub(1).and_then(|at| siblings.get(at)) } else { siblings.get(end + 1) }.ok_or(InvalidLayerOperation("Invalid layer position"))?;
+        doc.drop_layers_edit(&roots, *target, if raise { LayerDropPosition::Above } else { LayerDropPosition::Below })
+            .map(|plan| plan.edit)
     }
     fn layer_reparent_edit(&self, id: u64, parent: Option<u64>, index: u32) -> Result<Option<Edit>, String> {
         let doc = self.engine.document();
@@ -425,7 +492,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         let row=scene.occurrence(target).ok_or("Unknown destination")?;
         let attach=surface==LayerDropSurface::Thumbnail&&scene.effect(handle).is_some_and(|e|e.program.kind==layer_core::EffectKind::Adjustment);
         let position=if attach {LayerDropPosition::Attach}else if row.kind()==LayerKind::Group&&(0.25..0.75).contains(&fraction){LayerDropPosition::Into}else if fraction<0.5{LayerDropPosition::Above}else{LayerDropPosition::Below};
-        let plan=doc.drop_occurrence_edit(handle,target,position).map_err(error)?;
+        let roots = if self.selected_layers().contains(&handle) { doc.layer_roots(self.selected_layers()) } else { vec![handle] };
+        let position = if position == LayerDropPosition::Attach && roots.iter().any(|id| !scene.effect(*id).is_some_and(|effect| effect.program.kind == layer_core::EffectKind::Adjustment)) {
+            if fraction < 0.5 { LayerDropPosition::Above } else { LayerDropPosition::Below }
+        } else { position };
+        let plan=doc.drop_layers_edit(&roots,target,position).map_err(error)?;
         let mut probe=doc.clone();probe.apply(plan.edit.clone()).map_err(error)?;
         Ok((probe.artwork!=doc.artwork).then_some((plan.edit,LayerDropHint{target:occurrence_token(plan.target),position:plan.position})))
     }
@@ -473,7 +544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn image_layer_destination(&self, destination: Option<ImageLayerDestination>) -> Result<(usize, Option<OccurrenceHandle>), String> {
         let doc = self.engine.document();
         let scene = doc.scene();
-        let id = destination.map(|d| d.target).or(doc.working.occurrence).ok_or("Unknown layer")?;
+        let Some(id) = destination.map(|d| d.target).or(doc.working.occurrence) else { return Ok((0, None)); };
         let row = scene.occurrence(id).ok_or("The destination layer was removed")?;
         let position = destination.map_or(if row.kind() == LayerKind::Group { LayerDropPosition::Into } else { LayerDropPosition::Above }, |d| d.position);
         if position==LayerDropPosition::Attach{return Err("Images can be inserted into a group".into());}
@@ -493,8 +564,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(super) fn reference_action_removes(&self) -> bool {
         let doc = self.engine.document();
-        self.layer_interaction.selected.len() == 1 && doc.working.occurrence.is_some_and(|id|
-            self.layer_interaction.selected.contains(&id) && doc.scene().occurrence(id).is_some_and(|l| l.reference))
+        self.selected_layers().len() == 1 && doc.working.occurrence.is_some_and(|id|
+            self.selected_layers().contains(&id) && doc.scene().occurrence(id).is_some_and(|l| l.reference))
     }
     pub(super) fn set_references(&mut self, references: BTreeSet<OccurrenceHandle>) -> Result<(), String> {
         let doc = self.engine.document();
@@ -514,7 +585,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.layer_edit(Edit::Batch(edits))
     }
     pub(super) fn reference_selection(&self) -> BTreeSet<OccurrenceHandle> {
-        self.layer_interaction.selected.iter().copied().filter(|id|
+        self.selected_layers().iter().copied().filter(|id|
             self.engine.document().scene().occurrence(*id).is_some_and(|l| matches!(l.kind(), LayerKind::Paint | LayerKind::Group))).collect()
     }
     /// The host decodes/validates source color off-thread. Retain those original
@@ -598,6 +669,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         edits.push(Edit::Stack(RecordChange::replace(&artwork.stacks, stack_handle, Some(stack))?));
         let mut working = doc.working.clone();
         working.occurrence = Some(ids[0]);
+        working.layer_selection = ids.iter().copied().collect();
+        working.layer_anchor = Some(ids[0]);
         working.target = match artwork.occurrences.get(ids[0]).unwrap().content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), _ => unreachable!() };
         working.inspect_mask = None;
         edits.push(Edit::Working(working));
@@ -605,7 +678,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.source_edit_candidates(&edit, limits)?;
         if interactive {
             let rollback = self.engine.document().clone().apply(edit.clone()).map_err(error)?;
-            let selected = self.layer_interaction.selected.clone();
+            let selected = self.selected_layers().clone();
             self.engine.preview_edit(edit).map_err(error)?;
             if let Err(error) = self.begin_layer_placement(Some(super::operation::PlacementInsertion {
                 index, rollback: rollback.clone(), ids, selected,
@@ -651,6 +724,29 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.preview_edit(self.occurrence_change(id, occurrence)?).map_err(error)
         } else { self.engine.set_layer_opacity(id, opacity).map_err(error) }
     }
+    pub(super) fn copied_mask_use(&self, handle: OccurrenceHandle) -> Result<layer_core::authored::MaskUse, String> {
+        use layer_core::{Affine, Projective};
+        let (snapshot, geometry) = self.layer_interaction.clipboard_mask.as_ref().ok_or_else(||
+            self.localization().text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string())?;
+        let doc = self.engine.document();
+        let owner = doc.scene().occurrence(handle).ok_or("Unknown layer")?;
+        let invalid = || self.localization().text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING).to_string();
+        let mut mask = snapshot.use_.clone();
+        mask.translation = if mask.linked { owner.translation } else { Point::default() };
+        let world = doc.layer_offset(handle);
+        let parent = Point { x: world.x - owner.translation.x, y: world.y - owner.translation.y };
+        let destination = if mask.linked {
+            owner.placement.post(Projective::from_affine(Affine::translation(world))).ok_or_else(invalid)?
+        } else { layer_core::LayerPlacement::from_affine(Affine::translation(parent)) };
+        mask.placement = if geometry.placement.mesh.is_none() && destination.mesh.is_none() {
+            geometry.projective().and_then(|map| map.then(destination.outer.inverse()?)).ok_or_else(invalid)?
+        } else if geometry.placement.mesh == destination.mesh && geometry.placement.outer == destination.outer {
+            geometry.source_from_owner.map_or(Some(Projective::IDENTITY), Projective::inverse).ok_or_else(invalid)?
+        } else { return Err(invalid()); };
+        mask.validate().map_err(error)?;
+        Ok(mask)
+    }
+
     pub(super) fn editable_layer(&self, id: u64) -> Result<Occurrence, String> {
         let id = occurrence_handle(id)?;
         let layer = self.engine.document().scene().occurrence(id).ok_or("Unknown layer")?;
@@ -661,7 +757,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.selection_masks.quick() {
             match action {
                 LayerAction::Visibility { id: 0, value } => { self.selection_masks.quick_visible = value; return Ok(()); }
-                LayerAction::Select { id: 0, .. } | LayerAction::Context { id: 0, .. } | LayerAction::ToggleSelection { id: 0 } => return Ok(()),
+                LayerAction::Select { id: 0, .. } | LayerAction::SelectRow { id: 0, .. } | LayerAction::Context { id: 0, .. } | LayerAction::ToggleSelection { id: 0 } => return Ok(()),
                 LayerAction::Delete { id: 0 } | LayerAction::DeleteSelected => return self.return_to_artwork(),
                 _ => (),
             }
@@ -705,61 +801,60 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(self.visibility_edit(values)?)?;
             }
             LayerAction::Context { id, mask } => {
-                let selected = self.layer_interaction.selected.clone();
-                self.layer_action(LayerAction::Select { id, mask })?;
+                let selected = self.selected_layers().clone();
                 let handle = occurrence_handle(id)?;
-                self.layer_interaction.editing = Some(handle);
-                if selected.contains(&handle) { self.layer_interaction.selected = selected; }
+                if self.engine.document().working.occurrence != Some(handle) || mask {
+                    self.layer_action(LayerAction::Select { id, mask })?;
+                }
+                if selected.contains(&handle) { self.set_selected_layers(selected)?; }
+                else { self.set_selected_layers(BTreeSet::from([handle]))?; }
             }
             LayerAction::BeginRename { id } => { self.editable_layer(id)?; self.state.layer_tools.rename_layer = Some(id); }
             LayerAction::CancelRename => self.state.layer_tools.rename_layer = None,
             LayerAction::SelectAllLayers { selected } => {
-                let scene = self.engine.document().scene();
-                self.layer_interaction.selected = scene.order().iter().copied().filter(|_| selected).collect();
+                let doc = self.engine.document();
+                let checks = doc.ordered_layers().iter().copied()
+                    .filter(|id| selected && !self.layer_interaction.hidden_by_group(doc, *id)).collect();
+                self.set_selected_layers(checks)?;
             }
             LayerAction::GroupSelected => {
                 let doc = self.engine.document();
-                let roots = doc.layer_roots(&self.layer_interaction.selected);
+                let roots = doc.layer_roots(self.selected_layers());
                 let id = doc.artwork.occurrences.next_handle();
                 let edit = doc.group_layers_edit(&roots, self.new_group_blend(), self.numbered_document_name(MessageId::DOCUMENTS_GROUP_NAME, occurrence_token(id))).map_err(error)?;
                 let mut working = doc.working.clone();
                 working.occurrence = Some(id); working.target = None; working.inspect_mask = None;
+                working.layer_selection = BTreeSet::from([id]); working.layer_anchor = Some(id);
                 self.layer_edit(Edit::Batch(vec![edit, Edit::Working(working)]))?;
-                self.layer_interaction.selected = BTreeSet::from([id]);
             }
             LayerAction::Ungroup { id } => {
                 let id = occurrence_handle(id)?;
                 let doc = self.engine.document();
-                let children = doc.scene().children(Some(id)).iter().copied().collect();
                 let edit = doc.ungroup_layer_edit(id).map_err(error)?;
                 self.layer_edit(edit)?;
-                self.layer_interaction.editing = self.engine.document().working.occurrence;
-                self.layer_interaction.selected = children;
                 self.layer_interaction.collapsed.remove(&id);
             }
             LayerAction::Flatten => self.bake(layer_core::MergeKind::Flatten)?,
             LayerAction::DeleteSelected => {
-                let doc = self.engine.document();
-                self.layer_edit(doc.delete_layers_edit(&doc.layer_roots(&self.layer_interaction.selected)).map_err(error)?)?;
+                self.layer_edit(self.layer_deletion_edit(self.selected_layers()).map_err(error)?)?;
             }
             LayerAction::CopyMask { id } => {
                 let doc = self.engine.document();
                 let (mask, source) = doc.scene().mask(occurrence_handle(id)?).ok_or("No mask")?;
                 let snapshot = CoverageSnapshot { target: mask.source, source: source.clone(), use_: mask.clone() };
-                self.layer_interaction.clipboard_mask = Some((snapshot, doc.target_offset(SourceTarget::Coverage(mask.source))));
+                self.layer_interaction.clipboard_mask = Some((snapshot, doc.target_geometry(SourceTarget::Coverage(mask.source))));
             }
             LayerAction::PasteMask { id } => {
                 let handle = occurrence_handle(id)?;
                 let mut layer = self.editable_layer(id)?;
-                let (mut snapshot, origin) = self.layer_interaction.clipboard_mask.clone().ok_or("Copy a mask first")?;
+                let mask = self.copied_mask_use(handle)?;
+                let (snapshot, _) = self.layer_interaction.clipboard_mask.as_ref().ok_or("Copy a mask first")?;
                 let doc = self.engine.document();
-                let parent = doc.scene().parent(handle).map_or(Point::default(), |id| doc.layer_offset(id));
-                let source = RecordChange::insert(&doc.artwork.coverage, snapshot.source);
-                snapshot.use_.source = source.handle;
-                snapshot.use_.translation = Point { x: origin.x - parent.x, y: origin.y - parent.y };
-                layer.mask = Some(snapshot.use_);
+                let source = RecordChange::insert(&doc.artwork.coverage, snapshot.source.clone());
+                layer.mask = Some(layer_core::authored::MaskUse { source: source.handle, ..mask });
                 let mut working = doc.working.clone();
                 working.occurrence = Some(handle); working.target = Some(SourceTarget::Coverage(source.handle)); working.inspect_mask = None;
+                working.layer_selection = BTreeSet::from([handle]); working.layer_anchor = Some(handle);
                 let mut edits = vec![Edit::Coverage(source), self.occurrence_change(handle, layer)?, Edit::Working(working)];
                 if let Some(previous) = doc.scene().occurrence(handle).and_then(|o| o.mask.as_ref())
                     && !doc.artwork.occurrences.iter().any(|(h, _, o)| h != handle && o.mask.as_ref().is_some_and(|mask| mask.source == previous.source)) {
@@ -778,6 +873,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 }
             }
             LayerAction::New { group, clipped } => {
+                if group && !clipped && self.selected_layers().len() > 1 {
+                    return self.layer_action(LayerAction::GroupSelected);
+                }
                 self.return_to_artwork()?;
                 let doc = self.engine.document();
                 let scene = doc.scene();
@@ -807,9 +905,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 layer.attachment = if clipped { Attachment::Clip } else { Attachment::None };
                 let mut working = doc.working.clone();
                 working.occurrence = Some(id); working.target = match layer.content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), _ => None }; working.inspect_mask = None;
+                working.layer_selection = BTreeSet::from([id]); working.layer_anchor = Some(id);
                 stack.entries.insert(index, id);
                 edits.extend([Edit::Occurrence(RecordChange::insert(&doc.artwork.occurrences, layer)), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, stack_handle, Some(stack))?), Edit::Working(working)]);
                 self.layer_edit(Edit::Batch(edits))?;
+                if let Some(parent) = parent { self.layer_interaction.collapsed.remove(&parent); }
             }
             LayerAction::Select { id, mask } => {
                 let handle = occurrence_handle(id)?;
@@ -824,19 +924,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 working.occurrence = Some(handle);
                 working.target = if mask { Some(SourceTarget::Coverage(layer.mask.as_ref().ok_or("No mask")?.source)) } else { doc.scene().source_target(handle) };
                 working.inspect_mask = None;
+                working.layer_selection = BTreeSet::from([handle]);
+                working.layer_anchor = Some(handle);
                 self.layer_edit(Edit::Working(working))?;
-                self.layer_interaction.selected = BTreeSet::from([handle]);
             }
+            LayerAction::SelectRow { id, extend, toggle } => self.select_layer_row(id, extend, toggle)?,
             LayerAction::ToggleSelection { id } => {
-                let id = occurrence_handle(id)?;
-                self.engine.document().scene().occurrence(id).ok_or("Unknown layer")?;
-                if !self.layer_interaction.selected.remove(&id) { self.layer_interaction.selected.insert(id); }
+                self.select_layer_row(id, false, true)?;
             }
             LayerAction::ReferenceSelection => {
                 let targets = self.reference_selection();
                 let mut references = self.engine.document().scene().references();
                 if self.reference_action_removes() { references.retain(|id| !targets.contains(id)); }
-                else { references.extend(targets); self.layer_interaction.selected = self.engine.document().working.occurrence.into_iter().collect(); }
+                else { references.extend(targets); self.set_selected_layers(self.engine.document().working.occurrence.into_iter().collect())?; }
                 self.set_references(references)?;
             }
             LayerAction::Tool { tool } => {
@@ -897,7 +997,19 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Collapse { id } => {
                 let id = occurrence_handle(id)?;
-                if !self.layer_interaction.collapsed.remove(&id) { self.layer_interaction.collapsed.insert(id); }
+                if !self.engine.document().scene().occurrence(id).is_some_and(|o| o.kind() == LayerKind::Group) { return Err("Choose a group".into()); }
+                if !self.layer_interaction.collapsed.remove(&id) {
+                    self.layer_interaction.collapsed.insert(id);
+                    let doc = self.engine.document();
+                    let mut working = doc.working.clone();
+                    let concealed = working.layer_selection.iter().any(|h| self.layer_interaction.hidden_by_group(doc, *h));
+                    working.layer_selection.retain(|h| !self.layer_interaction.hidden_by_group(doc, *h));
+                    if working.occurrence.is_some_and(|h| self.layer_interaction.hidden_by_group(doc, h)) {
+                        working.occurrence = Some(id); working.target = None; working.inspect_mask = None;
+                    }
+                    if concealed || working.occurrence == Some(id) { working.layer_selection.insert(id); working.layer_anchor = Some(id); }
+                    self.layer_edit(Edit::Working(working))?;
+                }
             }
             LayerAction::Lock { id, value } => {
                 let id = occurrence_handle(id)?;
@@ -916,24 +1028,29 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerAction::SoloSelected => {
                 let doc = self.engine.document();
                 let scene = doc.scene();
-                let next: Vec<_> = if let Some(previous) = self.layer_interaction.solo.take() {
-                    previous.into_iter().filter(|(id, _)| scene.occurrence(*id).is_some()).collect()
+                let mut snapshot = None;
+                let next: Vec<_> = if let Some(previous) = &doc.working.solo_visibility {
+                    previous.iter().filter(|(id, _)| scene.occurrence(**id).is_some()).map(|(id, value)| (*id, *value)).collect()
                 } else {
-                    let roots = doc.layer_roots(&self.layer_interaction.selected);
+                    let roots = doc.layer_roots(self.selected_layers());
                     if roots.is_empty() { return Err("Select layers first".into()); }
-                    self.layer_interaction.solo = Some(scene.order().iter().map(|id| (*id, scene.occurrence(*id).unwrap().visible)).collect());
+                    snapshot = Some(scene.order().iter().map(|id| (*id, scene.occurrence(*id).unwrap().visible)).collect());
                     let mut keep = doc.composition_members(&roots);
+                    let mut reveal: BTreeSet<_> = roots.iter().copied().collect();
                     for id in roots {
                         let mut parent = scene.parent(id);
-                        while let Some(p) = parent { keep.insert(p); parent = scene.parent(p); }
+                        while let Some(p) = parent { keep.insert(p); reveal.insert(p); parent = scene.parent(p); }
                     }
-                    scene.order().iter().map(|id| (*id, keep.contains(id))).collect()
+                    scene.order().iter().map(|id| (*id, keep.contains(id) && (reveal.contains(id) || scene.occurrence(*id).unwrap().visible))).collect()
                 };
-                self.layer_edit(self.visibility_edit(next)?)?;
+                let Edit::Batch(mut edits) = self.visibility_edit(next)? else { unreachable!() };
+                let Some(Edit::Working(working)) = edits.last_mut() else { unreachable!() };
+                working.solo_visibility = snapshot;
+                self.layer_edit(Edit::Batch(edits))?;
             }
             a @ (LayerAction::Duplicate { .. } | LayerAction::DuplicateSelected) => {
                 let doc = self.engine.document();
-                let roots = if let LayerAction::Duplicate { id } = a { vec![occurrence_handle(id)?] } else { doc.layer_roots(&self.layer_interaction.selected) };
+                let roots = if let LayerAction::Duplicate { id } = a { vec![occurrence_handle(id)?] } else { doc.layer_roots(self.selected_layers()) };
                 let (edit, copies) = doc.duplicate_layers_edit(&roots).map_err(error)?;
                 let mut candidate = doc.clone(); candidate.apply(edit.clone()).map_err(error)?;
                 let mut edits = vec![edit];
@@ -944,13 +1061,14 @@ impl<R: CanvasRenderer> UiSession<R> {
                     edits.push(Edit::Occurrence(RecordChange::replace(&candidate.artwork.occurrences, *id, Some(copy))?));
                 }
                 let root = *copies.first().ok_or("Select layers first")?;
-                edits.push(candidate.select_occurrence_edit(root).map_err(error)?);
+                let mut working = candidate.working.clone();
+                working.occurrence = Some(root); working.target = candidate.scene().source_target(root); working.inspect_mask = None;
+                working.layer_selection = copies.into_iter().collect(); working.layer_anchor = Some(root);
+                edits.push(Edit::Working(working));
                 self.layer_edit(Edit::Batch(edits))?;
-                self.layer_interaction.editing = Some(root);
-                self.layer_interaction.selected = copies.into_iter().collect();
             }
             LayerAction::Delete { id } => {
-                let edit = self.engine.document().delete_layers_edit(&[occurrence_handle(id)?]).map_err(error)?;
+                let edit = self.layer_deletion_edit(&BTreeSet::from([occurrence_handle(id)?])).map_err(error)?;
                 self.layer_edit(edit)?;
             }
             LayerAction::Reparent { id, parent, index } => {
@@ -1142,7 +1260,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let locked = doc.is_locked(handle);
         let paint = l.kind() == LayerKind::Paint;
         let controls = LayerControls::for_layer(doc, handle, l);
-        let roots = doc.layer_roots(&self.layer_interaction.selected);
+        let roots = doc.layer_roots(self.selected_layers());
         let multiple = roots.len() > 1;
         let parent = if l.kind() == LayerKind::Group {
             Some(handle)
@@ -1154,19 +1272,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::RepairSourceProfile { .. } | A::RasterizeSource { .. } => self.can_edit_original(handle) && !self.state.document_file.busy,
                 A::GroupSelected => doc.group_layers_edit(&roots, LayerBlend::Normal, "").is_ok(),
                 A::Ungroup { .. } => doc.ungroup_layer_edit(handle).is_ok(),
-                A::DeleteSelected => doc.can_delete_layers(&roots),
-                A::Delete { .. } => doc.can_delete_layers(&[handle]),
-                A::DuplicateSelected => {
-                    !roots.is_empty()
-                        && roots.iter().all(|id| {
-                            doc.scene().occurrence(*id).is_some()
-                        })
-                }
-                A::Duplicate { .. } | A::Select { .. } | A::ShowMask { .. } => true,
+                A::DeleteSelected => self.can_delete_layer_rows(self.selected_layers()),
+                A::Delete { .. } => self.can_delete_layer_rows(&BTreeSet::from([handle])),
+                A::DuplicateSelected => doc.duplicate_layers_edit(&roots).is_ok(),
+                A::Duplicate { .. } => doc.duplicate_layers_edit(&[handle]).is_ok(),
+                A::Select { .. } | A::ShowMask { .. } => true,
                 A::CopyMask { .. } => l.mask.is_some(),
                 A::PasteMask { .. } => {
-                    !locked && self.layer_interaction.clipboard_mask.is_some()
+                    !locked && self.copied_mask_use(handle).is_ok()
                 }
+                A::New { group: true, clipped: false } if self.selected_layers().len() > 1 => doc.group_layers_edit(&roots, self.new_group_blend(), "").is_ok(),
                 A::New { clipped, .. } => {
                     !parent.is_some_and(|p| doc.is_locked(p))
                         && (!clipped
@@ -1192,7 +1307,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | A::ShowParents { .. }
                 | A::ShowAll
                 | A::SelectAllLayers { .. } => true,
-                A::SoloSelected => !roots.is_empty() || self.layer_interaction.solo.is_some(),
+                A::SoloSelected => !roots.is_empty() || doc.working.solo_visibility.is_some(),
                 _ => !locked,
             };
             let mut item = ContextMenuItem::command(label, UiAction::Layer { action });
@@ -1327,7 +1442,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 check(
                     self.localization().text(MessageId::RESOURCES_LAYER_MENU_ISOLATE_SELECTED_LAYERS).as_ref(),
                     A::SoloSelected,
-                    self.layer_interaction.solo.is_some(),
+                    doc.working.solo_visibility.is_some(),
                 ),
                 item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_ALL_LAYERS).as_ref(), A::ShowAll),
             ]];
@@ -1381,7 +1496,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 destructive.push(item(CommandId::ClearLayer.localized_label(self.localization()).as_ref(), A::Clear { id }));
             }
             destructive.push(item(
-                self.localization().text(if multiple { MessageId::RESOURCES_LAYER_MENU_DELETE_SELECTED_LAYERS } else if l.kind() == LayerKind::Group { MessageId::RESOURCES_LAYER_MENU_DELETE_GROUP_AND_CONTENTS } else { MessageId::COMMAND_DELETE_LAYER }).as_ref(),
+                self.localization().text(if multiple { MessageId::RESOURCES_LAYER_MENU_DELETE_SELECTED_LAYERS } else if l.kind() == LayerKind::Group && self.layer_interaction.collapsed.contains(&handle) { MessageId::RESOURCES_LAYER_MENU_DELETE_GROUP_AND_CONTENTS } else { MessageId::COMMAND_DELETE_LAYER }).as_ref(),
                 if multiple {
                     A::DeleteSelected
                 } else {
@@ -1450,8 +1565,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if mask { sections.push(vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_PIXEL_SELECTION).as_ref(),vec![self.coverage_menu_items(id,true)])]); }
         if l.kind() == LayerKind::Group {
             sections.insert(0, vec![
-                ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_SELECTION_LAYER_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: false } }),
-                ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SAVE_CURRENT_SELECTION_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }),
+                ContextMenuItem { enabled: !locked, ..ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_SELECTION_LAYER_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: false } }) },
+                ContextMenuItem { enabled: !locked && self.current_selection().is_some(), ..ContextMenuItem::command(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SAVE_CURRENT_SELECTION_IN_GROUP).as_ref(), UiAction::Selection { action: SelectionAction::NewLayer { parent: Some(id), save_current: true } }) },
             ]);
         }
         Ok(sections)

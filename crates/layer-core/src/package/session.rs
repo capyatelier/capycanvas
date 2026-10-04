@@ -2,7 +2,7 @@ use super::{archive::{self, Directory, InputMember, Member}, artwork_records, ma
 use crate::{authored::{Artwork, ArtworkCapture, CaptureCheckpoint, Handle, OccurrenceHandle, PortableId, SourceTarget, Support, WorkingState}, Document, Edit, Editor, HistoryEntry, ProjectLimits};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+use std::{collections::{BTreeMap, BTreeSet}, io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Clone, Debug)]
 pub struct EditorCapture {
@@ -68,17 +68,18 @@ fn active(cancel:&AtomicBool)->Result<(),String> {if cancel.load(Ordering::Relax
 #[serde(deny_unknown_fields)]
 pub(crate) struct WorkingRecord {
     pub(crate) generation:u64, selection:Option<Value>, selection_visibility:BTreeMap<OccurrenceHandle,bool>,
+    layer_selection:BTreeSet<OccurrenceHandle>,layer_anchor:Option<OccurrenceHandle>,solo_visibility:Option<BTreeMap<OccurrenceHandle,bool>>,
     occurrence:Option<OccurrenceHandle>,target:Option<SourceTarget>,inspect_mask:Option<OccurrenceHandle>,
 }
 impl WorkingRecord {
     pub(crate) fn capture(working:&WorkingState,resources:&mut ResourceInventory)->Result<Self,String> {
-        let WorkingState {generation,selection,selection_visibility,occurrence,target,inspect_mask}=working;
+        let WorkingState {generation,selection,selection_visibility,layer_selection,layer_anchor,solo_visibility,occurrence,target,inspect_mask}=working;
         Ok(Self {generation:*generation,selection:selection.as_ref().map(|s|selection_records::encode_selection(s,resources)).transpose()?,
-            selection_visibility:selection_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask})
+            selection_visibility:selection_visibility.clone(),layer_selection:layer_selection.clone(),layer_anchor:*layer_anchor,solo_visibility:solo_visibility.clone(),occurrence:*occurrence,target:*target,inspect_mask:*inspect_mask})
     }
     pub(crate) fn decode(&self,reader:&mut ResourceReader<'_>)->Result<WorkingState,String> {
         Ok(WorkingState {generation:self.generation,selection:self.selection.as_ref().map(|s|selection_records::decode_selection(s,reader)).transpose().map_err(|e|e.to_string())?,
-            selection_visibility:self.selection_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask})
+            selection_visibility:self.selection_visibility.clone(),layer_selection:self.layer_selection.clone(),layer_anchor:self.layer_anchor,solo_visibility:self.solo_visibility.clone(),occurrence:self.occurrence,target:self.target,inspect_mask:self.inspect_mask})
     }
 }
 const RASTER_INDEX_CHUNK:usize=64;

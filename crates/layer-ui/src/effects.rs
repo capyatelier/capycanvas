@@ -1080,19 +1080,19 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let generator = catalog.program.kind == layer_core::EffectKind::Generator;
                 let doc = self.engine.document();
                 let scene = doc.scene();
-                let current = doc.working.occurrence.ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
-                let occurrence = scene.occurrence(current).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
-                let replacing = choosing && scene.effect(current).is_some_and(|effect| effect.program.kind == catalog.program.kind);
+                let current = doc.working.occurrence;
+                let occurrence = current.and_then(|id| scene.occurrence(id));
+                let replacing = choosing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.kind == catalog.program.kind);
                 let masked = !replacing && doc.working.selection.is_some();
-                if replacing && doc.is_locked(current) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
-                if replacing && scene.effect(current).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
-                let attaches=choosing && scene.eligible_target(current) && occurrence.attachment==layer_core::Attachment::Clip;
-                let top = if choosing && (replacing || generator || attaches) { current }
-                    else { doc.clipping_stack_top(current).ok_or("Missing clipping stack")? };
-                let parent = scene.parent(current);
-                let stack_handle = scene.stack(top).ok_or("Missing containing stack")?;
+                if replacing && doc.is_locked(current.unwrap()) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
+                if replacing && current.and_then(|id| scene.effect(id)).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
+                let attaches=choosing && current.is_some_and(|id| scene.eligible_target(id)) && occurrence.is_some_and(|o| o.attachment==layer_core::Attachment::Clip);
+                let top = current.map(|id| if choosing && (replacing || generator || attaches) { id } else { doc.clipping_stack_top(id).unwrap_or(id) });
+                let parent = current.and_then(|id| scene.parent(id));
+                if !replacing && parent.is_some_and(|id| doc.is_locked(id)) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
+                let stack_handle = top.and_then(|id| scene.stack(id)).unwrap_or(doc.composition().result);
                 let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
-                let index = stack.entries.iter().position(|handle| *handle == top).ok_or("Missing insertion position")?;
+                let index = top.and_then(|id| stack.entries.iter().position(|handle| *handle == id)).unwrap_or(0);
                 let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
                 let depth = doc.composition().color.depth;
                 let mut instance = EffectInstance::new(catalog.program());
@@ -1107,16 +1107,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
                     let handle = change.handle; edits.push(Edit::Definition(change)); handle
                 };
-                let application = EffectApplication {definition, values: instance.values, domain: if replacing {scene.local_extent(current)} else {doc.composition().size}};
+                let application = EffectApplication {definition, values: instance.values, domain: if replacing {scene.local_extent(current.unwrap())} else {doc.composition().size}};
                 let effect_handle = if replacing {
-                    let handle = scene.effect_handle(current).ok_or("Missing adjustment")?;
+                    let handle = scene.effect_handle(current.unwrap()).ok_or("Missing adjustment")?;
                     edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
                     handle
                 } else {
                     let change = RecordChange::insert(&doc.artwork.effects, application);
                     let handle = change.handle; edits.push(Edit::Effect(change)); handle
                 };
-                let mut occurrence = if replacing { occurrence.clone() } else {
+                let mut occurrence = if replacing { occurrence.unwrap().clone() } else {
                     let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
                     value.attachment = if choosing && generator {insertion_attachment} else if attaches {
                         layer_core::Attachment::Effect
@@ -1124,11 +1124,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 occurrence.content = OccurrenceContent::Effect(effect_handle);
                 if masked {
-                    let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current) } else { doc.composition().size })?;
+                    let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current.unwrap()) } else { doc.composition().size })?;
                     edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
                 }
                 let handle = if replacing {
-                    edits.push(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, current, Some(occurrence)).map_err(str::to_string)?)); current
+                    edits.push(Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, current.unwrap(), Some(occurrence)).map_err(str::to_string)?)); current.unwrap()
                 } else {
                     let change = RecordChange::insert(&doc.artwork.occurrences, occurrence);
                     let handle = change.handle; edits.push(Edit::Occurrence(change));
@@ -1137,6 +1137,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let mut working = doc.working.clone();
                 working.occurrence = Some(handle); working.target = None; working.inspect_mask = None;
+                working.layer_selection = [handle].into(); working.layer_anchor = Some(handle);
                 if masked { working.selection = None; }
                 edits.push(Edit::Working(working));
                 self.layer_edit(Edit::Batch(edits))?;

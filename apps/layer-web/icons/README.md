@@ -56,6 +56,10 @@ the dots' bounds to pixels: one column at x=8 for `more-small`, two at x=5 and 1
 for `grip`. The workspace switcher and Layers footer share `more-small`;
 full-height controls use `more`, with 4px dots and 16px-tall artwork. Render all
 grab handles in a 16px box so their dots retain the same size in every context.
+The Layers mask button uses `link` for a vertical connected chain and `unlink`
+for separated links. Both use a narrow 12px box and the same foreground color;
+link state is conveyed by the shape, while disabled controls use the host's
+normal disabled styling.
 Keep ordinary SVG fill/stroke attributes authoritative. Existing symbolic classes
 remain for compatibility, but GTK's production renderer reads the vectors through
 [GtkSvg](https://docs.gtk.org/gtk4/class.Svg.html), without traditional symbolic

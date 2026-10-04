@@ -64,8 +64,8 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     Arc::make_mut(&mut photo.artwork.metadata).xmp = Some(b"<x:xmpmeta xmlns:x=\"adobe:ns:meta/\"/>".as_slice().into());
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() },
         photo, [800, 600], Platform::Gtk).unwrap();
-    session.layer_interaction.selected = session.engine.document().scene().order().iter().copied().collect();
-    let selected = session.layer_interaction.selected.clone();
+    session.set_selected_layers(session.engine.document().scene().order().iter().copied().collect()).unwrap();
+    let selected = session.engine.document().working.layer_selection.clone();
     let original = session.engine.document().clone();
     assert!(session.place_layer_sources(vec![("First".into(), first.clone()), ("bad\nname".into(), second.clone())],
         None, None).is_err());
@@ -76,7 +76,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     let ids: Vec<_> = doc.scene().order()[..2].to_vec();
     assert_eq!(session.engine.backend().moving_layer, doc.working.occurrence);
     assert_eq!(ids.iter().map(|h| doc.scene().occurrence(*h).unwrap().name.as_ref()).collect::<Vec<_>>(), ["First", "Second"]);
-    assert_eq!(session.layer_interaction.selected, ids.iter().copied().collect());
+    assert_eq!(session.engine.document().working.layer_selection, ids.iter().copied().collect());
     assert!(!session.engine.can_undo());
     let before: Vec<_> = ids.iter().map(|h| doc.scene().occurrence(*h).unwrap().clone()).collect();
     let sources: Vec<_> = ids.iter().map(|h| doc.scene().paint_source(*h).unwrap().clone()).collect();
@@ -105,7 +105,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     invoke(&mut session, CommandId::CancelTransform);
     assert_eq!(session.engine.backend().moving_layer, None);
     assert_live_artwork_eq(session.engine.document(), &original);
-    assert_eq!(session.layer_interaction.selected, selected);
+    assert_eq!(session.engine.document().working.layer_selection, selected);
     assert!(!session.engine.can_undo());
 
     session.place_layer_sources(images(), None, None).unwrap();
@@ -205,12 +205,12 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     doc.artwork.occurrences.get_mut(doc.working.occurrence.unwrap()).unwrap().locked = true;
     let mut session = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
     let before = session.engine.document().clone();
-    let selected = session.layer_interaction.selected.clone();
+    let selected = session.engine.document().working.layer_selection.clone();
     let tool = session.layer_interaction.tool;
     assert!(session.begin_layer_placement(None).is_err());
     assert!(!session.operation.active());
     assert_eq!(session.layer_interaction.tool, tool);
-    assert_eq!(session.layer_interaction.selected, selected);
+    assert_eq!(session.engine.document().working.layer_selection, selected);
     assert_eq!(session.engine.document(), &before);
     assert!(session.capture_artwork().is_ok(), "failed start must not block Save/recovery");
 }

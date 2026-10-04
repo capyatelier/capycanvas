@@ -19,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.selected
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -33,6 +34,10 @@ import androidx.compose.ui.graphics.drawscope.translate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.isShiftPressed as keyShiftPressed
+import androidx.compose.ui.input.key.isCtrlPressed as keyCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed as keyMetaPressed
 import androidx.compose.ui.input.pointer.PointerType
 import androidx.compose.ui.input.pointer.PointerEventPass
 import androidx.compose.ui.input.pointer.isSecondaryPressed
@@ -289,12 +294,16 @@ internal class LayerSwipe {
         if((!focused || !layer.optBoolean("can_delete")) && swipe.owner===swipeOwner)swipe.close()
     }
     val density=LocalDensity.current.density
-    fun select(mask:Boolean=false) = host.layer(obj("op" to "select","id" to id,"mask" to mask))
+    var extendSelection by remember { mutableStateOf(false) }
+    var toggleSelection by remember { mutableStateOf(false) }
+    fun select(toggle:Boolean=toggleSelection) = host.layer(obj("op" to "select_row","id" to id,"extend" to extendSelection,"toggle" to toggle))
     fun openContext(mask:Boolean) {
         if (!focused || (contactActive && !contactMenus)) return
         if (!contactActive || (holdEligible && !longPressed)) { longPressed=true; context(mask,origin+press) }
     }
-    Box(modifier.semantics { contentDescription = rowCaption }.fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned {
+    Box(modifier.onPreviewKeyEvent {
+            extendSelection=it.keyShiftPressed; toggleSelection=it.keyCtrlPressed || it.keyMetaPressed; false
+        }.semantics { contentDescription = rowCaption }.fillMaxWidth().heightIn(min=40.dp).clipToBounds().then(if(preview) Modifier else Modifier.testTag("layer-row-$id")).onGloballyPositioned {
             rowBounds=it.boundsInRoot(); origin=rowBounds.topLeft
             if(swipe.owner===swipeOwner)swipe.bounds=rowBounds
         }
@@ -307,7 +316,9 @@ internal class LayerSwipe {
             if (!focused) return@pointerInput
             awaitEachGesture {
                 val down=awaitFirstDown(requireUnconsumed=false,pass=PointerEventPass.Initial); press=down.position
-                if (currentEvent.keyboardModifiers.isCtrlPressed || currentEvent.keyboardModifiers.isMetaPressed) return@awaitEachGesture
+                extendSelection=currentEvent.keyboardModifiers.isShiftPressed
+                toggleSelection=currentEvent.keyboardModifiers.isCtrlPressed || currentEvent.keyboardModifiers.isMetaPressed
+                if (toggleSelection) return@awaitEachGesture
                 longPressed=false
                 contactActive=true
                 holdEligible=true
@@ -386,12 +397,13 @@ internal class LayerSwipe {
         LayerButton(host,if(layer.getBoolean("visible") && !layer.getBoolean("visibility_blocked")) "eye" else "eye-hidden",if(layer.optBoolean("selection_layer"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("visible")) "hide_selection" else "show_selection") else if(layer.getBoolean("visible"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("hide") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("show"),
             Modifier.testTag("layer-eye-$id").alpha(if(layer.getBoolean("visibility_blocked")) .35f else 1f),action=obj("type" to "set_layer_visibility","id" to id,"visible" to !layer.getBoolean("visible")))
         LayerButton(host,iconName(layer.getString("selection_icon")),host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("select_row_help"),
-            action=obj("type" to "layer","action" to obj("op" to "toggle_selection","id" to id)))
+            Modifier.semantics { selected=layer.getBoolean("selected") },
+            action=obj("type" to "layer","action" to obj("op" to "select_row","id" to id,"extend" to extendSelection,"toggle" to true)),onClick={select(true)})
         Spacer(Modifier.width((layer.getInt("depth")*8).coerceAtMost(24).dp))
         Spacer(Modifier.width(3.dp))
         @Composable fun thumb(mask:Boolean) {
             val group=!mask && layer.getBoolean("group")
-            val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("editing") && !layer.getBoolean("mask_selected")
+            val selected=if(mask)layer.getBoolean("mask_selected") else layer.getBoolean("content_selected")
             val operation=if(group)obj("op" to "collapse","id" to id) else obj("op" to "select","id" to id,"mask" to mask)
             val label=if(group) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse") else if(mask) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_mask") else if(layer.optBoolean("selection_layer")) host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_selection") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("edit_content")
             ActionTip(host,label,obj("type" to "layer","action" to operation),Modifier.size(30.dp).then(if(!mask && !preview) Modifier.testTag("layer-content-$id").onGloballyPositioned { contentBounds(it.boundsInRoot(),shift) } else Modifier)) {
@@ -446,8 +458,8 @@ internal class LayerSwipe {
             LayerButton(host,"selection-load",layer.getString("load_selection_tooltip"),Modifier.testTag("selection-load-$id"),action=load,size=30.dp)
         }
         if(layer.getBoolean("has_mask")) {
-            LayerButton(host,"link",if(layer.getBoolean("mask_linked"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("unlink_mask") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("link_mask_to_layer"),
-                Modifier.size(12.dp,24.dp).alpha(if(layer.getBoolean("mask_linked"))1f else .35f),
+            LayerButton(host,if(layer.getBoolean("mask_linked"))"link" else "unlink",if(layer.getBoolean("mask_linked"))host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("unlink_mask") else host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("link_mask_to_layer"),
+                Modifier.size(12.dp,24.dp),enabled=!layer.getBoolean("locked"),
                 action=obj("type" to "layer","action" to obj("op" to "link_mask","id" to id,"value" to !layer.getBoolean("mask_linked"))))
             thumb(true)
         }
@@ -463,7 +475,7 @@ internal class LayerSwipe {
             } else Text(layer.getString("label"),Modifier.combinedClickable(onClick={select()},onDoubleClick={if(layer.optBoolean("can_rename"))host.layer(obj("op" to "begin_rename","id" to id))},onLongClick={openContext(false)}),
                 maxLines=1,overflow=TextOverflow.Ellipsis)
             val meta=layer.getString("description")
-            if(meta.isNotEmpty())Text(meta,color=colors.secondary,maxLines=1,overflow=TextOverflow.Ellipsis)
+            if(meta.isNotEmpty())Text(meta,color=colors.secondary,fontSize=LocalTextStyle.current.fontSize*.83333f,lineHeight=LocalTextStyle.current.lineHeight*.83333f,maxLines=1,overflow=TextOverflow.Ellipsis)
         }
         SharedIcon(if(layer.getBoolean("locked"))"lock" else "alpha-lock",null,Modifier.size(12.dp).alpha(if(layer.getBoolean("locked") || layer.getBoolean("alpha_locked"))1f else 0f))
         SharedIcon("grip",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("move_layer"),Modifier.size(16.dp).alpha(if(layer.getBoolean("can_drop_below")) .6f else 0f))

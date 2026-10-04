@@ -285,7 +285,7 @@ fn source_frame(doc: &Document, target: OccurrenceHandle) -> Rect {
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn transform_roots(&self) -> Vec<OccurrenceHandle> {
         let doc = self.engine.document();
-        let roots = doc.layer_roots(&self.layer_interaction.selected);
+        let roots = doc.layer_roots(self.selected_layers());
         if roots.is_empty() { doc.working.occurrence.into_iter().collect() } else { roots }
     }
     pub(super) fn retained_transforming(&self) -> bool {
@@ -344,13 +344,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// selected pixels.
     pub(super) fn move_refusal(&self) -> Option<&'static str> {
         let doc = self.engine.document();
+        if self.retained_transforming() {
+            return doc.retained_transform_targets(&self.transform_roots()).err().map(|reason| match reason {
+                layer_core::DocumentError::ProtectedOccurrence(h) if Some(h) == doc.working.occurrence => "The active layer is locked",
+                _ => "The selected layers cannot be moved together",
+            });
+        }
         let handle = doc.working.occurrence?;
         let layer = doc.scene().occurrence(handle)?;
         if doc.is_locked(handle) {
             Some("The active layer is locked")
         } else if !self.moves_selected_pixels() {
-            (!matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && doc.retained_transform_targets(&self.transform_roots()).is_err())
-                .then_some("The selected layers cannot be moved together")
+            None
         } else if !matches!(doc.working.target, Some(SourceTarget::Coverage(_))) && layer.kind() != LayerKind::Paint {
             Some("Choose a paint layer or a mask to move selected pixels")
         } else if !self.can_transform() {

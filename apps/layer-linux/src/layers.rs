@@ -303,7 +303,7 @@ fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
     }
     UiAction::Layer {
         action: match kind {
-            1 => A::ToggleSelection { id: row.id },
+            1 => A::SelectRow { id: row.id, extend: false, toggle: true },
             2 if row.group => A::Collapse { id: row.id },
             2 => A::Select {
                 id: row.id,
@@ -577,6 +577,17 @@ impl LayerPanel {
                         }
                     ));
                 }
+                let range = gtk::GestureClick::new();
+                range.set_button(1);
+                range.set_propagation_phase(gtk::PropagationPhase::Capture);
+                range.connect_released(glib::clone!(#[weak] item, #[strong] owner, move |gesture,_,_,_| {
+                    if !gesture.current_event_state().contains(gdk::ModifierType::SHIFT_MASK) { return; }
+                    let Some(row) = row_state(&item) else { return; };
+                    let Some(w) = owner.borrow().upgrade() else { return; };
+                    gesture.set_state(gtk::EventSequenceState::Claimed);
+                    action(&w, A::SelectRow { id: row.id, extend: true, toggle: true });
+                }));
+                selection.add_controller(range);
                 for (button,is_mask) in [(&content,false),(&mask,true)] {
                     let load = gtk::GestureClick::new();
                     load.set_button(1);
@@ -603,7 +614,7 @@ impl LayerPanel {
                     root,
                     #[strong]
                     owner,
-                    move |_, _, x, y| {
+                    move |gesture, _, x, y| {
                         // Only empty space/text selects. Buttons and the rename
                         // entry keep their own actions, including touch checks.
                         let picked = root.pick(x, y, gtk::PickFlags::DEFAULT);
@@ -621,15 +632,12 @@ impl LayerPanel {
                         let Some(w) = owner.borrow().upgrade() else {
                             return;
                         };
-                        if !row.editing || !row.selected {
-                            action(
-                                &w,
-                                A::Select {
-                                    id: row.id,
-                                    mask: false,
-                                },
-                            );
-                        }
+                        let modifiers = gesture.current_event_state();
+                        action(&w, A::SelectRow {
+                            id: row.id,
+                            extend: modifiers.contains(gdk::ModifierType::SHIFT_MASK),
+                            toggle: modifiers.intersects(gdk::ModifierType::CONTROL_MASK | gdk::ModifierType::META_MASK),
+                        });
                     }
                 ));
                 root.add_controller(click);
@@ -1508,7 +1516,7 @@ impl Row {
             self.root.remove_css_class("selected");
         }
         self.content_frame
-            .set_visible(s.editing && !s.mask_selected);
+            .set_visible(s.content_selected);
         self.mask_frame.set_visible(s.mask_selected);
         let drawing_target = s.drawing;
         crate::icons::set_button(&self.selection, s.selection_icon);
@@ -1533,8 +1541,8 @@ impl Row {
         });
         self.link.set_visible(s.has_mask);
         self.mask.set_visible(s.has_mask);
-        crate::icons::set_button(&self.link, "layer-link-symbolic");
-        self.link.set_opacity(if s.mask_linked { 1. } else { 0.35 });
+        crate::icons::set_button(&self.link, if s.mask_linked { "layer-link-symbolic" } else { "layer-unlink-symbolic" });
+        self.link.set_sensitive(!s.locked);
         caption(&self.link, if s.mask_linked { copy.layer.unlink_mask.as_ref() } else { copy.layer.link_mask_to_layer.as_ref() });
         self.mask_image
             .set_opacity(if s.mask_enabled { 1. } else { 0.4 });

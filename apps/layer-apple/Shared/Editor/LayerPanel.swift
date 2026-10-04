@@ -289,7 +289,7 @@ private struct LayerRow: View {
                 perform { store.dispatch(["type": "set_layer_visibility", "id": id, "visible": !layer["visible"].bool]) }
             }.opacity(layer["visibility_blocked"].bool ? 0.35 : 1)
             LayerButton(icon: layer["selection_icon"].string, label: store.catalog["native_copy"]["layers"]["select_row_help"].string, height: 36) {
-                perform { store.layer(["op": "toggle_selection", "id": id]) }
+                selectRow(toggle: true)
             }.accessibilityAddTraits(layer["selected"].bool ? .isSelected : [])
             HStack(spacing: 2) {
                 Color.clear.frame(width: 3, height: 28)
@@ -300,9 +300,9 @@ private struct LayerRow: View {
                     }.frame(width: 30, height: 30).accessibilityIdentifier("selection-load-\(id)")
                 }
                 if layer["has_mask"].bool {
-                    LayerButton(icon: "link", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 12) {
+                    LayerButton(icon: layer["mask_linked"].bool ? "link" : "unlink", label: layer["mask_linked"].bool ? store.catalog["native_copy"]["layers"]["unlink_mask"].string : store.catalog["native_copy"]["layers"]["link_mask_to_layer"].string, size: 12) {
                         perform { store.layer(["op": "link_mask", "id": id, "value": !layer["mask_linked"].bool]) }
-                    }.foregroundStyle(palette["text"].opacity(layer["mask_linked"].bool ? 1 : 0.35))
+                    }.foregroundStyle(palette["text"]).disabled(layer["locked"].bool)
                     thumbnail(mask: true)
                 }
             }.padding(.leading, min(CGFloat(layer["depth"].uint) * 8, 24))
@@ -313,7 +313,7 @@ private struct LayerRow: View {
                 .modifier(LayerRowMeasurement(id: id, part: \.name, enabled: !preview))
                 .contentShape(Rectangle()).onTapGesture {
                     if store.state["layer_tools"]["rename_layer"].uint != id {
-                        perform { store.layer(["op": "select", "id": id, "mask": false]) }
+                        selectRow()
                     }
                 }
             SharedIcon(name: layer["locked"].bool ? "lock" : "alpha-lock", size: 12)
@@ -328,7 +328,7 @@ private struct LayerRow: View {
             .modifier(LayerRowMeasurement(id: id, part: \.swipe, enabled: !preview))
             .background((layer["selected"].bool ? surface.active : Color.clear)
                 .contentShape(Rectangle()).onTapGesture {
-                    perform { store.layer(["op": "select", "id": id, "mask": false]) }
+                    selectRow()
                 })
             .accessibilityElement(children: .contain)
             .accessibilityLabel(rowCaption)
@@ -382,7 +382,7 @@ private struct LayerRow: View {
             }.frame(width: 30, height: 30)
                 .background(!mask && (layer["group"].bool || layer["adjustment_effect"].bool) ? Color.clear : palette["input"], in: SquircleShape(3))
                 .overlay {
-                    if mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool {
+                    if mask ? layer["mask_selected"].bool : layer["content_selected"].bool {
                         TargetCorners().stroke(.white, lineWidth: 1).shadow(color: .black, radius: 1).allowsHitTesting(false)
                     }
                 }
@@ -393,8 +393,12 @@ private struct LayerRow: View {
             : layer["selection_layer"].bool ? store.catalog["native_copy"]["layers"]["edit_selection"].string : store.catalog["native_copy"]["layers"]["edit_content"].string)
             .accessibilityIdentifier("layer-thumbnail-\(id)-\(mask ? "mask" : "content")")
             .accessibilityValue(thumbnailCaptureStatus(mask: mask))
-            .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["editing"].bool && !layer["mask_selected"].bool) ? .isSelected : [])
+            .accessibilityAddTraits((mask ? layer["mask_selected"].bool : layer["content_selected"].bool) ? .isSelected : [])
             .modifier(LayerRowMeasurement(id: id, part: mask ? \.mask : \.content, enabled: !preview))
+    }
+    private func selectRow(toggle: Bool = false) {
+        let keys = ThumbnailSelectionLoad.modifiers()
+        perform { store.layer(["op": "select_row", "id": id, "extend": keys.shift, "toggle": toggle || keys.toggle]) }
     }
     private func perform(_ action: () -> Void) {
         guard !preview, interaction?.contact.consumeClick() != true else { return }

@@ -47,7 +47,7 @@ mod merge_checks {
         assert_eq!(baked(&mut s), [upper, lower]);
         let result = s.engine.document().working.occurrence.unwrap();
         assert_eq!(s.engine.document().scene().order().len(), 2);
-        assert_eq!(s.layer_interaction.selected, [result].into());
+        assert_eq!(s.engine.document().working.layer_selection, [result].into());
         assert!(s.engine.undo().unwrap());
         assert_live_artwork_eq(s.engine.document(), &before);
     }

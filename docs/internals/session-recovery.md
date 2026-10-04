@@ -25,6 +25,11 @@ stores. Incomplete gestures, previews, file requests and GPU handles are transie
 A pending manual save can checkpoint committed edits without acknowledging that
 save; active gestures and other file operations still block capture.
 
+Checked layer rows, their range-selection anchor and Solo's previous visibility
+state live in `WorkingState`. Private checkpoints retain them on both sides of
+structural edits and visibility changes, so restart and undo/redo restore the
+same checked rows and Solo toggle. Row navigation does not add an undo step.
+
 The [`private codec`](../../crates/layer-core/src/package/session.rs) shares the
 portable artwork record and resource adapters. It retains typed record identities,
 tombstones and checkpoint identities across history. Object versions, raster index

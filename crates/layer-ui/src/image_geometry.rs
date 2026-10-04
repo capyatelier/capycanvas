@@ -266,8 +266,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             return targets.into_iter().try_fold(Rect::EMPTY, |bounds, id|
                 Some(bounds.union(doc.target_geometry(id).forward_bounds(measured(id)?))));
         }
-        let bounds = measured(doc.active_target()?)?;
+        let target = targets.first().copied()?;
+        let bounds = measured(target)?;
         if bounds.is_empty() { return Some(bounds); }
+        if Some(target) != doc.active_target() { return Some(bounds); }
         let Some(companion) = self.bounds_companion() else { return Some(bounds); };
         let to = doc.affine_edit_transform(companion)?.then(doc.affine_edit_transform(doc.active_target()?)?.inverse()?);
         let other = measured(companion)?;

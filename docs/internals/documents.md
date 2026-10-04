@@ -50,7 +50,7 @@ shared extent planner when the real canvas changes.
 
 `retained_transform_targets` normalizes selected roots and checks every descendant
 before preview. `retained_transform_edit` composes one document-space delta into
-paint placement and independent masks, without moving group offsets or ordinary
+paint placement and linked group masks, without moving independent masks, group offsets or ordinary
 adjustment coordinates. Apply creates one history edit; canceled and unchanged
 transforms preserve both history directions. Mesh control roots are shared across
 document and history, charged once by the existing resource accounting.
@@ -85,12 +85,18 @@ clipping bases or effect owners. The shared group-mode edit retains the prior
 isolated blend and refuses Pass Through while these relationships need isolation.
 An explicit isolate-and-attach edit performs both changes in one undo step.
 
-New groups, from New Group and Group Selected Layers, are isolated Normal groups
-unless the [Use Pass Through for new groups](../ui/settings.md) preference is on.
+Empty new groups are isolated Normal groups unless the
+[Use Pass Through for new groups](../ui/settings.md) preference is on. Grouping
+existing rows uses Pass Through when their blend modes or standalone adjustments
+need the existing backdrop. Checked roots must share a parent; their displayed
+order is retained inside the new group.
 Ungroup keeps the image, so it needs a group at full opacity, with no mask and
 without clipping or attached effects or dependent clips, that is either Pass
 Through, holding any layers, or Normal, holding
-only Normal layers. A referenced adjustment inside a Pass Through group keeps what
+only Normal layers without standalone adjustments. Deleting an expanded group
+uses these same rules to preserve unchecked children; deleting a collapsed group
+includes its subtree. Unchecked clips and attached effects survive owner deletion
+as independent layers. A referenced adjustment inside a Pass Through group keeps what
 lies below the group in the reference composite.
 
 ### Blending

@@ -38,12 +38,36 @@ fn full_target_geometry_links_homographic_masks_and_refuses_only_nonlinear_write
 
 #[test]
 fn group_delta_preserves_raw_roots_and_linked_premaps_with_atomic_admission() {
+    for linked in [false,true] {
     let mut doc=fixture::document([128,96],&["Group","Ink"]);let paint=fixture::id(&doc,"Ink");let group=fixture::nest(&mut doc,"Group",&["Ink"]);fixture::occurrence_mut(&mut doc,"Group").translation=Point{x:10.,y:13.};
-    let mask=fixture::add_mask(&mut doc,group,[128,96],Point{x:7.,y:4.});fixture::occurrence_mut(&mut doc,"Group").mask.as_mut().unwrap().linked=false;
+    let mask=fixture::add_mask(&mut doc,group,[128,96],Point{x:7.,y:4.});fixture::occurrence_mut(&mut doc,"Group").mask.as_mut().unwrap().linked=linked;
     let old=doc.clone();let edit=doc.retained_transform_edit(&[group,paint],perspective()).unwrap();let mut editor=Editor::new(doc);editor.perform(edit).unwrap();
-    for target in [fixture::target(&old,"Ink"),SourceTarget::Coverage(mask)] {for p in [Point{x:20.,y:10.},Point{x:50.,y:40.}] {near(editor.document().target_geometry(target).map(p).unwrap(),perspective().map(old.target_geometry(target).map(p).unwrap()).unwrap());}}
+    for target in [fixture::target(&old,"Ink"),SourceTarget::Coverage(mask)] {for p in [Point{x:20.,y:10.},Point{x:50.,y:40.}] {let before=old.target_geometry(target).map(p).unwrap();near(editor.document().target_geometry(target).map(p).unwrap(),if target==SourceTarget::Coverage(mask)&&!linked{before}else{perspective().map(before).unwrap()});}}
     assert_eq!(fixture::paint(editor.document(),"Ink").raster,fixture::paint(&old,"Ink").raster);editor.undo().unwrap();let mut restored=editor.document().clone();restored.revision=old.revision;assert_eq!(restored,old);editor.redo().unwrap();
     let mut locked=old.clone();fixture::occurrence_mut(&mut locked,"Ink").locked=true;let before=locked.clone();assert!(locked.retained_transform_edit(&[group],perspective()).is_err());assert_eq!(locked,before);
+    }
+}
+
+#[test]
+fn retained_single_multi_and_nested_group_transforms_preserve_unlinked_masks() {
+    for mode in 0..3 {for linked in [false,true] {
+        let mut doc=fixture::document([128,96],&["Group","Ink","Other"]);
+        let paint=fixture::id(&doc,"Ink");let other=fixture::id(&doc,"Other");
+        let group=fixture::nest(&mut doc,"Group",&["Ink"]);
+        fixture::occurrence_mut(&mut doc,"Group").translation=Point{x:19.,y:-11.};
+        let mask=fixture::add_mask(&mut doc,paint,[64,48],Point{x:7.,y:4.});
+        fixture::occurrence_mut(&mut doc,"Ink").mask.as_mut().unwrap().linked=linked;
+        fixture::occurrence_mut(&mut doc,"Ink").placement.mesh=Some(Arc::new(MeshMap::identity(Rect::from_extent([128,96]),[3,3]).unwrap().move_node(5,Point{x:13.,y:8.}).unwrap()));
+        let original=doc.clone();let roots=match mode{0=>vec![paint],1=>vec![paint,other],_=>vec![group]};
+        let edit=doc.retained_transform_edit(&roots,perspective()).unwrap();let mut editor=Editor::new(doc);editor.perform(edit).unwrap();
+        for p in [Point{x:20.,y:10.},Point{x:50.,y:40.}] {
+            let before=original.target_geometry(SourceTarget::Coverage(mask)).map(p).unwrap();
+            near(editor.document().target_geometry(SourceTarget::Coverage(mask)).map(p).unwrap(),if linked{perspective().map(before).unwrap()}else{before});
+        }
+        if !linked{assert_eq!(fixture::occurrence(editor.document(),"Ink").mask,fixture::occurrence(&original,"Ink").mask);}
+        if mode!=1{assert_eq!(fixture::occurrence(editor.document(),"Other"),fixture::occurrence(&original,"Other"));}
+        editor.undo().unwrap();let mut restored=editor.document().clone();restored.revision=original.revision;assert_eq!(restored,original);editor.redo().unwrap();
+    }}
 }
 
 #[test]

@@ -774,7 +774,7 @@ impl Document {
                 o.placement = old.placement.post(local).ok_or_else(invalid)?;
                 o.placement.validate_for(Rect::from_extent(scene.local_extent(h)))?;
             }
-            if let Some(mask) = o.mask.as_mut() && !(mask.linked && old.kind() == LayerKind::Paint) {
+            if let Some(mask) = o.mask.as_mut() && mask.linked && old.kind() != LayerKind::Paint {
                 let desired = self
                     .target_geometry(SourceTarget::Coverage(mask.source))
                     .projective()
@@ -831,6 +831,8 @@ impl Document {
             working.selection_visibility.insert(id, true);
         }
         working.occurrence = Some(id);
+        working.layer_selection = BTreeSet::from([id]);
+        working.layer_anchor = Some(id);
         working.target = self.scene().source_target(id);
         working.inspect_mask = None;
         Ok(Edit::Working(working))
@@ -839,48 +841,64 @@ impl Document {
         self.reparent_occurrence_edit(id, self.scene().parent(id), to)
     }
 
-    pub fn can_delete_layers(&self, roots: &[OccurrenceHandle]) -> bool {
-        self.deletable_layer_ids(roots).is_ok()
+    pub fn can_delete_layers(&self, selected: &[OccurrenceHandle]) -> bool {
+        self.deletion_ids(selected).is_ok()
     }
-    fn deletable_layer_ids(&self, roots: &[OccurrenceHandle]) -> Result<BTreeSet<OccurrenceHandle>, DocumentError> {
-        if roots.is_empty() {
-            return Err(DocumentError::InvalidLayerOperation("Select layers first"));
-        }
+    fn deletion_ids(&self, selected: &[OccurrenceHandle]) -> Result<(BTreeSet<OccurrenceHandle>, BTreeSet<OccurrenceHandle>), DocumentError> {
+        if selected.is_empty() { return Err(DocumentError::InvalidLayerOperation("Select layers first")); }
         let scene = self.scene();
-        for h in roots {
-            scene.occurrence(*h).ok_or(DocumentError::MissingOccurrence(*h))?;
+        let ids: BTreeSet<_> = selected.iter().copied().collect();
+        for &id in &ids {
+            scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
+            if self.is_locked(id) { return Err(DocumentError::ProtectedOccurrence(id)); }
         }
-        let ids = self.layer_subtrees(&self.relationship_roots(roots));
-        for h in &ids {
-            if self.is_locked(*h) {
-                return Err(DocumentError::ProtectedOccurrence(*h));
+        let promote: BTreeSet<_> = ids.iter().copied().filter(|id|
+            scene.occurrence(*id).is_some_and(|o| o.kind() == LayerKind::Group)
+                && scene.order().iter().any(|h| !ids.contains(h) && descends_from(scene, *h, Some(*id)))).collect();
+        for &id in &promote { self.validate_ungroup(id, &ids, &promote)?; }
+        for &id in scene.order() {
+            if !ids.contains(&id) && scene.attachment_target(id).is_some_and(|target| ids.contains(&target)) && self.is_locked(id) {
+                return Err(DocumentError::ProtectedOccurrence(id));
             }
         }
-        if scene.order().iter().any(|h| {
-            scene.occurrence(*h).is_some_and(|o| o.attachment.is_clip()) && !ids.contains(h) && self.clipping_base(*h).is_some_and(|b| ids.contains(&b))
-        }) {
-            return Err(DocumentError::InvalidLayerOperation("Include the clipped layers above this base"));
-        }
-        Ok(ids)
+        Ok((ids, promote))
     }
-    pub fn delete_layers_edit(&self, roots: &[OccurrenceHandle]) -> Result<Edit, DocumentError> {
-        let ids = self.deletable_layer_ids(roots)?;
+    pub fn delete_layers_edit(&self, selected: &[OccurrenceHandle]) -> Result<Edit, DocumentError> {
+        let (ids, promote) = self.deletion_ids(selected)?;
+        let scene = self.scene();
+        let removed: BTreeSet<_> = ids.difference(&promote).copied().collect();
         let mut edits = Vec::new();
-        for (h, _, stack) in self.artwork.stacks.iter() {
-            let mut stack = stack.clone();
-            stack.entries.retain(|h| !ids.contains(h));
-            if self.artwork.stacks.get(h) != Some(&stack) {
-                edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, h, Some(stack))?));
+        for &id in scene.order() {
+            if !removed.contains(&id) && scene.attachment_target(id).is_some_and(|target| ids.contains(&target)) {
+                if self.is_locked(id) { return Err(DocumentError::ProtectedOccurrence(id)); }
+                let mut occurrence = scene.occurrence(id).unwrap().clone();
+                occurrence.attachment = crate::Attachment::None;
+                edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, id, Some(occurrence))?));
             }
         }
-        edits.extend(self.removal_edits(&ids)?);
-        if self.working.occurrence.is_some_and(|h| ids.contains(&h)) {
-            let mut working = self.working.clone();
-            working.occurrence = self.scene().order().iter().copied().find(|h| !ids.contains(h));
-            working.target = working.occurrence.and_then(|h| self.scene().source_target(h));
-            working.inspect_mask = None;
-            edits.push(Edit::Working(working));
+        for (h, _, original) in self.artwork.stacks.iter() {
+            let mut stack = original.clone();
+            stack.entries.retain(|h| !removed.contains(h));
+            if *original != stack { edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, h, Some(stack))?)); }
         }
+        edits.extend(self.removal_edits(&removed)?);
+        let mut candidate = self.clone();
+        candidate.apply(Edit::Batch(edits.clone()))?;
+        for &id in scene.order().iter().rev().filter(|id| promote.contains(id)) {
+            let edit = candidate.ungroup_layer_edit(id)?;
+            candidate.apply(edit.clone())?;
+            edits.push(edit);
+        }
+        let mut working = self.working.clone();
+        if working.occurrence.is_some_and(|id| ids.contains(&id)) {
+            let at = scene.position(working.occurrence.unwrap()).unwrap();
+            working.occurrence = scene.order()[at..].iter().chain(scene.order()[..at].iter().rev()).copied().find(|h| !ids.contains(h));
+            working.target = working.occurrence.and_then(|h| scene.source_target(h));
+            working.inspect_mask = None;
+            working.layer_selection = working.occurrence.into_iter().collect();
+            working.layer_anchor = working.occurrence;
+        } else { working.layer_selection.retain(|id| !ids.contains(id)); }
+        edits.push(Edit::Working(working));
         Ok(Edit::Batch(edits))
     }
     pub fn group_layers_edit(
@@ -904,9 +922,12 @@ impl Document {
                 return Err(DocumentError::InvalidLayerOperation("Select layers in the same group"));
             }
         }
+        for h in self.layer_subtrees(&roots) {
+            if self.is_locked(h) { return Err(DocumentError::ProtectedOccurrence(h)); }
+        }
         let siblings = scene.children(parent);
         let positions: Vec<_> = siblings.iter().enumerate().filter(|(_, h)| selected.contains(h)).map(|(i, _)| i).collect();
-        if positions.len() != roots.len() || positions.last().unwrap() - positions[0] + 1 != roots.len() {
+        if positions.len() != roots.len() {
             return Err(DocumentError::InvalidLayerOperation("Select neighboring layers to group"));
         }
         for h in siblings {
@@ -921,6 +942,10 @@ impl Document {
             Stack { entries: siblings.iter().copied().filter(|h| selected.contains(h)).collect() },
         );
         let mut group = Occurrence::new(OccurrenceContent::Stack(nested.handle), name);
+        let blend = if roots.iter().any(|h| scene.occurrence(*h).is_some_and(|o| o.blend != LayerBlend::Normal)
+            || scene.effect(*h).is_some_and(|effect| effect.program.kind == EffectKind::Adjustment && scene.effect_owner(*h).is_none())) {
+            LayerBlend::PassThrough
+        } else { blend };
         group.blend = blend;
         if blend!=LayerBlend::PassThrough {group.isolated_blend=blend;}
         let occurrence = RecordChange::insert(&self.artwork.occurrences, group);
@@ -933,32 +958,41 @@ impl Document {
             Edit::Stack(RecordChange::replace(&self.artwork.stacks, stack, Some(containing))?),
         ]),&roots)
     }
-    pub fn ungroup_layer_edit(&self, id: OccurrenceHandle) -> Result<Edit, DocumentError> {
+    fn validate_ungroup(&self, id: OccurrenceHandle, deleted: &BTreeSet<OccurrenceHandle>, promoted: &BTreeSet<OccurrenceHandle>) -> Result<(), DocumentError> {
         let scene = self.scene();
         let group = scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
-        if self.is_locked(id) {
-            return Err(DocumentError::ProtectedOccurrence(id));
+        if self.is_locked(id) { return Err(DocumentError::ProtectedOccurrence(id)); }
+        for h in self.layer_subtrees(&[id]) {
+            if !deleted.contains(&h) && self.is_locked(h) { return Err(DocumentError::ProtectedOccurrence(h)); }
         }
-        if group.kind() != LayerKind::Group
-            || group.opacity != 1.
-            || group.mask.is_some()
+        if group.kind() != LayerKind::Group || group.opacity != 1. || group.mask.is_some()
             || !(group.passes_through() || group.blend == LayerBlend::Normal)
-            || group.attachment!=crate::Attachment::None
-            || !scene.attached_effects(id).is_empty()
-            || scene.order().iter().any(|h|scene.clipping_base(*h)==Some(id))
-        {
+            || group.attachment != crate::Attachment::None && !scene.attachment_target(id).is_some_and(|h| deleted.contains(&h))
+            || scene.attached_effects(id).iter().any(|h| !deleted.contains(h))
+            || scene.order().iter().any(|h| !deleted.contains(h) && scene.clipping_base(*h) == Some(id)) {
             return Err(DocumentError::InvalidLayerOperation("Remove the group mask, blend and opacity effects before ungrouping"));
         }
+        let mut children = scene.children(Some(id)).to_vec();
+        while let Some(h) = children.pop() {
+            if promoted.contains(&h) { children.extend(scene.children(Some(h))); continue; }
+            if deleted.contains(&h) { continue; }
+            let child = scene.occurrence(h).unwrap();
+            if self.is_locked(h) { return Err(DocumentError::ProtectedOccurrence(h)); }
+            if !group.passes_through() && (child.blend != LayerBlend::Normal
+                || scene.effect(h).is_some_and(|effect| effect.program.kind == EffectKind::Adjustment && scene.effect_owner(h).is_none_or(|owner| deleted.contains(&owner)))) {
+                return Err(DocumentError::InvalidLayerOperation("Remove the group mask, blend and opacity effects before ungrouping"));
+            }
+        }
+        Ok(())
+    }
+    pub fn ungroup_layer_edit(&self, id: OccurrenceHandle) -> Result<Edit, DocumentError> {
+        self.validate_ungroup(id, &BTreeSet::new(), &BTreeSet::new())?;
+        let scene = self.scene();
+        let group = scene.occurrence(id).unwrap();
         let children = scene.children(Some(id));
         let mut edits = Vec::new();
         for h in children {
             let child = scene.occurrence(*h).unwrap();
-            if self.is_locked(*h) {
-                return Err(DocumentError::ProtectedOccurrence(*h));
-            }
-            if !group.passes_through() && child.blend != LayerBlend::Normal {
-                return Err(DocumentError::InvalidLayerOperation("Set child layers to Normal before ungrouping"));
-            }
             let mut child = child.clone();
             child.translation.x += group.translation.x;
             child.translation.y += group.translation.y;
@@ -978,13 +1012,21 @@ impl Document {
         edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, nested, Some(Stack::default()))?));
         edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks, stack, Some(containing))?));
         edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, id, None)?));
-        if self.working.occurrence == Some(id) {
-            let mut working = self.working.clone();
-            working.occurrence = children.first().copied();
+        let mut working = self.working.clone();
+        if working.layer_selection.remove(&id) { working.layer_selection.extend(children); }
+        if working.occurrence == Some(id) {
+            working.occurrence = children.first().copied().or_else(|| {
+                let siblings = scene.children(scene.parent(id));
+                let at = siblings.iter().position(|h| *h == id).unwrap();
+                siblings.get(at + 1).copied().or_else(|| at.checked_sub(1).map(|at| siblings[at]))
+                    .or_else(|| scene.parent(id))
+            });
+            if working.layer_selection.is_empty() { working.layer_selection.extend(working.occurrence); }
+            working.layer_anchor = working.occurrence;
             working.target = working.occurrence.and_then(|h| scene.source_target(h));
             working.inspect_mask = None;
-            edits.push(Edit::Working(working));
         }
+        if working != self.working { edits.push(Edit::Working(working)); }
         Ok(Edit::Batch(edits))
     }
 }
@@ -1331,7 +1373,9 @@ mod organization_tests {
         doc.apply(doc.attachment_edit(shade,true,false).unwrap()).unwrap();
         let before=doc.clone();
         let undo=doc.apply(doc.delete_layers_edit(&[base]).unwrap()).unwrap();
-        assert!(doc.scene().occurrence(base).is_none()&&doc.scene().occurrence(shade).is_none());doc.apply(undo).unwrap();restored(&before,&doc);
+        assert!(doc.scene().occurrence(base).is_none());
+        assert_eq!(doc.scene().occurrence(shade).unwrap().attachment, crate::Attachment::None);
+        doc.apply(undo).unwrap();restored(&before,&doc);
         let undo=doc.apply(doc.group_layers_edit(&[base],LayerBlend::Normal,"Group").unwrap()).unwrap();
         assert_eq!(doc.scene().children(Some(id(&doc,"Group"))),[shade,base]);assert_eq!(doc.scene().clipping_base(shade),Some(base));doc.apply(undo).unwrap();restored(&before,&doc);
         insert_paint(&mut doc, "Other", 0, None);
@@ -1342,6 +1386,49 @@ mod organization_tests {
         restored(&before, &doc);
         occurrence_mut(&mut doc, "Shade").locked = true;
         assert!(doc.delete_layers_edit(&[base, shade]).is_err());
+        assert!(doc.delete_layers_edit(&[base]).is_err());
+    }
+    #[test]
+    fn grouping_disjoint_rows_preserves_order_and_filter_scope() {
+        let mut doc = document([64; 2], &["Filter", "Gap", "Ink", "Below"]);
+        effect(&mut doc, "Filter", "exposure");
+        let filter = id(&doc, "Filter");
+        let ink = id(&doc, "Ink");
+        let before = doc.clone();
+        let inputs = crate::composite_input_layers(doc.scene(), filter);
+        let undo = doc.apply(doc.group_layers_edit(&[ink, filter], LayerBlend::Normal, "Group").unwrap()).unwrap();
+        let group = id(&doc, "Group");
+        assert_eq!(doc.scene().children(Some(group)), [filter, ink]);
+        assert!(doc.scene().occurrence(group).unwrap().passes_through());
+        assert_eq!(crate::composite_input_layers(doc.scene(), filter).into_iter().collect::<BTreeSet<_>>(), inputs.into_iter().collect());
+        doc.apply(undo).unwrap();
+        restored(&before, &doc);
+    }
+    #[test]
+    fn deleting_group_rows_promotes_only_unselected_children_and_protects_scope() {
+        let mut doc = document([64; 2], &["Group", "Filter", "Ink", "Below"]);
+        nest(&mut doc, "Group", &["Filter", "Ink"]);
+        effect(&mut doc, "Filter", "exposure");
+        let group = id(&doc, "Group");
+        let filter = id(&doc, "Filter");
+        let ink = id(&doc, "Ink");
+        assert!(doc.delete_layers_edit(&[group]).is_err());
+        assert!(doc.ungroup_layer_edit(group).is_err());
+        let before = doc.clone();
+        let undo = doc.apply(doc.delete_layers_edit(&[group, filter]).unwrap()).unwrap();
+        assert!(doc.scene().occurrence(group).is_none());
+        assert!(doc.scene().occurrence(filter).is_none());
+        assert_eq!(doc.scene().parent(ink), None);
+        doc.apply(undo).unwrap();
+        restored(&before, &doc);
+        occurrence_mut(&mut doc, "Group").blend = LayerBlend::PassThrough;
+        let undo = doc.apply(doc.delete_layers_edit(&[group]).unwrap()).unwrap();
+        assert_eq!(doc.scene().parent(filter), None);
+        assert_eq!(doc.scene().parent(ink), None);
+        doc.apply(undo).unwrap();
+        occurrence_mut(&mut doc, "Group").opacity = 0.5;
+        assert!(doc.delete_layers_edit(&[group]).is_err());
+        assert!(doc.delete_layers_edit(&[group, filter, ink]).is_ok());
     }
     fn pass_through_document() -> Document {
         let mut doc = document([64; 2], &["Above", "Group", "Top", "Adjustment", "Inner", "Below", "Ink"]);

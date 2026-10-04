@@ -127,7 +127,7 @@ impl Document {
         let moving=self.relationship_roots(&[id]);
         if parent.is_some_and(|h|self.layer_subtrees(&moving).contains(&h)){return Err(invalid("A group cannot contain itself"));}
         if let Some(parent)=parent && self.is_locked(parent){return Err(DocumentError::ProtectedOccurrence(parent));}
-        for &h in &moving {if self.is_locked(h){return Err(DocumentError::ProtectedOccurrence(h));}}
+        for h in self.layer_subtrees(&moving) {if self.is_locked(h){return Err(DocumentError::ProtectedOccurrence(h));}}
         let new_stack=match parent {Some(h)=>match scene.occurrence(h).map(|o|&o.content){Some(OccurrenceContent::Stack(s))=>*s,_=>return Err(invalid("Choose a group"))},None=>self.composition().result};
         let mut destination=self.artwork.stacks.get(new_stack).unwrap().clone();destination.entries.retain(|h|!moving.contains(h));
         if index>destination.entries.len(){return Err(invalid("Invalid layer position"));}
@@ -168,6 +168,28 @@ impl Document {
         let below=next[at..].iter().copied().find(|h|!moving.contains(h));
         let (target,position)=if let Some(below)=below {(below,OccurrenceDropPosition::Above)}else{(*next[..at].last().ok_or(DocumentError::MissingOccurrence(target))?,OccurrenceDropPosition::Below)};
         Ok(OccurrenceDropPlan{edit,target,position})
+    }
+
+    pub fn drop_layers_edit(&self, roots: &[OccurrenceHandle], target: OccurrenceHandle, position: OccurrenceDropPosition) -> Result<OccurrenceDropPlan, DocumentError> {
+        let roots = self.layer_roots(&roots.iter().copied().collect());
+        if roots.is_empty() { return Err(invalid("Select layers first")); }
+        let moving = self.relationship_roots(&roots);
+        if self.layer_subtrees(&moving).contains(&target) {
+            return Ok(OccurrenceDropPlan { edit: Edit::Batch(Vec::new()), target, position });
+        }
+        let mut units: Vec<_> = roots.iter().copied().filter(|id|
+            !roots.iter().any(|other| other != id && self.relationship_roots(&[*other]).contains(id))).collect();
+        if position != OccurrenceDropPosition::Above { units.reverse(); }
+        let mut candidate = self.clone();
+        let mut edits = Vec::new();
+        let mut hint = (target, position);
+        for id in units {
+            let plan = candidate.drop_occurrence_edit(id, target, position)?;
+            candidate.apply(plan.edit.clone())?;
+            edits.push(plan.edit);
+            hint = (plan.target, plan.position);
+        }
+        Ok(OccurrenceDropPlan { edit: Edit::Batch(edits), target: hint.0, position: hint.1 })
     }
 
     pub fn duplicate_layers_edit(&self, roots: &[OccurrenceHandle]) -> Result<(Edit, Vec<OccurrenceHandle>), DocumentError> {
@@ -289,7 +311,10 @@ mod tests {
         let undo=doc.apply(doc.attachment_edit(base,true,false).unwrap()).unwrap();assert_eq!(doc.scene().clipping_base(clip),Some(lower));assert_eq!(doc.scene().clipping_base(base),Some(lower));doc.apply(undo).unwrap();
         let undo=doc.apply(doc.attachment_edit(fx,false,false).unwrap()).unwrap();assert_eq!(doc.scene().children(None)[0],fx);assert_eq!(doc.scene().clipping_base(clip),Some(base));doc.apply(undo).unwrap();
         let (edit,copies)=doc.duplicate_layers_edit(&[base]).unwrap();let undo=doc.apply(edit).unwrap();let copied=copies[0];assert_eq!(doc.scene().attached_effects(copied).len(),1);assert_eq!(doc.scene().clipping_base(clip),Some(base));doc.apply(undo).unwrap();
-        let undo=doc.apply(doc.delete_layers_edit(&[base]).unwrap()).unwrap();assert!(doc.scene().occurrence(fx).is_none());assert!(doc.scene().occurrence(clip).is_none());doc.apply(undo).unwrap();f::restored(&before,&doc);
+        let undo=doc.apply(doc.delete_layers_edit(&[base]).unwrap()).unwrap();
+        assert_eq!(doc.scene().occurrence(fx).unwrap().attachment,Attachment::None);
+        assert_eq!(doc.scene().occurrence(clip).unwrap().attachment,Attachment::None);
+        doc.apply(undo).unwrap();f::restored(&before,&doc);
         doc.apply(doc.group_blend_edit(group,LayerBlend::Multiply).unwrap()).unwrap();doc.apply(doc.group_blend_edit(group,LayerBlend::PassThrough).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().isolated_blend,LayerBlend::Multiply);
         assert!(doc.attach_effect_edit(fx,group,0,false).is_err());let undo=doc.apply(doc.attach_effect_edit(fx,group,0,true).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().blend,LayerBlend::Multiply);assert!(doc.group_blend_edit(group,LayerBlend::PassThrough).is_err());
         let reopened=f::roundtrip(&doc);assert_eq!(reopened.scene().occurrence(f::id(&reopened,"Group")).unwrap().isolated_blend,LayerBlend::Multiply);doc.apply(undo).unwrap();
@@ -375,6 +400,27 @@ mod tests {
         assert!(doc.drop_occurrence_edit(free,upper,Above).is_ok());
     }
 
+    #[test]
+    fn multi_row_drops_keep_order_and_protect_nested_locks() {
+        use crate::operation_test_support as f;
+        use OccurrenceDropPosition::*;
+        let mut doc = f::document([32; 2], &["First", "Gap", "Second", "Group", "Child"]);
+        f::nest(&mut doc, "Group", &["Child"]);
+        let first = f::id(&doc, "First"); let second = f::id(&doc, "Second");
+        let group = f::id(&doc, "Group"); let child = f::id(&doc, "Child");
+        let before = doc.clone();
+        for position in [Above, Below, Into] {
+            let undo = doc.apply(doc.drop_layers_edit(&[first, second], group, position).unwrap().edit).unwrap();
+            let order = if position == Into { doc.scene().children(Some(group)) } else { doc.scene().children(None) };
+            assert_eq!(order.iter().position(|h| *h == second), order.iter().position(|h| *h == first).map(|at| at + 1));
+            doc.apply(undo).unwrap(); f::restored(&before, &doc);
+        }
+        f::nest(&mut doc, "First", &["Group"]);
+        doc.artwork.occurrences.get_mut(child).unwrap().locked = true;
+        assert!(doc.drop_layers_edit(&[first, second], f::id(&doc, "Gap"), Below).is_err());
+        assert!(doc.ungroup_layer_edit(first).is_err());
+        assert!(!doc.can_delete_layers(&[first]));
+    }
     #[test]
     fn saved_selections_stay_above_contiguous_effect_chains_and_undo_atomically() {
         use crate::operation_test_support as f;

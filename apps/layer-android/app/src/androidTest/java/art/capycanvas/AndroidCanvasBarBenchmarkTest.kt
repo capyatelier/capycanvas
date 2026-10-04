@@ -142,29 +142,9 @@ class AndroidCanvasBarBenchmarkTest {
             }
             fun photoDocument(): Long {
                 val file = photo()
-                val task = native { handle ->
-                    Native.dispatch(handle, obj("type" to "invoke", "command" to "open_document").toString())
-                    val snapshot = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
-                    val request = snapshot.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
-                    val document = snapshot.getJSONObject("document_file")
-                    Native.projectTask(handle, request.getInt("id"), "null", document.getLong("epoch"), document.getLong("revision"))
-                }
-                try {
-                    Native.projectWork(task, ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
-                    native { Native.projectAdopt(it, task, "null") }
-                } finally { Native.projectFree(task) }
-                val adopted = native { handle ->
-                    val now = System.nanoTime(); Native.frame(handle, now, now + 16_666_667)
-                    Native.dispatch(handle, obj("type" to "close_settings").toString())
-                    JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
-                }
-                val adoptedEpoch = adopted.getJSONObject("document_file").getLong("epoch")
-                val adoptedPhoto = adopted.array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
-                instrumentation.runOnMainSync { host.documentChanged() }
-                waitFor("tier photo document") { host.snapshot?.optBoolean("shaders_ready") == true &&
-                    state().getJSONObject("document_file").getLong("epoch") == adoptedEpoch &&
-                    state().array("layers").objects().any { it.optBoolean("editing") && it.getLong("id") == adoptedPhoto } &&
-                    state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
+                host.openDocument(file)
+                waitFor("tier photo document") { state().array("tabs").objects().any {
+                    it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
                 documentExtent = "${width}x$height"
                 blending?.let { invoke("blend_$it") }
                 val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
@@ -1312,10 +1292,11 @@ class AndroidCanvasBarBenchmarkTest {
                 }
             }
             if (wanted("photo")) {
-                val openedPhoto = if (args.getString("transformSnapping") == "true") photoDocument() else null
+                val tierPhoto = args.getString("tierPhoto") == "true"
+                val openedPhoto = if (tierPhoto || args.getString("transformSnapping") == "true") photoDocument() else null
                 if (openedPhoto == null) { newDocument(); place(photo()) }
                 else action(obj("type" to "select_layer", "id" to openedPhoto))
-                if (materialWatercolor || args.getString("acceptedPhoto") == "true") {
+                if (tierPhoto || materialWatercolor || args.getString("acceptedPhoto") == "true") {
                     Log.i("CapyBarPerf", "material setup: accept photo")
                     if (openedPhoto == null) invoke("apply_transform")
                     if (materialWatercolor) {

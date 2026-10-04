@@ -612,11 +612,12 @@ impl Document {
                                 mask.translation.x += replacement.translation.x - old.translation.x;
                                 mask.translation.y += replacement.translation.y - old.translation.y;
                             } else {
-                                let old_parent = shift(original_world, old.translation);
                                 let new_parent = shift(world, replacement.translation);
-                                mask.placement = mask
-                                    .placement
-                                    .then(Projective::from_affine(Affine::translation(shift(old_parent, new_parent))))
+                                mask.placement = self.target_geometry(SourceTarget::Coverage(mask.source)).projective()
+                                    .and_then(|map| map.then(Projective::from_affine(to_canvas)))
+                                    .and_then(|map| map.then(Projective::from_affine(Affine::translation(Point {
+                                        x: -mask.translation.x - new_parent.x, y: -mask.translation.y - new_parent.y,
+                                    }))))
                                     .ok_or_else(invalid_placement)?;
                             }
                         }

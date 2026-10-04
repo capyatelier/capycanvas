@@ -43,7 +43,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if matches!(doc.working.target,Some(SourceTarget::Coverage(_))) {return Some(l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST));}
         if doc.working.selection.is_none() {
             if cut {return Some(l.text(MessageId::COMMANDS_MAKE_A_SELECTION_FIRST));}
-            let mut selected=self.layer_interaction.selected.iter().filter_map(|h|scene.occurrence(*h));
+            let mut selected=self.selected_layers().iter().filter_map(|h|scene.occurrence(*h));
             return match selected.next() {
                 None=>Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_LAYERS_FIRST)),
                 Some(_)=>None,
@@ -88,6 +88,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let occurrence=RecordChange::insert(&doc.artwork.occurrences,copy);let id=occurrence.handle;
         stack.entries.insert(index,id);
         let mut working=doc.working.clone();working.occurrence=Some(id);working.target=Some(target);working.inspect_mask=None;
+        working.layer_selection=BTreeSet::from([id]);working.layer_anchor=Some(id);
         let edits=vec![Edit::Paint(paint),Edit::Occurrence(occurrence),Edit::Stack(RecordChange::replace(&doc.artwork.stacks,stack_handle,Some(stack)).map_err(error)?),Edit::Working(working)];
         let mut coverage=CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(),extent,Point::default());
         coverage.source.default_coverage=f32::from(selection.inverted);
@@ -96,8 +97,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             kind:RasterOperationKind::Bake {scene:snapshot,scope:SceneScope::Members(members.into()),offset:Point{x:-origin.x,y:-origin.y}}})];
         if cut {operations.push((source_target,self.erase_operation(source_target,&selection,source.alpha_locked)?));}
         self.engine.insert_with_operations(edits,operations,Some(None)).map_err(error)?;
-        self.selection_masks.reselect=Some(selection);self.layer_interaction.editing=Some(id);
-        self.layer_interaction.selected=BTreeSet::from([id]);self.layer_interaction.changed=true;Ok(())
+        self.selection_masks.reselect=Some(selection);self.layer_interaction.changed=true;Ok(())
     }
     pub(super) fn selection_mask(&self,owner:&Occurrence,hide:bool,parent:Option<OccurrenceHandle>,domain:[u32;2])
         ->Result<(RecordChange<CoverageSource>,MaskUse),String> {

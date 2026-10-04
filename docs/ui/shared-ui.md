@@ -433,6 +433,20 @@ right-swipe action. Hosts render these values without scanning sibling rows to
 infer ownership. The [authored model](../reference/authored-model.md) owns the
 composition and editing rules.
 
+Checked rows are the targets for grouping, deletion, movement and duplication.
+Clicking a checked row preserves the checked set; clicking the active row also
+preserves its mask target. Clicking a thumbnail explicitly changes the painting
+target. Shift selects a range of visible rows. Collapsing a folder replaces
+concealed checks with the folder row. Undo and
+redo restore the checked set and reveal its rows.
+
+New Group wraps multiple checked rows from the same parent in their displayed
+order, including separated rows. Deleting an expanded folder removes its wrapper
+and keeps unchecked children when their appearance can be preserved. A collapsed
+folder represents its contents for deletion. Deleting a clipping base or effect
+owner keeps unchecked dependents and releases their attachment. Locks protect
+descendants during structural edits, and disabled actions use the execution rules.
+
 Hosts use one header button for both operations. Its tooltip and accessible label
 say **Clip to {base}** or **Release clipping from {base}** for content, and
 **Apply to {owner}** or **Apply to layers below** for effects. The effect action
@@ -455,6 +469,10 @@ existing hit area; content generators retain their content thumbnails. Hiding
 an owner also hides its attached effects without changing their individual
 visibility settings. The shared row marks inherited hiding for a dimmed eye.
 Showing the owner restores effects that were not individually hidden.
+Selection corners mark editable paint, saved selection or mask pixels; filter,
+fill and folder icons do not show them. The narrow content-to-mask button uses
+distinct vertical linked and broken-chain symbols. Solo keeps individually hidden
+children hidden and restores visibility through undo and redo.
 Use Selection is a normal icon button with squircle corners, a transparent idle
 background and the usual hover/pressed states, within its existing hit area.
 
@@ -475,6 +493,9 @@ or at the beginning of a group stay outside that relationship. This also applies
 to imported images. Effect gaps use adjacent rows; saved Selections cannot be
 skipped to infer an effect attachment. Moves that would split an existing
 clipping run with a standalone adjustment are refused.
+Dragging a checked row moves the checked roots together in display order. Raise
+and Lower use sibling positions for every layer kind. Web edge scrolling continues
+the same drag without changing its target semantics.
 Dropping a saved Selection inside an effect chain previews and inserts it above
 the top effect. Attaching across saved Selections moves them above the resulting
 chain atomically. A drop below the owner remains a separate valid position.

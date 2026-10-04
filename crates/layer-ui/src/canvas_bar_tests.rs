@@ -1628,7 +1628,7 @@ fn mixed_retained_sampling_changes_together_in_one_undo_and_noop_preserves_each_
     let mut doc = Document::from_artwork(doc.artwork).unwrap();
     let edit = doc.select_occurrence_edit(photo_id).unwrap(); doc.apply(edit).unwrap();
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [800, 600], Platform::Gtk).unwrap();
-    s.layer_interaction.selected = std::collections::BTreeSet::from([photo_id, paint_id]);
+    s.set_selected_layers(std::collections::BTreeSet::from([photo_id, paint_id])).unwrap();
     let original = s.engine.document().clone();
     invoke(&mut s, CommandId::ScaleRotate);
     assert!(!s.command(CommandId::TransformNearest).selected);

@@ -558,12 +558,12 @@ fn row_alpha_lock_toggle_preserves_target_and_has_one_undo_step() {
     let mut s = session(Platform::Android);
     layer(&mut s, LayerAction::New { group: false, clipped: false });
     let target = s.engine.document().working.occurrence.unwrap();
-    let selected = s.layer_interaction.selected.clone();
+    let selected = s.engine.document().working.layer_selection.clone();
     assert_eq!(s.state.layers.iter().find(|l| l.id == 1).unwrap().right_swipe, Some(LayerAction::ToggleAlphaLock { id: 1 }));
     layer(&mut s, LayerAction::ToggleAlphaLock { id: 1 });
     assert!(s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     assert_eq!(s.engine.document().working.occurrence.unwrap(), target);
-    assert_eq!(s.layer_interaction.selected, selected);
+    assert_eq!(s.engine.document().working.layer_selection, selected);
     s.dispatch(UiAction::Invoke { command: CommandId::Undo }).unwrap();
     assert!(!s.engine.document().scene().occurrence(OccurrenceHandle::from_index(0)).unwrap().alpha_locked);
     s.dispatch(UiAction::Invoke { command: CommandId::Redo }).unwrap();

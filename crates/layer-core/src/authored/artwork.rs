@@ -2,7 +2,7 @@ use super::{Handle, PortableId, Store};
 use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend, LayerPlacement,
     PhotoMetadata, Point, Projective, RulerGeometry, Selection, SelectionMaskProperties,
     color::{DocumentColor, ProofRecipe, hdr::SdrRendition, source::SourceImage}, raster::RasterRevision};
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
 pub type CompositionHandle = Handle<Composition>;
 pub type StackHandle = Handle<Stack>;
@@ -142,6 +142,9 @@ pub struct WorkingState {
     pub generation: u64,
     pub selection: Option<Selection>,
     pub selection_visibility: BTreeMap<OccurrenceHandle,bool>,
+    pub layer_selection: BTreeSet<OccurrenceHandle>,
+    pub layer_anchor: Option<OccurrenceHandle>,
+    pub solo_visibility: Option<BTreeMap<OccurrenceHandle,bool>>,
     pub occurrence: Option<OccurrenceHandle>,
     pub target: Option<SourceTarget>,
     pub inspect_mask: Option<OccurrenceHandle>,

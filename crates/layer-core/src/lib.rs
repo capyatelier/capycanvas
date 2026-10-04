@@ -1326,6 +1326,8 @@ impl Document {
         let mut document = Self::from_artwork(artwork).expect("new artwork is editable");
         document.working.occurrence = Some(ink);
         document.working.target = Some(SourceTarget::Paint(paint));
+        document.working.layer_selection.insert(ink);
+        document.working.layer_anchor = Some(ink);
         document
     }
     pub fn from_artwork(artwork: Artwork) -> Result<Self, DocumentError> {
@@ -1561,6 +1563,11 @@ impl Document {
         self.working.occurrence = occurrence;
         self.working.target = target;
         self.working.inspect_mask = inspect;
+        self.working.layer_selection.retain(|h| self.artwork.occurrences.get(*h).is_some());
+        self.working.layer_anchor = self.working.layer_anchor.filter(|h| self.artwork.occurrences.get(*h).is_some());
+        if let Some(visibility) = &mut self.working.solo_visibility {
+            visibility.retain(|h, _| self.artwork.occurrences.get(*h).is_some());
+        }
         self.working.selection_visibility.retain(|h,_|self.artwork.occurrences.get(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Selection(_))));
         Ok(())
     }
@@ -1793,7 +1800,7 @@ impl Edit {
     }
     fn navigation(&self, document: &Document) -> bool {
         match self {
-            Self::Working(w) => w.selection == document.working.selection,
+            Self::Working(w) => w.selection == document.working.selection && w.solo_visibility == document.working.solo_visibility,
             Self::Batch(es) => !es.is_empty() && es.iter().all(|e| e.navigation(document)),
             _ => false,
         }
@@ -2086,7 +2093,7 @@ fn edit_metadata(edit: &Edit) -> usize {
             .iter()
             .map(edit_metadata)
             .fold(0usize, usize::saturating_add),
-        Edit::Working(w)=>w.selection_visibility.len().saturating_mul(64),
+        Edit::Working(w)=>w.selection_visibility.len().saturating_add(w.layer_selection.len()).saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64),
         Edit::Stack(c) => c.value.as_ref().map_or(0, |s| {
             s.entries.len() * std::mem::size_of::<OccurrenceHandle>()
         }),

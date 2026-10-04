@@ -27,7 +27,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const opacity = numberField(catalog.layer_opacity, ()=>copy.opacity, value => dispatch({ type: "set_layer_opacity", opacity: value }), true);
   opacity.id = "layer-opacity"; options.append(blend, opacity); header.append(options);
   const glyphButton = (glyph, label, click, cls = "", getAction) => {
-    const b = button("", e => { e.stopPropagation(); click(); }, `layer-icon ${cls}`);
+    const b = button("", e => { e.stopPropagation(); click(e); }, `layer-icon ${cls}`);
     if(typeof label==="function"){bindCopy(b,label,"title");bindCopy(b,label,"ariaLabel");}else{b.title=label;b.setAttribute("aria-label",label);} b.append(icon(glyph));
     if (getAction) b.onpointerenter = () => { b.title = app.action_tooltip(b.getAttribute("aria-label"), { type: "layer", action: getAction() }); };
     return b;
@@ -130,11 +130,11 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
   const connectionResize = new ResizeObserver(scheduleConnections); connectionResize.observe(list);
   function makeRow(layer) {
     const root = element("div", "layer-swipe"), row = element("div", "layer-row"), record = { root, row, layer }; row.dataset.layer = String(layer.id);
-    const get = () => record.layer, select = mask => send({ op: "select", id: get().id, mask });
+    const get = () => record.layer;
     const eye = glyphButton("eye", ()=>get().selection_layer?(get().visible?copy.hide_selection:copy.show_selection):(get().visible?copy.hide:copy.show), () => dispatch({ type: "set_layer_visibility", id: get().id, visible: !get().visible }));
     eye.onpointerenter = () => { eye.title = app.action_tooltip(eye.getAttribute("aria-label"), { type: "set_layer_visibility", id: get().id, visible: !get().visible }); };
-    const selection = () => ({ op: "toggle_selection", id: get().id });
-    const check = glyphButton("selection-empty", ()=>copy.select_row_help, () => send(selection()), "", selection);
+    const selection = (e = {}) => ({ op: "select_row", id: get().id, extend: !!e.shiftKey, toggle: true });
+    const check = glyphButton("selection-empty", ()=>copy.select_row_help, e => send(selection(e)), "", selection);
     const thumbnails = element("div", "layer-thumbnails"), gutter = element("span", "layer-connection-gutter");
     const thumb = (mask) => {
       const getAction = () => !mask && get().group ? { op: "collapse", id: get().id } : { op: "select", id: get().id, mask };
@@ -161,7 +161,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     const load=button('',e=>{e.stopPropagation();dispatch({type:'selection',action:{op:'load_layer',id:get().id,mode:'new',inverted:false}});},'layer-icon selection-layer-load');
     load.append(icon('selection-load'));thumbnails.insertBefore(load,link);
     row.append(eye, check, thumbnails, text, lock, grip);
-    row.onclick = e => { if (!e.target.closest("button,input")) select(false); };
+    row.onclick = e => { if (!e.target.closest("button,input")) send({op:"select_row", id:get().id, extend:e.shiftKey, toggle:e.ctrlKey || e.metaKey}); };
     name.ondblclick = e => { e.stopPropagation(); if(get().can_rename) send({ op: "begin_rename", id: get().id }); };
     menu(row, get); menu(mask.b, get, true);
     Object.assign(record, { load, eye, check, thumbnails, content, mask, link, name, text, meta, lock, grip });
@@ -217,17 +217,21 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (!drag.ghost && Math.hypot(e.clientX-drag.x, e.clientY-drag.y) > 6) {
         dismissContext();
         row.setPointerCapture(e.pointerId); drag.ghost = row.cloneNode(true); drag.ghost.classList.add("layer-drag-preview");
-        drag.ghost.style.width = `${row.clientWidth}px`; drag.ghost.style.left = `${row.getBoundingClientRect().left}px`;
-        document.body.append(drag.ghost);
+        drag.ghost.setAttribute("aria-hidden", "true"); drag.ghost.style.width = `${row.clientWidth}px`; drag.ghost.style.left = `${row.getBoundingClientRect().left}px`;
+        document.body.append(drag.ghost); drag.frame = requestAnimationFrame(autoscroll);
         drag.ghost.querySelectorAll("canvas").forEach((c,i) => c.getContext("2d").drawImage(row.querySelectorAll("canvas")[i],0,0));
       }
       if (!drag.ghost) return;
+      drag.point = [e.clientX, e.clientY];
       drag.ghost.style.top = `${drag.top + e.clientY-drag.y}px`;
+      updateDrop(...drag.point);
+    };
+    function updateDrop(x, y) {
       rows.querySelectorAll(".layer-drop-before,.layer-drop-after,.layer-drop-into,.layer-drop-attach").forEach(n => n.classList.remove("layer-drop-before","layer-drop-after","layer-drop-into","layer-drop-attach"));
-      const hit = document.elementFromPoint(e.clientX,e.clientY), target = hit?.closest(".layer-row"); drag.target = null;
+      const hit = document.elementFromPoint(x,y), target = hit?.closest(".layer-row"); drag.target = null;
       if (target && target !== row && rows.contains(target)) {
         const record = records.get(target.dataset.layer), to = record.layer, rect = target.getBoundingClientRect();
-        const fraction = to.can_drop_below ? (e.clientY-rect.top)/rect.height : 0;
+        const fraction = to.can_drop_below ? (y-rect.top)/rect.height : 0;
         const surface = record.content.b.contains(hit) ? "thumbnail" : "row";
         const preview = app.layer_drop_preview(get().id, to.id, fraction, surface);
         if (preview) {
@@ -237,9 +241,23 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         }
       }
     };
+    function autoscroll(now) {
+      if (!drag?.ghost) return;
+      const elapsed = drag.frameTime ? Math.min(50, now - drag.frameTime) / 1000 : 0;
+      drag.frameTime = now;
+      if (drag.point) {
+        const bounds = rows.getBoundingClientRect(), [x, y] = drag.point;
+        if (x >= bounds.left && x <= bounds.right) {
+          const speed = y >= bounds.top - 12 && y < bounds.top + 20 ? -240 : y <= bounds.bottom + 12 && y > bounds.bottom - 20 ? 240 : 0;
+          const before = rows.scrollTop; rows.scrollTop += speed * elapsed;
+          if (before !== rows.scrollTop) updateDrop(x, y);
+        }
+      }
+      drag.frame = requestAnimationFrame(autoscroll);
+    }
     const finish = e => {
       if (!drag || (e.pointerId != null && drag.pointer !== e.pointerId)) return;
-      const previous = drag; drag = null;
+      const previous = drag; drag = null; cancelAnimationFrame(previous.frame);
       window.removeEventListener("pointermove", move, true);
       window.removeEventListener("pointerup", finish, true);
       window.removeEventListener("pointercancel", finish, true);
@@ -318,9 +336,9 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (!layer.can_delete && !layer.right_swipe) r.closeSwipe();
       r.eye.replaceChildren(icon(layer.visible && !layer.visibility_blocked ? "eye" : "eye-hidden")); r.eye.style.opacity = layer.visibility_blocked ? .35 : 1;
       r.eye.title = r.eye.ariaLabel = layer.selection_layer?(layer.visible?copy.hide_selection:copy.show_selection):(layer.visible?copy.hide:copy.show);
-      r.check.replaceChildren(icon(nameIcon(layer.selection_icon)));
+      r.check.replaceChildren(icon(nameIcon(layer.selection_icon))); r.check.setAttribute("aria-pressed", String(layer.selected));
       r.thumbnails.style.marginLeft = `${Math.min(layer.depth*8,24)}px`;
-      r.content.b.classList.toggle("editing-target", layer.editing && !layer.mask_selected);
+      r.content.b.classList.toggle("editing-target", layer.content_selected);
       r.mask.b.classList.toggle("editing-target", layer.mask_selected);
       for(const thumbnail of [r.content,r.mask])thumbnail.b.title=thumbnail.b.ariaLabel=thumbnail.readLabel();
       r.content.b.classList.toggle("layer-folder", layer.group);
@@ -338,7 +356,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       }
       else if (r.content.b.childElementCount !== 1 || !r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
       r.mask.b.hidden = r.link.hidden = !layer.has_mask; r.mask.image.style.opacity = layer.mask_enabled ? 1 : .4;
-      r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? copy.unlink_mask : copy.link_mask_to_layer;
+      r.link.replaceChildren(icon(layer.mask_linked ? "link" : "unlink")); r.link.disabled = layer.locked; r.link.setAttribute("aria-pressed", String(layer.mask_linked)); r.link.title = r.link.ariaLabel = layer.mask_linked ? copy.unlink_mask : copy.link_mask_to_layer;
       r.name.textContent = layer.label; r.name.title = layer.label;
       r.meta.textContent = layer.description;
       r.meta.hidden = !r.meta.textContent; r.lock.replaceChildren(icon(layer.locked ? "lock" : "alpha-lock")); r.lock.style.opacity = layer.locked || layer.alpha_locked ? 1 : 0;

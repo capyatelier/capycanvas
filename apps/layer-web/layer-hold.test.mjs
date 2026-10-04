@@ -1,8 +1,15 @@
 import assert from "node:assert/strict";
+import {mkdir,writeFile} from "node:fs/promises";
 
 export async function checkLayerHolding({call, evaluate, settle}) {
   const wait=async(ms=180)=>{await settle();await evaluate(`new Promise(r=>setTimeout(r,${ms}))`);};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await wait();};
+  const capture = async name => {
+    if (!process.env.LAYER_TEST_ARTIFACTS) return;
+    await mkdir(process.env.LAYER_TEST_ARTIFACTS,{recursive:true});
+    const shot = await call("Page.captureScreenshot",{format:"png"});
+    await writeFile(`${process.env.LAYER_TEST_ARTIFACTS}/${name}.png`,Buffer.from(shot.data,"base64"));
+  };
   const order=()=>evaluate("layerApp.state().layers.map(l=>String(l.id))");
   const menu=()=>evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')");
   const rect=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};})()`);
@@ -25,9 +32,10 @@ export async function checkLayerHolding({call, evaluate, settle}) {
         await evaluate("document.querySelector('.panel-context-menu').hidePopover()");
         const r=await rect(selector),p={x:r.x+(region==="padding"?2:r.width/2),y:r.y+r.height/2};
         const visible=await evaluate(`layerApp.state().layers.find(l=>String(l.id)===${JSON.stringify(before[0])}).visible`);
+        const maskBefore = await evaluate("layerApp.state().layer_tools.editing_layer.mask_selected");
         await input("down",p);await wait(600);
         assert.equal(await menu(),true,`${region}: hold opens menu`);
-        assert.equal(await evaluate("layerApp.state().layer_tools.editing_layer.mask_selected"),region==="mask","hold targets the correct content/mask menu");
+        assert.equal(await evaluate("layerApp.state().layer_tools.editing_layer.mask_selected"),region==="mask" || maskBefore,"hold preserves editing target unless the mask menu is requested");
         await input("move",{x:p.x+1,y:p.y});assert.equal(await menu(),true,"jitter retains menu");
         if(releaseOnly){
           await input("up");await wait(350);
@@ -64,6 +72,57 @@ export async function checkLayerHolding({call, evaluate, settle}) {
       assert.equal(await menu(),false);
       assert.equal(await evaluate("document.querySelectorAll('.layer-drag-preview,.layer-drop-before,.layer-drop-after,.layer-drop-into').length"),0);
     }
+    const click = async (selector, modifiers = 0) => {
+      const r = await rect(selector), p = {x:r.x+r.width/2,y:r.y+r.height/2};
+      await call("Input.dispatchMouseEvent",{type:"mousePressed",...p,button:"left",buttons:1,clickCount:1,modifiers});
+      await call("Input.dispatchMouseEvent",{type:"mouseReleased",...p,button:"left",buttons:0,clickCount:1,modifiers});await wait();
+    };
+    const checked = () => evaluate("layerApp.state().layers.filter(l=>l.selected).map(l=>String(l.id))");
+    for (const theme of ["light","dark"]) {
+      await send({type:"set_theme",theme});
+      await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:true}});
+      await click(`#layer-rows .layer-row[data-layer="${before[1]}"] .layer-icon:nth-child(2)`);
+      await click(`${source} .layer-name`);
+      assert.equal(await evaluate("layerApp.state().layer_tools.editing_layer.mask_selected"),true,"active row keeps mask editing");
+      assert.deepEqual(await checked(),before.slice(0,2),"active row keeps checked companions");
+      await click(`${source} .layer-link`);
+      assert.equal(await evaluate(`document.querySelector('${source} .layer-link svg').dataset.asset`),"unlink");
+      assert.equal(await evaluate(`document.querySelector('${source} .layer-link').getAttribute('aria-pressed')`),"false");
+      await capture(`mask-unlinked-${theme}`);
+      await click(`${source} .layer-link`);
+      assert.equal(await evaluate(`document.querySelector('${source} .layer-link svg').dataset.asset`),"link");
+      await capture(`mask-linked-${theme}`);
+      await click(`${source} .layer-thumbnail`);
+      await click(`#layer-rows .layer-row[data-layer="${before[2]}"] .layer-name`,8);
+      assert.deepEqual(await checked(),before.slice(0,3),"Shift selects the visible consecutive range");
+      await click(`${source} .layer-thumbnail`);
+      await click(`#layer-rows .layer-row[data-layer="${before[2]}"] .layer-icon:nth-child(2)`,8);
+      assert.deepEqual(await checked(),before.slice(0,3),"Shift checkbox selects the same range");
+      for (const id of before.slice(0,3)) assert.equal(await evaluate(`document.querySelector('#layer-rows .layer-row[data-layer="${id}"] .layer-icon:nth-child(2)').getAttribute('aria-pressed')`),"true");
+      await click('.layer-footer button[aria-label="New group"]');
+      const group = await evaluate("String(layerApp.state().layer_tools.editing_layer.id)");
+      assert.ok((await order()).includes(group));
+      assert.equal(await evaluate(`layerApp.state().layers.filter(l=>${JSON.stringify(before.slice(0,3))}.includes(String(l.id))).every(l=>l.depth===1)`),true,"New group contains every checked row");
+      await click('.layer-footer button[aria-label="Delete selected layers"]');
+      assert.deepEqual(await order(),before,"deleting an expanded folder preserves unchecked children");
+      await send({type:"invoke",command:"undo"});await send({type:"invoke",command:"undo"});
+      assert.deepEqual(await order(),before);
+      await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
+      await send({type:"effect",action:{op:"insert",effect:"curves"}});
+      const effect = await evaluate("String(layerApp.state().layer_tools.editing_layer.id)");
+      assert.equal(await evaluate(`document.querySelector('#layer-rows .layer-row[data-layer="${effect}"] .layer-thumbnail').classList.contains('editing-target')`),false,"filter icon has no editable-pixel corners");
+      await capture(`filter-selected-${theme}`);
+      await send({type:"invoke",command:"undo"});
+      await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
+      await click(`#layer-rows .layer-row[data-layer="${before[1]}"] .layer-icon:nth-child(2)`);
+      device="mouse";
+      const start = await rect(`${source} .layer-name`), target = await rect(`#layer-rows .layer-row[data-layer="${before[2]}"]`);
+      await input("down",{x:start.x+start.width/2,y:start.y+start.height/2});
+      await input("move",{x:target.x+target.width/2,y:target.y+target.height-3});await input("up");
+      assert.deepEqual(await order(),[before[2],...before.slice(0,2),...before.slice(3)],"drag moves the checked block in stack order");
+      await send({type:"invoke",command:"undo"});assert.deepEqual(await order(),before);
+      await send({type:"layer",action:{op:"select",id:Number(before[0]),mask:false}});
+    }
     device="touch";
     await send({type:"layer",action:{op:"begin_rename",id:Number(before[0])}});
     const entry=await rect(`${source} input`);
@@ -91,7 +150,21 @@ export async function checkLayerHolding({call, evaluate, settle}) {
     await input("move",{x:point.x,y:point.y-85});await input("up");await wait(650);
     assert.ok(await evaluate("document.querySelector('#layer-rows').scrollTop")>20,"movement before hold scrolls normally");
     assert.equal(await menu(),false);assert.deepEqual(await order(),scrollingOrder);
-    console.log("PASS: whole-row holds, same-contact reorder, mask/row controls, release, cancellation, mouse, native touch scrolling, undo/redo");
+    for (const deviceType of ["mouse","touch","pen"]) {
+      device=deviceType;
+      await evaluate("document.querySelector('#layer-rows').scrollTop=0");await wait();
+      const source = await rect("#layer-rows .layer-swipe:nth-child(2) .layer-name"), viewport = await rect("#layer-rows");
+      await input("down",{x:source.x+source.width/2,y:source.y+source.height/2});
+      if (device!=="mouse") await wait(600);
+      await input("move",{x:viewport.x+viewport.width/2,y:viewport.y+viewport.height-8});
+      await wait(450);
+      assert.ok(await evaluate("document.querySelector('#layer-rows').scrollTop")>40,`${device}: dragging at the edge scrolls to offscreen destinations`);
+      await evaluate("window.dispatchEvent(new Event('blur'))");await input(device==="touch"?"cancel":"up");
+      const stopped = await evaluate("document.querySelector('#layer-rows').scrollTop");await wait(250);
+      assert.equal(await evaluate("document.querySelector('#layer-rows').scrollTop"),stopped,"cancelled drag stops edge scrolling");
+      assert.deepEqual(await order(),scrollingOrder);
+    }
+    console.log("PASS: layer range/group/delete, checked drag, content corners, mask link, accessibility, edge scrolling, whole-row holds and undo/redo");
   } finally {
     if(down)await input(device==="touch"?"cancel":"up");
     await evaluate("document.querySelector('.panel-context-menu').hidePopover()");

@@ -88,13 +88,14 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn begin_retained_placement(&mut self, imported: Option<PlacementInsertion>, moving: bool) -> Result<(), String> {
         if self.operation.active() { return Err("Finish the current transform first".into()); }
         let doc = self.engine.document();
-        let active = doc.working.occurrence.ok_or("Select a paint or photo layer")?;
-        let layer = doc.scene().occurrence(active).ok_or("Select a paint or photo layer")?.clone();
-        let selected = self.layer_interaction.selected.clone();
+        let selected = self.selected_layers().clone();
         let roots = imported.as_ref().map_or_else(|| self.transform_roots(), |insert| insert.ids.clone());
         let ids = doc.retained_transform_targets(&roots).map_err(error)?;
         let members: Vec<_> = ids.iter().map(|id| doc.scene().occurrence(*id).cloned()
             .map(|o| (*id, o)).ok_or("The transformed layer was removed")).collect::<Result<_, _>>()?;
+        let (active, layer) = members.iter().find(|(_, o)| o.kind() == LayerKind::Paint)
+            .ok_or("The layers have no pixels to transform")?;
+        let active = *active;
         let single = members.len() == 1 && layer.kind() == LayerKind::Paint;
         let bounds = if imported.is_some() || moving {
             self.measured_target_bounds().filter(|_| moving).unwrap_or_else(||
@@ -144,8 +145,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.operation.aspect = true;
         self.engine.backend_mut().prepare_moving_layer(Some(active));
-        self.layer_interaction.editing = Some(active);
-        self.layer_interaction.selected = roots.into_iter().collect();
         let tool = if moving { LayerCanvasTool::Move } else { LayerCanvasTool::Transform };
         self.layer_interaction.tool = tool;
         self.state.layer_tools.tool = tool;
@@ -190,8 +189,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.operation.nudging = None;
         self.operation.current = None;
         self.engine.backend_mut().prepare_moving_layer(None);
-        self.layer_interaction.editing = self.engine.document().working.occurrence;
-        self.layer_interaction.selected = selected;
+        self.set_selected_layers(selected)?;
         self.layer_interaction.path.clear();
         self.layer_interaction.tool = LayerCanvasTool::Move;
         self.state.layer_tools.tool = LayerCanvasTool::Move;

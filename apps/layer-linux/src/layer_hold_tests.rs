@@ -30,7 +30,7 @@ fn native_layer_hold_input() {
         },
     });
     pump(300);
-    let row = |id| find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{id}")).unwrap();
+    let row = |id| widgets(w.layer_panel.root.upcast_ref()).find(|node| node.is_mapped() && node.widget_name() == format!("art-layer-{id}")).unwrap();
     let bounds = |node: &gtk::Widget| node.compute_bounds(&w.surface).unwrap();
     let dismiss = || {
         let popovers: Vec<_> = w
@@ -147,6 +147,7 @@ fn native_layer_hold_input() {
                 .find(|l| l.id == before[0])
                 .unwrap()
                 .visible;
+            let mask_before = state(&w).layer_tools.editing_layer.as_ref().unwrap().mask_selected;
             input.perform(serde_json::json!([{"touch":"down", "point":start}]));
             pump(800);
             let menu = w
@@ -163,8 +164,8 @@ fn native_layer_hold_input() {
                     .as_ref()
                     .unwrap()
                     .mask_selected,
-                region == "mask",
-                "hold targets the content/mask menu"
+                region == "mask" || mask_before,
+                "hold preserves editing target unless the mask menu is requested"
             );
             if release_only {
                 input.perform(serde_json::json!([{"touch":"up"}]));
@@ -247,6 +248,74 @@ fn native_layer_hold_input() {
     });
     pump(150);
     assert_eq!(order(), before);
+    let layer = |action| { w.dispatch(UiAction::Layer { action }); pump(150); };
+    let checked = || state(&w).layers.iter().filter(|r| r.selected).map(|r| r.id).collect::<Vec<_>>();
+    let check = |id| row(id).first_child().unwrap().next_sibling().unwrap();
+    let click = |input: &mut RemoteInput, node: &gtk::Widget| input.click(screen_point(node, &w.surface, [0.5,0.5]));
+    let capture = |input: &mut RemoteInput, theme: Theme, name: &str| {
+        if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
+            input.perform(serde_json::json!([{"capture":format!("{name}-{}",format!("{theme:?}").to_lowercase())}]));
+        }
+    };
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) }); pump(180);
+        layer(layer_ui::LayerAction::Select { id: before[0], mask: true });
+        click(&mut input,&check(before[1]));
+        click(&mut input,&find_css(&row(before[0]),"layer-name").unwrap());
+        assert!(state(&w).layer_tools.editing_layer.unwrap().mask_selected,"active row preserves mask editing");
+        assert_eq!(checked(),before[..2],"active row preserves checked companions");
+        let link = find_css(&row(before[0]),"layer-link").unwrap().downcast::<gtk::Button>().unwrap();
+        click(&mut input,link.upcast_ref());
+        assert_eq!(crate::icons::name(&link.child().unwrap().downcast::<gtk::Image>().unwrap()).as_deref(),Some("layer-unlink-symbolic"));
+        capture(&mut input,theme,"mask-unlinked");
+        click(&mut input,link.upcast_ref());
+        assert_eq!(crate::icons::name(&link.child().unwrap().downcast::<gtk::Image>().unwrap()).as_deref(),Some("layer-link-symbolic"));
+        capture(&mut input,theme,"mask-linked");
+        click(&mut input,&find_css(&row(before[0]),"layer-thumbnail").unwrap());
+        input.perform(serde_json::json!([{"key":65505,"down":true}]));
+        click(&mut input,&find_css(&row(before[2]),"layer-name").unwrap());
+        input.perform(serde_json::json!([{"key":65505,"down":false}]));
+        assert_eq!(checked(),before[..3],"Shift-click selects a visible range");
+        layer(layer_ui::LayerAction::Select { id: before[0], mask: false });
+        input.perform(serde_json::json!([{"key":65505,"down":true}]));
+        click(&mut input,&check(before[2]));
+        input.perform(serde_json::json!([{"key":65505,"down":false}]));
+        assert_eq!(checked(),before[..3],"Shift checkbox selects the same range");
+        let group = find_named(w.layer_panel.footer.upcast_ref(),"layer-folder-symbolic").unwrap();
+        click(&mut input,&group);
+        let group_id = state(&w).layer_tools.editing_layer.unwrap().id;
+        assert!(state(&w).layers.iter().filter(|r| before[..3].contains(&r.id)).all(|r|r.depth==1));
+        assert!(!state(&w).layers.iter().find(|r|r.id==group_id).unwrap().content_selected);
+        click(&mut input,&find_named(w.layer_panel.footer.upcast_ref(),"delete-selected-layers").unwrap());
+        assert_eq!(order(),before,"deleting an expanded folder preserves unchecked children");
+        for _ in 0..2 { w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(150); }
+        assert_eq!(order(),before);
+        layer(layer_ui::LayerAction::Select { id: before[0], mask: false });
+        w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }); pump(180);
+        w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(Panel::Layers).unwrap(), panel: Panel::Layers }); pump(180);
+        let effect = state(&w).layer_tools.editing_layer.unwrap().id;
+        let thumbnail = find_css(&row(effect),"layer-thumbnail").unwrap();
+        assert!(!descendants::<gtk::DrawingArea>(&thumbnail).first().unwrap().is_visible(),"filter glyph has no editable-pixel corners");
+        capture(&mut input,theme,"filter-selected");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(180);
+        layer(layer_ui::LayerAction::Select { id: before[0], mask: false });
+        click(&mut input,&check(before[1]));
+        let source = row(before[0]);
+        let name = find_css(&source,"layer-name").unwrap();
+        assert!(name.is_mapped(),"checked row name is visible");
+        let start = screen_point(&name,&w.surface,[0.5,0.5]);
+        let target = screen_point(&row(before[2]),&w.surface,[0.7,0.9]);
+        let slop = gtk::Settings::default().unwrap().gtk_dnd_drag_threshold() as f32;
+        input.perform(serde_json::json!([{"point":start},{"down":true},{"point":[start[0]-2.,start[1]]},{"point":[start[0]-slop*3.,start[1]]}]));
+        let controllers = source.observe_controllers();
+        let drag = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>()).unwrap();
+        assert!(drag.drag().is_some(),"checked row starts native pickup");
+        input.perform(serde_json::json!([{"point":target},{"point":[target[0]+1.,target[1]]},{"down":false}]));
+        assert_eq!(order(),[vec![before[2],before[0],before[1]],before[3..].to_vec()].concat(),"drag moves checked rows as one ordered block");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(180);
+        assert_eq!(order(),before);
+        layer(layer_ui::LayerAction::Select { id: before[0], mask: false });
+    }
     for _ in 0..30 {
         w.dispatch(UiAction::Layer {
             action: layer_ui::LayerAction::New {

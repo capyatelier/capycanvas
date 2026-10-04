@@ -2296,7 +2296,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let document = self.engine.document();
         let active = document.working.occurrence;
         let scene = document.scene();
-        let index = active.and_then(|handle| scene.position(handle)).unwrap_or(0);
         let editable = active.and_then(|handle| scene.occurrence(handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint);
         let idle = self.canvas_idle();
 
@@ -2522,12 +2521,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             CommandId::UseReferenceBelow => {
                 self.require_document_idle().is_ok() && self.use_reference_below_reason().is_none()
             }
-            CommandId::DeleteLayer => idle && document.can_delete_layers(&[active.unwrap_or_default()]),
-            CommandId::RaiseLayer => idle && editable && index > 0,
-            CommandId::LowerLayer => {
-                idle && editable
-                    && scene.order().get(index + 1).and_then(|handle| scene.occurrence(*handle)).is_some_and(|occurrence| occurrence.kind() == LayerKind::Paint)
-            }
+            CommandId::DeleteLayer => idle && self.can_delete_layer_rows(self.selected_layers()),
+            CommandId::RaiseLayer | CommandId::LowerLayer => idle && self.layer_step_edit(id == CommandId::RaiseLayer).is_ok(),
             CommandId::FitCanvas
             | CommandId::ActualPixels
             | CommandId::LassoFill
@@ -4998,24 +4993,11 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((0, true))
             }
             CommandId::DeleteLayer => {
-                self.layer_action(LayerAction::Delete {
-                    id: occurrence_token(self.engine.document().working.occurrence.ok_or("Select a layer")?),
-                })?;
+                self.layer_action(LayerAction::DeleteSelected)?;
                 Ok((0, true))
             }
             CommandId::RaiseLayer | CommandId::LowerLayer => {
-                let id = self.engine.document().working.occurrence.ok_or("Select a layer")?;
-                let index = self.engine.document().scene().position(id).ok_or("Unknown layer")?;
-                self.engine
-                    .move_layer(
-                        id,
-                        if command == CommandId::RaiseLayer {
-                            index - 1
-                        } else {
-                            index + 1
-                        },
-                    )
-                    .map_err(error)?;
+                self.layer_edit(self.layer_step_edit(command == CommandId::RaiseLayer).map_err(error)?)?;
                 Ok((0, true))
             }
             CommandId::FitCanvas => {
@@ -5665,6 +5647,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     fn refresh_document(&mut self) {
         self.reconcile_selection_mask();
+        let doc = self.engine.document();
+        self.layer_interaction.collapsed.retain(|id| doc.scene().occurrence(*id).is_some_and(|o| o.kind() == LayerKind::Group));
+        for id in doc.working.layer_selection.iter().copied().chain(doc.working.occurrence) {
+            let mut parent = doc.scene().parent(id);
+            while let Some(id) = parent {
+                self.layer_interaction.collapsed.remove(&id);
+                parent = doc.scene().parent(id);
+            }
+        }
         self.refresh_file_state();
         if self.engine.document().output().proof.is_none() {
             self.state.soft_proof = false;
@@ -5683,12 +5674,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let doc = self.engine.document();
         self.state.filter_picker.selected = doc.working.occurrence.and_then(|handle| doc.scene().effect(handle)).map(|effect| effect.program.id.clone());
-        let interaction = &mut self.layer_interaction;
-        if interaction.editing != doc.working.occurrence {
-            interaction.editing = doc.working.occurrence;
-            interaction.selected = doc.working.occurrence.into_iter().collect();
-        }
-        interaction.selected.retain(|handle| doc.scene().occurrence(*handle).is_some());
         let drawing_target = doc.drawing_target();
         self.end_dry_mask_session(drawing_target);
         self.refresh_layer_presentation();
@@ -5697,12 +5682,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn refresh_layer_presentation(&mut self) {
         let ui_rendition = self.effective_sdr_rendition();
         let doc = self.engine.document();
+        let selected = &doc.working.layer_selection;
+        let collapsed = &self.layer_interaction.collapsed;
         let drawing_target = doc.drawing_target();
         let drawing_owner = if self.selection_masks.target().is_some() { None } else { drawing_target.and_then(|id| doc.target_owner(id)) };
         let layer_state = |id: layer_core::authored::OccurrenceHandle| {
             let scene = doc.scene();
             let l = scene.occurrence(id).expect("placed occurrence");
             let source = scene.source_target(id);
+            let drawing = drawing_owner == Some(id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id));
             LayerState {
             id: occurrence_token(id),
             selection_layer: l.kind() == LayerKind::Selection,
@@ -5725,26 +5713,30 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
             },
-            can_delete: doc.can_delete_layers(&[id]),
+            can_delete: doc.can_delete_layers(&if collapsed.contains(&id) {
+                doc.scene().order().iter().copied().filter(|h| *h == id || layer_core::descends_from(doc.scene(), *h, Some(id))).collect()
+            } else { vec![id] }),
             visible: doc.effective_visibility(id),
             visibility_blocked: l.is_artwork() && l.visible && !scene.visible(id),
             adjustment_effect: scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Adjustment),
             opacity: l.opacity,
-            selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&id),
+            selected: !self.selection_masks.quick() && selected.contains(&id),
             load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
-            selection_icon: if self.layer_interaction.selected.contains(&id)
-                && (self.layer_interaction.selected.len() > 1 || Some(id) != doc.working.occurrence)
+            selection_icon: if selected.contains(&id)
+                && (selected.len() > 1 || Some(id) != doc.working.occurrence || !drawing)
             {
                 "layer-selection-checked-symbolic"
             } else if l.reference {
                 "layer-reference-symbolic"
-            } else if drawing_owner.is_some_and(|owner| owner == id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id)) {
+            } else if drawing {
                 "layer-brush-symbolic"
             } else {
                 "layer-selection-empty-symbolic"
             },
             editing: Some(id) == doc.working.occurrence && !self.selection_masks.quick(),
-            drawing: drawing_owner.is_some_and(|owner| owner == id) || self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id)),
+            drawing,
+            content_selected: !self.selection_masks.quick() && (self.selection_masks.target() == Some(layer_core::SelectionTarget::Saved(id))
+                || matches!(source, Some(SourceTarget::Paint(_) | SourceTarget::Selection(_))) && source == drawing_target && self.selection_masks.target().is_none()),
             mask_selected: Some(id) == doc.working.occurrence && l.mask.as_ref().is_some_and(|m| doc.working.target == Some(layer_core::authored::SourceTarget::Coverage(m.source)) || drawing_target == Some(layer_core::authored::SourceTarget::Coverage(m.source))),
             has_mask: l.mask.is_some(),
             mask_enabled: l.mask.as_ref().is_some_and(|m| m.enabled),
@@ -5791,7 +5783,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 label: self.localization().text(MessageId::COMMAND_QUICK_MASK).to_string(), description: String::new(),
                 can_delete: true, visible: self.selection_masks.quick_visible,
                 visibility_blocked: false, adjustment_effect: false,
-                opacity: 1., selected: true, mask_selected: false, selection_icon: "layer-brush-symbolic",
+                opacity: 1., selected: true, mask_selected: false, content_selected: true, selection_icon: "layer-brush-symbolic",
                 load_selection_tooltip: "Finish Quick Mask and use it as the current selection",
                 editing: true, drawing: true, has_mask: false, mask_enabled: false, mask_linked: false,
                 alpha_locked: false, locked: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
@@ -5824,7 +5816,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let references = self.reference_selection();
         self.state.layer_tools.can_reference = !references.is_empty();
         self.state.layer_tools.can_delete = self.selection_masks.quick() ||
-            doc.can_delete_layers(&doc.layer_roots(&self.layer_interaction.selected));
+            self.can_delete_layer_rows(self.selected_layers());
         self.state.layer_tools.references_selected = !references.is_empty()
             && references
                 .iter()
@@ -9859,6 +9851,118 @@ mod tests {
     }
 
     #[test]
+    fn layer_row_navigation_preserves_mask_target_and_uses_visible_range() {
+        let mut s = session(Platform::Gtk);
+        let base = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        let top = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::AddMask { id: occurrence_token(top), replace: false });
+        let mask = s.engine.document().working.target;
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(base), extend: false, toggle: true });
+        let checked = s.selected_layers().clone();
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(top), extend: false, toggle: false });
+        assert_eq!(s.selected_layers(), &checked);
+        assert_eq!(s.engine.document().working.target, mask);
+        assert!(!s.state.layers.iter().find(|row| row.id == occurrence_token(top)).unwrap().content_selected);
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(base), extend: false, toggle: false });
+        assert_eq!(s.selected_layers(), &checked);
+        assert_eq!(s.engine.document().working.occurrence, Some(base));
+        assert!(s.state.layers.iter().find(|row| row.id == occurrence_token(base)).unwrap().content_selected);
+        layer(&mut s, LayerAction::Select { id: occurrence_token(base), mask: false });
+        layer(&mut s, LayerAction::New { group: true, clipped: false });
+        let group = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        let child = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::ToggleSelection { id: occurrence_token(top) });
+        layer(&mut s, LayerAction::Collapse { id: occurrence_token(group) });
+        assert_eq!(s.engine.document().working.occurrence, Some(group));
+        assert!(!s.selected_layers().contains(&child));
+        assert!(s.selected_layers().contains(&group));
+        layer(&mut s, LayerAction::SelectAllLayers { selected: true });
+        assert!(!s.selected_layers().contains(&child));
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(top), extend: true, toggle: true });
+        let rows: Vec<_> = s.state.layers.iter().map(|row| occurrence_handle(row.id).unwrap()).collect();
+        let start = rows.iter().position(|id| *id == group).unwrap();
+        let end = rows.iter().position(|id| *id == top).unwrap();
+        assert_eq!(s.selected_layers(), &rows[start.min(end)..=start.max(end)].iter().copied().collect());
+        assert_eq!(s.engine.document().working.occurrence, Some(group));
+        layer(&mut s, LayerAction::Collapse { id: occurrence_token(group) });
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(top), extend: false, toggle: false });
+        for _ in 0..2 { layer(&mut s, LayerAction::ToggleSelection { id: occurrence_token(child) }); }
+        layer(&mut s, LayerAction::Collapse { id: occurrence_token(group) });
+        assert_eq!(s.engine.document().working.layer_anchor, Some(child));
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(top), extend: true, toggle: false });
+        assert_eq!(s.engine.document().working.layer_anchor, Some(top));
+        assert_eq!(s.selected_layers(), &[top].into());
+        layer(&mut s, LayerAction::SelectRow { id: occurrence_token(group), extend: true, toggle: false });
+        assert_eq!(s.selected_layers(), &rows[start.min(end)..=start.max(end)].iter().copied().collect());
+        assert_eq!(s.engine.document().working.occurrence, Some(top));
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().scene().occurrence(child).is_none());
+    }
+
+    #[test]
+    fn layer_duplicate_delete_and_expanded_folder_restore_checked_rows() {
+        let mut s = session(Platform::Gtk);
+        let base = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        layer(&mut s, LayerAction::ToggleSelection { id: occurrence_token(base) });
+        let original = s.selected_layers().clone();
+        layer(&mut s, LayerAction::DuplicateSelected);
+        let copies = s.selected_layers().clone();
+        assert_eq!(copies.len(), 2);
+        assert!(copies.is_disjoint(&original));
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.selected_layers(), &original);
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.selected_layers(), &copies);
+        layer(&mut s, LayerAction::GroupSelected);
+        let group = s.engine.document().working.occurrence.unwrap();
+        assert_eq!(s.selected_layers(), &[group].into());
+        layer(&mut s, LayerAction::DeleteSelected);
+        assert!(s.engine.document().scene().occurrence(group).is_none());
+        for &id in &copies { assert_eq!(s.engine.document().scene().parent(id), None); }
+        let after_delete = s.selected_layers().clone();
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.selected_layers(), &[group].into());
+        for &id in &copies { assert_eq!(s.engine.document().scene().parent(id), Some(group)); }
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.selected_layers(), &after_delete);
+    }
+
+    #[test]
+    fn solo_retains_hidden_descendants_and_restores_its_history_snapshot() {
+        let mut s = session(Platform::Gtk);
+        layer(&mut s, LayerAction::New { group: true, clipped: false });
+        let group = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        let hidden = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::Visibility { id: occurrence_token(hidden), value: false });
+        layer(&mut s, LayerAction::Select { id: occurrence_token(group), mask: false });
+        let visibility = |s: &UiSession<Recorder>| s.engine.document().scene().order().iter().map(|id|
+            (*id, s.engine.document().scene().occurrence(*id).unwrap().visible)).collect::<std::collections::BTreeMap<_,_>>();
+        let before = visibility(&s);
+        layer(&mut s, LayerAction::SoloSelected);
+        let solo = visibility(&s);
+        assert!(!solo[&hidden]);
+        assert!(s.engine.document().working.solo_visibility.is_some());
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(visibility(&s), before);
+        assert!(s.engine.document().working.solo_visibility.is_none());
+        invoke(&mut s, CommandId::Redo);
+        assert_eq!(visibility(&s), solo);
+        assert!(s.engine.document().working.solo_visibility.is_some());
+        layer(&mut s, LayerAction::SoloSelected);
+        assert_eq!(visibility(&s), before);
+        assert!(s.engine.document().working.solo_visibility.is_none());
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().working.solo_visibility.is_some());
+        layer(&mut s, LayerAction::ShowAll);
+        assert!(s.engine.document().working.solo_visibility.is_none());
+        assert!(visibility(&s).values().all(|value| *value));
+    }
+
+    #[test]
     fn property_opacity_uses_layer_lock_and_validation_policy() {
         let property = |layer, opacity| UiAction::Effect {
             action: EffectAction::Set {
@@ -9994,14 +10098,14 @@ mod tests {
                 mask: false,
             },
         );
-        assert_eq!(s.layer_interaction.selected.len(), 2);
+        assert_eq!(s.engine.document().working.layer_selection.len(), 2);
         send(&mut s, LayerAction::DuplicateSelected);
         let doc = s.engine.document();
         let copies: Vec<_> = doc.ordered_layers().iter().copied().take(2).collect();
         assert_eq!(doc.scene().occurrence(copies[0]).unwrap().attachment, layer_core::Attachment::Clip);
         assert_eq!(doc.clipping_base(copies[0]), Some(copies[1]));
         assert_eq!(doc.clipping_base(shade), Some(occurrence_handle(1).unwrap()));
-        assert_eq!(s.layer_interaction.selected.len(), 2);
+        assert_eq!(s.engine.document().working.layer_selection.len(), 2);
         send(&mut s, LayerAction::DeleteSelected);
         assert_eq!(s.engine.document().scene().order().len(), 3);
         s.engine.undo().unwrap();
@@ -10045,6 +10149,67 @@ mod tests {
         let stack = layer_core::authored::RecordChange::replace(&document.artwork.stacks, root, Some(stack)).unwrap();
         s.engine.apply_edit(layer_core::Edit::Batch(vec![layer_core::Edit::Paint(paint), layer_core::Edit::Occurrence(occurrence), layer_core::Edit::Stack(stack)])).unwrap();
         assert_eq!(s.engine.document().scene().order().last(), Some(&bottom));
+    }
+
+    #[test]
+    fn copied_masks_keep_full_canvas_geometry_and_linkage_across_placed_owners() {
+        use layer_core::{Affine, Projective, LayerPlacement};
+        for linked in [false, true] { for perspective in [false, true] {
+            let mut s = session(Platform::Gtk);
+            layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
+            let source = occurrence_handle(1).unwrap();
+            let outer = if perspective { Projective([1.4, 0.1, 13., -0.2, 0.9, 17., 0.0001, -0.0002, 1.]) }
+                else { Projective::from_affine(Affine([1.4, 0.1, -0.2, 0.9, 13., 17.])) };
+            let mut original = s.engine.document().scene().occurrence(source).unwrap().clone();
+            original.translation = Point { x: 23., y: -11. };
+            original.placement = LayerPlacement::from_projective(outer);
+            let mask = original.mask.as_mut().unwrap();
+            mask.translation = Point { x: 39., y: 8. }; mask.linked = linked; mask.enabled = false; mask.inverted = true;
+            mask.placement = Projective::from_affine(Affine([0.8, 0.1, -0.1, 1.1, -3., 7.]));
+            s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, source, Some(original.clone())).unwrap())).unwrap();
+            let geometry = s.engine.document().target_geometry(SourceTarget::Coverage(original.mask.as_ref().unwrap().source));
+            layer(&mut s, LayerAction::CopyMask { id: 1 });
+            layer(&mut s, LayerAction::New { group: false, clipped: false });
+            let target = s.engine.document().working.occurrence.unwrap();
+            let mut destination = s.engine.document().scene().occurrence(target).unwrap().clone();
+            destination.translation = Point { x: -17., y: 31. };
+            destination.placement = LayerPlacement::from_projective(Projective([0.7, -0.1, -15., 0.2, 1.3, 21., -0.00015, 0.0001, 1.]));
+            s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, target, Some(destination)).unwrap())).unwrap();
+            let before = s.engine.document().clone();
+            layer(&mut s, LayerAction::PasteMask { id: occurrence_token(target) });
+            let doc = s.engine.document(); let copy = doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
+            assert_eq!((copy.linked, copy.enabled, copy.inverted), (linked, false, true));
+            assert_ne!(copy.source, original.mask.as_ref().unwrap().source);
+            for p in [Point { x: 20., y: 10. }, Point { x: 80., y: 60. }] {
+                let a = geometry.map(p).unwrap(); let b = doc.target_geometry(SourceTarget::Coverage(copy.source)).map(p).unwrap();
+                assert!((a.x-b.x).hypot(a.y-b.y)<0.001, "{a:?} != {b:?}");
+            }
+            let accepted = doc.clone(); s.engine.undo().unwrap(); test_support::assert_live_artwork_eq(s.engine.document(), &before);
+            s.engine.redo().unwrap(); test_support::assert_live_artwork_eq(s.engine.document(), &accepted);
+        }}
+    }
+
+    #[test]
+    fn copied_warped_mask_refuses_incompatible_destination_without_history() {
+        let mut s = session(Platform::Gtk);
+        layer(&mut s, LayerAction::AddMask { id: 1, replace: false });
+        let source = occurrence_handle(1).unwrap();
+        let mut original = s.engine.document().scene().occurrence(source).unwrap().clone();
+        original.placement.mesh = Some(std::sync::Arc::new(layer_core::MeshMap::identity(layer_core::Rect::from_extent([800, 600]), [3, 3]).unwrap().move_node(5, Point { x: 20., y: -8. }).unwrap()));
+        s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences, source, Some(original.clone())).unwrap())).unwrap();
+        layer(&mut s, LayerAction::CopyMask { id: 1 });
+        layer(&mut s, LayerAction::New { group: false, clipped: false });
+        let target = s.engine.document().working.occurrence.unwrap();
+        let action = UiAction::Layer { action: LayerAction::PasteMask { id: occurrence_token(target) } };
+        let before = s.engine.document().clone();
+        let entry = s.command_catalog().into_iter().find(|entry| entry.id == command_catalog::identity(&action)).unwrap();
+        assert!(!entry.enabled); assert_eq!(entry.disabled_reason.as_deref(), Some(s.localization().text(MessageId::COMMANDS_APPLY_TRANSFORM_BEFORE_EDITING).as_ref()));
+        assert!(s.dispatch(action).is_err()); assert_eq!(s.engine.document(), &before);
+        let mut destination = before.scene().occurrence(target).unwrap().clone(); destination.placement = original.placement.clone();
+        s.engine.apply_edit(layer_core::Edit::Occurrence(layer_core::authored::RecordChange::replace(&before.artwork.occurrences, target, Some(destination)).unwrap())).unwrap();
+        layer(&mut s, LayerAction::PasteMask { id: occurrence_token(target) });
+        let doc=s.engine.document();let mask=doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
+        assert_eq!(doc.target_geometry(SourceTarget::Coverage(mask.source)),doc.target_geometry(SourceTarget::Coverage(original.mask.as_ref().unwrap().source)));
     }
 
     #[test]
@@ -10095,7 +10260,7 @@ mod tests {
         let original = doc.scene().occurrence(occurrence_handle(1).unwrap()).unwrap().mask.as_ref().unwrap();
         let copy = doc.scene().occurrence(target).unwrap().mask.as_ref().unwrap();
         assert_ne!(original.source, copy.source);
-        assert_eq!(doc.target_offset(layer_core::authored::SourceTarget::Coverage(original.source)), doc.target_offset(layer_core::authored::SourceTarget::Coverage(copy.source)));
+        assert_eq!(doc.target_geometry(layer_core::authored::SourceTarget::Coverage(original.source)).projective(), doc.target_geometry(layer_core::authored::SourceTarget::Coverage(copy.source)).projective());
         assert!(!doc.artwork.coverage.get(original.source).unwrap().raster.is_empty());
         assert_eq!(doc.artwork.coverage.get(original.source).unwrap().raster.identity(), doc.artwork.coverage.get(copy.source).unwrap().raster.identity());
         s.engine.undo().unwrap();
@@ -17381,7 +17546,7 @@ mod tests {
         app.dispatch(UiAction::SelectLayer { id }).unwrap();
         invoke(&mut app, CommandId::LowerLayer);
         assert_eq!(app.state.layers[1].id, id);
-        assert!(!app.command(CommandId::LowerLayer).enabled);
+        assert!(app.command(CommandId::LowerLayer).enabled);
         app.dispatch(UiAction::SetLayerOpacity {
             id: Some(id),
             opacity: 0.35,
@@ -17390,7 +17555,7 @@ mod tests {
         assert_eq!(app.state.layers[1].opacity, 0.35);
         invoke(&mut app, CommandId::DeleteLayer);
         assert_eq!(app.state.layers.len(), 2);
-        assert!(app.state.layers.iter().any(|l| l.selected && l.id == 1));
+        assert!(app.state.layers.iter().any(|l| l.selected && l.id == 2));
     }
     #[test]
     fn pen_uses_camera_and_pressure_without_ui_updates_per_move() {

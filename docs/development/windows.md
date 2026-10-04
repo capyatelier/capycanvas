@@ -132,6 +132,8 @@ output; a row drop uses shared insertion policy. Native drag feedback uses the s
 normalized destination and release revalidates the original hit. Right swipes dispatch
 the shared row action. `exercise-layers.ps1 -Relationships` checks these interactions
 and their undo history in both themes, alongside the existing pickup fixture variants.
+The default layers fixture closes with a focused opacity draft, reopens the same
+private profile, and verifies the saved draft and its clean Undo checkpoint.
 
 ### Environment switches
 

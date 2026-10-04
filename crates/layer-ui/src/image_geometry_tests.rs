@@ -410,10 +410,22 @@ fn snapping_excludes_moved_nested_ancestors_but_keeps_siblings_and_cousins() {
     let eligible=|s:&UiSession<Recorder>|s.measured_snap_bounds().into_iter().map(|(id,_)|id).collect::<Vec<_>>();
     let mut expected=vec![sibling,cousin_group,cousin,unrelated];expected.sort();
     assert_eq!(eligible(&s),expected);
-    s.layer_interaction.selected=[nested].into_iter().collect();
+    s.set_selected_layers([nested].into_iter().collect()).unwrap();
+    s.frame(2,2).unwrap();
+    for _ in 0..20 {
+        s.prepare_transform_snapping().unwrap();
+        if !s.content_bounds.busy() {break;}
+        reply_bounds(&mut s,[0.,0.,10.,10.]);
+    }
     let mut expected=vec![cousin_group,cousin,unrelated];expected.sort();
     assert_eq!(eligible(&s),expected,"selected group excludes its subtree and ancestors");
-    s.layer_interaction.selected=[moved,cousin].into_iter().collect();
+    s.set_selected_layers([moved,cousin].into_iter().collect()).unwrap();
+    s.frame(3,3).unwrap();
+    for _ in 0..20 {
+        s.prepare_transform_snapping().unwrap();
+        if !s.content_bounds.busy() {break;}
+        reply_bounds(&mut s,[0.,0.,10.,10.]);
+    }
     let mut expected=vec![sibling,unrelated];expected.sort();
     assert_eq!(eligible(&s),expected,"multiple nested roots exclude each ancestor chain only");
 }

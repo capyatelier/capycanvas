@@ -526,7 +526,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let alias = |action: UiAction| {
             let command = match &action {
                 UiAction::Layer { action: LayerAction::Clear { id } } if *id == active && artwork => CommandId::ClearLayer,
-                UiAction::Layer { action: LayerAction::Delete { id } } if *id == active => CommandId::DeleteLayer,
+                UiAction::Layer { action: LayerAction::DeleteSelected } => CommandId::DeleteLayer,
+                UiAction::Layer { action: LayerAction::Delete { id } }
+                    if *id == active && self.selected_layers().len() == 1 && document.working.occurrence.is_some_and(|h| self.selected_layers().contains(&h)) => CommandId::DeleteLayer,
                 UiAction::Layer { action: LayerAction::RasterizeSource { id } } if *id == active && artwork => {
                     CommandId::RasterizeSource
                 }
@@ -1250,10 +1252,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             C::TransformAgain => self.transform_again_refusal().unwrap_or_else(|| l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_TRANSFORM_FIRST)),
             C::TransformSnapping => l.text(MessageId::COMMANDS_START_A_TRANSFORM_FIRST),
             C::ScaleRotate => l.text(MessageId::COMMANDS_SELECT_UNLOCKED_PAINT_CONTENT_OR_A_LAYER_MASK),
-            C::ClearLayer | C::FillSelection | C::RaiseLayer | C::LowerLayer if !paint => l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER),
+            C::ClearLayer | C::FillSelection if !paint => l.text(MessageId::COMMANDS_SELECT_A_PAINT_LAYER),
             C::ClearLayer | C::FillSelection if document.working.target.is_some_and(layer_core::SourceTarget::is_coverage) => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),
-            C::RaiseLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_TOP),
-            C::LowerLayer => l.text(MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_BOTTOM),
+            C::RaiseLayer | C::LowerLayer => match self.layer_step_edit(command == C::RaiseLayer).err() {
+                Some(layer_core::DocumentError::InvalidLayerOperation("Invalid layer position")) => l.text(if command == C::RaiseLayer {
+                    MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_TOP
+                } else { MessageId::COMMANDS_THE_LAYER_IS_ALREADY_AT_THE_BOTTOM }),
+                Some(error) => layer_error(error, l),
+                None => l.text(MessageId::COMMANDS_UNAVAILABLE_FOR_THE_SELECTED_LAYERS),
+            },
             _ => l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET),
         };
         reason
@@ -1275,7 +1282,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return reason;
         }
         let document = self.engine.document();
-        let roots = document.layer_roots(&self.layer_interaction.selected);
+        let roots = document.layer_roots(self.selected_layers());
         let apply_mask_refusal = document
             .scene().occurrence(document.working.occurrence.unwrap_or_default())
             .and_then(|l| art_layers::apply_mask_refusal(l.kind(), self.localization()));
@@ -1283,14 +1290,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             UiAction::Layer { action: LayerAction::GroupSelected } => {
                 document.group_layers_edit(&roots, layer_core::LayerBlend::Normal, "").err().map(|e| layer_error(e, l).to_string())
             }
-            UiAction::Layer { action: LayerAction::Ungroup { .. } } => {
-                document.ungroup_layer_edit(document.working.occurrence.unwrap_or_default()).err().map(|e| layer_error(e, l).to_string())
+            UiAction::Layer { action: LayerAction::Ungroup { id } } => {
+                super::occurrence_handle(*id).ok().and_then(|h| document.ungroup_layer_edit(h).err()).map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer { action: LayerAction::DeleteSelected } => {
-                document.delete_layers_edit(&roots).err().map(|e| layer_error(e, l).to_string())
+                self.layer_deletion_edit(self.selected_layers()).err().map(|e| layer_error(e, l).to_string())
             }
-            UiAction::Layer { action: LayerAction::Delete { .. } } => {
-                document.delete_layers_edit(&[document.working.occurrence.unwrap_or_default()]).err().map(|e| layer_error(e, l).to_string())
+            UiAction::Layer { action: LayerAction::Delete { id } } => {
+                super::occurrence_handle(*id).ok().and_then(|h| self.layer_deletion_edit(&[h].into()).err()).map(|e| layer_error(e, l).to_string())
             }
             UiAction::Layer {
                 action:
@@ -1304,11 +1311,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 Some(l.text(MessageId::COMMANDS_CREATE_A_SELECTION_FIRST).to_string())
             }
-            UiAction::Layer { action: LayerAction::PasteMask { .. } }
-                if self.layer_interaction.clipboard_mask.is_none() =>
-            {
-                Some(l.text(MessageId::COMMANDS_COPY_A_LAYER_MASK_FIRST).to_string())
-            }
+            UiAction::Layer { action: LayerAction::PasteMask { id } }
+                if occurrence_handle(*id).is_ok_and(|handle| self.copied_mask_use(handle).is_err()) =>
+                occurrence_handle(*id).ok().and_then(|handle| self.copied_mask_use(handle).err()),
             UiAction::Layer { action: LayerAction::CopyMask { .. } | LayerAction::ApplyMask { .. } }
                 if document.working.occurrence.and_then(|handle| document.scene().occurrence(handle)).is_some_and(|l| l.mask.is_none()) =>
             {

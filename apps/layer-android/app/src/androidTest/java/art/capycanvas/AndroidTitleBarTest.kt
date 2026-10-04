@@ -63,10 +63,10 @@ class AndroidTitleBarTest {
     }
     private fun send(value: JSONObject) { instrumentation.runOnMainSync { host.workspaceInput(value) }; idle() }
     private fun capture() = host.workspaceCapture()
-    private fun event(action: Int, next: Offset = point) {
+    private fun event(action: Int, next: Offset = point, meta: Int = 0) {
         point = next
         if (action == MotionEvent.ACTION_DOWN) downAt = SystemClock.uptimeMillis()
-        val event = motion(tool, action, next, downAt, button)
+        val event = motion(tool, action, next, downAt, button, meta)
         try { instrumentation.runOnMainSync { checkNotNull(pressed).view.dispatchTouchEvent(event) } }
         finally { event.recycle() }
         if (action in listOf(MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL)) pressed = null
@@ -1225,11 +1225,13 @@ class AndroidTitleBarTest {
 
     @Test fun layerSwipeFrameTiming() {
         val args=androidx.test.platform.app.InstrumentationRegistry.getArguments()
-        org.junit.Assume.assumeTrue(args.getString("layerSwipeBenchmark")=="true")
-        host.newDocument(6000,4000)
-        host.importImage(java.io.File(checkNotNull(args.getString("photo"))))
-        action(obj("type" to "invoke","command" to "apply_transform"))
-        for(id in listOf(1,2))action(obj("type" to "layer","action" to obj("op" to "delete","id" to id)))
+        val reorder=args.getString("layerReorderBenchmark")=="true"
+        org.junit.Assume.assumeTrue(reorder || args.getString("layerSwipeBenchmark")=="true")
+        val width=args.getString("width")?.toInt() ?: 6000
+        val height=args.getString("height")?.toInt() ?: 4000
+        val label=if(reorder) "layer-reorder" else "layer-swipe"
+        host.openDocument(java.io.File(checkNotNull(args.getString("photo"))))
+        assertTrue(state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width")==width && it.optInt("height")==height })
         action(obj("type" to "layer","action" to obj("op" to "new","group" to false,"clipped" to false)))
         if(args.getString("layerRelationshipBenchmark")=="true") {
             val owner=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
@@ -1245,22 +1247,24 @@ class AndroidTitleBarTest {
         action(obj("type" to "invoke","command" to "fit_canvas"))
         val id=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
         val frames=java.util.Collections.synchronizedList(mutableListOf<LongArray>())
-        val thread=android.os.HandlerThread("layer-swipe-frames").apply { start() }
+        val thread=android.os.HandlerThread("$label-frames").apply { start() }
         lateinit var window: android.view.Window
-        scenario.onActivity { window=it.window }
+        scenario.onActivity { window=it.window; window.addFlags(android.view.WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         val listener=android.view.Window.OnFrameMetricsAvailableListener { _,metrics,_ ->
             frames.add(longArrayOf(metrics.getMetric(android.view.FrameMetrics.VSYNC_TIMESTAMP),
                 metrics.getMetric(android.view.FrameMetrics.TOTAL_DURATION)))
         }
         instrumentation.runOnMainSync { window.addOnFrameMetricsAvailableListener(listener,android.os.Handler(thread.looper)) }
-        tool=MotionEvent.TOOL_TYPE_FINGER
+        tool=if(reorder) MotionEvent.TOOL_TYPE_MOUSE else MotionEvent.TOOL_TYPE_FINGER
         try {
             for(run in 0..3) {
                 down("layer-row-$id");val start=point
-                event(MotionEvent.ACTION_MOVE,start+Offset(24*density,0f))
+                event(MotionEvent.ACTION_MOVE,start+Offset((if(reorder) -24 else 24)*density,0f))
+                if(reorder)waitFor("moving layer preview") { node("layer-drag-preview")!=null }
                 val done=java.util.concurrent.CountDownLatch(1)
                 val duration=if(run==0)1000L else 5000L
                 val begin=SystemClock.uptimeMillis()
+                val beginNs=System.nanoTime()
                 frames.clear()
                 lateinit var callback: android.view.Choreographer.FrameCallback
                 instrumentation.runOnMainSync {
@@ -1270,8 +1274,9 @@ class AndroidTitleBarTest {
                         if(elapsed>=duration)done.countDown()
                         else {
                             val cycle=(elapsed%1000)/500f
-                            val dx=(24+40*(if(cycle<=1)cycle else 2-cycle))*density
-                            val move=motion(tool,MotionEvent.ACTION_MOVE,start+Offset(dx,0f),downAt,button)
+                            val fraction=if(cycle<=1)cycle else 2-cycle
+                            val delta=if(reorder) Offset(-24*density,40*density*fraction) else Offset((24+40*fraction)*density,0f)
+                            val move=motion(tool,MotionEvent.ACTION_MOVE,start+delta,downAt,button)
                             try { checkNotNull(pressed).view.dispatchTouchEvent(move) } finally { move.recycle() }
                             clock.postFrameCallback(callback)
                         }
@@ -1280,13 +1285,18 @@ class AndroidTitleBarTest {
                 }
                 try { assertTrue(done.await(15,java.util.concurrent.TimeUnit.SECONDS)) }
                 finally { instrumentation.runOnMainSync { android.view.Choreographer.getInstance().removeFrameCallback(callback) } }
-                val rows=synchronized(frames) { frames.toList() }
+                val endNs=System.nanoTime()
+                SystemClock.sleep(200)
+                val rows=synchronized(frames) { frames.filter { it[0] in beginNs..endNs } }
                 event(MotionEvent.ACTION_CANCEL);idle()
                 if(run>0) {
-                    val result=obj("run" to run,"duration_ms" to duration,"camera" to state().getJSONObject("camera"),
+                    assertTrue("Moving frames were measured",rows.size>1)
+                    val result=obj("run" to run,"duration_ms" to duration,"begin_ns" to beginNs,"end_ns" to endNs,
+                        "width" to width,"height" to height,"photo" to args.getString("photo"),"motion" to label,
+                        "camera" to state().getJSONObject("camera"),
                         "layers" to state().array("layers"),"frames" to JSONArray(rows.map { JSONArray(it.toList()) }))
-                    java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"layer-swipe-$run.json").writeText(result.toString())
-                    android.util.Log.i("LayerSwipePerf","Run $run: ${rows.size} moving frames in $duration ms")
+                    java.io.File(instrumentation.targetContext.getExternalFilesDir(null),"$label-$run.json").writeText(result.toString())
+                    android.util.Log.i("LayerSwipePerf","$label run $run: ${rows.size} moving frames in $duration ms")
                 }
             }
         } finally {
@@ -1353,14 +1363,14 @@ class AndroidTitleBarTest {
             workspace.getJSONObject("layout").array("bands").objects().first { it.getJSONObject("root").toString().contains("layers") }.put("extent",width)
             action(obj("type" to "restore_workspace","workspace" to workspace))
             action(obj("type" to "set_theme","theme" to theme))
+            shot("layer-relationships-$theme-$width")
             val ordinary=bounds("layer-row-$base")
             for(id in listOf(owner,blur,curves,isolated,through,saved)) {
                 assertEquals(ordinary.width,bounds("layer-row-$id").width,1f)
-                assertEquals(ordinary.height,bounds("layer-row-$id").height,1f)
+                assertEquals("Uniform row height: ${row(id).getString("label")}, $width/$theme",ordinary.height,bounds("layer-row-$id").height,1f)
                 assertEquals(30*density,bounds("layer-content-$id").width,1f)
             }
             assertEquals(30*density,bounds("selection-load-$saved").width,1f)
-            shot("layer-relationships-$theme-$width")
         }
         val first=order().first()
         val firstThumb=bounds("layer-content-$first")
@@ -1416,6 +1426,70 @@ class AndroidTitleBarTest {
             event(MotionEvent.ACTION_UP);idle()
             if(thumbnail)assertEquals(isolated,row(curves).getJSONObject("relationship").getLong("target")) else assertNotEquals(before,order())
             undo();assertEquals(before,order());assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+        }
+        for(theme in listOf("light","dark")) {
+            host.newDocument(2048,1536)
+            repeat(3) { layer(obj("op" to "new","group" to false,"clipped" to false)) }
+            action(obj("type" to "restore_workspace","workspace" to relationshipWorkspace))
+            action(obj("type" to "set_theme","theme" to theme))
+            val before=order()
+            val checked=before.take(3)
+            fun selection()=state().array("layers").objects().filter { it.getBoolean("selected") }.map { it.getLong("id") }
+            fun clickRow(id:Long,meta:Int=0) {
+                val b=bounds("layer-row-$id")
+                instrumentation.runOnMainSync { pressed=checkNotNull(node("layer-row-$id")).first }
+                val p=Offset(b.right-64*density,b.center.y)
+                event(MotionEvent.ACTION_DOWN,p,meta);event(MotionEvent.ACTION_UP,p,meta);idle()
+            }
+            tool=MotionEvent.TOOL_TYPE_MOUSE
+            layer(obj("op" to "add_mask","id" to checked[0],"replace" to false))
+            fun clickLink() {
+                val b=bounds("layer-content-${checked[0]}")
+                instrumentation.runOnMainSync { pressed=checkNotNull(node("layer-row-${checked[0]}")).first }
+                val p=Offset(b.right+8*density,b.center.y)
+                event(MotionEvent.ACTION_DOWN,p);event(MotionEvent.ACTION_UP,p);idle()
+            }
+            assertTrue(row(checked[0]).getBoolean("mask_linked"))
+            shot("layer-mask-linked-$theme")
+            clickLink();assertFalse(row(checked[0]).getBoolean("mask_linked"))
+            shot("layer-mask-unlinked-$theme")
+            layer(obj("op" to "lock","id" to checked[0],"value" to true))
+            clickLink();assertFalse("Locked layer disables mask linking",row(checked[0]).getBoolean("mask_linked"))
+            layer(obj("op" to "lock","id" to checked[0],"value" to false))
+            clickLink();assertTrue(row(checked[0]).getBoolean("mask_linked"))
+            layer(obj("op" to "select","id" to checked[0],"mask" to true))
+            clickRow(checked[0])
+            assertTrue("Active row retains its mask target",row(checked[0]).getBoolean("mask_selected"))
+            assertFalse(row(checked[0]).getBoolean("content_selected"))
+            clickRow(checked[2],KeyEvent.META_SHIFT_ON)
+            assertEquals("Shift extends the visible checked range",checked,selection())
+            assertTrue("Range selection preserves the editing target",row(checked[0]).getBoolean("mask_selected"))
+            shot("layer-range-mask-$theme")
+            clickRow(checked[1])
+            assertEquals("A checked row retains the other checks",checked,selection())
+            assertTrue(row(checked[1]).getBoolean("content_selected"))
+            assertFalse(row(checked[0]).getBoolean("mask_selected"))
+            val target=bounds("layer-row-${before[3]}")
+            down("layer-row-${checked[1]}")
+            event(MotionEvent.ACTION_MOVE,point+Offset(-30*density,0f))
+            waitFor("checked block pickup") { node("layer-drag-preview")!=null }
+            event(MotionEvent.ACTION_MOVE,Offset(target.right-64*density,target.bottom-2*density))
+            event(MotionEvent.ACTION_UP);idle()
+            assertEquals("Dragging a checked row moves the ordered block",listOf(before[3])+checked+before.drop(4),order())
+            undo();assertEquals(before,order());assertEquals(checked,selection())
+            layer(obj("op" to "new","group" to true,"clipped" to false))
+            val folder=current()
+            assertTrue(row(folder).getBoolean("group"))
+            for(id in checked)assertEquals("New group contains every checked layer",1,row(id).getInt("depth"))
+            shot("layer-checked-group-$theme")
+            layer(obj("op" to "select_all_layers","selected" to false))
+            layer(obj("op" to "select_row","id" to folder,"extend" to false,"toggle" to false))
+            layer(obj("op" to "delete_selected"))
+            assertFalse(order().contains(folder))
+            for(id in checked)assertEquals("Deleting an expanded group promotes unchecked children",0,row(id).getInt("depth"))
+            undo();assertTrue(order().contains(folder))
+            for(id in checked)assertEquals(1,row(id).getInt("depth"))
+            undo();assertEquals(before,order());assertEquals(checked,selection())
         }
         assertNull(host.actionError)
     }

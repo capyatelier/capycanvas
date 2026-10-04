@@ -415,6 +415,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             let target = occurrence.and_then(|handle| scene.source_target(handle));
             document.working.occurrence = occurrence;
             document.working.target = target;
+            document.working.layer_selection = occurrence.into_iter().collect();
+            document.working.layer_anchor = occurrence;
         }
         let photo_name = location.is_none().then(|| {
             document.scene().order().iter().find_map(|handle| {
@@ -1144,6 +1146,9 @@ mod capture_tests {
         let opened = UiSession::from_project(Recorder::default(), neutral.clone(), None, [128, 128], Platform::Gtk).unwrap();
         assert_eq!(opened.engine.document().working.occurrence, initial.working.occurrence);
         assert_eq!(opened.engine.document().working.target, initial.working.target);
+        assert_eq!(opened.engine.document().working.layer_selection, initial.working.layer_selection);
+        assert_eq!(opened.engine.document().working.layer_anchor, initial.working.layer_anchor);
+        assert_eq!(opened.state.layers.iter().filter(|row| row.selected).count(), 1);
         assert_eq!(opened.engine.document().working.generation, 0);
         assert_eq!(opened.engine.checkpoint(), 0);
         crate::session::test_support::assert_live_artwork_eq(opened.engine.document(), &neutral);
@@ -1157,6 +1162,13 @@ mod capture_tests {
         assert_eq!(restored.engine.document().working, working);
         assert_eq!(restored.engine.checkpoint(), 0);
         crate::session::test_support::assert_live_artwork_eq(restored.engine.document(), &parked);
+        let mut unchecked = opened.engine.document().clone();
+        unchecked.working.layer_selection.clear();
+        unchecked.working.generation = 1;
+        let working = unchecked.working.clone();
+        let restored = UiSession::from_project(Recorder::default(), unchecked, None, [128, 128], Platform::Gtk).unwrap();
+        assert_eq!(restored.engine.document().working, working);
+        assert!(restored.state.layers.iter().all(|row| !row.selected));
     }
 
     #[test]

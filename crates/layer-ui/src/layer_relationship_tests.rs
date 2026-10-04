@@ -2,6 +2,127 @@ fn relationship_row(s: &UiSession<Recorder>, id: u64) -> &LayerState {
     s.state.layers.iter().find(|row| row.id == id).unwrap()
 }
 
+#[test]
+fn new_group_wraps_checked_rows_and_reordering_moves_them_together() {
+    let mut s = session(Platform::Gtk);
+    let first = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let second = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let third = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::ToggleSelection { id: occurrence_token(first) });
+    let checked = s.selected_layers().clone();
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let group = s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().children(Some(group)), [third, first]);
+    layer(&mut s, LayerAction::Ungroup { id: occurrence_token(group) });
+    assert_eq!(s.selected_layers(), &checked);
+    invoke(&mut s, CommandId::Undo);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.selected_layers(), &checked);
+    assert_eq!(s.engine.document().scene().children(None)[..3], [third, second, first]);
+    let paper = s.state.layers.iter().find(|row| row.label == "Paper").unwrap().id;
+    layer(&mut s, LayerAction::Drop { id: occurrence_token(third), target: paper, fraction: 1., surface: LayerDropSurface::Row });
+    assert_eq!(s.engine.document().scene().children(None), [second, occurrence_handle(paper).unwrap(), third, first]);
+    assert_eq!(s.selected_layers(), &checked);
+    invoke(&mut s, CommandId::Undo);
+    invoke(&mut s, CommandId::DeleteLayer);
+    assert!(s.engine.document().scene().occurrence(third).is_none());
+    assert!(s.engine.document().scene().occurrence(first).is_none());
+    assert!(s.engine.document().scene().occurrence(second).is_some());
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.selected_layers(), &checked);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(first), value: true });
+    assert!(!s.command(CommandId::LowerLayer).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::LowerLayer).as_deref(), Some("The layer is locked"));
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(first), value: false });
+    layer(&mut s, LayerAction::Select { id: occurrence_token(third), mask: false });
+    layer(&mut s, LayerAction::ToggleSelection { id: occurrence_token(second) });
+    for command in [CommandId::RaiseLayer, CommandId::LowerLayer] {
+        assert!(!s.command(command).enabled);
+        assert_eq!(s.command_disabled_reason(command).as_deref(), Some("Select layers in the same group"));
+    }
+}
+
+#[test]
+fn layer_steps_use_siblings_for_paint_groups_and_filters() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let group = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let first = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let second = s.engine.document().working.occurrence.unwrap();
+    assert!(!s.command(CommandId::RaiseLayer).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::RaiseLayer).as_deref(), Some("The layer is already at the top"));
+    assert!(s.command(CommandId::LowerLayer).enabled);
+    invoke(&mut s, CommandId::LowerLayer);
+    assert_eq!(s.engine.document().scene().children(Some(group)), [first, second]);
+    assert!(!s.command(CommandId::LowerLayer).enabled);
+    assert_eq!(s.command_disabled_reason(CommandId::LowerLayer).as_deref(), Some("The layer is already at the bottom"));
+    invoke(&mut s, CommandId::RaiseLayer);
+    assert_eq!(s.engine.document().scene().children(Some(group)), [second, first]);
+    insert_effect(&mut s, "curves");
+    let filter = s.engine.document().working.occurrence.unwrap();
+    assert!(!relationship_row(&s, occurrence_token(filter)).content_selected);
+    invoke(&mut s, CommandId::LowerLayer);
+    assert_eq!(s.engine.document().scene().children(Some(group)), [second, filter, first]);
+    layer(&mut s, LayerAction::Select { id: occurrence_token(group), mask: false });
+    invoke(&mut s, CommandId::LowerLayer);
+    assert_eq!(s.engine.document().scene().children(None)[1], group);
+}
+
+#[test]
+fn layer_creation_obeys_locks_and_reveals_its_destination() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let group = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::Collapse { id: occurrence_token(group) });
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let child = s.engine.document().working.occurrence.unwrap();
+    assert!(relationship_row(&s, occurrence_token(child)).selected);
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(group), value: true });
+    let before = s.engine.document().clone();
+    assert!(s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).is_err());
+    assert_eq!(s.engine.document(), &before);
+    let menu = s.layer_menu(occurrence_token(child), false).unwrap();
+    assert!(!menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten())
+        .find(|item| matches!(item.action, Some(UiAction::Layer { action: LayerAction::Duplicate { .. } }))).unwrap().enabled);
+    layer(&mut s, LayerAction::Lock { id: occurrence_token(group), value: false });
+    layer(&mut s, LayerAction::SelectAllLayers { selected: true });
+    layer(&mut s, LayerAction::DeleteSelected);
+    assert!(s.engine.document().scene().order().is_empty());
+    assert_eq!(s.image_layer_destination(None).unwrap(), (0, None));
+    insert_effect(&mut s, "solid_color");
+    assert_eq!(s.engine.document().scene().order().len(), 1);
+    assert!(s.state.layers[0].selected);
+    assert!(!s.state.layers[0].content_selected);
+}
+
+#[test]
+fn collapsed_folder_deletion_keeps_unchecked_external_effects() {
+    let mut s = session(Platform::Gtk);
+    layer(&mut s, LayerAction::New { group: true, clipped: false });
+    let group = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::New { group: false, clipped: false });
+    let child = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::Select { id: occurrence_token(group), mask: false });
+    insert_effect(&mut s, "curves");
+    let effect = s.engine.document().working.occurrence.unwrap();
+    layer(&mut s, LayerAction::Clip { id: occurrence_token(effect), value: true });
+    layer(&mut s, LayerAction::Select { id: occurrence_token(group), mask: false });
+    assert!(!s.state.layer_tools.can_delete);
+    layer(&mut s, LayerAction::Collapse { id: occurrence_token(group) });
+    assert!(s.state.layer_tools.can_delete);
+    layer(&mut s, LayerAction::DeleteSelected);
+    assert!(s.engine.document().scene().occurrence(group).is_none());
+    assert!(s.engine.document().scene().occurrence(child).is_none());
+    assert_eq!(s.engine.document().scene().occurrence(effect).unwrap().attachment, layer_core::Attachment::None);
+    invoke(&mut s, CommandId::Undo);
+    assert_eq!(s.engine.document().scene().effect_owner(effect), Some(group));
+}
+
 fn assert_adjacent_effect_connections(s: &UiSession<Recorder>) {
     for edge in s.state.layer_tools.connections.iter().filter(|edge| edge.kind == LayerRelationKind::Effect) {
         let from = s.state.layers.iter().position(|row| row.id == edge.from).unwrap();
@@ -58,6 +179,7 @@ fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
         effects.push(id);
         assert_eq!(relationship_row(&s, id).relationship, Some(LayerRelation { kind: LayerRelationKind::Effect, target: owner }));
         assert!(relationship_row(&s, id).adjustment_effect);
+        assert_eq!(relationship_row(&s, id).selection_icon, "layer-selection-checked-symbolic");
     }
     assert_eq!(relationship_row(&s, owner).relationship, Some(LayerRelation { kind: LayerRelationKind::Clip, target: base }));
     let connections = s.state.layer_tools.connections.clone();

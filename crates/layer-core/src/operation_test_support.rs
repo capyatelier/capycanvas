@@ -10,6 +10,8 @@ pub fn document(size: [u32; 2], names: &[&str]) -> Document {
         insert_paint(&mut doc, *name, index, None);
     }
     doc.working.occurrence = doc.scene().children(None).first().copied();
+    doc.working.layer_selection = doc.working.occurrence.into_iter().collect();
+    doc.working.layer_anchor = doc.working.occurrence;
     doc.working.target = doc.working.occurrence.and_then(|h| doc.scene().source_target(h));
     doc
 }
@@ -105,6 +107,8 @@ pub fn activate(doc: &mut Document, name: &str) {
     refresh(doc);
     let h = id(doc, name);
     doc.working.occurrence = Some(h);
+    doc.working.layer_selection = [h].into();
+    doc.working.layer_anchor = Some(h);
     doc.working.target = doc.scene().source_target(h);
 }
 pub fn restored(before: &Document, after: &Document) {

@@ -91,6 +91,8 @@ impl Document {
         };
         let mut working = self.working.clone();
         working.occurrence = Some(active);
+        working.layer_selection = [active].into();
+        working.layer_anchor = Some(active);
         working.target = Some(target);
         working.inspect_mask = None;
         Ok(RetouchLayerPlan {
@@ -220,6 +222,8 @@ impl Document {
         hidden.visible = false;
         let mut working = self.working.clone();
         working.occurrence = Some(active);
+        working.layer_selection = [active].into();
+        working.layer_anchor = Some(active);
         working.target = Some(high_target);
         working.inspect_mask = None;
         Ok(RetouchLayerPlan {

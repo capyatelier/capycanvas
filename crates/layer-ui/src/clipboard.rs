@@ -399,6 +399,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         edits.push(Edit::Stack(RecordChange::replace(&artwork.stacks, containing, Some(stack))?));
         let mut working = document.working.clone();
         working.occurrence = Some(layers[0]);
+        working.layer_selection = layers.iter().copied().collect();
+        working.layer_anchor = Some(layers[0]);
         working.target = match artwork.occurrences.get(layers[0]).unwrap().content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), _ => unreachable!() };
         working.inspect_mask = None;
         if masked { working.selection = None; }
@@ -406,7 +408,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let edit = Edit::Batch(edits);
         self.source_edit_candidates(&edit, Default::default())?;
         self.layer_edit(edit)?;
-        self.layer_interaction.selected = layers.into_iter().collect();
         self.refresh_document();
         self.refresh_commands();
         self.layer_interaction.changed = true;

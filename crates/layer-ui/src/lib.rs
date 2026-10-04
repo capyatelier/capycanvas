@@ -1199,6 +1199,7 @@ pub struct LayerState {
     pub opacity: f32,
     pub selected: bool,
     pub mask_selected: bool,
+    pub content_selected: bool,
     /// Checked-selection precedence is shared across native hosts.
     pub selection_icon: &'static str,
     pub load_selection_tooltip: &'static str,

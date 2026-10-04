@@ -45,6 +45,7 @@ current-source results.
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |
 | Retained photo translation with snapping (61 MP) | 120 | **Not met.** 59.29–59.87 completed updates/s; matched snapping-off run 59.46–59.71/s | [Transform snapping](#transform-snapping), 2026-10-02 |
+| Retained dry-photo Transform body drag (61 MP) | 120 | **Not met.** 93.68–95.48 renderer-completed updates/s; completion gap p99 20.70–21.58 ms; canvas presentation unmeasured | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
 | Imported dry-photo translation, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 64.252–65.299 completed updates/s; completion gap p99 24.150–24.576 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
 | Imported dry-photo Distort, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 60.489–61.278 completed updates/s; completion gap p99 26.172–27.025 ms; baseline setup fails | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
 | Imported dry-photo Warp, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 18.961–19.375 completed updates/s; completion gap p99 88.404–91.979 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
@@ -94,7 +95,7 @@ current-source results.
 | Gradient drag | 120 | | |
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
-| Layer reorder drag | 120 | | |
+| Layer reorder drag | 120 | **Met.** Native UI 117.20–119.41 fps; moving-frame gap p99 8.38–16.67 ms | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
@@ -1725,3 +1726,43 @@ the 120 fps target. Hover leaves the artwork revision unchanged. Raw records and
 the report are in `artifacts/tool-cursors/viewport-final/` and
 `artifacts/tool-cursors/viewport-report.json`. Low and mid reference tablets
 remain unmeasured for these cursor modes.
+
+## Layer reorder and retained photo translation
+
+On 2026-10-04, the reference MovinkPad Pro 14 runs the 9504 × 6336 Sony photo
+with one empty paint layer at Fit, default workspace and glass, density 280,
+and thermal status 0 before and after each benchmark. The isolated benchmark
+uses optimized release Rust and nondebuggable Kotlin, based on `7fcca04e5` with
+the layer audit changes. App SHA256 is `dee1a234c5e2`, test `31c1ba8ea110`, and
+production-source manifest `206808fab2dc`; full hashes and source-file digests
+are in `artifacts/layer-audit-validation/performance/build.local.json`.
+
+Each benchmark primes and resets its gesture before three five-second contacts.
+Only moving windows count; percentiles use the nearest-rank calculation.
+
+| Motion | Moving rate, per second | Moving gap p99, ms | Criterion |
+| --- | --- | --- | --- |
+| Layer reorder preview, native UI FrameMetrics | 119.41 / 117.20 / 118.85 | 8.38 / 16.67 / 16.67 | Pass: all runs exceed 114 fps and stay within 16.7 ms |
+| Retained dry-photo Transform, renderer completions | 94.88 / 93.68 / 95.48 | 20.86 / 21.58 / 20.70 | Fail: all runs miss both bounds; canvas presentation unmeasured |
+
+The transform keeps Navigator visible. Its completion counts include retained
+Navigator work and do not establish fresh-input or displayed-canvas throughput.
+Native UI stays static during these contacts; SurfaceFlinger records canvas
+buffer traffic but lacks repeated canvas frame-timeline presentation records.
+The reorder result qualifies the moving native layer preview, not photo editing
+or physical input-to-display latency. These are current measurements without a
+matched baseline, so they do not establish a regression or improvement.
+
+Transform renderer-owner CPU median is 5.47–5.61 ms, callback wall time
+8.44–8.47 ms, viewport encoding 1.83–1.85 ms and queue-present wall time
+3.17–3.19 ms. Publication scheduling has a 0.012–0.014 ms median and at most
+0.059 ms p99. Submit-to-observed-completion medians are 13.88–13.97 ms;
+these include queueing and polling, not isolated GPU execution. Source/cache
+counters remain unchanged. This evidence points to the renderer and driver
+path rather than repeated native layer-row refresh, without establishing a
+hardware limit.
+
+Raw moving windows, FrameMetrics, renderer measurements, thermal boundaries,
+SurfaceFlinger traces and the strict-window summary are in
+`artifacts/layer-audit-validation/performance/`. Low and mid tiers and sustained
+edge autoscroll were not measured here.

@@ -1,4 +1,55 @@
 #[test]
+fn retained_move_uses_only_checked_geometry_source_frame_and_mask_linkage() {
+    for warped in [false,true] {
+        let mut s=session(Platform::Gtk);
+        let checked=occurrence_handle(1).unwrap();
+        layer(&mut s,LayerAction::AddMask{id:1,replace:false});
+        let mut occurrence=s.engine.document().scene().occurrence(checked).unwrap().clone();
+        occurrence.placement=layer_core::LayerPlacement::from_projective(layer_core::Projective([1.2,0.1,12.,-0.1,0.8,17.,0.0002,-0.0001,1.]));
+        occurrence.mask.as_mut().unwrap().linked=false;
+        if warped {occurrence.placement.mesh=Some(std::sync::Arc::new(layer_core::MeshMap::identity(layer_core::Rect::from_extent([37,29]),[3,3]).unwrap().move_node(5,Point{x:2.,y:-1.}).unwrap()));}
+        s.engine.apply_edit(layer_core::Edit::Occurrence(RecordChange::replace(&s.engine.document().artwork.occurrences,checked,Some(occurrence.clone())).unwrap())).unwrap();
+        let paint=s.engine.document().scene().source_target(checked).unwrap();
+        let SourceTarget::Paint(paint)=paint else{panic!("paint")};
+        let mut source=s.engine.document().artwork.paint.get(paint).unwrap().clone();source.domain=[37,29];
+        s.engine.apply_edit(layer_core::Edit::Paint(RecordChange::replace(&s.engine.document().artwork.paint,paint,Some(source)).unwrap())).unwrap();
+        layer(&mut s,LayerAction::New{group:false,clipped:false});
+        let active=s.engine.document().working.occurrence.unwrap();
+        layer(&mut s,LayerAction::Lock{id:occurrence_token(active),value:true});
+        layer(&mut s,LayerAction::ToggleSelection{id:1});layer(&mut s,LayerAction::ToggleSelection{id:occurrence_token(active)});
+        assert!(s.move_refusal().is_none());
+        let before=s.engine.document().clone();
+        let checks=s.selected_layers().clone();
+        s.begin_move_transform(Point{x:200.,y:200.},false).unwrap();
+        assert_live_artwork_eq(s.engine.document(),&before);
+        let bounds=s.transform_document_bounds().unwrap();assert!(bounds[2]<100.&&bounds[3]<100.,"{bounds:?}");
+        assert_eq!(s.engine.document().working.occurrence,Some(active));
+        s.cancel_transform().unwrap();assert_live_artwork_eq(s.engine.document(),&before);assert_eq!(s.selected_layers(),&checks);
+        s.begin_move_transform(Point{x:200.,y:200.},false).unwrap();
+        let mut up=event(&s,10,PenPhase::Up,1.);up.surface_position=on_surface(&s,Point{x:225.,y:214.});
+        s.layer_pen(up).unwrap();
+        let after=s.engine.document().clone();
+        assert_eq!(after.scene().occurrence(active),before.scene().occurrence(active));
+        assert_eq!(after.scene().occurrence(checked).unwrap().mask,occurrence.mask);
+        assert_ne!(after.scene().occurrence(checked).unwrap().placement,occurrence.placement);
+        invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
+        invoke(&mut s,CommandId::Redo);assert_live_artwork_eq(s.engine.document(),&after);
+    }
+}
+
+#[test]
+fn retained_transform_measures_sole_checked_layer_instead_of_unchecked_active_layer() {
+    let mut s=session(Platform::Gtk);
+    layer(&mut s,LayerAction::New{group:false,clipped:false});let active=s.engine.document().working.occurrence.unwrap();
+    layer(&mut s,LayerAction::ToggleSelection{id:1});layer(&mut s,LayerAction::ToggleSelection{id:occurrence_token(active)});
+    s.begin_transform().unwrap();
+    assert_eq!(s.engine.backend().bounds_requests.last().unwrap().scope,layer_core::ContentScope::Target(s.engine.document().scene().source_target(occurrence_handle(1).unwrap()).unwrap()));
+    reply_bounds(&mut s,[10.,20.,45.,60.]);assert!(s.operation.active());
+    assert_eq!(s.transform_document_bounds(),Some([10.,20.,45.,60.]));
+    s.cancel_transform().unwrap();
+}
+
+#[test]
 fn pending_pixel_move_replays_pointer_up_after_bounds_as_one_undo_step() {
     let mut s = filled_selection_session();
     s.layer_interaction.tool = LayerCanvasTool::Move;
@@ -313,7 +364,7 @@ fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_i
     document.apply(document.select_occurrence_edit(group_id).unwrap()).unwrap();
     let make = || {
         let mut session = UiSession::new(Recorder::default(), document.clone(), [800, 600], Platform::Gtk).unwrap();
-        session.layer_interaction.selected = std::collections::BTreeSet::from([group_id]);
+        session.set_selected_layers(std::collections::BTreeSet::from([group_id])).unwrap();
         session
     };
     let mut s = make();
@@ -352,7 +403,9 @@ fn four_child_group_bounds_complete_once_include_hidden_paint_and_cancel_stale_i
     reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
     let old_document = selection_stale.engine.document().clone();
     selection_stale.dispatch(UiAction::Layer { action: LayerAction::ToggleSelection { id: occurrence_token(outside_id) } }).unwrap();
-    assert_eq!(selection_stale.engine.document(), &old_document, "root selection does not revise artwork");
+    assert_live_artwork_eq(selection_stale.engine.document(), &old_document);
+    assert_eq!(selection_stale.selected_layers(), &std::collections::BTreeSet::from([group_id, outside_id]));
+    assert_eq!(selection_stale.engine.document().working.occurrence, old_document.working.occurrence);
     reply_bounds(&mut selection_stale, [20., 20., 40., 40.]);
     assert!(!selection_stale.operation.active());
     assert!(!selection_stale.content_bounds.busy());

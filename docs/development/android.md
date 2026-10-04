@@ -388,6 +388,12 @@ APK calls, so test-APK benchmarks use the unminified build.
   `-e switcherBenchmark true -e photo <readable-tier-photo.jpg>`. It scrolls the
   workspace choices and visibility checklist on the 12 MP photo with an empty
   paint layer, Fit zoom and a long workspace list.
+- **Layer reorder.** `AndroidTitleBarTest#layerSwipeFrameTiming` runs with
+  `-e layerReorderBenchmark true -e photo <readable-tier-photo.jpg>` and
+  `-e width`/`-e height` matching that photo. It moves the native row preview
+  with mouse contacts after immediate pickup, with one priming gesture and
+  three five-second gestures. The `layer-reorder-<run>.json` external files
+  retain moving-window `FrameMetrics` timestamps, camera and layer state.
 - **Grouped tool drawer scrolling.**
   `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
   `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the
@@ -466,7 +472,9 @@ APK calls, so test-APK benchmarks use the unminified build.
   collect memory separately. Use `-e photo` for the reference photo and
   `-e zoomOut false` to retain Fit zoom.
   `photo` separates body translation, corner resizing, distortion and a warp
-  node drag. Priming gestures validate their geometry, then reset the transform
+  node drag. `-e tierPhoto true` uses the reference photo beneath one empty paint
+  layer at Fit zoom for its retained Transform journeys. Priming gestures
+  validate their geometry, then reset the transform
   and restore the intended mode before measurement. Commands query the owner
   for the current shared `command_reason` after injected gestures. Published
   command state stays stable during contact; Android input delivery can finish before

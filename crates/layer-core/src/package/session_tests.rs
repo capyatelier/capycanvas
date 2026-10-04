@@ -51,6 +51,7 @@ fn fixture()->Editor {
     art.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![11;53])),xmp:Some(Resource::from(vec![13;67])),iptc:Some(Resource::from(vec![17;31]))});
     let mut document=Document::from_artwork(art).unwrap();
     document.working=WorkingState {generation:0,selection:Some(pixels()),selection_visibility:[(selection,false)].into(),
+        layer_selection:[ink,selection].into(),layer_anchor:Some(ink),solo_visibility:Some([(ink,true),(selection,false)].into()),
         occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink)};
     Editor::new(document)
 }

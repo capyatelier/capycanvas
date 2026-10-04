@@ -366,6 +366,8 @@ impl Document {
         }
         let mut working = self.working.clone();
         working.occurrence = Some(result);
+        working.layer_selection = [result].into();
+        working.layer_anchor = Some(result);
         working.target = Some(target);
         working.inspect_mask = None;
         edits.push(Edit::Working(working));
