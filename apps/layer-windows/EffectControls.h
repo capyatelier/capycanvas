@@ -12,6 +12,9 @@ struct Updating {
     ~Updating(){flag=previous;}
 };
 inline A values(std::initializer_list<double> list){A a;for(double v:list)a.Append(N(v));return a;}
+inline J effectGesture(J const& action,hstring const& phase){
+    return phase.empty()?action:O({{L"op",S(L"gesture")},{L"phase",S(phase)},{L"action",action}});
+}
 
 // Layer ids can be reused after New/Open. A retained draft belongs to an epoch,
 // layer and schema, not merely to the control's current position in the UI.
@@ -43,8 +46,7 @@ struct Property:std::enable_shared_from_this<Property> {
         bool continuing=!phase.empty()&&phase!=L"down";
         if(!continuing&&(data->updating||!current()||!flag(view(),L"enabled")))return;
         operation.Insert(L"layer",N(layer));operation.Insert(L"key",S(key));
-        if(!phase.empty())operation=O({{L"op",S(L"gesture")},{L"phase",S(phase)},{L"action",operation}});
-        data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",operation}}),to_hstring(uint64_t(epoch)));
+        data->dispatchDocument(O({{L"type",S(L"effect")},{L"action",effectGesture(operation,phase)}}),to_hstring(uint64_t(epoch)));
     }
     J setting(V const& value)const{
         return O({{L"op",S(L"set")},{L"value",O({{L"kind",S(str(object(model(),L"kind"),L"kind"))},{L"value",value}})}});
@@ -56,7 +58,18 @@ struct Property:std::enable_shared_from_this<Property> {
 FrameworkElement ColorField(std::shared_ptr<Property> const& property,hstring const& title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,
     std::function<hstring()> context={},std::function<hstring()> currentTitle={});
+struct ColorSwatch {Button pick{nullptr};FrameworkElement fields{nullptr};};
+ColorSwatch CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
+    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context);
 FrameworkElement CurveField(std::shared_ptr<Property> const& property,Bindings& bindings);
+struct GradientSource {
+    std::function<J()> control;
+    std::function<void(J,hstring)> send;
+    std::function<bool()> enabled;
+    hstring id;
+};
+FrameworkElement GradientEditor(std::shared_ptr<WorkspaceData> const& data,GradientSource source,Bindings& bindings);
+FrameworkElement GradientRamp(std::shared_ptr<WorkspaceData> const& data,std::function<J()> gradient,double height,Bindings& bindings);
 FrameworkElement GradientField(std::shared_ptr<Property> const& property,Bindings& bindings);
 }
 winrt::Microsoft::UI::Xaml::FrameworkElement PropertiesPanel(std::shared_ptr<CapyUi::WorkspaceData> const& data,CapyUi::Bindings& bindings);

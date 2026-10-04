@@ -4,6 +4,7 @@
 #include "NativeMenus.h"
 #include "WorkspaceQuery.h"
 #include "WorkspaceGeometry.h"
+#include "EffectControls.h"
 
 using namespace CapyUi;
 namespace {
@@ -204,10 +205,17 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
         return id==L"selection_visible"||id==L"selection_editing"||id==L"selection_reference";
     }
     static A extraSchema(A const& extra){
-        A result;for(auto value:extra){auto choice=object(value.GetObject(),L"Choice");
+        A result;for(auto value:extra){
+            auto entry=value.GetObject();
+            if(auto gradient=object(entry,L"Gradient");gradient.Size()){result.Append(object(object(gradient,L"gradient"),L"destination"));continue;}
+            auto choice=object(entry,L"Choice");
             result.Append(O({{L"id",S(str(choice,L"id"))},{L"columns",N(num(choice,L"columns"))},
                 {L"beside",S(str(choice,L"beside"))},{L"items",S(itemSchema(array(choice,L"items")))}}));
         }return result;
+    }
+    static J toolGradient(J const& state){
+        for(auto value:array(state,L"tool_extra"))if(auto gradient=object(value.GetObject(),L"Gradient");gradient.Size())return gradient;
+        return J{};
     }
     Grid segmented(bool compact,size_t count){
         Grid row;row.ColumnSpacing(0);row.HorizontalAlignment(HorizontalAlignment::Stretch);
@@ -270,6 +278,15 @@ struct SettingsView : std::enable_shared_from_this<SettingsView> {
             std::map<std::wstring,J> beside;
             for(auto value:extra){auto spec=object(value.GetObject(),L"Choice");if(auto target=str(spec,L"beside");!target.empty())beside.emplace(target.c_str(),spec);}
             for(auto value:extra){
+                if(object(value.GetObject(),L"Gradient").Size()){
+                    root.Children().Append(CapyEffects::GradientEditor(data,{[weak]{if(auto self=weak.lock())return toolGradient(self->data->state);return J{};},
+                        [weak,context](J action,hstring phase){
+                            auto self=weak.lock();bool continuing=!phase.empty()&&phase!=L"down";
+                            if(self&&(continuing||settingsContext(self->data->state)==context))
+                                self->data->dispatch(O({{L"type",S(L"effect")},{L"action",CapyEffects::effectGesture(action,phase)}}));
+                        },[]{return true;},L"tool-gradient"},fields));
+                    continue;
+                }
                 auto spec=object(value.GetObject(),L"Choice");auto items=array(spec,L"items");auto specId=str(spec,L"id");
                 if(!str(spec,L"beside").empty())continue;
                 auto bar=segmented(true,items.Size());AutomationProperties::SetName(bar,str(spec,L"label"));

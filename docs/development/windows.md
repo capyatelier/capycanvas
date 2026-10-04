@@ -345,6 +345,14 @@ header through customization, then narrows the window until that group overflows
 with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
 
+Properties, Tool Settings and Tool Options share one gradient editor
+(`GradientView.cpp`); a worker thread rasterizes its dithered preview through the
+shared `color_ui` gradient image request. `exercise-effects.ps1` drags Gradient Map
+stops with mouse, touch and pen and checks Escape, arrow keys, Delete,
+interpolation, Reverse and the current-color bucket, each as one Undo step.
+`exercise-tools.ps1` and `exercise-toolbar-components.ps1` cover the Gradient
+tool's editor in Tool Settings and the Tool Options popup.
+
 Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool
 uses the active tool's icon, aligned to its working point; Tool and brush size
 adds the current brush outline for brush tools. Windows presents the shared

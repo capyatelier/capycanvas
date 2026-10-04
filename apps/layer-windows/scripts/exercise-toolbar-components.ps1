@@ -121,6 +121,30 @@ try {
     [CapyRowPointer]::Key(0x1B);Start-Sleep -Milliseconds 300
     Write-Output 'PASS: Photo Tool Options field edit and More drawer'
 
+    Invoke (Tool-Tile 'gradient')
+    $gradient={(@((Model).state.tool_extra|Where-Object {$_.Gradient})[0]).Gradient.value.value|ConvertTo-Json -Depth 8 -Compress}
+    Wait-Until {(& $gradient) -and (Find 'toolbar-gradient')} 'Gradient Tool Options did not show the gradient button'
+    $original=& $gradient;$scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    $box=(Control 'toolbar-gradient').Current.BoundingRectangle
+    if([Math]::Abs($box.Height-24*$scale) -gt 1.5){throw 'The Tool Options gradient button is not 24 DIP tall'}
+    $face=@{x=[int]($box.X+$box.Width/2);y=[int]($box.Y+$box.Height/2)}
+    foreach($device in @('mouse','touch','pen')){
+        Focus-Review;Press $device $face;Release
+        $hit=@{item=$null};Wait-Until {$hit.item=Zoom-Item 'toolbar-gradient-editor-reverse';$null -ne $hit.item} "$device did not open the Tool Options gradient editor"
+        if($device -eq 'mouse'){
+            Capture 'photo-gradient-options' -WithModel
+            $hit.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            Wait-Until {(& $gradient) -ne $original} 'Reverse in Tool Options did not change the tool gradient'
+        }
+        if($device -eq 'pen'){
+            (Zoom-Item 'toolbar-gradient-editor-reset').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+            Wait-Until {(& $gradient) -eq $original} 'Reset in Tool Options did not restore the tool gradient'
+        }
+        [CapyRowPointer]::Key(0x1B)
+        Wait-Until {!(Zoom-Item 'toolbar-gradient-editor-reverse')} "$device gradient editor did not close with Escape"
+    }
+    Write-Output 'PASS: Photo Tool Options gradient button and editor'
+
     [CapyRowPointer]::Dispose()
     $null=$review.CloseMainWindow();$lastDecision=$null
     Wait-Until {

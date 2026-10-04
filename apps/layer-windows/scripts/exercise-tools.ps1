@@ -239,6 +239,15 @@ if(@((Model).state.tool_set.groups).Count){throw 'Gradient shapes kept category 
 Invoke-Id 'tool-subtool-1'
 Wait-Until {(Model).state.tool_set.subtools[1].selected} 'Radial gradient did not select'
 Check-Projection
+function Tool-Gradient{(@((Model).state.tool_extra|Where-Object {$_.Gradient})[0]).Gradient.value.value|ConvertTo-Json -Depth 8 -Compress}
+if(!(Tool-Gradient)){throw 'Gradient tool settings lack the shared gradient'}
+Invoke-Id 'tool-gradient-reset'
+$settled=@{value=$null};Wait-Until {$value=Tool-Gradient;$same=$value -eq $settled.value;$settled.value=$value;Start-Sleep -Milliseconds 200;$same} 'Tool gradient Reset did not settle'
+$gradient=$settled.value
+Invoke-Id 'tool-gradient-reverse'
+Wait-Until {(Tool-Gradient) -ne $gradient} 'Tool gradient Reverse did not apply'
+Invoke-Id 'tool-gradient-reset'
+Wait-Until {(Tool-Gradient) -eq $gradient} 'Tool gradient Reset did not restore the paint pair'
 Select-Tool 'figure'
 Invoke-Id 'tool-group-1'
 Wait-Until {(Model).state.tool_set.groups[1].selected} 'Rectangle did not select'

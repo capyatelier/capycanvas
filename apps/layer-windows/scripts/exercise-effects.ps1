@@ -102,6 +102,61 @@ function Pointer-Session([scriptblock]$Body){
     [CapyRowPointer]::Initialize([uint32]$review.Id)
     try{& $Body}finally{[CapyRowPointer]::Dispose()}
 }
+function Stops{@((Property 'gradient').value.value.stops)}
+function Gradient-Json{(Property 'gradient').value.value|ConvertTo-Json -Depth 10 -Compress}
+function Near-Stop([double]$Position){@(Stops|Where-Object {[Math]::Abs($_.position-$Position) -lt .02}).Count -gt 0}
+function Strip-Point([double]$Fraction){
+    $r=(Control 'property-gradient-gradient').Current.BoundingRectangle;$scale=[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    @([int]($r.X+6*$scale+($r.Width-12*$scale)*$Fraction),[int]($r.Y+16*$scale))
+}
+function Strip-Drag([string]$Device,[double]$From,[double]$To,[switch]$Escape){
+    $start=Strip-Point $From;$end=Strip-Point $To
+    [CapyRowPointer]::Down($Device,$start[0],$start[1])
+    for($i=1;$i -le 8;$i++){[CapyRowPointer]::Move([int]($start[0]+($end[0]-$start[0])*$i/8),$start[1]);Start-Sleep -Milliseconds 30}
+    if($Escape){[CapyRowPointer]::Key(0x1B)}
+    [CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
+}
+function Check-Undo([string]$Before,[string]$Reason){
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $Before} "$Reason was not one Undo"
+    Invoke 'Redo' -Name;Wait-Until {(Gradient-Json) -ne $Before} "$Reason did not redo"
+}
+function Check-Gradient {Pointer-Session {
+    if((Stops).Count -ne 2){throw 'Gradient Map did not start with two stops'}
+    foreach($pass in @(@('mouse',.3,.55),@('touch',.7,.85),@('pen',.15,.4))){
+        $before=Gradient-Json;$count=(Stops).Count
+        Strip-Drag $pass[0] $pass[1] $pass[2]
+        Wait-Until {(Stops).Count -eq $count+1 -and (Near-Stop $pass[2])} "$($pass[0]) did not add and drag a gradient stop"
+        Check-Undo $before "$($pass[0]) add and drag"
+    }
+    $before=Gradient-Json
+    Strip-Drag 'mouse' .55 .7 -Escape
+    Wait-Until {(Gradient-Json) -eq $before} 'Escape did not cancel the stop drag'
+    (Control 'property-gradient-gradient').SetFocus()
+    [CapyRowPointer]::Chord([uint32]$review.Id,[uint16[]]@(0x10),0x27)
+    Wait-Until {(Near-Stop .65) -and !(Near-Stop .55)} 'Shift+Right did not move the selected stop by ten steps'
+    Check-Undo $before 'A keyboard step'
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $before} 'Keyboard step did not undo'
+    (Control 'property-gradient-gradient').SetFocus();[CapyRowPointer]::Key([uint32]$review.Id,0x2E)
+    Wait-Until {(Stops).Count -eq 4} 'Delete did not remove the selected stop'
+    Check-Undo $before 'Delete'
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $before} 'Delete did not undo'
+    $mode=@((Property 'gradient').gradient.interpolations)[1]
+    Choose 'property-gradient-interpolation' $mode[1]
+    Wait-Until {(Property 'gradient').value.value.interpolation -eq $mode[0]} 'Interpolation did not apply'
+    Check-Undo $before 'Interpolation'
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $before} 'Interpolation did not undo'
+    $positions=@(Stops|ForEach-Object position)
+    Invoke 'property-gradient-reverse'
+    Wait-Until {$after=@(Stops|ForEach-Object position);$mirrored=$true;for($i=0;$i -lt $positions.Count;$i++){if([Math]::Abs($after[$i]-(1-$positions[$positions.Count-1-$i])) -gt .000001){$mirrored=$false}};$mirrored} 'Reverse did not mirror the stops'
+    Check-Undo $before 'Reverse'
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $before} 'Reverse did not undo'
+    Invoke 'property-gradient-use-color'
+    Wait-Until {(Gradient-Json) -ne $before} 'Use current color did not change the selected stop'
+    Check-Undo $before 'Use current color'
+    Invoke 'Undo' -Name;Wait-Until {(Gradient-Json) -eq $before} 'Use current color did not undo'
+    $at=Strip-Point .4;[CapyRowPointer]::Down('mouse',$at[0],$at[1]);[CapyRowPointer]::Up();Start-Sleep -Milliseconds 150
+    if((Gradient-Json) -ne $before){throw 'Selecting a stop changed the gradient'}
+}}
 function Check-PropertyScrub {Pointer-Session {
     $opacity=(Property 'opacity').value.value;$track=(Control 'property-opacity-slider').Current.BoundingRectangle;$y=[int]($track.Y+$track.Height/2)
     [CapyRowPointer]::Down('mouse',[int]($track.X+$track.Width*.3),$y)
@@ -360,14 +415,11 @@ try {
     Capture 'channel-mixer'
 
     Select-Filter 'gradient_map' 'Gradient Map'
-    Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.stops.Count -eq 3} 'Gradient stop not added'
+    Check-Gradient
     Edit 'property-gradient-position' '35';(Control 'property-gradient-color').SetFocus()
     Wait-Until {[Math]::Abs((Property 'gradient').value.value.stops[1].position-.35) -lt .000001} 'Gradient position not updated'
     Invoke 'property-gradient-color';Edit 'property-gradient-color-3' '40';Invoke 'property-gradient-color-apply'
     Wait-Until {[Math]::Abs((Rgba (Property 'gradient').value.value.stops[1].color)[3]-.4) -lt .000001} 'Gradient alpha not updated'
-    if([Math]::Abs((Rgba (Property 'gradient').value.value.stops[1].color)[0]-.5) -gt .000001){throw 'Alpha edit changed RGB'}
-    (Control 'property-reverse').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
-    Wait-Until {(Property 'reverse').value.value} 'Reverse toggle not updated'
     Capture 'gradient'
     Edit 'property-gradient-color-0' '90';Invoke 'property-gradient-reset'
     Wait-Until {(Property 'gradient').value.value.stops.Count -eq 2} 'Gradient reset failed'

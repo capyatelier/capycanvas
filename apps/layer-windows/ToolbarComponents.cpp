@@ -3,6 +3,7 @@
 #include "WorkspaceGeometry.h"
 #include "NativeMenus.h"
 #include "RangeControl.h"
+#include "EffectControls.h"
 #include <robuffer.h>
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <winrt/Microsoft.UI.Xaml.Media.Imaging.h>
@@ -67,7 +68,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         std::function<void()> orient;
         std::function<winrt::Windows::Foundation::Size()> natural;
         std::function<void()> dispose;
-        int segmented=0;bool action=false,intrinsic=false;
+        int segmented=0;bool action=false,intrinsic=false,slim=false;
     };
     struct Contact {uint32_t id;Point start;bool moved=false;};
     std::shared_ptr<WorkspaceData> data;
@@ -169,6 +170,10 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             if(auto action=object(entry,L"Action");action.Size()){
                 auto state=object(action,L"state");state.SetNamedValue(L"selected",B(false));state.SetNamedValue(L"enabled",B(true));
             }
+            if(auto gradient=object(entry,L"Gradient");gradient.Size()){
+                if(gradient.HasKey(L"value"))gradient.Remove(L"value");
+                if(auto controls=object(gradient,L"gradient");controls.HasKey(L"can_add"))controls.Remove(L"can_add");
+            }
         }
         std::function<void(J const&)> strip=[&strip](J const& node){
             for(auto field:{L"label",L"title",L"tooltip",L"description",L"disabled_reason",L"hint"})if(node.HasKey(field))node.Remove(field);
@@ -191,6 +196,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
                 if(entry.HasKey(L"Range"))fields.push_back(rangeField(object(entry,L"Range")));
                 else if(entry.HasKey(L"Numeric"))fields.push_back(numericField(object(entry,L"Numeric")));
                 else if(entry.HasKey(L"Choice"))fields.push_back(choiceField(object(entry,L"Choice")));
+                else if(entry.HasKey(L"Gradient"))fields.push_back(gradientField(object(entry,L"Gradient")));
                 else fields.push_back(actionField(object(entry,L"Action")));
                 root.Children().Append(fields.back().row);
             }
@@ -244,7 +250,7 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
             fields[i].row.Visibility(shown?Visibility::Visible:Visibility::Collapsed);
             if(!shown)continue;
             auto bounds=value.GetObject();
-            if(fields[i].segmented&&!vertical)bounds=O({{L"x",N(num(bounds,L"x"))},{L"y",N(num(bounds,L"y")+(num(bounds,L"height")-24)/2)},{L"width",N(num(bounds,L"width"))},{L"height",N(24)}});
+            if((fields[i].segmented||fields[i].slim)&&!vertical)bounds=O({{L"x",N(num(bounds,L"x"))},{L"y",N(num(bounds,L"y")+(num(bounds,L"height")-24)/2)},{L"width",N(num(bounds,L"width"))},{L"height",N(24)}});
             place(fields[i].row,bounds);
         }
     }
@@ -472,6 +478,34 @@ struct ToolbarComponent::Impl:std::enable_shared_from_this<Impl>{
         preview.VerticalOffset(std::max(6.,std::min(y,window.Height-side-6)));
     }
 
+    Field gradientField(J const& option){
+        auto weak=weak_from_this();
+        auto shown=std::make_shared<J>(option);auto bindings=std::make_shared<Bindings>();auto popup=std::make_shared<std::shared_ptr<Bindings>>();
+        auto face=button(data,str(option,L"label"),[]{});face.Padding({0});face.Background(clear());
+        face.HorizontalContentAlignment(HorizontalAlignment::Stretch);face.VerticalContentAlignment(VerticalAlignment::Stretch);
+        face.Content(CapyEffects::GradientRamp(data,[shown]{return object(object(*shown,L"value"),L"value");},24,*bindings));
+        AutomationProperties::SetAutomationId(face,L"toolbar-gradient");
+        face.Click([weak,shown,popup](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
+            auto self=weak.lock();if(!self)return;
+            self->closePopup();
+            auto editorBindings=std::make_shared<Bindings>();
+            auto body=CapyEffects::GradientEditor(self->data,{[shown]{return *shown;},
+                [weak](J action,hstring phase){if(auto self=weak.lock())self->send(O({{L"type",S(L"effect")},{L"action",CapyEffects::effectGesture(action,phase)}}));},
+                []{return true;},L"toolbar-gradient-editor"},*editorBindings);
+            body.Width(240);for(auto const& bind:*editorBindings)bind();*popup=editorBindings;
+            self->editor=Flyout();self->editor.Content(body);TrackPopup(self->editor,self->data);
+            self->editor.Closed([popup](auto&&,auto&&){popup->reset();});
+            self->editor.ShowAt(sender.as<FrameworkElement>());
+        });
+        Field result;result.row=face;result.intrinsic=true;result.slim=true;
+        result.update=[shown,bindings,popup,face](J const& entry){
+            *shown=object(entry,L"Gradient");auto title=str(*shown,L"label");AutomationProperties::SetName(face,title);tooltip(face,title);
+            for(auto const& bind:*bindings)bind();
+            if(auto open=*popup)for(auto const& bind:*open)bind();
+        };
+        result.natural=[weak]{auto self=weak.lock();return winrt::Windows::Foundation::Size{float(self&&self->vertical?self->width:120),24};};
+        return result;
+    }
     Field numericField(J const& option){
         auto weak=weak_from_this();
         auto id=str(option,L"id");auto settingSpec=object(option,L"numeric");

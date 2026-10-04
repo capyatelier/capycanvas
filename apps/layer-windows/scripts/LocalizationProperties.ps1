@@ -182,7 +182,7 @@ function Property-Surfaces{
   $baseline=Fresh-Model;$propertyDocument=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$propertyGpu=$baseline.windows_gpu_generation;$propertyValues=Property-Values $baseline
   $colorIds=@($colorId,($colorId+'-form-0'),($colorId+'-apply'),($colorId+'-error'))
   foreach($i in 0..2){$colorIds+=($colorId+'-0-'+$i)}
-  if($surface.key -eq 'gradient'){$colorIds+=@('property-gradient-gradient','property-gradient-position','property-gradient-add','property-gradient-remove','property-gradient-reset')}
+  if($surface.key -eq 'gradient'){$colorIds+=@('property-gradient-gradient','property-gradient-position','property-gradient-interpolation','property-gradient-reverse','property-gradient-remove','property-gradient-reset','property-gradient-use-color')}
   $identities=Native-Identities $colorIds;$colorOptionIdentity=(Selected-Option (Control ($colorId+'-form-0'))).GetRuntimeId() -join ':'
   $otherValues=@(1..2|ForEach-Object {Value (Control ($colorId+'-0-'+$_))})
   Surface-Languages ('retained-color-form-'+$surface.filter) {

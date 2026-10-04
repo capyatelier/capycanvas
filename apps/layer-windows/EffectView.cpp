@@ -9,10 +9,13 @@ Windows::UI::Color rgba(A const& a){
     return {byte(3),byte(0),byte(1),byte(2)};
 }
 struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
-    std::shared_ptr<Property> property;
+    std::shared_ptr<WorkspaceData> data;
+    hstring id;
     std::function<J()> get;
     std::function<void(J)> set;
     std::function<hstring()> context,currentTitle;
+    std::function<bool()> opaque;
+    bool compact=false;
     TextBlock name;Button pick;
     StackPanel root,fields;
     Bindings numbers;
@@ -20,31 +23,36 @@ struct ColorEditor : std::enable_shared_from_this<ColorEditor> {
     hstring editingContext;
     std::shared_ptr<ColorForm> form;
     void rebuild(){
-        fields.Children().Clear();form=std::make_shared<ColorForm>(property->data);auto weak=weak_from_this();
-        form->init([weak,expected=editingContext](J value,std::optional<double>){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},property->id()+L"-color");
+        fields.Children().Clear();form=std::make_shared<ColorForm>(data);auto weak=weak_from_this();
+        form->init([weak,expected=editingContext](J value,std::optional<double>){if(auto self=weak.lock();self&&(!self->context||self->context()==expected))self->set(value);},id+L"-color");
         fields.Children().Append(form->root);
     }
     void init(hstring const& title){
         root.Spacing(6);fields.Spacing(6);fields.Visibility(Visibility::Collapsed);
-        Grid row;ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
-        ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
-        name=label(property->data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
         auto weak=weak_from_this();
-        pick=button(property->data,title,[weak]{if(auto self=weak.lock()){
+        pick=button(data,title,[weak]{if(auto self=weak.lock()){
             self->fields.Visibility(self->fields.Visibility()==Visibility::Visible?Visibility::Collapsed:Visibility::Visible);
         }});
-        pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Background(property->data->brush(L"input"));
+        pick.Background(data->brush(L"input"));
         Shapes::Rectangle color;color.Fill(sample);color.Margin({2,2,2,2});pick.Content(color);
         pick.HorizontalContentAlignment(HorizontalAlignment::Stretch);pick.VerticalContentAlignment(VerticalAlignment::Stretch);
-        AutomationProperties::SetAutomationId(pick,property->id()+L"-color");
-        Grid::SetColumn(pick,1);row.Children().Append(pick);root.Children().Append(row);root.Children().Append(fields);
+        AutomationProperties::SetAutomationId(pick,id+L"-color");
+        if(compact){pick.Width(36);pick.Height(28);}
+        else{
+            Grid row;ColumnDefinition text;text.Width({1,GridUnitType::Star});row.ColumnDefinitions().Append(text);
+            ColumnDefinition swatch;swatch.Width({56,GridUnitType::Pixel});row.ColumnDefinitions().Append(swatch);
+            name=label(data,title);name.VerticalAlignment(VerticalAlignment::Center);row.Children().Append(name);
+            pick.Height(32);pick.HorizontalAlignment(HorizontalAlignment::Stretch);
+            Grid::SetColumn(pick,1);row.Children().Append(pick);root.Children().Append(row);
+        }
+        root.Children().Append(fields);
         rebuild();
     }
     void refresh(){
-        auto title=currentTitle?currentTitle():str(property->model(),L"label");name.Text(title);AutomationProperties::SetName(pick,title);
+        auto title=currentTitle();if(!compact)name.Text(title);AutomationProperties::SetName(pick,title);tooltip(pick,title);
         auto next=context?context():L"";
         if(next!=editingContext){editingContext=next;rebuild();}
-        form->load(displayColors(property->data->state),O({{L"color",get()}}),flag(object(property->model(),L"kind"),L"opaque"),object(property->data->model,L"color_panel"));
+        form->load(displayColors(data->state),O({{L"color",get()}}),opaque(),object(data->model,L"color_panel"));
         sample.Color(displayColor(object(form->view,L"new")));
     }
 };
@@ -191,8 +199,18 @@ struct PropertiesView : std::enable_shared_from_this<PropertiesView> {
 }
 FrameworkElement CapyEffects::ColorField(std::shared_ptr<Property> const& property,hstring const& title,
     std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context,std::function<hstring()> currentTitle){
-    auto editor=std::make_shared<ColorEditor>();editor->property=property;editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);editor->currentTitle=std::move(currentTitle);
+    auto editor=std::make_shared<ColorEditor>();editor->data=property->data;editor->id=property->id();
+    editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
+    editor->currentTitle=currentTitle?std::move(currentTitle):std::function<hstring()>([property]{return str(property->model(),L"label");});
+    editor->opaque=[property]{return flag(object(property->model(),L"kind"),L"opaque");};
     editor->init(title);bindings.emplace_back([editor]{editor->refresh();});return editor->root;
+}
+ColorSwatch CapyEffects::CompactColorField(std::shared_ptr<WorkspaceData> const& data,hstring const& id,std::function<hstring()> title,
+    std::function<J()> get,std::function<void(J)> set,Bindings& bindings,std::function<hstring()> context){
+    auto editor=std::make_shared<ColorEditor>();editor->data=data;editor->id=id;editor->compact=true;
+    editor->get=std::move(get);editor->set=std::move(set);editor->context=std::move(context);
+    editor->currentTitle=std::move(title);editor->opaque=[]{return false;};
+    editor->init(editor->currentTitle());bindings.emplace_back([editor]{editor->refresh();});return {editor->pick,editor->root};
 }
 FrameworkElement PropertiesPanel(std::shared_ptr<WorkspaceData> const& data,Bindings& bindings){
     auto view=std::make_shared<PropertiesView>(data);bindings.emplace_back([view]{view->refresh();});return view->root;
