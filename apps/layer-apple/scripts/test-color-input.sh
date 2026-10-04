@@ -13,7 +13,7 @@ xcrun swiftc -parse-as-library -target arm64-apple-macos15.0 \
   "$CAPY_APP/Shared/Bridge/NativeTextContext.swift" \
   "$CAPY_APP/Shared/Editor/ColorSwatch.swift" "$CAPY_APP/Shared/Editor/ColorEditor.swift" \
   "$CAPY_APP/tests/color-editor.swift" \
-  -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \
+  -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lsqlite3 -lc++ \
   -framework Metal -framework QuartzCore -framework Security -framework AppKit -framework SwiftUI \
   -o "$CAPY_CHECK_DIR/check"
 "$CAPY_CHECK_DIR/check"

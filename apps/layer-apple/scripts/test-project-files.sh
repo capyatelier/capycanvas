@@ -33,7 +33,7 @@ while IFS= read -r CAPY_SOURCE; do CAPY_SOURCES+=("$CAPY_SOURCE"); done < <(
 cargo build --manifest-path "$CAPY_APP/../../Cargo.toml" -p layer-apple-link --target aarch64-apple-darwin
 xcrun swiftc -module-name CapyTest -import-objc-header "$CAPY_APP/native/include/CapyApple.h" \
   "${CAPY_SOURCES[@]}" "${1:-$CAPY_APP/tests/project-files.swift}" \
-  -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lc++ \
+  -L "$CAPY_TARGET_DIR/aarch64-apple-darwin/debug" -llayer_apple -lsqlite3 -lc++ \
   -framework Metal -framework QuartzCore -framework Security -framework AppKit -framework SwiftUI \
   -o "$CAPY_CHECK_EXECUTABLE"
 "$CAPY_CHECK_EXECUTABLE"

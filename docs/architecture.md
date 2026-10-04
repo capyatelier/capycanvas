@@ -134,7 +134,8 @@ cost and input-to-display latency on the target device.
 Shared document compression and photo codecs use Rust implementations, including
 the explicitly selected Rust deflate backend. ICC transforms use Rust too.
 Native workspace storage builds its bundled SQLite; it does not require system
-SQLite development packages. Toolkit dependencies belong to the Linux client,
+SQLite development packages. Apple builds link the SQLite that ships with macOS
+and iPadOS instead, so its file-system checks stay inside Apple's library. Toolkit dependencies belong to the Linux client,
 and GPU drivers and platform APIs remain host requirements.
 
 Shared code defines file requests, save checkpoints and close decisions. The host

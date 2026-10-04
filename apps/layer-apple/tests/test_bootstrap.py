@@ -44,6 +44,7 @@ class BootstrapMetadataTests(unittest.TestCase):
             {"art.capycanvas.CapyCanvas", "art.capycanvas.CapyCanvas.dev"})
         self.assertEqual(project.count('"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements"'), 2)
         self.assertEqual(project.count('"ENABLE_HARDENED_RUNTIME" = "YES"'), 2)
+        self.assertEqual(project.count('"-llayer_apple",'), project.count('"-lsqlite3",'))
         entitlements = plistlib.loads((APPLE / "macOS/App/CapyCanvas.entitlements").read_bytes())
         self.assertEqual(entitlements, {"com.apple.security.app-sandbox": True,
             "com.apple.security.files.user-selected.read-write": True})
@@ -55,6 +56,8 @@ class BootstrapMetadataTests(unittest.TestCase):
         manifest = plistlib.loads((APPLE / "Shared/PrivacyInfo.xcprivacy").read_bytes())
         self.assertFalse(manifest["NSPrivacyTracking"])
         self.assertEqual(manifest["NSPrivacyCollectedDataTypes"], [])
+        self.assertNotIn("NSPrivacyAccessedAPICategoryDiskSpace",
+            [use["NSPrivacyAccessedAPIType"] for use in manifest["NSPrivacyAccessedAPITypes"]])
 
 
 if __name__ == "__main__":

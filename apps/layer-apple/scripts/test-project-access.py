@@ -30,7 +30,7 @@ with tempfile.TemporaryDirectory(prefix="capy-project-access-") as temporary:
     subprocess.run(["xcrun", "swiftc", "-import-objc-header", str(apple / "native/include/CapyApple.h"),
                     str(apple / "Shared/Bridge/JSON.swift"), str(apple / "Shared/Bridge/ProjectFileIO.swift"),
                     str(apple / "tests/project-file-access.swift"), "-L", str(target / "aarch64-apple-darwin/debug"),
-                    "-llayer_apple", "-lc++", "-framework", "Metal", "-framework", "QuartzCore",
+                    "-llayer_apple", "-lsqlite3", "-lc++", "-framework", "Metal", "-framework", "QuartzCore",
                     "-framework", "Security", "-framework", "AppKit", "-o", str(binary)], env=env, check=True)
     subprocess.run([str(binary), str(source), str(content / "Resources/input.bookmark")], env=env, check=True)
     subprocess.run(["codesign", "--force", "--sign", "-", "--entitlements", str(entitlements), str(content.parent)],

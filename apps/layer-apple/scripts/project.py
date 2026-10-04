@@ -75,7 +75,7 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         "ENABLE_USER_SCRIPT_SANDBOXING": "NO", "SWIFT_OBJC_BRIDGING_HEADER": "$(SRCROOT)/native/include/CapyApple.h",
         "ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS": "NO",
         "LIBRARY_SEARCH_PATHS": ["$(inherited)", "$(SRCROOT)/../../target/$(CAPY_RUST_TARGET)/$(CAPY_RUST_PROFILE)"],
-        "OTHER_LDFLAGS": ["$(inherited)", "-llayer_apple", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "Security"],
+        "OTHER_LDFLAGS": ["$(inherited)", "-llayer_apple", "-lsqlite3", "-lc++", "-framework", "Metal", "-framework", "QuartzCore", "-framework", "Security"],
         "ARCHS": "arm64", "ONLY_ACTIVE_ARCH": "YES",
         "CAPY_RUST_TARGET": "aarch64-apple-ios" if platform == "iOS" else "aarch64-apple-darwin",
     }

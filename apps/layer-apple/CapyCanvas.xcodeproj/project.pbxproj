@@ -1991,6 +1991,7 @@
 				"OTHER_LDFLAGS" = (
 					"$(inherited)",
 					"-llayer_apple",
+					"-lsqlite3",
 					"-lc++",
 					"-framework",
 					"Metal",
@@ -2035,6 +2036,7 @@
 				"OTHER_LDFLAGS" = (
 					"$(inherited)",
 					"-llayer_apple",
+					"-lsqlite3",
 					"-lc++",
 					"-framework",
 					"Metal",
@@ -3212,6 +3214,7 @@
 				"OTHER_LDFLAGS" = (
 					"$(inherited)",
 					"-llayer_apple",
+					"-lsqlite3",
 					"-lc++",
 					"-framework",
 					"Metal",
@@ -3255,6 +3258,7 @@
 				"OTHER_LDFLAGS" = (
 					"$(inherited)",
 					"-llayer_apple",
+					"-lsqlite3",
 					"-lc++",
 					"-framework",
 					"Metal",

@@ -102,7 +102,11 @@ code uses:
 | --- | --- | --- |
 | File timestamp | `C617.1`, `3B52.1` | `stat`/`fstat` on the app's own stores, including ordering unrestored drawing sessions, and on files the painter opened or chose |
 | System boot time | `35F9.1` | `ProcessInfo.systemUptime` for animation and tap timing; `mach_absolute_time` in wgpu's Metal presentation timer |
-| Disk space | `E174.1` | `statfs`/`fstatfs` in the bundled SQLite, which checks the volume before writing the workspace library |
+
+The workspace store links the SQLite that ships with macOS and iPadOS rather
+than the bundled copy other platforms build, so its file-system checks stay in
+Apple's library and need no disk-space reason. Every link of `liblayer_apple.a`,
+in the Xcode project and the Swift fixture scripts, adds `-lsqlite3`.
 
 Update the manifest in the same change when code starts using another
 required-reason API (for example `UserDefaults`, disk capacity keys or active
