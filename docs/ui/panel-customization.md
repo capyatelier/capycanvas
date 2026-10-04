@@ -54,6 +54,9 @@ sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 
+Tool Set category buttons fill their grid cells, so hover, selection and input
+cover the whole category.
+
 `EditingState.tool_slots` remembers one choice per tool slot across layouts,
 outside document and layout history. Brush groups use `ToolMemory` for presets
 and parameter overrides. Permanent selections through shortcuts, drawers and

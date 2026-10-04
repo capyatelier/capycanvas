@@ -237,6 +237,48 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
     }
 }
+
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tool_set_category_input"]
+fn native_tool_set_category_input() {
+    let mut d = Driver::new("art.capycanvas.ToolSetCategory");
+    restore(&d, WorkspacePreset::Illustrator);
+    for floating in [false, true] {
+        if floating {
+            d.w.dispatch(UiAction::MovePanel {
+                panel: Panel::Brushes,
+                target: DockTarget::Float { position: [400., 200.] },
+                viewport: [1600., 1000.],
+            });
+        }
+        for theme in [Theme::Light, Theme::Dark] {
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            for command in [CommandId::Brush, CommandId::Fill, CommandId::Hand] {
+                d.w.dispatch(UiAction::Invoke { command });
+                pump(250);
+                let buttons = d.w.tool_set.group_buttons.borrow().clone();
+                assert!(!buttons.is_empty());
+                for button in buttons {
+                    let cell = button.parent().unwrap();
+                    let bounds = button.compute_bounds(&cell).unwrap();
+                    assert!(bounds.x().abs() < 1. && (bounds.width() - cell.width() as f32).abs() < 1.,
+                        "category fills its cell: {command:?}/{theme:?}/{floating}: {bounds:?}, cell {}", cell.width());
+                    let point = screen_point(&cell, &d.w.window, [0.85, 0.5]);
+                    let hit = d.w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                    assert!(hit == button || hit.is_ancestor(&button), "category edge belongs to its button");
+                    d.input.perform(serde_json::json!([{"point": point}]));
+                    d.capture_canvas(&format!("tool-set-hover-{command:?}-{theme:?}-{floating}.png"));
+                    assert!(button.state_flags().contains(gtk::StateFlags::PRELIGHT));
+                    d.input.click(point);
+                    assert!(button.has_css_class("selected-tool"));
+                }
+                d.capture_canvas(&format!("tool-set-{command:?}-{theme:?}-{floating}.png"));
+            }
+        }
+    }
+    d.finish();
+}
+
 fn sketch_group_variations(d: &mut Driver, theme: Theme) {
     restore(d, WorkspacePreset::Painter);
     for (command, group) in [

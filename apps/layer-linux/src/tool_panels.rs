@@ -83,8 +83,6 @@ impl ToolSet {
                 button.add_css_class("tool-group");
                 let media = matches!(self.panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets);
                 if media { button.set_widget_name(&format!("{}-{}", if self.panel == layer_ui::Panel::SculptSets { "sculpt-set" } else { "brush-set" }, item.icon)); }
-                button.set_halign(if media { gtk::Align::Fill } else { gtk::Align::Start });
-                button.set_hexpand(media);
                 button.set_size_request(
                     ((if media { layer_ui::BRUSH_SETS_MIN_WIDTH } else { layer_ui::TOOL_PANEL_MIN_WIDTH }) - 2.0 * layer_ui::PANEL_CONTENT_INSET) as i32,
                     if media { TOOL_ROW_HEIGHT } else { layer_ui::TILE_SIZE as i32 },
