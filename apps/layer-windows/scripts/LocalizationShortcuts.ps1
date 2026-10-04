@@ -6,7 +6,7 @@ function Check-Identities($Identities){
 }
 function Shortcut-Owner($View){
  if(($View.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $shortcutDocument -or $View.windows_gpu_generation -ne $shortcutGpu){throw 'Shortcut publication changed document history or GPU ownership'}
- $settings=Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')
+ $settings=Read-Snapshot (Settings-File)
  if(($settings|Select-Object shortcuts,hold_keys,pen_buttons,keymap|ConvertTo-Json -Depth 30 -Compress) -ne $shortcutSettings){throw 'Locale publication changed stored shortcut or modifier semantics'}
 }
 function Shortcut-Surfaces{
@@ -15,7 +15,7 @@ function Shortcut-Surfaces{
  Invoke-Id 'preference-page-shortcuts'
  Wait-Until {$view=Model;$view -and $view.preferences.page -eq 'shortcuts' -and (Find 'shortcuts-search')} 'Retained Shortcuts did not open' 30
  $shortcutDocument=(Fresh-Model).state.document_file|ConvertTo-Json -Depth 20 -Compress;$shortcutGpu=(Fresh-Model).windows_gpu_generation
- $shortcutSettings=Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')|Select-Object shortcuts,hold_keys,pen_buttons,keymap|ConvertTo-Json -Depth 30 -Compress
+ $shortcutSettings=Read-Snapshot (Settings-File)|Select-Object shortcuts,hold_keys,pen_buttons,keymap|ConvertTo-Json -Depth 30 -Compress
  $search=Control 'shortcuts-search';Select-Draft $search $literalName
  $filterIds=Native-Identities @('shortcuts-search','shortcut-context','shortcut-show','keymap-preset','keymap-menu')
  $contextOption=(Selected-Option (Control 'shortcut-context')).GetRuntimeId() -join ':';$showOption=(Selected-Option (Control 'shortcut-show')).GetRuntimeId() -join ':'

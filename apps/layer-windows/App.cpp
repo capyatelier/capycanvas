@@ -4,14 +4,16 @@
 #include <sstream>
 #include <shellapi.h>
 #include <map>
+#include <optional>
 #include <winrt/Microsoft.UI.Xaml.XamlTypeInfo.h>
 #include <winrt/Windows.UI.Xaml.Interop.h>
 
 namespace {
 using namespace winrt;
 using namespace Microsoft::UI::Xaml;
-constexpr ULONG_PTR OpenFilesMessage=0x43415059;
+constexpr ULONG_PTR LaunchMessage=0x43415059;
 constexpr size_t MaxForwardedFiles=64;
+constexpr ULONGLONG HandOffMilliseconds=60000;
 std::vector<std::wstring> LaunchFiles() {
     std::vector<std::wstring> files;int count=0;
     auto arguments=CommandLineToArgvW(GetCommandLineW(),&count);
@@ -25,38 +27,39 @@ std::vector<std::wstring> LaunchFiles() {
     LocalFree(arguments);
     return files;
 }
-std::wstring OpenFilesClass() {
-    std::wstring profile=L"default";
-    if(auto size=GetEnvironmentVariableW(L"CAPY_SETTINGS_DIRECTORY",nullptr,0)){
-        std::wstring value(size,L'\0');value.resize(GetEnvironmentVariableW(L"CAPY_SETTINGS_DIRECTORY",value.data(),size));
-        wchar_t full[32768];auto length=GetFullPathNameW(value.c_str(),32768,full,nullptr);
-        if(length&&length<32768)value.assign(full,length);
-        CharLowerBuffW(value.data(),DWORD(value.size()));profile=L"profile:"+value;
-    }
-    uint64_t hash=14695981039346656037ull;
-    for(auto c:profile){hash^=uint16_t(c);hash*=1099511628211ull;}
-    wchar_t name[64];swprintf(name,64,L"CapyCanvasOpenFiles-%016llx",static_cast<unsigned long long>(hash));
+std::wstring const& InstanceName() {
+    static std::wstring const name=[]{auto value=capy_instance_name();return value?std::wstring(value):std::wstring();}();
     return name;
 }
-bool ForwardFiles(std::vector<std::wstring> const& files) {
-    auto target=FindWindowExW(HWND_MESSAGE,nullptr,OpenFilesClass().c_str(),nullptr);
+bool ForwardLaunch(std::vector<std::wstring> const& files) {
+    auto target=FindWindowExW(HWND_MESSAGE,nullptr,InstanceName().c_str(),nullptr);
     if(!target)return false;
     std::wstring payload;
     for(auto const& file:files){payload+=file;payload.push_back(L'\0');}
     DWORD process=0;GetWindowThreadProcessId(target,&process);AllowSetForegroundWindow(process);
-    COPYDATASTRUCT data{OpenFilesMessage,DWORD(payload.size()*sizeof(wchar_t)),payload.data()};
+    COPYDATASTRUCT data{LaunchMessage,DWORD(payload.size()*sizeof(wchar_t)),payload.data()};
     DWORD_PTR accepted=FALSE;
     return SendMessageTimeoutW(target,WM_COPYDATA,0,LPARAM(&data),SMTO_ABORTIFHUNG,10000,&accepted)&&accepted==TRUE;
 }
-std::function<bool(std::vector<std::wstring>)>& ForwardedFiles() {
+std::optional<int> HandOffToRunningInstance(std::vector<std::wstring> const& files) {
+    auto owner=CreateMutexW(nullptr,FALSE,(L"Local\\"+InstanceName()).c_str());
+    if(!owner)return 1;
+    for(auto start=GetTickCount64(),delay=0ull;GetTickCount64()-start<HandOffMilliseconds;delay=100){
+        auto wait=WaitForSingleObject(owner,DWORD(delay));
+        if(wait==WAIT_OBJECT_0||wait==WAIT_ABANDONED){capy_clear_temporary_files();return std::nullopt;}
+        if(ForwardLaunch(files))return 0;
+    }
+    return 1;
+}
+std::function<bool(std::vector<std::wstring>)>& ForwardedLaunch() {
     static std::function<bool(std::vector<std::wstring>)> receive;
     return receive;
 }
-LRESULT CALLBACK OpenFilesProc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
+LRESULT CALLBACK LaunchProc(HWND window,UINT message,WPARAM wparam,LPARAM lparam) {
     if(message!=WM_COPYDATA)return DefWindowProcW(window,message,wparam,lparam);
     auto data=reinterpret_cast<COPYDATASTRUCT const*>(lparam);
-    if(!data||data->dwData!=OpenFilesMessage||!data->lpData||data->cbData%sizeof(wchar_t)
-        ||data->cbData>MaxForwardedFiles*32768*sizeof(wchar_t)||!ForwardedFiles())return FALSE;
+    if(!data||data->dwData!=LaunchMessage||(data->cbData&&!data->lpData)||data->cbData%sizeof(wchar_t)
+        ||data->cbData>MaxForwardedFiles*32768*sizeof(wchar_t)||!ForwardedLaunch())return FALSE;
     std::wstring_view payload(static_cast<wchar_t const*>(data->lpData),data->cbData/sizeof(wchar_t));
     std::vector<std::wstring> files;
     for(size_t start=0;start<payload.size()&&files.size()<MaxForwardedFiles;){
@@ -65,12 +68,11 @@ LRESULT CALLBACK OpenFilesProc(HWND window,UINT message,WPARAM wparam,LPARAM lpa
         auto attributes=GetFileAttributesW(path.c_str());
         if(!path.empty()&&attributes!=INVALID_FILE_ATTRIBUTES&&!(attributes&FILE_ATTRIBUTE_DIRECTORY))files.push_back(std::move(path));
     }
-    return !files.empty()&&ForwardedFiles()(std::move(files));
+    return ForwardedLaunch()(std::move(files));
 }
-void ReceiveForwardedFiles() {
-    auto name=OpenFilesClass();
-    if(FindWindowExW(HWND_MESSAGE,nullptr,name.c_str(),nullptr))return;
-    WNDCLASSEXW type{sizeof(type)};type.lpfnWndProc=OpenFilesProc;type.hInstance=GetModuleHandleW(nullptr);type.lpszClassName=name.c_str();
+void ReceiveLaunches() {
+    auto const& name=InstanceName();
+    WNDCLASSEXW type{sizeof(type)};type.lpfnWndProc=LaunchProc;type.hInstance=GetModuleHandleW(nullptr);type.lpszClassName=name.c_str();
     if(RegisterClassExW(&type))CreateWindowExW(0,name.c_str(),L"",0,0,0,0,0,HWND_MESSAGE,nullptr,type.hInstance,nullptr);
 }
 // Use WinUI's metadata provider for its native controls and built-in templates.
@@ -92,6 +94,7 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
         WriteTraceFile(name,stream.str());
     }
     void OpenForwarded(std::vector<std::wstring> files) {
+        if(files.empty()){AddWindow();return;}
         std::shared_ptr<CanvasWindow> target;
         for(HWND handle=GetTopWindow(nullptr);handle&&!target;handle=GetWindow(handle,GW_HWNDNEXT)){
             if(!IsWindowVisible(handle))continue;
@@ -131,21 +134,21 @@ struct App : ApplicationT<App, Markup::IXamlMetadataProvider> {
     com_array<Markup::XmlnsDefinition> GetXmlnsDefinitions() { return metadata.GetXmlnsDefinitions(); }
     void OnLaunched(LaunchActivatedEventArgs const&) {
         Resources().MergedDictionaries().Append(Controls::XamlControlsResources());
-        ForwardedFiles()=[weak=get_weak()](std::vector<std::wstring> files){
+        ForwardedLaunch()=[weak=get_weak()](std::vector<std::wstring> files){
             auto self=weak.get();
             if(!self||self->windows.empty())return false;
             return Microsoft::UI::Dispatching::DispatcherQueue::GetForCurrentThread().TryEnqueue([weak,files=std::move(files)]()mutable{
                 if(auto self=weak.get())self->OpenForwarded(std::move(files));
             });
         };
-        ReceiveForwardedFiles();
+        if(!InstanceName().empty())ReceiveLaunches();
         AddWindow(LaunchFiles());
     }
 };
 }
 int WINAPI wWinMain(HINSTANCE,HINSTANCE,PWSTR,int) {
     winrt::init_apartment(winrt::apartment_type::single_threaded);
-    if(auto files=LaunchFiles();!files.empty()&&ForwardFiles(files))return 0;
+    if(!InstanceName().empty())if(auto exit=HandOffToRunningInstance(LaunchFiles()))return *exit;
     try {
         winrt::Microsoft::UI::Xaml::Application::Start([](auto&&){winrt::make<App>();});
         CapyLifecycle("application_loop_returned");

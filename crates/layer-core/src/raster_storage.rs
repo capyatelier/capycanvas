@@ -340,24 +340,13 @@ pub fn resident_tile_bytes<'a>(inventories: impl IntoIterator<Item = &'a Retaine
 /// the immutable tiles, including references held by undo, redo and file jobs.
 pub const SPILL_CHUNK_BYTES: usize = 8 * 1024 * 1024;
 
-/// Hosts choose an appropriate private cache directory and run this on their
-/// file worker. Unlinked open files survive pathname eviction and disappear on
-/// final-owner release or process exit, without a compactor or orphan scan.
+/// Runs on a host file worker. Anonymous files survive pathname eviction and
+/// disappear on final-owner release or process exit, without an orphan scan.
 #[cfg(any(unix, windows))]
 pub fn spill_to_directory(
     tiles: &RetainedTiles,
     directory: &std::path::Path,
 ) -> Result<(), String> {
-    #[cfg(unix)]
-    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-    #[cfg(windows)]
-    use std::os::windows::fs::OpenOptionsExt;
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static NEXT: AtomicU64 = AtomicU64::new(0);
-    std::fs::create_dir_all(directory).map_err(|e| format!("Cannot create drawing cache: {e}"))?;
-    #[cfg(unix)]
-    std::fs::set_permissions(directory, std::fs::Permissions::from_mode(0o700))
-        .map_err(|e| e.to_string())?;
     let blobs: Vec<_> = tiles
         .blobs()?
         .into_iter()
@@ -373,23 +362,8 @@ pub fn spill_to_directory(
             bytes += blobs[end].compressed_len();
             end += 1;
         }
-        let path = directory.join(format!(
-            "{}-{}.tiles",
-            std::process::id(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        ));
-        let mut options = std::fs::OpenOptions::new();
-        options.create_new(true).read(true).write(true);
-        #[cfg(unix)]
-        options.mode(0o600);
-        // Temporary private backing follows the final open handle on Windows.
-        // It is never a user file or a durable recovery destination.
-        #[cfg(windows)]
-        options.custom_flags(0x0400_0100).share_mode(0x7); // DELETE_ON_CLOSE | TEMPORARY; share read/write/delete
-        let file = options.open(&path)
+        let file = crate::temp_files::anonymous(directory, "tiles")
             .map_err(|e| format!("Cannot create drawing cache: {e}"))?;
-        #[cfg(unix)]
-        std::fs::remove_file(&path).map_err(|e| e.to_string())?;
         spill_tiles(&blobs[start..end], file)?;
         start = end;
     }

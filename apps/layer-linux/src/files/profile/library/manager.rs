@@ -1,6 +1,10 @@
 //! Profile library management follows the workspace manager's native layout.
 use super::*;
 
+fn saved_profiles() -> Result<PathBuf, ColorFeatureError> {
+    directory().ok_or_else(|| ColorFeatureError::Diagnostic("Saved profiles are unavailable".into()))
+}
+
 struct Manager {
     copy: RefCell<layer_ui::color_feature_copy::ProfileCopy>,
     localization: RefCell<std::sync::Arc<layer_ui::Localizer>>,
@@ -157,14 +161,14 @@ impl Manager {
                 let result = match operation {
                     Operation::Add => state.add().await,
                     Operation::Remove(path) => {
-                        gio::spawn_blocking(move || remove(&directory(), &path))
+                        gio::spawn_blocking(move || remove(&saved_profiles()?, &path))
                             .await
                             .map_err(|_| ColorFeatureError::Diagnostic("Could not remove the profile".into()))
                             .and_then(|r| r)
                             .map(Some)
                     }
                     Operation::Show(path, visible) => {
-                        gio::spawn_blocking(move || set_visible(&directory(), &path, visible))
+                        gio::spawn_blocking(move || set_visible(&saved_profiles()?, &path, visible))
                             .await
                             .map_err(|_| ColorFeatureError::Diagnostic("Could not update the profile".into()))
                             .and_then(|r| r)
@@ -237,7 +241,7 @@ impl Manager {
         {
             Ok(file) => {
                 let path = file.path().ok_or(ColorFeatureError::ProfileChooseFile)?;
-                gio::spawn_blocking(move || import(&directory(), &path))
+                gio::spawn_blocking(move || import(&saved_profiles()?, &path))
                     .await
                     .map_err(|_| ColorFeatureError::Diagnostic("Could not add the profile".into()))
                     .and_then(|r| r)
@@ -264,7 +268,7 @@ pub(crate) async fn manage_for_window(
     localization: std::sync::Arc<layer_ui::Localizer>,
 ) -> Result<(), String> {
     let copy = layer_ui::color_feature_copy::ProfileCopy::new(&localization);
-    let entries = gio::spawn_blocking(|| list(&directory()))
+    let entries = gio::spawn_blocking(|| list(&saved_profiles()?))
         .await
         .map_err(|_| ColorFeatureError::Diagnostic("Could not load saved profiles".into()).profile_message(&localization))?.map_err(|reason|reason.profile_message(&localization))?;
     let dialog = adw::Dialog::builder()
@@ -399,7 +403,7 @@ mod tests {
     fn native_profile_library_live_language() {
         let (app, active) = crate::application("art.capycanvas.ProfileLibraryLanguages");
         app.register(None::<&gio::Cancellable>).unwrap();
-        let directory = directory(); assert!(directory.starts_with(std::env::temp_dir()));
+        let directory = saved_profiles().unwrap(); assert!(directory.starts_with(std::env::var_os(layer_host::storage::STORAGE_OVERRIDE).unwrap()));
         std::fs::create_dir_all(&directory).unwrap();
         let id = "0".repeat(64); let path = directory.join(format!("{id}.icc"));
         let literal = "tiếng ไทย Русский {profile} 🎨";

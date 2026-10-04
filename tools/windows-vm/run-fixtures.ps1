@@ -87,10 +87,10 @@ function Save-Evidence([string]$Log) {
 
 function Start-Shortcuts {
     $saved = @{}
-    foreach ($variable in 'CAPY_SMOKE_TEST', 'CAPY_TRACE_UI', 'CAPY_SETTINGS_DIRECTORY') { $saved[$variable] = [Environment]::GetEnvironmentVariable($variable) }
+    foreach ($variable in 'CAPY_SMOKE_TEST', 'CAPY_TRACE_UI', 'CAPY_STORAGE_DIR') { $saved[$variable] = [Environment]::GetEnvironmentVariable($variable) }
     $env:CAPY_SMOKE_TEST = '1'
     $env:CAPY_TRACE_UI = '1'
-    $env:CAPY_SETTINGS_DIRECTORY = Join-Path $Output 'shortcuts-profile'
+    $env:CAPY_STORAGE_DIR = Join-Path $Output 'shortcuts-profile'
     try { $review = Start-Process $Executable -WorkingDirectory (Split-Path $Executable) -PassThru } finally { foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) } }
     $directory = Split-Path $Executable
     @{process_id=$review.Id;trace_directory=$directory;profile=(Join-Path $Output 'shortcuts-profile')} | ConvertTo-Json | Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT

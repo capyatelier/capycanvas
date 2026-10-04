@@ -86,17 +86,14 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
     capture.preview_linear_document([32, 24]).unwrap().pixels
 }
 #[test]
-#[ignore = "Requires isolated CAPY_SETTINGS_DIRECTORY and hardware D3D12; removes its own devices"]
+#[ignore = "Requires isolated CAPY_STORAGE_DIR and hardware D3D12; removes its own devices"]
 fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
     use layer_core::color::{
         DocumentColor, hdr,
         source::{SourceBuilder, SourceChannels, SourceInterpretation},
     };
     use std::{io::Cursor, sync::Arc};
-    let directory = std::path::PathBuf::from(
-        std::env::var_os("CAPY_SETTINGS_DIRECTORY").expect("isolated profile required"),
-    );
-    assert!(directory.is_absolute());
+    let directory = crate::test_support::isolated_storage();
     std::fs::create_dir_all(&directory).unwrap();
     for depth in [SampleDepth::F16, SampleDepth::F32] {
         let color = DocumentColor {

@@ -32,7 +32,7 @@ class UiStartupInstrumentation : Instrumentation() {
             check(arguments.getString("uiStartupAudit") == "true") { "Opt in with -e uiStartupAudit true" }
             check(!BuildConfig.DEBUG) { "Use a non-debug build" }
             val label = arguments.getString("auditLabel") ?: "run"
-            CanvasHost.workspaceDirectoryForTest = File(targetContext.filesDir, "ui-audit-workspace").absolutePath
+            AppStorage.directoryForTest = File(targetContext.filesDir, "ui-audit")
             val began = SystemClock.elapsedRealtimeNanos()
             activity = startActivitySync(Intent(targetContext, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) as MainActivity
             val host = activity.host
@@ -125,7 +125,7 @@ class UiStartupInstrumentation : Instrumentation() {
                 frameObserver?.let { Choreographer.getInstance().removeFrameCallback(it) }
                 it.finish()
             } }
-            CanvasHost.workspaceDirectoryForTest = null
+            AppStorage.directoryForTest = null
         }
         finish(Activity.RESULT_OK, result)
     }

@@ -420,7 +420,7 @@ cargo test --release -p layer-linux native_toolbar_manager -- --ignored --test-t
 cargo test --release -p layer-linux native_web_parity_reference -- --ignored --test-threads=1
 ```
 
-GTK tests are thread-affine and need isolated `LAYER_SETTINGS_FILE` paths and a
+GTK tests are thread-affine and need an isolated `CAPY_STORAGE_DIR` and a
 Wayland/Vulkan display. Against a served web client (`LAYER_WEB_URL`, or
 `--package` for the static build), run `node apps/layer-web/test.mjs` with
 `--customization`, `--tab-styles`, `--workspace`, `--toolbar-manager` and

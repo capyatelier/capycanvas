@@ -119,7 +119,7 @@ internal class DocumentColorJob(val host: CanvasHost, val id: Int, private val s
                 withContext(Dispatchers.IO) {
                     val name = application.contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use { if (it.moveToFirst()) it.getString(0) else null }
                     check(name?.endsWith(".capy", ignoreCase = true) == true) { host.catalog.getJSONObject("document_delivery_copy").getString("converted_filename_invalid") }
-                    temporary = File.createTempFile("capy-converted-", ".capy", application.cacheDir)
+                    temporary = host.storage.temporaryFile("capy-converted-", ".capy")
                     Native.colorWriteCopy(task, ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd())
                 }
                 if (closing) return@launch

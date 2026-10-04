@@ -519,10 +519,8 @@ fn native_export_presets_save_update_remove_reset_and_remember_after_delivery() 
         .join(std::process::id().to_string());
     std::fs::create_dir_all(&directory).unwrap();
     let directory = directory.canonicalize().unwrap();
-    let path = std::env::var_os("LAYER_SETTINGS_FILE")
-        .map(std::path::PathBuf::from)
-        .unwrap()
-        .with_file_name("export-presets.json");
+    let path = crate::storage::roots().unwrap().export_presets();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     let mut library = ExportPresets::default();
     let mut custom = ExportRecipe::further_editing(DocumentColor {
         space: RgbSpace::DisplayP3,

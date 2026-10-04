@@ -8,7 +8,7 @@ $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/persistence/'+[Guid]::NewGuid().ToString('N'))
 [IO.Directory]::CreateDirectory($run)|Out-Null
 function Launch([string]$Profile,[string]$Label) {
-    $env:CAPY_SETTINGS_DIRECTORY=$Profile
+    $env:CAPY_STORAGE_DIR=$Profile
     $script:stderr=Join-Path $run ($Label+'-stderr.log')
     $script:review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
     $null=$review.Handle
@@ -36,7 +36,7 @@ try {
     Wait-Until {$null -ne (Find 'renderer-stat-6') -and (Layout) -ne $before} 'Workspace layout did not change'
     $expected=Layout
     Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Workspace autosave did not complete'
-    if(!(Test-Path -LiteralPath (Join-Path $profile 'workspaces.sqlite3'))){throw 'Workspace database was not created'}
+    if(!(Test-Path -LiteralPath (Join-Path $profile 'data/workspaces/workspaces.sqlite3'))){throw 'Workspace database was not created'}
     (Control 'Brush size slider' -Name -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(0.61)
     Wait-Until {(Model).state.brush.diameter -ne 32} 'Final tool edit did not apply'
     $expectedSize=(Model).state.brush.diameter
@@ -48,8 +48,8 @@ try {
     Wait-Until {$null -ne (Find 'renderer-stat-6')} 'Restored Diagnostics did not appear natively'
     Close
     $broken=Join-Path $run 'unreadable'
-    [IO.Directory]::CreateDirectory($broken)|Out-Null
-    $database=Join-Path $broken 'workspaces.sqlite3'
+    $database=Join-Path $broken 'data/workspaces/workspaces.sqlite3'
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $database))|Out-Null
     [IO.File]::WriteAllText($database,'isolated fixture: unreadable workspace database')
     $script:startupNotice=$null
     $CapyEach={if(!$script:startupNotice -and $review){$text=(Model).state.notice.text;if($text){$script:startupNotice=$text}}}

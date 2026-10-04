@@ -30,7 +30,8 @@ import UniformTypeIdentifiers
         try require(properties[kCGImagePropertyProfileName as String] != nil && image.colorSpace?.copyICCData() != nil, "Embedded output profile")
     }
     static func library(_ root: URL) throws -> JSON {
-        let preferences = ColorPreferencesStore(root: root.appendingPathComponent("preferences"))
+        let locations = StorageLocations.within(root.appendingPathComponent("preferences"))!
+        let preferences = ColorPreferencesStore(locations: locations)
         let color = JSON(["space": "ProPhoto", "depth": "U16"])
         try require(try preferences.profiles().isEmpty, "Missing library is empty")
         let initial = try preferences.presets(color: color, request: JSON(["type": "get", "index": 2]))
@@ -48,7 +49,7 @@ import UniformTypeIdentifiers
         let recipe = initial["recipe"].replacing("profile", with: profile)
         let saved = try preferences.presets(color: color, request: JSON(["type": "save", "name": "Studio", "recipe": recipe.raw]))
         try require(saved["index"].uint == 4, "Save named recipe")
-        let file = root.appendingPathComponent("preferences/color-export-presets.json")
+        let file = locations.exportPresets
         let savedBytes = try Data(contentsOf: file)
         try rejected("Reject duplicate preset") { _ = try preferences.presets(color: color,
             request: JSON(["type": "save", "name": "Studio", "recipe": recipe.raw])) }
@@ -57,7 +58,7 @@ import UniformTypeIdentifiers
                 "recipe": recipe.replacing("profile", with: JSON(["profile": ["Icc": [1,2,3]], "channels": "Rgb", "name": "Broken"])).raw]))
         }
         try require(try Data(contentsOf: file) == savedBytes, "Failed presets preserve the existing file")
-        let stored = root.appendingPathComponent("preferences/color-profiles/\(id).icc")
+        let stored = locations.colorProfiles.appendingPathComponent("\(id).icc")
         try Data("Damaged copy".utf8).write(to: stored)
         try require(try !preferences.profiles()[0]["issue"].isNull, "Report damaged saved profiles")
         try rejected("Reject changed saved profile") { _ = try preferences.profile(id) }
@@ -65,7 +66,7 @@ import UniformTypeIdentifiers
         try require(try Data(contentsOf: stored) == bytes, "Reimport repairs library copy")
         try preferences.removeProfile(id)
         try require(try preferences.profiles().isEmpty && Data(contentsOf: original) == bytes, "Remove only the library copy")
-        let reopened = ColorPreferencesStore(root: root.appendingPathComponent("preferences"))
+        let reopened = ColorPreferencesStore(locations: locations)
         let restored = try reopened.presets(color: color, request: JSON(["type": "get", "index": 4]))
         try require(restored["recipe"].stableKey == recipe.stableKey, "Named preset retains ICC after library removal and restart")
         let update = recipe.replacing("format", with: JSON("Png"))
@@ -76,10 +77,10 @@ import UniformTypeIdentifiers
         try require(reset["recipe"]["depth"].string == "U8", "Reset destination uses shared default")
         let removed = try reopened.presets(color: color, request: JSON(["type": "remove", "index": 4]))
         try require(removed["names"].array.count == 4, "Remove named preset")
-        let overflowRoot = root.appendingPathComponent("overflow")
-        let overflowDirectory = overflowRoot.appendingPathComponent("color-profiles")
+        let overflowLocations = StorageLocations.within(root.appendingPathComponent("overflow"))!
+        let overflowDirectory = overflowLocations.colorProfiles
         try FileManager.default.createDirectory(at: overflowDirectory, withIntermediateDirectories: true)
-        let overflow = ColorPreferencesStore(root: overflowRoot)
+        let overflow = ColorPreferencesStore(locations: overflowLocations)
         for index in 0..<129 {
             try Data([0]).write(to: overflowDirectory.appendingPathComponent(String(format: "%064x.icc", index)))
         }
@@ -102,7 +103,7 @@ import UniformTypeIdentifiers
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: root) }
         let profile = try await io { try library(root) }
-        let cmyk = try await io { try ColorPreferencesStore(root: nil).importProfile(
+        let cmyk = try await io { try ColorPreferencesStore(locations: nil).importProfile(
             URL(fileURLWithPath: "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")) }
         for platform: UInt32 in [0,1] {
             let directory = root.appendingPathComponent("state-\(platform)")
@@ -202,7 +203,7 @@ import UniformTypeIdentifiers
                 try await io { }
                 try require(staging?.pathExtension == "tiff" && !FileManager.default.fileExists(atPath: staging!.path), "Provider staging type and cleanup")
             }
-            let persisted = try await io { try ColorPreferencesStore(root: directory).presets(color: color, request: JSON(["type":"get", "index":3])) }
+            let persisted = try await io { try ColorPreferencesStore(locations: StorageLocations.within(directory)).presets(color: color, request: JSON(["type":"get", "index":3])) }
             try require(persisted["recipe"].stableKey == recipe.stableKey, "Successful named output remembers Custom, preserving named preset")
             for (format,type) in [("Png",UTType.png),("Jpeg",UTType.jpeg)] {
                 editor = try await dialog()

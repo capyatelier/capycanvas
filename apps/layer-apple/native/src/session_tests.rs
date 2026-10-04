@@ -15,18 +15,22 @@ impl SessionJob {
         Some(error)
     }
 }
-fn launch(platform: u32, path: &Path) -> App {
-    launch_observed(platform, path, None)
+fn open(app: &App, path: &Path, adopt: bool) -> SessionJob {
+    let sessions = CString::new(path.parent().unwrap().to_str().unwrap()).unwrap();
+    let scene = CString::new(path.file_name().unwrap().to_str().unwrap()).unwrap();
+    SessionJob(unsafe { capy_apple_session_open(app.0, sessions.as_ptr(), scene.as_ptr(), adopt, false) })
 }
-fn launch_observed(platform: u32, path: &Path, observe: Option<SessionDestinationObserver>) -> App {
+fn launch(platform: u32, path: &Path) -> App {
+    launch_observed(platform, path, None, false)
+}
+fn launch_observed(platform: u32, path: &Path, observe: Option<SessionDestinationObserver>, adopt: bool) -> App {
     let app = App::new(platform);
     unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
     app.draw_until_idle();
-    let path = CString::new(path.to_str().unwrap()).unwrap();
-    let task = SessionJob(unsafe { capy_apple_session_open(app.0, path.as_ptr(), false) });
+    let task = open(&app, path, adopt);
     assert!(!task.0.is_null(), "{:?}", unsafe { &*app.0 }.error);
     assert_eq!(unsafe { capy_session_work(task.0, observe) }, 0, "{:?}", task.error());
-    let index = std::path::PathBuf::from(path.to_str().unwrap()).join("window.json");
+    let index = path.join("window.json");
     let pending = layer_ui::SessionManifest::read(&index).unwrap().map(|manifest| manifest.restoring).unwrap_or_default();
     assert_eq!(unsafe { capy_apple_session_adopt(app.0, task.0) }, 0, "{:?}", unsafe { &*app.0 }.error);
     assert_eq!(layer_ui::SessionManifest::read(&index).unwrap().map(|manifest| manifest.restoring).unwrap_or_default(), pending);
@@ -59,7 +63,7 @@ fn apple_saved_session_checks_original_before_clean_close() {
         assert_eq!(unsafe { capy_apple_project_saved(app.0, save.0, c"drawing.capy".as_ptr(), uri.as_ptr()) }, 0);
         checkpoint(&app, 0, true);
         drop((save, file, app));
-        let restored = launch_observed(platform, &path, Some(observe_original));
+        let restored = launch_observed(platform, &path, Some(observe_original), false);
         assert_eq!(restored.pixels(), pixels);
         assert_eq!(restored.state()["document_file"]["modified"], false);
         checkpoint(&restored, 0, true);
@@ -72,13 +76,13 @@ fn apple_saved_session_checks_original_before_clean_close() {
         let mut bytes = std::fs::read(&original).unwrap();
         bytes[0] ^= 1;
         std::fs::write(&original, bytes).unwrap();
-        let changed = launch_observed(platform, &path, Some(observe_original));
+        let changed = launch_observed(platform, &path, Some(observe_original), false);
         assert_eq!(changed.pixels(), pixels);
         assert_eq!(changed.state()["document_file"]["modified"], true);
         assert_eq!(changed.state()["document_file"]["recovered"], true);
         drop(changed);
         std::fs::remove_file(&original).unwrap();
-        let missing = launch_observed(platform, &path, Some(observe_original));
+        let missing = launch_observed(platform, &path, Some(observe_original), false);
         assert_eq!(missing.pixels(), pixels);
         assert_eq!(missing.state()["document_file"]["modified"], true);
         drop(missing);
@@ -163,8 +167,7 @@ fn apple_session_stale_startup_never_overwrites_new_input() {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
         app.draw_until_idle();
-        let title = CString::new(path.to_str().unwrap()).unwrap();
-        let task = SessionJob(unsafe { capy_apple_session_open(app.0, title.as_ptr(), false) });
+        let task = open(&app, &path, false);
         assert!(!task.0.is_null());
         app.invoke("add_layer");
         let current = unsafe { &*app.0 }.host.session.engine().document().clone();
@@ -210,4 +213,47 @@ fn apple_session_failed_peer_checkpoint_keeps_closing_drawing_indexed() {
         drop((task, project, app));
         std::fs::remove_dir_all(path).unwrap();
     }
+}
+#[test]
+fn apple_new_window_adopts_the_newest_unlocked_session_with_drawings() {
+    let sessions = std::env::temp_dir().join(format!("capy-apple-sessions-{}", layer_core::PortableId::random()));
+    let pause = || std::thread::sleep(std::time::Duration::from_millis(20));
+    let older = launch(1, &sessions.join("older"));
+    checkpoint(&older, 0, false);
+    drop(older);
+    pause();
+    let newer = launch(1, &sessions.join("newer"));
+    newer.stroke();
+    newer.draw_until_idle();
+    let painted = newer.pixels();
+    checkpoint(&newer, 0, false);
+    drop(newer);
+    pause();
+    let closed = launch(1, &sessions.join("closed"));
+    checkpoint(&closed, u64::MAX, true);
+    drop(closed);
+    pause();
+    let busy = launch(1, &sessions.join("busy"));
+    checkpoint(&busy, 0, false);
+    let unadopted = launch(1, &sessions.join("unadopted"));
+    assert!(sessions.join("newer").is_dir());
+    drop(unadopted);
+    let adopted = launch_observed(1, &sessions.join("adopted"), None, true);
+    assert_eq!(adopted.pixels(), painted);
+    assert!(!sessions.join("newer").exists());
+    assert!(sessions.join("busy").is_dir() && sessions.join("closed").is_dir());
+    checkpoint(&adopted, 0, true);
+    drop(adopted);
+    let restored = launch_observed(1, &sessions.join("adopted"), None, true);
+    assert_eq!(restored.pixels(), painted);
+    assert!(sessions.join("older").is_dir());
+    let second = launch_observed(1, &sessions.join("second"), None, true);
+    assert!(!sessions.join("older").exists());
+    checkpoint(&second, u64::MAX, true);
+    drop(second);
+    let fresh = launch_observed(1, &sessions.join("fresh"), None, true);
+    assert_eq!(layer_ui::SessionManifest::read(&sessions.join("fresh/window.json")).unwrap(), None);
+    assert!(sessions.join("busy/window.json").is_file() && sessions.join("adopted/window.json").is_file());
+    drop((fresh, restored, busy));
+    std::fs::remove_dir_all(sessions).unwrap();
 }

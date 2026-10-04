@@ -366,7 +366,7 @@ mod tests {
                 adapter.clone(),
                 device.clone(),
                 queue.clone(),
-                &temp.0,
+                Some(&temp.0),
                 color,
             )
             .unwrap();
@@ -387,7 +387,7 @@ mod tests {
             }
         }
         // A new device wrapper reads the saved driver blob, then releases it.
-        let cached = PipelineDevice::cached(device, &adapter, &temp.0);
+        let cached = PipelineDevice::cached(device, &adapter, Some(&temp.0));
         cached.finish_cache();
         assert!(
             Store::open(&temp.0, 1, BUDGET).is_ok(),

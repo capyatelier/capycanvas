@@ -18,7 +18,7 @@ if(Test-Path $OutputDirectory){throw 'Use a fresh result directory'}
 New-Item -ItemType Directory $OutputDirectory|Out-Null
 try{
  Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $OutputDirectory 'profile'
+ $env:CAPY_STORAGE_DIR=Join-Path $OutputDirectory 'profile'
  $env:CAPY_LATENCY_TRACE='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $OutputDirectory 'stderr.log')
 }finally{Exit-CapyEnvironment}

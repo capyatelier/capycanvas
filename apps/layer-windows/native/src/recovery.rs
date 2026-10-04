@@ -198,7 +198,7 @@ pub(crate) struct Service {
 }
 impl Service {
     pub fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
-        let root = crate::settings::data_directory()?.join("sessions");
+        let root = crate::storage::roots()?.sessions();
         let (send, jobs) = mpsc::sync_channel(1);
         let (reply, receive) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));

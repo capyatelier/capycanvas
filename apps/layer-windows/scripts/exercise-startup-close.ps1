@@ -23,7 +23,7 @@ try {
     foreach ($delay in $Delays) {
         $launch = Join-Path $run ([string]$results.Count)
         [IO.Directory]::CreateDirectory($launch) | Out-Null
-        $env:CAPY_SETTINGS_DIRECTORY = Join-Path $launch 'profile'
+        $env:CAPY_STORAGE_DIR = Join-Path $launch 'profile'
         $stderr = Join-Path $launch 'shader-jobs.log'
         $review = Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
         # Retain the exact process handle through shutdown and final exit-code collection.

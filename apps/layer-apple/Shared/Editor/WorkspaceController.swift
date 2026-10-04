@@ -25,7 +25,7 @@ import SwiftUI
     var page: String { view["page"].string }
     var hasUnsavedChanges: Bool { !ready || busy || view["dirty"].bool || view["saving"].bool }
 
-    init(store: EditorStore, root: URL, scene: String) {
+    init(store: EditorStore, directory: URL, scene: String) {
         self.store = store
         observer = NotificationCenter.default.addObserver(forName: Self.preferencesChanged, object: nil, queue: .main) { [weak self] event in
             MainActor.assumeIsolated {
@@ -33,7 +33,7 @@ import SwiftUI
                 self.send(["type": "refresh_switcher"])
             }
         }
-        send(["type": "start", "directory": root.path, "scene": UUID(uuidString: scene)?.uuidString ?? "default"])
+        send(["type": "start", "directory": directory.path, "scene": UUID(uuidString: scene)?.uuidString ?? "default"])
         Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
             MainActor.assumeIsolated {
                 guard let self, !self.view["closed"].bool else { timer.invalidate(); return }

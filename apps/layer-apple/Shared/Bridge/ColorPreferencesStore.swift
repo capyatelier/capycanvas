@@ -3,14 +3,14 @@ import Synchronization
 
 /// Call on NativeProjectTask.io: every window shares ordered, atomic preferences.
 final class ColorPreferencesStore: @unchecked Sendable {
-    private let root: URL?
+    private let locations: StorageLocations?
     private let language = Mutex("en")
     func setLanguage(_ tag: String) { language.withLock { $0 = tag } }
     private func localized(_ request: JSON) -> JSON {
         JSON(["language": language.withLock { $0 }, "request": request.raw])
     }
-    init(root: URL?) { self.root = root }
-    var canSave: Bool { root != nil }
+    init(locations: StorageLocations?) { self.locations = locations }
+    var canSave: Bool { locations != nil }
 
     private func result(_ pointer: UnsafeMutablePointer<CChar>?) throws -> JSON {
         guard let pointer else { throw HostFailure(message: "Color preferences are unavailable") }
@@ -20,7 +20,7 @@ final class ColorPreferencesStore: @unchecked Sendable {
         return value
     }
     func presets(color: JSON, request: JSON) throws -> JSON {
-        let url = root?.appendingPathComponent("color-export-presets.json")
+        let url = locations?.exportPresets
         let file: FileHandle?
         do { file = try url.map { try FileHandle(forReadingFrom: $0) } }
         catch let error as NSError where Self.missing(error) { file = nil }
@@ -91,7 +91,7 @@ final class ColorPreferencesStore: @unchecked Sendable {
             }
         }
     }
-    private var directory: URL? { root?.appendingPathComponent("color-profiles", isDirectory: true) }
+    private var directory: URL? { locations?.colorProfiles }
     private func inventory() throws -> [JSON] {
         var entries: [[String: Any]] = []
         if let directory {

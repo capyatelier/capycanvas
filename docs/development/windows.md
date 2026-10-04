@@ -36,6 +36,8 @@ The script restores the NuGet packages pinned in
 `-OutputDirectory` builds elsewhere, `-PackagesDirectory` reuses another restore
 and `-SkipRestore` skips it. `-ControlFixture` and `-SoftwareAdapterTests` build
 the [control reviews](#control-reviews) and the [VM fixture build](windows-vm.md#ui-fixtures-on-the-software-adapter).
+`-ReleaseIdentity` gives the build the installed app's [folders](#where-files-live);
+only packaging uses it.
 
 Always rebuild with `build.ps1` after Rust or shared changes. MSBuild alone copies
 whatever Rust DLL already exists, so you would test stale code. Close the test
@@ -48,8 +50,6 @@ the system FXC compiler, which is several times slower. Set
 `WGPU_DX12_COMPILER=fxc` to compare the two. The Windows App SDK runtime is also
 copied beside the executable, so development builds run unpackaged.
 
-Preferences live in `settings.json`, workspaces in `workspaces.sqlite3` and private
-editing sessions in `sessions/` under `%LOCALAPPDATA%\CapyAtelier\CapyCanvas`.
 Ordinary restarts reopen saved and untitled drawings automatically, retaining tab
 order, the active drawing, camera, selection and bounded Undo/Redo. Closing the
 window flushes the session asynchronously and destroys its GPU and storage owners
@@ -135,6 +135,43 @@ and their undo history in both themes, alongside the existing pickup fixture var
 The default layers fixture closes with a focused opacity draft, reopens the same
 private profile, and verifies the saved draft and its clean Undo checkpoint.
 
+### Where files live
+
+[App storage](../internals/storage.md) describes each kind of file. The Rust
+bridge resolves every folder once at startup, in
+[`storage.rs`](../../apps/layer-windows/native/src/storage.rs): a process with
+package identity uses its package's `ApplicationData` folders, and every other
+build uses Known Folders named for its build.
+
+| Files | ZIP or installer | Development build | Microsoft Store |
+| --- | --- | --- | --- |
+| Preferences, export presets | `%APPDATA%\CapyAtelier\CapyCanvas` | `%APPDATA%\CapyAtelier\CapyCanvas-Dev` | `LocalState` |
+| Workspaces and palettes, color profiles, editing sessions | `%LOCALAPPDATA%\CapyAtelier\CapyCanvas` | `%LOCALAPPDATA%\CapyAtelier\CapyCanvas-Dev` | `LocalState` |
+| Cache | `%LOCALAPPDATA%\CapyAtelier\CapyCanvas\Cache` | `%LOCALAPPDATA%\CapyAtelier\CapyCanvas-Dev\Cache` | `LocalCache` |
+| Parked drawing tabs, copies of opened `.capy` files, clipboard images | `%TEMP%\CapyCanvas` | `%TEMP%\CapyCanvas-Dev` | `TempState` |
+
+The Store folders are under `%LOCALAPPDATA%\Packages\<package family name>`.
+Only [`package.ps1`](#portable-zip) builds with the `release-identity` feature, so
+a development build never opens an installed app's files or windows. The MSIX
+holds that same build; with package identity it writes only to its package
+folders, so MSIX file-system virtualization never redirects its files and cannot
+split the workspace database from its `-wal` and `-shm` files. Uninstalling the
+Store app deletes its folders; deleting a ZIP or installer build leaves them.
+Nothing is written beside the executable; opt-in trace files go to the working
+directory.
+
+`CAPY_STORAGE_DIR` replaces all of these with `config`, `data`, `state`, `cache`
+and `temp` in one absolute folder ([test storage](../internals/storage.md#test-storage)).
+Unit tests that write app storage fail without it.
+
+One process owns each installation's storage, as on the other platforms. Every
+later launch, with or without files, hands itself to that process through a
+message-only window named for its storage folders, then exits. Files open in the
+frontmost window; a launch without files opens a new window. A launch waits up to
+a minute for an instance that is still starting or closing. Builds with different
+storage never hand launches to each other; `exercise-file-activation.ps1` checks
+both cases.
+
 ### Environment switches
 
 Remove a switch with `Remove-Item Env:NAME`. An empty variable still counts as
@@ -142,7 +179,7 @@ set, and passing `$null` to `[Environment]::SetEnvironmentVariable` can leave on
 
 | Variable | Effect |
 | --- | --- |
-| `CAPY_SETTINGS_DIRECTORY` | Absolute profile directory replacing the one above. Test and review runs use a fresh one under `artifacts/windows`. |
+| `CAPY_STORAGE_DIR` | Absolute folder replacing every [app folder](#where-files-live). Test and review runs use a fresh one under `artifacts/windows`; smoke-test hooks require it. |
 | `CAPY_TRACE_UI=1` | Writes `ui-state-<pid>-<window>.json`, `camera-state-<pid>-<window>.json`, `windows-<pid>.json` and `lifecycle.log` in the working directory, and adds gesture state to UI Automation. These files can contain private settings. |
 | `CAPY_SMOKE_TEST=1` | Adds test buttons: replayed stroke, pan, pen and backlog, filter reload and GPU device removal. Replay bypasses OS input delivery. |
 | `CAPY_TEST_HDR=1` | With `CAPY_SMOKE_TEST`, adds buttons that simulate HDR and SDR output. |
@@ -181,7 +218,8 @@ an unlocked desktop:
 ./apps/layer-windows/scripts/exercise-package.ps1 -Archive <path-to-zip>
 ```
 
-The packager runs a Release build into a fresh directory, collects the
+The packager runs a Release build with the release identity into a fresh
+directory, collects the
 self-contained Windows App SDK, the app-local Visual C++ runtime and all notices,
 and records every payload file's size and SHA-256 in `package-manifest.json`. It
 assembles the archive twice and requires identical hashes. Output stays under
@@ -204,7 +242,9 @@ from an STA PowerShell session (Windows PowerShell 5.1 or PowerShell 7):
 ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile <msix-result.json>
 ```
 
-The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust`. Output
+The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust` and
+keeps its files in the package's [app data](#where-files-live); the converter
+refuses a portable build without the release identity. Output
 stays under ignored `artifacts/windows/msix`. The version needs a nonzero major
 component and components no greater than 65535; `-AllowDirty` works as for the ZIP.
 MakeAppx writes wall-clock ZIP timestamps, so `normalize-msix.ps1` rewrites only
@@ -249,8 +289,8 @@ key tests include nested message timestamps, release before the confirming key,
 unrelated releases and clock wraparound. Real
 IME checks must distinguish candidate Enter/Escape from the next ordinary press,
 and include selected names, numeric refusal, pointer confirmation and focus
-changes. The `d3d12_` tests read `CAPY_SETTINGS_DIRECTORY`;
-point it at a fresh absolute directory. In Debug builds the HDR test needs
+changes. The `d3d12_` tests that write app storage need `CAPY_STORAGE_DIR` set
+to a fresh absolute folder. In Debug builds the HDR test needs
 `RUST_MIN_STACK=8388608`, the native document worker's stack size.
 
 Grouped toolbar and header tools retain their shared slot identity while presenting
@@ -413,7 +453,7 @@ then capture both themes with fitted and zoomed paper:
 $exe = (Resolve-Path ./artifacts/windows/Release/CapyCanvas.exe).Path
 $run = Join-Path (Get-Location) ('artifacts/windows/review/' + [Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $run -Force | Out-Null
-$env:CAPY_SETTINGS_DIRECTORY = Join-Path $run 'profile'
+$env:CAPY_STORAGE_DIR = Join-Path $run 'profile'
 $env:CAPY_TRACE_UI = '1'
 Remove-Item Env:CAPY_SMOKE_TEST,Env:CAPY_TEST_DISPLAY,Env:CAPY_TEST_PRIMARY -ErrorAction SilentlyContinue
 $review = Start-Process -FilePath $exe -WorkingDirectory (Split-Path $exe) -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')

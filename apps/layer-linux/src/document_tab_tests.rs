@@ -776,7 +776,7 @@ fn native_session_restart() {
 fn native_session_restart_saved_origins() {
     let (app,windows)=crate::application("art.capycanvas.SessionSavedOrigins");
     let app=NativeTestApp(app);app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    let root=std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap()).parent().unwrap().join("originals");
+    let root=crate::storage::roots().unwrap().data.join("originals");
     std::fs::create_dir_all(&root).unwrap();
     let paths=[root.join("intact.capy"),root.join("missing.capy"),root.join("changed.capy")];
     let mut drawing=new_drawing(128,96,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
@@ -965,12 +965,11 @@ fn native_document_tabs_immediate_stroke_and_undo() {
 }
 
 #[test]
-#[ignore = "isolated Wayland; CAPY_TAB_CACHE_DIR=/dev/null/capy-tabs"]
+#[ignore = "isolated Wayland and private storage"]
 fn native_document_tabs_disk_failure_keeps_data() {
-    assert_eq!(
-        std::env::var("CAPY_TAB_CACHE_DIR").unwrap(),
-        "/dev/null/capy-tabs"
-    );
+    let temp = &crate::storage::roots().unwrap().temp;
+    let _ = std::fs::remove_dir_all(temp);
+    std::fs::write(temp, b"").unwrap();
     let app = native_test_app("art.capycanvas.TabDiskFailure");
     let mut project = new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     let blob = std::sync::Arc::new(
@@ -1018,6 +1017,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
         .unwrap_err();
     assert!(error.contains("Free disk space"));
     assert_eq!(w.documents.len(), 2);
+    std::fs::remove_file(temp).unwrap();
     switch(&w, 1);
     let captured = ui_session(&w)
         .capture_artwork()
@@ -1091,6 +1091,7 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
     std::os::unix::fs::symlink(&source,&symbolic).unwrap();
     std::fs::hard_link(&source,&linked).unwrap();
     let bytes = std::fs::read(&source).unwrap();
+    crate::storage::roots();
     let imported = match layer_ui::read_import(std::io::Cursor::new(bytes.clone()),layer_ui::ImportIntent::Open,Default::default(),layer_ui::photo_document_names("Original.capy",&localization),Default::default(),Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() {
         layer_ui::ImportOutcome::Editable(imported) => imported,
         _ => panic!("Expected supported native package"),

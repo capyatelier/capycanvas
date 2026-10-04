@@ -14,18 +14,27 @@ iPad without multiple-window support reports that limitation.
 
 ## Files and threads
 
-- Everything lives in the app's own Application Support directory:
-  `settings.json` for app settings, `workspaces.sqlite3` for the workspace
-  library, and `sessions/<scene UUID>/` for drawing checkpoints. Debug builds can redirect this
-  with `CAPY_PERSISTENCE_NAMESPACE` or disable it with
-  `CAPY_DISABLE_PERSISTENCE=1`; Release builds ignore both.
+- Shared Rust names every store ([where the app keeps its files](../../docs/internals/storage.md)).
+  `StorageLocations` resolves them once per process:
+
+  | Folder | Contents |
+  | --- | --- |
+  | `Application Support/<bundle id>` | `settings.json`, `export-presets`, `color-profiles/`, `workspaces/workspaces.sqlite3` |
+  | `Application Support/<bundle id>/State` | `sessions/<scene UUID>/` drawing checkpoints; excluded from backups |
+  | `Caches/<bundle id>` | `shaders/` pipeline cache |
+  | The app's temporary folder | Anonymous copies of opened `.capy` files and parked drawing tabs |
+
+  On macOS these folders are inside the app's sandbox container.
+  `CAPY_STORAGE_DIR` replaces all of them with one private folder; a relative
+  name is a folder inside the app's temporary folder.
 - `EditorPersistence` uses one background I/O queue per process. Neither the UI
   thread nor the render owner reads or writes files. The render owner reserves
   its first operation for restoration; queued input, fixtures and surface
   attachment follow it.
 - JSON preferences and session indexes are limited to 1 MiB. A preference
-  write syncs a private temporary file, renames it atomically and syncs the
-  directory before acknowledging. Rust keeps the settings request pending until
+  write flushes a private temporary file through the drive cache
+  (`F_FULLFSYNC`), renames it atomically and flushes the directory before
+  acknowledging. Rust keeps the settings request pending until
   then. A failed save keeps the accepted in-memory edit and offers Retry Save.
 - Settings commits propagate to the process's other owners; pending local writes
   defer incoming notifications, and owners converge on the newest successful
@@ -89,7 +98,7 @@ iPad without multiple-window support reports that limitation.
 - Image export captures immutable artwork and a GPU reference and encodes
   through the shared Float32 snapshot worker, never through the display cache.
   It never renames the drawing or marks unsaved edits as saved. Export presets
-  and ICC library copies are saved atomically in the private persistence root.
+  and ICC library copies are saved atomically in Application Support.
 - Image imports use the same coordinated file worker and shared Rust decoder;
   the bridge rejects a result that arrives after the document was replaced.
 - Not handled: restoring a provider URL across launches, provider conflicts and
@@ -102,6 +111,12 @@ iPad without multiple-window support reports that limitation.
   directory. A permanent shared `SessionLease` excludes a second owner. The
   serial render owner captures the window's ordered drawing list and shared
   `SessionCapture` values; one file worker encodes and publishes them.
+- A window whose own session has no drawings adopts the newest unlocked session
+  that has drawings and renames it to its own. Artwork from windows the system
+  did not restore (Close windows when quitting, Option-Quit, cleared saved
+  state, iPad windows swiped away) therefore reopens in the next new window. On
+  iPad a window adopts only while every open scene session is connected, so a
+  background window can still reconnect to its own session.
 - The private shared session codec preserves authored artwork, working selection,
   editing target, bounded Undo/Redo, camera, saved checkpoint, modified state and
   drawing names. Portable `.capy` exports remain artwork files. The old full
@@ -145,7 +160,8 @@ iPad without multiple-window support reports that limitation.
 Close flushes accepted edits before releasing the workspace claim; a failed
 release keeps the close pending. Sleep and iPad backgrounding suspend input and
 flush; activation revalidates ownership before editing resumes. Discarded iPad
-scenes attempt a final workspace close and preserve their drawing session. macOS
+scenes attempt a final workspace close and preserve their drawing session for
+the next new window. macOS
 Quit flushes open drawings and releases workspace owners without prompting to
 save or retiring drawing membership. Explicit drawing/window close retains
 Save/Discard/Cancel and publishes removal before native destruction.
@@ -168,7 +184,8 @@ cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --feature
 
 The portable `tests::session` bridge journeys cover both Apple policies, exact
 pixels, selection, Undo/Redo after restart, orderly restart, explicit removal,
-failed peer checkpoint publication and stale adoption. Tab checks cover cancelling
+failed peer checkpoint publication, stale adoption and new windows adopting
+unrestored sessions. Tab checks cover cancelling
 a prepared close before membership changes. The XCTest `testArtworkRecoveryAfterRestart` journey expects
 immediate restored editing without a chooser. macOS/iPadOS builds, light/dark UI,
 system scene restoration, background-task expiration and provider delivery still

@@ -1446,6 +1446,7 @@ dependencies = [
 name = "layer-linux"
 version = "0.1.0"
 dependencies = [
+ "glib",
  "glib-unix",
  "gtk4",
  "half",

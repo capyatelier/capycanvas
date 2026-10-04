@@ -181,7 +181,7 @@ and `-e photo <device-path>` pointing to the mid-tier photo; it writes
 GTK `--native-test=native_layer_relationship_review` covers group-mode
 swipes, clipped owners, effect thumbnail drops, normalized gap feedback and
 relationship geometry in both themes at narrow and wide panel widths.
-Set `CAPY_RECOVERY_DIR` to a fresh private directory for this journey. It also
+Run this journey with `--native-recovery`. It also
 checks outer and inner chain drops and automatic recovery while Motion Blur is
 attached, after its removal, and through undo/redo.
 Run its pen branch with `LAYER_RELATIONSHIP_PEN=1` and `--tablet`; the tablet

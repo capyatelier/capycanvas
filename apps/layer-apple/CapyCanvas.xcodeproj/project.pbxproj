@@ -179,6 +179,12 @@
 			"path" = "Shared/Bridge/SnapshotProjection.swift";
 			"sourceTree" = "<group>";
 		};
+		"35015588782B1487FD32FA50" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "sourcecode.swift";
+			"path" = "Shared/Bridge/StorageLocations.swift";
+			"sourceTree" = "<group>";
+		};
 		"AEA7D0586FB5C227C3651CE7" = {
 			"isa" = "PBXFileReference";
 			"lastKnownFileType" = "sourcecode.swift";
@@ -1229,6 +1235,12 @@
 			"path" = "Generated/licenses";
 			"sourceTree" = "<group>";
 		};
+		"E48FE4ABFC68C8E9A0F71404" = {
+			"isa" = "PBXFileReference";
+			"lastKnownFileType" = "text.xml";
+			"path" = "Shared/PrivacyInfo.xcprivacy";
+			"sourceTree" = "<group>";
+		};
 		"7274CC092D14B33D3B863BE4" = {
 			"isa" = "PBXFileReference";
 			"explicitFileType" = "wrapper.application";
@@ -1350,6 +1362,10 @@
 		"C248632021C1E487A35F87DA" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E832721D179945D955147A0B";
+		};
+		"0641FE1518DBB91ED77D0D5D" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "35015588782B1487FD32FA50";
 		};
 		"FCAF47CBF60D3B3260DA6FC0" = {
 			"isa" = "PBXBuildFile";
@@ -1771,6 +1787,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "915157684DB88C8E3DCE8F38";
 		};
+		"984D367851C148431E2D9F42" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E48FE4ABFC68C8E9A0F71404";
+		};
 		"22D0AF704E25CB2BA94F3D2F" = {
 			"isa" = "PBXShellScriptBuildPhase";
 			"buildActionMask" = "2147483647";
@@ -1834,6 +1854,7 @@
 				"7863B359422595310635ECDA",
 				"2393889F1FE827C549C31153",
 				"C248632021C1E487A35F87DA",
+				"0641FE1518DBB91ED77D0D5D",
 				"FCAF47CBF60D3B3260DA6FC0",
 				"8AA03AE1B26A86FF3C369FBC",
 				"A190083839CE9495670D8979",
@@ -1946,6 +1967,7 @@
 			"files" = (
 				"E419FFD16A5C419DBEC65B97",
 				"62EFFDE19D42A5ADCE4A29E8",
+				"984D367851C148431E2D9F42",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -1955,7 +1977,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPad";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas.dev";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -1999,7 +2021,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPad";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -2365,7 +2387,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPadTests";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas.dev";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "iphoneos";
@@ -2388,7 +2410,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-iPadTests";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.ipad";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "iphoneos";
@@ -2551,6 +2573,10 @@
 		"72D82EEAAFFF95BB60C3A2D7" = {
 			"isa" = "PBXBuildFile";
 			"fileRef" = "E832721D179945D955147A0B";
+		};
+		"3B51C8FEAE19477D670BAF44" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "35015588782B1487FD32FA50";
 		};
 		"637A81EC799188873C60B3DE" = {
 			"isa" = "PBXBuildFile";
@@ -2980,6 +3006,10 @@
 			"isa" = "PBXBuildFile";
 			"fileRef" = "915157684DB88C8E3DCE8F38";
 		};
+		"BBDA8119C88E77672817943A" = {
+			"isa" = "PBXBuildFile";
+			"fileRef" = "E48FE4ABFC68C8E9A0F71404";
+		};
 		"B3251EEB2E73BB977F9A0CEB" = {
 			"isa" = "PBXShellScriptBuildPhase";
 			"buildActionMask" = "2147483647";
@@ -3043,6 +3073,7 @@
 				"99B5A105ECA2B65294481030",
 				"E97407AD2585DC9C218492B5",
 				"72D82EEAAFFF95BB60C3A2D7",
+				"3B51C8FEAE19477D670BAF44",
 				"637A81EC799188873C60B3DE",
 				"DA7E84475D9883296C8DFA6E",
 				"DAB0E2738631552889E8F95B",
@@ -3157,6 +3188,7 @@
 			"files" = (
 				"95DEBB7584B28DACAD448AC8",
 				"9C5DAB521961785962A358E7",
+				"BBDA8119C88E77672817943A",
 			);
 			"runOnlyForDeploymentPostprocessing" = "0";
 		};
@@ -3166,7 +3198,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-Mac";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas.dev";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -3195,6 +3227,8 @@
 				"SUPPORTED_PLATFORMS" = "macosx";
 				"MACOSX_DEPLOYMENT_TARGET" = "15.0";
 				"INFOPLIST_FILE" = "macOS/App/Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements";
+				"ENABLE_HARDENED_RUNTIME" = "YES";
 				"CAPY_RUST_PROFILE" = "debug";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-Onone";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "DEBUG";
@@ -3207,7 +3241,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-Mac";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID)";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"CLANG_ENABLE_MODULES" = "YES";
@@ -3236,6 +3270,8 @@
 				"SUPPORTED_PLATFORMS" = "macosx";
 				"MACOSX_DEPLOYMENT_TARGET" = "15.0";
 				"INFOPLIST_FILE" = "macOS/App/Info.plist";
+				"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements";
+				"ENABLE_HARDENED_RUNTIME" = "YES";
 				"CAPY_RUST_PROFILE" = "release";
 				"SWIFT_OPTIMIZATION_LEVEL" = "-O";
 				"SWIFT_ACTIVE_COMPILATION_CONDITIONS" = "";
@@ -3567,7 +3603,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-MacTests";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas.dev";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "macosx";
@@ -3590,7 +3626,7 @@
 			"buildSettings" = {
 				"PRODUCT_NAME" = "CapyCanvas-MacTests";
 				"PRODUCT_BUNDLE_IDENTIFIER" = "$(CAPY_APPLE_BUNDLE_ID).tests";
-				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.apple.mac";
+				"CAPY_APPLE_BUNDLE_ID" = "art.capycanvas.CapyCanvas";
 				"CODE_SIGN_STYLE" = "Automatic";
 				"SWIFT_VERSION" = "5.0";
 				"SDKROOT" = "macosx";
@@ -3676,6 +3712,7 @@
 				"048E4DA63B9119CBFFDA23AA",
 				"52A6DE9CF2B74A90111CFB10",
 				"E832721D179945D955147A0B",
+				"35015588782B1487FD32FA50",
 				"AEA7D0586FB5C227C3651CE7",
 				"4E6053EE38F5B2266BA47B1A",
 				"EFF7A92B891E3CDF0E83EED3",
@@ -3851,6 +3888,7 @@
 				"C15727CDA237AEFEEB099692",
 				"A6D47918270966E6019BC1D8",
 				"915157684DB88C8E3DCE8F38",
+				"E48FE4ABFC68C8E9A0F71404",
 				"0A3E27B8CA818264D75C8D81",
 			);
 			"sourceTree" = "<group>";

@@ -171,7 +171,7 @@ function Start-Review([string]$Phase){
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
     Start-Review 'initial'
     Check-Open 12;Capture 'default-paint';Check-ColumnInteractions;Check-DockTargets
     Tap 'column-icon-layers';Wait-Until {!(Column 12).open} 'Clicking the selected member did not close it'

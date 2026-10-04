@@ -156,10 +156,10 @@ impl MetalHost {
         &mut self,
         host: &mut NativeHost,
         layer: *mut c_void,
-        cache: &std::path::Path,
+        cache: Option<std::path::PathBuf>,
     ) -> Result<(), String> {
         self.detach();
-        self.cache = Some(cache.to_path_buf());
+        self.cache = cache;
         // Keep the device when replacing a layer: document textures remain live.
         let instance = self.instance.get_or_insert_with(|| {
             let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
@@ -243,7 +243,7 @@ impl MetalHost {
         &mut self,
         _: &mut NativeHost,
         _: *mut c_void,
-        _: &std::path::Path,
+        _: Option<std::path::PathBuf>,
     ) -> Result<(), String> {
         Err("Metal presentation requires an Apple target".into())
     }

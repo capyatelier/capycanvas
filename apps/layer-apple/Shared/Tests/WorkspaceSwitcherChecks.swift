@@ -2,8 +2,6 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkWorkspaceSwitcher(in app: XCUIApplication) {
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"workspace_manager","command":{"type":"manage"}}]"#
         app.launch()
         let painter = app.buttons["workspace-select-builtin:workspace:painter"]

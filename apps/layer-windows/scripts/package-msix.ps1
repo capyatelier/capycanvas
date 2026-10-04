@@ -33,7 +33,7 @@ if($UnsignedTestIdentity){
 $result=Get-Content -LiteralPath (Resolve-Path -LiteralPath $PortableResultFile).Path -Raw|ConvertFrom-Json
 $source=(Resolve-Path -LiteralPath $result.payload).Path
 $manifest=Get-Content -LiteralPath (Join-Path $source 'package-manifest.json') -Raw|ConvertFrom-Json
-if($manifest.schema -ne 1 -or $manifest.architecture -ne 'x64' -or $manifest.source_commit -ne $result.source_commit -or $manifest.packaging){throw 'Expected a portable x64 package result and matching manifest.'}
+if($manifest.schema -ne 1 -or $manifest.architecture -ne 'x64' -or !$manifest.release_identity -or $manifest.source_commit -ne $result.source_commit -or $manifest.packaging){throw 'Expected a portable x64 release package result and matching manifest.'}
 $parsedVersion=[Version]::Parse($Version)
 foreach($part in @($parsedVersion.Major,$parsedVersion.Minor,$parsedVersion.Build,$parsedVersion.Revision)){if($part -gt 65535){throw 'MSIX version components cannot exceed 65535.'}}
 $declared=[Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)

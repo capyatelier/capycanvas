@@ -1,6 +1,5 @@
 package art.capycanvas
 
-import android.app.Application
 import androidx.compose.runtime.*
 import kotlinx.coroutines.*
 import kotlinx.coroutines.sync.Mutex
@@ -13,9 +12,8 @@ import java.nio.file.StandardOpenOption
 import java.util.UUID
 import org.json.JSONObject
 
-internal class RecoveryController(private val host: CanvasHost, application: Application) {
-    companion object { @Volatile internal var directoryForTest: File? = null }
-    private val directory = directoryForTest ?: File(application.filesDir, "sessions")
+internal class RecoveryController(private val host: CanvasHost) {
+    private val directory get() = host.storage.sessions
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val storage = Mutex()
     private val publication = Mutex()
@@ -51,6 +49,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
         if (lock == null) { channel.close(); return null }
         return Held(path, channel, lock)
     }
+    private fun keys(manifest: String) = org.json.JSONArray(JSONObject(manifest).array("drawings").objects().map {it.getString("key")}).toString()
     private suspend fun writeManifest(event: JSONObject) = publication.withLock {
         val next = Native.sessionManifestUpdate(manifest, event.toString())
         if(next == manifest&&!publicationPending)return@withLock
@@ -59,7 +58,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
         publicationPending = !result.isNull("error")
         if(publicationPending)throw PublicationFailure(result.getBoolean("published"),result.getString("error"))
         manifest = next
-        if(event.getString("type") == "reconcile")withContext(Dispatchers.IO) {Native.sessionCollect(checkNotNull(held).path.absolutePath,manifest)}
+        if(event.getString("type") == "reconcile")withContext(Dispatchers.IO) {Native.sessionCollect(checkNotNull(held).path.absolutePath,keys(manifest))}
     }
     private suspend fun store(path: File): Long = withContext(NonCancellable) {
         stores[path.absolutePath] ?: withContext(Dispatchers.IO) {Native.sessionStoreOpen(path.absolutePath)}
@@ -85,7 +84,7 @@ internal class RecoveryController(private val host: CanvasHost, application: App
                         val owner = claim(path) ?: continue
                         val saved = runCatching {Native.sessionManifestRead(File(path,"session.json").absolutePath)}.getOrNull()
                         val empty = saved != null&&JSONObject(saved).array("drawings").length() == 0
-                        if(empty)try {Native.sessionCollect(path.absolutePath,checkNotNull(saved))}finally {owner.close()}
+                        if(empty)try {Native.sessionCollect(path.absolutePath,keys(checkNotNull(saved)))}finally {owner.close()}
                         else if(selected == null)selected = owner else owner.close()
                     }
                     selected
@@ -319,6 +318,37 @@ internal class RecoveryController(private val host: CanvasHost, application: App
                 }
             }
             capture()?.join()
+        }
+    }
+    fun discard() {
+        val path = candidate ?: return
+        if(working||closed)return
+        working = true
+        scope.launch {
+            try {
+                storage.withLock {
+                    val current = path == held?.path
+                    val preserved = retained.firstOrNull {it.path == path}.takeUnless {current}
+                    if(!current&&preserved == null)return@withLock
+                    val rows = if(current) JSONObject(manifest).array("drawings").objects().filter {row -> owners.values.none {it.key == row.getString("key")}} else emptyList()
+                    withContext(Dispatchers.IO) {
+                        val copies = if(current) rows.map {File(path,it.getString("key"))} else path.listFiles().orEmpty().filter {it.isDirectory}
+                        for(copy in copies) {
+                            stores.remove(copy.absolutePath)?.let(Native::sessionStoreFree)
+                            Native.sessionPrepareRetirement(copy.absolutePath)
+                        }
+                    }
+                    for(row in rows)writeManifest(obj("type" to "remove","id" to row.getLong("id")))
+                    withContext(Dispatchers.IO) {
+                        Native.sessionCollect(path.absolutePath,if(current)keys(manifest) else "[]")
+                        if(preserved != null)java.nio.file.Files.deleteIfExists(File(path,"session.json").toPath())
+                    }
+                    preserved?.let {retained.remove(it);withContext(Dispatchers.IO) {it.close()}}
+                    candidate = null
+                }
+            } catch(e:CancellationException) {throw e}
+            catch(e:Exception) {reportFailure(e,true)}
+            finally {working = false}
         }
     }
     fun dismiss() { candidate = null }

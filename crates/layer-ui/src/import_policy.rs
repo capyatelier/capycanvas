@@ -112,7 +112,7 @@ impl ImportedDocument {
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn package_backing(input: &mut impl Read, limit: u64, cancelled: &AtomicBool) -> Result<layer_core::package::ImmutableBacking, String> {
-    layer_core::package::transport::spool(input, &std::env::temp_dir(), limit, cancelled)
+    layer_core::package::transport::spool(input, layer_core::temp_files::directory()?, limit, cancelled)
 }
 #[cfg(target_arch = "wasm32")]
 fn package_backing(input: &mut impl Read, limit: u64, cancelled: &AtomicBool) -> Result<layer_core::package::ImmutableBacking, String> {
@@ -347,6 +347,7 @@ mod tests {
         document.artwork.paint.iter().find_map(|(_, _, p)| p.original.as_deref()).expect("photo source")
     }
     fn native_bytes(document: &Document) -> Vec<u8> {
+        layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
         let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
         package_bytes(&capture)
     }
@@ -379,6 +380,7 @@ mod tests {
         }
     }
     fn native_with_preview(document: &Document, preview: layer_core::package::preview::Preview) -> Vec<u8> {
+        layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
         let capture = layer_core::Editor::new(document.clone()).capture(0, document.output().context.clone()).unwrap();
         let captured_preview = layer_core::package::codec::CapturedPreview { checkpoint: capture.checkpoint, context: document.output().context.clone(), preview };
         let cancelled = AtomicBool::new(false);

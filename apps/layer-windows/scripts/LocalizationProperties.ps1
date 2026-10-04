@@ -31,12 +31,12 @@ function Preference-Numeric{
  if(Find 'settings-button' -Visible){Invoke 'settings-button'}else{Menu-Command 'edit' 'settings'}
  Invoke-Id 'preference-page-canvas'
  $entry=Control 'setting-number-pan_speed' -Arranged;$identity=$entry.GetRuntimeId() -join ':'
- $pan=(Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')).pan_speed
+ $pan=(Read-Snapshot (Settings-File)).pan_speed
  $baseline=Fresh-Model;$document=$baseline.state.document_file|ConvertTo-Json -Depth 20 -Compress;$gpu=$baseline.windows_gpu_generation
  Select-Draft $entry $numericDraft;Key 13;Select-Draft $entry $numericDraft
  Surface-Languages 'retained-numeric-validation' {
   $view=Fresh-Model $first $choice.tag;$control=Control 'setting-number-pan_speed' -Arranged
-  if(($control.GetRuntimeId() -join ':') -ne $identity -or (Value $control) -ne $numericDraft -or (Selection $control) -ne $numericDraft -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')).pan_speed -ne $pan){throw 'Native invalid numeric draft changed its editor, selected literal, setting or document/GPU ownership'}
+  if(($control.GetRuntimeId() -join ':') -ne $identity -or (Value $control) -ne $numericDraft -or (Selection $control) -ne $numericDraft -or ($view.state.document_file|ConvertTo-Json -Depth 20 -Compress) -ne $document -or $view.windows_gpu_generation -ne $gpu -or (Read-Snapshot (Settings-File)).pan_speed -ne $pan){throw 'Native invalid numeric draft changed its editor, selected literal, setting or document/GPU ownership'}
   if($control.Current.HelpText -ne (Catalog-Text $choice.tag 'numeric-invalid-expression' 'common')){throw 'Retained typed numeric error accessibility help stayed in an earlier language'}
   $away=(Control 'preferences-heading').Current.BoundingRectangle;[CapyRowPointer]::Hover([int]($away.Left+$away.Width/2),[int]($away.Top+$away.Height/2))
   Wait-Until {!(Numeric-Tooltip)} 'Previous native numeric tooltip did not dismiss' 10

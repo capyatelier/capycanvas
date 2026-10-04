@@ -37,7 +37,7 @@ try {
     Enter-CapyEnvironment @('CAPY_FILTERS_DIR','CAPY_FILTERS_MODE','PATH')
     # A build shell adds SDK shader compilers to PATH; exercise the bundled runtime.
     $env:PATH=(Join-Path $env:WINDIR 'System32')+[IO.Path]::PathSeparator+$env:WINDIR
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
     $stderr=Join-Path $run 'stderr.log'
     # Launch with a separate working directory to detect resource lookup that

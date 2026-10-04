@@ -360,8 +360,8 @@ function Swatch-Journey{
 }
 try{
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
-    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$theme;language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    [IO.File]::WriteAllText((Settings-File),(@{theme=$theme;language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     # The smoke command strip covers the bottom swatches at this window size.
     # This fixture uses native controls only; keep the isolated profile and all

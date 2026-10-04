@@ -45,7 +45,7 @@ fn switch(app: &App, id: u64, closing: bool) {
     assert!(!task.is_null(), "{:?}", unsafe { &*app.0 }.error);
     if closing { assert_eq!(unsafe { capy_apple_document_close_commit(app.0, task, true) }, 0); }
     assert_eq!(
-        unsafe { capy_document_prepare(task, c"/tmp/capy-apple-tabs-test-spill".as_ptr()) },
+        unsafe { capy_document_prepare(task) },
         0
     );
     assert_eq!(

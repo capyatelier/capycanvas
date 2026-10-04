@@ -29,17 +29,8 @@ impl Entry {
         self.issue.as_ref().map(|reason|reason.profile_message(localizer)).unwrap_or_else(|| layer_ui::color_feature_copy::profile_visibility(localizer, self.channels, self.visible))
     }
 }
-pub(super) fn directory() -> PathBuf {
-    if let Some(path) = std::env::var_os("LAYER_SETTINGS_FILE")
-        .map(PathBuf::from)
-        .and_then(|p| p.parent().map(|p| p.join("color-profiles")))
-    {
-        return path;
-    }
-    if cfg!(test) {
-        return std::env::temp_dir().join(format!("capy-color-profiles-{}", std::process::id()));
-    }
-    glib::user_data_dir().join("capycanvas/color-profiles")
+pub(super) fn directory() -> Option<PathBuf> {
+    crate::storage::roots().map(layer_host::StorageRoots::color_profiles)
 }
 // Display metadata only: the ICC bytes and digest remain authoritative.
 fn saved_name(path: &Path, description: Option<String>) -> String {

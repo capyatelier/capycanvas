@@ -9,6 +9,7 @@ name = "layer_windows"
 crate-type = ["cdylib"]
 
 [features]
+release-identity = ["layer-windows/release-identity"]
 software-adapter-tests = ["layer-windows/software-adapter-tests"]
 
 [dependencies]

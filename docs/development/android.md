@@ -83,8 +83,10 @@ Restart restores the selected drawing first, then hydrates the other tabs withou
 changing the selected canvas. The shared private session format retains tab order,
 camera, working state, manual save checkpoint and bounded undo/redo history for
 both saved and unsaved drawings. Common restart has no dialog. A drawing restored
-after an interrupted exit shows the shared recovered suffix until its next save;
-failed copies remain on disk and offer Retry or Later.
+after an interrupted exit shows the shared recovered suffix until its next save.
+A drawing that fails to restore keeps its copy and offers Restore, Later or
+Discard. Discard retires the copies that no open drawing uses, including every
+copy of a session whose index cannot be read.
 
 `Recovery.kt` owns native timing, window leases and provider access. Shared Rust
 validates the window manifest, restore attempt tickets and incremental resource
@@ -113,6 +115,31 @@ Save As remains available. Save must durably checkpoint the current drawing
 before opening a provider destination for replacement. A failed checkpoint leaves
 the original untouched. Provider replacement retains the provider's own durability
 guarantees.
+
+## Storage
+
+`AppStorage` passes the platform folders to shared Rust, and
+`layer_host::StorageRoots` names each store within them:
+
+| Kind | Folder | Contents |
+| --- | --- | --- |
+| Settings | `SharedPreferences` `capy-canvas` | the shared settings |
+| Config | `filesDir` | `export-presets` |
+| Data | `filesDir` | `workspaces/` with palettes, `color-profiles/` |
+| State | `noBackupFilesDir` | `sessions/` |
+| Cache | `cacheDir` | `shaders/` |
+| Temp | `cacheDir/temp` | package spools, parked tile spills, staged saves and imports, `clipboard/` |
+
+The canvas worker resolves the folders before the native session starts. The
+first resolution in a process empties `temp`; Android runs one process per app.
+Rust temporary files have no name once open, and Kotlin staging files are deleted
+when their job ends. The latest copied image keeps its name in `temp/clipboard`
+so other apps can paste it until Capy Canvas starts again.
+
+Auto Backup and device transfer copy the settings and `filesDir`, except the
+workspace database's `-shm` index and `-locks` folder. Android never backs up
+`noBackupFilesDir` or `cacheDir`, so sessions, caches and temporary files stay on
+the device. `hasFragileUserData` lets the user keep the data when uninstalling.
 
 ## Prerequisites
 
@@ -157,14 +184,14 @@ The launcher starts the configured emulator if no device is connected, builds
 the debug APK for the device's ABI, installs it with `adb install -r` and opens
 the app. It targets `CAPY_ANDROID_SERIAL`, default `emulator-5554`.
 `run.sh headless` starts the emulator without a window. `run.sh` and
-`run.sh headless` install the default application ID `art.capycanvas`.
+`run.sh headless` install the development application ID `art.capycanvas.dev`.
 
 `run.sh test` runs every instrumented test through
 `:app:connectedDebugAndroidTest`. Gradle uninstalls the app and its test APK
 after the run, so `run.sh test` builds them under an
 [isolated application ID](#isolated-installs): `$CAPY_APPLICATION_ID` when set,
 otherwise `tools/devices/devices.py appid`. It never installs or removes
-`art.capycanvas`.
+`art.capycanvas` or `art.capycanvas.dev`.
 
 The Gradle wrapper supplies Gradle and builds the Rust library through
 `cargo-ndk`. Direct Gradle builds default to both ABIs; use
@@ -179,12 +206,14 @@ profile/ABI changes invalidate its Rust task.
 
 ### Isolated installs
 
-`-PcapyApplicationId=<id>` builds the app under a separate package, and
-`-PcapyAppLabel=<label>` gives it its own launcher name. Its instrumentation
-package is `<id>.test`. On a shared tablet use your own ID:
+Release builds use the application ID `art.capycanvas`. Debug and benchmark
+builds use `art.capycanvas.dev`, so a development build never replaces the
+release app or reads its data. `-PcapyApplicationId=<id>` sets the ID of every
+build type, and `-PcapyAppLabel=<label>` gives it its own launcher name. Its
+instrumentation package is `<id>.test`. On a shared tablet use your own ID:
 `tools/devices/devices.py appid` prints it, and [`devices.py run`](devices.md)
-exports it as `$CAPY_APPLICATION_ID`. The commands below write `art.capycanvas`
-for the single-user case.
+exports it as `$CAPY_APPLICATION_ID`. The commands below write
+`art.capycanvas.dev` for the single-user case.
 
 ## Device tests
 
@@ -207,7 +236,7 @@ CAPY_TEST_ABI=$(adb -s "$CAPY_ANDROID_SERIAL" shell getprop ro.product.cpu.abi |
 (cd apps/layer-android && ./gradlew :app:assembleDebug :app:assembleDebugAndroidTest "-PcapyAbi=$CAPY_TEST_ABI")
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/debug/app-debug.apk
 adb -s "$CAPY_ANDROID_SERIAL" install -r apps/layer-android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.AndroidWorkspaceSwitcherTest art.capycanvas.test/androidx.test.runner.AndroidJUnitRunner
+adb -s "$CAPY_ANDROID_SERIAL" shell am instrument -w -e class art.capycanvas.AndroidWorkspaceSwitcherTest art.capycanvas.dev.test/androidx.test.runner.AndroidJUnitRunner
 ```
 
 `DEVICE_SERIAL` is the value shown by `adb devices`. Use
@@ -317,11 +346,12 @@ manual save checkpoints and undo/redo after an actual process death.
 
 ### Test data
 
-`CapyDeviceRule` gives a test its own workspace, recovery and color stores
-under the app cache, and restores the user's preferences afterwards. Tests
-without it can edit the live document and settings, so save work before running
-them. Never uninstall the app or clear its storage to reset a test; use an
-isolated application ID instead.
+`CapyDeviceRule` sets `AppStorage.directoryForTest`, which gives a test its own
+settings, workspaces, color stores and sessions under the app cache, and restores
+the user's preferences afterwards. Tests share the shader cache and temporary
+folder. Tests without the rule can edit the live document and settings, so save
+work before running them. Never uninstall the app or clear its storage to reset a
+test; use an isolated application ID instead.
 
 Tests that produce captures write them to the app's external
 `files/validation/` directory. `AndroidHostTest` and `AndroidShortcutsTest`
@@ -365,10 +395,11 @@ most magnified transform pose.
 Use the tier photo, release or benchmark build, and three five-second gestures
 under the [measurement rules](../performance/measuring.md).
 
-The `benchmark` build type inherits `release`, is not debuggable, and is signed
-with the debug key. `-PcapyBenchmark` makes it the build type of the test APK.
-Make performance decisions with it, never with a debug build. Reinstall the
-debug APK afterwards for ordinary development.
+The `benchmark` build type inherits `release`, is not debuggable, uses the
+development application ID and is signed with the debug key. `-PcapyBenchmark`
+makes it the build type of the test APK. Make performance decisions with it,
+never with a debug build. Reinstall the debug APK afterwards for ordinary
+development.
 
 ```bash
 (cd apps/layer-android && ./gradlew :app:assembleBenchmark :app:assembleBenchmarkAndroidTest "-PcapyAbi=$CAPY_TEST_ABI" -PcapyBenchmark)
@@ -630,8 +661,8 @@ and checks that the prepared brush remains ready.
 mkdir -p artifacts/android
 adb -s "$CAPY_ANDROID_SERIAL" logcat -d -v threadtime > artifacts/android/logcat.txt
 adb -s "$CAPY_ANDROID_SERIAL" exec-out screencap -p > artifacts/android/screen.png
-adb -s "$CAPY_ANDROID_SERIAL" pull /sdcard/Android/data/art.capycanvas/files/validation artifacts/android/
-adb -s "$CAPY_ANDROID_SERIAL" shell am start -n art.capycanvas/.MainActivity
+adb -s "$CAPY_ANDROID_SERIAL" pull /sdcard/Android/data/art.capycanvas.dev/files/validation artifacts/android/
+adb -s "$CAPY_ANDROID_SERIAL" shell am start -n art.capycanvas.dev/art.capycanvas.MainActivity
 ```
 
 Where to look:

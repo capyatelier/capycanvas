@@ -89,6 +89,11 @@ __declspec(dllimport) int32_t capy_finish_services(CapyHost*);
 __declspec(dllimport) void capy_destroy(CapyHost*);
 /* Process exit only, after every canvas host has been destroyed. */
 __declspec(dllimport) int32_t capy_finish_process();
+/* Shared by every launch using this installation's storage; null if unavailable. */
+__declspec(dllimport) const wchar_t* capy_instance_name(void);
+__declspec(dllimport) void capy_clear_temporary_files(void);
+/* Worker only: replaces `path` (UTF-8) after the bytes are durable. 0=ok, -1=capy_error. */
+__declspec(dllimport) int32_t capy_write_file(const char* path, const uint8_t* bytes, size_t length);
 /* Read-only DXGI diagnostics: six counters; 0=valid, HRESULT otherwise. */
 __declspec(dllimport) int32_t capy_presentation_stats(const CapyHost*, uint64_t* values);
 __declspec(dllimport) const char* capy_error(void);

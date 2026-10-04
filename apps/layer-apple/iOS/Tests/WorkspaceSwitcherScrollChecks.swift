@@ -1,17 +1,15 @@
 import XCTest
 
 extension EditorLaunchTests {
-    /// The simulator helper copies a coordinator-created database into a fresh
-    /// test namespace. No repeated creation dialogs or production seeding hook.
+    /// The simulator helper installs a disposable app and copies a
+    /// coordinator-created database into that app's own storage.
     @MainActor func testWorkspaceSwitcherScrolling() throws {
-        guard let value = ProcessInfo.processInfo.environment["CAPY_SWITCHER_SEED_NAMESPACE"],
-              let namespace = UUID(uuidString: value) else {
+        guard ProcessInfo.processInfo.environment["CAPY_SWITCHER_SEEDED"] == "1" else {
             throw XCTSkip("Run scripts/test-workspace-scrolling.py with an iPad simulator")
         }
         XCUIDevice.shared.orientation = .landscapeLeft
         let app = editorTestApplication()
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = namespace.uuidString
+        app.launchEnvironment.removeValue(forKey: "CAPY_STORAGE_DIR")
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"workspace_manager","command":{"type":"manage"}}]"#
         app.launch()
         let list = app.scrollViews["workspace-manager-rows"]

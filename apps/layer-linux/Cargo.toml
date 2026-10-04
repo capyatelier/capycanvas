@@ -10,6 +10,9 @@ path = "src/main.rs"
 test = false
 bench = false
 
+[features]
+release-identity = []
+
 [dependencies]
 layer-core = { path = "../../crates/layer-core" }
 layer-color = { path = "../../crates/layer-color" }
@@ -29,6 +32,7 @@ pollster = "0.4"
 wayland-client = { version = "0.31", features = ["system"] }
 wayland-protocols = { version = "0.32", features = ["client", "staging"] }
 raw-window-handle = "0.6"
+glib = { version = "0.22", features = ["v2_72"] }
 glib-unix = "0.22"
 half = "2.7"
 

@@ -6,12 +6,10 @@ use layer_ui::{recovery::{RecoveryState, RecoveryEvent, RecoveryWork, RecoveryWo
 use std::{cell::{Cell, RefCell}, path::PathBuf, rc::Rc, sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}}, time::Duration};
 
 fn directory() -> PathBuf {
-    std::env::var_os("CAPY_RECOVERY_DIR").map(PathBuf::from).unwrap_or_else(|| {
-        std::env::var_os("XDG_STATE_HOME").map(PathBuf::from).unwrap_or_else(|| glib::home_dir().join(".local/state")).join("capycanvas/sessions")
-    })
+    crate::storage::sessions().map(Into::into).unwrap_or_default()
 }
 fn key() -> String { layer_core::authored::PortableId::random().to_string() }
-fn enabled() -> bool { !cfg!(test) || std::env::var_os("CAPY_RECOVERY_DIR").is_some() }
+fn enabled() -> bool { crate::storage::sessions().is_some() }
 
 fn storage_gate(root:&std::path::Path)->Result<OwnerLock,String> {
     layer_core::package::session_store::create_directory(root)?;

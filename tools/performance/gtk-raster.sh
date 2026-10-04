@@ -25,9 +25,8 @@ export GDK_BACKEND=wayland GSK_RENDERER=vulkan GTK_A11Y=none
 # Match production's GTK color-management opt-in and preserve diagnostic flags.
 export GDK_DEBUG="${GDK_DEBUG:+$GDK_DEBUG:}no-portals:color-mgmt"
 export XDG_CONFIG_DIRS="$(dirname "$raster_script")/gtk-config:${XDG_CONFIG_DIRS:-/etc/xdg}"
-export LAYER_SETTINGS_FILE="$raster_run_dir/settings.json"
-export CAPY_WORKSPACE_DIR="$raster_run_dir/workspaces"
-export CAPY_RECOVERY_DIR="$raster_run_dir/recovery"
+export CAPY_STORAGE_DIR="$raster_run_dir/storage"
+mkdir -p "$CAPY_STORAGE_DIR/data/workspaces" "$CAPY_STORAGE_DIR/state/sessions"
 export LAYER_PACING_REPORT="$raster_report.json"
 unset DISPLAY
 env -u G_DEBUG mutter --headless --wayland --no-x11 \

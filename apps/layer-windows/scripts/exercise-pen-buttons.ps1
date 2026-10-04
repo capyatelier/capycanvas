@@ -47,7 +47,7 @@ function Barrel-Stroke([int]$X,[int]$Y,[switch]$Held) {
 }
 try {
  Enter-CapyEnvironment
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned pen button review $($review.Id): $run"

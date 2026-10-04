@@ -115,9 +115,10 @@ impl PipelineDevice {
     pub fn cached(
         device: wgpu::Device,
         adapter: &wgpu::Adapter,
-        directory: &std::path::Path,
+        directory: Option<&std::path::Path>,
     ) -> Self {
-        let cache = super::shader_cache::Cache::open(&device, &adapter.get_info(), directory)
+        let cache = directory
+            .and_then(|directory| super::shader_cache::Cache::open(&device, &adapter.get_info(), directory))
             .map(std::sync::Arc::new);
         Self { cache, ..Self::from(device) }
     }

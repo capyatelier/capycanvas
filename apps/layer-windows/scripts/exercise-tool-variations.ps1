@@ -71,8 +71,8 @@ function Workspace([string]$Id){
 }
 try{
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
-    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
     $null=$review.Handle
     Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'Review did not start' 120

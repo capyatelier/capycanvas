@@ -56,12 +56,9 @@ def main():
                 for index, input_path in enumerate(args.photo):
                     photo = input_path.resolve(strict=True)
                     capture = output / f"{index}-{photo.stem}.png"
-                    settings = root / f"job-{index}"
-                    settings.mkdir()
-                    photo_env = dict(env, LAYER_UI_CAPTURE=str(capture),
-                        LAYER_SETTINGS_FILE=str(settings / "settings.json"),
-                        CAPY_WORKSPACE_DIR=str(settings / "workspaces"),
-                        CAPY_RECOVERY_DIR=str(settings / "recovery"))
+                    storage = root / f"job-{index}"
+                    storage.mkdir()
+                    photo_env = dict(env, LAYER_UI_CAPTURE=str(capture), CAPY_STORAGE_DIR=str(storage))
                     loaded_gtk, high_water_kib = set(), 0
                     started = time.monotonic()
                     with (output / f"{index}-{photo.stem}.log").open("w") as app_log:

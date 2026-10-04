@@ -120,9 +120,10 @@ workers. The window stops accepting new edits during an orderly exit and waits
 asynchronously for drawing and workspace publication. Storage failure keeps the
 window open and preserves the previous complete checkpoint.
 
-Saved sessions live in `$XDG_STATE_HOME/capycanvas/sessions` (or
-`~/.local/state/capycanvas/sessions`). `CAPY_RECOVERY_DIR` selects an isolated
-session directory for tests. Window and drawing locks protect live owners;
+Saved sessions live in `$XDG_STATE_HOME/capycanvas/sessions` for a packaged
+build and `capycanvas-devel` for any other build; the
+[storage guide](../internals/storage.md) lists every folder. Window and drawing
+locks protect live owners;
 unfinished restoration attempts are retained and skipped on subsequent launch.
 Saving to a restored destination verifies its original immutable bytes before
 replacement; an unavailable or externally changed destination opens Save As.
@@ -139,7 +140,7 @@ overlay opacity and visibility through native controls, checks the displayed pix
 and clean artwork state, and verifies that private restart retains the display
 settings while portable files omit them. `native_document_files` checks saved
 project pixels and preservation of the clean drawing's private copy. Run each
-through the private-display runner, with a fresh `CAPY_RECOVERY_DIR`, and set `CAPY_NATIVE_TEST_THEME=light`
+through the private-display runner with `--native-recovery`, and set `CAPY_NATIVE_TEST_THEME=light`
 or `dark` for both presentations.
 
 ## Native text input
@@ -295,6 +296,7 @@ prerequisites. Useful settings:
 | `--native-test=<name>` | Runs the one test with that exact name. |
 | `--tablet` | Adds tablet-v2 pen input through a Wayland proxy. |
 | `--native-storage` | Gives the test the run's SQLite workspace directory instead of in-memory workspaces. |
+| `--native-recovery` | Gives the test the run's session directory, so drawings are checkpointed and restored. |
 | `LAYER_NATIVE_TEST_EXECUTABLE` | Absolute path of an already built test executable; skips the rebuild. |
 | `CAPY_NATIVE_TEST_THEME` | Sets fixture windows to `light` or `dark`; run affected journeys once with each. |
 | `LAYER_MOTION_VIEWPORT`, `LAYER_MOTION_SCALE` | Private monitor size (default `1600x1000`) and scale, for example `3200x2000` and `2`. |
@@ -314,9 +316,10 @@ Rules and pitfalls:
   native test owns the display, input protocol and storage for its run. Pass one
   exact name with `--exact --test-threads=1`; Cargo's filter is a substring match
   and can start a second journey in the same process. Test builds never fall
-  back to your own settings, workspaces or recovery files. When a test needs
-  real storage, give it fresh `CAPY_WORKSPACE_DIR`, `LAYER_SETTINGS_FILE` and
-  `CAPY_RECOVERY_DIR` paths; the runners do this.
+  back to your own settings, workspaces or recovery files. A test stores files
+  only under a fresh `CAPY_STORAGE_DIR`, and uses its workspaces and sessions
+  only when `data/workspaces` or `state/sessions` exist there; the runners
+  create the folder and those subfolders.
 - **Inject input only on the private display.** `native-input.js` drives
   Mutter's RemoteDesktop API and refuses any display not named `layer-bench-*`.
   Never point it at a desktop session.
@@ -343,8 +346,8 @@ session, for example to attach a debugger. Give it fresh storage:
 
 ```bash
 gtk_test_dir=$(mktemp -d)
-CAPY_WORKSPACE_DIR="$gtk_test_dir/workspaces" \
-LAYER_SETTINGS_FILE="$gtk_test_dir/settings.json" \
+mkdir -p "$gtk_test_dir/data/workspaces"
+CAPY_STORAGE_DIR="$gtk_test_dir" \
 GDK_BACKEND=wayland GSK_RENDERER=vulkan G_DEBUG=fatal-criticals RUST_BACKTRACE=1 \
   cargo test --locked --release -p layer-linux \
   workspace::tests::workspace_switcher_tests::native_active_workspace_delete \
@@ -387,7 +390,12 @@ node apps/layer-linux/package.mjs
 dist/capycanvas-linux/bin/capycanvas
 ```
 
-The packager builds a release binary and a pinned GTK 4.22.4 with the
+The packager builds a release binary with the `release-identity` feature, which
+gives it the application ID `art.capycanvas.CapyCanvas` and the `capycanvas`
+folders; every other build runs as `art.capycanvas.CapyCanvas.Devel` with
+`capycanvas-devel` folders, so it never shares a running instance or files with
+an installed package ([storage](../internals/storage.md)). It also builds a
+pinned GTK 4.22.4 with the
 [tablet patches](../../tools/build/gtk-runtime/README.md), cached in
 `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it). The `bin/capycanvas`
 launcher puts the bundled `libgtk-4.so.1` first on the library path; use it for

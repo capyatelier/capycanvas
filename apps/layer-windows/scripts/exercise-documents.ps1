@@ -54,7 +54,7 @@ try{
 }finally{$bitmap.Dispose()}
 try {
 Enter-CapyEnvironment @('CAPY_TEST_GPU_UNAVAILABLE')
-$env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
+$env:CAPY_STORAGE_DIR=$settingsProfile
 if($FailGpu){$env:CAPY_TEST_GPU_UNAVAILABLE='1'}
 $env:CAPY_TRACE_UI='1'
 $env:CAPY_SMOKE_TEST='1'
@@ -549,7 +549,7 @@ Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model
 if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
 Request-Close;Wait-Closed 'Restarted session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted native review reported stderr'}
-$env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'untitled-profile'
+$env:CAPY_STORAGE_DIR=Join-Path $run 'untitled-profile'
 $stderr=Join-Path $run 'untitled.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)

@@ -68,6 +68,41 @@ or removing a Swift file also changes the project, so commit that diff too.
 icons and brush previews from `apps/layer-web` and the license files. Edit those
 sources, never `Generated/`.
 
+### Identity, sandbox and privacy
+
+Both apps share one bundle identifier, so the App Store sells them as one
+Universal Purchase: `art.capycanvas.CapyCanvas` for Release and
+`art.capycanvas.CapyCanvas.dev` for Debug. A Debug build therefore never opens
+a Release build's files. `CAPY_APPLE_BUNDLE_ID=<id>` on the `xcodebuild` command
+line is the only identity override; the UI test runners append `.tests`. The
+apps installed under the old `art.capycanvas.apple.ipad` and
+`art.capycanvas.apple.mac` identifiers are separate apps that these builds
+never read or replace; leave them and their data alone.
+
+The Mac app runs in the App Sandbox with the hardened runtime in every
+configuration. `macOS/App/CapyCanvas.entitlements` grants only
+`com.apple.security.app-sandbox` and
+`com.apple.security.files.user-selected.read-write`: files reach the app
+through Open and Save panels, Finder, drag and drop and the clipboard. Its
+storage folders live in `~/Library/Containers/<bundle id>/Data`. The iPad app
+needs no entitlements.
+
+`Shared/PrivacyInfo.xcprivacy` is copied into both apps. It declares no
+tracking and no collected data, matching the privacy policy: the apps make no
+network connections, and crash reports come only through Apple's own
+diagnostics. It lists every required-reason API the Swift, Rust and vendored
+code uses:
+
+| Category | Reasons | Uses |
+| --- | --- | --- |
+| File timestamp | `C617.1`, `3B52.1` | `stat`/`fstat` on the app's own stores, including ordering unrestored drawing sessions, and on files the painter opened or chose |
+| System boot time | `35F9.1` | `ProcessInfo.systemUptime` for animation and tap timing; `mach_absolute_time` in wgpu's Metal presentation timer |
+| Disk space | `E174.1` | `statfs`/`fstatfs` in the bundled SQLite, which checks the volume before writing the workspace library |
+
+Update the manifest in the same change when code starts using another
+required-reason API (for example `UserDefaults`, disk capacity keys or active
+keyboards).
+
 ## Install and run
 
 Launch a local Mac build:
@@ -83,14 +118,14 @@ xcrun devicectl list devices
 xcrun devicectl device install app --device DEVICE_ID \
   apps/layer-apple/DerivedData/Build/Products/Debug-iphoneos/CapyCanvas-iPad.app
 xcrun devicectl device process launch --device DEVICE_ID \
-  --console art.capycanvas.apple.ipad
+  --console art.capycanvas.CapyCanvas.dev
 ```
 
 Or open the project in Xcode and run the `CapyCanvas-Mac` or `CapyCanvas-iPad`
 scheme. Attach Xcode or LLDB to the launched process for breakpoints and native
 errors. Wait for each build or install to finish before launching.
 
-**Isolated installs.** The regular apps hold an artist's drawings; never
+**Isolated installs.** Installed apps can hold an artist's drawings; never
 replace them or clear their data. Pass `CAPY_APPLE_BUNDLE_ID=<your id>` to
 `xcodebuild` to build under another identity; its UI test target uses the
 `.tests` suffix, so the regular editor stays installed. Benchmarks use their own
@@ -98,18 +133,24 @@ identity and DerivedData directory as well. A free Personal Team profile limits
 how many apps a device may hold, and the XCTest runner counts as one; do not
 remove the artist's apps to make room.
 
-**Debug fixture variables.** Release builds ignore all of these.
+**Private storage.** `CAPY_STORAGE_DIR` puts every store of a launch in one
+folder instead of the installation's folders. A relative name is a folder inside
+the app's temporary folder, which the system clears; tests can name it without
+knowing the sandboxed app's paths. Give every experiment and test its own name
+so it never reads or changes the installation's settings, workspaces or
+drawings.
+
+**Debug fixture variables.** Release builds ignore these.
 
 | Variable | Effect |
 | --- | --- |
-| `CAPY_INITIAL_ACTIONS` | JSON array of shared actions applied once after restoration and the first surface size. Also disables persistence unless a namespace is set. |
-| `CAPY_PERSISTENCE_NAMESPACE` | A UUID; settings, workspaces and recovery live in a private `test-<uuid>` folder. |
-| `CAPY_DISABLE_PERSISTENCE=1` | Runs with memory-only storage. |
+| `CAPY_INITIAL_ACTIONS` | JSON array of shared actions applied once after restoration and the first surface size. |
 
 For example, this opens the Tool panel without driving the Mac menu bar:
 
 ```sh
-open -n --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]' \
+open -n --env CAPY_STORAGE_DIR=capy-try-tool-panel \
+  --env CAPY_INITIAL_ACTIONS='[{"type":"customize","action":{"type":"set_panel_visible","panel":"tool_settings","visible":true}}]' \
   apps/layer-apple/DerivedData/Build/Products/Debug/CapyCanvas-Mac.app
 ```
 
@@ -176,7 +217,8 @@ bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/works
 
 `test-project-files.sh` builds the Rust library, compiles `Shared/`, `macOS/`
 and `tests/support` with the given fixture (default `tests/project-files.swift`)
-and runs it. Both Apple policies run on the Mac with temporary storage. Point
+and runs it with `CAPY_STORAGE_DIR` inside its own temporary folder, which it
+deletes afterwards. Both Apple policies run on the Mac with that storage. Point
 `CAPY_TEST_ASSETS_APP` at a built Mac app when a fixture needs the vector or
 filter assets. Fixtures that open windows take focus: run them one at a time and
 never alongside a UI test batch.
@@ -195,10 +237,10 @@ and `DrawingWorkloadPlan.swift`). Other runners in `scripts/` and `tests/`:
 
 | Runner | Checks |
 | --- | --- |
-| `scripts/test-persistence.sh` | Atomic settings files and the settings owner |
+| `scripts/test-persistence.sh` | Atomic settings files, backup exclusion and the settings owner |
 | `scripts/test-color-input.sh` | AppKit color text entry in all RGB spaces |
 | `scripts/test-project-access.py` | Project writes through a file-only App Sandbox grant |
-| `cargo test -p layer-apple tests::session` | Session restart, history and durable removal on both policies |
+| `cargo test -p layer-apple tests::session` | Session restart, history, durable removal and new windows adopting unrestored sessions on both policies |
 | `tests/background-expiration.py` | iPad background-task lease ordering |
 | `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator (`--fixture scenes` for per-scene cancellation) |
 | `scripts/test-workspace-scrolling.py` | Long workspace list on an iPad simulator |
@@ -228,8 +270,10 @@ xcodebuild -project apps/layer-apple/CapyCanvas.xcodeproj \
   DEVELOPMENT_TEAM=YOUR_TEAM_ID CODE_SIGN_IDENTITY='Apple Development' test
 ```
 
-- Journeys launch with their own persistence namespace or with persistence
-  disabled, and never touch the artist's data.
+- `editorTestApplication()` gives each journey's application a new
+  `CAPY_STORAGE_DIR` name, kept across its relaunches, so journeys never touch
+  the installation's data. Do not create an `XCUIApplication` for the editor
+  any other way.
 - The iOS simulator lacks Float32 filtering, so journeys that render the canvas
   need a physical iPad. UIKit component checks still run on the simulator.
 - On a physical iPad, keep the device awake and unlocked and turn on

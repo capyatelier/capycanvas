@@ -2,8 +2,6 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkWorkspaceLibraryHistory(in app: XCUIApplication) {
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"customize","action":{"type":"set_panel_visible","panel":"navigator","visible":false}},{"type":"workspace_manager","command":{"type":"layout_history"}}]"#
         app.launch()
         let manager = app.descendants(matching: .any)["workspace-library-manager"].firstMatch

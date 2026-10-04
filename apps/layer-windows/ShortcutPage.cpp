@@ -594,12 +594,9 @@ struct ShortcutPage::Impl:std::enable_shared_from_this<Impl>{
             if(auto picked=co_await save.PickSaveFileAsync())path=picked.Path();
         }catch(hresult_error const& failure){finish(id,failure.message(),L"");co_return;}
         if(path.empty()){finish(id,L"",L"");co_return;}
-        background(id,[path,bytes=to_string(text)]{
-            std::filesystem::path target(path.c_str());auto partial=target;partial+=L".partial";
-            {std::ofstream out(partial,std::ios::binary|std::ios::trunc);out.write(bytes.data(),std::streamsize(bytes.size()));
-                if(!out)return KeymapResult{L"Could not write the keymap.",L""};}
-            std::error_code failure;std::filesystem::rename(partial,target,failure);
-            if(failure){std::filesystem::remove(partial,failure);return KeymapResult{L"Could not save the keymap.",L""};}
+        background(id,[path=to_string(path),bytes=to_string(text)]{
+            if(capy_write_file(path.c_str(),reinterpret_cast<uint8_t const*>(bytes.data()),bytes.size())!=0)
+                return KeymapResult{to_hstring(capy_error()),L""};
             return KeymapResult{};
         });
     }

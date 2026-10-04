@@ -20,11 +20,15 @@ void capy_language_free(CapyLanguageTask *task);
 void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
+/* {"directory": path} names the stores within one private folder; {"platform":
+   {config, data, state, cache, temp}} resolves the installation once per process
+   and sets its temporary folder. Returns owned JSON paths or {"error": text}. */
+char *capy_apple_storage(const char *request_json);
 typedef struct CapyDocumentTask CapyDocumentTask;
 typedef struct CapySessionTask CapySessionTask;
 typedef struct CapySessionDestination CapySessionDestination;
 typedef CapySessionDestination *(*CapySessionDestinationObserver)(const char *uri);
-CapySessionTask *capy_apple_session_open(CapyApple *app, const char *path, bool retry);
+CapySessionTask *capy_apple_session_open(CapyApple *app, const char *sessions, const char *scene, bool adopt, bool retry);
 CapySessionTask *capy_apple_session_capture(CapyApple *app, uint64_t exclusion, bool clean_exit);
 int32_t capy_session_work(CapySessionTask *task, CapySessionDestinationObserver observe);
 CapySessionDestination *capy_session_destination_read(int32_t fd);
@@ -37,7 +41,7 @@ void capy_session_free(CapySessionTask *task);
 CapyDocumentTask *capy_apple_document_switch(CapyApple *app, uint64_t id, bool closing);
 int32_t capy_apple_document_prepare_switch(CapyApple *app, uint64_t now);
 CapyDocumentTask *capy_apple_document_storage(CapyApple *app);
-int32_t capy_document_prepare(CapyDocumentTask *task, const char *directory);
+int32_t capy_document_prepare(CapyDocumentTask *task);
 int32_t capy_apple_document_close_commit(CapyApple *app, CapyDocumentTask *task, bool accept);
 int32_t capy_apple_document_close_validate(CapyApple *app, const CapyDocumentTask *task);
 int32_t capy_apple_document_resume(CapyApple *app, CapyDocumentTask *task);
@@ -151,7 +155,7 @@ int32_t capy_apple_navigator_placements(CapyApple *app, const char *json);
 char *capy_apple_navigator_geometry(const char *json);
 int32_t capy_apple_attach(CapyApple *app, void *metal_layer,
                          uint32_t width, uint32_t height, float scale,
-                         const char *cache_directory);
+                         const char *cache_directory); /* NULL disables the pipeline cache */
 int32_t capy_apple_finish_startup_cache(CapyApple *app);
 int32_t capy_apple_resize(CapyApple *app, uint32_t width, uint32_t height, float scale);
 int32_t capy_apple_redraw(CapyApple *app);

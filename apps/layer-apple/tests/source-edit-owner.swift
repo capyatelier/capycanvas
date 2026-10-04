@@ -27,9 +27,9 @@ import UniformTypeIdentifiers
         let profile: JSON = try await withCheckedThrowingContinuation { done in
             NativeProjectTask.io.async {
                 do {
-                    do { _ = try ColorPreferencesStore(root: nil).importProfile(invalid); throw HostFailure(message: "Invalid ICC accepted") }
+                    do { _ = try ColorPreferencesStore(locations: nil).importProfile(invalid); throw HostFailure(message: "Invalid ICC accepted") }
                     catch { if error.localizedDescription == "Invalid ICC accepted" { throw error } }
-                    let profile = try ColorPreferencesStore(root: nil).importProfile(profileURL)
+                    let profile = try ColorPreferencesStore(locations: nil).importProfile(profileURL)
                     try require(profile["channels"].string == "Rgb", "ICC channels")
                     try require(Data(profile["profile"]["Icc"].array.map { UInt8($0.uint) }) == bytes, "Exact imported profile bytes")
                     done.resume(returning: profile)

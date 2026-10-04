@@ -30,7 +30,7 @@ def main():
     parser.add_argument("trace")
     parser.add_argument("markers")
     parser.add_argument("--processor", required=True)
-    parser.add_argument("--package", default="art.capycanvas")
+    parser.add_argument("--package", default="art.capycanvas.dev")
     args = parser.parse_args()
     package = args.package.replace("'", "''")
     # Android may record only the tail of a long package name in /proc comm.

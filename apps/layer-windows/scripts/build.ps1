@@ -5,7 +5,8 @@ param(
     [switch]$SkipRust,
     [ValidateSet('None','Number','Color')][string]$ControlFixture = 'None',
     [switch]$SkipRestore,
-    [switch]$SoftwareAdapterTests
+    [switch]$SoftwareAdapterTests,
+    [switch]$ReleaseIdentity
 )
 $ErrorActionPreference = 'Stop'
 $repo = (Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -31,7 +32,8 @@ try {
     if (!$SkipRust) {
         $cargoArgs = @('build','--locked','-p','layer-windows-link')
         if ($Configuration -eq 'Release') { $cargoArgs += '--release' }
-        if ($SoftwareAdapterTests) { $cargoArgs += '--features', 'software-adapter-tests' }
+        $features = @(if ($SoftwareAdapterTests) { 'software-adapter-tests' }) + @(if ($ReleaseIdentity) { 'release-identity' })
+        if ($features) { $cargoArgs += '--features', ($features -join ',') }
         & cargo @cargoArgs
         if ($LASTEXITCODE -ne 0) { throw 'Rust build failed.' }
     }

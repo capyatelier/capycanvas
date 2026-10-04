@@ -5,6 +5,8 @@ mod document_tabs;
 pub use document_tabs::*;
 mod session;
 pub use session::*;
+mod storage;
+pub use storage::*;
 
 /// SDR viewing contract shared by canvas, UI values and image transports.
 /// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
@@ -550,7 +552,7 @@ pub unsafe extern "C" fn capy_apple_gesture(
 
 /// # Safety
 /// Valid handle and retained CAMetalLayer; layer outlives attach through detach.
-/// Cache directory is a NUL-terminated UTF-8 path valid for this call.
+/// Cache directory is null or a NUL-terminated UTF-8 path valid for this call.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_apple_attach(
     app: *mut CapyApple,
@@ -564,16 +566,14 @@ pub unsafe extern "C" fn capy_apple_attach(
         return -1;
     };
     app.perform(|a| {
-        if layer.is_null() || cache_directory.is_null() {
-            return Err("Missing Metal layer or cache directory".into());
+        if layer.is_null() {
+            return Err("Missing Metal layer".into());
         }
-        let cache = unsafe { CStr::from_ptr(cache_directory) }
-            .to_str()
-            .map_err(|e| e.to_string())?;
+        let cache = (!cache_directory.is_null())
+            .then(|| unsafe { project::read_title(cache_directory) }.map(std::path::PathBuf::from))
+            .transpose()?;
         a.host.resize(width, height, scale)?;
-        a.gpu_operation(|a| unsafe {
-            a.metal.attach(&mut a.host, layer, std::path::Path::new(cache))
-        })
+        a.gpu_operation(|a| unsafe { a.metal.attach(&mut a.host, layer, cache) })
     })
     .map_or(-1, |_| 0)
 }

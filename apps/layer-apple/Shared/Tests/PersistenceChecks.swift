@@ -1,9 +1,11 @@
 import XCTest
 
 extension XCTestCase {
+    /// Each application keeps its files in a new folder inside the app's
+    /// temporary folder, never in the installation's storage.
     @MainActor func editorTestApplication() -> XCUIApplication {
         let app = XCUIApplication()
-        app.launchEnvironment["CAPY_DISABLE_PERSISTENCE"] = "1"
+        app.launchEnvironment["CAPY_STORAGE_DIR"] = "capy-test-" + UUID().uuidString
         // Clean up the app even when an assertion interrupts the workflow.
         // Each test owns this application; unrelated app instances stay open.
         addTeardownBlock {
@@ -14,19 +16,13 @@ extension XCTestCase {
         return app
     }
 
-    /// Full-editor fixtures must include the production workspace service and
-    /// switcher. A fresh private namespace isolates preferences/history per test.
     @MainActor func editorCaptureApplication() -> XCUIApplication {
         let app = editorTestApplication()
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"
         return app
     }
 
     @MainActor func checkSettingsAndWorkspaceRestart(in app: XCUIApplication) {
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"dark"},{"type":"customize","action":{"type":"set_panel_visible","panel":"color","visible":true}}]"#
         for launch in 0..<2 {

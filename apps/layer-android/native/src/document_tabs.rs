@@ -134,10 +134,6 @@ pub extern "system" fn Java_art_capycanvas_Native_documentResumeFree(
         drop(unsafe { Box::from_raw(handle as *mut Activation) })
     }
 }
-struct Spill {
-    tiles: layer_core::raster_storage::RetainedTiles,
-    directory: std::path::PathBuf,
-}
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentSpillTask(
     _: JNIEnv,
@@ -148,12 +144,7 @@ pub extern "system" fn Java_art_capycanvas_Native_documentSpillTask(
     a.window
         .documents
         .spill_candidate()
-        .map(|tiles| {
-            Box::into_raw(Box::new(Spill {
-                tiles,
-                directory: std::path::Path::new(&a.cache_directory).join("drawing-tiles"),
-            })) as jlong
-        })
+        .map(|tiles| Box::into_raw(Box::new(tiles)) as jlong)
         .unwrap_or(0)
 }
 #[unsafe(no_mangle)]
@@ -162,9 +153,10 @@ pub extern "system" fn Java_art_capycanvas_Native_documentSpillWork(
     _: JClass,
     handle: jlong,
 ) {
-    let job = unsafe { Box::from_raw(handle as *mut Spill) };
+    let tiles = unsafe { Box::from_raw(handle as *mut layer_core::raster_storage::RetainedTiles) };
     fail(
         &mut env,
-        layer_core::raster_storage::spill_to_directory(&job.tiles, &job.directory).map(|_| ()),
+        layer_core::temp_files::directory()
+            .and_then(|directory| layer_core::raster_storage::spill_to_directory(&tiles, directory)),
     );
 }

@@ -74,9 +74,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             check(mode != "pauses" || duration % (contactCycle * 5) == 0)
             output = File(targetContext.getExternalFilesDir(null), "brush-benchmark").apply { mkdirs() }
             val root = File(targetContext.cacheDir, "brush-benchmark-$label-${System.nanoTime()}")
-            CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-            RecoveryController.directoryForTest = File(root, "recovery")
-            ColorPreferencesStore.directoryForTest = File(root, "color")
+            AppStorage.directoryForTest = root
             DocumentController.nativeFileJobsForTest = true
             val source = arguments.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!
             check(source.matches(Regex("/data/local/tmp/[a-zA-Z0-9_.-]+\\.jpg")))
@@ -507,9 +505,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             memorySampler?.interrupt()
             memorySampler?.join(1000)
             activity?.let { runOnMainSync { it.finish() } }
-            CanvasHost.workspaceDirectoryForTest = null
-            RecoveryController.directoryForTest = null
-            ColorPreferencesStore.directoryForTest = null
+            AppStorage.directoryForTest = null
             DocumentController.nativeFileJobsForTest = false
         }
         finish(Activity.RESULT_OK, result)

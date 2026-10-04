@@ -31,9 +31,8 @@ if [[ "$motion_platform" == gtk ]]; then
     export XDG_CONFIG_DIRS="$PWD/tools/performance/gtk-config:${XDG_CONFIG_DIRS:-/etc/xdg}"
 fi
 export LAYER_NATIVE_INPUT_DIR="$motion_run_dir/input"
-export LAYER_SETTINGS_FILE="$motion_run_dir/settings.json"
-export CAPY_WORKSPACE_DIR="$motion_run_dir/workspaces"
-mkdir "$LAYER_NATIVE_INPUT_DIR" "$CAPY_WORKSPACE_DIR"
+export CAPY_STORAGE_DIR="$motion_run_dir/storage"
+mkdir "$LAYER_NATIVE_INPUT_DIR" "$CAPY_STORAGE_DIR"
 unset DISPLAY
 printf 'Workspace test logs: %s\n' "$motion_run_dir"
 env -u G_DEBUG mutter --headless --wayland --no-x11 \

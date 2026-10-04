@@ -165,6 +165,7 @@ fn write_document(document: &layer_core::Document, output: &mut impl std::io::Wr
     write_capture(&capture, output);
 }
 fn read_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
+    layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
     let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Paint".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable artwork") };
     imported.project
@@ -221,6 +222,25 @@ fn assert_saved_document(actual: &layer_core::Document, expected: &layer_core::D
     }
     captured.artwork.outputs.get_mut(captured.artwork.default_output).unwrap().context = context;
     assert_project_document(actual, &captured);
+}
+
+#[test]
+fn storage_names_every_store_within_the_folders_it_is_given() {
+    let temp = std::env::temp_dir();
+    let support = temp.join("capy-apple-storage/support");
+    let installation = stateless(capy_apple_storage, json!({"platform": {"config": support, "data": support,
+        "state": support.join("State"), "cache": temp.join("capy-apple-storage/caches"), "temp": temp}}).to_string());
+    assert_eq!(installation["settings"], json!(support.join("settings.json")));
+    assert_eq!(installation["workspaces"], json!(support.join("workspaces")));
+    assert_eq!(installation["sessions"], json!(support.join("State/sessions")));
+    assert_eq!(installation["shaders"], json!(temp.join("capy-apple-storage/caches/shaders")));
+    assert_eq!(layer_core::temp_files::directory().unwrap(), temp);
+    let private = stateless(capy_apple_storage, r#"{"directory":"/private/capy"}"#);
+    assert_eq!(private["color_profiles"], "/private/capy/data/color-profiles");
+    assert_eq!(private["export_presets"], "/private/capy/config/export-presets");
+    assert_eq!(private["state"], "/private/capy/state");
+    let relative = json!({"platform": {"config": "support", "data": support, "state": support, "cache": support, "temp": temp}});
+    assert!(stateless(capy_apple_storage, relative.to_string())["error"].is_string());
 }
 
 #[test]
@@ -1071,6 +1091,7 @@ fn application_menu_actions_change_real_pixels_on_both_apple_platforms() {
 
 impl App {
     fn new(platform: u32) -> Self {
+        layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
         let app = Self(capy_apple_create(platform));
         assert!(!app.0.is_null());
         assert_eq!(unsafe { capy_apple_resize(app.0, 1200, 900, 1.) }, 0);

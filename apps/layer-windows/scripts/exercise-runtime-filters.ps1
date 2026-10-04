@@ -112,7 +112,7 @@ try {
     $manifestPath=Join-Path $package 'manifest.json'
     $shaderPath=Join-Path $package 'tent.wgsl'
     $shader=[IO.File]::ReadAllText($shaderPath)
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_FILTERS_DIR=$package;$env:CAPY_FILTERS_MODE='add'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'

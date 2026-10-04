@@ -5,6 +5,7 @@ export DEVELOPER_DIR="${DEVELOPER_DIR:-/Applications/Xcode.app/Contents/Develope
 export MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-15.0}"
 CAPY_CHECK_DIR="$(mktemp -d "${TMPDIR:-/tmp}/capy-project-files.XXXXXX")"
 trap 'rm -rf "$CAPY_CHECK_DIR"' EXIT
+export CAPY_STORAGE_DIR="$CAPY_CHECK_DIR/storage"
 CAPY_TARGET_DIR="${CARGO_TARGET_DIR:-$CAPY_APP/../../target}"
 CAPY_CHECK_EXECUTABLE="$CAPY_CHECK_DIR/check"
 # Optional real vector assets for direct SwiftUI captures. This temporary bundle

@@ -26,7 +26,7 @@ function Choose([string]$Device,[string]$Id){
 }
 try {
  Enter-CapyEnvironment
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned zoom readout review $($review.Id): $run"

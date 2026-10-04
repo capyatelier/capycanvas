@@ -36,6 +36,9 @@ def main():
             raise RuntimeError(f"{name} failed; inspect {output / (name + '.log')}")
         return (output / f"{name}.log").read_text()
 
+    def library(container):
+        return container / "Library/Application Support" / bundle / "workspaces/workspaces.sqlite3"
+
     def backup(source, destination):
         destination.parent.mkdir(parents=True, exist_ok=True)
         with sqlite3.connect(source.as_uri() + "?mode=ro", uri=True) as src:
@@ -51,7 +54,6 @@ def main():
     device = sorted(candidates, key=lambda d: d["state"] != "Booted")[0]
     destination = device["udid"]
     bundle = "art.capycanvas.tests.scrolling.run" + token
-    namespace = str(uuid.uuid4()).upper()
     derived = output / "DerivedData"
     seed = output / "seed"
     installed = booted = False
@@ -72,8 +74,7 @@ def main():
         run("install", ["xcrun", "simctl", "install", destination, str(app)])
         installed = True
         container = Path(run("container", ["xcrun", "simctl", "get_app_container", destination, bundle, "data"]).strip())
-        database = container / "Library/Application Support" / bundle / f"test-{namespace}/workspaces.sqlite3"
-        backup(seed / "workspaces.sqlite3", database)
+        backup(seed / "data/workspaces/workspaces.sqlite3", library(container))
 
         manifests = list(products.glob("*.xctestrun"))
         if len(manifests) != 1:
@@ -84,7 +85,7 @@ def main():
         else:
             targets = [v for k, v in manifest.items() if not k.startswith("__")]
         for target in targets:
-            target.setdefault("EnvironmentVariables", {})["CAPY_SWITCHER_SEED_NAMESPACE"] = namespace
+            target.setdefault("EnvironmentVariables", {})["CAPY_SWITCHER_SEEDED"] = "1"
 
         def relocate(value):
             if isinstance(value, str):
@@ -109,12 +110,11 @@ def main():
         # XCTest may reinstall the app and move its data container. Rediscover
         # the current sandbox instead of retaining the pre-test absolute path.
         container = Path(run("final-container", ["xcrun", "simctl", "get_app_container", destination, bundle, "data"]).strip())
-        database = container / "Library/Application Support" / bundle / f"test-{namespace}/workspaces.sqlite3"
-        backup(database, output / "final-workspaces.sqlite3")
+        backup(library(container), output / "final-workspaces.sqlite3")
         with sqlite3.connect(output / "final-workspaces.sqlite3") as db:
             order = json.loads(db.execute("SELECT workspace_ids FROM workspace_order WHERE id=1").fetchone()[0])
             pins = json.loads(db.execute("SELECT workspace_ids FROM workspace_switcher WHERE id=1").fetchone()[0])
-        with sqlite3.connect(seed / "workspaces.sqlite3") as db:
+        with sqlite3.connect(seed / "data/workspaces/workspaces.sqlite3") as db:
             original_pins = json.loads(db.execute("SELECT workspace_ids FROM workspace_switcher WHERE id=1").fetchone()[0])
         # Before the first explicit reorder, shared policy supplies the list's
         # default order without writing a workspace_order preference row.
@@ -132,8 +132,7 @@ def main():
                 try:
                     container = Path(run("failure-container", ["xcrun", "simctl", "get_app_container",
                                                                destination, bundle, "data"]).strip())
-                    database = container / "Library/Application Support" / bundle / f"test-{namespace}/workspaces.sqlite3"
-                    backup(database, output / "failure-workspaces.sqlite3")
+                    backup(library(container), output / "failure-workspaces.sqlite3")
                 except Exception as error:
                     (output / "database-capture-error.log").write_text(str(error) + "\n")
             run("uninstall-runner", ["xcrun", "simctl", "uninstall", destination, bundle + ".tests.xctrunner"], check=False)

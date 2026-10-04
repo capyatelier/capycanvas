@@ -34,10 +34,13 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
     // Establish the unlink guard before the first cancellable write. Async
     // creation could finish after its future is dropped and orphan the file.
     // This is one private-file creation; all payload I/O stays asynchronous.
-    let (file, stream) =
-        gio::File::new_tmp(Some("capy-image-XXXXXX")).map_err(|e| e.to_string())?;
-    let temporary = TemporaryImage(file.path().ok_or("Temporary image path is unavailable")?);
-    let output = stream.output_stream();
+    let directory = layer_core::temp_files::directory()?;
+    std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
+    let path = directory.join(format!("clipboard-image-{}", layer_core::PortableId::random()));
+    let output = gio::File::for_path(&path)
+        .create(gio::FileCreateFlags::PRIVATE, gio::Cancellable::NONE)
+        .map_err(|e| e.to_string())?;
+    let temporary = TemporaryImage(path);
     let mut total = 0usize;
     loop {
         let bytes = input
@@ -63,7 +66,7 @@ async fn spool(clipboard: &gdk::Clipboard) -> Result<TemporaryImage, String> {
             return Err("Incomplete clipboard image transfer".into());
         }
     }
-    stream
+    output
         .close_future(glib::Priority::DEFAULT)
         .await
         .map_err(|e| e.to_string())?;

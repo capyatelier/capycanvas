@@ -17,7 +17,8 @@ private final class ResultBox<Value>: @unchecked Sendable {
     static func main() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-persistence-\(UUID())")
         defer { try? FileManager.default.removeItem(at: directory) }
-        let file = directory.appendingPathComponent("settings.json")
+        let persistence = EditorPersistence(root: directory)
+        let file = persistence.locations!.settings
         check(try AtomicJSONFile.read(file) == nil)
         let first = Data(#"{"version":1,"theme":"dark"}"#.utf8)
         let second = Data(#"{"version":1,"theme":"light"}"#.utf8)
@@ -49,9 +50,8 @@ private final class ResultBox<Value>: @unchecked Sendable {
         }
         for index in 0..<30 { try AtomicJSONFile.write(index.isMultiple(of: 2) ? second : first, to: file) }
         done.wait(); precondition(reader.get(), "Concurrent readers saw an incomplete generation")
-        check(try FileManager.default.contentsOfDirectory(atPath: directory.path).allSatisfy { !$0.hasSuffix(".tmp") })
+        check(try FileManager.default.contentsOfDirectory(atPath: file.deletingLastPathComponent().path).allSatisfy { !$0.hasSuffix(".tmp") })
 
-        let persistence = EditorPersistence(root: directory)
         func load() -> EditorPersistence.Loaded {
             let result = ResultBox<EditorPersistence.Loaded>()
             persistence.load(observer: UUID(), changed: { _ in }) { result.set($0) }
@@ -66,6 +66,10 @@ private final class ResultBox<Value>: @unchecked Sendable {
         persistence.saveSettings(second) { saved.set($0) }
         precondition(saved.get() == nil && notification.get().data == second)
         let flushed = ResultBox<Bool>(); persistence.flush { flushed.set(true) }; precondition(flushed.get())
+        var excluded = try persistence.locations!.state.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        precondition(excluded.isExcludedFromBackup == true, "Drawing sessions must stay out of backups")
+        excluded = try file.deletingLastPathComponent().resourceValues(forKeys: [.isExcludedFromBackupKey])
+        precondition(excluded.isExcludedFromBackup != true, "Settings must remain in backups")
         precondition(load().settings == second, "Acknowledgment must follow durable replacement")
 
         try Data("broken".utf8).write(to: file)

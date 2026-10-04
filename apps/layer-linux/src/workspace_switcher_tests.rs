@@ -257,7 +257,7 @@ fn native_workspace_manager_visual() {
 #[test]
 #[ignore = "requires isolated workspace storage and a native GTK display"]
 fn native_starting_layout_preview() {
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    assert!(crate::storage::workspaces().is_some());
     let app = native_test_app("art.capycanvas.StartingLayoutPreview");
     let w = Workspace::new(&app);
     w.window.present();
@@ -363,7 +363,7 @@ fn native_active_workspace_delete_with_occupied_default() {
 }
 
 fn check_active_workspace_delete(occupied_default: bool) {
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    assert!(crate::storage::workspaces().is_some());
     let app = native_test_app("art.capycanvas.WorkspaceDelete");
     let w = Workspace::new(&app);
     w.window.present();
@@ -568,7 +568,7 @@ fn native_workspace_switcher_pending_menu() {
                 wait_switcher(&w);
             }
             let ready = input.dir.join(format!("preference-lock-{theme:?}-{presentation}"));
-            let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap()).join("workspaces.sqlite3");
+            let database = crate::storage::workspaces().unwrap().to_path_buf().join("workspaces.sqlite3");
             let mut lock = std::process::Command::new("python3")
                 .arg("-c").arg("import pathlib,sqlite3,sys; c=sqlite3.connect(sys.argv[1]); c.execute('BEGIN IMMEDIATE'); pathlib.Path(sys.argv[2]).touch(); sys.stdin.readline(); c.rollback()")
                 .arg(database).arg(&ready).stdin(std::process::Stdio::piped()).spawn().unwrap();

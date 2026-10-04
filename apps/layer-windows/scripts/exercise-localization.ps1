@@ -210,8 +210,8 @@ try{
   Wait-Until {[Math]::Abs((Text-Scale)-1.5) -lt .01} 'Windows accessibility text size did not become 150 percent' 15
  }
  $actualTextScale=Text-Scale
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
- [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{language='System';theme=$Theme}|ConvertTo-Json -Depth 4))
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ [IO.File]::WriteAllText((Settings-File),(@{language='System';theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle;Write-Output "Owned localization review $($review.Id): $run"
  Wait-Until {@(Windows).Count -eq 1} 'First window did not register' 45
@@ -443,7 +443,7 @@ try{
  $future=@(Windows|Where-Object {$_.id -ne $first.id -and $_.id -ne $second.id -and $_.id -ne $textWindow.id})[0];Ready $future
  if((Fresh-Model $future $lastChoice.tag).windows_active_tag -ne $lastChoice.tag){throw 'Future window used a stale language'}
  Capture-Window $future 'future-window'
- Wait-Until {(Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')).language.Explicit -eq $lastChoice.tag} 'Language preference did not persist to the isolated settings file' 30
+ Wait-Until {(Read-Snapshot (Settings-File)).language.Explicit -eq $lastChoice.tag} 'Language preference did not persist to the isolated settings file' 30
  [pscustomobject]@{theme=$Theme;language_limit=$LanguageLimit;system_text_scale=$actualTextScale;narrow_preferences='900 by 720 for every locale';language_choices=$seen;explicit_language_count=$seen.Count;system_language=$systemChoice.tag;retained_numeric_draft_and_selection='passed';retained_unicode_text_draft_and_selection='passed';retained_nonempty_canvas_selection_and_bounds='passed';retained_preference_control='passed';retained_profile_source_proof_export='all exercised explicit locales passed';retained_shortcut_editor_picker_capture='all exercised explicit locales passed';retained_properties_numeric_choice_toggle_curve_color_gradient='all exercised explicit locales passed';retained_transform_numeric_anchor='all exercised explicit locales passed';sampler='current captions and raw choices after expected Blur/reentry passed; native RTI retention across Blur unavailable';inactive_windows='passed';future_window='passed';settings_persistence='passed';rapid_choices='passed';document_and_gpu_generation='passed';journeys=$journeys;scope='WinUI SDK/WARP controls, native file pickers and injected mouse/keys; genuine TSF, physical pen and hardware D3D12 frame pacing unverified';evidence=$run}|ConvertTo-Json -Depth 6|Tee-Object -FilePath (Join-Path $run 'results.json')
  $completed=$true
 }catch{

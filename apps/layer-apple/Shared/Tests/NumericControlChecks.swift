@@ -166,12 +166,10 @@ extension XCTestCase {
         XCTAssertTrue(canvas.waitForExistence(timeout: 20))
         expectation(for: NSPredicate(format: "value == %@", "Canvas ready"), evaluatedWith: canvas)
         waitForExpectations(timeout: 30)
-        if app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] != nil {
-            for name in ["painter", "illustrator", "photographer"] {
-                let workspace = app.buttons["workspace-switch-builtin:workspace:" + name]
-                XCTAssertTrue(workspace.waitForExistence(timeout: 10), "Full captures require every workspace segment")
-                XCTAssertEqual(workspace.isSelected, name == "illustrator")
-            }
+        for name in ["painter", "illustrator", "photographer"] {
+            let workspace = app.buttons["workspace-switch-builtin:workspace:" + name]
+            XCTAssertTrue(workspace.waitForExistence(timeout: 10), "Full captures require every workspace segment")
+            XCTAssertEqual(workspace.isSelected, name == "illustrator")
         }
         for panel in ["toolbar", "commands", "brushes", "tool_settings", "sizes", "color", "stats", "navigator", "properties", "adjustments", "layers"] {
             let control = panel == "toolbar" || panel == "commands"

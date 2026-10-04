@@ -6,8 +6,8 @@ $Executable=(Resolve-Path -LiteralPath $Executable).Path
 $directory=Split-Path -Parent $Executable
 $run=Join-Path $repo ('artifacts/windows/settings-storage/'+[Guid]::NewGuid().ToString('N'))
 $settingsProfile=Join-Path $run 'profile'
-[IO.Directory]::CreateDirectory($settingsProfile)|Out-Null
-$settingsFile=Join-Path $settingsProfile 'settings.json'
+$settingsFile=Join-Path $settingsProfile 'config/settings.json'
+[IO.Directory]::CreateDirectory((Split-Path -Parent $settingsFile))|Out-Null
 $script:review=$null
 $script:launch=0
 $locked=$null
@@ -125,7 +125,7 @@ function Recovery-Choice([string]$Name) {
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=$settingsProfile
+    $env:CAPY_STORAGE_DIR=$settingsProfile
     $env:CAPY_TRACE_UI='1'
     $env:CAPY_SMOKE_TEST='1'
 

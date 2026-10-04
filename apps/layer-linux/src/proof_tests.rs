@@ -501,10 +501,7 @@ fn native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile(
     let output = std::path::Path::new("../../artifacts/color-m3/proof-portability");
     std::fs::create_dir_all(output).unwrap();
     let output = output.canonicalize().unwrap();
-    let library = std::path::PathBuf::from(std::env::var_os("LAYER_SETTINGS_FILE").unwrap())
-        .parent()
-        .unwrap()
-        .join("color-profiles");
+    let library = crate::storage::roots().unwrap().color_profiles();
     assert!(!library.exists(), "run with an isolated profile library");
     let a = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::AdobeRgb)).unwrap();
     let b = layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap();

@@ -37,6 +37,8 @@ mod workspace_service;
 pub use navigator::{capy_navigator_aspect, capy_navigator_image};
 #[cfg(any(target_os = "windows", test))]
 mod settings;
+#[cfg(any(target_os = "windows", test))]
+mod storage;
 pub use events::CapyPointer;
 #[cfg(target_os = "windows")]
 mod device;
@@ -90,6 +92,17 @@ mod test_support {
         use layer_core::authored::*;let definition=document.artwork.definitions.insert(PortableId::random(),Definition{program:effect.program}).unwrap();let application=document.artwork.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values}).unwrap();let h=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();let stack=document.composition().result;document.artwork.stacks.get_mut(stack).unwrap().entries.insert(0,h);document.apply(layer_core::Edit::Stack(RecordChange::replace(&document.artwork.stacks,stack,document.artwork.stacks.get(stack).cloned()).unwrap())).unwrap();document.working.occurrence=Some(h);document.working.target=None;h
     }
     pub(crate) fn editable(outcome:layer_ui::ImportOutcome)->layer_ui::ImportedDocument {let layer_ui::ImportOutcome::Editable(document)=outcome else{panic!("Expected editable photo")};document}
+
+    pub(crate) fn isolated_storage() -> PathBuf {
+        crate::storage::roots().unwrap();
+        PathBuf::from(std::env::var_os(layer_host::storage::STORAGE_OVERRIDE).unwrap())
+    }
+    #[cfg(target_os = "windows")]
+    pub(crate) fn temporary_files() {
+        if crate::storage::roots().is_err() {
+            layer_core::temp_files::set_directory(std::env::temp_dir()).unwrap();
+        }
+    }
 
     pub(crate) struct TempDir {
         pub(crate) path: PathBuf,

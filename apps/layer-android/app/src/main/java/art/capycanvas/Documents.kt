@@ -91,7 +91,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             if (previewOnly && original != null && withContext(Dispatchers.IO) { sameDestination(original, uri) }) {
                 error(JSONObject(summary).getString("destination_error"))
             }
-            spool = withContext(Dispatchers.IO) {File.createTempFile("capy-package-",if(previewOnly)".png" else ".capy",application.cacheDir)}
+            spool = withContext(Dispatchers.IO) {host.storage.temporaryFile("capy-package-",if(previewOnly)".png" else ".capy")}
             withContext(Dispatchers.IO) {
                 Native.projectPackageWrite(task,ParcelFileDescriptor.open(spool,ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),previewOnly)
                 if (exportCancelled) throw CancellationException("Drawing copy cancelled")
@@ -300,7 +300,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 if (kind == "save" || kind == "export") {
                     val expectation = if(kind == "save") host.withNative { Native.sessionDestination(it) }.takeUnless { it == "null" }?.let(::JSONObject) else null
                     // Finish encoding before opening/truncating the destination.
-                    temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", if (kind == "export") ".png" else ".capy", application.cacheDir) }
+                    temporary = withContext(Dispatchers.IO) { host.storage.temporaryFile("capy-save-", if (kind == "export") ".png" else ".capy") }
                     withContext(Dispatchers.IO) {
                         val fd = ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_WRITE).detachFd()
                         if (kind == "export") exportRecipe?.let { Native.projectExportOptions(task, it.toString()) }
@@ -391,9 +391,11 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         title = { Text(recoveryCopy.getString("title")) },
         text = { Text(recoveryCopy.getString(if (recovery.working) "restoring" else "explanation")) },
         confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text(recoveryCopy.getString("restore")) } },
-        dismissButton = { Row {
+        dismissButton = {
             TextButton({ recovery.dismiss() }, enabled = !recovery.working) { Text(recoveryCopy.getString("later")) }
-        } }
+            TextButton({ recovery.discard() }, enabled = !recovery.working, modifier = Modifier.testTag("discard-recovery"),
+                colors = ButtonDefaults.textButtonColors(contentColor = MaterialTheme.colorScheme.error)) { Text(recoveryCopy.getString("discard")) }
+        }
     )
     val controller = host.documents
     if ((controller.exporting || controller.opening) && controller.packagePrompt == null) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,

@@ -247,11 +247,16 @@ pub extern "system" fn Java_art_capycanvas_Native_sessionManifestWrite(mut env: 
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_sessionCollect(mut env: JNIEnv, _: JClass, directory: JString, value: JString) {
+pub extern "system" fn Java_art_capycanvas_Native_sessionPrepareRetirement(mut env: JNIEnv, _: JClass, directory: JString) {
+    let result = read(&mut env, &directory).and_then(|path| layer_core::package::session_store::prepare_store_retirement(Path::new(&path)));
+    fail(&mut env, result)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_sessionCollect(mut env: JNIEnv, _: JClass, directory: JString, keys: JString) {
     let result = (|| {
         let path = read(&mut env, &directory)?;
-        let manifest = SessionManifest::parse(read(&mut env, &value)?.as_bytes())?;
-        let reachable = manifest.drawings.into_iter().map(|drawing|drawing.key).collect();
+        let reachable = serde_json::from_str(&read(&mut env, &keys)?).map_err(error)?;
         layer_core::package::session_store::collect_unreferenced_stores(Path::new(&path), &reachable, &AtomicBool::new(false))?;
         Ok(())
     })();

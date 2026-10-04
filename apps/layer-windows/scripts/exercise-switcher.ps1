@@ -179,9 +179,8 @@ function Close {
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
-    [IO.Directory]::CreateDirectory($env:CAPY_SETTINGS_DIRECTORY)|Out-Null
-    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$Theme}|ConvertTo-Json))
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
+    [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'initial';Check-Options
     $active=(Storage).id;$order=@((Storage).order);$original=Layout

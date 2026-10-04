@@ -41,7 +41,7 @@ function Choose-Cursor([string]$Label,[string]$Mode) {
     (Control $Label -Name -Type ([System.Windows.Automation.ControlType]::ListItem)).GetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern).Select()
     $dropdown.Collapse()
     Wait-Until {(Model).state.settings.cursor -eq $Mode} "Cursor mode did not change to $Mode"
-    Wait-Until {(Read-Snapshot (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json')).cursor -eq $Mode} 'Cursor choice did not persist'
+    Wait-Until {(Read-Snapshot (Settings-File)).cursor -eq $Mode} 'Cursor choice did not persist'
     Capture ('settings-'+$Mode) -WithModel -Composed
     Invoke-Id 'CloseButton'
     Wait-Until {!(Model).preferences -and !(Find 'CloseButton' -Visible)} 'Preferences did not close'
@@ -76,9 +76,8 @@ function Pixels([string]$Name='') {
 try {
     Enter-CapyEnvironment
     $previousDpi=[CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
-    [IO.Directory]::CreateDirectory($env:CAPY_SETTINGS_DIRECTORY)|Out-Null
-    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$Theme;language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme;language=@{Explicit='en'}}|ConvertTo-Json -Depth 4))
     Start-App
     if((Model).state.theme -ne $Theme){throw 'Cursor review did not apply the requested theme'}
     $revision=(Model).state.document_file.revision

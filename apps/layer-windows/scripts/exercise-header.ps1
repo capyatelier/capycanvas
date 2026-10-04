@@ -357,9 +357,8 @@ function Check-Narrow {
 
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
-    [IO.Directory]::CreateDirectory($env:CAPY_SETTINGS_DIRECTORY)|Out-Null
-    [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{theme=$Theme}|ConvertTo-Json))
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+    [IO.File]::WriteAllText((Settings-File),(@{theme=$Theme}|ConvertTo-Json))
     Start-Review 'initial';Capture 'normal'
     if($Journey -ne 'full'){
         $initial=HeaderJson

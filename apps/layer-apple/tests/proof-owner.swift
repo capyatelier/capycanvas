@@ -65,7 +65,7 @@ import SwiftUI
             try require(!store.state["document_file"]["modified"].bool, "Cancel before worker capture rejects its late reply")
 
             let icc = CGColorSpace(name: CGColorSpace.displayP3)!.copyICCData()! as Data
-            let embedded = try await io { try ColorPreferencesStore(root: nil).importProfile(icc) }
+            let embedded = try await io { try ColorPreferencesStore(locations: nil).importProfile(icc) }
             try await setup()
             try await apply(base.replacing("name", with: JSON("Embedded P3")).replacing("profile", with: embedded["profile"]))
             try require(try await io { try preferences.profiles().isEmpty }, "Selecting embedded bytes does not require a library copy yet")
@@ -75,10 +75,10 @@ import SwiftUI
             let entries = try await io { try preferences.profiles() }
             try require(entries.count == 1, "Replacing embedded profile preserves one exact copy")
             let id = entries[0]["id"].string
-            let preserved = root.appendingPathComponent("color-profiles/\(id).icc")
+            let preserved = StorageLocations.within(root)!.colorProfiles.appendingPathComponent("\(id).icc")
             try require(try Data(contentsOf: preserved) == icc, "Durable copy must preserve all ICC bytes")
             try await io { try preferences.showProfile(id, visible: false) }
-            try require(try await io { try ColorPreferencesStore(root: root).profiles()[0]["visible"].bool } == false, "Visibility survives a fresh preferences store")
+            try require(try await io { try ColorPreferencesStore(locations: StorageLocations.within(root)).profiles()[0]["visible"].bool } == false, "Visibility survives a fresh preferences store")
             try await io { try preferences.showProfile(id, visible: true) }
             try require(try await io { try preferences.profiles()[0]["visible"].bool }, "Hidden profile remains reversible")
             try await invoke("undo")
@@ -122,7 +122,7 @@ import SwiftUI
             try await io { try preferences.removeProfile(id) }
             try require(try await io { try preferences.profiles().isEmpty }, "Removing a saved copy leaves embedded recipes independent")
             try require(await query("proof_form")["recipe"]["name"].string == "sRGB proof", "Library removal must not edit the drawing")
-            let cmyk = try await io { try ColorPreferencesStore(root: nil).importProfile(
+            let cmyk = try await io { try ColorPreferencesStore(locations: nil).importProfile(
                 URL(fileURLWithPath: "/System/Library/ColorSync/Profiles/Generic CMYK Profile.icc")) }
             try require(cmyk["channels"].string == "Cmyk", "Exercise an actual print profile")
             try await setup()

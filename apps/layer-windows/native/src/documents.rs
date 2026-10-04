@@ -80,7 +80,7 @@ enum Source {
 enum Job {
     WritePackage {view:layer_ui::PackageView,action:layer_ui::PackageAction,original:Option<PathBuf>,path:PathBuf,cancelled:Arc<AtomicBool>},
     Activate(Box<layer_host::window::Activation>),
-    Spill { tiles: layer_core::raster_storage::RetainedTiles, directory: PathBuf },
+    Spill { tiles: layer_core::raster_storage::RetainedTiles },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
     DiscardOpening(Box<Opening>),
     Save {
@@ -243,7 +243,7 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
             Ok(Completed::PackageWritten)
         },
         Job::Activate(mut activation) => activation.work().map(|()| Completed::Activated(activation)),
-        Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
+        Job::Spill { tiles } => layer_core::raster_storage::spill_to_directory(&tiles, layer_core::temp_files::directory()?).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
         Job::Save { project, path,expected,changed_message } => {
@@ -1460,6 +1460,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
     fn d3d12_save_checkpoint_survives_later_edits() {
+        crate::test_support::temporary_files();
         let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());
@@ -1518,6 +1519,7 @@ mod gpu_tests {
     #[test]
     #[ignore = "Requires an explicitly selected hardware D3D12 adapter"]
     fn d3d12_background_save_open_new_and_stale_adoption() {
+        crate::test_support::temporary_files();
         let gpu = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
         assert_eq!(gpu.adapter().get_info().backend, wgpu::Backend::Dx12);
         assert!(gpu.adapter().get_info().device_type != wgpu::DeviceType::Cpu || layer_render_wgpu::software_adapter_tests());

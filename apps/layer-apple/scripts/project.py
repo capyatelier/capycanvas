@@ -6,6 +6,7 @@ from pathlib import Path
 
 APP = Path(__file__).resolve().parents[1]
 PROJECT = APP / "CapyCanvas.xcodeproj"
+APP_ID = "art.capycanvas.CapyCanvas"
 objects = {}
 
 def ident(name):
@@ -28,6 +29,8 @@ def configs(name, settings):
     refs = []
     for config in ["Debug", "Release"]:
         values = dict(settings)
+        if config == "Debug" and "CAPY_APPLE_BUNDLE_ID" in values:
+            values["CAPY_APPLE_BUNDLE_ID"] += ".dev"
         values.update({"CAPY_RUST_PROFILE": "debug" if config == "Debug" else "release",
             "SWIFT_OPTIMIZATION_LEVEL": "-Onone" if config == "Debug" else "-O",
             "SWIFT_ACTIVE_COMPILATION_CONDITIONS": "DEBUG" if config == "Debug" else "",
@@ -41,7 +44,8 @@ refs = {}
 for path in sources:
     name = str(path.relative_to(APP))
     refs[name] = obj(name, "PBXFileReference", lastKnownFileType="sourcecode.swift", path=name, sourceTree="<group>")
-for name, kind in [("Generated/SharedAssets.xcassets", "folder.assetcatalog"), ("Generated/licenses", "folder")]:
+for name, kind in [("Generated/SharedAssets.xcassets", "folder.assetcatalog"), ("Generated/licenses", "folder"),
+        ("Shared/PrivacyInfo.xcprivacy", "text.xml")]:
     refs[name] = obj(name, "PBXFileReference", lastKnownFileType=kind, path=name, sourceTree="<group>")
 
 targets, products = [], []
@@ -50,10 +54,10 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
     products.append(product)
     builds, resources = [], []
     for name, ref in refs.items():
-        if (name.startswith("Shared/") or name.startswith(platform + "/")) and "/Tests/" not in name:
-            builds.append(obj(scheme + name, "PBXBuildFile", fileRef=ref))
-        elif name.startswith("Generated/"):
+        if not name.endswith(".swift"):
             resources.append(obj(scheme + name, "PBXBuildFile", fileRef=ref))
+        elif (name.startswith("Shared/") or name.startswith(platform + "/")) and "/Tests/" not in name:
+            builds.append(obj(scheme + name, "PBXBuildFile", fileRef=ref))
     phases = [obj(scheme + "prepare", "PBXShellScriptBuildPhase", buildActionMask=2147483647,
         files=[], inputPaths=[], outputPaths=[], runOnlyForDeploymentPostprocessing=0,
         alwaysOutOfDate=1, name="Generate shared resources", shellPath="/bin/bash",
@@ -66,7 +70,7 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
         obj(scheme + "resources", "PBXResourcesBuildPhase", buildActionMask=2147483647, files=resources, runOnlyForDeploymentPostprocessing=0)]
     settings = {
         "PRODUCT_NAME": scheme, "PRODUCT_BUNDLE_IDENTIFIER": "$(CAPY_APPLE_BUNDLE_ID)",
-        "CAPY_APPLE_BUNDLE_ID": "art.capycanvas.apple." + ("ipad" if platform == "iOS" else "mac"),
+        "CAPY_APPLE_BUNDLE_ID": APP_ID,
         "CODE_SIGN_STYLE": "Automatic", "SWIFT_VERSION": "5.0", "CLANG_ENABLE_MODULES": "YES",
         "ENABLE_USER_SCRIPT_SANDBOXING": "NO", "SWIFT_OBJC_BRIDGING_HEADER": "$(SRCROOT)/native/include/CapyApple.h",
         "ASSETCATALOG_COMPILER_GENERATE_ASSET_SYMBOLS": "NO",
@@ -81,7 +85,8 @@ for platform, scheme in [("iOS", "CapyCanvas-iPad"), ("macOS", "CapyCanvas-Mac")
             "TARGETED_DEVICE_FAMILY": "2", "IPHONEOS_DEPLOYMENT_TARGET": "18.0",
             "INFOPLIST_FILE": "iOS/App/Info.plist", "SUPPORTS_MACCATALYST": "NO"})
     else:
-        settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "INFOPLIST_FILE": "macOS/App/Info.plist"})
+        settings.update({"SDKROOT": "macosx", "SUPPORTED_PLATFORMS": "macosx", "MACOSX_DEPLOYMENT_TARGET": "15.0", "INFOPLIST_FILE": "macOS/App/Info.plist",
+            "CODE_SIGN_ENTITLEMENTS": "macOS/App/CapyCanvas.entitlements", "ENABLE_HARDENED_RUNTIME": "YES"})
     target = obj(scheme, "PBXNativeTarget", buildConfigurationList=configs(scheme, settings),
         buildPhases=phases, buildRules=[], dependencies=[], name=scheme, productName=scheme,
         productReference=product, productType="com.apple.product-type.application")

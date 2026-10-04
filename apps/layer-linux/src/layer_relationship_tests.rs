@@ -556,7 +556,7 @@ fn native_layer_relationship_review() {
     name(motion,"Motion blur");
     relationship_action(&w,A::AttachEffect { id:motion,owner:motion_owner });
     show_layers();
-    assert!(std::env::var_os("CAPY_RECOVERY_DIR").is_some(), "idle reproduction requires private recovery storage");
+    assert!(crate::storage::sessions().is_some(), "idle reproduction requires private recovery storage");
     let idle_scene = |input:&mut RemoteInput,label:&str| {
         super::new_photo::ready(&w);
         let start = Instant::now();

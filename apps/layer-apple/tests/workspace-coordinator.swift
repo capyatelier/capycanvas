@@ -61,12 +61,12 @@ import SQLite3
             try require(await restored.workspaceRows().count == 4,
                 "Scene restoration must not create an unused workspace beside another live window")
             try await restored.closed(); try await second.workspaces!.closed()
-            let badRoot = root.appendingPathComponent("corrupt-library")
-            try FileManager.default.createDirectory(at: badRoot, withIntermediateDirectories: false)
-            let badFile = badRoot.appendingPathComponent("workspaces.sqlite3")
+            let badStorage = EditorPersistence(root: root.appendingPathComponent("corrupt-library"))
+            let badFile = badStorage.locations!.workspaces.appendingPathComponent("workspaces.sqlite3")
+            try FileManager.default.createDirectory(at: badFile.deletingLastPathComponent(), withIntermediateDirectories: true)
             let badData = Data("invalid SQLite data".utf8)
             try badData.write(to: badFile)
-            let blocked = EditorStore(platform: platform, persistence: EditorPersistence(root: badRoot))
+            let blocked = EditorStore(platform: platform, persistence: badStorage)
             try await wait("corrupt database error") { blocked.failure != nil || blocked.workspaces?.error != nil }
             precondition(blocked.workspaces?.ready != true)
             try require(Data(contentsOf: badFile) == badData, "A corrupt library must not be replaced")
@@ -83,7 +83,7 @@ import SQLite3
         root: URL, scene: String, platform: UInt32) async throws {
         try await workspaces.flushed()
         let original = workspaces.view["id"].string
-        let database = try TestWorkspaceDatabase(root: root)
+        let database = try TestWorkspaceDatabase(directory: StorageLocations.within(root)!.workspaces)
         try database.execute("BEGIN IMMEDIATE")
         let emergency = Task { @MainActor in
             try await Task.sleep(for: .seconds(3))
@@ -166,9 +166,9 @@ import SQLite3
 
 private final class TestWorkspaceDatabase {
     private let handle: OpaquePointer
-    init(root: URL) throws {
+    init(directory: URL) throws {
         var handle: OpaquePointer?
-        guard sqlite3_open(root.appendingPathComponent("workspaces.sqlite3").path, &handle) == SQLITE_OK, let handle else {
+        guard sqlite3_open(directory.appendingPathComponent("workspaces.sqlite3").path, &handle) == SQLITE_OK, let handle else {
             throw HostFailure(message: "Could not open fixture SQLite connection")
         }
         self.handle = handle

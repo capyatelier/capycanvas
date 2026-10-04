@@ -77,10 +77,9 @@ generated code; qualify frame performance before changing the launcher default.
 ## Test state and processes
 
 - Never run tests against a user's real settings, workspaces, documents or browser
-  profile. GTK tests take fresh `CAPY_WORKSPACE_DIR`, `LAYER_SETTINGS_FILE` and
-  `CAPY_RECOVERY_DIR` directories, Windows fixtures a fresh absolute
-  `CAPY_SETTINGS_DIRECTORY` under `artifacts/windows`, and Web checks their own
-  Chrome profile and origin.
+  profile. Native tests and fixtures take a fresh `CAPY_STORAGE_DIR`
+  ([test storage](../internals/storage.md#test-storage)), development builds use
+  their own app identity, and Web checks use their own Chrome profile and origin.
 - Inject native input only into the private display that
   `tools/performance/workspace-motion.sh` and `gtk-raster.sh` start, never into
   the desktop session.
@@ -100,6 +99,7 @@ generated code; qualify frame performance before changing the launcher default.
 | `CAPY_CHROME` | `tools/visual/` captures | macOS Chrome path |
 | `CAPY_ANDROID_SERIAL` | Android scripts and docs | `emulator-5554` in `run.sh` |
 | `CAPY_RUST_PROFILE` | GTK and Web scripts | `dev-perf` |
+| `CAPY_STORAGE_DIR` | Native clients: one private folder for all stored files; a relative name is inside the app's temporary folder | Platform folders |
 
 The package preview uses port 4174 and `workspace-motion.sh web` uses 4179.
 When another session may be serving on the same machine, pick a port nobody

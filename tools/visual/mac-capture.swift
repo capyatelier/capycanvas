@@ -6,7 +6,7 @@ enum CaptureFailure: Error { case missingWindow, captureFailed, invalidImage, no
 let directory = URL(fileURLWithPath: CommandLine.arguments.dropFirst().first ?? "artifacts/ui/parity/mac")
 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
 guard let app = NSWorkspace.shared.frontmostApplication,
-    app.bundleIdentifier == "art.capycanvas.apple.mac" else {
+    app.bundleIdentifier?.hasPrefix("art.capycanvas.CapyCanvas") == true else {
     fputs("Bring the native Mac editor to the front before capturing.\n", stderr)
     throw CaptureFailure.notFrontmost
 }

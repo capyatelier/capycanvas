@@ -60,12 +60,7 @@ pub(crate) struct NativeWorkspaces {
 impl NativeWorkspaces {
     pub fn new() -> Self {
         let localization = crate::launch_localization();
-        let directory = std::env::var_os("CAPY_WORKSPACE_DIR")
-            .map(std::path::PathBuf::from)
-            .or_else(|| {
-                (!cfg!(test)).then(|| glib::user_data_dir().join("art.capycanvas.CapyCanvas"))
-            });
-        let store = directory.and_then(|directory| StoreWorker::shared(&directory).ok());
+        let store = crate::storage::workspaces().and_then(|directory| StoreWorker::shared(directory).ok());
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 8);
         root.set_widget_name("workspace-save-status");
         root.add_css_class("workspace-save-status");

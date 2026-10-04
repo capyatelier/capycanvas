@@ -6,7 +6,7 @@ import SwiftUI
 
 @MainActor final class EditorStore: ObservableObject {
     private let ui = EditorSnapshotState()
-    private(set) var colorPreferences = ColorPreferencesStore(root: nil)
+    private(set) var colorPreferences = ColorPreferencesStore(locations: nil)
     let camera = CameraReadout()
     @Published var displayDetails = DisplayDetails()
     @Published var displayHeadroom: Double = 1
@@ -93,8 +93,8 @@ import SwiftUI
             let storage = workload == nil ? persistence : EditorPersistence(root:
                 FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
                     .appendingPathComponent("CapyPerformanceSessions/\(UUID().uuidString)", isDirectory: true))
-            colorPreferences = ColorPreferencesStore(root: storage.root)
-            let usesWorkspaceLibrary = managedWorkspaces && storage.root != nil
+            colorPreferences = ColorPreferencesStore(locations: storage.locations)
+            let usesWorkspaceLibrary = managedWorkspaces && storage.locations != nil
             native = try NativeOwner(platform: platform, persistence: storage,
                 traceDuration: workload.map { $0.seconds + 140 }, workload: workload?.metadata,
                 managedWorkspaces: usesWorkspaceLibrary) { [weak self] snapshot, failure in
@@ -107,8 +107,8 @@ import SwiftUI
                     self?.canvasBar.delay = (result?["canvas_bar_reappear_ms"].number ?? 0) / 1000
                 }
             }
-            if usesWorkspaceLibrary, let root = storage.root {
-                workspaces = WorkspaceController(store: self, root: root, scene: scene)
+            if usesWorkspaceLibrary, let locations = storage.locations {
+                workspaces = WorkspaceController(store: self, directory: locations.workspaces, scene: scene)
             }
             notice.answer = { [weak self] id, accept in self?.dispatch(["type": "notice", "id": id, "accept": accept]) }
             native?.canvasBarHoldChanged = { [weak self] hold in

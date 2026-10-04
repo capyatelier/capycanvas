@@ -66,8 +66,8 @@ fn atomic_write_seek_ready(
 )->Result<(),String>{
     check_cancelled(cancel)?;
     let parent = fs::canonicalize(path.parent().ok_or("Choose a destination folder")?)
-        .map_err(|e| io_error("locate the destination for", e))?;
-    let destination = parent.join(path.file_name().ok_or("Choose a drawing filename")?);
+        .map_err(|e| file_error("find the destination folder", e))?;
+    let destination = parent.join(path.file_name().ok_or("Choose a filename")?);
     let mut reserved = None;
     for _ in 0..32 {
         let serial = NEXT.fetch_add(1, Ordering::Relaxed);
@@ -82,21 +82,21 @@ fn atomic_write_seek_ready(
                 break;
             }
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(io_error("create temporary", e)),
+            Err(e) => return Err(file_error("create a temporary file", e)),
         }
     }
-    let (temporary, file) = reserved.ok_or("Could not reserve a temporary drawing file")?;
+    let (temporary, file) = reserved.ok_or("Could not reserve a temporary file")?;
     let mut stream = layer_core::Cancellable {
         inner: BufWriter::new(file),
         cancelled: || cancel.load(Ordering::Acquire),
     };
     write(&mut stream)?;
-    stream.flush().map_err(|e| io_error("write", e))?;
+    stream.flush().map_err(|e| file_error("write the file", e))?;
     stream
         .inner
         .get_ref()
         .sync_all()
-        .map_err(|e| io_error("flush", e))?;
+        .map_err(|e| file_error("flush the file", e))?;
     // Close before replacement on Windows, including all error and unwind paths.
     drop(stream);
     check_cancelled(cancel)?;
@@ -116,7 +116,7 @@ fn replace_when_available(
     loop {
         check_cancelled(cancel)?;
         ready()?;
-        match crate::settings::replace(source, destination) {
+        match replace(source, destination) {
             Ok(()) => return Ok(()),
             Err(error) => {
                 let remaining = deadline.saturating_duration_since(std::time::Instant::now());
@@ -124,12 +124,37 @@ fn replace_when_available(
                     || !matches!(error.raw_os_error(), Some(5 | 32 | 33))
                     || remaining.is_zero()
                 {
-                    return Err(io_error("replace saved", error));
+                    return Err(file_error("replace the saved file", error));
                 }
                 std::thread::sleep(remaining.min(std::time::Duration::from_millis(20)));
             }
         }
     }
+}
+fn file_error(operation: &str, error: std::io::Error) -> String {
+    format!("Could not {operation} ({:?}).", error.kind())
+}
+#[cfg(target_os = "windows")]
+fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::{
+        Win32::Storage::FileSystem::{MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW},
+        core::PCWSTR,
+    };
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination.as_os_str().encode_wide().chain(Some(0)).collect();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))
+}
+#[cfg(not(target_os = "windows"))]
+fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
+    fs::rename(source, destination)
 }
 #[cfg(test)]
 mod tests {

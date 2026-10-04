@@ -5,10 +5,10 @@ use layer_ui::ColorFeatureError;
 use layer_ui::profile_library::{self as policy, ProfileEntry, ProfileRecord};
 use serde::Deserialize;
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::Read,
-    path::{Path, PathBuf},
-    sync::atomic::AtomicBool,
+    path::Path,
+    sync::{Mutex, TryLockError, atomic::AtomicBool},
     time::{Duration, Instant},
 };
 
@@ -26,33 +26,25 @@ impl ProfileChoice {
         }
     }
 }
-fn directory() -> Result<PathBuf, String> {
-    Ok(crate::settings::data_directory()?.join("color"))
-}
+static STORE: Mutex<()> = Mutex::new(());
 pub(crate) fn locked<T, E: From<String>>(
     cancel: &AtomicBool,
     action: impl FnOnce(&Path) -> Result<T, E>,
 ) -> Result<T, E> {
-    let directory = directory()?;
+    let directory = crate::storage::roots()?.color_profiles();
     fs::create_dir_all(&directory).map_err(|e| io_error("prepare color preferences", e))?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(directory.join("storage.lock"))
-        .map_err(|e| io_error("open color storage lock", e))?;
     let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
+    let _store = loop {
         check_cancelled(cancel)?;
-        match lock.try_lock() {
-            Ok(()) => break,
-            Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+        match STORE.try_lock() {
+            Ok(store) => break store,
+            Err(TryLockError::Poisoned(store)) => break store.into_inner(),
+            Err(TryLockError::WouldBlock) if Instant::now() < deadline => {
                 std::thread::sleep(Duration::from_millis(10))
             }
-            Err(_) => return Err("Color preferences are busy; try again".to_owned().into()),
+            Err(TryLockError::WouldBlock) => return Err("Color preferences are busy; try again".to_owned().into()),
         }
-    }
+    };
     action(&directory)
 }
 fn read(path: &Path, limit: usize) -> Result<Vec<u8>, String> {
@@ -200,8 +192,8 @@ pub(crate) fn presets(
     cancel: &AtomicBool,
     localization: &layer_ui::Localizer,
 ) -> Result<layer_ui::ExportPresetView, ColorFeatureError> {
-    locked(cancel, |directory| {
-        let path = directory.join("export-presets.json");
+    locked(cancel, |_| {
+        let path = crate::storage::roots()?.export_presets();
         let mut library = if path.exists() {
             layer_ui::ExportPresets::restore(&read(&path, layer_ui::ExportPresets::MAX_FILE_BYTES)?)
         } else {
@@ -211,6 +203,9 @@ pub(crate) fn presets(
         view.localize_names(document.composition().color, localization);
         if view.changed {
             let bytes = library.encode()?;
+            if let Some(directory) = path.parent() {
+                fs::create_dir_all(directory).map_err(|e| io_error("prepare export presets", e))?;
+            }
             atomic_write(&path, cancel, |file| {
                 file.write_all(&bytes)
                     .map_err(|e| io_error("save export presets", e))
@@ -225,16 +220,15 @@ mod tests {
     use super::*;
 
     #[test]
-    #[ignore = "Requires an isolated CAPY_SETTINGS_DIRECTORY"]
+    #[ignore = "Requires an isolated CAPY_STORAGE_DIR"]
     fn hidden_profiles_leave_menus_until_shown_or_removed() {
-        assert!(std::env::var_os("CAPY_SETTINGS_DIRECTORY").is_some(), "use isolated storage");
         let cancel = AtomicBool::new(false);
         let localization = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
         let bytes = layer_color::profile_bytes(&ColorProfile::Builtin(layer_core::color::RgbSpace::DisplayP3)).unwrap();
         let id = policy::profile_identity(&bytes);
         let listed = |cancel: &AtomicBool| list(cancel).unwrap().iter().any(|p| p.id == id);
         preserve(&bytes, &cancel, &localization).unwrap();
-        let menus = directory().unwrap().join("menus.json");
+        let menus = crate::storage::roots().unwrap().color_profiles().join("menus.json");
         std::fs::write(&menus, serde_json::json!([id, 7, {"id": id}]).to_string()).unwrap();
         assert!(!listed(&cancel));
         std::fs::write(&menus, "not json").unwrap();

@@ -72,14 +72,8 @@ impl ByteSource for ChunkedBytes {
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
     use super::*;
-    use std::{fs::{File, OpenOptions}, io::Write, path::{Path, PathBuf}, sync::Mutex};
-    struct PrivateFile { file: Mutex<Option<File>>, path: PathBuf, length: u64 }
-    impl Drop for PrivateFile {
-        fn drop(&mut self) {
-            if let Ok(file) = self.file.get_mut() { drop(file.take()); }
-            let _ = std::fs::remove_file(&self.path);
-        }
-    }
+    use std::{fs::File, io::Write, path::Path, sync::Mutex};
+    struct PrivateFile { file: Mutex<File>, length: u64 }
     impl ByteSource for PrivateFile {
         fn byte_len(&self) -> u64 { self.length }
         fn resident_bytes(&self) -> usize { 0 }
@@ -87,8 +81,7 @@ mod native {
             if length > MAX_RANGE_BYTES || offset.checked_add(length as u64).is_none_or(|end| end > self.length) {
                 return Err("Package file range exceeds backing".into());
             }
-            let mut guard = self.file.lock().map_err(|_| "Package file lock failed")?;
-            let file = guard.as_mut().ok_or("Package file was released")?;
+            let mut file = self.file.lock().map_err(|_| "Package file lock failed")?;
             file.seek(SeekFrom::Start(offset)).map_err(|e| e.to_string())?;
             let mut bytes = vec![0; length];
             file.read_exact(&mut bytes).map_err(|e| e.to_string())?;
@@ -96,21 +89,17 @@ mod native {
         }
     }
     pub fn spool(input: &mut impl Read, directory: &Path, limit: u64, cancelled: &AtomicBool) -> Result<ImmutableBacking, String> {
-        let path = directory.join(format!("capy-package-{}.tmp", crate::authored::PortableId::random()));
-        let mut options=OpenOptions::new();
-        options.create_new(true).read(true).write(true);
-        #[cfg(unix)] { use std::os::unix::fs::OpenOptionsExt; options.mode(0o600); }
-        let file = options.open(&path).map_err(|e| e.to_string())?;
-        let mut owner = PrivateFile { file: Mutex::new(Some(file)), path, length: 0 };
+        let mut file = crate::temp_files::anonymous(directory, "package").map_err(|e| e.to_string())?;
+        let mut length = 0u64;
         let mut buffer = [0; 64 * 1024];
         loop {
             if cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
             let count = input.read(&mut buffer).map_err(|e| e.to_string())?;
             if count == 0 { break; }
-            owner.length = owner.length.checked_add(count as u64).filter(|length| *length <= limit).ok_or("Package stream exceeds admission limit")?;
-            owner.file.get_mut().map_err(|_| "Package file lock failed")?.as_mut().unwrap().write_all(&buffer[..count]).map_err(|e| e.to_string())?;
+            length = length.checked_add(count as u64).filter(|length| *length <= limit).ok_or("Package stream exceeds admission limit")?;
+            file.write_all(&buffer[..count]).map_err(|e| e.to_string())?;
         }
-        ImmutableBacking::new(Arc::new(owner)).map_err(String::from)
+        ImmutableBacking::new(Arc::new(PrivateFile { file: Mutex::new(file), length })).map_err(String::from)
     }
 }
 #[cfg(not(target_arch = "wasm32"))]

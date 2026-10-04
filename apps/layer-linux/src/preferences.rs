@@ -1170,9 +1170,7 @@ pub(crate) async fn persist(w: &Workspace, settings: Box<Settings>) -> Result<()
 }
 
 fn path() -> Option<std::path::PathBuf> {
-    std::env::var_os("LAYER_SETTINGS_FILE")
-        .map(Into::into)
-        .or_else(|| (!cfg!(test)).then(|| glib::user_config_dir().join("layer/settings.json")))
+    crate::storage::roots().map(layer_host::StorageRoots::settings)
 }
 pub fn load_language_preference() -> Result<layer_ui::LanguagePreference, String> {
     Ok(load_saved()?.as_deref().map(Settings::language_preference).unwrap_or_default())

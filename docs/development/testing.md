@@ -295,6 +295,12 @@ are your task, and remove an entry when you fix it.
   `native_workspace_motion_input`, and `native_workspace_switcher_input`
   (intermittent). `native_workspace_resize_input` presents below its rate
   threshold under the runner's `color-mgmt`.
+- GTK `native_document_tabs_history_storage_and_close`: the reactivated camera's
+  translation differs from the original by about 3e-5.
+  `native_embedded_proof_replacement_preserves_local_copy_and_saves_one_profile`
+  expects error text the app no longer shows, and
+  `native_workspace_unavailable_close_recovery` expects a startup error where
+  unavailable storage now starts in memory.
 - Android: 7 of 15 `AndroidTitleBarTest` cases;
   `detachedPanelsKeepBodiesAndWiderResizeTargets`;
   `AndroidInteractionTest#cachedPanelsMatchDirectDrawing` (light docked panels);
@@ -320,11 +326,19 @@ are your task, and remove an entry when you fix it.
   intermittently times out waiting for profile-library buttons.
 - Android `AndroidIconEditorTest#allToolCategoriesModesFiltersAndToolbarIconsRender`
   expects 13 brush categories where the current catalog supplies 16.
+- Android `AndroidPaletteTest#palettesPersistAcrossRelaunch` and
+  `AndroidWorkspaceSwitcherTest#nativeOptionsVisibilityInputsAndRestart` fail on
+  MovinkPad Pro 14. `AndroidWorkspaceOwnershipTest` expects `focus_window` to be
+  a workspace ID, but the view now names the owning window too.
 - Windows `exercise-tab-pickup.ps1 -Device touch`: after the Layers group is torn
   off, the injected contact reaches neither XAML nor the canvas, so the drag never
   finishes. Mouse passes.
 - Windows `exercise-multiwindow.ps1`: "Pin preferences did not refresh in the
   inactive window".
+- Windows `exercise-clipboard.ps1`: "Ctrl+X did not write the clipboard", and
+  `exercise-persistence.ps1`: "Missing control: Brush size slider" (the slider is
+  named "Brush size"). `documents:RecoverGpu` on a VM: "GPU reconstruction did not
+  start".
 - `layer-ui` `localization::tests::preparation_chunks_preserve_all_message_values_and_attributes`
   fails in Windows checkouts with `core.autocrlf`: three multi-line English messages
   parse into differently split text elements with the same formatted text.

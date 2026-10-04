@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     io::Read,
     path::{Path, PathBuf},
-    sync::{Arc, mpsc},
+    sync::{Arc, atomic::AtomicBool, mpsc},
 };
 
 #[derive(Deserialize)]
@@ -41,17 +41,6 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     Ok(bytes)
-}
-
-fn write_replacing(path: &Path, bytes: &[u8]) -> Result<(), String> {
-    let mut partial = path.as_os_str().to_owned();
-    partial.push(".partial");
-    let partial = PathBuf::from(partial);
-    std::fs::write(&partial, bytes).map_err(|e| e.to_string())?;
-    std::fs::rename(&partial, path).map_err(|e| {
-        let _ = std::fs::remove_file(&partial);
-        e.to_string()
-    })
 }
 
 impl Service {
@@ -100,7 +89,9 @@ impl Service {
                 let path = PathBuf::from(path);
                 Box::new(move || {
                     let export = palette.export(format)?;
-                    write_replacing(&path, &export.bytes)?;
+                    crate::document_io::atomic_write(&path, &AtomicBool::new(false), |file| {
+                        file.write_all(&export.bytes).map_err(|e| e.to_string())
+                    })?;
                     Ok(Outcome::Exported(export.notice))
                 })
             }
@@ -168,13 +159,14 @@ mod tests {
         let mut service = Service::new(Arc::new(|| {}));
         let id = host.session.state().color_library.palettes[0].id;
         let count = host.session.state().color_library.palettes.len();
-        for format in PaletteFormat::ALL {
+        for (exported, format) in PaletteFormat::ALL.into_iter().enumerate() {
             let path = directory.path.join(format!("round trip.{}", format.extension()));
             service.dispatch(&mut host, Action::Export { id, format, path: path.to_string_lossy().into() }).unwrap();
             assert!(service.dispatch(&mut host, Action::Import { path: String::new() }).is_err());
             settle(&mut service, &mut host);
             assert!(service.status.error.is_none(), "{format:?}: {:?}", service.status.error);
-            assert!(path.exists() && !directory.path.join(format!("round trip.{}.partial", format.extension())).exists());
+            assert!(path.exists());
+            assert_eq!(std::fs::read_dir(&directory.path).unwrap().count(), exported + 1);
             service.dispatch(&mut host, Action::Import { path: path.to_string_lossy().into() }).unwrap();
             settle(&mut service, &mut host);
             assert!(service.status.error.is_none(), "{format:?}: {:?}", service.status.error);

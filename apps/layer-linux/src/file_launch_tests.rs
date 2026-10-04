@@ -79,9 +79,9 @@ fn native_application_file_launch() {
     app.register(None::<&gio::Cancellable>).unwrap();
     assert!(!app.is_remote());
     assert!(windows.borrow().is_empty() && app.windows().is_empty());
-    let settings_path =
-        PathBuf::from(std::env::var_os("LAYER_SETTINGS_FILE").expect("isolated settings"));
+    let settings_path = crate::storage::roots().unwrap().settings();
     assert!(settings_path.starts_with(std::env::temp_dir()));
+    std::fs::create_dir_all(settings_path.parent().unwrap()).unwrap();
     let mut settings = layer_ui::Settings::default();
     settings.photo_open.promote_to_16 = true;
     settings.photo_open.missing_profile = layer_ui::MissingProfilePolicy::Ask;

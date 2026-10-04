@@ -43,7 +43,7 @@ fun jsonValue(value: Any?): Any? = when (value) {
 class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalResource() {
     lateinit var root: File
         private set
-    val recovery get() = File(root, "recovery")
+    val recovery get() = AppStorage.of(instrumentation.targetContext).sessions
     private lateinit var userPreferences: Map<String, *>
     private var rotation: Pair<Int, Boolean>? = null
     fun landscape(scenario: ActivityScenario<MainActivity>) = orient(scenario, true)
@@ -72,9 +72,7 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
         val fixture = InstrumentationRegistry.getArguments().getString("restartFixture")
         require(fixture == null || fixture.matches(Regex("[a-zA-Z0-9_-]{1,64}")))
         root = File(context.cacheDir, if(fixture == null)"capy-tests/${UUID.randomUUID()}" else "capy-tests/restart-$fixture").apply {mkdirs()}
-        CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
-        RecoveryController.directoryForTest = recovery
-        ColorPreferencesStore.directoryForTest = File(root, "colors")
+        AppStorage.directoryForTest = root
         DocumentController.nativeFileJobsForTest = nativeFileJobs
     }
     override fun after() {
@@ -82,9 +80,7 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
         rotation?.let { (previous, auto) -> instrumentation.uiAutomation.setRotation(if (auto) android.app.UiAutomation.ROTATION_UNFREEZE else previous) }
         rotation = null
         context.deleteSharedPreferences(CanvasHost.preferencesName)
-        CanvasHost.workspaceDirectoryForTest = null
-        RecoveryController.directoryForTest = null
-        ColorPreferencesStore.directoryForTest = null
+        AppStorage.directoryForTest = null
         DocumentController.nativeFileJobsForTest = false
         if(InstrumentationRegistry.getArguments().getString("restartPhase") != "prepare")root.deleteRecursively()
         assertEquals("User preferences are preserved", userPreferences, context.getSharedPreferences("capy-canvas", 0).all)

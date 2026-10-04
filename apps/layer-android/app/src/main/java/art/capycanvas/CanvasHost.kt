@@ -44,8 +44,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     companion object {
         /** Instrumentation can hold device creation while checking the real UI. */
         @Volatile internal var beforeGpuAttachForTest: (() -> Unit)? = null
-        @Volatile internal var workspaceDirectoryForTest: String? = null
-        internal val preferencesName get() = workspaceDirectoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas"
+        internal val preferencesName get() = AppStorage.directoryForTest?.let { "capy-test-${it.hashCode()}" } ?: "capy-canvas"
     }
     internal val strokeRecording = StrokeRecording(this)
     internal var bootstrap by mutableStateOf<JSONObject?>(null)
@@ -254,9 +253,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     private val worker = Handler(thread.looper)
     @Volatile internal var documentInputBlocked = false
     internal fun documentCanvasFailure(message: String?) { failure=message }
+    internal val storage by lazy { AppStorage.of(application) }
     internal val drawingTabs = DrawingTabsController(this)
     internal val documents = DocumentController(this, application)
-    internal val recovery = RecoveryController(this, application)
+    internal val recovery = RecoveryController(this)
     private val saved = application.getSharedPreferences(preferencesName, 0)
     private var handle = 0L
     internal val filterPreviewCache = FilterPreviewCache(this)
@@ -314,6 +314,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     init {
         worker.post {
             attempt {
+                val workspaces = storage.workspaces.absolutePath
                 val savedSettings = runCatching { saved.getString("settings", null).orEmpty() }.getOrElse {
                     Log.e("CapyCanvas", "Could not read saved settings", it); ""
                 }
@@ -327,8 +328,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 handle = Native.create(savedSettings, locales, BuildConfig.DEBUG || BuildConfig.WORKSPACE_BENCHMARK)
                 choreographer = Choreographer.getInstance()
                 attempt(canvas = false) {
-                    val directory = workspaceDirectoryForTest ?: java.io.File(application.filesDir, "workspaces").absolutePath
-                    updateWorkspaceManager(obj("type" to "start", "directory" to directory))
+                    updateWorkspaceManager(obj("type" to "start", "directory" to workspaces))
                     worker.post(workspaceTick)
                 }
                 val value = JSONObject(Native.query(handle, obj("type" to "catalog").toString()))
@@ -536,7 +536,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             publish(true)
             if (BuildConfig.DEBUG) beforeGpuAttachForTest?.invoke()
             Log.i("CapyStartup", "gpu_attach boot_ns=${SystemClock.elapsedRealtimeNanos()}")
-            Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
+            Native.attach(handle, surface, storage.shaders.absolutePath)
             attached = true
             awaitingSurfaceFrame = true
             main.post { failure = null }
@@ -550,7 +550,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         post(canvas = true) {
             Native.resetGpu(handle)
             check(surface.isValid) { "The canvas surface is unavailable" }
-            Native.attach(handle, surface, java.io.File(getApplication<Application>().cacheDir, "shader-pipelines").absolutePath)
+            Native.attach(handle, surface, storage.shaders.absolutePath)
             attached = true; awaitingSurfaceFrame = true; startupCacheFinished = false
             main.post { failure = null }
             publish(true); wake()
@@ -852,8 +852,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             documentEpoch = epoch
             main.post { filterPreviewCache.reset() }
         }
-        // Legacy preferences remain a migration backup. Named workspaces are
-        // saved asynchronously by Rust's shared SQLite worker.
         state.array("requests").objects().forEach { request ->
             val kind = request.getJSONObject("kind")
             when (kind.getString("type")) {

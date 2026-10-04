@@ -5,6 +5,7 @@ edition.workspace = true
 license.workspace = true
 
 [features]
+release-identity = []
 software-adapter-tests = ["layer-render-wgpu/software-adapter-tests"]
 
 [dependencies]
@@ -25,4 +26,4 @@ wgpu.workspace = true
 layer-core = { path = "../../../crates/layer-core", features = ["test-support"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem"] }
+windows = { version = "0.62.2", features = ["Win32_Graphics_Direct3D12", "Win32_Graphics_Gdi", "Win32_Graphics_Dxgi", "Win32_Graphics_Dxgi_Common", "Win32_Storage_FileSystem", "Storage_Search"] }

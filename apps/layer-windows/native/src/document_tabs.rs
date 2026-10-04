@@ -330,9 +330,8 @@ impl DocumentService {
             && self.window.documents.storage_error().is_none()
             && let Some(tiles) = self.window.documents.spill_candidate()
         {
-            let directory = crate::settings::data_directory()?.join("drawing-backing");
             self.spilling = true;
-            self.worker.submit(Job::Spill { tiles, directory });
+            self.worker.submit(Job::Spill { tiles });
             host.invalidate_snapshot();
         }
         Ok(())

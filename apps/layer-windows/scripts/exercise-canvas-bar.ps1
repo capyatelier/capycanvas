@@ -51,7 +51,7 @@ function Drag([string]$Device,[int[]]$From,[int[]]$To){
 }
 try {
  Enter-CapyEnvironment
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned canvas bar review $($review.Id): $run"

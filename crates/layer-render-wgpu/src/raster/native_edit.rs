@@ -238,7 +238,7 @@ impl WgpuRasterizer {
         adapter: wgpu::Adapter,
         device: wgpu::Device,
         queue: wgpu::Queue,
-        directory: &std::path::Path,
+        directory: Option<&std::path::Path>,
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
         let device = PipelineDevice::cached(device, &adapter, directory);
@@ -250,7 +250,7 @@ impl WgpuRasterizer {
     #[cfg(not(target_arch = "wasm32"))]
     pub fn color_candidate_staged_cached(
         &self,
-        directory: &std::path::Path,
+        directory: Option<&std::path::Path>,
         color: DocumentColor,
     ) -> Result<Self, GpuRasterError> {
         let mut device = PipelineDevice::cached(self.device().clone(), &self.adapter, directory);

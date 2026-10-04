@@ -1,8 +1,8 @@
 use super::*;
-use layer_core::package::session_store::{SessionLease, SessionStore, collect_unreferenced_stores};
+use layer_core::package::session_store::{SessionLease, SessionStore, collect_unreferenced_stores, sync_directory};
 use layer_host::open::OpenEnvironment;
 use layer_ui::session_recovery::{SessionCapture, SessionDrawing, SessionManifest, SessionRestore};
-use std::{collections::BTreeMap, path::PathBuf, sync::{Arc, Mutex, atomic::AtomicBool}};
+use std::{collections::BTreeMap, path::{Component, Path, PathBuf}, sync::{Arc, Mutex, atomic::AtomicBool}};
 
 pub(crate) struct WindowDisk {
     path: PathBuf,
@@ -15,8 +15,44 @@ pub(crate) struct WindowDisk {
 pub struct CapySessionTask(Mutex<SessionJob>);
 pub struct CapySessionDestination(layer_ui::DestinationFingerprint);
 pub type SessionDestinationObserver = unsafe extern "C" fn(*const c_char) -> *mut CapySessionDestination;
+struct SessionOpen {
+    sessions: PathBuf,
+    scene: String,
+    adopt: bool,
+}
+fn has_drawings(directory: &Path) -> Result<bool, String> {
+    Ok(SessionManifest::read(&directory.join("window.json"))?.is_some_and(|manifest| !manifest.drawings.is_empty()))
+}
+/// The scene's own session or, when it has no drawings and `adopt` is set, the
+/// newest unlocked session that has drawings, renamed to the scene.
+fn claim(open: SessionOpen) -> Result<(PathBuf, SessionLease), String> {
+    let mut parts = Path::new(&open.scene).components();
+    if !matches!((parts.next(), parts.next()), (Some(Component::Normal(_)), None)) {
+        return Err("Invalid editing session".into());
+    }
+    let own = open.sessions.join(&open.scene);
+    let lease = SessionLease::claim(&own)?.ok_or("This editing session is already open")?;
+    if !open.adopt || has_drawings(&own)? { return Ok((own, lease)); }
+    let mut candidates = Vec::new();
+    for entry in std::fs::read_dir(&open.sessions).map_err(|e| e.to_string())? {
+        let path = entry.map_err(|e| e.to_string())?.path();
+        if path != own && let Ok(modified) = std::fs::metadata(path.join("window.json")).and_then(|metadata| metadata.modified()) {
+            candidates.push((modified, path));
+        }
+    }
+    candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+    for (_, candidate) in candidates {
+        if !has_drawings(&candidate).unwrap_or(false) { continue; }
+        let Ok(Some(adopted)) = SessionLease::claim(&candidate) else { continue };
+        std::fs::remove_dir_all(&own).map_err(|e| e.to_string())?;
+        std::fs::rename(&candidate, &own).map_err(|e| e.to_string())?;
+        sync_directory(&open.sessions)?;
+        return Ok((own, adopted));
+    }
+    Ok((own, lease))
+}
 struct SessionJob {
-    path: Option<PathBuf>,
+    open: Option<SessionOpen>,
     disk: Option<Arc<Mutex<WindowDisk>>>,
     environment: Option<OpenEnvironment>,
     captures: Option<Vec<(u64, SessionCapture)>>,
@@ -40,8 +76,7 @@ impl SessionJob {
             .ok_or_else(|| "The editing session is unavailable".into())
     }
     fn load(&mut self, observe: Option<SessionDestinationObserver>) -> Result<(), String> {
-        let path = self.path.take().ok_or("Session storage is unavailable")?;
-        let owner = SessionLease::claim(&path)?.ok_or("This editing session is already open")?;
+        let (path, owner) = claim(self.open.take().ok_or("Session storage is unavailable")?)?;
         self.disk = Some(Arc::new(Mutex::new(WindowDisk { path, _owner: owner, stores: BTreeMap::new(), metadata: BTreeMap::new(), manifest: SessionManifest::default(), published_sequence: 0 })));
         let manifest_path = self.manifest_path()?;
         let Some(mut manifest) = SessionManifest::read(&manifest_path)? else { return Ok(()) };
@@ -176,15 +211,20 @@ impl SessionJob {
 }
 
 /// # Safety
-/// Serial owner; path is UTF-8 and the returned job is owned by the file worker.
+/// Serial owner; sessions and scene are UTF-8 and the returned job is owned by
+/// the file worker. `adopt` lets a scene without drawings take over another
+/// unlocked session that has some.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_session_open(app: *mut CapyApple, path: *const c_char, retry: bool) -> *mut CapySessionTask {
+pub unsafe extern "C" fn capy_apple_session_open(app: *mut CapyApple, sessions: *const c_char, scene: *const c_char,
+    adopt: bool, retry: bool) -> *mut CapySessionTask {
     let Some(a) = (unsafe { app.as_mut() }) else { return std::ptr::null_mut(); };
     a.perform(|a| {
+        let open = SessionOpen { sessions: PathBuf::from(unsafe { project::read_title(sessions) }?),
+            scene: unsafe { project::read_title(scene) }?.to_owned(), adopt };
         let environment = OpenEnvironment::capture(&a.host.session,
             a.window.documents.admission(&a.host.session.retained_document_tiles()), a.host.renderer_options(a.metal.cache.clone()))?;
         Ok(Box::into_raw(Box::new(CapySessionTask(Mutex::new(SessionJob {
-            path: Some(PathBuf::from(unsafe { project::read_title(path) }?)), disk: None, environment: Some(environment), captures: None,
+            open: Some(open), disk: None, environment: Some(environment), captures: None,
             candidates: Vec::new(), active: 0, clean_exit: false, retry, stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: 0, exclusion: 0, committed: false, restore_attempts: Vec::new(),
         })))))
     }).unwrap_or(std::ptr::null_mut())
@@ -202,7 +242,7 @@ pub unsafe extern "C" fn capy_apple_session_capture(app: *mut CapyApple, exclusi
         let active = if order.contains(&a.window.documents.selected()) { a.window.documents.selected() } else { order.first().copied().unwrap_or(0) };
         let captures = order.into_iter().map(|id| Ok((id, a.window.session(&a.host, id)?.capture_session()?))).collect::<Result<Vec<_>,String>>()?;
         Ok(Box::into_raw(Box::new(CapySessionTask(Mutex::new(SessionJob {
-            path: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, retry: false,
+            open: None, disk: Some(disk), environment: None, captures: Some(captures), candidates: Vec::new(), active, clean_exit, retry: false,
             stamp: a.host.session.session_stamp(), retired: Vec::new(), error: None, restored: false, adopted: false, sequence: a.session_capture_sequence, exclusion, committed: false, restore_attempts: Vec::new(),
         })))))
     }).unwrap_or(std::ptr::null_mut())
@@ -215,7 +255,7 @@ pub unsafe extern "C" fn capy_session_work(task: *mut CapySessionTask, observe: 
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     on_large_stack("capy-session", || {
         let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
-        let result = catch_unwind(AssertUnwindSafe(|| if job.path.is_some() { job.load(observe) } else { job.write() }));
+        let result = catch_unwind(AssertUnwindSafe(|| if job.open.is_some() { job.load(observe) } else { job.write() }));
         match result {
             Ok(Ok(())) => 0,
             error => {

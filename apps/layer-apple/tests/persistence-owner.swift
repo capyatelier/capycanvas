@@ -99,7 +99,7 @@ private final class State: @unchecked Sendable {
                 precondition(state.read().0["preferences"]["error"].isNull && flush(owner) && flush(restored))
                 precondition(state.read().0["state"]["settings"].stableKey == baseline,
                     "Reset must restore the complete baseline without changing unrelated preferences: \(id)")
-                let disk = try JSON.decode(String(decoding: Data(contentsOf: root.appendingPathComponent("settings.json")), as: UTF8.self))
+                let disk = try JSON.decode(String(decoding: Data(contentsOf: persistence.locations!.settings), as: UTF8.self))
                 precondition(disk.stableKey == baseline && !current()["reset"]["enabled"].bool,
                     "Reset must be durable: \(id)")
                 print("PASS preference platform \(platform): \(id) edit, fresh-owner restore and exact durable Reset")
@@ -132,7 +132,7 @@ private final class State: @unchecked Sendable {
                 (index.isMultiple(of: 2) ? a : b).submit(0, JSON(["type":"preferences", "action":["type":"edit", "id":"pressure", "value":1.0 + Double(index) / 20]]))
             }
             precondition(flush(a) && flush(b) && flush(a) && flush(restored))
-            let disk = try JSON.decode(String(decoding: Data(contentsOf: root.appendingPathComponent("settings.json")), as: UTF8.self))
+            let disk = try JSON.decode(String(decoding: Data(contentsOf: persistence.locations!.settings), as: UTF8.self))
             for state in [stateA, stateB, restoredState] {
                 precondition(state.read().2 == nil, state.read().2 ?? "")
                 precondition(NSDictionary(dictionary: state.read().0["state"]["settings"].object).isEqual(disk.raw),
@@ -142,7 +142,7 @@ private final class State: @unchecked Sendable {
 
             // Force an actual replacement failure, then retry the accepted
             // in-memory value after repairing the path. No GUI is involved.
-            let settingsFile = root.appendingPathComponent("settings.json")
+            let settingsFile = persistence.locations!.settings
             try FileManager.default.removeItem(at: settingsFile)
             try FileManager.default.createDirectory(at: settingsFile, withIntermediateDirectories: false)
             send(a, ["type":"set_theme", "theme":"light"])

@@ -41,13 +41,13 @@ function Close-Review {
     if($review.ExitCode -ne 0){throw "Clean close failed: $($review.ExitCode)"}
 }
 function Session-Index {
-    @(Get-ChildItem (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'sessions') -Filter session.json -Recurse)|ForEach-Object{Get-Content $_.FullName -Raw|ConvertFrom-Json}|Sort-Object generation -Descending|Select-Object -First 1
+    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter session.json -Recurse)|ForEach-Object{Get-Content $_.FullName -Raw|ConvertFrom-Json}|Sort-Object generation -Descending|Select-Object -First 1
 }
 function Settled-Checkpoint([int]$Count){
     Wait-Until {$index=Session-Index;$index -and @($index.drawings).Count -eq $Count -and !(Model).windows_recovery.busy} 'Session checkpoint did not become durable' 120
 }
 function Disk-Signature {
-    @(Get-ChildItem (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'sessions') -Filter '*.json' -Recurse|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress
+    @(Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter '*.json' -Recurse|Sort-Object FullName|ForEach-Object{@{path=$_.FullName;bytes=$_.Length;written=$_.LastWriteTimeUtc.Ticks}})|ConvertTo-Json -Compress
 }
 function Signature {
     $m=Model
@@ -56,7 +56,7 @@ function Signature {
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Start-Review 'first'
     if((Model).state.theme -ne $Theme){
@@ -166,7 +166,7 @@ try {
     if(@((Model).windows_tabs.tabs).Count -ne 1){throw 'Restart resurrected an explicitly closed drawing'}
     $remaining=Signature
     Close-Review
-    $manifest=Get-ChildItem (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'sessions') -Filter session.json -Recurse|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
+    $manifest=Get-ChildItem (Join-Path $env:CAPY_STORAGE_DIR 'state/sessions') -Filter session.json -Recurse|Sort-Object LastWriteTimeUtc -Descending|Select-Object -First 1
     $original=[IO.File]::ReadAllBytes($manifest.FullName)
     [IO.File]::WriteAllText($manifest.FullName,'incomplete membership')
     Start-Review 'corrupt-index' -AllowFailure

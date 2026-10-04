@@ -66,13 +66,13 @@ fn save(service: &mut DocumentService, host: &mut NativeHost, path: &std::path::
     settle(service, host);
 }
 #[test]
-#[ignore = "Requires hardware D3D12 and an isolated CAPY_SETTINGS_DIRECTORY"]
+#[ignore = "Requires hardware D3D12 and an isolated CAPY_STORAGE_DIR"]
 fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     use layer_core::color::{
         ColorProfile, SampleDepth,
         source::{SourceBuilder, SourceChannels, SourceInterpretation},
     };
-    let directory = crate::settings::data_directory().unwrap();
+    let directory = crate::test_support::isolated_storage();
     std::fs::create_dir_all(&directory).unwrap();
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
     descriptor.backends = wgpu::Backends::DX12;
@@ -182,14 +182,15 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
             .document_file
             .modified
     );
-    let backing = directory.join("drawing-backing");
-    std::fs::write(&backing, b"fixture blocks storage directory").unwrap();
+    let temporary = layer_core::temp_files::directory().unwrap();
+    let _ = std::fs::remove_dir(temporary);
+    std::fs::write(temporary, b"fixture blocks temporary storage").unwrap();
     service.window.documents.budget.inactive_ram = 0;
     settle(&mut service, &mut host);
     assert!(service.window.documents.storage_error().is_some());
     assert!(service.window.documents.resident_bytes() > 0);
     assert_eq!(service.window.documents.order(), [1, 2]);
-    std::fs::remove_file(&backing).unwrap();
+    std::fs::remove_file(temporary).unwrap();
     service.tab_action(&mut host, Action::RetryStorage).unwrap();
     settle(&mut service, &mut host);
     assert!(service.window.documents.storage_error().is_none());
@@ -264,7 +265,7 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     let deadline=Instant::now()+Duration::from_secs(30);
     loop {
         service.poll(&mut host).unwrap();
-        let complete=std::fs::read_dir(directory.join("sessions")).ok().is_some_and(|entries|entries.filter_map(Result::ok).any(|entry|{
+        let complete=std::fs::read_dir(crate::storage::roots().unwrap().sessions()).ok().is_some_and(|entries|entries.filter_map(Result::ok).any(|entry|{
             let Ok(Some(manifest))=layer_ui::SessionManifest::read(&entry.path().join("session.json")) else{return false};
             manifest.drawings.len()==expected.len()&&manifest.drawings.iter().all(|drawing|{
                 let root=entry.path().join(&drawing.key);

@@ -255,7 +255,7 @@ impl CapyHost {
     fn prepare_gpu(&mut self) -> Result<(), String> {
         if self.device_is_lost() && std::env::var_os("CAPY_TEST_GPU_UNAVAILABLE").is_some()
             && std::env::var_os("CAPY_SMOKE_TEST").is_some()
-            && std::env::var_os("CAPY_SETTINGS_DIRECTORY").map(std::path::PathBuf::from).is_some_and(|p| p.is_absolute())
+            && crate::storage::isolated()
         {
             return Err("Test GPU remains unavailable".into());
         }
@@ -556,7 +556,7 @@ pub unsafe extern "C" fn capy_start_services(
         }
         if host.workspaces.is_none() {
             let context = context as usize;
-            let directory = crate::settings::data_directory()?;
+            let directory = crate::storage::roots()?.workspaces();
             let worker = layer_workspace::StoreWorker::shared(&directory).map_err(err)?;
             let service =
                 crate::workspace_service::WorkspaceService::new(worker, directory, host.native.session.localization().clone(), move || {
@@ -1068,9 +1068,7 @@ pub unsafe extern "C" fn capy_snapshot(host: *mut CapyHost) -> *mut c_char {
                 .and_then(|s| serde_json::to_value(s.status(&host.native)).ok()),
             windows_settings_close: host.services.as_ref().map(|s| s.close_status().clone()),
             windows_filter_load: host.filters.as_ref().map(|s| s.status().clone()),
-            windows_isolated_settings: std::env::var_os("CAPY_SETTINGS_DIRECTORY")
-                .map(std::path::PathBuf::from)
-                .is_some_and(|path| path.is_absolute()),
+            windows_isolated_settings: crate::storage::isolated(),
             windows_adapter: host.native.session.engine().backend().0.as_ref().map(|gpu| {
                 let info = gpu.adapter().get_info();
                 format!("{} ({:?})", info.name, info.device_type)
@@ -1275,11 +1273,7 @@ pub unsafe extern "C" fn capy_reset_surface(host: *mut CapyHost, panel: *mut c_v
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_test_device_loss(host: *mut CapyHost, json: *const c_char) -> i32 {
     guard(host, |host| {
-        if std::env::var_os("CAPY_SMOKE_TEST").is_none()
-            || !std::env::var_os("CAPY_SETTINGS_DIRECTORY")
-                .map(std::path::PathBuf::from)
-                .is_some_and(|p| p.is_absolute())
-        {
+        if std::env::var_os("CAPY_SMOKE_TEST").is_none() || !crate::storage::isolated() {
             return Err("Device-loss injection requires an isolated smoke test".into());
         }
         let (token, participants) = serde_json::from_str(unsafe { read_json(json) }?).map_err(err)?;
@@ -1407,6 +1401,59 @@ pub unsafe extern "C" fn capy_filter_previews(
     result
 }
 
+/// Called once by the process that owns this installation, before any window.
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_clear_temporary_files() {
+    if let Err(error) = catch_unwind(|| crate::storage::roots().and_then(layer_host::StorageRoots::clear_temp))
+        .unwrap_or_else(|_| Err("Temporary file cleanup panic".into()))
+    {
+        eprintln!("{error}");
+    }
+}
+
+/// The NUL-terminated name every launch using this installation's storage
+/// shares, or null when its storage is unavailable (see `capy_error`).
+#[unsafe(no_mangle)]
+pub extern "C" fn capy_instance_name() -> *const u16 {
+    match catch_unwind(crate::storage::instance_name) {
+        Ok(Ok(name)) => name.as_ptr(),
+        Ok(Err(error)) => {
+            fail(error);
+            std::ptr::null()
+        }
+        Err(_) => {
+            fail("Storage lookup panic");
+            std::ptr::null()
+        }
+    }
+}
+
+/// Replaces the file at `path` only after `bytes` are durable beside it.
+/// # Safety
+/// Call on a worker. `path` is readable NUL-terminated UTF-8 and `bytes`
+/// points to `length` readable bytes; both stay unchanged during the call.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_write_file(path: *const c_char, bytes: *const u8, length: usize) -> i32 {
+    let result = catch_unwind(AssertUnwindSafe(|| {
+        let path = std::path::Path::new(unsafe { read_json(path) }?);
+        let bytes = if length == 0 { &[][..] } else { unsafe { std::slice::from_raw_parts(bytes, length) } };
+        crate::document_io::atomic_write(path, &std::sync::atomic::AtomicBool::new(false), |file| {
+            file.write_all(bytes).map_err(err)
+        })
+    }));
+    match result {
+        Ok(Ok(())) => 0,
+        Ok(Err(error)) => {
+            fail(error);
+            -1
+        }
+        Err(_) => {
+            fail("File write panic");
+            -1
+        }
+    }
+}
+
 /// Join retired shader workers after every host is destroyed, before process
 /// runtime teardown. Ordinary surface/document replacement stays asynchronous.
 #[unsafe(no_mangle)]
@@ -1483,7 +1530,7 @@ pub unsafe extern "C" fn capy_workspace_query(
 pub unsafe extern "C" fn capy_test_display(host: *mut CapyHost, hdr: bool) -> i32 {
     guard(host, |host| {
         if std::env::var_os("CAPY_SMOKE_TEST").is_none() || std::env::var_os("CAPY_TEST_HDR").is_none()
-            || !std::env::var_os("CAPY_SETTINGS_DIRECTORY").map(std::path::PathBuf::from).is_some_and(|p| p.is_absolute()) {
+            || !crate::storage::isolated() {
             return Err("Display injection requires an isolated HDR smoke test".into());
         }
         host.test_display = Some(crate::display::Display::reported(hdr, if hdr { 1015. } else { 80. }, "Synthetic test output".into()));

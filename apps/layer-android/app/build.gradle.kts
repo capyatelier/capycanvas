@@ -8,6 +8,8 @@ plugins {
 val capyAbis = providers.gradleProperty("capyAbi").getOrElse("arm64-v8a,x86_64").split(",")
 val capyRustProfile = providers.gradleProperty("capyRustProfile")
     .orElse(providers.environmentVariable("CAPY_RUST_PROFILE"))
+val capyApplicationId = providers.gradleProperty("capyApplicationId")
+val capyDevelopmentSuffix = ".dev".takeUnless { capyApplicationId.isPresent }
 
 abstract class RustBuild : Exec() {
     @get:OutputDirectory
@@ -20,7 +22,7 @@ android {
     buildToolsVersion = "37.0.0"
     ndkVersion = "29.0.14206865"
     defaultConfig {
-        applicationId = providers.gradleProperty("capyApplicationId").getOrElse("art.capycanvas")
+        applicationId = capyApplicationId.getOrElse("art.capycanvas")
         manifestPlaceholders["capyAppLabel"] = providers.gradleProperty("capyAppLabel").getOrElse("Capy Canvas")
         minSdk = 29
         targetSdk = 37
@@ -33,6 +35,9 @@ android {
     }
     buildFeatures { compose = true; buildConfig = true }
     buildTypes {
+        getByName("debug") {
+            applicationIdSuffix = capyDevelopmentSuffix
+        }
         getByName("release") {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -40,6 +45,7 @@ android {
         }
         create("benchmark") {
             initWith(getByName("release"))
+            applicationIdSuffix = capyDevelopmentSuffix
             signingConfig = signingConfigs.getByName("debug")
             isDebuggable = false
             // White-box regression APKs keep their existing unminified ABI.

@@ -13,7 +13,8 @@ path you want to understand:
 
 Subsystem guides:
 
-- Documents and files: [binary payloads](binary-payloads.md),
+- Documents and files: [where the app keeps its files](storage.md),
+  [binary payloads](binary-payloads.md),
   [workspace ownership](workspace-ownership.md),
   [portable photo codecs and color](portable-color.md) and
   [Float32 HDR layers](float32-hdr-scope.md).

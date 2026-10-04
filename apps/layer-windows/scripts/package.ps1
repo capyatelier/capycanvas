@@ -26,7 +26,7 @@ try {
     [IO.Directory]::CreateDirectory($build)|Out-Null
     [IO.Directory]::CreateDirectory($payload)|Out-Null
     # Fresh directories cannot contain old diagnostics, profiles or staged assets.
-    & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release -OutputDirectory $build -SkipRestore:$SkipRestore *> (Join-Path $run 'build.log')
+    & (Join-Path $PSScriptRoot 'build.ps1') -Configuration Release -ReleaseIdentity -OutputDirectory $build -SkipRestore:$SkipRestore *> (Join-Path $run 'build.log')
     if($LASTEXITCODE -ne 0){throw "Package build failed; inspect $run/build.log"}
     $vswhere=Join-Path ([Environment]::GetFolderPath('ProgramFilesX86')) 'Microsoft Visual Studio/Installer/vswhere.exe'
     $installation=(& $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath).Trim()
@@ -60,7 +60,8 @@ Capy Canvas for Windows
 Extract the entire ZIP to a folder, then run CapyCanvas.exe.
 Keep the files and subfolders together. Windows 11 x64 is required.
 The Windows App SDK and Visual C++ runtimes are included beside the app.
-Preferences and workspace data use the normal per-user application directory.
+Preferences and app data are kept in AppData\Roaming\CapyAtelier\CapyCanvas
+and AppData\Local\CapyAtelier\CapyCanvas; deleting the app folder keeps them.
 
 This package is unsigned. Its manifest identifies the source commit and whether
 uncommitted development changes were included. See Notices for project,
@@ -78,7 +79,7 @@ sizes and SHA-256 hashes.
     $nuget=@($config.packages.package|ForEach-Object {[ordered]@{name=$_.id;version=$_.version}})
     if((& git rev-parse HEAD).Trim() -ne $commit -or (!$dirty -and (Source-IsDirty))){throw 'Package sources changed during the build; retry from a stable checkout.'}
     $manifest=[ordered]@{
-        schema=1;application='Capy Canvas';source_commit=$commit;development=$dirty;architecture='x64';minimum_windows='11';
+        schema=1;application='Capy Canvas';source_commit=$commit;development=$dirty;release_identity=$true;architecture='x64';minimum_windows='11';
         rust=(& rustc --version).Trim();visual_cpp_tools=$env:VCToolsVersion;windows_sdk=$env:WindowsSDKVersion.TrimEnd('\');
         cargo_lock_sha256=(Get-FileHash -LiteralPath (Join-Path $repo 'Cargo.lock') -Algorithm SHA256).Hash.ToLowerInvariant();
         nuget=$nuget;files=$files

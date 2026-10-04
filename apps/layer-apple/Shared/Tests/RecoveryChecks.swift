@@ -2,8 +2,6 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkArtworkRecoveryAfterRestart(in app: XCUIApplication) {
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_PERSISTENCE_PROBE"] = "1"
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"invoke","command":"add_layer"},{"type":"set_layer_opacity","opacity":0.42},{"type":"set_color","rgba":[0.1,0.3,0.9,1]}]"#
         app.launch()

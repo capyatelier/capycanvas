@@ -72,7 +72,7 @@ pub(super) async fn preserve_replaced_proof(
     };
     let bytes = bytes.clone();
     let name = previous.name.clone();
-    gio::spawn_blocking(move || library::store(&library::directory(), &bytes, &name).map(|_| ()))
+    gio::spawn_blocking(move || library::directory().map_or(Ok(()), |directory| library::store(&directory, &bytes, &name).map(|_| ())))
         .await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Profile library worker failed".into()))?
 }

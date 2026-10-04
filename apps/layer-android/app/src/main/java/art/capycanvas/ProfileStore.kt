@@ -13,7 +13,7 @@ internal object ProfileStore {
     private val lock=Any()
     internal val entryLimit by lazy { JSONObject(Native.profileLibrary(obj("type" to "limits").toString(),byteArrayOf())).getInt("entries") }
     private val readLimit by lazy { JSONObject(Native.profileLibrary(obj("type" to "limits").toString(),byteArrayOf())).getInt("read_bytes") }
-    private fun root(context:Context)=File(ColorPreferencesStore.directoryForTest?:context.filesDir,"color-profiles")
+    private fun root(context:Context)=AppStorage.of(context).colorProfiles
     private fun call(action:JSONObject,bytes:ByteArray=byteArrayOf())=Native.profileLibrary(action.toString(),bytes)
     private fun inventory(context:Context):JSONArray {
         val entries=JSONArray()

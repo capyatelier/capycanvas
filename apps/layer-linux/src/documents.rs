@@ -1195,8 +1195,5 @@ impl Documents {
 }
 
 fn spill(tiles: RetainedTiles) -> Result<(), String> {
-    let directory = std::env::var_os("CAPY_TAB_CACHE_DIR")
-        .map(std::path::PathBuf::from)
-        .unwrap_or_else(|| glib::user_cache_dir().join("capycanvas/tabs"));
-    layer_core::raster_storage::spill_to_directory(&tiles, &directory)
+    layer_core::raster_storage::spill_to_directory(&tiles, layer_core::temp_files::directory()?)
 }

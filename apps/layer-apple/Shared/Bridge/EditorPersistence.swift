@@ -6,27 +6,28 @@ final class EditorPersistence: @unchecked Sendable {
         var settings: Data?
     }
     struct SettingsChange: Sendable { let revision: UInt64; let data: Data }
-    static let shared = EditorPersistence(root: configuredRoot())
-    let root: URL?
+    static let shared = EditorPersistence(locations: StorageLocations.installation)
+    let locations: StorageLocations?
     private let queue = DispatchQueue(label: "art.capycanvas.storage", qos: .utility)
     private var revision: UInt64 = 0
     private var acceptedSettings: Data?
     private var observers: [UUID: @Sendable (SettingsChange) -> Void] = [:]
 
-    init(root: URL?) { self.root = root }
-    private static func configuredRoot() -> URL? {
-        let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent(Bundle.main.bundleIdentifier ?? "art.capycanvas.apple", isDirectory: true)
-        #if DEBUG
-        let environment = ProcessInfo.processInfo.environment
-        if environment["CAPY_DISABLE_PERSISTENCE"] == "1" { return nil }
-        if let namespace = environment["CAPY_PERSISTENCE_NAMESPACE"], let id = UUID(uuidString: namespace) {
-            return base.appendingPathComponent("test-\(id.uuidString)", isDirectory: true)
-        }
-        // Existing deterministic fixtures must not read or alter user preferences.
-        if environment["CAPY_INITIAL_ACTIONS"] != nil { return nil }
-        #endif
-        return base
+    init(locations: StorageLocations?) {
+        self.locations = locations
+        if let state = locations?.state { queue.async { Self.excludeFromBackup(state) } }
+    }
+    /// Every store inside one private folder, or memory only without a folder.
+    convenience init(root: URL?) { self.init(locations: root.flatMap(StorageLocations.within)) }
+    private static func excludeFromBackup(_ directory: URL) {
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            var excluded = URLResourceValues()
+            excluded.isExcludedFromBackup = true
+            var url = directory
+            try url.setResourceValues(excluded)
+        } catch { NSLog("Capy Canvas could not exclude drawing sessions from backups: %@", error.localizedDescription) }
     }
     func load(observer: UUID, changed: @escaping @Sendable (SettingsChange) -> Void,
         completion: @escaping @Sendable (Loaded) -> Void) {
@@ -34,7 +35,7 @@ final class EditorPersistence: @unchecked Sendable {
             observers[observer] = changed
             var result = Loaded()
             if let acceptedSettings { result.settings = acceptedSettings }
-            else if let root { result.settings = try? AtomicJSONFile.read(root.appendingPathComponent("settings.json")) }
+            else if let locations { result.settings = try? AtomicJSONFile.read(locations.settings) }
             completion(result)
         }
     }
@@ -46,7 +47,7 @@ final class EditorPersistence: @unchecked Sendable {
             let change = SettingsChange(revision: revision, data: data)
             for observer in observers.values { observer(change) }
             do {
-                if let root { try AtomicJSONFile.write(data, to: root.appendingPathComponent("settings.json")) }
+                if let locations { try AtomicJSONFile.write(data, to: locations.settings) }
                 completion(nil)
             } catch { completion("Could not save settings: \(error.localizedDescription)") }
         }

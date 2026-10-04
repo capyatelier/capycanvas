@@ -94,7 +94,7 @@ impl Drop for Clip {
 }
 static NEXT_CLIPBOARD: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 fn clipboard_file() -> Result<std::path::PathBuf, String> {
-    Ok(crate::settings::data_directory()?.join("clipboard").join(format!(
+    Ok(crate::storage::roots()?.temp.join("clipboard").join(format!(
         "{}-{}.png",
         std::process::id(),
         NEXT_CLIPBOARD.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -963,11 +963,9 @@ mod tests {
         }
     }
     #[test]
-    #[ignore = "Requires hardware D3D12 and an isolated CAPY_SETTINGS_DIRECTORY"]
+    #[ignore = "Requires hardware D3D12 and an isolated CAPY_STORAGE_DIR"]
     fn d3d12_native_color_import_export_source_and_history_round_trip() {
-        let directory = std::path::PathBuf::from(
-            std::env::var_os("CAPY_SETTINGS_DIRECTORY").expect("use isolated storage"),
-        );
+        let directory = crate::test_support::isolated_storage();
         std::fs::create_dir_all(&directory).unwrap();
         let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
         descriptor.backends = wgpu::Backends::DX12;

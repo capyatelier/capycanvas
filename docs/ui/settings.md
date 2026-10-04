@@ -271,8 +271,9 @@ stroke ends, and none applies while Settings, a popup or command search is open.
 ## Saving and loading
 
 The host performs storage through its own APIs. Native clients write application
-settings in platform storage; the web client uses browser storage. A failed
-write must be reported without blocking pen input.
+settings in the platform's config folder; the web client uses browser storage
+([where the app keeps its files](../internals/storage.md)). A failed write must
+be reported without blocking pen input.
 
 Stored data may come from any build, older or newer, and is never migrated.
 Reading it never fails and never shows a message:

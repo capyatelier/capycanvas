@@ -41,6 +41,7 @@ mod previews;
 mod recovery;
 mod render_thread;
 mod squircle;
+mod storage;
 mod system_status;
 mod tiles;
 #[cfg(test)]
@@ -89,7 +90,7 @@ pub fn run() -> gtk::glib::ExitCode {
     // SAFETY: first operation, before GTK initialization or worker creation.
     unsafe { display_color::enable_gtk_color_management() };
     glib::set_application_name(layer_ui::APP_NAME);
-    let (app, active) = application("art.capycanvas.CapyCanvas");
+    let (app, active) = application(storage::APP_ID);
     let result = app.run();
     let windows = std::mem::take(&mut *active.borrow_mut());
     drop(windows);
@@ -218,6 +219,7 @@ fn application(id: &str) -> (adw::Application, Rc<RefCell<Vec<Rc<workspace::Work
         .build();
     let active: Rc<RefCell<Vec<Rc<workspace::Workspace>>>> = Rc::default();
     app.connect_startup(|app| {
+        storage::clear_temporary_files();
         text_language::install(app, launch_localization());
         let css = stylesheet_provider();
         gtk::style_context_add_provider_for_display(

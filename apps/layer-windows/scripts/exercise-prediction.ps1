@@ -45,7 +45,7 @@ function Draw([string]$Device){
 }
 try {
  Enter-CapyEnvironment @('CAPY_LATENCY_TRACE')
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_LATENCY_TRACE='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_LATENCY_TRACE='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -WindowStyle Hidden -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned prediction review $($review.Id): $run"
@@ -80,7 +80,7 @@ try {
  & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved -StateDirectory $run
  $prediction=Get-ChildItem (Join-Path $run ('prediction-'+$review.Id+'-*.json'))|Get-Content -Raw|ConvertFrom-Json
  if(!$prediction -or $prediction.platform_prediction_frames -le 0 -or $prediction.engine_prediction_frames -le 0){throw 'The runtime did not render both native predictions and the engine fallback'}
- $saved=Get-Content -LiteralPath (Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json') -Raw|ConvertFrom-Json
+ $saved=Get-Content -LiteralPath (Settings-File) -Raw|ConvertFrom-Json
  if(!$saved.platform_prediction){throw 'Saved settings lost native prediction'}
  if((Get-Item (Join-Path $run 'stderr.log')).Length){throw 'Native stderr requires review'}
  [pscustomobject]@{settings_toggle=$true;survives_mouse_touch_pen=$true;prediction=$prediction;evidence=$run}|ConvertTo-Json -Depth 5|Tee-Object -FilePath (Join-Path $run 'results.json')

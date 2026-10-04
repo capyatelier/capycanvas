@@ -50,8 +50,8 @@ and untracked files, to `C:\capycanvas`, and runs
 [`test-without-gpu.ps1`](../../apps/layer-windows/scripts/test-without-gpu.ps1):
 the Debug build (`--release` for Release), the native input tests, and the
 shared and Windows Rust unit tests, with the `layer-host` GPU tests and the
-ignored `d3d12_` document tests on WARP. Each check uses a fresh document-test
-profile under `artifacts/windows/test-settings`; keep it isolated across runs.
+ignored `d3d12_` document tests on WARP. Each check uses a fresh
+`CAPY_STORAGE_DIR` under `artifacts/windows/test-storage`; keep it isolated across runs.
 Build outputs persist between syncs;
 each sync sends only files that changed since that VM's last sync, stamped with
 the current time, so incremental builds stay correct when a VM switches trees.

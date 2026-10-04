@@ -195,7 +195,7 @@ enum ProjectFileIO {
         var opened = true
         defer { if opened { close(descriptor) }; try? FileManager.default.removeItem(at: temporary) }
         try write(descriptor)
-        guard fsync(descriptor) == 0 else { throw posixFailure() }
+        guard synchronize(descriptor) else { throw posixFailure() }
         let closed = close(descriptor); opened = false
         guard closed == 0 else { throw posixFailure() }
         try beforeCommit()
@@ -212,5 +212,7 @@ enum ProjectFileIO {
         let name = URL(fileURLWithPath: title).deletingPathExtension().lastPathComponent
         return folder.appendingPathComponent(name.isEmpty ? "Untitled" : name).appendingPathExtension(suffix)
     }
+    /// Flushes through the drive's cache; a volume without that command gets an ordinary flush.
+    static func synchronize(_ descriptor: Int32) -> Bool { fcntl(descriptor, F_FULLFSYNC) != -1 || fsync(descriptor) == 0 }
     private static func posixFailure() -> NSError { NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
 }

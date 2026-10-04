@@ -203,7 +203,9 @@ impl State {
             let ColorProfile::Icc(bytes) = &value.profile else {
                 unreachable!();
             };
-            library::store(&library::directory(), bytes, &value.name)?;
+            if let Some(directory) = library::directory() {
+                library::store(&directory, bytes, &value.name)?;
+            }
             Ok::<_,layer_ui::ColorFeatureError>(Some(value))
         })
         .await
@@ -461,7 +463,7 @@ impl ProfilePicker {
                         let current = state.value.borrow().clone();
                         let document = state.document.borrow().clone();
                         let (entries, document, current) = gio::spawn_blocking(move || {
-                            let mut entries = library::list(&library::directory());
+                            let mut entries = library::directory().map_or(Ok(Vec::new()), |directory| library::list(&directory));
                             if let Some(ExportProfile {
                                 profile: ColorProfile::Icc(bytes),
                                 ..

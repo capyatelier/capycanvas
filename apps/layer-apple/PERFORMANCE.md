@@ -22,10 +22,15 @@ the instrumentation.
 
 ```sh
 CAPY_CONFIGURATION=Release bash apps/layer-apple/scripts/build.sh macos
-open -n --env CAPY_TRACE_SECONDS=30 \
-  --env CAPY_TRACE_DIRECTORY="$PWD/artifacts/performance/mac" \
+open -n --env CAPY_TRACE_SECONDS=30 --env CAPY_STORAGE_DIR=capy-trace \
   apps/layer-apple/DerivedData/Build/Products/Release/CapyCanvas-Mac.app
+mkdir -p artifacts/performance/mac
+cp ~/Library/Containers/art.capycanvas.CapyCanvas/Data/Documents/Performance/frames-*.jsonl \
+  artifacts/performance/mac/
 ```
+
+A Release build has the release identity, so `CAPY_STORAGE_DIR` keeps the run
+away from the artist's settings and drawings.
 
 On the iPad, install a Release build and launch it with the variables, then copy
 the trace out of the app container:
@@ -42,7 +47,8 @@ python3 tools/performance/apple_trace.py TRACE.jsonl --target-hz 120 \
 
 - `CAPY_TRACE_SECONDS` (at most 3600) starts recording when the session owner is
   created, so startup is included. Traces go to `Documents/Performance` in the
-  app container unless `CAPY_TRACE_DIRECTORY` names another writable directory.
+  app container unless `CAPY_TRACE_DIRECTORY` names another directory inside
+  it; the sandboxed Mac app cannot write outside its container.
   A finished trace is `frames-<uuid>.jsonl`; `.partial` means export did not
   finish.
 - `CAPY_TRACE_GPU=0` keeps CPU, input, memory and presentation records but turns
@@ -96,12 +102,14 @@ DerivedData directory, and run one workload per device.
 xcodebuild -quiet -project apps/layer-apple/CapyCanvas.xcodeproj \
   -scheme CapyCanvas-Mac -configuration Release -destination 'platform=macOS,arch=arm64' \
   -derivedDataPath apps/layer-apple/DerivedData/PerformanceMac \
-  CAPY_APPLE_BUNDLE_ID=art.capycanvas.apple.mac.performance \
+  CAPY_APPLE_BUNDLE_ID=art.capycanvas.CapyCanvas.performance \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_ALLOWED=YES build
 open -n --env CAPY_WORKLOAD=ink --env CAPY_WORKLOAD_SECONDS=600 \
-  --env CAPY_TRACE_DIRECTORY="$PWD/artifacts/performance/mac-ink" \
   apps/layer-apple/DerivedData/PerformanceMac/Build/Products/Release/CapyCanvas-Mac.app \
   --args -ApplePersistenceIgnoreState YES
+mkdir -p artifacts/performance/mac-ink
+cp ~/Library/Containers/art.capycanvas.CapyCanvas.performance/Data/Documents/Performance/frames-*.jsonl \
+  artifacts/performance/mac-ink/
 ```
 
 For the iPad, build the `CapyCanvas-iPad` scheme for `generic/platform=iOS` with a

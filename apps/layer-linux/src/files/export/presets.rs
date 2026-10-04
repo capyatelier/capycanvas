@@ -6,15 +6,8 @@ use std::{
 };
 static LOCK: Mutex<()> = Mutex::new(());
 
-pub(super) fn path() -> PathBuf {
-    if let Some(path) = std::env::var_os("LAYER_SETTINGS_FILE").map(PathBuf::from) {
-        return path.with_file_name("export-presets.json");
-    }
-    if cfg!(test) {
-        return std::env::temp_dir()
-            .join(format!("capy-export-presets-{}.json", std::process::id()));
-    }
-    glib::user_data_dir().join("capycanvas/export-presets.json")
+fn path() -> Option<PathBuf> {
+    crate::storage::roots().map(layer_host::StorageRoots::export_presets)
 }
 fn read(path: &std::path::Path) -> Result<ExportPresets, String> {
     let file = match std::fs::File::open(path) {
@@ -32,7 +25,7 @@ pub(super) async fn load(
     document: layer_core::color::DocumentColor,
 ) -> Result<ExportPresets, layer_ui::ColorFeatureError> {
     gio::spawn_blocking(move || {
-        let library = read(&path())?;
+        let library = path().map_or(Ok(ExportPresets::default()), |path| read(&path))?;
         let mut checked = Vec::new();
         for index in 0..4 + library.names().count() {
             let recipe = library.recipe(index, document)?;
@@ -69,7 +62,7 @@ fn write(
     }).map_err(layer_ui::ColorFeatureError::from)
 }
 pub(super) async fn save(expected: ExportPresets, next: ExportPresets) -> Result<(), layer_ui::ColorFeatureError> {
-    gio::spawn_blocking(move || write(&path(), &expected, &next))
+    gio::spawn_blocking(move || path().map_or(Ok(()), |path| write(&path, &expected, &next)))
         .await
         .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Export preset writer failed".into()))?
 }

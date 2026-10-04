@@ -9,6 +9,7 @@ internal object Native {
     @JvmStatic external fun shaderInput(handle: Long)
     init { System.loadLibrary("layer_android") }
     @JvmStatic external fun bootstrap(saved: String, locales: Array<String>): String
+    @JvmStatic external fun storage(config: String, data: String, state: String, cache: String, temp: String): String
     @JvmStatic external fun languageRequest(handle: Long, locales: Array<String>): String?
     @JvmStatic external fun prepareLanguage(language: String): Long
     @JvmStatic external fun publishLanguage(handle: Long, generation: Long, context: Long, busy: Boolean)
@@ -87,6 +88,7 @@ internal object Native {
     @JvmStatic external fun sessionStoreFree(store: Long)
     @JvmStatic external fun sessionStoreRetire(store: Long)
     @JvmStatic external fun sessionStorePrepareRetirement(store: Long)
+    @JvmStatic external fun sessionPrepareRetirement(directory: String)
     @JvmStatic external fun sessionCommit(task: Long, store: Long)
     @JvmStatic external fun sessionRestoreTask(handle: Long, stamp: String = "null"): Long
     @JvmStatic external fun sessionReserveIdentities(handle: Long, identities: String)
@@ -104,7 +106,7 @@ internal object Native {
     @JvmStatic external fun sessionManifestRead(path: String): String
     @JvmStatic external fun sessionManifestWrite(path: String, value: String): String
     @JvmStatic external fun sessionManifestUpdate(state: String, event: String): String
-    @JvmStatic external fun sessionCollect(directory: String, manifest: String)
+    @JvmStatic external fun sessionCollect(directory: String, keys: String)
     @JvmStatic external fun sessionClose(handle: Long)
     @JvmStatic external fun sessionFingerprint(fd: Int): String
     @JvmStatic external fun sessionDestination(handle: Long): String

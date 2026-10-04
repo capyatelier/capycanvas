@@ -152,7 +152,7 @@ internal class ImageImportController(private val host: CanvasHost, private val a
                             else {
                                 // Cloud/clipboard providers may return a pipe. Retain
                                 // its encoded bytes in a bounded private spool for codecs.
-                                val temporary = File.createTempFile("capy-image-", ".source", application.cacheDir)
+                                val temporary = host.storage.temporaryFile("capy-image-", ".source")
                                 try {
                                     ParcelFileDescriptor.AutoCloseInputStream(it).use { input -> temporary.outputStream().use { output ->
                                         val buffer = ByteArray(64 * 1024); var total = 0L

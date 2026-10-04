@@ -103,6 +103,7 @@ final class NativeOwner: @unchecked Sendable {
     private var gpuSamples = [CapyGpuFrameSample](repeating: CapyGpuFrameSample(), count: 8)
     private var lastTraceState: UInt64?
     private let persistence: EditorPersistence
+    private let shaderCache = StorageLocations.installation?.shaders
     private let managedWorkspaces: Bool
     private let observerID = UUID()
     private var settingsRequests = Set<UInt64>()
@@ -120,7 +121,7 @@ final class NativeOwner: @unchecked Sendable {
     private var surfaceSized = false
     #endif
     let receive: @Sendable (JSON?, String?) -> Void
-    var persistenceRoot: URL? { persistence.root }
+    var sessions: URL? { persistence.locations?.sessions }
 
     init(platform: UInt32, persistence: EditorPersistence = .shared,
         traceDuration: TimeInterval? = nil, workload: [String: Any]? = nil, managedWorkspaces: Bool = false,
@@ -135,7 +136,7 @@ final class NativeOwner: @unchecked Sendable {
         let preferredLanguages = Locale.preferredLanguages
         self.queue = queue; self.receive = receive
         self.persistence = persistence; self.managedWorkspaces = managedWorkspaces
-        launchSessionPending = persistence.root != nil
+        launchSessionPending = persistence.locations != nil
         #if DEBUG
         initialActions = fixtureActions
         workspaceInitialized = !managedWorkspaces
@@ -392,9 +393,13 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
-    func restoreSession(path: String, retry: Bool = false, completion: @escaping @Sendable (String?, Bool) -> Void) {
+    func restoreSession(sessions: URL, scene: String, adopt: Bool, retry: Bool = false,
+        completion: @escaping @Sendable (String?, Bool) -> Void) {
         queue.async { [self] in
-            guard let pointer = path.withCString({ capy_apple_session_open(handle, $0, retry) }) else {
+            let opened = sessions.path.withCString { sessions in
+                scene.withCString { capy_apple_session_open(handle, sessions, $0, adopt, retry) }
+            }
+            guard let pointer = opened else {
                 launchSessionPending = false
                 completion(capy_apple_error(handle).map(String.init(cString:)) ?? documentDeliveryCopy["open_operation"].string, false); return
             }
@@ -519,9 +524,8 @@ final class NativeOwner: @unchecked Sendable {
         runDocumentJob(DocumentJob(task)) { [weak self] error in if let error { self?.receive(nil, error) } }
     }
     private func runDocumentJob(_ job: DocumentJob, completion: @escaping @Sendable (String?) -> Void) {
-        let directory = FileManager.default.temporaryDirectory.appendingPathComponent("capy-apple-drawing-tiles", isDirectory: true)
         NativeProjectTask.io.async { [self, job] in
-            _ = directory.path.withCString { capy_document_prepare(job.handle, $0) }
+            _ = capy_document_prepare(job.handle)
             queue.async { [self, job] in
                 do { try check(capy_apple_document_resume(handle, job.handle)); try publish(); completion(nil) }
                 catch { try? publish(); completion(error.localizedDescription) }
@@ -593,7 +597,7 @@ final class NativeOwner: @unchecked Sendable {
     func flushPersistence(_ completion: @escaping @Sendable (Bool) -> Void) {
         let deadline = DispatchTime.now() + .seconds(10)
         @Sendable func poll() {
-            let result = persistence.root == nil ? 0 : capy_apple_prepare_recovery(handle, FrameTrace.now())
+            let result = persistence.locations == nil ? 0 : capy_apple_prepare_recovery(handle, FrameTrace.now())
             do { try publish() } catch { receive(nil, error.localizedDescription) }
             if result == 1 && DispatchTime.now() < deadline {
                 queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll); return
@@ -660,10 +664,13 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func attachCurrentLayer() throws {
         guard let layer, let size = surfaceSize else { throw HostFailure(message: "The canvas has no presentation surface") }
-        let cache = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("art.capycanvas.apple.shader-pipelines", isDirectory: true)
-        try cache.path.withCString {
-            try check(capy_apple_attach(handle, Unmanaged.passUnretained(layer).toOpaque(), size.width, size.height, size.scale, $0))
+        let surface = Unmanaged.passUnretained(layer).toOpaque()
+        if let shaderCache {
+            try shaderCache.path.withCString {
+                try check(capy_apple_attach(handle, surface, size.width, size.height, size.scale, $0))
+            }
+        } else {
+            try check(capy_apple_attach(handle, surface, size.width, size.height, size.scale, nil))
         }
     }
     private func startGpuHealthChecks() {

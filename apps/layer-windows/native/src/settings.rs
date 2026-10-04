@@ -2,18 +2,17 @@
 use layer_host::NativeHost;
 use layer_ui::{HostRequestKind, Settings, UiAction};
 use std::{
-    fs::{self, File, OpenOptions},
+    fs::{self, File},
     io::{Read, Write},
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{
         Arc, Condvar, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::AtomicBool,
     },
     thread::JoinHandle,
 };
 
 const MAX_BYTES: usize = 1024 * 1024;
-static TEMP_ID: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) fn localization_presentation(native: &mut NativeHost) -> Result<serde_json::Value, String> {
     let mut catalog = native.query(serde_json::json!({"type":"catalog"}))?;
@@ -25,35 +24,21 @@ fn io_error(operation: &str, error: std::io::Error) -> String {
     format!("Could not {operation} preferences ({:?}).", error.kind())
 }
 
-pub(crate) fn data_directory() -> Result<PathBuf, String> {
-    let directory = if let Some(value) = std::env::var_os("CAPY_SETTINGS_DIRECTORY") {
-        PathBuf::from(value)
-    } else {
-        PathBuf::from(std::env::var_os("LOCALAPPDATA").ok_or("Windows app data is unavailable.")?)
-            .join("CapyAtelier")
-            .join("CapyCanvas")
-    };
-    if !directory.is_absolute() {
-        return Err("The app data directory must be an absolute path.".into());
-    }
-    Ok(directory)
-}
-
 pub(crate) struct SettingsFile {
-    directory: PathBuf,
+    path: PathBuf,
 }
 impl SettingsFile {
     fn environment() -> Result<Self, String> {
-        Self::new(data_directory()?)
+        Self::new(crate::storage::roots()?.settings())
     }
-    fn new(directory: PathBuf) -> Result<Self, String> {
-        if !directory.is_absolute() {
-            return Err("The preferences directory must be an absolute path.".into());
+    fn new(path: PathBuf) -> Result<Self, String> {
+        if !path.is_absolute() {
+            return Err("The preferences file must have an absolute path.".into());
         }
-        Ok(Self { directory })
+        Ok(Self { path })
     }
     fn load_saved(&self) -> Result<Option<String>, String> {
-        let file = match File::open(self.directory.join("settings.json")) {
+        let file = match File::open(&self.path) {
             Ok(file) => file,
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
             Err(error) => return Err(io_error("read saved", error)),
@@ -69,65 +54,13 @@ impl SettingsFile {
         if bytes.len() > MAX_BYTES {
             return Err("Preferences exceed the storage size limit.".into());
         }
-        fs::create_dir_all(&self.directory)
-            .map_err(|error| io_error("create storage for", error))?;
-        // Windows canonicalization supplies a verbatim path, including long paths.
-        let directory =
-            fs::canonicalize(&self.directory).map_err(|error| io_error("locate", error))?;
-        let target = directory.join("settings.json");
-        let (temporary, mut file) = reserve(&directory)?;
-        let result = (|| {
-            file.write_all(bytes)
-                .map_err(|error| io_error("write", error))?;
-            file.sync_all().map_err(|error| io_error("flush", error))?;
-            drop(file);
-            replace(&temporary, &target).map_err(|error| io_error("replace saved", error))
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
+        if let Some(directory) = self.path.parent() {
+            fs::create_dir_all(directory).map_err(|error| io_error("create storage for", error))?;
         }
-        result
+        crate::document_io::atomic_write(&self.path, &AtomicBool::new(false), |file| {
+            file.write_all(bytes).map_err(|error| io_error("write", error))
+        })
     }
-}
-fn reserve(directory: &Path) -> Result<(PathBuf, File), String> {
-    for _ in 0..32 {
-        let id = TEMP_ID.fetch_add(1, Ordering::Relaxed);
-        let path = directory.join(format!("settings.pending.{}.{id}.json", std::process::id()));
-        match OpenOptions::new().write(true).create_new(true).open(&path) {
-            Ok(file) => return Ok((path, file)),
-            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(error) => return Err(io_error("create temporary", error)),
-        }
-    }
-    Err("Could not reserve a preferences file.".into())
-}
-#[cfg(target_os = "windows")]
-pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    use std::os::windows::ffi::OsStrExt;
-    use windows::{
-        Win32::Storage::FileSystem::{
-            MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
-        },
-        core::PCWSTR,
-    };
-    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
-    let destination: Vec<u16> = destination
-        .as_os_str()
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
-    unsafe {
-        MoveFileExW(
-            PCWSTR(source.as_ptr()),
-            PCWSTR(destination.as_ptr()),
-            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
-        )
-    }
-    .map_err(|error| std::io::Error::from_raw_os_error(error.code().0 & 0xffff))
-}
-#[cfg(not(target_os = "windows"))]
-pub(crate) fn replace(source: &Path, destination: &Path) -> std::io::Result<()> {
-    fs::rename(source, destination)
 }
 fn encode(settings: &Settings) -> Result<Vec<u8>, String> {
     struct Bounded(Vec<u8>);

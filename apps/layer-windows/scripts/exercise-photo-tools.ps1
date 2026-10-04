@@ -88,7 +88,7 @@ function Undo{Wait-Until {(Command 'undo').enabled} 'Undo did not become availab
 function Width{[int]@((Model).state.tabs)[0].width}
 try {
  Enter-CapyEnvironment
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned photo tools review $($review.Id): $run"

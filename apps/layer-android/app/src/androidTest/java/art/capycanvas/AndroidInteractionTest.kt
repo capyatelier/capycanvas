@@ -2729,7 +2729,7 @@ class AndroidInteractionTest {
             command("undo")
             waitFor("one undo step restores the selection", 5_000) { layerStates().size == count && hasSelection() }
 
-            val external = File(instrumentation.targetContext.cacheDir, "clipboard/external.png")
+            val external = File(AppStorage.of(instrumentation.targetContext).clipboard, "external.png")
             external.parentFile!!.mkdirs()
             android.graphics.Bitmap.createBitmap(64, 48, android.graphics.Bitmap.Config.ARGB_8888).apply { eraseColor(android.graphics.Color.RED) }
                 .compress(android.graphics.Bitmap.CompressFormat.PNG, 100, external.outputStream())

@@ -43,7 +43,7 @@ struct Driver {
 }
 impl Driver {
     fn managed(name: &str) -> Self {
-        assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+        assert!(crate::storage::workspaces().is_some());
         let app = native_test_app(name);
         let w = Workspace::new(&app);
         w.window.maximize();
@@ -336,7 +336,7 @@ fn native_header_managed_input() {
 #[ignore = "isolated native-input.js --native-test=native_workspace_ownership_input --native-storage"]
 fn native_workspace_ownership_input() {
     let mut d = Driver::managed("art.capycanvas.WorkspaceOwnership");
-    let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap())
+    let database = crate::storage::workspaces().unwrap().to_path_buf()
         .join("workspaces.sqlite3");
     let original =
         d.w.workspaces
@@ -446,7 +446,7 @@ fn native_workspace_ownership_input() {
 #[ignore = "isolated native-input.js --native-test=native_unreadable_workspace_storage_input --native-storage"]
 fn native_unreadable_workspace_storage_input() {
     let mut d = Driver::managed("art.capycanvas.UnreadableWorkspaceStorage");
-    let database = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap())
+    let database = crate::storage::workspaces().unwrap().to_path_buf()
         .join("workspaces.sqlite3");
     let sql = |query: &str| {
         let output = std::process::Command::new("sqlite3")
@@ -467,14 +467,15 @@ fn native_unreadable_workspace_storage_input() {
         sql("UPDATE items SET working=json_set(working,'$.zen_mode',json('{}')); SELECT changes()"),
         "3"
     );
-    let settings = std::path::PathBuf::from(std::env::var_os("LAYER_SETTINGS_FILE").unwrap());
+    let settings = crate::storage::roots().unwrap().settings();
+    std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
     std::fs::write(
         &settings,
         r#"{"pan_speed":2.0,"tip_lock":true,"prediction_algorithm":"kalman","zoom_speed":"fast"}"#,
     )
     .unwrap();
     std::fs::write(
-        settings.with_file_name("export-presets.json"),
+        crate::storage::roots().unwrap().export_presets(),
         r#"{"destinations":[null,null,null,null],"named":[]}"#,
     )
     .unwrap();
@@ -497,6 +498,12 @@ fn native_unreadable_workspace_storage_input() {
         sql("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'"),
         "0"
     );
+    let kept = std::process::Command::new("sqlite3")
+        .arg(database.with_file_name("workspaces.unreadable.sqlite3"))
+        .arg("SELECT count(*) FROM items WHERE json_type(working,'$.zen_mode')='object'")
+        .output()
+        .unwrap();
+    assert_eq!(String::from_utf8(kept.stdout).unwrap().trim(), "3");
     d.w.dispatch(UiAction::Invoke {
         command: CommandId::ExportDocument,
     });

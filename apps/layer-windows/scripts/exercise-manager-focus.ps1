@@ -53,7 +53,7 @@ function Close {
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch 'first'
     Menu 'Manage Workspaces…'

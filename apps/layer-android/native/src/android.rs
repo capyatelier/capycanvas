@@ -786,6 +786,32 @@ pub extern "system" fn Java_art_capycanvas_Native_bootstrap(
     string(&mut env, result)
 }
 #[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_storage(
+    mut env: JNIEnv, _: JClass, config: JString, data: JString, state: JString, cache: JString, temp: JString,
+) -> jstring {
+    let result = (|| {
+        let mut folder = |path: &JString| read(&mut env, path).map(std::path::PathBuf::from);
+        let platform = layer_host::StorageRoots {
+            config: folder(&config)?,
+            data: folder(&data)?,
+            state: folder(&state)?,
+            cache: folder(&cache)?,
+            temp: folder(&temp)?,
+        };
+        let roots = layer_host::StorageRoots::resolve(|| Ok(platform))?;
+        serde_json::to_string(&serde_json::json!({
+            "workspaces": roots.workspaces(),
+            "sessions": roots.sessions(),
+            "shaders": roots.shaders(),
+            "clipboard": roots.clipboard(),
+            "color_profiles": roots.color_profiles(),
+            "export_presets": roots.export_presets(),
+            "temp": roots.temp,
+        })).map_err(error)
+    })();
+    string(&mut env, result)
+}
+#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_languageRequest(
     mut env: JNIEnv, _: JClass, handle: jlong, locales: JObjectArray,
 ) -> jstring {

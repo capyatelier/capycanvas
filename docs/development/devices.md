@@ -65,7 +65,7 @@ tools/devices/devices.py release
 - Install experiments and test builds under your own application ID:
   `-PcapyApplicationId=$(tools/devices/devices.py appid) -PcapyAppLabel=<label>`.
   The test package is `<id>.test`, and `devices.py run` exports the same ID as
-  `$CAPY_APPLICATION_ID`. `apps/layer-android/run.sh` installs `art.capycanvas`
+  `$CAPY_APPLICATION_ID`. `apps/layer-android/run.sh` installs `art.capycanvas.dev`
   and is for single-user work on an emulator or your own device; `run.sh test`
   uses your own ID.
 - Never uninstall `art.capycanvas` or clear its data; it holds an artist's
@@ -109,11 +109,12 @@ Rust bridge tests run.
 
 - The iPad must be awake and unlocked, with Settings > Developer > Enable UI
   Automation on.
-- Never replace or clear the regular `art.capycanvas.apple.ipad` and `.mac`
-  apps; they hold an artist's drawings. Build test and benchmark apps under your
-  own `CAPY_APPLE_BUNDLE_ID` and `CAPY_PERSISTENCE_NAMESPACE`
-  ([Apple guide](apple.md)). A free Personal Team profile limits how many apps a
-  device may hold, and the XCTest runner counts as one.
+- Never replace or clear an installed `art.capycanvas.CapyCanvas`,
+  `art.capycanvas.CapyCanvas.dev` or older `art.capycanvas.apple.ipad`/`.mac`
+  app; they may hold an artist's drawings. Build test and benchmark apps under
+  your own `CAPY_APPLE_BUNDLE_ID` and give test launches their own
+  `CAPY_STORAGE_DIR` ([Apple guide](apple.md)). A free Personal Team profile
+  limits how many apps a device may hold, and the XCTest runner counts as one.
 - There is no iPad hardware keyboard, second Mac display, 120 Hz Mac display or
   working iCloud Drive account. Leave those checks unverified; don't ask for them.
 - Keep device UDIDs, team IDs and signing details out of commits.

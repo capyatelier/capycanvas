@@ -1,6 +1,14 @@
 use super::*;
 use crate::test_support::TempDir;
-use std::{sync::mpsc, time::Duration};
+#[cfg(target_os = "windows")]
+use std::fs::OpenOptions;
+use std::{
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        mpsc,
+    },
+    time::Duration,
+};
 
 impl SettingsFile {
     fn load(&self) -> Result<Option<Settings>, String> {
@@ -8,7 +16,7 @@ impl SettingsFile {
     }
 }
 fn storage(directory: &TempDir) -> SettingsFile {
-    SettingsFile::new(directory.path.clone()).unwrap()
+    SettingsFile::new(directory.path.join("settings.json")).unwrap()
 }
 fn service_over(worker: Worker) -> SettingsService {
     SettingsService {

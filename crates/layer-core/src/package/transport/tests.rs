@@ -23,7 +23,7 @@ fn bounded_memory_crosses_chunks_without_retaining_the_archive() {
 
 #[cfg(not(target_arch = "wasm32"))]
 #[test]
-fn private_spool_survives_the_provider_and_releases_only_its_own_file() {
+fn private_spool_survives_the_provider_without_leaving_a_file() {
     let path = std::env::temp_dir().join(format!("capy-spool-test-{}", crate::authored::PortableId::random()));
     std::fs::create_dir(&path).unwrap();
     let cancelled = AtomicBool::new(false);
@@ -34,7 +34,8 @@ fn private_spool_survives_the_provider_and_releases_only_its_own_file() {
     drop(backing);
     let RangeState::Ready(bytes) = retained.poll(MAX_RANGE_BYTES as u64, 1).unwrap() else { panic!() };
     assert_eq!(&*bytes, &[3]);
-    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 1);
+    #[cfg(unix)]
+    assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
     drop(retained);
     assert_eq!(std::fs::read_dir(&path).unwrap().count(), 0);
     assert_eq!(&*bytes, &[3]);

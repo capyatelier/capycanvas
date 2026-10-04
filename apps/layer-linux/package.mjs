@@ -21,7 +21,7 @@ const licenseHtml = dependencyNotices(licensing.licenses);
 const gtkRuntime = stageGtkRuntime(root, output);
 const flags = [...(process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f") || []),
   `--remap-path-prefix=${homedir()}=/build-home`, `--remap-path-prefix=${root}=/capycanvas`];
-const records = execFileSync("cargo", ["build", "--locked", "--release", "-p", "layer-linux", "--message-format=json"], {
+const records = execFileSync("cargo", ["build", "--locked", "--release", "-p", "layer-linux", "--features", "release-identity", "--message-format=json"], {
   cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"],
   env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") },
 }).trim().split("\n").map(line => JSON.parse(line));

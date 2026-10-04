@@ -12,7 +12,7 @@ whole client area, including behind the custom title bar.
 
 | Path | Contents |
 | --- | --- |
-| `App.cpp` | Entry point; opens windows and forwards file launches to a running instance. |
+| `App.cpp` | Entry point; opens windows and hands every later launch of the installation to its running instance. |
 | `CanvasWindow.*` | One editor window: title bar, swap-chain attachment, independent canvas input, the render thread and the queues between them. |
 | `CanvasWorkBuffer.h`, `CanvasQueryQueue.h`, `CanvasSnapshotMailbox.h` | Bounded, ordered input and command queue; optional UI queries; latest published models. |
 | `WorkspaceView.*`, `PanelBody.*`, `WorkspaceDrawers.*`, `CollapsedColumns.*`, `WorkspaceExpansion.*` | Native projection of the shared workspace: panels, tabs, drawers, columns, panel configuration. |
@@ -22,7 +22,7 @@ whole client area, including behind the custom title bar.
 | `native/` | The `layer-windows` Rust crate, built as `layer_windows.dll`. `native/include/capy_windows.h` is the C ABI. |
 | `native/src/host.rs` | Render owner: device, surface, frame loop and the exported entry points around `NativeHost`. |
 | `native/src/documents.rs`, `document_*.rs`, `recovery.rs` | Document worker: open, save, export, drawing tabs, color and proof workflows, crash recovery. |
-| `native/src/workspace*.rs`, `settings.rs` | Workspace storage on a SQLite worker, and preferences. |
+| `native/src/workspace*.rs`, `settings.rs`, `storage.rs` | Workspace storage on a SQLite worker, preferences, and the installation's [folders](../../docs/development/windows.md#where-files-live). |
 | `native/src/filter_packages.rs`, `device.rs`, `display.rs` | Runtime filter transport, device-removal detection, display HDR state. |
 | `tests/` | C++ queue test (`scripts/test-input.ps1`) and the Color and Number control review entry points. |
 | `scripts/` | `build.ps1`, packaging, asset staging, `exercise-*.ps1` UI fixtures and their UI Automation helpers (`CapyUia.ps1`). |

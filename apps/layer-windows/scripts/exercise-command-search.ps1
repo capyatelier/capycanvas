@@ -29,7 +29,7 @@ function Key([uint16]$Code){[CapyRowPointer]::Key([uint32]$review.Id,$Code)}
 function Closed {Wait-Until {!(Visible 'command-bar') -and !(Visible 'command-search')} 'Command search did not close' 5}
 try {
  Enter-CapyEnvironment
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log')
  $null=$review.Handle
  Write-Output "Owned command search review $($review.Id): $run"

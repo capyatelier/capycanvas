@@ -682,7 +682,7 @@ class AndroidLanguageTest {
                 val refusal = runCatching { Native.profileLibrary(obj("type" to "get", "id" to entry.getString("id")).toString(), byteArrayOf(1, 2, 3)) }.exceptionOrNull()
                 assertTrue(refusal is ColorFeatureFailure)
                 assertEquals("ProfileChanged", (refusal as ColorFeatureFailure).reason)
-                stored = File(ColorPreferencesStore.directoryForTest, "color-profiles/${entry.getString("id")}.icc")
+                stored = File(AppStorage.of(activity).colorProfiles, "${entry.getString("id")}.icc")
                 held = File(stored!!.parentFile, "${entry.getString("id")}.held")
                 host.drain(obj("type" to "open_settings", "page" to "color"))
                 compose.onNodeWithText(host.catalog.getJSONObject("profile_copy").getString("manage")).performScrollTo().performClick()

@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 @MainActor final class ArtworkRecovery: ObservableObject {
     @Published private(set) var saving = false
@@ -23,9 +26,9 @@ import SwiftUI
         if !started {
             guard store.snapshot["canvas_ready"].bool, store.snapshot["brush_ready"].bool, store.workspaces?.ready != false else { return }
             started = true
-            guard let root = store.native?.persistenceRoot else { restoring = false; return }
-            let path = root.appendingPathComponent("sessions/\(store.sessionIdentity)", isDirectory: true).path
-            store.native?.restoreSession(path: path) { [weak self] failure, adopted in DispatchQueue.main.async {
+            guard let sessions = store.native?.sessions else { restoring = false; return }
+            store.native?.restoreSession(sessions: sessions, scene: store.sessionIdentity, adopt: Self.adoptsUnrestoredSessions) {
+                [weak self] failure, adopted in DispatchQueue.main.async {
                 guard let self else { return }
                 self.restoring = false; self.error = failure
                 self.restoreFailed = failure != nil && !adopted
@@ -43,7 +46,7 @@ import SwiftUI
         if !restoring && error == nil { schedule() }
     }
     private func schedule() {
-        guard !closed, !restoring, scheduled == nil, !saving, store?.native?.persistenceRoot != nil else { return }
+        guard !closed, !restoring, scheduled == nil, !saving, store?.native?.sessions != nil else { return }
         scheduled = Task { [weak self] in
             do { try await Task.sleep(for: .seconds(2)) } catch { return }
             guard let self else { return }
@@ -64,7 +67,7 @@ import SwiftUI
     }
     private func write(exclusion: UInt64 = 0, cleanExit: Bool = false) {
         guard !saving else { return }
-        guard let native = store?.native, native.persistenceRoot != nil else { finish(nil); return }
+        guard let native = store?.native, native.sessions != nil else { finish(nil); return }
         guard !restoring else { finish(copy["restoring"].string); return }
         saving = true
         let cleanExit = cleanExit || finalCheckpoint
@@ -78,7 +81,7 @@ import SwiftUI
     func flush(cleanExit: Bool = false, _ completion: @escaping (Bool) -> Void) {
         scheduled?.cancel(); scheduled = nil
         if restoring {
-            completion(store?.native?.persistenceRoot == nil); return
+            completion(store?.native?.sessions == nil); return
         }
         guard !restoreFailed else { completion(false); return }
         waiters.append { [self] saved in completion(saved); withExtendedLifetime(self) {} }
@@ -101,11 +104,19 @@ import SwiftUI
         write(exclusion: UInt64.max)
     }
     func resume() { closed = false; durable = ""; schedule() }
+    /// A scene the system still holds may reconnect to its own session.
+    private static var adoptsUnrestoredSessions: Bool {
+        #if os(iOS)
+        return UIApplication.shared.openSessions.allSatisfy { $0.scene != nil }
+        #else
+        return true
+        #endif
+    }
     func retry() {
-        guard restoreFailed, let root = store?.native?.persistenceRoot else { flush { _ in }; return }
+        guard restoreFailed, let store, let sessions = store.native?.sessions else { flush { _ in }; return }
         restoring = true
-        let path = root.appendingPathComponent("sessions/\(store?.sessionIdentity ?? "")", isDirectory: true).path
-        store?.native?.restoreSession(path: path, retry: true) { [weak self] failure, adopted in DispatchQueue.main.async {
+        store.native?.restoreSession(sessions: sessions, scene: store.sessionIdentity, adopt: false, retry: true) {
+            [weak self] failure, adopted in DispatchQueue.main.async {
             guard let self else { return }
             restoring = false; restoreFailed = failure != nil && !adopted; error = failure
             if failure == nil { schedule() }

@@ -139,34 +139,29 @@ pub unsafe extern "C" fn capy_apple_document_storage(app: *mut CapyApple) -> *mu
     unsafe { app.as_ref() }.map_or(std::ptr::null_mut(), |a| a.document_job(None))
 }
 /// # Safety
-/// Worker only; directory is UTF-8, job stays alive and has no concurrent caller.
+/// Worker only; job stays alive and has no concurrent caller.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_document_prepare(
-    task: *mut CapyDocumentTask,
-    directory: *const c_char,
-) -> i32 {
+pub unsafe extern "C" fn capy_document_prepare(task: *mut CapyDocumentTask) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else {
         return -1;
     };
-    let path = unsafe { project::read_title(directory) }.map(str::to_owned);
     std::thread::scope(|scope| {
         std::thread::Builder::new()
             .name("capy-drawing".into())
             .stack_size(8 * 1024 * 1024)
-            .spawn_scoped(scope, || prepare_document(task, path))
+            .spawn_scoped(scope, || prepare_document(task))
             .map_or(-1, |worker| worker.join().unwrap_or(-1))
     })
 }
-fn prepare_document(task: &CapyDocumentTask, path: Result<String, String>) -> i32 {
+fn prepare_document(task: &CapyDocumentTask) -> i32 {
     let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
     let result = catch_unwind(AssertUnwindSafe(|| -> Result<(), String> {
-        let path = path?;
         for tiles in &job.tiles {
             if layer_core::raster_storage::resident_tile_bytes(job.tiles.iter()) <= job.budget {
                 break;
             }
-            if let Err(e) =
-                layer_core::raster_storage::spill_to_directory(tiles, std::path::Path::new(&path))
+            if let Err(e) = layer_core::temp_files::directory()
+                .and_then(|directory| layer_core::raster_storage::spill_to_directory(tiles, directory))
             {
                 job.storage_error = Some(e);
                 break;

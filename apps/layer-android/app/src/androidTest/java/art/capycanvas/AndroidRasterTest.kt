@@ -1568,9 +1568,9 @@ class AndroidRasterTest {
         assertFalse(runBlocking{ProfileStore.list(activity).any{it.getString("name")==embedded.getString("name")}})
         assertEquals(baseline.outputData().getJSONObject("proof").toString(),manifest(save("proof-cancel.capy")).outputData().getJSONObject("proof").toString())
         // An unwritable library path fails before document/history publication.
-        val oldDirectory=ColorPreferencesStore.directoryForTest
+        val oldDirectory=AppStorage.directoryForTest
         val blocked=File(files,"proof-blocked-${System.nanoTime()}").apply{writeText("not a directory")}
-        ColorPreferencesStore.directoryForTest=blocked
+        AppStorage.directoryForTest=blocked
         setup()
         // Select through the standard/profile callback with the already loaded ICC;
         // changing the library path prevents the picker from resolving its entry.
@@ -1580,7 +1580,7 @@ class AndroidRasterTest {
         compose.waitUntil(120_000){!host.proof.busy&&(host.proof.error!=null||compose.onAllNodesWithText("Proof").fetchSemanticsNodes().isEmpty())}
         assertNotNull("Preservation must fail before replacing ${current().getString("name")}",host.proof.error)
         assertEquals(embedded.getString("name"),current().getString("name"))
-        ColorPreferencesStore.directoryForTest=oldDirectory
+        AppStorage.directoryForTest=oldDirectory
         apply()
         val preserved=runBlocking{ProfileStore.list(activity).first{it.getString("name")==embedded.getString("name")}}
         assertEquals(array.toString(),runBlocking{ProfileStore.get(activity,preserved.getString("id"))}.getJSONObject("profile").getJSONArray("Icc").toString())
@@ -2754,7 +2754,7 @@ class AndroidRasterTest {
         runBlocking {
             ProfileStore.import(activity,bytes);ProfileStore.import(activity,bytes)
             val entries=ProfileStore.list(activity);assertEquals(1,entries.size)
-            val id=entries[0].getString("id");val file=File(ColorPreferencesStore.directoryForTest,"color-profiles/$id.icc")
+            val id=entries[0].getString("id");val file=File(AppStorage.of(activity).colorProfiles,"$id.icc")
             assertArrayEquals(bytes,file.readBytes())
             assertEquals(array.toString(),ProfileStore.get(activity,id).getJSONObject("profile").getJSONArray("Icc").toString())
             file.writeBytes(byteArrayOf(1,2,3));assertTrue(ProfileStore.list(activity)[0].has("issue"))
@@ -2799,7 +2799,7 @@ class AndroidRasterTest {
         val saved=store(obj("type" to "save","name" to "Tablet test delivery","recipe" to recipe))
         val index=saved.getInt("index");assertEquals(4,index)
         assertEquals(canonical(recipe),canonical(store(obj("type" to "get","index" to index)).getJSONObject("recipe")))
-        val persisted=File(ColorPreferencesStore.directoryForTest!!,"color-export-presets.json").readBytes()
+        val persisted=AppStorage.of(activity).exportPresets.readBytes()
         assertArrayEquals("CAPYPRESETS".toByteArray(Charsets.US_ASCII),persisted.copyOfRange(0,11))
         // Reopen through the real export dialog and load the persisted named recipe.
         DocumentController.nativeFileJobsForTest=false
@@ -4199,6 +4199,55 @@ class AndroidRasterTest {
         compose.waitUntil(120_000) {!host.drawingTabs.switching&&tabs().getLong("selected") == failed}
         assertEquals(failedLayers,native {state(it).array("layers").length()})
         command("undo");assertEquals(failedLayers-1,native {state(it).array("layers").length()})
+    }
+
+    @Test fun failedInactiveSessionDiscardRetiresOnlyItsCopy() {
+        compose.waitUntil(120_000) {host.recovery.ready}
+        fun command(name:String) {native {Native.dispatch(it,obj("type" to "invoke","command" to name).toString())};tick()}
+        command("add_layer")
+        val first = tabs().getLong("selected")
+        host.newDocument(640,480);refresh();command("add_layer")
+        val failed = tabs().getLong("selected")
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close()
+        val session = device.recovery.walkTopDown().first {it.name == "session.json"}
+        awaitSessionRelease(session)
+        val copies = JSONObject(Native.sessionManifestRead(session.absolutePath)).array("drawings").objects().associate {it.getLong("id") to File(session.parentFile,it.getString("key"))}
+        File(copies.getValue(failed),"generations").listFiles().orEmpty().filter {it.extension == "json"}.forEach {it.writeText("broken checkpoint")}
+        launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
+        compose.runOnUiThread {host.clearActionError()}
+        compose.onNodeWithTag("discard-recovery").performClick()
+        compose.waitUntil(120_000) {!host.recovery.working&&host.recovery.candidate == null}
+        assertNull(host.actionError)
+        assertFalse(File(copies.getValue(failed),"head.json").exists())
+        assertTrue(File(copies.getValue(first),"head.json").isFile)
+        assertEquals(listOf(copies.getValue(first).name),JSONObject(Native.sessionManifestRead(session.absolutePath)).array("drawings").objects().map {it.getString("key")})
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close();launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNull(host.recovery.candidate);assertNull(host.actionError);assertEquals(listOf(first),ids())
+    }
+
+    @Test fun unreadableWindowSessionDiscardRetiresItsCopies() {
+        compose.waitUntil(120_000) {host.recovery.ready}
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick()
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close()
+        val session = device.recovery.walkTopDown().first {it.name == "session.json"}
+        awaitSessionRelease(session)
+        val copies = session.parentFile!!.listFiles().orEmpty().filter {it.isDirectory}
+        assertTrue(copies.all {File(it,"head.json").isFile}&&copies.isNotEmpty())
+        session.writeText("broken window metadata")
+        launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
+        compose.runOnUiThread {host.clearActionError()}
+        compose.onNodeWithTag("discard-recovery").performClick()
+        compose.waitUntil(120_000) {!host.recovery.working&&host.recovery.candidate == null}
+        assertNull(host.actionError);assertFalse(session.exists())
+        assertTrue(copies.none {File(it,"head.json").exists()})
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close();launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNull(host.recovery.candidate);assertNull(host.actionError)
     }
 
     private fun awaitSessionRelease(session:File) {

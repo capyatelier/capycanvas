@@ -3,8 +3,6 @@ import XCTest
 extension XCTestCase {
     @MainActor func checkDefaultWorkspaceColumns(in app: XCUIApplication, photo: Bool = false) {
         let workspace = photo ? "photographer" : "illustrator"
-        app.launchEnvironment.removeValue(forKey: "CAPY_DISABLE_PERSISTENCE")
-        app.launchEnvironment["CAPY_PERSISTENCE_NAMESPACE"] = UUID().uuidString
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"light\"},{\"type\":\"workspace_manager\",\"command\":{\"type\":\"switch\",\"id\":\"builtin:workspace:\(workspace)\"}}]"
         func element(_ id: String) -> XCUIElement { app.descendants(matching: .any)[id].firstMatch }
         let scene = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "editor-scene-")).firstMatch

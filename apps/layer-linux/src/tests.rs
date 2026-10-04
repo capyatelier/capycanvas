@@ -118,6 +118,7 @@ pub(crate) fn new_drawing_at(width: u32, height: u32, depth: layer_core::color::
 }
 
 fn open_native_document(input: impl std::io::Read + std::io::Seek) -> layer_core::Document {
+    crate::storage::roots();
     let outcome = layer_ui::read_import(input, layer_ui::ImportIntent::Open, Default::default(), layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() }, Default::default(), Default::default(), &std::sync::atomic::AtomicBool::new(false)).unwrap();
     let layer_ui::ImportOutcome::Editable(imported) = outcome else { panic!("Expected editable drawing") };
     imported.project
@@ -7752,9 +7753,9 @@ fn native_ribbon_allocation() {
 #[test]
 #[ignore = "native sidebar, shortcut recording and persistence: requires a Wayland display"]
 fn native_preferences_and_shortcuts() {
-    if let Some(path) = std::env::var_os("LAYER_SETTINGS_FILE") {
+    if let Some(path) = crate::storage::roots().map(layer_host::StorageRoots::settings) {
         assert!(
-            !std::path::Path::new(&path).exists(),
+            !path.exists(),
             "Use a fresh isolated preferences path for this test"
         );
     }
@@ -8224,7 +8225,7 @@ fn native_preferences_and_shortcuts() {
                 && item.hint == "Ctrl+,")
     );
     // Explicit override isolates persistence from the user's actual config.
-    if std::env::var_os("LAYER_SETTINGS_FILE").is_some() {
+    if crate::storage::roots().is_some() {
         assert_eq!(
             crate::preferences::load().unwrap().unwrap(),
             state(&w).settings
@@ -12117,7 +12118,7 @@ fn native_workspace_menu_input() {
 
     let mut input = RemoteInput::new().settle_ms(250);
     let dir = input.dir.clone();
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    assert!(crate::storage::workspaces().is_some());
     let app = native_test_app("art.capycanvas.WorkspaceMenuInput");
     gtk::Settings::default()
         .unwrap()
@@ -12379,11 +12380,11 @@ fn native_workspace_menu_input() {
 }
 
 #[test]
-#[ignore = "private Wayland display, Vulkan and CAPY_WORKSPACE_DIR: native SQLite workspace resume"]
+#[ignore = "private Wayland display, Vulkan and native workspace storage: native SQLite workspace resume"]
 fn native_workspace_database_resume_and_independent_windows() {
     assert!(
-        std::env::var_os("CAPY_WORKSPACE_DIR").is_some(),
-        "Use an isolated CAPY_WORKSPACE_DIR for this test"
+        crate::storage::workspaces().is_some(),
+        "Run with --native-storage"
     );
     let app = native_test_app("art.capycanvas.WorkspacePersistence");
     let wait_saved = |w: &Workspace| {
@@ -12495,10 +12496,10 @@ fn native_workspace_database_resume_and_independent_windows() {
 }
 
 #[test]
-#[ignore = "requires an isolated CAPY_WORKSPACE_DIR and native GTK/Vulkan display"]
+#[ignore = "requires native workspace storage and a native GTK/Vulkan display"]
 fn native_named_workspace_manager_library_and_history() {
     use layer_workspace::{ItemKind, ManagerAction as A, ManagerPage};
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    assert!(crate::storage::workspaces().is_some());
     let app = native_test_app("art.capycanvas.NamedWorkspaceManager");
     gtk::Settings::default()
         .unwrap()
@@ -12898,10 +12899,11 @@ fn native_named_workspace_manager_library_and_history() {
 }
 
 #[test]
-#[ignore = "CAPY_WORKSPACE_DIR must name an isolated regular file to simulate unavailable storage"]
+#[ignore = "isolated Wayland and private storage"]
 fn native_workspace_unavailable_close_recovery() {
-    let blocked = std::path::PathBuf::from(std::env::var_os("CAPY_WORKSPACE_DIR").unwrap());
-    assert!(blocked.is_file());
+    let blocked = crate::storage::roots().unwrap().workspaces();
+    std::fs::create_dir_all(blocked.parent().unwrap()).unwrap();
+    std::fs::write(&blocked, b"not a folder").unwrap();
     let original = std::fs::read(&blocked).unwrap();
     let app = native_test_app("art.capycanvas.WorkspaceUnavailable");
     gtk::Settings::default()
@@ -12937,10 +12939,10 @@ fn native_workspace_unavailable_close_recovery() {
 }
 
 #[test]
-#[ignore = "requires an isolated CAPY_WORKSPACE_DIR and native GTK/Vulkan display"]
+#[ignore = "requires native workspace storage and a native GTK/Vulkan display"]
 fn native_workspace_owner_takeover_preserves_recovery_and_blocks_stale_input() {
     use layer_workspace::ManagerAction as A;
-    assert!(std::env::var_os("CAPY_WORKSPACE_DIR").is_some());
+    assert!(crate::storage::workspaces().is_some());
     let app = native_test_app("art.capycanvas.WorkspaceOwnership");
     gtk::Settings::default()
         .unwrap()
@@ -14063,9 +14065,7 @@ fn live_language_documents(theme: Theme) {
 #[ignore = "private IBus engine and native compositor input"]
 fn native_genuine_language_composition() {
     assert!(std::env::var("WAYLAND_DISPLAY").unwrap().starts_with("layer-bench-"));
-    for name in ["LAYER_SETTINGS_FILE", "CAPY_WORKSPACE_DIR", "CAPY_RECOVERY_DIR"] {
-        assert!(std::env::var_os(name).is_some(), "private fixture requires {name}");
-    }
+    assert!(crate::storage::workspaces().is_some() && crate::storage::sessions().is_some(), "private fixture requires workspace and session storage");
     let result = std::path::PathBuf::from(std::env::var_os("LAYER_IME_RESULT").unwrap());
     assert!(!result.exists());
     let (application, active) = crate::application("art.capycanvas.LocalizationResolutionIme");

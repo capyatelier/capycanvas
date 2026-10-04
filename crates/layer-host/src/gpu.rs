@@ -53,13 +53,8 @@ impl GpuContext {
             self.device.clone(),
             self.queue.clone(),
         );
-        let mut gpu = match &options.cache {
-            Some(cache) => {
-                WgpuRasterizer::from_wgpu_native_staged_cached(adapter, device, queue, cache, color)
-            }
-            None => WgpuRasterizer::from_wgpu_native_staged(adapter, device, queue, color),
-        }
-        .map_err(|e| e.to_string())?;
+        let mut gpu = WgpuRasterizer::from_wgpu_native_staged_cached(adapter, device, queue, options.cache.as_deref(), color)
+            .map_err(|e| e.to_string())?;
         gpu.configure_ui_previews(options.ui_color.preview_space())
             .map_err(|e| e.to_string())?;
         if finish_cache {

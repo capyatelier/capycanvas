@@ -69,6 +69,9 @@ hardware or implementation failure.
 
 ## Durable publication and ownership
 
+Sessions are device state: they live in each platform's state folder and are
+not backed up ([where the app keeps its files](storage.md)).
+
 [`SessionManifest`](../../crates/layer-ui/src/session_recovery.rs) owns tab order,
 selection, membership and unfinished restore attempts. The native window holds an
 exclusive lease; web uses browser locks. A live owner's session cannot be claimed

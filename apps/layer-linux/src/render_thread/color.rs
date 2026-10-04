@@ -162,11 +162,9 @@ impl Worker {
         };
         check()?;
         request.project.validate(Default::default())?;
-        let cache = gtk::glib::user_cache_dir()
-            .join("capycanvas")
-            .join("shaders");
+        let cache = crate::storage::roots().map(layer_host::StorageRoots::shaders);
         let mut renderer = self.renderer.color_candidate_staged_cached(
-            &cache,
+            cache.as_deref(),
             request.project.composition().color,
         )
         .map_err(error)?;

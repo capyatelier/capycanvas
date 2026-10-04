@@ -287,7 +287,7 @@ class AndroidWorkspaceSwitcherTest {
                 tapMenu(view().getJSONObject("switcher_menu").array("sections").getJSONArray(1).getJSONObject(0).getString("label"))
             }
             var popup: android.view.View? = null
-            val database = android.database.sqlite.SQLiteDatabase.openDatabase(java.io.File(device.root, "workspace/workspaces.sqlite3").path,
+            val database = android.database.sqlite.SQLiteDatabase.openDatabase(java.io.File(AppStorage.of(instrumentation.targetContext).workspaces, "workspaces.sqlite3").path,
                 null, android.database.sqlite.SQLiteDatabase.OPEN_READWRITE)
             try {
                 database.execSQL("BEGIN IMMEDIATE")

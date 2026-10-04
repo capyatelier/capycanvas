@@ -101,6 +101,11 @@ function Read-Snapshot([string]$Path){
         }
     }
 }
+function Settings-File{
+    $path=Join-Path $env:CAPY_STORAGE_DIR 'config/settings.json'
+    [IO.Directory]::CreateDirectory((Split-Path -Parent $path))|Out-Null
+    $path
+}
 function Trace-File([string]$Kind='ui-state',[switch]$Isolated){
     $folder=if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory}
     foreach($path in [IO.Directory]::EnumerateFiles($folder,"$Kind-$($review.Id)-*.json")){
@@ -145,7 +150,7 @@ function Capture([string]$Name,[switch]$WithModel,[switch]$Composed){
 function Enter-CapyEnvironment([string[]]$Names=@()){
     if($env:CAPY_FIXTURE_CONTEXT -and $run){@{run=$run}|ConvertTo-Json|Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT}
     $script:CapyEnvironment=@{}
-    foreach($name in @('CAPY_SETTINGS_DIRECTORY','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')+$Names){
+    foreach($name in @('CAPY_STORAGE_DIR','CAPY_TRACE_UI','CAPY_SMOKE_TEST','CAPY_TEST_DISPLAY','CAPY_TEST_PRIMARY')+$Names){
         $script:CapyEnvironment[$name]=[Environment]::GetEnvironmentVariable($name,'Process')
         Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue
     }
@@ -153,7 +158,7 @@ function Enter-CapyEnvironment([string[]]$Names=@()){
 function Exit-CapyEnvironment{
     if(!$script:CapyEnvironment){return}
     if($env:CAPY_FIXTURE_CONTEXT -and $run){
-        @{run=$run;process_id=$review.Id;trace_directory=$(if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory});profile=$env:CAPY_SETTINGS_DIRECTORY}|
+        @{run=$run;process_id=$review.Id;trace_directory=$(if($script:CapyTraceDirectory){$script:CapyTraceDirectory}else{$directory});profile=$env:CAPY_STORAGE_DIR}|
             ConvertTo-Json|Set-Content -LiteralPath $env:CAPY_FIXTURE_CONTEXT
     }
     foreach($entry in $script:CapyEnvironment.GetEnumerator()){

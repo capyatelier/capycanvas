@@ -212,7 +212,7 @@ function Held-Drag([string]$Id,$To,[switch]$Cancel) {
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardOutput (Join-Path $run 'stdout.log') -RedirectStandardError $stderr

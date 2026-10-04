@@ -89,7 +89,7 @@ function Close-Window($Window){
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_SMOKE_TEST='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     $stderr=Join-Path $run 'stderr.log'
     $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
@@ -205,7 +205,7 @@ try {
     }
     $expectedDark='#1c2c3c'
     if($FailPreferences){
-        $settingsFile=Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'
+        $settingsFile=Settings-File
         function Saved-Preferences {try{Get-Content -LiteralPath $settingsFile -Raw|ConvertFrom-Json}catch{$null}}
         Wait-Until {(Saved-Preferences).dark_base -eq $expectedDark -and (Saved-Preferences).light_base -eq '#dcecfb'} 'Shared preferences were not saved before the failure fixture'
         $savedHash=(Get-FileHash -LiteralPath $settingsFile).Hash

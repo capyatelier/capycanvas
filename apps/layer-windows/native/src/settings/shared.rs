@@ -22,7 +22,7 @@ impl Hub {
     pub(super) fn with_launch(file: SettingsFile, preferred_tags: &[&str], launch: impl FnOnce(Option<&str>) -> Result<NativeHost, String>) -> Result<(NativeHost, Arc<Self>), String> {
         static PROFILES: OnceLock<Mutex<HashMap<PathBuf, Arc<Hub>>>> = OnceLock::new();
         let mut profiles = PROFILES.get_or_init(Default::default).lock().unwrap();
-        if let Some(hub) = profiles.get(&file.directory).cloned() {
+        if let Some(hub) = profiles.get(&file.path).cloned() {
             let state = hub.state.lock().unwrap();
             let saved = String::from_utf8(state.bytes.clone()).map_err(|error| error.to_string())?;
             let language = layer_ui::resolve_launch_language(state.settings.language, &state.preferred_tags.iter().map(String::as_str).collect::<Vec<_>>());
@@ -37,7 +37,7 @@ impl Hub {
         let native = launch(saved.as_deref())?;
         let settings = native.session.state().settings.clone();
         let bytes = encode(&settings)?;
-        let key = file.directory.clone();
+        let key = file.path.clone();
         let hub = Arc::new(Self {
             state: Mutex::new(State { preferred_tags: preferred_tags.iter().map(|tag| (*tag).to_owned()).collect(), localization: native.session.localization().clone(), settings, bytes, load_error, dirty: false, listeners: Vec::new() }),
             file: Mutex::new(file),

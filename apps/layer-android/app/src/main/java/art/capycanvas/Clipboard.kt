@@ -28,17 +28,13 @@ internal class ClipboardController(private val host: CanvasHost, private val app
         const val NONCE = "art.capycanvas.clip.nonce"
     }
     private val clipboard = application.getSystemService(ClipboardManager::class.java)
-    private val directory = File(application.cacheDir, "clipboard")
+    private val directory get() = host.storage.clipboard
     var progress by mutableStateOf<Int?>(null); private set
     var cancelling by mutableStateOf(false); private set
     private var control = 0L
 
     /** The copy the system clipboard still names, when it is this window's. */
     fun nonce(): String? = clipboard.primaryClipDescription?.extras?.getString(NONCE)
-
-    init {
-        directory.listFiles()?.sortedByDescending { it.lastModified() }?.drop(1)?.forEach { it.delete() }
-    }
 
     /** Keep only the latest copy's file, which the system clipboard names. */
     private fun prune(keep: String) {

@@ -19,6 +19,7 @@ struct Fixture {
 }
 impl Fixture {
     fn new() -> Self {
+        crate::test_support::temporary_files();
         let (renderer, device) = renderer();
         let mut host = NativeHost::new(Platform::Windows).unwrap();
         host.session = UiSession::from_project(

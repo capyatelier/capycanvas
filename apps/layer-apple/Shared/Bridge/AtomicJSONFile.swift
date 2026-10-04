@@ -42,7 +42,7 @@ enum AtomicJSONFile {
                 offset += count
             }
         }
-        guard fsync(descriptor) == 0 else { throw posixFailure() }
+        guard ProjectFileIO.synchronize(descriptor) else { throw posixFailure() }
         let closed = close(descriptor); openDescriptor = false
         guard closed == 0 else { throw posixFailure() }
         let replaced = temporary.path.withCString { source in url.path.withCString { rename(source, $0) } }
@@ -50,7 +50,7 @@ enum AtomicJSONFile {
         let directoryDescriptor = directory.path.withCString { open($0, O_RDONLY) }
         guard directoryDescriptor >= 0 else { throw posixFailure() }
         defer { close(directoryDescriptor) }
-        guard fsync(directoryDescriptor) == 0 else { throw posixFailure() }
+        guard ProjectFileIO.synchronize(directoryDescriptor) else { throw posixFailure() }
     }
     private static func failure(_ message: String) -> NSError {
         NSError(domain: "art.capycanvas.storage", code: 1, userInfo: [NSLocalizedDescriptionKey: message])

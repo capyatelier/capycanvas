@@ -1668,11 +1668,9 @@ impl Worker {
             config.present_mode,
             config.format
         );
-        let cache = gtk::glib::user_cache_dir()
-            .join("capycanvas")
-            .join("shaders");
+        let cache = crate::storage::roots().map(layer_host::StorageRoots::shaders);
         let mut renderer = WgpuRasterizer::from_wgpu_native_staged_cached(
-            adapter, device, queue, &cache, color,
+            adapter, device, queue, cache.as_deref(), color,
         ).map_err(error)?;
         renderer.configure_ui_previews(view_color.space()).map_err(error)?;
         eprintln!("Wayland canvas color: {:?}; available: {:?}", config.color_space, caps.format_capabilities);

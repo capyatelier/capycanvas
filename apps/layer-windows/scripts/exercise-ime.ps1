@@ -60,8 +60,8 @@ function Assert-Renaming([string]$Name){
 try{
  Enter-CapyEnvironment
  if(!(Get-WinUserLanguageList | Where-Object {$_.InputMethodTips -match '^0411:'})){throw 'Enable the installed Japanese IME in the private Windows user before running this fixture'}
- $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
- [IO.File]::WriteAllText((Join-Path $env:CAPY_SETTINGS_DIRECTORY 'settings.json'),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
+ $env:CAPY_STORAGE_DIR=Join-Path $run 'profile';$env:CAPY_TRACE_UI='1'
+ [IO.File]::WriteAllText((Settings-File),(@{language=@{Explicit='en'};theme=$Theme}|ConvertTo-Json -Depth 4))
  $review=Start-Process -FilePath $Executable -WorkingDirectory $run -PassThru -RedirectStandardError (Join-Path $run 'stderr.log');$null=$review.Handle
  Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero -and (Model).brush_ready -and (Model).windows_workspace.ready} 'IME review did not prepare' 120
  $root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle)

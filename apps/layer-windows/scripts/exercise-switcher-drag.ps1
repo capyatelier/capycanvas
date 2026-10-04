@@ -184,7 +184,7 @@ function Drag([switch]$Grip,[switch]$Hold,[switch]$Cancel){
 }
 try {
     Enter-CapyEnvironment
-    $env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'profile'
+    $env:CAPY_STORAGE_DIR=Join-Path $run 'profile'
     $env:CAPY_TRACE_UI='1';$env:CAPY_TEST_DISPLAY='1';$env:CAPY_TEST_PRIMARY='1'
     Launch $Device
     [CapyRowPointer]::SetThreadDpiAwarenessContext([IntPtr](-4))|Out-Null

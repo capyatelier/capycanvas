@@ -34,6 +34,23 @@ class BootstrapMetadataTests(unittest.TestCase):
             phase = re.search(r'"' + phase_id + r'" = \{(.+?)\n\t\t\};', project, re.S).group(1)
             self.assertIn(source_id, phase)
 
+    def test_both_apps_ship_one_identity_privacy_manifest_and_mac_sandbox(self):
+        project = (APPLE / "CapyCanvas.xcodeproj/project.pbxproj").read_text()
+        ident = lambda name: hashlib.sha256(name.encode()).hexdigest()[:24].upper()
+        for scheme in ("CapyCanvas-iPad", "CapyCanvas-Mac"):
+            phase = re.search(r'"' + ident(scheme + "resources") + r'" = \{(.+?)\n\t\t\};', project, re.S).group(1)
+            self.assertIn(ident(scheme + "Shared/PrivacyInfo.xcprivacy"), phase)
+        self.assertEqual(set(re.findall(r'"CAPY_APPLE_BUNDLE_ID" = "([^"]+)"', project)),
+            {"art.capycanvas.CapyCanvas", "art.capycanvas.CapyCanvas.dev"})
+        self.assertEqual(project.count('"CODE_SIGN_ENTITLEMENTS" = "macOS/App/CapyCanvas.entitlements"'), 2)
+        self.assertEqual(project.count('"ENABLE_HARDENED_RUNTIME" = "YES"'), 2)
+        entitlements = plistlib.loads((APPLE / "macOS/App/CapyCanvas.entitlements").read_bytes())
+        self.assertEqual(entitlements, {"com.apple.security.app-sandbox": True,
+            "com.apple.security.files.user-selected.read-write": True})
+        manifest = plistlib.loads((APPLE / "Shared/PrivacyInfo.xcprivacy").read_bytes())
+        self.assertFalse(manifest["NSPrivacyTracking"])
+        self.assertEqual(manifest["NSPrivacyCollectedDataTypes"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

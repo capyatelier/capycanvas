@@ -44,5 +44,5 @@ if [[ "$capy_mode" == test ]]; then
 else
     "$capy_android_dir/gradlew" -p "$capy_android_dir" :app:assembleDebug "-PcapyAbi=$capy_abi"
     adb install -r "$capy_android_dir/app/build/outputs/apk/debug/app-debug.apk"
-    adb shell am start -n art.capycanvas/.MainActivity
+    adb shell am start -n art.capycanvas.dev/art.capycanvas.MainActivity
 fi
