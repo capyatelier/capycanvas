@@ -338,14 +338,13 @@ resources-size-resample-nearest = Au plus proche
 resources-size-current = Taille actuelle : { $width } × { $height } px
 resources-size-new = Nouvelle taille : { $width } × { $height } px
 resources-size-resolution-only = Seule la résolution change, à { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = Écrêter sur le calque inférieur
+resources-layer-clipped-to = Écrêté sur { $target }
+resources-layer-attach-pass-through = Désactivez d’abord { resources-blend-pass-through } sur « { $group } »
 resources-layer-attach-clip = Écrêter sur { $target }
-resources-layer-attach-release = Libérer l’écrêtage de { $target }
 resources-layer-attach-effect = Appliquer à { $target }
 resources-layer-attach-stack = Appliquer aux calques inférieurs
-resources-layer-attach-isolate = Isoler le groupe et rattacher
 resources-layer-attach-unavailable = Aucun calque inférieur auquel rattacher
-resources-layer-isolate-group = Isoler le groupe
-resources-layer-use-pass-through = Utiliser { resources-blend-pass-through }
 resources-layer-effect-owner = Appliqué à { $target }
 
 resources-layer-menu-add-mask = Ajouter un masque

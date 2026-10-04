@@ -679,14 +679,13 @@ resources-size-new = Ukuran baru: { $width } × { $height } px
 
 resources-size-resolution-only = Hanya resolusi berubah, menjadi { $resolution } ppi
 
+resources-layer-menu-clip-to-layer-below = Klip ke lapisan di bawah
+resources-layer-clipped-to = Diklip ke { $target }
+resources-layer-attach-pass-through = Nonaktifkan { resources-blend-pass-through } pada “{ $group }” terlebih dahulu
 resources-layer-attach-clip = Klip ke { $target }
-resources-layer-attach-release = Lepaskan klip dari { $target }
 resources-layer-attach-effect = Terapkan ke { $target }
 resources-layer-attach-stack = Terapkan ke lapisan di bawah
-resources-layer-attach-isolate = Isolasi grup dan tautkan
 resources-layer-attach-unavailable = Tidak ada lapisan di bawah untuk ditautkan
-resources-layer-isolate-group = Isolasi grup
-resources-layer-use-pass-through = Gunakan { resources-blend-pass-through }
 resources-layer-effect-owner = Diterapkan ke { $target }
 
 resources-layer-menu-add-mask = Tambah mask

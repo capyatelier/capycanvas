@@ -338,14 +338,13 @@ resources-size-resample-nearest = Ближайший сосед
 resources-size-current = Текущий размер: { $width } × { $height } px
 resources-size-new = Новый размер: { $width } × { $height } px
 resources-size-resolution-only = Изменится только разрешение, на { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = Обтравка по слою ниже
+resources-layer-clipped-to = Обтравка по { $target }
+resources-layer-attach-pass-through = Сначала отключите режим «{ resources-blend-pass-through }» для «{ $group }»
 resources-layer-attach-clip = Обтравка по { $target }
-resources-layer-attach-release = Отменить обтравку по { $target }
 resources-layer-attach-effect = Применить к { $target }
 resources-layer-attach-stack = Применить к слоям ниже
-resources-layer-attach-isolate = Изолировать группу и прикрепить
 resources-layer-attach-unavailable = Нет слоя ниже для прикрепления
-resources-layer-isolate-group = Изолировать группу
-resources-layer-use-pass-through = Использовать режим «{ resources-blend-pass-through }»
 resources-layer-effect-owner = Применяется к { $target }
 
 resources-layer-menu-add-mask = Добавить маску

@@ -259,9 +259,6 @@ pub enum LayerAction {
         id: u64,
         value: bool,
     },
-    IsolateAndAttach {
-        id: u64,
-    },
     AttachEffect {
         id: u64,
         owner: u64,
@@ -1076,10 +1073,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Clip { id, value } => {
                 let edit = self.engine.document().attachment_edit(occurrence_handle(id)?, value, false).map_err(error)?;
-                self.layer_edit(edit)?;
-            }
-            LayerAction::IsolateAndAttach { id } => {
-                let edit = self.engine.document().attachment_edit(occurrence_handle(id)?, true, true).map_err(error)?;
                 self.layer_edit(edit)?;
             }
             LayerAction::AttachEffect { id, owner } => {

@@ -313,7 +313,8 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
     }
     const control = view.attachment;
     attachment.disabled = !control.action;
-    attachment.title = attachment.ariaLabel = control.label;
+    attachment.ariaLabel = control.label;
+    attachment.title = control.description;
     attachment.setAttribute("aria-description", control.description);
     attachment.setAttribute("aria-pressed", control.checked);
     if (attachment.firstChild?.dataset.asset !== nameIcon(control.icon)) attachment.replaceChildren(icon(nameIcon(control.icon)));

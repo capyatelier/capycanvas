@@ -338,14 +338,13 @@ resources-size-resample-nearest = Vicino più prossimo
 resources-size-current = Dimensioni correnti: { $width } × { $height } px
 resources-size-new = Nuove dimensioni: { $width } × { $height } px
 resources-size-resolution-only = Cambia solo la risoluzione, a { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = Ritaglia al livello sottostante
+resources-layer-clipped-to = Ritagliato a { $target }
+resources-layer-attach-pass-through = Disattiva prima { resources-blend-pass-through } su “{ $group }”
 resources-layer-attach-clip = Ritaglia a { $target }
-resources-layer-attach-release = Scollega il ritaglio da { $target }
 resources-layer-attach-effect = Applica a { $target }
 resources-layer-attach-stack = Applica ai livelli sottostanti
-resources-layer-attach-isolate = Isola gruppo e collega
 resources-layer-attach-unavailable = Nessun livello sottostante a cui collegare
-resources-layer-isolate-group = Isola gruppo
-resources-layer-use-pass-through = Usa { resources-blend-pass-through }
 resources-layer-effect-owner = Applicato a { $target }
 
 resources-layer-menu-add-mask = Aggiungi maschera

@@ -341,14 +341,13 @@ resources-size-resample-nearest = Nearest neighbor
 resources-size-current = Current size: { $width } × { $height } px
 resources-size-new = New size: { $width } × { $height } px
 resources-size-resolution-only = Only the resolution changes, to { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = Clip to Layer Below
+resources-layer-clipped-to = Clipped to { $target }
+resources-layer-attach-pass-through = Turn off { resources-blend-pass-through } on “{ $group }” first
 resources-layer-attach-clip = Clip to { $target }
-resources-layer-attach-release = Release clipping from { $target }
 resources-layer-attach-effect = Apply to { $target }
 resources-layer-attach-stack = Apply to layers below
-resources-layer-attach-isolate = Isolate group and attach
 resources-layer-attach-unavailable = No layer below to attach to
-resources-layer-isolate-group = Isolate group
-resources-layer-use-pass-through = Use { resources-blend-pass-through }
 resources-layer-effect-owner = Applied to { $target }
 
 resources-layer-menu-add-mask = Add mask

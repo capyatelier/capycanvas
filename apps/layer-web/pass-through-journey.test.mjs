@@ -40,6 +40,21 @@ export async function checkPassThrough({call,evaluate,settle}) {
   const saved=await evaluate('({theme:layerApp.state().settings.theme ?? null,pass:layerApp.state().settings.pass_through_groups})');
   await wait(`(()=>{[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Keep for Later')?.click();return !document.querySelector('dialog[open]');})()`);
   const open=async kind=>{await tap(await middle(`document.querySelector('${control}')`),kind);await wait(opened);};
+  const settings=async id=>{
+    const name=`document.querySelector('.layer-row[data-layer="${id}"] .layer-name')`;
+    await evaluate(`${name}.scrollIntoView({block:'nearest'})`);
+    const p=await middle(name);
+    await call('Input.dispatchMouseEvent',{type:'mousePressed',...p,button:'right',buttons:2,clickCount:1});
+    await call('Input.dispatchMouseEvent',{type:'mouseReleased',...p,button:'right',buttons:0,clickCount:1});
+    await wait(opened);
+    await tap(await middle(row('Layer Settings')),'mouse');
+    await wait(`!!${row('Clip to Layer Below')}`);
+  };
+  const check=async(label,checked,asset)=>{
+    assert.equal(await evaluate(`${row(label)}.getAttribute('aria-checked')`),String(checked));
+    assert.ok(await evaluate(`${row(label)}.querySelector('svg[data-asset="${asset}"]')?.childElementCount>0`),'the menu uses a packaged icon');
+    assert.equal(await evaluate(`!!${row(label)}.querySelector('.menu-check svg')`),checked);
+  };
   try {
     await send({type:'set_color',rgba:[0.9,0.08,0.05,1]});
     await send({type:'effect',action:{op:'insert',effect:'solid_color'}});
@@ -72,6 +87,16 @@ export async function checkPassThrough({call,evaluate,settle}) {
       await capture(`menu-${name}`,await rect(`document.querySelector('${menu}')`),await rect(`document.querySelector('${control}')`));
       await escape();
       await wait(`!${opened}`);
+      for(const checked of [true,false]) {
+        await settings(group);
+        await check('Pass Through',checked,'group-pass-through');
+        await check('Clip to Layer Below',false,'clip');
+        assert.equal(await evaluate(`${row('Clip to Layer Below')}.disabled`),true,'the fill below cannot be a clipping base');
+        await capture(`settings-${name}-pass-${checked}`,await rect(`document.querySelector('${menu}')`));
+        await tap(await middle(row('Pass Through')),'mouse');
+        await wait(`!${opened}&&layerApp.state().layer_tools.editing_layer.blend_label===${JSON.stringify(checked?'Normal':'Pass Through')}`);
+        assert.equal(await evaluate(`document.querySelector('.layer-row[data-layer="${group}"] .layer-meta').textContent`),checked?'':'Pass Through');
+      }
     }
     await send({type:'layer',action:{op:'select',id:fill,mask:false}});
     await wait(`Number(layerApp.state().layer_tools.editing_layer.id)===${fill}&&!document.querySelector('${control}').disabled`);
@@ -79,6 +104,29 @@ export async function checkPassThrough({call,evaluate,settle}) {
     assert.equal(await evaluate(`!!${row('Pass Through')}`),false,'only groups offer Pass Through');
     await escape();
     await wait(`!${opened}`);
+
+    await send({type:'layer',action:{op:'new',group:false,clipped:false}});
+    const base=await active();
+    await send({type:'layer',action:{op:'rename',id:base,name:'Base {ink} 🎨'}});
+    await send({type:'layer',action:{op:'new',group:false,clipped:false}});
+    const clipped=await active();
+    for(const name of ['light','dark']) {
+      await send({type:'set_theme',theme:name});
+      for(const checked of [false,true]) {
+        await settings(clipped);
+        await check('Clip to Layer Below',checked,'clip');
+        assert.equal(await evaluate(`${row('Clip to Layer Below')}.disabled`),false);
+        assert.equal(await evaluate(`document.querySelector('.layer-attachment').getAttribute('aria-label')`),'Clip to Layer Below');
+        assert.equal(await evaluate(`document.querySelector('.layer-attachment').title`),`${checked?'Clipped':'Clip'} to Base {ink} 🎨`);
+        await capture(`settings-${name}-clip-${checked}`,await rect(`document.querySelector('${menu}')`));
+        await tap(await middle(row('Clip to Layer Below')),'mouse');
+        await wait(`!${opened}&&layerApp.state().layer_tools.attachment.checked===${!checked}`);
+      }
+      await send({type:'invoke',command:'undo'});
+      assert.equal(await evaluate('layerApp.state().layer_tools.attachment.checked'),true);
+      await send({type:'invoke',command:'redo'});
+      assert.equal(await evaluate('layerApp.state().layer_tools.attachment.checked'),false);
+    }
 
     await send({type:'open_settings',page:'canvas'});
     await wait(`!!document.querySelector('#setting-pass-through-groups')`);
@@ -95,7 +143,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
     await send({type:'layer',action:{op:'new',group:true,clipped:false}});
     await wait(`layerApp.state().layer_tools.editing_layer.blend_label==='Pass Through'`);
     assert.equal(await evaluate(`document.querySelector('${control} .layer-blend-label').textContent`),'Pass Through','New Group passes through');
-    console.log(`PASS pass through: a group set to Pass Through from the blend menu with a finger lets its adjustment reach the fill below in one undo step; Use Pass Through for new groups makes New Group pass through; screenshots in ${directory}`);
+    console.log(`PASS pass through: fixed Layer Settings labels, packaged icons, checked states, default subtitles and clipping tooltips in both themes; blend behavior and new-group preference; screenshots in ${directory}`);
   } finally {
     await send({type:'preferences',action:{type:'edit',id:'pass_through_groups',value:saved.pass}});
     if(saved.theme)await send({type:'set_theme',theme:saved.theme});

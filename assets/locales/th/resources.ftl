@@ -338,14 +338,13 @@ resources-size-resample-nearest = พิกเซลใกล้ที่สุ�
 resources-size-current = ขนาดปัจจุบัน: { $width } × { $height } px
 resources-size-new = ขนาดใหม่: { $width } × { $height } px
 resources-size-resolution-only = เปลี่ยนเฉพาะความละเอียดเป็น { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = ตัดตามเลเยอร์ด้านล่าง
+resources-layer-clipped-to = ตัดตาม { $target } แล้ว
+resources-layer-attach-pass-through = ปิดโหมด{ resources-blend-pass-through } ของ “{ $group }” ก่อน
 resources-layer-attach-clip = ตัดตาม { $target }
-resources-layer-attach-release = ยกเลิกการตัดตาม { $target }
 resources-layer-attach-effect = ใช้กับ { $target }
 resources-layer-attach-stack = ใช้กับเลเยอร์ด้านล่าง
-resources-layer-attach-isolate = แยกกลุ่มและแนบ
 resources-layer-attach-unavailable = ไม่มีเลเยอร์ด้านล่างให้แนบ
-resources-layer-isolate-group = แยกกลุ่ม
-resources-layer-use-pass-through = ใช้โหมด{ resources-blend-pass-through }
 resources-layer-effect-owner = ใช้กับ { $target }
 
 resources-layer-menu-add-mask = เพิ่มมาสก์

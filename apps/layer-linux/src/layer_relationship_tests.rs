@@ -1,6 +1,85 @@
 use super::*;
 use layer_ui::{LayerAction as A, LayerRelationKind as R};
 
+#[test]
+#[ignore = "private Wayland display and native menu input"]
+fn native_layer_settings_menu() {
+    let app = native_test_app("art.capycanvas.LayerSettingsMenu");
+    let w = fixture_workspace(&app);
+    w.window.maximize();
+    w.window.present();
+    pump(1600);
+    relationship_action(&w, A::New { group: true, clipped: false });
+    let group = state(&w).layer_tools.editing_layer.as_ref().unwrap().id;
+    let row = find_named(w.layer_panel.root.upcast_ref(), &format!("art-layer-{group}")).unwrap();
+    let meta = find_css(&row, "layer-meta").unwrap();
+    let attachment = named::<gtk::ToggleButton>(w.layer_panel.root.upcast_ref(), "layer-attachment");
+    let item = |popover: &gtk::Popover, label: &str| {
+        widgets(popover.upcast_ref()).find(|node| node.is_mapped() && node.type_().name() == "GtkModelButton"
+            && node.property::<String>("text") == label).unwrap()
+    };
+    let open = |input: &mut RemoteInput| {
+        let point = screen_point(&find_css(&row, "layer-name").unwrap(), &w.surface, [0.5, 0.5]);
+        input.perform(serde_json::json!([{"point":point},{"button":273,"down":true},{"button":273,"down":false}]));
+        let popover = w.popovers.borrow().iter().filter_map(|p| p.upgrade())
+            .find(|p| p.is_visible() && mapped_label(p.upcast_ref(), "Layer Settings").is_some()).unwrap();
+        let settings = item(&popover, "Layer Settings");
+        let nested = settings.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+        let point = screen_point(&settings, &w.window, [0.5, 0.5]);
+        input.perform(serde_json::json!([{"point":point},{"wait_ms":200}]));
+        if !nested.is_mapped() { input.click(point); }
+        until(|| nested.is_mapped() && mapped_label(nested.upcast_ref(), "Clip to Layer Below").is_some(), "Layer Settings opens");
+        nested.upcast::<gtk::Popover>()
+    };
+    let icon = |node: &gtk::Widget, name: &str| {
+        let image = widgets(node).filter_map(|child| child.downcast::<gtk::Image>().ok())
+            .find(|image| crate::icons::name(image).as_deref() == Some(name)).unwrap();
+        assert_eq!(image.paintable().unwrap().type_().name(), "GtkSvg");
+    };
+    let directory = std::path::Path::new("../../artifacts/layer-settings/gtk").join(std::process::id().to_string());
+    std::fs::create_dir_all(&directory).unwrap();
+    let mut input = RemoteInput::new().settle_ms(150);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(250);
+        assert!(!meta.is_visible());
+        for checked in [false, true] {
+            let popover = open(&mut input);
+            let pass = item(&popover, "Pass Through");
+            let clip = item(&popover, "Clip to Layer Below");
+            assert_eq!(pass.property::<bool>("active"), checked);
+            assert_eq!(clip.is_sensitive(), !checked);
+            icon(&pass, "layer-group-pass-through-symbolic");
+            icon(&clip, "layer-clip-symbolic");
+            capture_popover(popover.upcast_ref(), directory.join(format!("{theme:?}-pass-{checked}.png")).to_str().unwrap());
+            input.click(screen_point(&pass, &w.window, [0.5, 0.5]));
+            until(|| state(&w).layers.iter().find(|r| r.id == group).unwrap().pass_through != checked, "Pass Through toggles");
+            assert_eq!(meta.is_visible(), !checked);
+        }
+        for checked in [false, true] {
+            let popover = open(&mut input);
+            let clip = item(&popover, "Clip to Layer Below");
+            assert_eq!(clip.property::<bool>("active"), checked);
+            assert!(clip.is_sensitive());
+            icon(&clip, "layer-clip-symbolic");
+            assert_eq!(attachment.tooltip_text().as_deref(), Some(if checked { "Clipped to Current ink" } else { "Clip to Current ink" }));
+            capture_popover(popover.upcast_ref(), directory.join(format!("{theme:?}-clip-{checked}.png")).to_str().unwrap());
+            input.click(screen_point(&clip, &w.window, [0.5, 0.5]));
+            until(|| state(&w).layer_tools.attachment.checked != checked, "Clipping toggles");
+        }
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        pump(100);
+        assert!(state(&w).layer_tools.attachment.checked);
+        w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+        pump(100);
+        assert!(!state(&w).layer_tools.attachment.checked);
+    }
+    input.finish();
+    w.window.destroy();
+    pump(100);
+}
+
 fn relationship_action(w: &Rc<Workspace>, action: A) {
     w.dispatch(UiAction::Layer { action });
     pump(100);
@@ -148,7 +227,7 @@ fn native_layer_relationship_review() {
     assert!(load_selection.has_css_class("flat") && load_selection.has_css_class("layer-icon") && !load_selection.has_css_class("layer-thumbnail"), "Use Selection follows the normal button style");
     assert!(state(&w).layer_tools.connections.iter().any(|c| c.kind == R::Effect && c.from == blur && c.to == shadows));
     let attachment = named::<gtk::ToggleButton>(w.layer_panel.root.upcast_ref(), "layer-attachment");
-    for (id, caption) in [(highlights, "Release clipping from Base colors"), (curves, "Apply to layers below")] {
+    for (id, caption) in [(highlights, "Clipped to Base colors"), (curves, "Applied to Shadows")] {
         select(id);
         assert_eq!(attachment.tooltip_text().as_deref(), Some(caption));
         assert!(attachment.is_active());
@@ -236,7 +315,7 @@ fn native_layer_relationship_review() {
             let badge = find_css(&row(through), "layer-group-pass-through").unwrap();
             assert!(badge.is_visible());
             assert!(!find_css(&row(isolated), "layer-group-pass-through").unwrap().is_visible());
-            assert!(view(isolated).description.contains("Normal"));
+            assert!(view(isolated).description.is_empty());
             assert!(view(through).description.contains("Pass Through"));
             for id in [isolated, through] {
                 let subtitle = find_css(&row(id), "layer-meta").unwrap().downcast::<gtk::Label>().unwrap();

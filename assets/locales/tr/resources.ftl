@@ -340,14 +340,13 @@ resources-size-resample-nearest = En yakın komşu
 resources-size-current = Geçerli boyut: { $width } × { $height } px
 resources-size-new = Yeni boyut: { $width } × { $height } px
 resources-size-resolution-only = Yalnızca çözünürlük { $resolution } ppi olarak değişir
+resources-layer-menu-clip-to-layer-below = Alttaki katmana kırp
+resources-layer-clipped-to = { $target } katmanına kırpıldı
+resources-layer-attach-pass-through = Önce “{ $group }” için { resources-blend-pass-through } modunu kapat
 resources-layer-attach-clip = { $target } katmanına kırp
-resources-layer-attach-release = { $target } katmanına kırpmayı kaldır
 resources-layer-attach-effect = { $target } üzerine uygula
 resources-layer-attach-stack = Alttaki katmanlara uygula
-resources-layer-attach-isolate = Grubu izole et ve iliştir
 resources-layer-attach-unavailable = İliştirilecek alt katman yok
-resources-layer-isolate-group = Grubu izole et
-resources-layer-use-pass-through = { resources-blend-pass-through } kullan
 resources-layer-effect-owner = { $target } üzerine uygulandı
 
 resources-layer-menu-add-mask = Maske ekle

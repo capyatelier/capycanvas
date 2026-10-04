@@ -338,14 +338,13 @@ resources-size-resample-nearest = Nächster Nachbar
 resources-size-current = Aktuelle Größe: { $width } × { $height } px
 resources-size-new = Neue Größe: { $width } × { $height } px
 resources-size-resolution-only = Nur die Auflösung wird auf { $resolution } ppi geändert
+resources-layer-menu-clip-to-layer-below = Auf die Ebene darunter beschneiden
+resources-layer-clipped-to = Auf { $target } beschnitten
+resources-layer-attach-pass-through = Deaktiviere zuerst { resources-blend-pass-through } für „{ $group }“
 resources-layer-attach-clip = Auf { $target } beschneiden
-resources-layer-attach-release = Beschneidung durch { $target } aufheben
 resources-layer-attach-effect = Auf { $target } anwenden
 resources-layer-attach-stack = Auf die Ebenen darunter anwenden
-resources-layer-attach-isolate = Gruppe isolieren und zuordnen
 resources-layer-attach-unavailable = Keine Ebene darunter zum Zuordnen
-resources-layer-isolate-group = Gruppe isolieren
-resources-layer-use-pass-through = { resources-blend-pass-through } verwenden
 resources-layer-effect-owner = Auf { $target } angewendet
 
 resources-layer-menu-add-mask = Maske hinzufügen

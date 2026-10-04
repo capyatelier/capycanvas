@@ -447,12 +447,15 @@ folder represents its contents for deletion. Deleting a clipping base or effect
 owner keeps unchecked dependents and releases their attachment. Locks protect
 descendants during structural edits, and disabled actions use the execution rules.
 
-Hosts use one header button for both operations. Its tooltip and accessible label
-say **Clip to {base}** or **Release clipping from {base}** for content, and
-**Apply to {owner}** or **Apply to layers below** for effects. The effect action
-uses the vertical link symbol. Attaching across a Pass Through boundary requires
-the explicit **Isolate group and attach** action. The same actions appear in
-Layer settings, with shared availability and checked state.
+Hosts use one header button for both operations. Content uses the stable label
+**Clip to Layer Below** and a checked state. Its description and tooltip name the
+base as **Clip to {base}** or **Clipped to {base}**. Effects use
+**Apply to {owner}** or **Apply to layers below**. The effect action
+uses the vertical link symbol. Clipping or attaching an effect to a Pass Through
+group is disabled until the group's blend mode changes. The description names
+the group whose Pass Through setting must be turned off. The same actions appear
+in Layer settings, with shared availability and checked state. Menu icons use
+the shared bank's short identities.
 
 A straight clipping rail runs through the common-base stack, ending without a
 notch at the bottom of the base thumbnail. It continues past an expanded clipped group's children, but
@@ -477,8 +480,9 @@ Use Selection is a normal icon button with squircle corners, a transparent idle
 background and the usual hover/pressed states, within its existing hit area.
 
 Pass Through groups have a through-arrow badge inside the folder thumbnail;
-expansion keeps its separate folder shape. Every group shows its blend mode in
-the subtitle, including Normal. Right swipe invokes the shared group-mode action
+expansion keeps its separate folder shape. Layer subtitles show non-default blend
+modes and reduced opacity; Normal is omitted. The Layer settings menu keeps
+**Pass Through** as a stable checked label and icon. Right swipe invokes the shared group-mode action
 or paint alpha lock; see the [gesture rules](drag-and-reorder.md#scrolling-menus-and-cancellation).
 
 Layer drop previews and commits use the same shared planner. A thumbnail hit can

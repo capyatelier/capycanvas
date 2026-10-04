@@ -1312,6 +1312,7 @@ impl LayerPanel {
         self.attachment.set_sensitive(attachment.action.is_some());
         crate::icons::set_button(&self.attachment, attachment.icon);
         caption(&self.attachment, &attachment.label);
+        self.attachment.set_tooltip_text(Some(&attachment.description));
         self.attachment.update_property(&[gtk::accessible::Property::Description(&attachment.description)]);
         self.connections.refresh(&state.layers, &state.layer_tools.connections);
         let controls = state.layer_tools.controls;

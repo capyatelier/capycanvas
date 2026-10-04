@@ -5709,7 +5709,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
-                if l.kind() == LayerKind::Group || l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
+                if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
             },

@@ -3,6 +3,52 @@ fn relationship_row(s: &UiSession<Recorder>, id: u64) -> &LayerState {
 }
 
 #[test]
+fn layer_settings_keep_labels_checks_and_packaged_icons_on_every_host() {
+    fn icons(sections: &[Vec<ContextMenuItem>]) {
+        for item in sections.iter().flatten() {
+            if let Some(icon) = item.icon { assert!(crate::icon_ships(icon), "{icon}: missing menu icon"); }
+            icons(&item.sections);
+        }
+    }
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        layer(&mut s, LayerAction::New { group: true, clipped: false });
+        let group = occurrence_token(s.engine.document().working.occurrence.unwrap());
+        assert_eq!(relationship_row(&s, group).description, "");
+        s.dispatch(UiAction::SetLayerOpacity { id: Some(group), opacity: 0.5 }).unwrap();
+        assert_eq!(relationship_row(&s, group).description, "50%");
+        s.dispatch(UiAction::SetLayerOpacity { id: Some(group), opacity: 1. }).unwrap();
+        for checked in [false, true, false] {
+            let menu = s.layer_menu(group, false).unwrap();
+            icons(&menu.sections);
+            let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten())
+                .find(|item| item.icon == Some("group-pass-through")).unwrap();
+            assert_eq!(mode.label, "Pass Through");
+            assert_eq!(mode.selected, Some(checked));
+            assert!(mode.enabled);
+            s.dispatch(mode.action.clone().unwrap()).unwrap();
+        }
+        layer(&mut s, LayerAction::TogglePassThrough { id: group });
+        for checked in [false, true] {
+            let menu = s.layer_menu(group, false).unwrap();
+            icons(&menu.sections);
+            let clip = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten())
+                .find(|item| item.icon == Some("clip")).unwrap();
+            assert_eq!(clip.label, "Clip to Layer Below");
+            assert_eq!(clip.selected, Some(checked));
+            assert!(clip.enabled);
+            assert_eq!(clip.hint, if checked { "Clipped to Current ink" } else { "Clip to Current ink" });
+            s.dispatch(clip.action.clone().unwrap()).unwrap();
+        }
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.state.layer_tools.attachment.checked);
+        assert_eq!(s.state.layer_tools.attachment.label, "Clip to Layer Below");
+        invoke(&mut s, CommandId::Redo);
+        assert!(!s.state.layer_tools.attachment.checked);
+    }
+}
+
+#[test]
 fn new_group_wraps_checked_rows_and_reordering_moves_them_together() {
     let mut s = session(Platform::Gtk);
     let first = s.engine.document().working.occurrence.unwrap();
@@ -170,7 +216,8 @@ fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
     layer(&mut s, LayerAction::New { group: false, clipped: true });
     let owner = occurrence_token(s.engine.document().working.occurrence.unwrap());
     layer(&mut s, LayerAction::Rename { id: owner, name: "Shadows".into() });
-    assert_eq!(s.state.layer_tools.attachment.label, "Release clipping from Base {ink} 🎨");
+    assert_eq!(s.state.layer_tools.attachment.label, "Clip to Layer Below");
+    assert_eq!(s.state.layer_tools.attachment.description, "Clipped to Base {ink} 🎨");
     let mut effects = Vec::new();
     for effect in ["curves", "exposure"] {
         insert_effect(&mut s, effect);
@@ -198,8 +245,9 @@ fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
     let menu = s.layer_menu(effects[1], false).unwrap();
     let attached = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.label == "Apply to layers below").unwrap();
     assert_eq!(attached.selected, Some(true));
-    assert_eq!(attached.icon, Some("layer-effect-link-symbolic"));
-    assert!(!menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).any(|item| item.label == "Clip to layer below"));
+    assert_eq!(attached.icon, Some("effect-link"));
+    assert!(crate::icon_ships(attached.icon.unwrap()));
+    assert!(!menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).any(|item| item.label == "Clip to Layer Below"));
     layer(&mut s, LayerAction::Visibility { id: effects[0], value: false });
     layer(&mut s, LayerAction::Visibility { id: owner, value: false });
     assert!(!relationship_row(&s, owner).visible);
@@ -244,7 +292,7 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
     layer(&mut s, LayerAction::New { group: true, clipped: false });
     let group = occurrence_token(s.engine.document().working.occurrence.unwrap());
     layer(&mut s, LayerAction::Blend { id: group, value: layer_core::LayerBlend::Normal.code() });
-    assert_eq!(relationship_row(&s, group).description, "Normal");
+    assert_eq!(relationship_row(&s, group).description, "");
     layer(&mut s, LayerAction::New { group: false, clipped: false });
     let child = occurrence_token(s.engine.document().working.occurrence.unwrap());
     assert!(matches!(relationship_row(&s, child).right_swipe, Some(LayerAction::ToggleAlphaLock { .. })));
@@ -274,12 +322,19 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
     s.refresh_layer_presentation();
     assert_eq!(s.engine.document(), &before);
     let menu = s.layer_menu(group, false).unwrap();
-    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.label == "Use Pass Through").unwrap();
+    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon == Some("group-pass-through")).unwrap();
+    assert_eq!(mode.label, "Pass Through");
+    assert_eq!(mode.selected, Some(false));
+    assert!(crate::icon_ships(mode.icon.unwrap()));
     assert!(mode.enabled);
     assert_eq!(mode.action, Some(UiAction::Layer { action: swipe.clone() }));
     layer(&mut s, swipe);
     assert!(relationship_row(&s, group).pass_through);
     assert_eq!(relationship_row(&s, group).description, "Pass Through");
+    let menu = s.layer_menu(group, false).unwrap();
+    let mode = menu.sections.iter().flatten().flat_map(|item| item.sections.iter().flatten()).find(|item| item.icon == Some("group-pass-through")).unwrap();
+    assert_eq!(mode.label, "Pass Through");
+    assert_eq!(mode.selected, Some(true));
     let isolate = relationship_row(&s, group).right_swipe.clone().unwrap();
     layer(&mut s, isolate);
     assert_eq!(relationship_row(&s, group).blend, layer_core::LayerBlend::Multiply.code());
@@ -290,17 +345,22 @@ fn layer_relationships_keep_collapsed_group_edges_and_offer_reversible_swipe_act
 }
 
 #[test]
-fn layer_relationships_offer_explicit_isolation_and_disable_quick_mask_attachment() {
+fn layer_relationships_require_group_mode_changes_before_attachment() {
     let mut s = session(Platform::Gtk);
     let base = occurrence_token(s.engine.document().working.occurrence.unwrap());
     layer(&mut s, LayerAction::New { group: true, clipped: false });
     let group = occurrence_token(s.engine.document().working.occurrence.unwrap());
+    layer(&mut s, LayerAction::Rename { id: group, name: "G{roup} 🎨".into() });
     layer(&mut s, LayerAction::Blend { id: group, value: layer_core::LayerBlend::PassThrough.code() });
     let control = s.state.layer_tools.attachment.clone();
-    assert_eq!(control.label, "Isolate group and attach");
-    assert_eq!(control.description, "Clip to Current ink");
-    assert_eq!(control.action, Some(LayerAction::IsolateAndAttach { id: group }));
-    layer(&mut s, control.action.unwrap());
+    assert_eq!(control.label, "Clip to Layer Below");
+    assert_eq!(control.description, "Turn off Pass Through on “G{roup} 🎨” first");
+    assert_eq!(control.action, None);
+    layer(&mut s, LayerAction::TogglePassThrough { id: group });
+    assert_eq!(s.state.layer_tools.attachment.label, "Clip to Layer Below");
+    assert_eq!(s.state.layer_tools.attachment.description, "Clip to Current ink");
+    let action = s.state.layer_tools.attachment.action.clone().unwrap();
+    layer(&mut s, action);
     assert!(!relationship_row(&s, group).pass_through);
     assert!(relationship_row(&s, group).right_swipe.is_none());
     assert_eq!(relationship_row(&s, group).relationship.unwrap().kind, LayerRelationKind::Clip);
@@ -309,13 +369,14 @@ fn layer_relationships_offer_explicit_isolation_and_disable_quick_mask_attachmen
     layer(&mut s, LayerAction::Reparent { id: base, parent: None, index: 0 });
     layer(&mut s, LayerAction::Lock { id: group, value: true });
     layer(&mut s, LayerAction::Select { id: base, mask: false });
-    assert_eq!((s.state.layer_tools.attachment.label.as_str(), s.state.layer_tools.attachment.action.as_ref()), ("Isolate group and attach", None));
+    assert_eq!((s.state.layer_tools.attachment.label.as_str(), s.state.layer_tools.attachment.action.as_ref()), ("Clip to Layer Below", None));
     invoke(&mut s, CommandId::QuickMask);
     assert!(relationship_row(&s, 0).relationship.is_none());
     assert!(relationship_row(&s, 0).right_swipe.is_none());
     assert!(!relationship_row(&s, 0).visibility_blocked);
     assert!(!relationship_row(&s, 0).adjustment_effect);
     assert_eq!(s.state.layer_tools.attachment.icon, "layer-clip-symbolic");
-    assert_eq!(s.state.layer_tools.attachment.label, "No layer below to attach to");
+    assert_eq!(s.state.layer_tools.attachment.label, "Clip to Layer Below");
+    assert_eq!(s.state.layer_tools.attachment.description, "No layer below to attach to");
     assert!(s.state.layer_tools.attachment.action.is_none());
 }

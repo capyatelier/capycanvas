@@ -41,8 +41,10 @@ impl Default for LayerAttachmentControl {
 
 impl LayerAttachmentControl {
     pub(super) fn menu_item(self) -> ContextMenuItem {
+        let icon = self.icon.strip_prefix("layer-").unwrap_or(self.icon);
+        let icon = icon.strip_suffix("-symbolic").unwrap_or(icon);
         ContextMenuItem {
-            icon: Some(self.icon), label: self.label, selected: Some(self.checked),
+            icon: Some(icon), label: self.label, selected: Some(self.checked),
             enabled: self.action.is_some(), action: self.action.map(|action| UiAction::Layer { action }),
             hint: self.description, bindings: Vec::new(), sections: Vec::new(),
         }
@@ -73,8 +75,8 @@ pub(super) fn group_mode_menu(doc: &Document, id: OccurrenceHandle, l: &Localize
     if row.kind() != LayerKind::Group { return None; }
     let action = right_swipe(doc, id);
     Some(ContextMenuItem {
-        icon: Some(if row.passes_through() { "layer-folder-symbolic" } else { "layer-group-pass-through-symbolic" }),
-        label: l.text(if row.passes_through() { MessageId::RESOURCES_LAYER_ISOLATE_GROUP } else { MessageId::RESOURCES_LAYER_USE_PASS_THROUGH }).to_string(),
+        icon: Some("group-pass-through"),
+        label: l.text(MessageId::RESOURCES_BLEND_PASS_THROUGH).to_string(),
         selected: Some(row.passes_through()), enabled: action.is_some(),
         action: action.map(|action| UiAction::Layer { action }),
         hint: String::new(), bindings: Vec::new(), sections: Vec::new(),
@@ -85,32 +87,33 @@ pub(super) fn attachment_control(doc: &Document, id: Option<OccurrenceHandle>, l
     let scene = doc.scene();
     let unavailable = || {
         let label = l.text(MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE).to_string();
-        LayerAttachmentControl { description: label.clone(), label, ..Default::default() }
+        LayerAttachmentControl { description: label, label: l.text(MessageId::RESOURCES_LAYER_MENU_CLIP_TO_LAYER_BELOW).to_string(), ..Default::default() }
     };
     let Some((id, row)) = id.and_then(|id| scene.occurrence(id).map(|row| (id, row))) else { return unavailable(); };
     if row.kind() == LayerKind::Selection { return unavailable(); }
     let effect = scene.effect(id).is_some_and(|e| e.program.kind == EffectKind::Adjustment);
     let checked = row.attachment != Attachment::None;
     let target = scene.attachment_target(id).or_else(|| doc.attachment_candidate(id));
-    let target_group = target.and_then(|id| scene.occurrence(id).filter(|row| row.passes_through()).map(|row| (id, row.isolated_blend)));
-    let isolate = !checked && target.is_some() && (row.passes_through() || target_group.is_some());
-    let isolation_allowed = target_group.is_none_or(|(id, blend)| doc.group_blend_refusal(id, blend).is_none());
-    let message = if target.is_none() { MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE }
-        else if isolate { MessageId::RESOURCES_LAYER_ATTACH_ISOLATE }
-        else if checked && effect { MessageId::RESOURCES_LAYER_ATTACH_STACK }
-        else if checked { MessageId::RESOURCES_LAYER_ATTACH_RELEASE }
-        else if effect { MessageId::RESOURCES_LAYER_ATTACH_EFFECT }
-        else { MessageId::RESOURCES_LAYER_ATTACH_CLIP };
+    let pass_through_group = if checked { None }
+        else if row.passes_through() { Some(row) }
+        else { target.and_then(|id| scene.occurrence(id).filter(|row| row.passes_through())) };
     let mut args = FluentArgs::new();
     if let Some(target) = target { args.set("target", scene.occurrence(target).unwrap().name.as_ref()); }
-    let label = l.format(message, &args);
-    let description = if checked && effect { l.format(MessageId::RESOURCES_LAYER_EFFECT_OWNER, &args) }
-        else if isolate { l.format(if effect { MessageId::RESOURCES_LAYER_ATTACH_EFFECT } else { MessageId::RESOURCES_LAYER_ATTACH_CLIP }, &args) }
-        else { label.clone() };
-    let action = (!doc.is_locked(id) && isolation_allowed && (checked || target.is_some())).then(|| {
-        if isolate { LayerAction::IsolateAndAttach { id: occurrence_token(id) } }
-        else { LayerAction::Clip { id: occurrence_token(id), value: !checked } }
-    });
+    let label = if !effect { l.text(MessageId::RESOURCES_LAYER_MENU_CLIP_TO_LAYER_BELOW).to_string() }
+        else { l.format(if target.is_none() { MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE }
+            else if checked { MessageId::RESOURCES_LAYER_ATTACH_STACK } else { MessageId::RESOURCES_LAYER_ATTACH_EFFECT }, &args) };
+    let description = if target.is_none() { l.text(MessageId::RESOURCES_LAYER_ATTACH_UNAVAILABLE).to_string() }
+        else if let Some(group) = pass_through_group {
+            args.set("group", group.name.as_ref());
+            l.format(MessageId::RESOURCES_LAYER_ATTACH_PASS_THROUGH, &args)
+        } else { l.format(match (checked, effect) {
+            (true, true) => MessageId::RESOURCES_LAYER_EFFECT_OWNER,
+            (true, false) => MessageId::RESOURCES_LAYER_CLIPPED_TO,
+            (false, true) => MessageId::RESOURCES_LAYER_ATTACH_EFFECT,
+            (false, false) => MessageId::RESOURCES_LAYER_ATTACH_CLIP,
+        }, &args) };
+    let action = (!doc.is_locked(id) && pass_through_group.is_none() && (checked || target.is_some()))
+        .then(|| LayerAction::Clip { id: occurrence_token(id), value: !checked });
     LayerAttachmentControl {
         icon: if effect { "layer-effect-link-symbolic" } else { "layer-clip-symbolic" },
         label, description, checked, action,

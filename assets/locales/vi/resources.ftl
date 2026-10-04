@@ -338,14 +338,13 @@ resources-size-resample-nearest = Lân cận gần nhất
 resources-size-current = Kích thước hiện tại: { $width } × { $height } px
 resources-size-new = Kích thước mới: { $width } × { $height } px
 resources-size-resolution-only = Chỉ độ phân giải thay đổi thành { $resolution } ppi
+resources-layer-menu-clip-to-layer-below = Cắt theo lớp bên dưới
+resources-layer-clipped-to = Đã cắt theo { $target }
+resources-layer-attach-pass-through = Tắt { resources-blend-pass-through } trên “{ $group }” trước
 resources-layer-attach-clip = Cắt theo { $target }
-resources-layer-attach-release = Bỏ cắt theo { $target }
 resources-layer-attach-effect = Áp dụng cho { $target }
 resources-layer-attach-stack = Áp dụng cho các lớp bên dưới
-resources-layer-attach-isolate = Cô lập nhóm và gắn
 resources-layer-attach-unavailable = Không có lớp bên dưới để gắn
-resources-layer-isolate-group = Cô lập nhóm
-resources-layer-use-pass-through = Dùng { resources-blend-pass-through }
 resources-layer-effect-owner = Đã áp dụng cho { $target }
 
 resources-layer-menu-add-mask = Thêm mặt nạ
