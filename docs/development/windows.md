@@ -232,6 +232,15 @@ and Photo selection tools, pinned Eraser, and a drawing group added to the heade
 through customization, with injected mouse, pen and touch. Repeat with `-Theme light`.
 The VM fixture names are `tool-variations` and `tool-variations:light`.
 
+Canvas cursor shapes come from shared Rust and the shared GPU presenter. Tool
+uses the active tool's icon, aligned to its working point; Tool and brush size
+adds the current brush outline for brush tools. Windows presents the shared
+cursor choices directly in Pen & Input preferences.
+`exercise-cursors.ps1 -Executable <path> -Theme dark` selects both choices,
+checks persisted settings, and compares composed mouse and pen hover pixels for
+six tools without changing the drawing. Repeat with `-Theme light`, or use
+`tools/windows-vm/windows-vm.py fixtures cursors` for both themes on WARP.
+
 `exercise-ime.ps1 -Executable <path> -Theme dark` exercises the installed
 Microsoft Japanese IME on the interactive test desktop. Enable Japanese input
 in the private test user first; the fixture requires actual Hiragana preedit
