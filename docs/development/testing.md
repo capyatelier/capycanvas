@@ -6,7 +6,9 @@ Different checks answer different questions. Shared tests exercise document and
 editor rules without a window. Host tests exercise native controls and input.
 GPU tests check pixels and rendering cost. Device tests establish whether real
 pen and display behaviour matches the intended interaction. None substitutes for
-another, and there is no CI: run the checks for every area your change touches.
+another. CI runs only the window-free shared suites, the Wasm check, the Apple
+project check and the license check ([releasing](releasing.md#continuous-integration)),
+so run the checks for every area your change touches.
 
 ## Checks by change type
 

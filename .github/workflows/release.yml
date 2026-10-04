@@ -1,0 +1,184 @@
+name: Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: release
+  cancel-in-progress: false
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.99.0"
+  SIGNED: ${{ github.ref_type == 'tag' }}
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - id: version
+        run: echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+      - if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          test "$GITHUB_REF_NAME" = "v$VERSION"
+          status=$(gh api "repos/$GITHUB_REPOSITORY/compare/main...$GITHUB_SHA" -q .status)
+          test "$status" = identical || test "$status" = behind
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    container: archlinux:latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: bash apps/layer-linux/appimage.sh
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: linux
+          path: dist/*.AppImage*
+          if-no-files-found: error
+
+  web:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rust-docs --target wasm32-unknown-unknown
+          rustup default "$RUST_VERSION"
+          cargo install --locked wasm-bindgen-cli --version 0.2.128
+          cargo install --locked cargo-about --version 0.9.2 --features cli
+          cargo install --locked resvg --version 0.48.1
+      - run: node apps/layer-web/package.mjs
+      - run: cd dist && zip -qr "capycanvas-${{ needs.version.outputs.version }}-web.zip" capycanvas
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web
+          path: dist/*.zip
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-24.04
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rust-docs --target aarch64-linux-android
+          rustup default "$RUST_VERSION"
+          cargo install --locked cargo-ndk --version 4.1.2
+          cargo install --locked cargo-about --version 0.9.2 --features cli
+          "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" "ndk;29.0.14206865"
+      - if: env.SIGNED == 'true'
+        env:
+          KEYSTORE: ${{ secrets.ANDROID_UPLOAD_KEYSTORE }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_UPLOAD_KEYSTORE_PASSWORD }}
+        run: |
+          base64 --decode <<< "${KEYSTORE:?}" > "$RUNNER_TEMP/upload.p12"
+          echo "CAPY_UPLOAD_KEYSTORE=$RUNNER_TEMP/upload.p12" >> "$GITHUB_ENV"
+          echo "CAPY_UPLOAD_KEYSTORE_PASSWORD=${KEYSTORE_PASSWORD:?}" >> "$GITHUB_ENV"
+      - run: ./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a
+        working-directory: apps/layer-android
+      - run: |
+          mkdir dist
+          mv apps/layer-android/app/build/outputs/bundle/release/app-release.aab "dist/capycanvas-${{ needs.version.outputs.version }}-android.aab"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android
+          path: dist/*.aab
+          if-no-files-found: error
+
+  windows:
+    needs: version
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install $env:RUST_VERSION --profile minimal --component rust-docs
+          rustup default $env:RUST_VERSION
+      - run: |
+          ./apps/layer-windows/scripts/package.ps1
+          $portable = (Get-ChildItem artifacts/windows/distribution -Recurse -Filter result.json).FullName
+          ./apps/layer-windows/scripts/package-msix.ps1 -PortableResultFile $portable
+          $msix = (Get-ChildItem artifacts/windows/msix -Recurse -Filter result.json).FullName
+          ./apps/layer-windows/scripts/test-msix.ps1 -ResultFile $msix
+          ./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile $portable
+          $setup = (Get-ChildItem artifacts/windows/installer -Recurse -Filter result.json).FullName
+          New-Item -ItemType Directory dist | Out-Null
+          foreach ($result in @($portable, $msix)) { Copy-Item (Get-Content $result -Raw | ConvertFrom-Json).archive dist }
+          Copy-Item (Get-Content $setup -Raw | ConvertFrom-Json).installer dist
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: windows
+          path: dist/*
+          if-no-files-found: error
+
+  apple:
+    needs: version
+    runs-on: macos-26
+    environment: ${{ github.ref_type == 'tag' && 'release' || '' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: [ipad, mac]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --target aarch64-apple-ios --target aarch64-apple-darwin
+          rustup default "$RUST_VERSION"
+      - if: env.SIGNED == 'true'
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          DEVELOPER_ID: ${{ secrets.APPLE_DEVELOPER_ID_P12 }}
+          DEVELOPER_ID_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_PASSWORD }}
+        run: |
+          base64 --decode <<< "${API_KEY:?}" > "$RUNNER_TEMP/api-key.p8"
+          {
+            echo "CAPY_APPLE_TEAM=${{ vars.APPLE_TEAM_ID }}"
+            echo "CAPY_APPLE_KEY=$RUNNER_TEMP/api-key.p8"
+            echo "CAPY_APPLE_KEY_ID=${{ vars.APPLE_API_KEY_ID }}"
+            echo "CAPY_APPLE_ISSUER=${{ vars.APPLE_API_ISSUER_ID }}"
+          } >> "$GITHUB_ENV"
+          if [[ ${{ matrix.platform }} == mac ]]; then
+            keychain="$RUNNER_TEMP/signing.keychain-db"
+            base64 --decode <<< "${DEVELOPER_ID:?}" > "$RUNNER_TEMP/developer-id.p12"
+            security create-keychain -p '' "$keychain"
+            security set-keychain-settings -lut 21600 "$keychain"
+            security unlock-keychain -p '' "$keychain"
+            security import "$RUNNER_TEMP/developer-id.p12" -P "${DEVELOPER_ID_PASSWORD:?}" -A -t cert -f pkcs12 -k "$keychain"
+            security set-key-partition-list -S apple-tool:,apple: -k '' "$keychain"
+            security list-keychains -d user -s "$keychain"
+          fi
+      - run: apps/layer-apple/scripts/release.sh ${{ matrix.platform }}
+      - if: matrix.platform == 'mac'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mac
+          path: dist/*.dmg
+          if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: [version, linux, web, android, windows, apple]
+    runs-on: ubuntu-24.04
+    permissions:
+      attestations: write
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          path: dist
+          merge-multiple: true
+      - run: cd dist && sha256sum -- * > SHA256SUMS
+      - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/*
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes --title "Capy Canvas ${{ needs.version.outputs.version }}"

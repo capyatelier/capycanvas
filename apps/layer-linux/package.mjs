@@ -1,6 +1,6 @@
 // Native GTK package. Photo codecs are compiled into the shared Rust core.
 import { execFileSync } from "node:child_process";
-import { chmodSync, cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -20,7 +20,8 @@ const licensing = JSON.parse(execFileSync(about, ["generate", "--locked", "--fai
 const licenseHtml = dependencyNotices(licensing.licenses);
 const gtkRuntime = stageGtkRuntime(root, output);
 const flags = [...(process.env.CARGO_ENCODED_RUSTFLAGS?.split("\x1f") || []),
-  `--remap-path-prefix=${homedir()}=/build-home`, `--remap-path-prefix=${root}=/capycanvas`];
+  `--remap-path-prefix=${homedir()}=/build-home`, `--remap-path-prefix=${root}=/capycanvas`,
+  "-Clink-arg=-Wl,-rpath,$ORIGIN/../lib/capycanvas/gtk"];
 const records = execFileSync("cargo", ["build", "--locked", "--release", "-p", "layer-linux", "--features", "release-identity", "--message-format=json"], {
   cwd: root, encoding: "utf8", maxBuffer: 32 * 1024 * 1024, stdio: ["ignore", "pipe", "inherit"],
   env: { ...process.env, CARGO_ENCODED_RUSTFLAGS: flags.join("\x1f") },
@@ -29,10 +30,10 @@ const binary = records.find(r => r.reason === "compiler-artifact" && r.target.na
 const generated = records.find(r => r.reason === "build-script-executed" && r.package_id.includes("/layer-linux#"))?.out_dir;
 if (!binary || !generated) throw new Error("Cargo did not report the native binary and icon");
 const files = [
-  [binary, "bin/capycanvas-bin"],
-  [join(app, "launch.sh"), "bin/capycanvas"],
+  [binary, "bin/capycanvas"],
   [join(app, "art.capycanvas.CapyCanvas.desktop"), "share/applications/art.capycanvas.CapyCanvas.desktop"],
   [join(app, "art.capycanvas.CapyCanvas.xml"), "share/mime/packages/art.capycanvas.CapyCanvas.xml"],
+  [join(app, "art.capycanvas.CapyCanvas.metainfo.xml"), "share/metainfo/art.capycanvas.CapyCanvas.metainfo.xml"],
   [join(generated, "art.capycanvas.CapyCanvas.svg"), "share/icons/hicolor/scalable/apps/art.capycanvas.CapyCanvas.svg"],
   ...readdirSync(join(root, "assets/filters")).filter(name => /\.(json|wgsl)$/.test(name))
     .map(name => [join(root, "assets/filters", name), `bin/filters/${name}`]),
@@ -51,8 +52,7 @@ const rustNotices = [
 ].find(existsSync);
 if (!rustNotices) throw new Error(`Rust toolchain copyright notice not found under ${sysroot}`);
 cpSync(rustNotices, join(docs, "rust-toolchain-notices.html"));
-chmodSync(join(output, "bin/capycanvas"), 0o755);
-execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas-bin")]);
+execFileSync("strip", ["--strip-debug", join(output, "bin/capycanvas")]);
 writeFileSync(join(output, "share/doc/capycanvas-gtk/manifest.json"), JSON.stringify(gtkRuntime, null, 2) + "\n");
 execFileSync("desktop-file-validate", [join(output, "share/applications/art.capycanvas.CapyCanvas.desktop")]);
 writeFileSync(marker, "Generated Capy Canvas native package\n");

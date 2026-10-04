@@ -1,4 +1,4 @@
-param([string]$OutputRoot,[switch]$SkipRestore,[switch]$AllowDirty)
+param([string]$OutputRoot,[switch]$SkipRestore,[switch]$AllowDirty,[string[]]$SignArguments)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
@@ -54,6 +54,11 @@ try {
     foreach($name in @('CapyCanvas.exe','layer_windows.dll','CapyCanvas.pri','Microsoft.UI.Xaml.dll','Microsoft.WindowsAppRuntime.dll')){
         if(!(Test-Path -LiteralPath (Join-Path $payload $name) -PathType Leaf)){throw "Incomplete runtime payload: $name"}
     }
+    $signed=[bool]$SignArguments
+    if($signed){
+        & signtool sign @SignArguments (Join-Path $payload 'CapyCanvas.exe') (Join-Path $payload 'layer_windows.dll')
+        if($LASTEXITCODE -ne 0){throw 'Signing the application executables failed.'}
+    }
     & (Join-Path $PSScriptRoot 'collect-package-notices.ps1') -Destination (Join-Path $payload 'Notices') -PackagesDirectory (Join-Path $repo 'artifacts/windows/packages') -VisualStudio $installation
     $utf8=[Text.UTF8Encoding]::new($false);$lf=[string][char]10
     $readme=@'
@@ -65,10 +70,10 @@ The Windows App SDK and Visual C++ runtimes are included beside the app.
 Preferences and app data are kept in AppData\Roaming\CapyAtelier\CapyCanvas
 and AppData\Local\CapyAtelier\CapyCanvas; deleting the app folder keeps them.
 
-This package is unsigned. Its manifest identifies the source commit and whether
-uncommitted development changes were included. See Notices for project,
-branding, dependency and runtime terms. See package-manifest.json for all file
-sizes and SHA-256 hashes.
+Its manifest identifies the source commit, whether uncommitted development
+changes were included and whether the executables are signed. See Notices for
+project, branding, dependency and runtime terms. See package-manifest.json for
+all file sizes and SHA-256 hashes.
 '@
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme.Replace(([string][char]13+[char]10),$lf)+$lf,$utf8)
     [string[]]$paths=@(Get-ChildItem -LiteralPath $payload -File -Recurse|ForEach-Object {$_.FullName.Substring($payload.Length+1).Replace('\','/')})
@@ -81,7 +86,7 @@ sizes and SHA-256 hashes.
     $nuget=@($config.packages.package|ForEach-Object {[ordered]@{name=$_.id;version=$_.version}})
     if((& git rev-parse HEAD).Trim() -ne $commit -or (!$dirty -and (Source-IsDirty))){throw 'Package sources changed during the build; retry from a stable checkout.'}
     $manifest=[ordered]@{
-        schema=1;application='Capy Canvas';version=$version;source_commit=$commit;development=$dirty;release_identity=$true;architecture='x64';minimum_windows='11';
+        schema=1;application='Capy Canvas';version=$version;source_commit=$commit;development=$dirty;signed=$signed;release_identity=$true;architecture='x64';minimum_windows='11';
         rust=(& rustc --version).Trim();visual_cpp_tools=$env:VCToolsVersion;windows_sdk=$env:WindowsSDKVersion.TrimEnd('\');
         cargo_lock_sha256=(Get-FileHash -LiteralPath (Join-Path $repo 'Cargo.lock') -Algorithm SHA256).Hash.ToLowerInvariant();
         nuget=$nuget;files=$files

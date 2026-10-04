@@ -104,7 +104,6 @@ def main():
                     compositor.wait()
     (output / "report.json").write_text(json.dumps({"binary": str(binary),
         "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(), "results": records,
-        "executable_sha256": hashlib.sha256((binary.parent / "capycanvas-bin").read_bytes()).hexdigest(),
         "scope": "Photo application launch and capture; 4-second capture delay is not decode latency."}, indent=2) + "\n")
 
 

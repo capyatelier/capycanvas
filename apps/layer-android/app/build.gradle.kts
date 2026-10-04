@@ -45,6 +45,15 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            ndk.debugSymbolLevel = "FULL"
+            providers.environmentVariable("CAPY_UPLOAD_KEYSTORE").orNull?.let { keystore ->
+                signingConfig = signingConfigs.create("upload") {
+                    storeFile = file(keystore)
+                    storePassword = providers.environmentVariable("CAPY_UPLOAD_KEYSTORE_PASSWORD").get()
+                    keyAlias = "upload"
+                    keyPassword = storePassword
+                }
+            }
         }
         create("benchmark") {
             initWith(getByName("release"))

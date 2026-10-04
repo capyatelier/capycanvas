@@ -29,14 +29,6 @@ makepkg --syncdeps --cleanbuild --clean --noconfirm
 namcap capycanvas-git-*.pkg.tar.zst
 ```
 
-Release packages are published on the GitHub Releases page. Verify and install
-a downloaded package with:
-
-```bash
-sha256sum -c capycanvas-git-*.pkg.tar.zst.sha256
-sudo pacman -U capycanvas-git-*.pkg.tar.zst
-```
-
 ## VM qualification (2026-09-20 UTC)
 
 The recipe was built and installed in the official Arch Linux

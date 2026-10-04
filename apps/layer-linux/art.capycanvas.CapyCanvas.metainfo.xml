@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>art.capycanvas.CapyCanvas</id>
+  <metadata_license>MIT</metadata_license>
+  <project_license>MIT OR Apache-2.0</project_license>
+  <name>Capy Canvas</name>
+  <summary>Draw and paint with a GPU-accelerated canvas</summary>
+  <developer id="art.capycanvas">
+    <name>Capy Atelier</name>
+  </developer>
+  <description>
+    <p>Capy Canvas is an app for sketching, illustration and photography, with
+    GPU-accelerated brushes and compositing, layers and photo adjustments.</p>
+  </description>
+  <launchable type="desktop-id">art.capycanvas.CapyCanvas.desktop</launchable>
+  <url type="homepage">https://capycanvas.art/</url>
+  <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
+  <content_rating type="oars-1.1"/>
+  <releases>
+    <release version="1.0.0" date="2026-10-04"/>
+  </releases>
+</component>

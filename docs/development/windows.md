@@ -211,8 +211,8 @@ describes the loader and the `capy_load_filter_directory` reload API.
 
 ### Portable ZIP
 
-Build an unsigned Windows 11 x64 ZIP from a committed checkout, then check it on
-an unlocked desktop:
+Build a Windows 11 x64 ZIP from a committed checkout, then check it on an
+unlocked desktop:
 
 ```powershell
 ./apps/layer-windows/scripts/package.ps1
@@ -226,7 +226,10 @@ and records every payload file's size and SHA-256 in `package-manifest.json`. It
 assembles the archive twice and requires identical hashes. Output stays under
 ignored `artifacts/windows/distribution`. `-SkipRestore` reuses restored packages;
 uncommitted changes need `-AllowDirty`, which marks the package as a development
-build. The exercise extracts to a path with spaces and launches with an unrelated
+build. `-SignArguments` passes its values to `signtool sign` for `CapyCanvas.exe`
+and `layer_windows.dll` before the payload is inventoried, for example
+`-SignArguments /sha1,<thumbprint>,/fd,SHA256,/tr,<timestamp URL>,/td,SHA256`
+from a Visual Studio developer shell. The exercise extracts to a path with spaces and launches with an unrelated
 working directory and an isolated profile.
 
 Deployment follows Microsoft's

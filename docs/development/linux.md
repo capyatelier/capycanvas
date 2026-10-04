@@ -398,14 +398,14 @@ an installed package ([storage](../internals/storage.md)). It also builds a
 pinned GTK 4.22.4 with the
 [tablet patches](../../tools/build/gtk-runtime/README.md), cached in
 `target/gtk-runtime` (`CAPY_GTK_BUILD_DIR` overrides it). The `bin/capycanvas`
-launcher puts the bundled `libgtk-4.so.1` first on the library path; use it for
-ordinary and file launches. System GTK is never replaced; libadwaita and GTK's
-other dependencies stay system requirements, so this is a native bundle for
-compatible distributions. `share/doc/capycanvas-gtk` carries the GTK source,
+executable finds the bundled `libgtk-4.so.1` through its embedded library path.
+System GTK is never replaced; libadwaita and GTK's other dependencies stay system
+requirements, so this is a native bundle for compatible distributions. The
+[AppImage](releasing.md#linux-appimage) bundles those dependencies too. `share/doc/capycanvas-gtk` carries the GTK source,
 patches, license, checksums and a rebuild script.
 
-The output holds the executable, desktop entry, `.capy` MIME definition, icon,
-runtime filters, GTK runtime and notices. Photo codecs are compiled in, so a
+The output holds the executable, desktop entry, AppStream metainfo, `.capy` MIME
+definition, icon, runtime filters, GTK runtime and notices. Photo codecs are compiled in, so a
 moved package needs no codec path. Staging replaces only a directory carrying
 the generated `.capy-package` marker. The GTK and Web packagers share
 `tools/build/about.toml`, need original license texts including vendored

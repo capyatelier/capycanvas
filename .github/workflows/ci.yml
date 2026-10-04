@@ -1,0 +1,28 @@
+name: CI
+on: [push, pull_request]
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+env:
+  CARGO_TERM_COLOR: always
+  RUST_VERSION: "1.99.0"
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: rustup toolchain install "$RUST_VERSION" --profile minimal --target wasm32-unknown-unknown && rustup default "$RUST_VERSION"
+      - run: cargo test --locked -p layer-core -p layer-engine -p layer-ui -p layer-workspace -p layer-color -p layer-render
+      - run: cargo check --locked -p layer-web --target wasm32-unknown-unknown
+      - run: python3 apps/layer-apple/scripts/project.py && git diff --exit-code
+      - run: python3 -m unittest discover -s tools/git -p 'test_*.py'
+  licenses:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
+        with:
+          arguments: --locked
+          command: check licenses sources
