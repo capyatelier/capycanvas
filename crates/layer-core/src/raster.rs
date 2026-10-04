@@ -323,29 +323,6 @@ impl TileBlob {
         Ok(Self { resource_profile, resource_id, owner_identity: next_tile_owner(), descriptor,
             encoded_fingerprint: None, digest: OnceLock::new(), expected_digest: None, compressed: Arc::new(bytes.into()) })
     }
-
-    /// Transfer from this application's browser codec worker, which already
-    /// encoded or validated the blob. This avoids repeating decompression on the
-    /// input owner. Untrusted project files must use `from_compressed` instead.
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_verified_worker(
-        descriptor: PixelDescriptor,
-        digest: [u8; 32],
-        bytes: Arc<[u8]>,
-    ) -> Result<Self, String> {
-        Self::from_verified_worker_with_id(crate::authored::PortableId::random(), descriptor, digest, bytes)
-    }
-    #[cfg(target_arch = "wasm32")]
-    pub fn from_verified_worker_with_id(
-        resource_id: crate::authored::PortableId,
-        descriptor: PixelDescriptor,
-        digest: [u8; 32],
-        bytes: Arc<[u8]>,
-    ) -> Result<Self, String> {
-        let mut tile = Self::from_verified_resource(resource_id, descriptor, bytes, None)?;
-        tile.expected_digest = Some(digest);
-        Ok(tile)
-    }
 }
 
 /// A dirty tile's queue-ordered capture. Its CPU data is published once by the

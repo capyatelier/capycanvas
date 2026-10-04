@@ -84,7 +84,7 @@ pub fn effect(doc: &mut Document, name: &str, program: &str) {
     let h = id(doc, name);
     let program = bundled_effect_catalog().get(program).unwrap().program();
     let draft = EffectInstance::new(program.clone());
-    let d = doc.artwork.definitions.insert(PortableId::random(), Definition { program, dimensions: Default::default() }).unwrap();
+    let d = doc.artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
     let e = doc
         .artwork
         .effects

@@ -242,7 +242,7 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
     };
     let effect = |document: &mut Document, image: bool| {
         let instance = Arc::unwrap_or_clone(probe_effect(depth, image));
-        let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program, dimensions: Default::default() }).unwrap();
+        let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program }).unwrap();
         let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values, domain: EXTENT }).unwrap();
         document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "Probe")).unwrap()
     };

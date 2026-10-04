@@ -31,8 +31,13 @@ pub trait ByteSource: Send + Sync {
 impl ByteSource for Arc<[u8]> {
     fn byte_len(&self) -> u64 { self.as_ref().len() as u64 }
     fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String> {
+        if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let start = usize::try_from(offset).map_err(|_| "Package offset exceeds address space")?;
         let end = start.checked_add(len).ok_or("Package range overflow")?;
+        if self.len() > MAX_RANGE_BYTES {
+            let bytes = self.get(start..end).ok_or("Invalid owned byte range")?;
+            return Ok(RangeState::Ready(ByteRange::new(Arc::from(bytes), 0..len)?));
+        }
         Ok(RangeState::Ready(ByteRange::new(self.clone(), start..end)?))
     }
 }
@@ -44,16 +49,16 @@ impl std::fmt::Debug for ImmutableBacking {
         f.debug_struct("ImmutableBacking").field("identity", &self.identity()).field("length", &self.byte_len()).finish()
     }
 }
-struct Owner { identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>> }
+struct Owner { identity: u64, length: u64, source: Arc<dyn ByteSource>, failure: Mutex<Option<String>>, integrity_failure: Mutex<Option<String>> }
 impl ImmutableBacking {
     pub fn new(source: Arc<dyn ByteSource>) -> Result<Self, &'static str> {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let identity = NEXT.try_update(Ordering::Relaxed, Ordering::Relaxed, |n| n.checked_add(1))
             .map_err(|_| "Package owner identity exhausted")?;
-        Ok(Self { owner: Arc::new(Owner { identity, length: source.byte_len(), source, failure: Mutex::new(None) }) })
+        Ok(Self { owner: Arc::new(Owner { identity, length: source.byte_len(), source, failure: Mutex::new(None), integrity_failure: Mutex::new(None) }) })
     }
     pub fn fail(&self, error: String) -> String {
-        match self.owner.failure.lock() {
+        match self.owner.integrity_failure.lock() {
             Ok(mut failure) => failure.get_or_insert(error).clone(),
             Err(_) => "Package failure lock".into(),
         }
@@ -62,6 +67,16 @@ impl ImmutableBacking {
     pub fn byte_len(&self) -> u64 { self.owner.length }
     pub fn resident_bytes(&self) -> usize { self.owner.source.resident_bytes() }
     pub fn poll(&self, offset: u64, len: usize) -> Result<RangeState, String> {
+        if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
+            return Err(failure.clone());
+        }
+        let result = self.poll_original(offset, len);
+        if let Some(failure) = self.owner.integrity_failure.lock().map_err(|_| "Package failure lock")?.as_ref() {
+            return Err(failure.clone());
+        }
+        result
+    }
+    pub(super) fn poll_original(&self, offset: u64, len: usize) -> Result<RangeState, String> {
         if len > MAX_RANGE_BYTES { return Err("Package read exceeds bounded range".into()); }
         let end = offset.checked_add(len as u64).ok_or("Package range overflow")?;
         if end > self.byte_len() { return Err("Package range exceeds immutable backing".into()); }

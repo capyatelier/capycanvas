@@ -99,12 +99,12 @@ pub struct EffectApplication {
     pub values: Vec<EffectValue>,
     pub domain: [u32; 2],
 }
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Dimension { Scalar, Angle, Time, SourcePixels, CompositionPixels, Normalized }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Dimension { #[default] Scalar, Angle, Time, SourcePixels, CompositionPixels, Normalized }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
     pub program: Arc<EffectProgram>,
-    pub dimensions: BTreeMap<Arc<str>, Dimension>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct SavedSelection { pub selection: Selection, pub display: SelectionMaskProperties }

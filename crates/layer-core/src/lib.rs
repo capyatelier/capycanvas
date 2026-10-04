@@ -1304,7 +1304,7 @@ impl Document {
         let mut fill = EffectInstance::new(bundled_effect_catalog().get("solid_color").unwrap().program());
         fill.set("color", EffectValue::Color(color::RgbColor::WHITE)).expect("valid fill color");
         let definition = artwork.definitions.insert(PortableId::random(), Definition {
-            program: fill.program, dimensions: Default::default(),
+            program: fill.program,
         }).expect("new definition store");
         let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
             definition, values: fill.values, domain: [width, height],

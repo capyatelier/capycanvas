@@ -27,7 +27,7 @@ fn document(depth: SampleDepth) -> Document {
 
 fn effect(document: &mut Document, id: &str) -> Occurrence {
     let draft = EffectInstance::new(fixture(id).program());
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: draft.program, dimensions: Default::default() }).unwrap();
+    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: draft.program }).unwrap();
     let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: draft.values, domain: EXTENT }).unwrap();
     Occurrence::new(OccurrenceContent::Effect(effect), id)
 }

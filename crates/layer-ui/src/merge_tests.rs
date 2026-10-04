@@ -92,7 +92,7 @@ mod merge_checks {
         assert_eq!(s.command(CommandId::MergeDown).label.as_ref(), "Merge Clipped Layers");
         let instance = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("levels").unwrap().program());
         let doc = s.engine.document();
-        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program: instance.program, dimensions: Default::default() });
+        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program: instance.program });
         let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: instance.values, domain: doc.composition().size });
         let mut effect = doc.scene().occurrence(upper).unwrap().clone();
         effect.content = OccurrenceContent::Effect(application.handle);

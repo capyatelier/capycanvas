@@ -122,7 +122,7 @@ fn fixture(color: DocumentColor) -> Document {
     ] {
         let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
         effect.set(key, value).unwrap();
-        let definition=artwork.definitions.insert(PortableId::random(),Definition {program:effect.program,dimensions:Default::default()}).unwrap();
+        let definition=artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
         let application=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values,domain:[TILE_SIZE;2]}).unwrap();
         entries.push(artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),id)).unwrap());
     }

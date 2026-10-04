@@ -139,24 +139,23 @@ fn encode_dimension(fields: &mut Map<String,Value>, dimension: &Dimension) {
     fields.insert("dimension".into(),json!(dimension));
     if let Some(reference)=reference {fields.insert("reference".into(),json!(reference));}
 }
-fn decode_dimension(fields: &Map<String,Value>) -> DecodeResult<Option<Dimension>> {
+fn decode_dimension(fields: &Map<String,Value>) -> DecodeResult<Dimension> {
     let Some(dimension) = fields.get("dimension") else {
         if fields.contains_key("reference") { return Err("Length reference requires dimension".into()); }
-        return Ok(None);
+        return Ok(Dimension::Scalar);
     };
     let tag=string(dimension)?;
     if tag!="length" && fields.contains_key("reference") {return Err("Only length has a reference".into());}
-    Ok(Some(match tag {"scalar"=>Dimension::Scalar,"angle"=>Dimension::Angle,"time"=>Dimension::Time,
+    Ok(match tag {"scalar"=>Dimension::Scalar,"angle"=>Dimension::Angle,"time"=>Dimension::Time,
         "length" => match string(required(fields,"reference")?)? {"source_pixels"=>Dimension::SourcePixels,
             "composition_pixels"=>Dimension::CompositionPixels,"normalized"=>Dimension::Normalized,_=>return Err(unsupported("length reference"))},
-        _=>return Err(unsupported("dimension"))}))
+        _=>return Err(unsupported("dimension"))})
 }
 
 pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWriter) -> Result<Value,String> {
     let program=&definition.program;
     text(&json!(program.id)).map_err(|error|error.to_string())?;
     EffectInstance::new(program.clone()).validate().map_err(str::to_string)?;
-    if definition.dimensions.keys().any(|key| !program.parameters.iter().any(|p|p.key==*key)) {return Err("Unknown dimension parameter".into());}
     let mut parameters=Map::new();
     for parameter in program.parameters.iter() {
         let mut fields=Map::new();
@@ -172,7 +171,7 @@ pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWrit
         if let Some(bounds)=parameter.soft_bounds {fields.insert("soft_bounds".into(),json!(bounds));}
         match parameter.mapping {NumericMapping::Linear=>{},NumericMapping::Log=>{fields.insert("mapping".into(),json!({"type":"log"}));},
             NumericMapping::Power {exponent}=>{fields.insert("mapping".into(),json!({"type":"power","exponent":exponent}));}}
-        if let Some(dimension)=definition.dimensions.get(&parameter.key) {encode_dimension(&mut fields,dimension);}
+        encode_dimension(&mut fields,&parameter.dimension);
         parameters.insert(parameter.key.to_string(),Value::Object(fields));
     }
     let mut data=json!({"key":program.id,"contract":"capy.filter/1","abi":program.abi,"label":encode_label(&program.label),
@@ -247,11 +246,9 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
     if slots.len()!=parameter_records.len() || slots.iter().collect::<BTreeSet<_>>().len()!=slots.len()
         || slots.iter().any(|key|!parameter_records.contains_key(key.as_ref())) {return Err("Invalid effect ABI slots".into());}
     let mut kinds=BTreeMap::new();
-    let mut dimensions=BTreeMap::new();
     for key in &slots {
         let record=object(&parameter_records[key.as_ref()],&["kind","default","label","section","page","visible_when","soft_bounds","mapping","dimension","reference"])?;
         kinds.insert(key.clone(),decode_kind(required(record,"kind")?)?);
-        if let Some(dimension)=decode_dimension(record)? {dimensions.insert(key.clone(),dimension);}
     }
     let mut parameters=Vec::new();
     for key in slots {
@@ -269,7 +266,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
             let number=|v:&Value| v.as_f64().filter(|v|v.is_finite()).ok_or_else(||DecodeError::Invalid("Invalid soft bound".into()));
             Ok::<_,DecodeError>([number(&pair[0])?,number(&pair[1])?])
         }).transpose()?;
-        parameters.push(EffectParameter {key,label:label(required(record,"label")?)?,
+        parameters.push(EffectParameter {dimension:decode_dimension(record)?,key,label:label(required(record,"label")?)?,
             section:record.get("section").map(label).transpose()?,page:record.get("page").map(text).transpose()?,visible_when,soft_bounds,
             mapping:record.get("mapping").map(decode_mapping).transpose()?.unwrap_or_default(),kind,default});
     }
@@ -304,7 +301,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
         constant_color:fields.get("constant_color").map(text).transpose()?,
         auxiliary:fields.get("auxiliary").map(decode_auxiliary).transpose()?,pages:pages.into(),parameters:parameters.into(),constraints:constraints.into()});
     EffectInstance::new(program.clone()).validate()?;
-    Ok(Definition {program,dimensions})
+    Ok(Definition {program})
 }
 
 pub fn encode_values(program: &Arc<EffectProgram>, values: &[EffectValue], writer: &mut impl ResourceWriter) -> Result<Value,String> {
@@ -351,12 +348,12 @@ mod tests {
         }
     }
     fn fixture() -> Definition {
-        Definition {program:crate::bundled_effect_catalog().filters()[0].program(),dimensions:BTreeMap::new()}
+        Definition {program:crate::bundled_effect_catalog().filters()[0].program()}
     }
     #[test]
     fn bundled_definitions_preserve_semantics_slots_modules_and_resource_owners() {
         for filter in crate::bundled_effect_catalog().filters() {
-            let definition=Definition {program:filter.program(),dimensions:BTreeMap::new()};
+            let definition=Definition {program:filter.program()};
             let mut resources=Resources::default();
             let encoded=encode_definition(&definition,&mut resources).unwrap();
             let decoded=decode_definition(&encoded,&mut resources).unwrap();
@@ -436,12 +433,11 @@ mod tests {
     #[test]
     fn dimensions_are_semantic_and_parameter_map_order_does_not_change_abi() {
         let mut definition=fixture(); let mut resources=Resources::default();
-        let key=definition.program.parameters.first().unwrap().key.clone();
-        for dimension in [Dimension::Angle,Dimension::Time,Dimension::SourcePixels,Dimension::CompositionPixels,Dimension::Normalized] {
-            definition.dimensions.insert(key.clone(),dimension);
+        for dimension in [Dimension::Scalar,Dimension::Angle,Dimension::Time,Dimension::SourcePixels,Dimension::CompositionPixels,Dimension::Normalized] {
+            Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters)[0].dimension=dimension;
             let encoded=encode_definition(&definition,&mut resources).unwrap();
             let decoded=decode_definition(&encoded,&mut resources).unwrap();
-            assert_eq!(decoded.dimensions,definition.dimensions);
+            assert_eq!(decoded.program.parameters,definition.program.parameters);
             assert_eq!(decoded.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>(),definition.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>());
         }
     }

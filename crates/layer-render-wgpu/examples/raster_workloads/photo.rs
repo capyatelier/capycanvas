@@ -74,7 +74,7 @@ fn change(effect: &mut EffectInstance, key: &str, value: f32) -> Result<()> {
 }
 fn insert_effect(doc: &Document, name: &str, draft: EffectInstance, mask: Option<CoverageSnapshot>) -> (EffectHandle, Edit) {
     let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: draft.program, dimensions: Default::default(),
+        program: draft.program,
     });
     let effect = RecordChange::insert(&doc.artwork.effects, EffectApplication {
         definition: definition.handle, values: draft.values, domain: doc.composition().size,

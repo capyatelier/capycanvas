@@ -308,10 +308,13 @@ Verify the manifest member CRC before interpreting the index. Verify resource
 CRC before decoding or copying bytes; decoding additionally validates sample and
 size rules. A random block read does not require reading its entire pack. A full
 pack read/write checks the member CRC. A detected failure is retained on the
-backing owner and fails every dependent operation; absent residency or corruption
-never becomes empty paint. Save verifies every retained required payload,
-including hidden and unplaced content. Unknown ancillary-only payloads require
-bounded transport integrity, not knowledge of their decoder.
+backing owner and fails every operation that interprets its content; absent
+residency or corruption never becomes empty paint. Copy Original may still copy
+the captured bytes after an integrity failure. A source-read failure remains
+terminal for both interpreted reads and original copying. Save verifies every
+retained required payload, including hidden and unplaced content. Unknown
+ancillary-only payloads require bounded transport integrity, not knowledge of
+their decoder.
 
 ## Restricted ZIP64 transport
 

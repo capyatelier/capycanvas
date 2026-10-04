@@ -24,7 +24,7 @@ pub(crate) fn refresh(document: &mut Document) {
 }
 pub(crate) fn insert_effect(document: &mut Document, effect: EffectInstance) -> OccurrenceHandle {
     let name = effect.program.id.clone();
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program:effect.program, dimensions:Default::default()}).unwrap();
+    let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program:effect.program}).unwrap();
     let application = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values:effect.values,domain:document.composition().size}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.push(occurrence);

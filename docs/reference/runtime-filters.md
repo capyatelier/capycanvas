@@ -196,6 +196,12 @@ preview presets. WGSL modules live beside it. `BuiltinEffect`, built-in category
 switches, Rust filter constructors and the Rust Gaussian algorithm are removed.
 The same parser resolves external packages and the embedded startup fallback.
 
+Each parameter declares its semantic `dimension`: `scalar` (the default),
+`angle`, `time`, `source_pixels`, `composition_pixels` or `normalized`.
+Image resize scales pixel lengths; displayed `unit` labels affect presentation
+only. The bundled catalog declares its pixel lengths explicitly, and authored
+packages retain the same parameter dimensions.
+
 | Owner | Responsibility |
 | --- | --- |
 | `layer-core/effect_catalog.rs` | Parse/resolve packages, validate metadata and stage catalogs |

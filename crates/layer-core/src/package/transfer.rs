@@ -375,7 +375,7 @@ mod tests {
         let lut=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],Arc::from("first"),vec![[0.25;3];8].into()).unwrap());
         let alias=Arc::new(lut.with_title(Arc::from("second")).unwrap());let mut occurrences=Vec::new();
         let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
-        let definition=art.definitions.insert(PortableId::random(),Definition{program:program.clone(),dimensions:BTreeMap::new()}).unwrap();
+        let definition=art.definitions.insert(PortableId::random(),Definition{program:program.clone()}).unwrap();
         for lookup in [lut.clone(),alias.clone()]{let mut effect=EffectInstance::new(program.clone());effect.set("resource",EffectValue::Lut3d(Some(lookup))).unwrap();
             let application=art.effects.insert(PortableId::random(),EffectApplication{definition,values:effect.values,domain:[19,11]}).unwrap();
             occurrences.push(art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(application),"lookup")).unwrap());
@@ -415,6 +415,28 @@ mod tests {
         let OpenOutcome::Candidate{artwork,..}=crate::package::codec::open(backing,ProjectLimits::default(),&cancel).unwrap()else{panic!("Shared ancillary resource must remain editable")};
         assert_eq!(artwork.extensions.records[&ancillary],original.artwork.extensions.records[&ancillary]);
         assert_eq!(artwork.metadata.xmp.as_ref().unwrap().id(),id);
+    }
+    #[test]
+    fn large_opaque_attachments_survive_worker_transfer_save_and_reopen(){
+        let cancel=AtomicBool::new(false);let mut original=capture();
+        let artwork=Arc::make_mut(&mut original.artwork);
+        let id=PortableId::random();let bytes:Arc<[u8]>=(0..MAX_RANGE_BYTES+1).map(|i|(i%251) as u8).collect::<Vec<_>>().into();
+        let chunks=super::super::transport::ChunkedBytes::new(bytes.chunks(MAX_RANGE_BYTES).map(Arc::from).collect()).unwrap();
+        let resource=Arc::new(OpaqueResource{id,kind:"future.bytes/1".into(),data:json!({}),encoding:"future.raw/1".into(),extra_fields:Default::default(),
+            backing:ImmutableBacking::new(Arc::new(chunks)).unwrap(),offset:0,length:bytes.len() as u64,crc32:crc32fast::hash(&bytes)});
+        let ancillary=PortableId::random();let extensions=Arc::make_mut(&mut artwork.extensions);
+        extensions.resources.insert(id,resource);
+        extensions.records.insert(ancillary,json!({"id":ancillary,"type":"future.attachment/1","ancillary":true,"copy_safe":true,"data":{"payload":resources::reference(id)}}));
+        let prepared=PreparedTransfer::capture(&original,&cancel).unwrap();
+        let loaded=receive(&prepared).adopt_verified(ProjectLimits::default(),&cancel).unwrap();
+        let package=PreparedPackage::prepare(&loaded,None,&cancel).unwrap();let mut saved=Vec::new();package.write(&mut saved,&cancel).unwrap();
+        let backing=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(saved))).unwrap();
+        let OpenOutcome::Candidate{artwork,..}=crate::package::codec::open(backing,ProjectLimits::default(),&cancel).unwrap()else{panic!("Transferred attachment must reopen")};
+        assert_eq!(artwork.extensions.records[&ancillary],original.artwork.extensions.records[&ancillary]);
+        for (index,expected) in bytes.chunks(MAX_RANGE_BYTES).enumerate(){
+            let actual=artwork.extensions.resources[&id].read_chunk((index*MAX_RANGE_BYTES) as u64,expected.len(),&cancel).unwrap();
+            assert_eq!(&*actual,expected);assert!(actual.retained_bytes()<=MAX_RANGE_BYTES);
+        }
     }
     #[test]
     fn transfer_rejects_incomplete_chunks_missing_verification_and_foreign_layout(){

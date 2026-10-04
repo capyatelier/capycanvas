@@ -75,7 +75,7 @@ impl Builder {
     }
     fn effect(&mut self, name: &str, parent: Option<OccurrenceHandle>, filter: &str) -> OccurrenceHandle {
         let draft = EffectInstance::new(fixture(filter).program());
-        let definition = RecordChange::insert(&self.0.artwork.definitions, Definition { program: draft.program, dimensions: Default::default() });
+        let definition = RecordChange::insert(&self.0.artwork.definitions, Definition { program: draft.program });
         let effect = RecordChange::insert(&self.0.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: EXTENT });
         self.push(OccurrenceContent::Effect(effect.handle), name, parent, vec![Edit::Definition(definition), Edit::Effect(effect)])
     }

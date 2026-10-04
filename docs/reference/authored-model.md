@@ -27,6 +27,12 @@ that same slot. A missing slot is an error, never an implicit empty source. Stor
 slots, indexes, allocator cursors, revisions and process addresses are not portable
 identity. Reopening resolves portable references into a fresh set of handles.
 
+Deletion, merge and effect replacement use `Document::effect_edits` to include
+dependent records in the undoable edit. Removing an application removes its
+saved output phases; removing or replacing the last application of a definition
+releases that definition. Shared definitions and already unplaced definitions
+remain authored content; undo restores the removed identities and phases.
+
 Stacks alone own front-to-back order. An occurrence has at most one containing
 stack. Groups refer to nested stacks; there is no second authoritative parent
 field or flat layer order. Parent, sibling, clipping, ancestry and target indexes
@@ -188,7 +194,7 @@ strong deduplication remain separate from editable source identity.
 | `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
 | `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
 | `Definition.program` | Shared immutable `EffectProgram`. | Saving retains its owner rather than detaching or mutating program metadata. |
-| `Definition.dimensions` | Stable-key semantic dimensions: Scalar, Angle, Time, SourcePixels, CompositionPixels or Normalized. | Resize follows declared dimensions rather than labels or control positions. |
+| `EffectParameter.dimension` | Semantic dimension stored with the parameter: Scalar (default), Angle, Time, SourcePixels, CompositionPixels or Normalized. | Catalog insertion, package I/O and resize use the same declaration; display units never control resizing. |
 | `EffectProgram.abi`, `id` | Definition's execution ABI and program identity, distinct from its portable authored ID and semantic type version. | Validate ABI/slot layout before admission; unsupported definitions remain preserved. |
 | `label` | Definition presentation metadata. | Preserve literal/localized label representation independently of semantic identity. |
 | `constant_color` | Optional generator contract naming its color parameter. | Static pointwise fills evaluate directly from the tagged color, including its alpha; the definition and parameter survive save and undo. |

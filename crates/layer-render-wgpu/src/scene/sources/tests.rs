@@ -118,7 +118,7 @@ fn repeated_native_threshold_updates_reuse_an_oversized_decoded_working_set() {
             doc.artwork.paint.get_mut(paint).unwrap().original = Some(scan_source(tiles, 0));
             let program = crate::tests::fixture("threshold").program();
             let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == "threshold").unwrap();
-            let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: program.clone(), dimensions: Default::default() }).unwrap();
+            let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: program.clone() }).unwrap();
             let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: EffectInstance::new(program).values, domain: extent }).unwrap();
             let handle = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "Threshold")).unwrap();
             let stack = doc.composition().result;

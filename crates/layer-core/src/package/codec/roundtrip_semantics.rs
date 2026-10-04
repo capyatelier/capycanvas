@@ -105,7 +105,7 @@ fn literal_choices_and_pixels_resave_unchanged() {
     let crate::EffectParameterKind::Choice{options}=&mut parameter.kind else{panic!()};
     for option in Arc::make_mut(options){*option=crate::EffectOption::Literal(option.value().into());}
     let mut effect=EffectInstance::new(Arc::new(program));effect.set("domain",EffectValue::Choice(1)).unwrap();
-    let definition=artwork.definitions.insert(identity(90),Definition{program:effect.program,dimensions:Default::default()}).unwrap();
+    let definition=artwork.definitions.insert(identity(90),Definition{program:effect.program}).unwrap();
     let application=artwork.effects.insert(identity(91),EffectApplication{definition,values:effect.values.clone(),domain:[256;2]}).unwrap();
     let occurrence=artwork.occurrences.insert(identity(92),Occurrence::new(OccurrenceContent::Effect(application),"  My curves { $name } 한글 🎨  ")).unwrap();
     let root=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(root).unwrap().entries.insert(0,occurrence);
@@ -540,7 +540,7 @@ fn filter_blending_space_round_trips() {
     let mut artwork = Artwork::new([256; 2]).unwrap();
     let instance = EffectInstance::new(crate::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
     let definition =
-        artwork.definitions.insert(identity(30), Definition { program: instance.program, dimensions: BTreeMap::new() }).unwrap();
+        artwork.definitions.insert(identity(30), Definition { program: instance.program }).unwrap();
     let effect = artwork.effects.insert(identity(40), EffectApplication { definition, values: instance.values, domain: [256; 2] }).unwrap();
     let occurrence = artwork.occurrences.insert(identity(50), Occurrence::new(OccurrenceContent::Effect(effect), "Blur")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;

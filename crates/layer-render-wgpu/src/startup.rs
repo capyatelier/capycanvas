@@ -575,7 +575,7 @@ mod tests {
         use layer_core::authored::*;
         let program = layer_core::bundled_effect_catalog().get("curves").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
-        let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program, dimensions: Default::default() }).unwrap();
+        let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program }).unwrap();
         let effect = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values, domain: doc.composition().size }).unwrap();
         let occurrence = doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(effect), "curves")).unwrap();
         let stack=doc.composition().result;

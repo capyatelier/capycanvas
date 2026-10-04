@@ -663,6 +663,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":3},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -706,6 +707,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1.5},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -761,6 +763,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":4},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -801,6 +804,7 @@
         "label": {"message":"resources-filter-motion-blur"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":64,"min":0,"step":0.1,"unit":"px"},
@@ -834,6 +838,7 @@
         "label": {"message":"resources-filter-denoise"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":2},
             "key": "radius",
             "kind": {"decimals":0,"kind":"number","max":3,"min":1,"step":1,"unit":"px"},
@@ -867,6 +872,7 @@
         "label": {"message":"resources-filter-edge-detect"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
@@ -1032,6 +1038,7 @@
             "label": {"message":"resources-parameter-film-grain-amount"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1},
             "key": "size",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
@@ -1090,6 +1097,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":6},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -1142,6 +1150,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":5},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -1181,6 +1190,7 @@
         "label": {"message":"resources-filter-halftone"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":9},
             "key": "size",
             "kind": {"decimals":1,"kind":"number","max":48,"min":3,"step":0.5,"unit":"px"},
@@ -1231,12 +1241,14 @@
         "label": {"message":"resources-filter-crosshatch"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":8},
             "key": "spacing",
             "kind": {"decimals":1,"kind":"number","max":32,"min":3,"step":0.5,"unit":"px"},
             "label": {"message":"resources-parameter-crosshatch-spacing"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1},
             "key": "width",
             "kind": {"decimals":1,"kind":"number","max":4,"min":0.25,"step":0.1,"unit":"px"},
@@ -1275,6 +1287,7 @@
         "label": {"message":"resources-filter-emboss"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1.5},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":8,"min":0.5,"step":0.1,"unit":"px"},
@@ -1314,6 +1327,7 @@
         "label": {"message":"resources-filter-pixel-mosaic"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":12},
             "key": "size",
             "kind": {"decimals":0,"kind":"number","max":96,"min":1,"step":1,"unit":"px"},
@@ -1341,6 +1355,7 @@
         "label": {"message":"resources-filter-chromatic-aberration"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":3},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
@@ -1373,6 +1388,7 @@
         "label": {"message":"resources-filter-painterly"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":5},
             "key": "radius",
             "kind": {"decimals":1,"kind":"number","max":16,"min":1,"step":0.5,"unit":"px"},
@@ -1442,6 +1458,7 @@
         ],
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":2},
             "key": "sigma",
             "soft_bounds": [0,21],
@@ -1576,12 +1593,14 @@
         "label": {"message":"resources-filter-ripple"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-ripple-distance"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":64},
             "key": "wavelength",
             "kind": {"decimals":0,"kind":"number","max":256,"min":8,"step":1,"unit":"px"},
@@ -1643,12 +1662,14 @@
         "label": {"message":"resources-filter-glass"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":12},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-glass-distance"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":24},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":160,"min":4,"step":1,"unit":"px"},
@@ -1683,12 +1704,14 @@
         "label": {"message":"resources-filter-rainy-glass"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":8},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-rainy-glass-distance"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":48},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":120,"min":12,"step":1,"unit":"px"},
@@ -1744,6 +1767,7 @@
         "label": {"message":"resources-filter-vhs"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":5},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":32,"min":0,"step":0.1,"unit":"px"},
@@ -1823,6 +1847,7 @@
             "label": {"message":"resources-parameter-crt-mask"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":1},
             "key": "separation",
             "kind": {"decimals":1,"kind":"number","max":5,"min":0,"step":0.1,"unit":"px"},
@@ -1861,12 +1886,14 @@
         "label": {"message":"resources-filter-heat-haze"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":8},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":48,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-heat-haze-distance"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":90},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":240,"min":10,"step":1,"unit":"px"},
@@ -1927,6 +1954,7 @@
             "label": {"message":"resources-parameter-iridescence-strength"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":64},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":240,"min":8,"step":1,"unit":"px"},
@@ -1970,12 +1998,14 @@
         "label": {"message":"resources-filter-domain-warp"},
         "parameters": [
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":24},
             "key": "distance",
             "kind": {"decimals":1,"kind":"number","max":64,"min":0,"step":0.1,"unit":"px"},
             "label": {"message":"resources-parameter-domain-warp-distance"}
           },
           {
+            "dimension": "source_pixels",
             "default": {"kind":"number","value":96},
             "key": "scale",
             "kind": {"decimals":0,"kind":"number","max":256,"min":8,"step":1,"unit":"px"},

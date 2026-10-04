@@ -260,7 +260,6 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
         match kind {"capy.composition/1"=>{reserve(&mut art.compositions,*identity,layout.is_some())?;},"capy.stack/1"=>{reserve(&mut art.stacks,*identity,layout.is_some())?;},"capy.occurrence/1"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},"capy.paint-source/1"=>{reserve(&mut art.paint,*identity,layout.is_some())?;},"capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,layout.is_some())?;},"capy.effect/1"=>{reserve(&mut art.effects,*identity,layout.is_some())?;},"capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,layout.is_some())?;},"capy.selection/1"=>{reserve(&mut art.selections,*identity,layout.is_some())?;},"capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},"capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},_=>unreachable!()}
     }
     art.root=art.compositions.allocated(manifest.root).ok_or("Root is not a composition")?;
-    art.default_output=art.outputs.allocated(manifest.default_output.ok_or("Missing default output")?).ok_or("Default is not an output")?;
     for (identity,kind,value) in &known {if *kind=="capy.composition/1" {
         let data=fields(value,&["frame","resolution","color","blend","result"])?;
         let (origin,size)=v::parse_frame(v::required(data,"frame")?)?;
@@ -349,6 +348,8 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
         }}
     }
     metadata.validate()?;art.metadata=Arc::new(metadata);
+    let default=manifest.default_output.ok_or_else(||DecodeError::Unsupported("Artwork has no editable output".into()))?;
+    art.default_output=art.outputs.allocated(default).ok_or("Default is not an output")?;
     art.topology()?;
     Ok(art)
 }
@@ -397,7 +398,7 @@ mod tests {
         art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::empty(),display:SelectionMaskProperties {color:RgbColor::new(crate::color::RgbSpace::Srgb,[1.,-0.,0.,1.]).unwrap(),opacity:-0.}}).unwrap();
         art.guides.insert(PortableId::random(),Guides {rulers:vec![(PortableId::random(),RulerGeometry::Parallel {start:Point {x:1.,y:2.},end:Point {x:3.,y:4.}})]}).unwrap();
         let program=crate::bundled_effect_catalog().filters()[0].program();let values=crate::EffectInstance::new(program.clone()).values;
-        let definition=art.definitions.insert(PortableId::random(),Definition {program,dimensions:BTreeMap::new()}).unwrap();
+        let definition=art.definitions.insert(PortableId::random(),Definition {program}).unwrap();
         let effect=art.effects.insert(PortableId::random(),EffectApplication {definition,values,domain:[37,29]}).unwrap();
         let output=art.outputs.get_mut(art.default_output).unwrap();output.context.elapsed=17.125;output.context.phases=vec![(effect,0.75)].into();output.name="Export".into();output.frame=Some((Point {x:-0.,y:1.},[23,17]));output.scale=[1.25,0.75];output.sdr.exposure=0.625;
         output.proof=Some(crate::color::ProofRecipe::new("Print".into(),crate::color::ColorProfile::Builtin(crate::color::RgbSpace::AdobeRgb)));

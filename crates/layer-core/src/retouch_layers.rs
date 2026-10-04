@@ -150,7 +150,7 @@ impl Document {
         let mut low_artwork = high_scene.artwork.clone();
         let definition = low_artwork
             .definitions
-            .insert(PortableId::random(), Definition { program: filters.blur.program.clone(), dimensions: Default::default() })
+            .insert(PortableId::random(), Definition { program: filters.blur.program.clone() })
             .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let effect = low_artwork
             .effects

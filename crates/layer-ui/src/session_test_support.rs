@@ -511,7 +511,7 @@ pub(crate) fn package_bytes(capture: &layer_core::ArtworkCapture) -> Vec<u8> {
 pub(crate) fn effect_insertion(document: &Document, draft: layer_core::EffectInstance, name: &str) -> (OccurrenceHandle, layer_core::Edit) {
     use layer_core::authored::{Definition, EffectApplication, Occurrence, OccurrenceContent, RecordChange};
     let artwork=&document.artwork;
-    let definition=RecordChange::insert(&artwork.definitions,Definition {program:draft.program,dimensions:Default::default()});
+    let definition=RecordChange::insert(&artwork.definitions,Definition {program:draft.program});
     let effect=RecordChange::insert(&artwork.effects,EffectApplication {definition:definition.handle,values:draft.values,domain:document.composition().size});
     let occurrence=RecordChange::insert(&artwork.occurrences,Occurrence::new(OccurrenceContent::Effect(effect.handle),name));
     let handle=occurrence.handle;

@@ -104,7 +104,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let doc = self.engine.document();
             let mut artwork = doc.artwork.clone();
             let definition = artwork.definitions.insert(PortableId::random(), Definition {
-                program: draft.filters.blur.program.clone(), dimensions: Default::default(),
+                program: draft.filters.blur.program.clone(),
             })?;
             let effect = artwork.effects.insert(PortableId::random(), EffectApplication {
                 definition, values: draft.filters.blur.values.clone(), domain: doc.composition().size,

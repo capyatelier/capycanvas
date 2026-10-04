@@ -54,7 +54,7 @@ fn document(depth: SampleDepth, space: BlendSpace) -> Document {
 
 fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstance, name: &str) -> (Edit, OccurrenceHandle) {
     let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: effect.program.clone(), dimensions: Default::default(),
+        program: effect.program.clone(),
     });
     let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
         definition: definition.handle, values: effect.values.clone(), domain: doc.composition().size,

@@ -199,7 +199,7 @@ fn compile_candidate(
     let result = (|| {
         let mut artwork = layer_core::authored::Artwork::new([1,1]).map_err(|e| GpuRasterError::Effect(e.into()))?;
         for program in &request.programs {
-            let definition = artwork.definitions.insert(layer_core::authored::PortableId::random(), layer_core::authored::Definition {program:program.clone(),dimensions:Default::default()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
+            let definition = artwork.definitions.insert(layer_core::authored::PortableId::random(), layer_core::authored::Definition {program:program.clone()}).map_err(|e|GpuRasterError::Effect(e.into()))?;
             let effect = artwork.effects.insert(layer_core::authored::PortableId::random(), layer_core::authored::EffectApplication {
                 definition,values:layer_core::EffectInstance::new(program.clone()).values,domain:[1,1]
             }).map_err(|e|GpuRasterError::Effect(e.into()))?;

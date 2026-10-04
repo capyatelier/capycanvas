@@ -113,7 +113,7 @@ fn insert_paint(document: &mut layer_core::Document, name: &str, original: Optio
     occurrence
 }
 fn insert_effect(document: &mut layer_core::Document, name: &str, draft: layer_core::EffectInstance, index: usize) -> OccurrenceHandle {
-    let definition = document.artwork.definitions.insert(PortableId::random(),Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+    let definition = document.artwork.definitions.insert(PortableId::random(),Definition {program:draft.program}).unwrap();
     let effect = document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values,domain:document.composition().size}).unwrap();
     let occurrence = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),name)).unwrap();
     document.artwork.stacks.get_mut(document.composition().result).unwrap().entries.insert(index,occurrence);

@@ -13,7 +13,7 @@ pub(crate) fn effect(doc: &mut Document, generator: bool, global: bool) -> Occur
     add_effect(doc, program(generator, global))
 }
 pub(crate) fn add_effect(doc: &mut Document, instance: EffectInstance) -> OccurrenceHandle {
-    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program, dimensions: Default::default() }).unwrap();
+    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program }).unwrap();
     let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: instance.values, domain: doc.composition().size }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), "window fixture")).unwrap()
 }

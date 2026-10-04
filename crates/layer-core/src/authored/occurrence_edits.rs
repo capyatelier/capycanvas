@@ -212,7 +212,7 @@ mod tests {
         doc.apply(doc.reparent_occurrence_edit(paint, Some(group_handle), 0).unwrap()).unwrap();
         let program = crate::bundled_effect_catalog().get("unsharp_mask").unwrap().program();
         let draft = crate::EffectInstance::new(program.clone());
-        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program, dimensions: Default::default() });
+        let definition = RecordChange::insert(&doc.artwork.definitions, Definition { program });
         let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: [16, 16] });
         let effect = RecordChange::insert(&doc.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(application.handle), "Effect"));
         let effect_handle = effect.handle; let app_handle = application.handle;

@@ -90,7 +90,7 @@ fn wrap(document: &mut Document, child: OccurrenceHandle, name: &str) -> Occurre
     h
 }
 fn add_effect(document: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
-    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program, dimensions: Default::default() }).unwrap();
+    let definition = document.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
     let application = document.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values, domain: document.composition().size }).unwrap();
     let h = document.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap();
     let root = document.composition().result; document.artwork.stacks.get_mut(root).unwrap().entries.insert(0, h);

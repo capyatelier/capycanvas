@@ -2571,7 +2571,7 @@ mod tests {
         let mut document = Document::new(PortableId::random(), 64, 64, layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
         let program = layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program();
         let values = layer_core::EffectInstance::new(program.clone()).values;
-        let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program, dimensions:Default::default()}).unwrap();
+        let definition = document.artwork.definitions.insert(PortableId::random(), Definition {program}).unwrap();
         let effect = document.artwork.effects.insert(PortableId::random(), EffectApplication {definition,values,domain:[64,64]}).unwrap();
         let saved = EvaluationContext {elapsed:3.,phases:vec![(effect,7.)].into()};
         document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().context = saved.clone();
@@ -3753,7 +3753,7 @@ mod tests {
             let handle = coverage.handle;
             mask.use_.source = handle;
             let draft = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("exposure").unwrap().program());
-            let definition = RecordChange::insert(&document.artwork.definitions, Definition { program:draft.program, dimensions:Default::default() });
+            let definition = RecordChange::insert(&document.artwork.definitions, Definition { program:draft.program });
             let effect = RecordChange::insert(&document.artwork.effects, EffectApplication { definition:definition.handle, values:draft.values, domain:[64; 2] });
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect.handle), "Masked exposure");
             occurrence.mask = Some(mask.use_);

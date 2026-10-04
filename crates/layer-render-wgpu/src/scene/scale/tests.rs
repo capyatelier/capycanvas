@@ -102,7 +102,7 @@ fn remove_occurrence(doc: &mut Document, handle: OccurrenceHandle) {
     reindex(doc);
 }
 fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, name: &str) -> OccurrenceHandle {
-    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program, dimensions: Default::default() }).unwrap();
+    let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: effect.program }).unwrap();
     let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values, domain: doc.composition().size }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap()
 }

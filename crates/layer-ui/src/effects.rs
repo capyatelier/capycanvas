@@ -1140,13 +1140,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let definition = if let Some((handle, _, _)) = doc.artwork.definitions.iter().find(|(_, _, definition)| definition.program == instance.program) {
                     handle
                 } else {
-                    let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program, dimensions: Default::default()});
+                    let change = RecordChange::insert(&doc.artwork.definitions, Definition {program: instance.program});
                     let handle = change.handle; edits.push(Edit::Definition(change)); handle
                 };
                 let application = EffectApplication {definition, values: instance.values, domain: if replacing {scene.local_extent(current)} else {doc.composition().size}};
                 let effect_handle = if replacing {
                     let handle = scene.effect_handle(current).ok_or("Missing adjustment")?;
-                    edits.push(Edit::Effect(RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?));
+                    edits.extend(doc.effect_edits(vec![RecordChange::replace(&doc.artwork.effects, handle, Some(application)).map_err(str::to_string)?]).map_err(|error|error.to_string())?);
                     handle
                 } else {
                     let change = RecordChange::insert(&doc.artwork.effects, application);
@@ -1380,7 +1380,7 @@ mod resource_tests {
                     let mut document = Document::new(layer_core::authored::PortableId::random(), 32, 32, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
                     let handle=document.working.occurrence.unwrap();
                     let draft=EffectInstance::new(custom.get("curves").unwrap().program());
-                    let definition=document.artwork.definitions.insert(layer_core::authored::PortableId::random(),layer_core::authored::Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+                    let definition=document.artwork.definitions.insert(layer_core::authored::PortableId::random(),layer_core::authored::Definition {program:draft.program}).unwrap();
                     let effect=document.artwork.effects.insert(layer_core::authored::PortableId::random(),EffectApplication {definition,values:draft.values,domain:[32;2]}).unwrap();
                     document.artwork.occurrences.get_mut(handle).unwrap().content=OccurrenceContent::Effect(effect);
                     assert!(validate_document_labels(&document, &l).is_err(), "embedded field {field}: {key}");

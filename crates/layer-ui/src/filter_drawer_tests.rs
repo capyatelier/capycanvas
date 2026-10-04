@@ -41,6 +41,7 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
         layer: occurrence_token(id), key: "brightness".into(), value: layer_core::EffectValue::Number(0.3),
     } }).unwrap();
     let edited=s.engine.document().clone();
+    let definition=edited.scene().effect_application(id).unwrap().definition;
     s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
     assert!(!s.filter_drawer_open());
     s.dispatch(UiAction::ActivateHeaderItem { id: opener }).unwrap();
@@ -49,12 +50,16 @@ fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoa
     assert_eq!(s.engine.document().working.occurrence.unwrap(), id);
     assert_eq!(s.engine.document().scene().order().len(), 3);
     assert_eq!(s.state.filter_picker.selected.as_deref(), Some("curves"));
+    assert!(s.engine.document().artwork.definitions.get(definition).is_none());
+    assert_eq!(package_roundtrip(s.engine.document()).artwork.definitions.len(),edited.artwork.definitions.len());
     invoke(&mut s, CommandId::Undo);
     assert_live_artwork_eq(s.engine.document(),&edited);
+    assert!(s.engine.document().artwork.definitions.get(definition).is_some());
     invoke(&mut s, CommandId::Redo);
     s.dispatch(UiAction::Effect { action: EffectAction::CancelFilter }).unwrap();
     assert!(!s.filter_drawer_open());
     assert!(s.engine.document().scene().occurrence(id).is_none());
+    assert_eq!(s.engine.document().artwork.definitions.len(),1);
     invoke(&mut s, CommandId::Undo);
     assert!(s.engine.document().scene().occurrence(id).is_some());
 }

@@ -193,7 +193,7 @@ pub fn convert_group(doc: &Document, handle: OccurrenceHandle, children: &[Occur
 
 pub fn effect_edit(doc: &Document, handle: OccurrenceHandle, effect: EffectInstance) -> Edit {
     let definition = RecordChange::insert(&doc.artwork.definitions, Definition {
-        program: effect.program, dimensions: Default::default(),
+        program: effect.program,
     });
     let application = RecordChange::insert(&doc.artwork.effects, EffectApplication {
         definition: definition.handle, values: effect.values, domain: doc.composition().size,

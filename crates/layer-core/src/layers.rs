@@ -1043,6 +1043,31 @@ impl Document {
 }
 
 impl Document {
+    pub fn effect_edits(&self, changes: Vec<RecordChange<EffectApplication>>) -> Result<Vec<Edit>, DocumentError> {
+        if changes.is_empty() { return Ok(Vec::new()); }
+        let mut effects = self.artwork.effects.clone();
+        for change in &changes {
+            effects.change(change.handle, change.id, change.value.clone()).map_err(DocumentError::InvalidLayerOperation)?;
+        }
+        let retained: BTreeSet<_> = effects.iter().map(|(_, _, effect)| effect.definition).collect();
+        let removed: BTreeSet<_> = self.artwork.effects.iter().map(|(_, _, effect)| effect.definition)
+            .filter(|definition| !retained.contains(definition) && self.artwork.definitions.get(*definition).is_some()).collect();
+        let removed_effects: BTreeSet<_> = self.artwork.effects.iter().map(|(handle, _, _)| handle)
+            .filter(|handle| effects.get(*handle).is_none()).collect();
+        let mut edits: Vec<_> = changes.into_iter().map(Edit::Effect).collect();
+        for definition in removed {
+            edits.push(Edit::Definition(RecordChange::remove(&self.artwork.definitions, definition)?));
+        }
+        for (handle, _, output) in self.artwork.outputs.iter() {
+            if output.context.phases.iter().any(|(effect, _)| removed_effects.contains(effect)) {
+                let mut changed = output.clone();
+                Arc::make_mut(&mut changed.context.phases).retain(|(effect, _)| !removed_effects.contains(effect));
+                edits.push(Edit::Output(RecordChange::replace(&self.artwork.outputs, handle, Some(changed))?));
+            }
+        }
+        Ok(edits)
+    }
+
     pub(crate) fn removal_edits(&self, ids: &BTreeSet<OccurrenceHandle>) -> Result<Vec<Edit>, DocumentError> {
         let mut paints = BTreeSet::new();
         let mut coverage = BTreeSet::new();
@@ -1102,9 +1127,7 @@ impl Document {
         for h in stacks {
             edits.push(Edit::Stack(RecordChange::remove(&self.artwork.stacks, h)?));
         }
-        for h in effects {
-            edits.push(Edit::Effect(RecordChange::remove(&self.artwork.effects, h)?));
-        }
+        edits.extend(self.effect_edits(effects.into_iter().map(|h| RecordChange::remove(&self.artwork.effects, h)).collect::<Result<_, _>>()?)?);
         for h in selections {
             edits.push(Edit::SavedSelection(RecordChange::remove(&self.artwork.selections, h)?));
         }

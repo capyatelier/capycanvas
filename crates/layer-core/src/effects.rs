@@ -1,6 +1,6 @@
 //! Pure effect descriptions and parameters. No graphics API or UI widget types.
 use crate::color::{RgbColor, RgbSpace};
-use crate::authored::Resource;
+use crate::authored::{Dimension, Resource};
 use crate::effect_catalog::ResourceLabel;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
@@ -246,6 +246,8 @@ pub struct EffectVisibility {
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EffectParameter {
+    #[serde(default)]
+    pub dimension: Dimension,
     pub key: Arc<str>,
     pub label: ResourceLabel,
     /// Consecutive parameters in the same section share one heading/divider.
@@ -607,8 +609,8 @@ impl<'a> EffectView<'a> {
     pub fn scaled_values(&self, factor: f32) -> Option<Vec<EffectValue>> {
         let mut values = self.values.to_vec();
         for (parameter, value) in self.program.parameters.iter().zip(&mut values) {
-            if let (EffectParameterKind::Number { min, max, decimals, unit, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
-                && &**unit == "px"
+            if let (EffectParameterKind::Number { min, max, decimals, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
+                && matches!(parameter.dimension, Dimension::SourcePixels | Dimension::CompositionPixels)
             {
                 let places = 10f32.powi(i32::from(*decimals));
                 *v = ((*v * factor * places).round() / places).clamp(*min, *max);
@@ -706,12 +708,6 @@ impl EffectInstance {
         self.view().validate_resource(|index| if index == i { &value } else { &self.values[index] })?;
         self.values[i] = value;
         Ok(())
-    }
-    /// Distances declared in pixels scaled with the image, rounded to their
-    /// decimals and clamped to their range; None when nothing changes or the
-    /// scaled values would break the effect's constraints.
-    pub fn scaled_px(&self, factor: f32) -> Option<Self> {
-        self.view().scaled_values(factor).map(|values| Self { program: self.program.clone(), values })
     }
 }
 

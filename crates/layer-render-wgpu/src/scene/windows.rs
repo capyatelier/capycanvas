@@ -86,7 +86,7 @@ mod tests {
         let mut artwork = Artwork::new(extent).unwrap();
         let mut program = (*layer_core::bundled_effect_catalog().get("exposure").unwrap().program()).clone();
         program.passes = vec![EffectPass { entry: program.entry.clone(), sampling }].into();
-        let definition = artwork.definitions.insert(PortableId::random(), Definition { program: Arc::new(program), dimensions: Default::default() }).unwrap();
+        let definition = artwork.definitions.insert(PortableId::random(), Definition { program: Arc::new(program) }).unwrap();
         let stack = artwork.compositions.get(artwork.root).unwrap().result;
         for _ in 0..count {
             let values = EffectInstance::new(artwork.definitions.get(definition).unwrap().program.clone()).values;
@@ -133,7 +133,7 @@ mod tests {
             for _ in 0..count {
                 let mut draft=EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
                 draft.set("sigma",EffectValue::Number(sigma)).unwrap();
-                let definition=artwork.definitions.insert(PortableId::random(),Definition {program:draft.program,dimensions:Default::default()}).unwrap();
+                let definition=artwork.definitions.insert(PortableId::random(),Definition {program:draft.program}).unwrap();
                 let effect=artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:draft.values,domain:extent}).unwrap();
                 let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),"Gaussian")).unwrap();
                 artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);

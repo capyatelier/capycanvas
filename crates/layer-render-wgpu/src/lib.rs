@@ -5694,6 +5694,7 @@ mod tests {
         let mut parameters = program.parameters.to_vec();
         parameters.extend([
             layer_core::EffectParameter {
+                dimension: Default::default(),
                 page: None, visible_when: None, soft_bounds: None, mapping: Default::default(),
                 key: "animate".into(),
                 label: "Animate".into(),
@@ -5702,6 +5703,7 @@ mod tests {
                 default: layer_core::EffectValue::Toggle(true),
             },
             layer_core::EffectParameter {
+                dimension: Default::default(),
                 page: None, visible_when: None, soft_bounds: None, mapping: Default::default(),
                 key: "time".into(),
                 label: "Frozen time".into(),

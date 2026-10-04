@@ -209,7 +209,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             let mut authored = authored.clone();
             authored.program = definition.program();
-            authored.dimensions.retain(|key, _| authored.program.parameters.iter().any(|parameter| parameter.key == *key));
             edits.push(Edit::Definition(RecordChange::replace(&artwork.definitions, handle, Some(authored)).map_err(str::to_string)?));
         }
         if !edits.is_empty() {

@@ -2,7 +2,7 @@ use super::{archive::{self, Directory, InputMember}, manifest::{Manifest, Manife
     resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES}, transport::BackingReader, ImmutableBacking};
 use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, EvaluationContext, PortableId, Support};
 use serde_json::{Value, json};
-use std::{io::{Cursor, Read, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
+use std::{io::{Cursor, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Clone, Debug)]
 pub struct CapturedPreview { pub checkpoint: CaptureCheckpoint, pub context: EvaluationContext, pub preview: Preview }
@@ -151,9 +151,15 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
 }
 
 pub fn copy_original(source:&ImmutableBacking,output:&mut impl Write,cancelled:&AtomicBool) -> Result<(),String> {
-    let mut reader=BackingReader::new(source,cancelled);
-    let mut bytes=[0;64*1024];
-    loop {active(cancelled)?;let count=reader.read(&mut bytes).map_err(|e|e.to_string())?;if count==0 {break;}output.write_all(&bytes[..count]).map_err(|e|e.to_string())?;}
+    let mut offset=0;
+    active(cancelled)?;
+    while offset<source.byte_len() {
+        active(cancelled)?;
+        let count=(source.byte_len()-offset).min(64*1024) as usize;
+        let super::RangeState::Ready(bytes)=source.poll_original(offset,count)? else {return Err("Package bytes are pending".into());};
+        output.write_all(&bytes).map_err(|e|e.to_string())?;
+        offset+=count as u64;
+    }
     output.flush().map_err(|e|e.to_string())
 }
 
