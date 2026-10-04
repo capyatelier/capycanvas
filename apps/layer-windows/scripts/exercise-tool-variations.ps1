@@ -172,4 +172,4 @@ try{
     [pscustomobject]@{theme=$Theme;toolbar='passed';header='passed';header_overflow='passed';devices=@('mouse','pen','touch');eraser_group='passed';checked_choices='passed';layout_unchanged='passed';evidence=$run}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
-}finally{Exit-CapyEnvironment}
+}finally{[CapyRowPointer]::Dispose();Exit-CapyEnvironment}

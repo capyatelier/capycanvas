@@ -225,18 +225,21 @@ public static class CapyRowPointer {
  public static void Key(ushort key) {
   Guard(last);Key(owner,key);
  }
+ static Input Press(ushort key,bool release) {
+  bool extended=key>=0x21&&key<=0x28||key==0x2D||key==0x2E||key==0x5B||key==0x5C;
+  return new Input{type=1,keyboard=new Keyboard{key=key,flags=(release?2u:0u)|(extended?1u:0u)}};
+ }
  static readonly System.Collections.Generic.HashSet<ushort> held=new System.Collections.Generic.HashSet<ushort>();
  public static void Hold(ushort key,bool down) {
   lock(gate){
    if(down)Guard(last);else if(!held.Contains(key))return;
-   var input=new Input{type=1,keyboard=new Keyboard{key=key,flags=down?0u:2u}};
-   if(SendInput(1,new[]{input},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
+   if(SendInput(1,new[]{Press(key,!down)},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
    if(down)held.Add(key);else held.Remove(key);
   }
  }
  static void ReleaseHeld() {
   foreach(var key in new System.Collections.Generic.List<ushort>(held)){
-   var input=new Input{type=1,keyboard=new Keyboard{key=key,flags=2}};SendInput(1,new[]{input},40);
+   SendInput(1,new[]{Press(key,true)},40);
   }
   held.Clear();
  }
@@ -244,17 +247,15 @@ public static class CapyRowPointer {
  public static void Key(uint process,ushort key) {
   uint foreground;GetWindowThreadProcessId(GetForegroundWindow(),out foreground);
   if(foreground!=process)throw new Exception("Review does not own foreground input.");
-  var down=new Input{type=1,keyboard=new Keyboard{key=key}};
-  var up=new Input{type=1,keyboard=new Keyboard{key=key,flags=2}};
-  if(SendInput(2,new[]{down,up},40)!=2)throw new Win32Exception(Marshal.GetLastWin32Error());
+  if(SendInput(2,new[]{Press(key,false),Press(key,true)},40)!=2)throw new Win32Exception(Marshal.GetLastWin32Error());
  }
  public static void Chord(uint process,ushort[] modifiers,ushort key) {
   uint foreground;GetWindowThreadProcessId(GetForegroundWindow(),out foreground);
   if(foreground!=process)throw new Exception("Review does not own foreground input.");
   var inputs=new System.Collections.Generic.List<Input>();
-  foreach(var modifier in modifiers)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifier}});
-  inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key}});inputs.Add(new Input{type=1,keyboard=new Keyboard{key=key,flags=2}});
-  for(int i=modifiers.Length-1;i>=0;i--)inputs.Add(new Input{type=1,keyboard=new Keyboard{key=modifiers[i],flags=2}});
+  foreach(var modifier in modifiers)inputs.Add(Press(modifier,false));
+  inputs.Add(Press(key,false));inputs.Add(Press(key,true));
+  for(int i=modifiers.Length-1;i>=0;i--)inputs.Add(Press(modifiers[i],true));
   if(SendInput((uint)inputs.Count,inputs.ToArray(),40)!=inputs.Count){
    int error=Marshal.GetLastWin32Error();var releases=inputs.GetRange(modifiers.Length+1,modifiers.Length+1);
    SendInput((uint)releases.Count,releases.ToArray(),40);throw new Win32Exception(error);
