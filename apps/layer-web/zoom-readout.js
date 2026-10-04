@@ -19,7 +19,7 @@ export function createZoomReadout({ root, workspace, canvas, element, button, ic
   bindCopy(root, () => copy.zoom, "title");
   root.setAttribute("aria-haspopup", "menu"); root.setAttribute("aria-expanded", "false");
   const field = numberField(catalog.zoom, () => copy.zoom, zoom => dispatch({ type: "set_zoom", zoom }), true);
-  const rotation = numberField(catalog.rotation, () => copy.rotation, rotation => dispatch({ type: "set_rotation", rotation }));
+  const rotation = numberField(catalog.rotation, () => copy.rotation, rotation => dispatch({ type: "set_rotation", rotation }), true);
   rotation.classList.add("rotation-field");
   const popup = element("div", "zoom-menu");
   popup.popover = "auto";

@@ -60,6 +60,8 @@ fn native_zoom_readout_menu_and_field() {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         open(&w, &mut input);
         until(|| w.view_info.rotation.is_mapped(), "the rotation slider is visible");
+        assert_eq!(w.view_info.rotation.height(), w.view_info.field.height());
+        assert!(mapped_label(w.view_info.menu.upcast_ref(), "Rotation").is_none());
         let zoom = screen_point(w.view_info.field.upcast_ref(), &w.window, [0.5, 0.5]);
         let lock_zoom = screen_point(&mapped_label(w.view_info.menu.upcast_ref(), "Lock zoom").unwrap(), &w.window, [0.5, 0.5]);
         let rotation = screen_point(w.view_info.rotation.upcast_ref(), &w.window, [0.5, 0.5]);

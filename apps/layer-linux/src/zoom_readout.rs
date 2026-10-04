@@ -37,7 +37,7 @@ impl ZoomReadout {
         let field = NumberControl::inline(NumericControl::zoom(), &title, localization.clone());
         field.set_widget_name(FIELD);
         field.set_size_request(220, -1);
-        let rotation = NumberControl::new(NumericControl::rotation(), &localization.text(layer_ui::MessageId::MENU_ROTATION), "", localization);
+        let rotation = NumberControl::inline(NumericControl::rotation(), &localization.text(layer_ui::MessageId::MENU_ROTATION), localization);
         rotation.set_widget_name(ROTATION);
         let controls = crate::navigator::NavigationControls::new("zoom");
         Rc::new(Self {

@@ -63,7 +63,7 @@ import org.json.JSONObject
         WorkspaceMenuItems(host, JSONArray(sections.take(rotationSection)), close)
         HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("rotation-field")) {
-            NumericSetting(copy.getString("rotation"), rotation, host.catalog.getJSONObject("rotation"), Modifier.fillMaxWidth(),
+            NumericSetting(copy.getString("rotation"), rotation, host.catalog.getJSONObject("rotation"), Modifier.fillMaxWidth(), inline = true,
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_rotation", "rotation" to it)) }
         }
         HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)

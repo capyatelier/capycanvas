@@ -178,6 +178,7 @@ test("rotation and navigation buttons follow the open menu and keep it open", ()
   h.root.dispatch("contextmenu");
   assert.equal(h.readout.open(), true);
   assert.equal(h.readout.rotation.label, "Rotation");
+  assert.equal(h.readout.rotation.inline, h.readout.field.inline);
   assert.deepEqual(h.readout.rotation.values, [Math.PI / 2]);
   h.readout.rotation.onChange(Math.PI / 4);
   h.readout.controls.children[3].click();

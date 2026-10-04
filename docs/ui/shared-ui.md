@@ -395,9 +395,10 @@ Pixels. The field takes its value from the camera and refreshes only while the
 menu is open.
 
 GTK, Web and Android also show a rotation slider from
-`NumericControl::rotation()`. Zoom controls and percentages precede Lock zoom;
-the rotation slider, Reset rotation and Lock rotation follow together. Both locks
-show checkmarks. `SetRotation` rotates about the work-area
+`NumericControl::rotation()`. Both fields use one row with the slider and editable
+value, without a visible label or step buttons. Zoom controls and percentages
+precede Lock zoom; the rotation slider, Reset rotation and Lock rotation follow
+together. Both locks show checkmarks. `SetRotation` rotates about the work-area
 centre without changing the artwork. The locks belong to the camera and stop
 canvas navigation gestures, including touch, wheel and continuous zoom input;
 pan remains available. Explicit sliders, percentages, commands and shortcuts
