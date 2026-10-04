@@ -279,6 +279,56 @@ fn native_tool_set_category_input() {
     d.finish();
 }
 
+#[test]
+#[ignore = "isolated native-input.js --native-test=native_tool_set_preview_input"]
+fn native_tool_set_preview_input() {
+    let mut d = Driver::new("art.capycanvas.ToolSetPreview");
+    restore(&d, WorkspacePreset::Illustrator);
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+    d.w.dispatch(UiAction::MovePanel {
+        panel: Panel::Brushes, target: DockTarget::Float { position: [400., 180.] }, viewport: [1600., 1000.],
+    });
+    pump(300);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let (item, button, preview) = d.w.tool_set.buttons.borrow()[0].clone();
+        let preview = preview.unwrap();
+        let caption = preview.parent().unwrap().last_child().unwrap();
+        let mut full_height = 0;
+        for height in [600., 360., 600.] {
+            let layout = state(&d.w).workspace.layout;
+            let group = layout.panel_group(Panel::Brushes).unwrap();
+            let bounds = layout.workspace(1600., 1000., layer_ui::HEADER_HEIGHT, layer_ui::STATUS_HEIGHT)
+                .groups.into_iter().find(|placement| placement.id == group).unwrap().bounds;
+            let corner = [bounds.x + bounds.width, bounds.y + bounds.height];
+            for (phase, position) in [(ContactPhase::Down, corner), (ContactPhase::Up, [corner[0], bounds.y + height])] {
+                d.w.dispatch(UiAction::ResizeFloating { group, edge: layer_ui::ResizeEdge::BottomRight, phase, position, viewport: [1600., 1000.] });
+            }
+            pump(250);
+            let parent = preview.parent().unwrap();
+            let stroke = preview.compute_bounds(&parent).unwrap();
+            let text = caption.compute_bounds(&parent).unwrap();
+            assert!((40..=41).contains(&preview.height()), "Compression preserves the stroke preview");
+            assert!(text.y() >= 0. && text.y() + text.height() <= parent.height() as f32 + 1.);
+            if height == 360. {
+                eprintln!("Tool Set {theme:?} row height: {full_height} -> {}", button.height());
+                assert!(button.height() as f32 <= full_height as f32 * 0.8,
+                    "Tool rows compact by about a quarter: {full_height} -> {}", button.height());
+                assert!(text.y() < stroke.y() + stroke.height(), "Compact captions share preview space");
+            } else {
+                if full_height == 0 { full_height = button.height(); }
+                assert_eq!(button.height(), full_height, "Tool rows regain their original full height");
+                assert!(text.y() >= stroke.y() + stroke.height() - 1., "Full captions sit below the preview");
+            }
+            assert_eq!(button, d.w.tool_set.buttons.borrow()[0].1, "Resizing retains the tool button");
+            d.capture_canvas(&format!("tool-preview-{theme:?}-{height}.png"));
+            d.click(button.upcast_ref());
+            assert_eq!(state(&d.w).brush.preset, item.preview.unwrap());
+        }
+    }
+    d.finish();
+}
+
 fn sketch_group_variations(d: &mut Driver, theme: Theme) {
     restore(d, WorkspacePreset::Painter);
     for (command, group) in [

@@ -57,6 +57,9 @@ the same complete projection through More tool options.
 Tool Set category buttons fill their grid cells, so hover, selection and input
 cover the whole category. A thin horizontal divider separates categories from
 tools when both are shown, using the toolbar's inset separator style.
+GTK tool rows keep their full preview and caption height when the panel has
+room. Shorter panels bring the caption into the preview area before scrolling,
+while every part of a row shows the same action tooltip.
 
 `EditingState.tool_slots` remembers one choice per tool slot across layouts,
 outside document and layout history. Brush groups use `ToolMemory` for presets
@@ -72,7 +75,9 @@ layout. Fresh workspaces and Restore Starting Layout use the current defaults.
 
 GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations_input`;
 `--native-test=native_toolbar_variations_overflow_input` focuses on title-bar
-sizes and overflow. Web uses `workspace-motion.sh web --tool-variations`. Run
+sizes and overflow. `--native-test=native_tool_set_preview_input` checks row
+compression and expansion; `--tooltips` checks captions across the whole row.
+Web uses `workspace-motion.sh web --tool-variations`. Run
 native popup journeys without `--tablet`, whose synthetic pen serials cannot
 authorize popup grabs.
 

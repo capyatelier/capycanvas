@@ -116,14 +116,14 @@ impl ToolSet {
                 button.add_css_class("brush-choice");
                 let preview = item.preview.map(|id| {
                     button.set_widget_name(&format!("brush-{id}"));
-                    let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
                     let preview = gtk::Picture::builder()
                         .can_shrink(true)
                         .content_fit(gtk::ContentFit::Fill)
                         .height_request(40)
                         .build();
-                    content.append(&preview);
-                    content.append(&tool_label(item));
+                    let content: ToolPreview = glib::Object::new();
+                    preview.set_parent(&content);
+                    tool_label(item).set_parent(&content);
                     button.set_child(Some(&content));
                     preview
                 });
@@ -173,9 +173,53 @@ pub(crate) fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Bo
     label.set_xalign(xalign);
     label.set_ellipsize(gtk::pango::EllipsizeMode::End);
     label.set_max_width_chars(1);
-    label.set_tooltip_text(Some(text));
     row.append(&label);
     row
+}
+mod preview_row {
+    use super::*;
+    #[derive(Default)]
+    pub struct ToolPreview;
+    #[glib::object_subclass]
+    impl ObjectSubclass for ToolPreview {
+        const NAME: &'static str = "CapyToolPreview";
+        type Type = super::ToolPreview;
+        type ParentType = gtk::Widget;
+    }
+    impl ObjectImpl for ToolPreview {
+        fn dispose(&self) {
+            while let Some(child) = self.obj().first_child() { child.unparent(); }
+        }
+    }
+    impl WidgetImpl for ToolPreview {
+        fn measure(&self, axis: gtk::Orientation, size: i32) -> (i32, i32, i32, i32) {
+            let obj = self.obj();
+            let (minimum, natural, _, _) = obj.last_child().unwrap().measure(axis, size);
+            if axis == gtk::Orientation::Horizontal { (minimum, natural, -1, -1) }
+            else {
+                let full = obj.first_child().unwrap().height_request() + natural;
+                (minimum.max(full * 3 / 4), full, -1, -1)
+            }
+        }
+        fn size_allocate(&self, width: i32, height: i32, _: i32) {
+            let obj = self.obj();
+            let preview = obj.first_child().unwrap();
+            preview.allocate(width, preview.height_request().min(height), -1, None);
+            let caption = obj.last_child().unwrap();
+            let h = caption.measure(gtk::Orientation::Vertical, width).1.min(height);
+            caption.allocate(width, h, -1, Some(gtk::gsk::Transform::new()
+                .translate(&gtk::graphene::Point::new(0., (height - h) as f32))));
+        }
+        fn snapshot(&self, snapshot: &gtk::Snapshot) {
+            let obj = self.obj();
+            obj.snapshot_child(&obj.first_child().unwrap(), snapshot);
+            obj.snapshot_child(&obj.last_child().unwrap(), snapshot);
+        }
+    }
+}
+glib::wrapper! {
+    pub struct ToolPreview(ObjectSubclass<preview_row::ToolPreview>) @extends gtk::Widget,
+        @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 use std::{
     cell::{Cell, RefCell},

@@ -176,6 +176,24 @@ fn native_tooltip_input() {
             "Pen action tooltips retain the shared keyboard hint"
         );
         w.tooltips.hide();
+        w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+        pump(200);
+        let (item, button, _) = w.tool_set.buttons.borrow()[0].clone();
+        let current = state(&w);
+        let expected = current.settings.action_tooltip_localized(
+            &item.label, &item.action, current.platform, &w.localization());
+        for at in [[0.5, 0.2], [0.9, 0.85], [0.02, 0.98]] {
+            let point = screen_point(button.upcast_ref(), &w.window, at);
+            input.perform(serde_json::json!([{"point":[800.,500.]},{"point":point}]));
+            pump(850);
+            let tip = native_tip(w.window.upcast_ref()).expect("Tool Set mouse tooltip appears across its row");
+            assert!(widgets(&tip).filter_map(|widget| widget.downcast::<gtk::Label>().ok())
+                .any(|label| label.text() == expected), "Tool Set mouse tooltip retains its caption and shortcut");
+            w.tooltips.hover(w.window.upcast_ref(), point.map(f64::from));
+            pump(620);
+            assert_eq!(popup().unwrap().child().unwrap().downcast::<gtk::Label>().unwrap().text(), expected);
+            w.tooltips.hide();
+        }
     }
     input.finish();
     w.window.destroy();

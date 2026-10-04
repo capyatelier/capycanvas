@@ -433,7 +433,7 @@ impl EffectPanels {
         if language_changed {
             *self.picker_categories.borrow_mut() = state.filter_categories.clone();
             for (button, choice) in self.type_buttons.borrow().iter().zip(&state.filter_categories) {
-                if let Some(label) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_label(&choice.label); label.set_tooltip_text(Some(&choice.label)); }
+                if let Some(label) = button.child().and_then(|row| row.last_child()).and_downcast::<gtk::Label>() { label.set_label(&choice.label); }
                 button.set_tooltip_text(Some(&choice.label));
                 button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
             }
@@ -446,7 +446,7 @@ impl EffectPanels {
                     button.set_tooltip_text(Some(&choice.tooltip));
                     button.update_property(&[gtk::accessible::Property::Label(&choice.label)]);
                 }
-                if let Some(label) = self.picker_headings.borrow().get(&choice.category) { label.set_label(&choice.category_label); label.set_tooltip_text(Some(&choice.category_label)); }
+                if let Some(label) = self.picker_headings.borrow().get(&choice.category) { label.set_label(&choice.category_label); label.parent().unwrap().set_tooltip_text(Some(&choice.category_label)); }
             }
             if let Some(empty) = self.picker_empty.borrow().as_ref() { empty.set_label(&state.filter_picker.empty_label); }
         }
@@ -499,6 +499,7 @@ impl EffectPanels {
             if !self.split_picker && category.as_ref() != Some(&choice.category) {
                 let heading =
                     crate::tool_panels::icon_label(&choice.category_label, choice.category_icon);
+                heading.set_tooltip_text(Some(&choice.category_label));
                 heading.add_css_class("filter-category");
                 self.picker_headings.borrow_mut().insert(choice.category.clone(), heading.last_child().and_downcast::<gtk::Label>().unwrap());
                 self.picker_body.append(&heading);

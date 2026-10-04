@@ -1580,6 +1580,7 @@ impl Workspace {
         action: impl Fn(&layer_ui::UiState) -> Option<UiAction> + 'static,
     ) {
         let button = button.as_ref();
+        let caption = button.label().unwrap_or_default();
         self.tooltips.bind(
             button,
             glib::clone!(
@@ -1592,7 +1593,7 @@ impl Workspace {
                     let label = button
                         .tooltip_text()
                         .or_else(|| button.label())
-                        .unwrap_or_default();
+                        .unwrap_or_else(|| caption.clone());
                     let gpu = this.gpu.borrow();
                     let g = gpu.as_ref()?;
                     let state = g.session.state();
