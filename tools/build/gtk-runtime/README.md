@@ -59,9 +59,10 @@ python3 tools/build/gtk-runtime/test-configure.py
 
 The pad check executes GTK's actual callbacks without a display, checking all
 event producers, independent keyboard/pad focus, retained mode state, missing
-devices, foreign surfaces, tablet reassociation and balanced surface references.
-It fails against the unpatched source when an initial mode event has no keyboard
-focus. Native pen journeys still run through the private compositor in the
+devices, surface destruction before initial entry, foreign surfaces, tablet
+reassociation and balanced surface references.
+It rejects the unpatched source and missing producer guards when an event has
+no target. Native pen journeys still run through the private compositor in the
 [Linux guide](../../../docs/development/linux.md#tests).
 
 The source archive is pinned by SHA-256. TIFF and JPEG use GTK's checksum-pinned

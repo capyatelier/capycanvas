@@ -129,9 +129,14 @@ int main(void) {
   group.buttons = g_list_append(NULL, GUINT_TO_POINTER(0));
   seat.tablet_pads = g_list_append(NULL, pad);
   expected_surface = a;
+  tablet_pad_handle_enter(pad, NULL, 0, &protocol_tablet, NULL);
+  controls(&group, 1);
+  assert(delivered == 0 && group.current_mode == 1 && group.mode_switch_serial == 901);
+  tablet_pad_handle_leave(pad, NULL, 0, NULL);
+  int devices_before_focus = added;
   tablet_pad_handle_enter(pad, NULL, 1, &protocol_tablet, &wa);
   controls(&group, 0);
-  assert(delivered == 6 && added == 1 && a->ref_count == 2);
+  assert(delivered == 6 && added == devices_before_focus + 1 && removed == devices_before_focus && a->ref_count == 2);
   seat.keyboard_focus = b;
   controls(&group, 1);
   assert(delivered == 12);
@@ -145,7 +150,7 @@ int main(void) {
   expected_surface = b;
   tablet_pad_handle_enter(pad, NULL, 3, &protocol_second, &wb);
   controls(&group, 1);
-  assert(delivered == 24 && added == 2 && removed == 1 && b->ref_count == 2);
+  assert(delivered == 24 && added == devices_before_focus + 2 && removed == devices_before_focus + 1 && b->ref_count == 2);
   g_object_set_data(G_OBJECT(b), "destroyed", GINT_TO_POINTER(1));
   controls(&group, 0);
   assert(delivered == 24);
@@ -176,7 +181,7 @@ int main(void) {
   assert(seat.tablet_pads == NULL && a->ref_count == 1 && b->ref_count == 1);
   g_object_unref(a);
   g_object_unref(b);
-  puts("PASS: all pad producers, independent focus, absent device, modes, foreign surfaces, reassociation and reference lifetime");
+  puts("PASS: all pad producers, destroyed surface before entry, independent focus, absent device, modes, foreign surfaces, reassociation and reference lifetime");
   return 0;
 }
 '''
