@@ -26,8 +26,10 @@ export function createZoomReadout({ root, workspace, canvas, element, button, ic
   bindCopy(popup, () => copy.zoom, "ariaLabel");
   const items = element("div", "zoom-menu-items");
   items.setAttribute("role", "menu");
+  const rotationItems = element("div", "zoom-menu-items");
+  rotationItems.setAttribute("role", "menu");
   const controls = createNavigationControls({ element, button, icon, dispatch, commands: catalog.navigator_commands, prefix: "zoom" });
-  popup.append(field, rotation, element("hr"), items, element("hr"), controls); workspace.append(popup);
+  popup.append(field, element("hr"), items, element("hr"), rotation, element("hr"), rotationItems, element("hr"), controls); workspace.append(popup);
   let text = "", wasOpen = false, previous = null;
   const open = () => popup.matches(":popover-open");
   const close = () => { if (open()) popup.hidePopover(); };
@@ -43,14 +45,19 @@ export function createZoomReadout({ root, workspace, canvas, element, button, ic
   });
   function show() {
     previous = doc.activeElement;
-    const model = menu();
-    renderMenu(items, model, close);
-    controls.update(model.buttons);
+    updateMenu(renderMenu);
     field.update(camera().zoom);
     rotation.update(camera().rotation);
     popup.showPopover();
     const { left, top } = zoomMenuPlacement(root.getBoundingClientRect(), popup.getBoundingClientRect(), viewport());
     popup.style.left = `${left}px`; popup.style.top = `${top}px`;
+  }
+  function updateMenu(render) {
+    const model = menu();
+    const boundary = Number(model.rotation_section);
+    render(items, { title: model.title, sections: model.sections.slice(0, boundary) }, close);
+    render(rotationItems, { title: copy.rotation, sections: model.sections.slice(boundary) }, close);
+    controls.update(model.buttons);
   }
   popup.addEventListener("toggle", e => {
     const shown = e.newState === "open";
@@ -76,9 +83,7 @@ export function createZoomReadout({ root, workspace, canvas, element, button, ic
     if (!open()) return;
     field.update(state.zoom);
     rotation.update(state.rotation);
-    const model = menu();
-    refreshMenu(items, model, close);
-    controls.update(model.buttons);
+    updateMenu(refreshMenu);
   }
-  return { root, popup, field, rotation, controls, items, refresh, open, close };
+  return { root, popup, field, rotation, controls, items, rotationItems, refresh, open, close };
 }

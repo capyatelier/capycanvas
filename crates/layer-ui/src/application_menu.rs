@@ -8,6 +8,7 @@ pub const NAVIGATOR_COMMANDS: [CommandId; 6] = [CommandId::ZoomOut, CommandId::Z
 pub struct ZoomMenu {
     #[serde(flatten)]
     pub menu: ContextMenu,
+    pub rotation_section: usize,
     pub buttons: Vec<CommandState>,
 }
 
@@ -275,17 +276,17 @@ impl<R: CanvasRenderer> UiSession<R> {
             sections: vec![
                 [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels].map(command).into(),
                 ZOOM_LEVELS.map(level).into(),
+                vec![lock(MessageId::MENU_LOCK_ZOOM, self.state.camera.zoom_locked,
+                    UiAction::SetZoomLocked { locked: !self.state.camera.zoom_locked })],
                 vec![ContextMenuItem { enabled: idle,
                     ..ContextMenuItem::command(self.localization().text(MessageId::MENU_RESET_ROTATION).to_string(),
-                        UiAction::SetRotation { rotation: 0.0 }) }],
-                vec![lock(MessageId::MENU_LOCK_ROTATION, self.state.camera.rotation_locked,
-                        UiAction::SetRotationLocked { locked: !self.state.camera.rotation_locked }),
-                    lock(MessageId::MENU_LOCK_ZOOM, self.state.camera.zoom_locked,
-                        UiAction::SetZoomLocked { locked: !self.state.camera.zoom_locked })],
+                        UiAction::SetRotation { rotation: 0.0 }) },
+                    lock(MessageId::MENU_LOCK_ROTATION, self.state.camera.rotation_locked,
+                        UiAction::SetRotationLocked { locked: !self.state.camera.rotation_locked })],
             ],
         }
         .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization());
-        ZoomMenu { menu, buttons: NAVIGATOR_COMMANDS.into_iter().map(|id| self.command(id)).collect() }
+        ZoomMenu { menu, rotation_section: 3, buttons: NAVIGATOR_COMMANDS.into_iter().map(|id| self.command(id)).collect() }
     }
 }
 

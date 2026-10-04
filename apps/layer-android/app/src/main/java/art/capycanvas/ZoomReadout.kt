@@ -20,6 +20,7 @@ import androidx.compose.ui.focus.focusProperties
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
+import org.json.JSONArray
 import org.json.JSONObject
 
 @Composable internal fun ZoomReadout(host: CanvasHost) {
@@ -44,6 +45,8 @@ import org.json.JSONObject
     val rotation = host.cameraRotation
     val locks = host.cameraLocks
     val commands = host.snapshot?.getJSONObject("state")?.array("commands")
+    val sections = menu.array("sections").values()
+    val rotationSection = menu.getInt("rotation_section")
     val copy = host.catalog.getJSONObject("native_copy").getJSONObject("header")
     LaunchedEffect(zoom, rotation, locks, commands) {
         host.query(obj("type" to "zoom_menu")) { next -> if (button.menu != null) (next as? JSONObject)?.let { button.menu = it } }
@@ -56,12 +59,15 @@ import org.json.JSONObject
             NumericSetting(copy.getString("zoom"), zoom, host.catalog.getJSONObject("zoom"), Modifier.fillMaxWidth(), inline = true,
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_zoom", "zoom" to it)) }
         }
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        WorkspaceMenuItems(host, JSONArray(sections.take(rotationSection)), close)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("rotation-field")) {
             NumericSetting(copy.getString("rotation"), rotation, host.catalog.getJSONObject("rotation"), Modifier.fillMaxWidth(),
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_rotation", "rotation" to it)) }
         }
         HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
-        WorkspaceMenuItems(host, menu.array("sections"), close)
+        WorkspaceMenuItems(host, JSONArray(sections.drop(rotationSection)), close)
         HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
         NavigationButtons(host, menu.array("buttons").objects(), "zoom")
     }

@@ -56,7 +56,8 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
       assert.ok(await evaluate(canvasFocused),`${kind}: opening leaves focus on the canvas`);
       assert.equal(await evaluate(`Number(document.querySelector('${menu} input.number-slider').getAttribute('aria-valuetext')?.replace(/[^0-9.]/g,''))`),37,`${kind}: the field shows the camera zoom`);
       const labels=await evaluate(`[...document.querySelectorAll('${menu} .zoom-menu-items .menu-label')].map(n=>n.textContent)`);
-      assert.deepEqual(labels,['Zoom in','Zoom out','Fit canvas','Actual Pixels','25%','50%','100%','200%','400%','Reset rotation','Lock rotation','Lock zoom'],'the shared zoom menu');
+      assert.deepEqual(labels,['Zoom in','Zoom out','Fit canvas','Actual Pixels','25%','50%','100%','200%','400%','Lock zoom','Reset rotation','Lock rotation'],'the shared zoom menu');
+      assert.ok(await evaluate(`(()=>{const zoom=document.querySelector('${menu} .number-control').getBoundingClientRect(),rotation=document.querySelector('${menu} .rotation-field').getBoundingClientRect(),lockZoom=${row('Lock zoom')}.getBoundingClientRect(),reset=${row('Reset rotation')}.getBoundingClientRect(),lockRotation=${row('Lock rotation')}.getBoundingClientRect(),buttons=document.querySelector('${menu} .navigator-buttons').getBoundingClientRect();return zoom.bottom<=lockZoom.top&&lockZoom.bottom<=rotation.top&&rotation.bottom<=reset.top&&reset.bottom<=lockRotation.top&&lockRotation.bottom<=buttons.top;})()`),'zoom controls precede rotation controls, with navigation buttons at the bottom');
       if(index===0)for(const name of ['light','dark']){await send({type:'set_theme',theme:name});await pause(150);await screenshot(`zoom-menu-${name}`);}
       await choose('200%',kind);
       await wait(`layerApp.state().camera.zoom===2&&!${opened}`);

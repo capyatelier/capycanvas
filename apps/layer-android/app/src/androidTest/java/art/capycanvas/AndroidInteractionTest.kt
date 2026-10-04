@@ -2062,6 +2062,12 @@ class AndroidInteractionTest {
                 tool = device
                 action(obj("type" to "set_zoom", "zoom" to .37))
                 open(name)
+                onMain {
+                    val root = zoomMenuRoot()!!
+                    val positions = listOf(hasTag("zoom-field"), hasLabel("Lock zoom"), hasTag("rotation-field"),
+                        hasLabel("Reset rotation"), hasLabel("Lock rotation")).map { root.find(it)!!.positionInRoot.y }
+                    assertTrue("$name zoom controls precede rotation controls", positions.zipWithNext().all { (a, b) -> a < b })
+                }
                 if (device == MotionEvent.TOOL_TYPE_STYLUS) captureCanvasBar("zoom-menu-$theme", "zoom-readout")
                 choose("Lock rotation")
                 waitFor("$name rotation lock applies", 5_000) { camera().getBoolean("rotation_locked") && !zoomMenuShown() }
@@ -2099,7 +2105,7 @@ class AndroidInteractionTest {
                 instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
                 waitFor("$name typed rotation works while locked", 5_000) { kotlin.math.abs(camera().getDouble("rotation") - Math.PI / 4) < .00001 }
                 revealInMenu(hasTag("number-slider-Rotation"), "zoom-menu")
-                val slider = bounds("number-slider-Rotation")
+                val slider = settledBounds("number-slider-Rotation")
                 tap(Offset(slider.left + slider.width * .3f, slider.center.y))
                 waitFor("$name rotation slider works while locked", 5_000) { kotlin.math.abs(camera().getDouble("rotation") - Math.PI / 4) > .01 }
                 choose("Reset rotation")

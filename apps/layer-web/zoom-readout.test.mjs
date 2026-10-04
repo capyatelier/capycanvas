@@ -30,9 +30,11 @@ class FakeElement extends SharedElement {
 
 const document = { body: new FakeElement("body"), activeElement: null };
 const commands = ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"];
-const menuModel = zoomIn => ({ buttons: commands.map(id => ({ id, icon: id, label: id, tooltip: id, enabled: id !== "zoom_in" || zoomIn, selected: false })), title: "Zoom", sections: [
+const menuModel = zoomIn => ({ buttons: commands.map(id => ({ id, icon: id, label: id, tooltip: id, enabled: id !== "zoom_in" || zoomIn, selected: false })), title: "Zoom", rotation_section: 3n, sections: [
   [["Zoom in", { type: "invoke", command: "zoom_in" }, zoomIn], ["Actual Pixels", { type: "invoke", command: "actual_pixels" }, true]],
   [["50%", { type: "set_zoom", zoom: 0.5 }, true], ["200%", { type: "set_zoom", zoom: 2 }, true]],
+  [["Lock zoom", { type: "set_zoom_locked", locked: true }, true]],
+  [["Reset rotation", { type: "set_rotation", rotation: 0 }, true], ["Lock rotation", { type: "set_rotation_locked", locked: true }, true]],
 ].map(section => section.map(([label, action, enabled]) => ({ label, action, enabled, hint: "", selected: null, sections: [] }))) });
 
 function harness() {
@@ -70,7 +72,7 @@ function harness() {
   });
   root.rect = { left: 1300, top: 950, right: 1400, bottom: 972, width: 100, height: 22 };
   readout.popup.rect = { width: 240, height: 300 };
-  const row = label => readout.items.children.find(n => n.textContent === label);
+  const row = label => [...readout.items.children, ...readout.rotationItems.children].find(n => n.textContent === label);
   const key = (node, name = "Escape") => { document.activeElement = node; return window.dispatch("keydown", { key: name, target: node }); };
   return { readout, root, canvas, window, dispatched, rendered, row, key,
     setCamera: next => { camera = next; }, setZoomIn: value => { zoomIn = value; } };
@@ -97,7 +99,10 @@ test("opening shows the shared menu and the camera zoom above the readout", () =
   h.root.click();
   assert.equal(h.readout.open(), true);
   assert.equal(h.root.getAttribute("aria-expanded"), "true");
-  assert.deepEqual(h.rendered.at(-1), menuModel(true));
+  const model = menuModel(true);
+  assert.deepEqual(h.rendered.map(m => m.sections), [model.sections.slice(0, Number(model.rotation_section)), model.sections.slice(Number(model.rotation_section))]);
+  const content = h.readout.popup.children.filter(n => n.tagName !== "HR");
+  assert.deepEqual(content, [h.readout.field, h.readout.items, h.readout.rotation, h.readout.rotationItems, h.readout.controls]);
   assert.deepEqual(h.readout.field.values, [0.5], "the field starts at the camera's zoom");
   assert.deepEqual(h.readout.popup.style, { left: `${1400 - 240}px`, top: `${950 - 300 - MARGIN}px` });
   assert.equal(document.activeElement, h.canvas, "opening leaves focus on the canvas");

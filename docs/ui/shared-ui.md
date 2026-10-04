@@ -395,8 +395,9 @@ Pixels. The field takes its value from the camera and refreshes only while the
 menu is open.
 
 GTK, Web and Android also show a rotation slider from
-`NumericControl::rotation()`, Reset rotation, and a separate section with Lock
-rotation and Lock zoom checkmarks. `SetRotation` rotates about the work-area
+`NumericControl::rotation()`. Zoom controls and percentages precede Lock zoom;
+the rotation slider, Reset rotation and Lock rotation follow together. Both locks
+show checkmarks. `SetRotation` rotates about the work-area
 centre without changing the artwork. The locks belong to the camera and stop
 canvas navigation gestures, including touch, wheel and continuous zoom input;
 pan remains available. Explicit sliders, percentages, commands and shortcuts
@@ -406,7 +407,8 @@ horizontal/vertical. These buttons keep the menu open and follow live command
 availability.
 
 Hosts read numeric specifications from `UiCatalog` and menu sections and buttons
-from the Web `zoom_menu` export or native `zoom_menu` query. Opening the menu or
+from the Web `zoom_menu` export or native `zoom_menu` query. Its `rotation_section`
+marks where the rotation slider belongs, after the zoom items. Opening the menu or
 choosing an item preserves canvas keyboard focus; typing borrows it:
 - GTK's readout button cannot take focus, and closing its popover returns
   focus to the canvas.

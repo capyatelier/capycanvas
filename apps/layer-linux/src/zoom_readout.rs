@@ -5,7 +5,8 @@ use gtk::{gio, glib};
 use layer_ui::{Camera, NumericControl, UiAction};
 use std::{cell::RefCell, rc::Rc};
 
-const FIELD: &str = "zoom-fields";
+const FIELD: &str = "zoom-field";
+const ROTATION: &str = "rotation-field";
 const BUTTONS: &str = "zoom-buttons";
 
 pub struct ZoomReadout {
@@ -14,7 +15,6 @@ pub struct ZoomReadout {
     pub(crate) menu: gtk::PopoverMenu,
     pub(crate) field: NumberControl,
     pub(crate) rotation: NumberControl,
-    fields: gtk::Box,
     controls: crate::navigator::NavigationControls,
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
@@ -35,14 +35,10 @@ impl ZoomReadout {
         menu.set_widget_name("zoom-menu");
         menu.set_position(gtk::PositionType::Top);
         let field = NumberControl::inline(NumericControl::zoom(), &title, localization.clone());
-        field.set_widget_name("zoom-field");
+        field.set_widget_name(FIELD);
         field.set_size_request(220, -1);
         let rotation = NumberControl::new(NumericControl::rotation(), &localization.text(layer_ui::MessageId::MENU_ROTATION), "", localization);
-        rotation.set_widget_name("rotation-field");
-        let fields = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        fields.set_widget_name(FIELD);
-        fields.append(&field);
-        fields.append(&rotation);
+        rotation.set_widget_name(ROTATION);
         let controls = crate::navigator::NavigationControls::new("zoom");
         Rc::new(Self {
             root,
@@ -50,7 +46,6 @@ impl ZoomReadout {
             menu,
             field,
             rotation,
-            fields,
             controls,
             previous_focus: RefCell::new(None),
         })
@@ -114,24 +109,24 @@ impl ZoomReadout {
             return;
         };
         *self.previous_focus.borrow_mut() = gtk::prelude::RootExt::focus(&workspace.window).map(|f| f.downgrade());
-        if self.fields.parent().is_some() {
-            self.menu.remove_child(&self.fields);
+        if self.field.parent().is_some() {
+            self.menu.remove_child(&self.field);
+            self.menu.remove_child(&self.rotation);
             self.menu.remove_child(&self.controls.root);
         }
         self.controls.refresh(&model.buttons);
+        let rotation_section = model.rotation_section as i32;
         let root = workspace.workspace_menu_model(&self.menu, model.menu);
-        let item = gio::MenuItem::new(None, None);
-        item.set_attribute_value("custom", Some(&FIELD.to_variant()));
-        let section = gio::Menu::new();
-        section.append_item(&item);
-        root.prepend_section(None, &section);
-        let item = gio::MenuItem::new(None, None);
-        item.set_attribute_value("custom", Some(&BUTTONS.to_variant()));
-        let section = gio::Menu::new();
-        section.append_item(&item);
-        root.append_section(None, &section);
+        for (position, name) in [(0, FIELD), (rotation_section + 1, ROTATION), (-1, BUTTONS)] {
+            let item = gio::MenuItem::new(None, None);
+            item.set_attribute_value("custom", Some(&name.to_variant()));
+            let section = gio::Menu::new();
+            section.append_item(&item);
+            root.insert_section(position, None, &section);
+        }
         self.menu.set_menu_model(Some(&root));
-        self.menu.add_child(&self.fields, FIELD);
+        self.menu.add_child(&self.field, FIELD);
+        self.menu.add_child(&self.rotation, ROTATION);
         self.menu.add_child(&self.controls.root, BUTTONS);
         self.field.set_value(f64::from(camera.zoom));
         self.rotation.set_value(f64::from(camera.rotation));

@@ -1749,7 +1749,8 @@ mod tests {
             assert_eq!(update["camera"], json!(app.session.state().camera));
         }
         let menu = app.query(json!({"type": "zoom_menu"})).unwrap();
-        assert_eq!(menu["sections"][3][0]["selected"], true);
+        assert_eq!(menu["rotation_section"], 3);
+        assert_eq!(menu["sections"][2][0]["selected"], true);
         assert_eq!(menu["sections"][3][1]["selected"], true);
         assert_eq!(menu["buttons"].as_array().unwrap().len(), layer_ui::NAVIGATOR_COMMANDS.len());
     }

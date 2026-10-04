@@ -59,10 +59,10 @@ fn set_zoom_clamps_to_the_camera_limits_and_waits_for_idle() {
 }
 
 #[test]
-fn zoom_menu_offers_view_commands_then_fixed_levels() {
+fn zoom_menu_groups_zoom_and_rotation_controls() {
     let mut s = session(Platform::Gtk);
     let menu = s.zoom_menu();
-    let [commands, levels, reset, locks] = menu.menu.sections.as_slice() else {
+    let [commands, levels, zoom_lock, rotation] = menu.menu.sections.as_slice() else {
         panic!("four sections: {menu:?}");
     };
     let invoked: Vec<_> = commands
@@ -72,8 +72,12 @@ fn zoom_menu_offers_view_commands_then_fixed_levels() {
             _ => panic!("{i:?}"),
         })
         .collect();
-    assert_eq!(reset[0].action, Some(UiAction::SetRotation { rotation: 0.0 }));
-    assert_eq!(locks.iter().map(|i| i.selected).collect::<Vec<_>>(), [Some(false), Some(false)]);
+    assert_eq!(menu.rotation_section, 3);
+    assert_eq!(zoom_lock[0].action, Some(UiAction::SetZoomLocked { locked: true }));
+    assert_eq!(zoom_lock[0].selected, Some(false));
+    assert_eq!(rotation[0].action, Some(UiAction::SetRotation { rotation: 0.0 }));
+    assert_eq!(rotation[1].action, Some(UiAction::SetRotationLocked { locked: true }));
+    assert_eq!(rotation[1].selected, Some(false));
     assert_eq!(menu.buttons.iter().map(|c| c.id).collect::<Vec<_>>(), NAVIGATOR_COMMANDS);
     assert_eq!(invoked, [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels]);
     assert_eq!(commands[3].label, "Actual Pixels");
@@ -127,9 +131,9 @@ fn navigation_locks_preserve_pan_and_leave_explicit_controls_usable() {
             assert!((s.state.camera.rotation - before.rotation - if rotation { 0.0 } else { 0.3 }).abs() < 1e-5);
             let anchored = s.state.camera.input_transform().map(layer_core::Point { x: to[0], y: to[1] });
             assert!((anchored.x - point.x).abs() < 1e-3 && (anchored.y - point.y).abs() < 1e-3);
-            let locks = &s.zoom_menu().menu.sections[3];
-            assert_eq!(locks[0].selected, Some(rotation));
-            assert_eq!(locks[1].selected, Some(zoom));
+            let menu = s.zoom_menu();
+            assert_eq!(menu.menu.sections[2][0].selected, Some(zoom));
+            assert_eq!(menu.menu.sections[menu.rotation_section][1].selected, Some(rotation));
             assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
         }
         s.dispatch(UiAction::SetZoomLocked { locked: true }).unwrap();
