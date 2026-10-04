@@ -30,8 +30,8 @@ impl CursorMode {
         (Self::SinglePixelDot, "Single-pixel dot"),
         (Self::Sight, "Sight"),
         (Self::Tool, "Tool"),
-        (Self::ToolBrushSize, "Tool and brush size"),
         (Self::BrushSize, "Brush size"),
+        (Self::ToolBrushSize, "Tool and brush size"),
         (Self::BrushSizeCross, "Brush size and cross"),
         (Self::BrushSizeDot, "Brush size and dot"),
         (

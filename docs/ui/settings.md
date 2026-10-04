@@ -38,11 +38,11 @@ About ends with a read-only two-column row, Dedicated to / Nagu, after Source
 code. Application license shows its value without a description.
 
 **Cursor shape** is one shared setting for canvas tools, with None first,
-followed by Cross, Triangle, Dot, Single-pixel dot, Sight, Tool, Tool and brush
-size, and brush-size
-outlines with no center marker, a cross, a dot, or a single-pixel dot. The
-brush-size options retain the resolved brush-tip shape and dynamics. Existing
-saved cursor modes remain valid, and Reset still selects the brush-size outline.
+followed by Cross, Triangle, Dot, Single-pixel dot, Sight and Tool, then Brush
+size, Tool and brush size, and brush-size outlines with a cross, a dot, or a
+single-pixel dot. The brush-size options retain the resolved brush-tip shape and
+dynamics. Existing saved cursor modes remain valid, and Reset still selects the
+brush-size outline.
 Single-pixel markers occupy one physical display pixel at any host scale.
 Dot is a tiny cross. Cross, Dot, and Sight use dark strokes with a light surround;
 Sight also has a center dot. Their silhouettes match the shared dropdown icons.
