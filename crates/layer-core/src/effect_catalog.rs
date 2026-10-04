@@ -502,7 +502,7 @@ fn gaussian_consumers_admit_extended_sigma_with_bounded_preparation_and_support(
         let encoded=serde_json::to_vec(&effect).unwrap();let restored:crate::EffectInstance=serde_json::from_slice(&encoded).unwrap();
         assert_eq!(restored,effect);
         effect.set("sigma",EffectValue::Number(170.)).unwrap();
-        assert_eq!(effect.program.passes.iter().map(|pass|pass.sampling.radius((&effect).into()).unwrap()).collect::<Vec<_>>(),[255,255],"{id}");
+        assert_eq!(effect.program.passes.iter().map(|pass|pass.sampling.radius((&effect).into()).unwrap()).collect::<Vec<_>>(),[510,510],"{id}");
         assert!(effect.set("sigma",EffectValue::Number(-0.5)).is_err(),"{id}");
     }
 }

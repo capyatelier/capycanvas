@@ -662,6 +662,13 @@ fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=p-settings.operation_offset.zw;
     return fx_grid_sample(front,point,settings.source_over,settings.operation_linear.x);
 }
+fn fx_sample_bounds()->vec4<f32> {
+    let grid=settings.source_over;
+    let size=select(vec2<f32>(textureDimensions(front)),grid.zw,grid.z>0.);
+    let origin=select(vec2<f32>(0.),grid.xy,grid.z>0.)+settings.operation_offset.zw;
+    let side=max(1.,settings.operation_linear.x);
+    return vec4(origin+min(vec2(side),size)*.5,origin+(side*(ceil(size/side)-1.)+size)*.5);
+}
 fn fx_original(p:vec2<f32>)->vec4<f32> {
     let point=p-settings.operation_offset.zw;
     return fx_grid_sample(back,point,settings.backdrop,settings.operation_linear.y);

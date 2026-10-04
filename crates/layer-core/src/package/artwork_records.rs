@@ -275,7 +275,7 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
     let mut known=Vec::new();
     for (identity,record) in objects {
         let kind=record["type"].as_str().ok_or("Missing object type")?;
-        if !matches!(kind,"capy.composition/1"|"capy.stack/1"|"capy.occurrence/2"|"capy.paint-source/1"|"capy.coverage-source/1"|"capy.effect/1"|"capy.effect-definition/1"|"capy.selection/1"|"capy.guides/1"|"capy.output/1") {
+        if !super::manifest::known_object(kind) {
             if record["ancillary"].as_bool()==Some(true) {continue;}
             return Err(DecodeError::Unsupported(format!("Unknown authored object {kind}")));
         }
@@ -380,6 +380,7 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
             "capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},
             "capy.occurrence/2"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},
             "capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},
+            kind if record["ancillary"].as_bool()!=Some(true)=>return Err(DecodeError::Unsupported(format!("Unknown authored object {kind}"))),
             _=>{},
         }
     }

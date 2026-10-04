@@ -653,7 +653,7 @@ use super::*;
 use layer_core::{EffectInstance, EffectKind, EffectResolution, EffectSpace, EffectValue};
 use std::sync::Arc;
 
-const SIGMAS:[f32;8]=[0.,0.1,1.,3.,21.,21.1,64.,85.];
+const SIGMAS:[f32;9]=[0.,0.1,1.,3.,21.,21.1,64.,85.,120.];
 const CONSUMERS:[&str;6]=["gaussian_blur","unsharp_mask","high_pass","bloom","soft_focus","pencil"];
 
 fn gaussian_fixture(id:&str,sigma:f32,resolution:EffectResolution)->EffectInstance {
@@ -726,7 +726,7 @@ fn assert_points(image:&[[f32;4]],extent:[u32;2],field:Field,sigma:f32,points:&[
         let actual=image[(p[1] as u32*extent[0]+p[0] as u32) as usize];let target=expected(field,p,extent,&weights);
         for i in 0..4 {
             let error=(f64::from(actual[i])-target[i]).abs();maximum=maximum.max(error);
-            let tolerance=match field {Field::Impulse(..)=>target[i].abs()*0.003+2e-10,_=>2e-5*target[i].abs().max(1.)};
+            let tolerance=match field {Field::Impulse(..)=>target[i].abs()*0.003+if sigma>85. {f64::from(layer_core::color::f16::from_bits(1).to_f32())}else{2e-10},_=>2e-5*target[i].abs().max(1.)};
             assert!(actual[i].is_finite()&&error<=tolerance,"{field:?} sigma={sigma} at={p:?} actual={actual:?} expected={target:?}");
         }
     }
@@ -749,6 +749,47 @@ fn gaussian_support_edges_and_seams_match_unpaired_f64_kernel() {
             assert_points(&image,extent,field,sigma,&points);
             if sigma==0. {
                 for p in [[0,0],center,[1028,516]] {assert_eq!(image[(p[1] as u32*extent[0]+p[0] as u32) as usize],expected(field,p,extent,&[1.]).map(|v|v as f32));}
+            }
+        }
+    }
+}
+
+#[test]
+fn saved_large_sigmas_preserve_gaussian_width_and_edge_mass() {
+    let extent=[257,9];let color=layer_core::color::DocumentColor {depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    let fields=[Field::Constant([1.5,-0.25,2.,0.5]),Field::Impulse([128,4],[0.25,0.5,1.,1.]),
+        Field::Step(128,[0.1,0.2,0.3,0.5],[0.8,0.4,0.2,1.])];
+    for sigma in [85.01,120.,512.,65536.] {
+        for field in fields {
+            let doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)]);
+            r.submit(packet(doc.scene(),extent)).unwrap();
+            let image=pixels(&r,crate::test_support::document_texture(&r));
+            assert_points(&image,extent,field,sigma,&[[0,0],[1,4],[64,4],[127,4],[128,4],[129,4],[192,4],[255,4],[256,8]]);
+        }
+    }
+}
+
+#[test]
+fn saved_spatial_lengths_keep_their_scale_beyond_editor_bounds() {
+    let extent=[129,3];let color=layer_core::color::DocumentColor {depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    let sample=|x:f64| {let x=(x-0.5).clamp(0.,128.);let a=if x.floor()<64. {0.1}else{0.8};
+        let b=if x.floor()+1.<64. {0.1}else{0.8};a+(b-a)*x.fract()};
+    for (id,key) in [("motion_blur","distance"),("pixel_mosaic","size")] {
+        for value in [0.25,120.,65536.] {
+            let mut effect=EffectInstance::new(crate::tests::fixture(id).program());set(&mut effect,key,value);
+            if id=="motion_blur" {set(&mut effect,"angle",0.);}
+            let doc=gaussian_document(extent,color,[effect,original(Field::Step(64,[0.1;4],[0.8;4]))]);
+            r.submit(packet(doc.scene(),extent)).unwrap();let image=pixels(&r,crate::test_support::document_texture(&r));
+            for x in [0,32,63,64,65,96,128] {
+                let value=f64::from(value);let p=f64::from(x)+0.5;
+                let expected=if id=="pixel_mosaic" {sample(((p/value).floor()+0.5)*value)}else {
+                    let count=(value.ceil() as usize+1).max(2);
+                    (0..count).map(|i|sample(p+value*(i as f64/(count-1) as f64-0.5))).sum::<f64>()/count as f64
+                };
+                let actual=image[129+x as usize];
+                assert!(actual.iter().all(|v|v.is_finite()&&(f64::from(*v)-expected).abs()<2e-5),"{id} {value} at {x}: {actual:?} != {expected}");
             }
         }
     }
@@ -965,7 +1006,7 @@ fn native_and_reduced_gaussian_preparation_variants_do_not_overwrite_each_other(
     let extent=[1029,517];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
     let mut doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",85.,EffectResolution::Display),original(Field::Step(256,[0.1,0.2,0.3,1.],[0.8,0.4,0.2,1.]))]);
     let mut reused=WgpuRasterizer::new_native_headless(color).unwrap();
-    for (sigma,level) in [(85.,0),(85.,1),(85.,2),(85.,3),(64.,3),(64.,0),(85.,2),(85.,0)] {
+    for (sigma,level) in [(85.,0),(85.,1),(85.,2),(85.,3),(64.,3),(64.,0),(120.,0),(120.,1),(512.,2),(85.,2),(85.,0)] {
         set_effect_at(&mut doc,0,"sigma",EffectValue::Number(sigma));let side=(1<<level) as f32;
         reused.scale_display=None;
         let mut frame=packet(doc.scene(),extent);frame.composite_all=false;frame.view.document_to_surface=[1./side,0.,0.,1./side,0.,0.];

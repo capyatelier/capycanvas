@@ -208,6 +208,58 @@ fn unsupported_known_fields_future_objects_and_shared_sources_preserve_original_
 }
 
 #[test]
+fn future_record_types_and_selection_descriptors_preserve_the_package() {
+    let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
+    for (collection,kind) in [("objects","capy.composition/1"),("objects","capy.stack/1"),
+        ("objects","capy.occurrence/2"),("objects","capy.paint-source/1"),("objects","capy.coverage-source/1"),
+        ("objects","capy.effect-definition/1"),("objects","capy.effect/1"),("objects","capy.selection/1"),
+        ("objects","capy.guides/1"),("objects","capy.output/1"),("resources","capy.raster-tile/1"),
+        ("resources","capy.selection-coverage/1"),("resources","capy.icc/1"),
+        ("resources","capy.photo-metadata/1"),("resources","capy.lut3d/1")] {
+        let changed=rewrite(&bytes,|manifest| {
+            let records=manifest[collection].as_array_mut().unwrap();
+            assert!(records.iter().any(|r|r["type"]==kind));
+            for record in records.iter_mut().filter(|r|r["type"]==kind) {record["type"]=json!(format!("{kind}-future"));}
+        });
+        let OpenOutcome::Preserved {source,preview,..}=open(backing(changed.clone()),Default::default(),&AtomicBool::new(false)).unwrap()
+            else {panic!("future {kind} must be preserved")};
+        assert!(preview.is_some());
+        let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,changed);
+    }
+    for (key,value,preserved) in [("future_sampling",json!(true),true),("depth",json!("f32"),true),
+        ("chunk",json!(7),false),("bounds",json!([0,0,4,2]),false)] {
+        let changed=rewrite(&bytes,|manifest| {
+            for record in manifest["resources"].as_array_mut().unwrap().iter_mut().filter(|r|r["type"]=="capy.selection-coverage/1") {
+                record["data"][key]=value.clone();
+            }
+        });
+        let outcome=open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap();
+        if preserved {assert!(matches!(outcome,OpenOutcome::Preserved {..}),"{key}: {outcome:?}");}
+        else {assert!(matches!(outcome,OpenOutcome::RecoveredView {..}),"{key}: {outcome:?}");}
+    }
+    let changed=rewrite(&bytes,|manifest| {
+        for record in manifest["resources"].as_array_mut().unwrap().iter_mut().filter(|r|r["type"]=="capy.raster-tile/1") {
+            record["type"]=json!("capy.icc/1");
+        }
+    });
+    assert!(matches!(open(backing(changed),Default::default(),&AtomicBool::new(false)).unwrap(),OpenOutcome::RecoveredView {..}));
+}
+
+#[test]
+fn selection_admission_preserves_a_valid_package() {
+    let mut artwork=Artwork::new([8,1]).unwrap();
+    artwork.selections.insert(identity(1),SavedSelection {selection:Selection::pixels(Arc::new(
+        SelectionPixels::bytes([8,1],[0,0,8,1],vec![u32::MAX;2]).unwrap()))}).unwrap();
+    let bytes=serialize(&prepare(&artwork,false));
+    for limits in [crate::ProjectLimits {raster_bytes:3,..Default::default()},crate::ProjectLimits {tiles:0,..Default::default()}] {
+        let OpenOutcome::Preserved {source,..}=open(backing(bytes.clone()),limits,&AtomicBool::new(false)).unwrap()
+            else {panic!("selection admission must preserve the package")};
+        let mut copied=Vec::new();copy_original(&source,&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,bytes);
+        assert_eq!(editable(copied).selections.len(),1);
+    }
+}
+
+#[test]
 fn corrupt_authorship_returns_only_a_verified_preview_and_latches_resource_failure() {
     let bytes=serialize(&prepare(&fixture(SampleDepth::U8),true));
     for mutation in [0,1] {

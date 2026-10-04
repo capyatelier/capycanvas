@@ -74,7 +74,7 @@ fn kind(record: &Value) -> Result<&str, String> {
     if name.is_empty() { return Err("Empty record type".into()); }
     Ok(name)
 }
-fn known_object(name: &str) -> bool { matches!(name,
+pub(crate) fn known_object(name: &str) -> bool { matches!(name,
     "capy.composition/1" | "capy.stack/1" | "capy.occurrence/2" | "capy.paint-source/1" | "capy.coverage-source/1" |
     "capy.effect/1" | "capy.effect-definition/1" | "capy.selection/1" | "capy.guides/1" | "capy.output/1") }
 fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static str>) -> Result<Shape, String> {
@@ -118,7 +118,10 @@ fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static st
         _ => unknown(),
     })
 }
-fn resource_supported(record: &Value) -> Result<bool, String> {
+pub(crate) fn known_resource(name: &str) -> bool { matches!(name,
+    "capy.raster-tile/1" | "capy.selection-coverage/1" | "capy.icc/1" |
+    "capy.wgsl/1" | "capy.photo-metadata/1" | "capy.lut3d/1") }
+pub(crate) fn resource_supported(record: &Value) -> Result<bool, String> {
     let fields = object(record)?;
     let data = object(required(fields, "data")?)?;
     let encoding = string(required(fields, "encoding")?)?;

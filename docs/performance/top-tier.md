@@ -77,6 +77,7 @@ current-source results.
 | Gaussian Blur Radius, soft range | 120, soft | **Not met.** 34.15–35.44 presents/s; interval p99 66.67–75.00 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
 | Unsharp Mask Amount, native Radius 21 or 85 | 120, soft | **Not met.** No presents during three five-second contacts at either radius | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
 | Navigation with Gaussian Blur, Radius 85 | 120 | **Not met.** 40.55–41.09 presents/s; interval p99 33.33 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
+| Saved spatial lengths beyond editor bounds, including Gaussian sigma >85 | 120, soft | Unmeasured | Full authored lengths need moving-frame qualification; earlier capped-value measurements do not apply |
 | Edge-Preserving Smooth slider | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
 | Fill layer or gradient-fill edit | 120, soft | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |

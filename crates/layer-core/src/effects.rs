@@ -182,8 +182,8 @@ impl EffectSampling {
                 scale,
                 padding,
             } => match effect.parameter(key)? {
-                (parameter, EffectValue::Number(value)) => {
-                    ((parameter.evaluated(*value) * scale).ceil() as u32).checked_add(*padding)
+                (_, EffectValue::Number(value)) => {
+                    ((*value * scale).ceil() as u32).checked_add(*padding)
                 }
                 _ => None,
             },
@@ -595,7 +595,7 @@ impl<'a> EffectView<'a> {
         let mut data = vec![[0.; 4]];
         for (parameter,value) in self.program.parameters.iter().zip(self.values) {
             match value {
-                EffectValue::Number(v) => data.push([parameter.evaluated(*v), 0., 0., 0.]),
+                EffectValue::Number(v) => data.push([*v, 0., 0., 0.]),
                 EffectValue::Toggle(v) => data.push([f32::from(*v), 0., 0., 0.]),
                 EffectValue::Choice(v) => {
                     let code = if matches!(&self.program.auxiliary, Some(EffectAuxiliary::Lut3d {color_space,..}) if color_space == &parameter.key) {
@@ -729,12 +729,6 @@ impl EffectParameter {
     }
     pub fn accepts(&self, value: f32) -> bool {
         self.accepted_range().is_some_and(|[low, high]| value.is_finite() && (low..=high).contains(&value))
-    }
-    pub fn evaluated(&self, value: f32) -> f32 {
-        match self.kind {
-            EffectParameterKind::Number { min, max, .. } if self.pixel_length() => value.clamp(min, max),
-            _ => value,
-        }
     }
     pub fn validate(&self, value: &EffectValue) -> Result<(), &'static str> {
         if self.key.is_empty()
@@ -1039,13 +1033,14 @@ mod tests {
         }
     }
     #[test]
-    fn resizing_keeps_pixel_lengths_beyond_the_evaluated_range() {
+    fn resizing_evaluates_the_full_authored_pixel_length() {
         let mut effect=EffectInstance::new(fixture("gaussian_blur").program());
         effect.set("sigma",EffectValue::Number(60.)).unwrap();
         let scaled=effect.view().scaled_values(2.).unwrap();
         assert_eq!(scaled[0],EffectValue::Number(120.));
         let view=EffectView::new(&effect.program,&scaled);
-        assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1][0],85.);
+        assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[1][0],120.);
+        assert_eq!(view.damage_radius(),Some(720));
         assert_eq!(view.scaled_values(0.5).unwrap(),effect.values);
     }
     #[test]

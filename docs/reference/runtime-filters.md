@@ -201,7 +201,7 @@ Each parameter declares its semantic `dimension`: `scalar` (the default),
 Counts require whole bounds and values. Posterize Levels and Kaleidoscope Segments
 are counts. Denoise exposes Strength and uses an internal radius of two pixels;
 Domain Warp uses three internal noise octaves. Image resize scales pixel lengths
-without rounding to displayed decimal places or clamping to the evaluated range;
+without rounding to displayed decimal places or clamping to catalog bounds;
 displayed `unit` labels affect presentation only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
 Custom packages retain their own declarations; built-in files omit the schema.
 Percentages keep their existing meanings: center coordinates use the composition
@@ -498,10 +498,21 @@ fused multiply-adds, then restore the scale within the finite Float32 range.
 Kernels without effective side taps return the center sample unchanged. Coverage
 is clamped to its valid range after accumulation. Coefficients are prepared once, outside pixel evaluation. The
 standalone Tent Blur example demonstrates a different kernel using the same ABI.
-Radius stores sigma from 0 to 85 px, with a 0–21 px soft slider range and
-square-root mapping for finer low values. Preparation uses 256 lanes and 129
-records for support up to `ceil(3*sigma) = 255` pixels. Frequency Separation
-uses the same admitted Gaussian range.
+Radius edits sigma from 0 to 85 px, with a 0–21 px soft slider range and
+square-root mapping for finer low values. Saved and resized sigma can exceed
+those editor bounds. Preparation uses 256 lanes and 129 records through 85
+evaluation texels. Above that, the header retains sigma, support and texel size;
+the consumer evaluates the full kernel over source samples, with paired taps and
+error-function integrals for clamped edge tails. Work and storage do not grow
+with off-image support. The independent Float64 kernel fixtures cover the
+transition and saved sigma through 65,536 pixels. Frequency Separation's dialog
+retains its 0–85 px range.
+
+`fx_sample_bounds()` returns the first and last source sample centers in document
+coordinates. Its bounds account for reduced-resolution edge cells. Built-in
+periods used as divisors use a numerical floor of 1/256 pixel; all other pixel
+lengths pass to shaders unchanged. The [package math contract](capy-package.md#evaluation-meaning)
+owns their lasting meaning.
 
 Every pass of an effect chain at one resolution shares a persistent
 parameter/table buffer. Resolution variants retain separate buffers and reuse
@@ -552,7 +563,8 @@ no third-party shader implementation was imported.
 Run the changed-layer checks in [Testing](../development/testing.md). Core tests
 cover reserved IDs, explicit keyed values, dimensions, opaque colors and stable
 color-space choices. The fixed `builtin-contracts.json` snapshot protects semantic
-parameter contracts and shader parameter order; the fixed artwork fixture
+parameter contracts, color domain and alpha behavior independently of shader
+parameter order and ABI; the fixed artwork fixture
 retains pixel, material, lookup and authored-value assertions. Renderer
 tests compile all current built-ins and custom programs with overlapping function
 names separately. UI tests cover atomic catalog publication without document

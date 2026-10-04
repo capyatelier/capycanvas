@@ -73,12 +73,44 @@ fn saved_numeric_bounds_remain_accepted_independently_of_slider_ranges() {
     let contracts:Value=serde_json::from_str(include_str!("fixtures/builtin-contracts.json")).unwrap();
     for (id,contract) in contracts.as_object().unwrap() {
         let builtin=crate::bundled_effect_catalog().get(id).unwrap();
-        for saved in contract["parameters"].as_array().unwrap() {
+        for (key,saved) in contract["parameters"].as_object().unwrap() {
             if saved["kind"]["kind"]!="number" {continue;}
-            let parameter=builtin.program.parameters.iter().find(|p|p.key.as_ref()==saved["key"].as_str().unwrap()).unwrap();
+            let parameter=builtin.program.parameters.iter().find(|p|p.key.as_ref()==key).unwrap();
             for bound in ["min","max"] {parameter.validate(&EffectValue::Number(saved["kind"][bound].as_f64().unwrap() as f32)).unwrap();}
         }
     }
     assert_eq!(crate::package::RASTER_TILE_SIZE,256);
     assert_eq!(crate::package::SELECTION_CHUNK_BYTES,65536);
+}
+
+#[test]
+fn pixel_lengths_reopen_and_evaluate_without_catalog_clamping() {
+    let mut artwork=editable(SAVED.to_vec());
+    let handles:Vec<_>=artwork.effects.iter().map(|(handle,_,_)|handle).collect();
+    for handle in handles {
+        let application=artwork.effects.get_mut(handle).unwrap();
+        let program=&artwork.definitions.get(application.definition).unwrap().program;
+        for (parameter,value) in program.parameters.iter().zip(&mut application.values) {
+            if matches!(parameter.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {*value=EffectValue::Number(120.);}
+        }
+    }
+    let reopened=editable(serialize(&prepare(&artwork,false)));
+    for (_,_,application) in reopened.effects.iter() {
+        let mut program=reopened.definitions.get(application.definition).unwrap().program.clone();
+        for parameter in Arc::make_mut(&mut Arc::make_mut(&mut program).parameters) {
+            if matches!(parameter.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {
+                if let crate::EffectParameterKind::Number {max,..}=&mut parameter.kind {*max=100.;}
+                parameter.soft_bounds=None;
+            }
+        }
+        let view=crate::EffectView::new(&program,&application.values);
+        let mut slot=1;
+        for (parameter,value) in program.parameters.iter().zip(&application.values) {
+            if matches!(parameter.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {
+                assert_eq!(*value,EffectValue::Number(120.));
+                assert_eq!(view.gpu_parameters(RgbSpace::Srgb).unwrap()[slot][0],120.);
+            }
+            slot+=match parameter.kind {crate::EffectParameterKind::Curve|crate::EffectParameterKind::Gradient=>crate::EFFECT_TABLE_VECTORS,_=>1};
+        }
+    }
 }

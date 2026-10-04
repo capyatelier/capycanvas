@@ -63,6 +63,7 @@ current-source results.
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 90, soft | | |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 90, soft | Gaussian at 50%: 7.2/s small, 4.6/s large fresh completed canvas updates; UI 58.7–59.3/s and 40.3–41.8/s. Fit: 38.9/s and 26.1/s fresh canvas updates | Spatial composition comparison below; target not met; other filters unmeasured |
+| Saved spatial lengths beyond editor bounds, including Gaussian sigma >85 | 90, soft | Unmeasured | Full authored lengths need moving-frame qualification; earlier capped-value measurements do not apply |
 | Animated or warping filter: Domain Warp, Ripple | 90, soft | | |
 | Fill layer or gradient-fill edit | 90, soft | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Navigation with proof or tone guide shown | 90 | | |

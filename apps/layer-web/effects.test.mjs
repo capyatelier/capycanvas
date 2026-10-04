@@ -54,7 +54,7 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
       assert.equal(await evaluate('layerApp.state().host_error??null'),null);
       const radiusShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/radius85-${width}-${theme}.png`,Buffer.from(radiusShot.data,'base64'));
 
-      for(const [step,[center,sigma]] of [[[2400,1600],85],[[3300,2100],85],[[2400,1600],0],[[2400,1600],7]].entries()) {
+      for(const [step,[center,sigma]] of [[[2400,1600],85],[[3300,2100],85],[[2400,1600],120],[[2400,1600],0],[[2400,1600],7]].entries()) {
         await send({type:'effect',action:{op:'set',layer,key:'sigma',value:{kind:'number',value:sigma}}});
         await evaluate(`(()=>{const c=layerApp.app.camera(),p=${JSON.stringify(center)},m=c.document_to_surface??[c.zoom,0,0,c.zoom,...c.translation];
           layerApp.app.gesture(m[0]*p[0]+m[2]*p[1]+m[4],m[1]*p[0]+m[3]*p[1]+m[5],c.viewport[0]/2,c.viewport[1]/2,1,0);layerApp.wake();})()`);
@@ -68,7 +68,7 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
         await writeFile(`${directory}/${width}-${theme}-${step}.png`,Buffer.from(shot.data,'base64'));
       }
     }
-    console.log('PASS: generic Radius85 draft/cancel/bounds/undo, 24 MP chained spatial filters at 50% zoom, pan round trips and support changes, light and dark themes');
+    console.log('PASS: generic Radius85 draft/cancel/bounds/undo, saved sigma120, 24 MP chained spatial filters at 50% zoom, pan round trips and support changes, light and dark themes');
   } finally {
     await evaluate('window.showOpenFilePicker=spatialPicker;delete window.spatialPicker');
   }

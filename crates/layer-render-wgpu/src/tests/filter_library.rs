@@ -157,6 +157,25 @@ fn saved_procedural_patterns_keep_their_noise() {
 }
 
 #[test]
+fn zero_pixel_periods_and_large_lengths_render_finite_pixels() {
+    let extent=[32,24];let base=setup(extent);
+    let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    for definition in fixtures() {
+        let mut effect=EffectInstance::new(definition.program());
+        let lengths:Vec<_>=effect.program.parameters.iter().filter(|p|matches!(p.dimension,
+            layer_core::authored::Dimension::SourcePixels|layer_core::authored::Dimension::CompositionPixels)).map(|p|p.key.clone()).collect();
+        if lengths.is_empty() {continue;}
+        for value in [0.,65536.] {
+            for key in &lengths {effect.set(key,EffectValue::Number(value)).unwrap();}
+            let (document,_)=filtered(&base,effect.clone());
+            submit(&mut r,extent,&document,0.,true,true,None);
+            let pixels=crate::test_support::float_pixels(&r,crate::test_support::document_texture(&r));
+            assert!(pixels.iter().flatten().all(|v|v.is_finite()),"{}: {value}",definition.id());
+        }
+    }
+}
+
+#[test]
 fn runtime_manifest_loads_a_new_filter_and_its_preparation() {
     let directory =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/filters/tent-blur");

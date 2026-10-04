@@ -165,6 +165,13 @@ unchanged. A UI range uses `soft_bounds`; it must not narrow accepted saved data
 Unknown IDs, data versions, parameter keys or choices preserve the package as
 unsupported, without guessing, dropping values or substituting defaults.
 
+Pixel lengths retain their complete authored value, including values outside the
+catalog's numeric editing bounds. A Gaussian `sigma` of 120 means a standard
+deviation of 120 source pixels. UI bounds and GPU table capacity cannot change
+that meaning. Sampling footprints and dirty regions follow the authored length.
+An evaluator may approximate the mathematical operation, with numerical reference
+tests covering its error, while preserving its scale, color domain and endpoints.
+
 Keep fixed-file tests for the supported parameter data. Before release, replace
 superseded representations without adding conversion readers. Once a data version
 is released it stays readable: changing what a built-in's saved values mean needs
@@ -187,10 +194,12 @@ Their parameter dimensions use `scalar`, `count`, `angle`, `time`, or `length` w
 come from the current catalog; a displayed unit never controls resizing.
 Counts require whole bounds and values. A pixel length accepts any value from zero
 to 65,536 pixels (or the declared bounds when wider, keeping a negative minimum's
-sign), independently of its declared `min`/`max`. Those bounds are the range the
-renderer evaluates: a value beyond them renders at the nearest bound and stays
-saved unchanged. Resizing multiplies pixel lengths without rounding to the number
-field's displayed precision or clamping to the evaluated range.
+sign), independently of its declared `min`/`max`. Resizing multiplies pixel lengths
+without rounding to the number field's displayed precision or clamping to catalog
+bounds. Values remain finite and within the accepted data range. Positive periods
+used as divisors have a numerical floor of 1/256 pixel; this prevents undefined
+zero-period patterns and overflowing integer noise coordinates. The floor affects
+evaluation only, and never rewrites the authored value.
 The custom evaluation contract `capy.filter/1` fixes shader ABI `5`; artwork has
 no separate `abi` field. This contract is independent of built-in parameter
 versions. Unknown custom contracts remain preserved.
@@ -290,10 +299,28 @@ a new record or data version.
 | Built-in positions | Composition-frame pixels with the origin at the frame's top-left. Centers are percentages of the frame's width and height. Vignette radius is a percentage of half the frame on each axis, Swirl radius of half the shorter side, and Gradient Fill scale of the frame's extent along its axis, or of half its diagonal when radial. |
 | Built-in angles | Degrees. Gradient Fill turns counterclockwise from +x; every other spatial angle, including Swirl's turn, turns clockwise from +x in y-down frame pixels. |
 | Curves | Monotone cubic Hermite through the saved points with Fritsch–Butland interior tangents and secant end tangents, continuing linearly beyond the end points. |
+| Filter color and alpha | The keyed built-in contract fixes `space` and `alpha`. Filter input/output is premultiplied in linear document RGB, or in the composition's blending space when declared `blending`. `preserve` retains source coverage; `filter` permits coverage to move with the samples. Tagged colors remain straight and convert to the document's primaries before evaluation. Extended RGB remains extended unless the named operation explicitly clips it. |
+| Gaussian family | Normalized separable weights proportional to `exp(-x²/(2*sigma²))`, supported through `ceil(3*sigma)` on each side. Zero sigma is identity. Larger sigma widens the kernel; it does not stop at an editor or lookup-table limit. Gaussian Blur, Unsharp Mask, High Pass, Bloom, Soft Focus and Pencil share this kernel. |
+| Spatial sampling | Filter sample positions are continuous pixel coordinates; centers are half-integers. Image filters interpolate linearly and extend the nearest edge sample outside the captured source. Motion Blur averages a centered line of the authored `distance` and `angle`. Pixel Mosaic samples the center of each authored-size grid cell. Placement interpolation uses its saved kernel independently of filter sampling. |
+| Placement kernels | `nearest` selects the pixel containing the source coordinate; `linear` is bilinear about pixel centers. `bicubic` is separable Catmull–Rom and `lanczos` is normalized Lanczos-3 (`sinc(x)*sinc(x/3)`, support three). Both bound overshoot by the nearest four samples and their brightest straight color, as in [`pixel_transform.wgsl`](../../crates/layer-render-wgpu/src/pixel_transform.wgsl). Outside paint is transparent; coverage uses its authored default. Minification may integrate the pixel footprint. |
+| Mesh geometry | Tensor-product cubic Bézier patches over the saved breakpoint intervals and destination control net, composed with the saved projective map and translation. Tessellation and inverse-solving tolerances may improve without changing the authored surface. |
+| Tone and color adjustments | The equations and neutral conditions in [photo adjustment mathematics](photo-adjustments.md) and [runtime filter color semantics](runtime-filters.md#filter-spaces). Amount/strength controls retain each operation's existing mapping, including divisions by 100, stop exposure, thresholds and signed continuations; a new slider mapping cannot retune them. |
+| Gradients | Interpolate associated color and coverage in the saved mixing space; preserve exact stop colors, extend end colors outside the stop range and contribute no hidden color in a fully transparent span. Gradient Map's stop alpha is mapping strength; Gradient Fill's stop alpha is coverage. |
 | Procedural patterns | `fx_random`, `fx_noise` and `fx_fbm` in [`filter_library.wgsl`](../../assets/filters/filter_library.wgsl), with each filter's fixed seeds, belong to that filter's data version. |
+| Time and phase | Saved output phases are accumulated seconds, already integrated through speed changes. Without an output phase, frozen time is `time*speed`. Pattern frequency and phase direction belong to each filter's math; playback scheduling does not. |
 | Imported originals | Untouched original tiles convert to the working space with relative colorimetric intent and no black-point compensation; painted tiles hold the converted result. |
 | Linked masks | Mask pixels pass through the mask's projective placement, then its translation relative to the owner's, then the owner's placement and translation. |
-| SDR rendition | Parameters of the tone mapper in [`sdr.rs`](../../crates/layer-core/src/color/hdr/sdr.rs): `contrast` and `balance` are relative to its 1.3 and 0.3 baselines, and the default `headroom` is log2(1000/203). |
+| SDR rendition | Parameters of the tone mapper in [`sdr.rs`](../../crates/layer-core/src/color/hdr/sdr.rs): exposure is stops, headroom is the input white endpoint in stops above RGB 1, and highlight color runs from luminous white to retained chroma. Macro/micro gains are `1.3*contrast*2^(∓0.5*(0.3+balance))`; baseline compression is 0.6 and default headroom is log2(1000/203). |
+| Watercolor | Exact saved pigment and wetness samples, with the 2/255 material floor and the wet-edge, burnt-edge and source-pixel edge-width meanings in [painterly paint state](painterly-paint-state.md). Opening never replays strokes or ages the saved water. Future brush interactions may improve while retaining that material interpretation. |
+
+The compact mathematical expressions in the bundled filter sources define each
+built-in's remaining parameter mappings. Their names, coordinate conventions,
+strength normalization, clipping decisions, seeds and neutral behavior belong to
+the data version. Tap packing, pass fusion, workgroup sizes, precision improvements
+and numerical approximations may change. Tests compare independent equations and
+authored values with operation-specific tolerances; rendered GPU bytes are not the
+portable contract. Correcting a shader that violates these meanings does not
+require a new file version.
 
 ## Resources and packs
 
@@ -664,9 +691,13 @@ placement, contour selection placement, every ruler kind, non-default built-in
 choices and gradient interpolations, and both color forms, using the current
 occurrence and filter data versions. Its fixed values exercise opening, editing,
 saving, reopening and compiling current filters. `builtin-contracts.json` fixes
-all 52 built-in contracts and 282 parameter keys: kinds, choice IDs, units,
-dimensions, accepted bounds, constraints and shader parameter order. Choice order
-may change because built-in shader codes map explicitly from stable values.
+all 52 built-in contracts and 282 parameter keys: kinds, choice IDs,
+dimensions, accepted bounds, constraints, color domain, alpha behavior and time
+use. Parameters are keyed; control order, shader parameter order, runtime ABI
+and displayed unit labels are excluded. Choice order may change because built-in
+shader codes map explicitly from stable values. Reader regressions distinguish future record/resource types,
+unknown descriptors and admission limits from inconsistent known descriptors,
+malformed data and failed integrity checks.
 Keep these inputs fixed while
 their data versions remain supported; superseded pre-release formats have no
 conversion readers.

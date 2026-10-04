@@ -16,6 +16,10 @@ fn capy_prepare_gaussian(local:vec3<u32>, global:vec3<u32>) {
         if i<stride {sums[i]+=sums[i+stride];}
         workgroupBarrier();
     }
+    if sigma>85. {
+        if i==0u {prep_store(0u,vec4<f32>(0.,ceil(sigma*3.),sigma,side));}
+        return;
+    }
     if i==0u {
         var count=0u;
         for(var j=1u;j<=radius;j+=2u) {

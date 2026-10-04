@@ -1,6 +1,7 @@
 // Original WGSL filter library. Parameters, footprints and pass order are in
 // manifest.json. No platform code or filter-specific renderer branches.
 const FX_PI:f32=3.141592653589793;
+fn fx_period(value:f32)->f32 {return max(value,1./256.);}
 fn fx_axis(degrees:f32)->vec2<f32> {let a=degrees*FX_PI/180.;return vec2<f32>(cos(a),sin(a));}
 fn fx_rotate(p:vec2<f32>,axis:vec2<f32>)->vec2<f32> {return vec2<f32>(p.x*axis.x-p.y*axis.y,p.x*axis.y+p.y*axis.x);}
 fn fx_straight(c:vec4<f32>)->vec3<f32> {return fx_unassociate(c);}
@@ -23,8 +24,36 @@ fn fx_bright(c:vec4<f32>,threshold:f32)->vec4<f32> {
     if threshold<0. {return c;}
     let l=fx_luma(fx_straight(c));return c*max(l-threshold,0.)/max(l,.00001);
 }
+fn fx_erf(x:f32)->f32 {
+    let a=abs(x);let t=1./(1.+.3275911*a);
+    let polynomial=(((((1.061405429*t-1.453152027)*t)+1.421413741)*t-.284496736)*t+.254829592)*t;
+    return sign(x)*(1.-polynomial*exp(-a*a));
+}
+fn fx_wide_blur(p:vec2<f32>,axis:vec2<f32>,threshold:f32,info:vec4<f32>)->vec4<f32> {
+    let radius=i32(info.y);let sigma=info.z;let side=info.w;
+    let bounds=fx_sample_bounds();let coordinate=dot(p,axis);
+    let first=max(-radius,i32(ceil((dot(bounds.xy,axis)-coordinate)/side)));
+    let last=min(radius,i32(floor((dot(bounds.zw,axis)-coordinate)/side)));
+    if first>last {return fx_bright(fx_sample(p),threshold);}
+    let spread=sigma*1.41421356237;let tail=fx_erf((f32(radius)+.5)/spread);
+    let norm=1./(sigma*2.50662827463*tail);
+    let left=(tail+fx_erf((f32(first)-.5)/spread))/(2.*tail);
+    let right=(tail-fx_erf((f32(last)+.5)/spread))/(2.*tail);
+    var sum=fx_bright(fx_sample(p+axis*f32(first-1)*side),threshold)*(max(left,0.)*.5);
+    sum+=fx_bright(fx_sample(p+axis*f32(last+1)*side),threshold)*(max(right,0.)*.5);
+    for(var i=first;i<=last;i+=2) {
+        let x=f32(i)/sigma;let y=f32(i+1)/sigma;
+        let a=exp(-.5*x*x);let b=select(0.,exp(-.5*y*y),i<last);let pair=a+b;
+        let offset=(f32(i)+b/pair)*side;
+        sum+=fx_bright(fx_sample(p+axis*offset),threshold)*(pair*norm*.5);
+    }
+    let result=ldexp(clamp(sum,vec4(-1.7014117e38),vec4(1.7014117e38)),vec4<i32>(1));
+    return vec4(result.rgb,clamp(result.a,0.,1.));
+}
 fn fx_blur(p:vec2<f32>,base:u32,axis:vec2<f32>,threshold:f32)->vec4<f32> {
-    let info=fx_lookup(base,0u,0u);let center=fx_bright(fx_sample(p),threshold);
+    let info=fx_lookup(base,0u,0u);
+    if info.z>0. {return fx_wide_blur(p,axis,threshold,info);}
+    let center=fx_bright(fx_sample(p),threshold);
     if info.y==0. {return center;}
     var sum=center*(info.x*.5);
     for(var i=1u;i<=u32(info.y);i+=1u){let tap=fx_lookup(base,0u,i);let offset=axis*tap.x;
@@ -67,8 +96,14 @@ fn capy_pencil(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
 fn capy_motion_blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let distance=fx_parameter(b,0u).x;if distance<.001{return c;}
     let axis=fx_axis(fx_parameter(b,1u).x);let count=max(2u,u32(ceil(distance))+1u);var sum=vec4<f32>(0.);
-    for(var i=0u;i<count;i+=1u){sum+=fx_sample(p+axis*distance*(f32(i)/f32(count-1u)-.5));}
-    return sum/f32(count);
+    var block=vec4<f32>(0.);let weight=.5/f32(count);
+    for(var i=0u;i<count;i+=1u){
+        block+=fx_sample(p+axis*distance*(f32(i)/f32(count-1u)-.5))*weight;
+        if (i&255u)==255u {sum+=block;block=vec4<f32>(0.);}
+    }
+    sum+=block;
+    let result=ldexp(clamp(sum,vec4(-1.7014117e38),vec4(1.7014117e38)),vec4<i32>(1));
+    return vec4(result.rgb,clamp(result.a,0.,1.));
 }
 fn capy_denoise(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let amount=fx_parameter(b,0u).x/100.;if amount<.0001{return c;}
@@ -111,13 +146,13 @@ fn capy_vignette(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return vec4<f32>(rgb,c.a);
 }
 fn capy_film_grain(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let size=fx_parameter(b,1u).x;let frame=u32(floor(fx_time(b)*24.));
+    let size=fx_period(fx_parameter(b,1u).x);let frame=u32(floor(fx_time(b)*24.));
     var grain=vec3<f32>(fx_random(p/size,frame));if fx_parameter(b,2u).x>.5{grain=vec3<f32>(grain.x,fx_random(p/size,frame+13u),fx_random(p/size,frame+37u));}
     let rgb=fx_rgb(c);let l=fx_luma(rgb);let amplitude=(.15+.85*sqrt(max(0.,l*(1.-l))*4.))*fx_parameter(b,0u).x/250.;
     return fx_rgba(rgb+(grain-.5)*amplitude,c.a);
 }
 fn capy_halftone(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let size=fx_parameter(b,0u).x;let axis=fx_axis(fx_parameter(b,1u).x);let q=fx_rotate(p,axis)/size;
+    let size=fx_period(fx_parameter(b,0u).x);let axis=fx_axis(fx_parameter(b,1u).x);let q=fx_rotate(p,axis)/size;
     let center=fx_rotate((floor(q)+.5)*size,vec2<f32>(axis.x,-axis.y));let l=fx_luma(fx_rgb(fx_sample(center)));
     let density=clamp((1.-l-.5)*(1.+fx_parameter(b,2u).x/100.)+.5,0.,1.);let radius=.7071068*sqrt(density);
     let dot=1.-smoothstep(radius-.5/size,radius+.5/size,length(fract(q)-.5));
@@ -125,7 +160,7 @@ fn capy_halftone(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return fx_rgba(mix(fx_parameter(b,4u).rgb,fx_parameter(b,3u).rgb,ink),c.a);
 }
 fn capy_crosshatch(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let spacing=fx_parameter(b,0u).x;let width=fx_parameter(b,1u).x;let l=fx_luma(fx_rgb(c));var ink=0.;
+    let spacing=fx_period(fx_parameter(b,0u).x);let width=fx_parameter(b,1u).x;let l=fx_luma(fx_rgb(c));var ink=0.;
     for(var i=0u;i<4u;i+=1u){let axis=fx_axis(fx_parameter(b,2u).x+f32(i)*45.);let distance=abs(fract(dot(p,axis)/spacing)-.5)*spacing;
         let darkness=1.-smoothstep(.7-f32(i)*.18,.9-f32(i)*.18,l);ink=max(ink,(1.-smoothstep(max(0.,width*.5-.5),width*.5+.5,distance))*darkness);}
     return fx_rgba(mix(fx_parameter(b,4u).rgb,fx_parameter(b,3u).rgb,ink),c.a);
@@ -135,7 +170,7 @@ fn capy_emboss(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let slope=fx_luma(fx_rgb(fx_sample(p+offset)))-fx_luma(fx_rgb(fx_sample(p-offset)));
     return fx_rgba(vec3<f32>(.5+slope*fx_parameter(b,2u).x/100.),c.a);
 }
-fn capy_pixel_mosaic(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let size=fx_parameter(b,0u).x;return fx_sample((floor(p/size)+.5)*size);}
+fn capy_pixel_mosaic(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let size=fx_period(fx_parameter(b,0u).x);return fx_sample((floor(p/size)+.5)*size);}
 fn capy_chromatic_aberration(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let offset=fx_axis(fx_parameter(b,1u).x)*fx_parameter(b,0u).x;let red=fx_sample(p+offset);let blue=fx_sample(p-offset);
     return vec4<f32>(red.r,c.g,blue.b,max(c.a,max(red.a,blue.a)));
@@ -167,17 +202,17 @@ fn capy_ripple(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let center=fx_extent()*vec2<f32>(fx_parameter(b,3u).x,fx_parameter(b,4u).x)/100.;let delta=p-center;let radius=length(delta);
     // Reduce each term before subtracting: long-running time must not erase
     // the spatial phase. Keep sin inside WGSL's specified accuracy interval.
-    let phase=fract(radius/fx_parameter(b,1u).x)-fract(fx_time(b));
+    let phase=fract(radius/fx_period(fx_parameter(b,1u).x))-fract(fx_time(b));
     let wave=sin(2.*FX_PI*(phase-floor(phase+.5)));
     return fx_sample(p+delta/max(radius,1.)*wave*fx_parameter(b,0u).x);
 }
 fn capy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let q=p/fx_parameter(b,1u).x;let rough=fx_parameter(b,2u).x/100.;
+    let q=p/fx_period(fx_parameter(b,1u).x);let rough=fx_parameter(b,2u).x/100.;
     let coarse=vec2<f32>(fx_noise(q,3u),fx_noise(q,17u));let fine=vec2<f32>(fx_noise(q*4.,7u),fx_noise(q*4.,29u));
     return fx_sample(p+mix(coarse,fine,rough)*fx_parameter(b,0u).x);
 }
 fn capy_rainy_glass(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let scale=fx_parameter(b,1u).x;let time=fx_time(b);let grid=p/vec2<f32>(scale,scale*1.5);
+    let scale=fx_period(fx_parameter(b,1u).x);let time=fx_time(b);let grid=p/vec2<f32>(scale,scale*1.5);
     let cell=floor(grid);let seed=fx_random(cell,17u);let phase=fract(time*.35+seed);
     let center=vec2<f32>(.25+.5*fx_random(cell,31u),phase);let delta=fract(grid)-center;
     let enabled=1.-step(fx_parameter(b,2u).x/100.,seed);
@@ -210,18 +245,18 @@ fn capy_crt(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return vec4<f32>(rgb,alpha);
 }
 fn capy_heat_haze(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let q=p/fx_parameter(b,1u).x+vec2<f32>(0.,-fx_time(b));let detail=fx_parameter(b,3u).x/100.;
+    let q=p/fx_period(fx_parameter(b,1u).x)+vec2<f32>(0.,-fx_time(b));let detail=fx_parameter(b,3u).x/100.;
     let noise=mix(fx_noise(q,13u),fx_noise(q*3.7,47u),detail*.5);let side=fx_noise(q+11.7,29u);
     let amount=fx_parameter(b,0u).x*smoothstep(0.,1.,p.y/fx_extent().y);
     return fx_sample(p+vec2<f32>(noise,side*.35)*amount);
 }
 fn capy_iridescence(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let rgb=fx_rgb(c);let l=fx_luma(rgb);let thickness=l*2.+fx_noise(p/fx_parameter(b,1u).x,7u)*.35+fx_time(b);
+    let rgb=fx_rgb(c);let l=fx_luma(rgb);let thickness=l*2.+fx_noise(p/fx_period(fx_parameter(b,1u).x),7u)*.35+fx_time(b);
     let film=.5+.5*cos(thickness*vec3<f32>(5.1,6.4,7.2)+vec3<f32>(0.,1.,2.));
     return fx_rgba(mix(rgb,fx_preserve_luma(film,l),fx_parameter(b,0u).x/100.),c.a);
 }
 fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let octaves=3u;let time=fx_time(b);let q=p/fx_parameter(b,1u).x+vec2<f32>(time*.17,-time*.23);
+    let octaves=3u;let time=fx_time(b);let q=p/fx_period(fx_parameter(b,1u).x)+vec2<f32>(time*.17,-time*.23);
     let bend=vec2<f32>(fx_fbm(q,octaves,3u),fx_fbm(q+19.3,octaves,31u));
     let warp=vec2<f32>(fx_fbm(q+bend*1.4,octaves,71u),fx_fbm(q+bend*1.4+7.9,octaves,113u));
     return fx_sample(p+warp*fx_parameter(b,0u).x);

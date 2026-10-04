@@ -14,8 +14,9 @@ pub trait ResourceReader {
 }
 fn unsupported(name: &str) -> DecodeError { DecodeError::Unsupported(format!("Unsupported effect {name}")) }
 fn bounded(value: &Value, maximum: usize) -> DecodeResult<&[Value]> {
-    value.as_array().filter(|v| v.len() <= maximum).map(Vec::as_slice)
-        .ok_or_else(|| "Invalid or oversized effect array".into())
+    let values=value.as_array().ok_or("Expected an effect array")?;
+    if values.len()>maximum {return Err(unsupported("array length"));}
+    Ok(values)
 }
 fn list<'a>(fields: &'a Map<String, Value>, key: &str, maximum: usize) -> DecodeResult<&'a [Value]> {
     fields.get(key).map_or(Ok(&[]), |v| bounded(v, maximum))
@@ -341,20 +342,25 @@ mod tests {
         Definition {program:crate::effect_catalog::custom_program("exposure")}
     }
     #[test]
-    fn builtin_data_contracts_and_shader_parameter_order_are_fixed() {
-        assert_eq!(EFFECT_ABI,5);
+    fn builtin_data_contracts_are_keyed_and_independent_of_shader_layout() {
         let mut actual=Map::new();
         for filter in crate::bundled_effect_catalog().filters() {
             let program=filter.program();
-            let parameters:Vec<_>=program.parameters.iter().map(|p| {
-                let kind=if let EffectParameterKind::Choice {options}=&p.kind {
+            let parameters:Map<_,_>=program.parameters.iter().map(|p| {
+                let mut kind=if let EffectParameterKind::Choice {options}=&p.kind {
                     let choices:BTreeSet<_>=options.iter().map(EffectOption::value).collect();
                     json!({"kind":"choice","options":choices})
                 } else {encode_kind(&p.kind)};
-                json!({"key":p.key,"kind":kind,"dimension":p.dimension,"opaque":p.opaque})
+                kind.as_object_mut().unwrap().remove("unit");
+                if let EffectParameterKind::Number {min,max,..}=p.kind
+                    && matches!(p.dimension,Dimension::SourcePixels|Dimension::CompositionPixels) {
+                    kind["min"]=json!(if min<0. {min.min(-MAX_PIXEL_LENGTH)}else{0.});
+                    kind["max"]=json!(max.max(MAX_PIXEL_LENGTH));
+                }
+                (p.key.to_string(),json!({"kind":kind,"dimension":p.dimension,"opaque":p.opaque}))
             }).collect();
             actual.insert(filter.id().into(),json!({"version":builtin_version(filter.id()),"kind":program.kind,
-                "time":program.time,"parameters":parameters,"constraints":program.constraints}));
+                "alpha":program.alpha,"space":program.space,"time":program.time,"parameters":parameters,"constraints":program.constraints}));
         }
         let expected:Value=serde_json::from_str(include_str!("codec/fixtures/builtin-contracts.json")).unwrap();
         assert_eq!(Value::Object(actual),expected);
@@ -528,6 +534,16 @@ mod tests {
         let values=decode_values(&program,&saved,&mut Resources::default()).unwrap();
         assert_eq!(EffectView::new(&program,&values).value("exposure"),Some(&EffectValue::Number(7.25)));
         assert_eq!(EffectView::new(&program,&values).value("gamma"),Some(&EffectValue::Number(1.)));
+    }
+    #[test]
+    fn extended_curve_counts_are_unsupported_and_malformed_arrays_are_invalid() {
+        let mut resources=Resources::default();
+        let points:Vec<_>=(0..33).map(|i|[i as f32/32.;2]).collect();
+        let value=json!({"kind":"curve","value":points});
+        assert!(matches!(decode_value(&value,&EffectParameterKind::Curve,&mut resources),Err(DecodeError::Unsupported(_))));
+        for value in [json!({"kind":"curve","value":{}}),json!({"kind":"curve","value":[[0,0],[1]]})] {
+            assert!(matches!(decode_value(&value,&EffectParameterKind::Curve,&mut resources),Err(DecodeError::Invalid(_))));
+        }
     }
     #[test]
     fn lookup_choice_ids_survive_option_reordering_and_label_changes() {

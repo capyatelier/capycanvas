@@ -107,11 +107,13 @@ pub fn decode_selection(value: &Value, resources: &mut impl SelectionResourceRea
             let count = u64::from(extent[0].div_ceil(if byte_coverage { 4 } else { 8 })) * u64::from(extent[1]);
             let decoded_bytes = count.checked_mul(4).ok_or("Oversized selection coverage")?;
             let chunks = values::required(fields, "chunks")?.as_array().ok_or("Expected selection chunks")?;
-            if extent.contains(&0) || extent.iter().any(|v| *v > limits.dimension || *v > crate::MAX_EXTENT)
-                || x0 > x1 || y0 > y1 || x1 > extent[0] || y1 > extent[1]
-                || decoded_bytes > limits.raster_bytes || usize::try_from(decoded_bytes).is_err()
-                || chunks.len() > limits.tiles || decoded_bytes.div_ceil(SELECTION_CHUNK_BYTES as u64) != chunks.len() as u64 {
-                return Err("Invalid or oversized selection coverage".into());
+            if extent.contains(&0) || x0 > x1 || y0 > y1 || x1 > extent[0] || y1 > extent[1]
+                || decoded_bytes.div_ceil(SELECTION_CHUNK_BYTES as u64) != chunks.len() as u64 {
+                return Err("Invalid selection coverage".into());
+            }
+            if extent.iter().any(|v| *v > limits.dimension || *v > crate::MAX_EXTENT)
+                || decoded_bytes > limits.raster_bytes || usize::try_from(decoded_bytes).is_err() || chunks.len() > limits.tiles {
+                return Err(DecodeError::Unsupported("Selection exceeds coverage admission".into()));
             }
             let mut loaded = Vec::new();
             loaded.try_reserve_exact(chunks.len()).map_err(|_| "Selection allocation failed")?;
@@ -261,7 +263,7 @@ mod tests {
         for limits in [ProjectLimits{raster_bytes:3,..Default::default()},
             ProjectLimits{tiles:0,..Default::default()}, ProjectLimits{dimension:7,..Default::default()}] {
             resources.limits = Some(limits);
-            invalid(decode_selection(&wire, &mut resources));
+            unsupported(decode_selection(&wire, &mut resources));
             assert_eq!(resources.reads, 0);
         }
         resources.limits = None;

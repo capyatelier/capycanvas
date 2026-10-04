@@ -566,7 +566,7 @@ fn native_spatial_filter_windows() {
         w.dispatch(UiAction::SetZoom { zoom: 0.5 });
         wait();
         assert!((state(&w).camera.zoom - 0.5).abs() < 1e-6);
-        for (step, (center, sigma)) in [([2400., 1600.], 85.), ([3300., 2100.], 85.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
+        for (step, (center, sigma)) in [([2400., 1600.], 85.), ([3300., 2100.], 85.), ([2400., 1600.], 120.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
             w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set {
                 layer: u64::from(filter.index()) + 1, key: "sigma".into(), value: layer_core::EffectValue::Number(sigma),
             } });

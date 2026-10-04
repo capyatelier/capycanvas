@@ -99,6 +99,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Other pointwise adjustment sliders | 60, soft | | |
 | Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 50.0 presents/s, p99 33.4 ms; renderer 23.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 42.7 presents/s, p99 50.0 ms; renderer 15.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
+| Saved spatial lengths beyond editor bounds, including Gaussian sigma >85 | 60, soft | Unmeasured | Full authored lengths need moving-frame qualification; earlier capped-value measurements do not apply |
 | Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Denoise Strength | 60, soft | **Not met.** 0.199 completed updates/s; whole-screen proxy 27.86–30.72 presents/s, p99 99.96 ms | [Fixed filter controls](#fixed-filter-controls), 2026-10-04 |
 | Domain Warp Distance, animation frozen | 60, soft | **Not met.** 0.199 completed updates/s; whole-screen proxy 54.14–54.32 presents/s, p99 66.64–83.30 ms | [Fixed filter controls](#fixed-filter-controls), 2026-10-04 |

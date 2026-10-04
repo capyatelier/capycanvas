@@ -277,7 +277,10 @@ impl<'a> ResourceReader<'a> {
     pub fn record(&self, reference: &Value, kind: &str) -> DecodeResult<(PortableId, &Value)> {
         let id = reference_id(reference)?;
         let record = &self.manifest.resources.get(&id).ok_or("Missing resource")?.value;
-        if record["type"].as_str() != Some(kind) { return Err("Resource type does not match binding".into()); }
+        let actual=values::string(&record["type"])?;
+        if !super::manifest::known_resource(actual) {return Err(DecodeError::Unsupported(format!("Unknown resource type {actual}")));}
+        if actual != kind { return Err("Resource type does not match binding".into()); }
+        if !super::manifest::resource_supported(record)? {return Err(DecodeError::Unsupported("Unknown resource interpretation".into()));}
         Ok((id,record))
     }
     fn stored(&self, id: PortableId, limit: usize) -> DecodeResult<(Arc<[u8]>,EncodedIntegrity)> {
@@ -307,7 +310,7 @@ impl<'a> ResourceReader<'a> {
         let expected_raw = match kind {"capy.wgsl/1"=>"utf8","capy.lut3d/1"=>"capy.rgb-f32/1",_=>"raw"};
         if !compressed && encoding != expected_raw { return Err(DecodeError::Unsupported("Unknown resource encoding".into())); }
         let expected = if compressed { decimal_u64(&record["data"]["decoded_bytes"])? } else { self.manifest.resources[&id].bytes };
-        if expected > limit as u64 { return Err("Resource exceeds decoded size bound".into()); }
+        if expected > limit as u64 { return Err(DecodeError::Unsupported("Resource exceeds decoded size admission".into())); }
         if let Some(previous)=self.alias(id)?.and_then(|alias|self.bytes.get(&alias)) {
             let result=previous.alias(id);
             self.bytes.insert(id,result.clone()); return Ok(result);

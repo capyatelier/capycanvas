@@ -45,14 +45,20 @@ in that test fixture module; production sessions keep the host's platform.
 Artwork and filter changes run core `package::effect_records`, `package::codec`
 and `package::session` tests. The fixed
 [`builtin-contracts.json`](../../crates/layer-core/src/package/codec/fixtures/builtin-contracts.json)
-snapshot checks semantic types, choice IDs, units, dimensions, hard bounds,
-constraints and shader parameter order. The fixed
+snapshot checks semantic types, choice IDs, dimensions, hard bounds,
+constraints, color domain, alpha behavior and time use. Parameter order and shader
+ABI belong to renderer interface tests. The fixed
 [`authored-filters.capy`](../../crates/layer-core/src/package/codec/fixtures/authored-filters.capy)
 checks all built-ins alongside exact raster, watercolor, LUT and SDR values, and
 every wire name it lists in the [package contract](../reference/capy-package.md#fixtures-and-acceptance-cases).
 Keep resize precision, whole-count controls, choice reordering and private
 selection-overlay recovery assertions. Replace superseded pre-release fixtures
 without conversion readers; retain the pixel and authored-value checks.
+Spatial evaluation changes also run the renderer's `scene::scale::tests::effects::gaussian`
+references, including sigmas above editor bounds, source-edge mass, neutral
+values, HDR, native and reduced evaluation. Preserved-package tests cover future
+object/resource versions and descriptor fields separately from known corruption
+and local admission limits.
 
 Photo writer tests use `photo::test_support::assert_provider_failure` for row
 cancellation. Keep each codec's admission, publication and pixel assertions.
