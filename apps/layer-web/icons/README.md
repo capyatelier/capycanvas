@@ -31,6 +31,9 @@ silhouette and a light surround. After changing a tool icon, regenerate with
 `/usr/bin/python3 tools/build/cursor-icons.py` (PyGObject, Pycairo and librsvg),
 and verify with the same command's `--check` option. No SVG parsing or image
 decoding runs during cursor motion.
+Cursor-setting previews use the same centered 1px ring for every brush-size
+option. Tool uses the pencil silhouette alone; Tool and brush size places the
+same silhouette inside that ring.
 Web-only browser-window controls load the original two-arrow fullscreen icons
 from this bank directly; no fullscreen button is added to GTK.
 The Color panel uses the original `color-square`, `color-triangle` and
