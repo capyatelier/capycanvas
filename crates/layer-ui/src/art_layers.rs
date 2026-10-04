@@ -329,7 +329,7 @@ pub use layer_core::OccurrenceDropPosition as LayerDropPosition;
 #[serde(rename_all = "snake_case")]
 pub enum LayerDropSurface { #[default] Row, Thumbnail }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LayerDropHint { pub target: u64, pub position: LayerDropPosition }
+pub struct LayerDropHint { pub target: u64, pub position: LayerDropPosition, pub effect_owner: Option<u64> }
 /// Captured destination for an external image insertion. Resolve and validate
 /// again against the same document revision when prepared sources arrive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -498,7 +498,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else { position };
         let plan=doc.drop_layers_edit(&roots,target,position).map_err(error)?;
         let mut probe=doc.clone();probe.apply(plan.edit.clone()).map_err(error)?;
-        Ok((probe.artwork!=doc.artwork).then_some((plan.edit,LayerDropHint{target:occurrence_token(plan.target),position:plan.position})))
+        let effect_owner=probe.scene().effect_owner(handle).filter(|owner|roots.iter().all(|id|probe.scene().effect_owner(*id)==Some(*owner))).map(occurrence_token);
+        Ok((probe.artwork!=doc.artwork).then_some((plan.edit,LayerDropHint{target:occurrence_token(plan.target),position:plan.position,effect_owner})))
     }
     pub fn layer_drop_preview(&self,id:u64,target:u64,fraction:f32,surface:LayerDropSurface)->Option<LayerDropHint> {
         self.layer_drop_edit(id,target,fraction,surface).ok().flatten().map(|(_,hint)|hint)

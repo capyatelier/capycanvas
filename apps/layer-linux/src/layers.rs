@@ -280,6 +280,7 @@ fn show_drop_hint(rows: &RefCell<HashMap<usize, Row>>, hint: Option<layer_ui::La
     for row in rows.borrow().values() {
         for class in ["layer-drop-before", "layer-drop-after", "layer-drop-into"] { row.root.remove_css_class(class); }
         row.content.remove_css_class("layer-drop-attach");
+        if hint.is_some_and(|hint| hint.effect_owner == Some(row.id.get())) { row.content.add_css_class("layer-drop-attach"); }
         if let Some(hint) = hint.filter(|hint| hint.target == row.id.get()) {
             use layer_ui::LayerDropPosition as P;
             match hint.position {

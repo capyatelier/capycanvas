@@ -9674,7 +9674,7 @@ mod tests {
         insert_effect(&mut s, "curves");
         let effect = s.engine.document().working.occurrence.unwrap();
         let before_attach=s.engine.document().artwork.clone();
-        assert_eq!(s.layer_drop_preview(occurrence_token(effect),occurrence_token(base),0.5,LayerDropSurface::Thumbnail),Some(LayerDropHint{target:occurrence_token(base),position:LayerDropPosition::Attach}));
+        assert_eq!(s.layer_drop_preview(occurrence_token(effect),occurrence_token(base),0.5,LayerDropSurface::Thumbnail),Some(LayerDropHint{target:occurrence_token(base),position:LayerDropPosition::Attach, effect_owner: Some(occurrence_token(base))}));
         assert_eq!(s.engine.document().artwork,before_attach);
         layer(&mut s, LayerAction::Drop { id: occurrence_token(effect), target: occurrence_token(base), fraction: 0.5, surface: LayerDropSurface::Thumbnail });
         assert_eq!(s.engine.document().scene().effect_owner(effect), Some(base));
@@ -10286,7 +10286,7 @@ mod tests {
         for fraction in [f32::NAN, f32::INFINITY, -0.1, 1.1] {
             assert_eq!(s.layer_drop_preview(id, 1, fraction, LayerDropSurface::Row), None);
         }
-        assert_eq!(s.layer_drop_preview(id,1,1.0,LayerDropSurface::Row),Some(LayerDropHint{target:paper,position:LayerDropPosition::Above}));
+        assert_eq!(s.layer_drop_preview(id,1,1.0,LayerDropSurface::Row),Some(LayerDropHint{target:paper,position:LayerDropPosition::Above, effect_owner: None}));
         test_support::assert_live_artwork_eq(s.engine.document(), &created);
         layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0,  surface: LayerDropSurface::Row, });
         // The no-op drop must not consume Undo ahead of the preceding New layer.
@@ -10314,7 +10314,7 @@ mod tests {
         assert_eq!(s.layer_drop_preview(occurrence_token(parent), occurrence_token(child), 0.5, LayerDropSurface::Row), None);
         assert_eq!(
             s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row),
-            Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into })
+            Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into, effect_owner: None })
         );
         layer(&mut s, LayerAction::Lock { id: occurrence_token(parent), value: true, });
         assert_eq!(s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row), None);
@@ -10323,8 +10323,8 @@ mod tests {
         layer(&mut s, LayerAction::Select { id: 1, mask: false });
         layer(&mut s, LayerAction::New { group: false, clipped: true, });
         let clipped = occurrence_token(s.engine.document().working.occurrence.unwrap());
-        assert_eq!(s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into }));
-        assert_eq!(s.layer_drop_preview(clipped, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into }));
+        assert_eq!(s.layer_drop_preview(1, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into, effect_owner: None }));
+        assert_eq!(s.layer_drop_preview(clipped, occurrence_token(child), 0.5, LayerDropSurface::Row), Some(LayerDropHint { target: occurrence_token(child), position: LayerDropPosition::Into, effect_owner: None }));
     }
 
     #[test]

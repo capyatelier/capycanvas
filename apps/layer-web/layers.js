@@ -236,6 +236,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
         const preview = app.layer_drop_preview(get().id, to.id, fraction, surface);
         if (preview) {
           drag.target = { op: "drop", id: get().id, target: to.id, fraction, surface };
+          records.get(String(preview.effect_owner))?.content.b.classList.add("layer-drop-attach");
           const feedback = records.get(String(preview.target));
           if (feedback) (preview.position === "attach" ? feedback.content.b : feedback.row).classList.add(`layer-drop-${{above:"before",below:"after",into:"into",attach:"attach"}[preview.position]}`);
         }

@@ -224,7 +224,7 @@ fn layer_relationship_drop_previews_keep_outer_gaps_unattached() {
     layer(&mut s,LayerAction::Drop{id:paint,target:base,fraction:1.,surface:LayerDropSurface::Row});
     for target in [effect,owner] {
         let before=s.engine.document().clone();
-        assert_eq!(s.layer_drop_preview(paint,target,0.,LayerDropSurface::Row),Some(LayerDropHint{target:effect,position:LayerDropPosition::Above}));
+        assert_eq!(s.layer_drop_preview(paint,target,0.,LayerDropSurface::Row),Some(LayerDropHint{target:effect,position:LayerDropPosition::Above, effect_owner: None}));
         assert_eq!(s.engine.document(),&before);
         layer(&mut s,LayerAction::Drop{id:paint,target,fraction:0.,surface:LayerDropSurface::Row});
         assert_eq!(relationship_row(&s,paint).relationship,None);
@@ -235,6 +235,48 @@ fn layer_relationship_drop_previews_keep_outer_gaps_unattached() {
     }
     layer(&mut s,LayerAction::Drop{id:paint,target:base,fraction:0.,surface:LayerDropSurface::Row});
     assert_eq!(relationship_row(&s,paint).relationship,Some(LayerRelation{kind:LayerRelationKind::Clip,target:base}));
+}
+
+#[test]
+fn clipping_filter_previews_publish_the_owner_and_commit_selected_filters_atomically() {
+    for platform in Platform::ALL {
+        let mut s=session(platform);let base=occurrence_token(s.engine.document().working.occurrence.unwrap());
+        layer(&mut s,LayerAction::New{group:false,clipped:true});let owner=occurrence_token(s.engine.document().working.occurrence.unwrap());
+        insert_effect(&mut s,"motion_blur");let existing=occurrence_token(s.engine.document().working.occurrence.unwrap());
+        layer(&mut s,LayerAction::AttachEffect{id:existing,owner});
+        let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+        assert_eq!(s.layer_drop_preview(existing,owner,0.,LayerDropSurface::Row),None);
+        layer(&mut s,LayerAction::Drop{id:existing,target:owner,fraction:0.,surface:LayerDropSurface::Row});
+        assert_eq!(s.engine.document(),&before);assert_eq!(s.engine.checkpoint(),checkpoint);
+        let mut free=Vec::new();
+        for effect in ["exposure","curves"] {
+            layer(&mut s,LayerAction::Select{id:base,mask:false});insert_effect(&mut s,effect);
+            free.push(occurrence_token(s.engine.document().working.occurrence.unwrap()));
+        }
+        layer(&mut s,LayerAction::ToggleSelection{id:free[0]});
+        let before=s.engine.document().clone();
+        for (target,fraction) in [(existing,1.),(owner,0.)] {
+            let preview_before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
+            assert_eq!(s.layer_drop_preview(free[1],target,fraction,LayerDropSurface::Row),Some(LayerDropHint{target:owner,position:LayerDropPosition::Above,effect_owner:Some(owner)}));
+            assert_eq!(s.engine.document(),&preview_before);assert_eq!(s.engine.checkpoint(),checkpoint);
+            layer(&mut s,LayerAction::Drop{id:free[1],target,fraction,surface:LayerDropSurface::Row});
+            assert_eq!(s.engine.document().scene().attached_effects(occurrence_handle(owner).unwrap()),[occurrence_handle(free[1]).unwrap(),occurrence_handle(free[0]).unwrap(),occurrence_handle(existing).unwrap()]);
+            invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
+            invoke(&mut s,CommandId::Redo);
+            for id in &free {assert_eq!(relationship_row(&s,*id).relationship,Some(LayerRelation{kind:LayerRelationKind::Effect,target:owner}));}
+            invoke(&mut s,CommandId::Undo);
+        }
+        layer(&mut s,LayerAction::Select{id:free[0],mask:false});
+        assert_eq!(s.layer_drop_preview(free[0],base,0.,LayerDropSurface::Row).unwrap().effect_owner,Some(base));
+        layer(&mut s,LayerAction::Drop{id:free[0],target:base,fraction:0.,surface:LayerDropSurface::Row});
+        invoke(&mut s,CommandId::RaiseLayer);
+        assert_eq!(relationship_row(&s,free[0]).relationship,Some(LayerRelation{kind:LayerRelationKind::Effect,target:owner}));
+        invoke(&mut s,CommandId::LowerLayer);
+        assert_eq!(relationship_row(&s,free[0]).relationship,Some(LayerRelation{kind:LayerRelationKind::Effect,target:base}));
+        layer(&mut s,LayerAction::Lock{id:base,value:true});
+        assert!(!s.command(CommandId::RaiseLayer).enabled);
+        assert_eq!(s.layer_drop_preview(free[0],owner,0.5,LayerDropSurface::Thumbnail),None);
+    }
 }
 
 #[test]
@@ -302,7 +344,7 @@ fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
     invoke(&mut s, CommandId::NewSelectionLayer);
     let saved = occurrence_token(s.engine.document().working.occurrence.unwrap());
     layer(&mut s, LayerAction::Drop { id: saved, target: owner, fraction: 1., surface: LayerDropSurface::Row });
-    assert_eq!(s.layer_drop_preview(saved, owner, 0., LayerDropSurface::Row), Some(LayerDropHint { target: effects[1], position: LayerDropPosition::Above }));
+    assert_eq!(s.layer_drop_preview(saved, owner, 0., LayerDropSurface::Row), Some(LayerDropHint { target: effects[1], position: LayerDropPosition::Above, effect_owner: None }));
     layer(&mut s, LayerAction::Drop { id: saved, target: owner, fraction: 0., surface: LayerDropSurface::Row });
     assert_adjacent_effect_connections(&s);
     invoke(&mut s, CommandId::ReturnToArtwork);

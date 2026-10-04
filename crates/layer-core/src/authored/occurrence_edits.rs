@@ -19,9 +19,20 @@ fn clipping_gap(scene:SceneView<'_>,entries:&[OccurrenceHandle],index:usize)->bo
     above.and_then(|h|scene.clipping_base(h)).is_some_and(|base|below.is_some_and(|h|h==base||scene.clipping_base(h)==Some(base)))
 }
 fn effect_gap_owner(scene:SceneView<'_>,entries:&[OccurrenceHandle],index:usize)->Option<OccurrenceHandle> {
-    let above=*entries.get(index.checked_sub(1)?)?;let below=*entries.get(index)?;
-    let owner=scene.effect_owner(above)?;
-    (below==owner||scene.effect_owner(below)==Some(owner)).then_some(owner)
+    let below=*entries.get(index)?;
+    let owner=scene.effect_owner(below).or_else(||scene.eligible_target(below).then_some(below))?;
+    let above=index.checked_sub(1).and_then(|at|entries.get(at)).and_then(|h|scene.effect_owner(*h));
+    (above==Some(owner)||clipping_gap(scene,entries,index)).then_some(owner)
+}
+fn drop_gap(scene:SceneView<'_>,moving:&[OccurrenceHandle])->Result<(OccurrenceHandle,OccurrenceDropPosition),DocumentError> {
+    let first=*moving.first().ok_or(invalid("Select layers first"))?;
+    let entries=scene.children(scene.parent(first));
+    let at=entries.iter().position(|h|moving.contains(h)).ok_or(DocumentError::MissingOccurrence(first))?;
+    if let Some(below)=entries[at..].iter().copied().find(|h|!moving.contains(h)) {
+        Ok((below,OccurrenceDropPosition::Above))
+    }else{
+        Ok((*entries[..at].last().ok_or(DocumentError::MissingOccurrence(first))?,OccurrenceDropPosition::Below))
+    }
 }
 fn invalid(message: &'static str) -> DocumentError { DocumentError::InvalidLayerOperation(message) }
 
@@ -94,8 +105,9 @@ impl Document {
     }
     pub(crate) fn checked_relationship_edit(&self,edit:Edit,changed:&[OccurrenceHandle])->Result<Edit,DocumentError> {
         let mut candidate=self.clone();candidate.apply(edit.clone())?;let old=self.scene();let new=candidate.scene();
-        for &h in old.order().iter().filter(|h|!changed.contains(h)) {
-            if old.attachment_target(h)!=new.attachment_target(h){return Err(invalid("Keep unrelated layers with their current clipping base and effect owner"));}
+        for &h in old.order() {
+            if old.attached_effects(h)!=new.attached_effects(h)&&self.is_locked(h){return Err(DocumentError::ProtectedOccurrence(h));}
+            if !changed.contains(&h)&&old.attachment_target(h)!=new.attachment_target(h){return Err(invalid("Keep unrelated layers with their current clipping base and effect owner"));}
         }
         Ok(edit)
     }
@@ -132,6 +144,7 @@ impl Document {
         if index>destination.entries.len(){return Err(invalid("Invalid layer position"));}
         let original=scene.occurrence(id).unwrap();let adjustment=scene.effect(id).is_some_and(|e|e.program.kind==crate::EffectKind::Adjustment);
         let at=if adjustment{index}else{content_position(scene,&destination.entries,index)};
+        if old_stack==new_stack&&scene.children(parent).get(at..at+moving.len())==Some(moving.as_slice()) {return Ok(Edit::Batch(Vec::new()));}
         let attachment=if !original.is_artwork(){Attachment::None}else if adjustment {
             if let Some(owner)=effect_gap_owner(scene,&destination.entries,at){
                 if self.is_locked(owner){return Err(DocumentError::ProtectedOccurrence(owner));}Attachment::Effect
@@ -162,10 +175,8 @@ impl Document {
         if scene.parent(id)==parent {index-=siblings[..index].iter().filter(|h|moving.contains(h)).count();}
         let edit=self.reparent_occurrence_edit(id,parent,index)?;
         if into{return Ok(OccurrenceDropPlan{edit,target,position});}
-        let mut candidate=self.clone();candidate.apply(edit.clone())?;let next=candidate.scene().children(parent);
-        let at=next.iter().position(|h|moving.contains(h)).ok_or(DocumentError::MissingOccurrence(id))?;
-        let below=next[at..].iter().copied().find(|h|!moving.contains(h));
-        let (target,position)=if let Some(below)=below {(below,OccurrenceDropPosition::Above)}else{(*next[..at].last().ok_or(DocumentError::MissingOccurrence(target))?,OccurrenceDropPosition::Below)};
+        let mut candidate=self.clone();candidate.apply(edit.clone())?;
+        let (target,position)=drop_gap(candidate.scene(),&moving)?;
         Ok(OccurrenceDropPlan{edit,target,position})
     }
 
@@ -181,13 +192,12 @@ impl Document {
         if position != OccurrenceDropPosition::Above { units.reverse(); }
         let mut candidate = self.clone();
         let mut edits = Vec::new();
-        let mut hint = (target, position);
         for id in units {
             let plan = candidate.drop_occurrence_edit(id, target, position)?;
             candidate.apply(plan.edit.clone())?;
             edits.push(plan.edit);
-            hint = (plan.target, plan.position);
         }
+        let hint=if matches!(position,OccurrenceDropPosition::Above|OccurrenceDropPosition::Below){drop_gap(candidate.scene(),&moving)?}else{(target,position)};
         Ok(OccurrenceDropPlan { edit: Edit::Batch(edits), target: hint.0, position: hint.1 })
     }
 
@@ -357,7 +367,9 @@ mod tests {
             ("Effect","Member A",Above,Attachment::Effect,Some("Member A")),
             ("Paint","Group",Into,Attachment::None,None),
             ("Effect","Group",Into,Attachment::None,None),
-            ("Top A","FX A",Above,Attachment::None,None),
+            ("Top A","FX A",Above,Attachment::Clip,Some("Base A")),
+            ("Effect","FX B",Above,Attachment::Effect,Some("Base B")),
+            ("FX A","Member A",Above,Attachment::Effect,Some("Member A")),
             ("Effect","Base B",Attach,Attachment::Effect,Some("Base B")),
         ] {
             let mut doc=original.clone();let source=f::id(&doc,source);let target=f::id(&doc,target);let expected=owner.map(|name|f::id(&doc,name));
@@ -371,7 +383,6 @@ mod tests {
             let at=original.scene().children(None).iter().position(|h|*h==f::id(&original,target)).unwrap();
             assert_eq!(original.content_insertion(None,at).1,attachment,"{target}");
         }
-        for (source,target) in [("Effect","FX B"),("FX A","Member A")] {assert!(original.drop_occurrence_edit(f::id(&original,source),f::id(&original,target),Above).is_err());}
         let effect=f::id(&original,"Effect");let saved=f::id(&original,"Saved");let top=f::id(&original,"Top A");
         original.apply(original.drop_occurrence_edit(saved,top,Above).unwrap().edit).unwrap();
         original.apply(original.drop_occurrence_edit(effect,saved,Above).unwrap().edit).unwrap();
@@ -397,6 +408,108 @@ mod tests {
         doc.artwork.occurrences.get_mut(owner).unwrap().locked=true;
         assert!(doc.drop_occurrence_edit(free,lower,Above).is_err());assert!(doc.reparent_occurrence_edit(free,None,2).is_err());
         assert!(doc.drop_occurrence_edit(free,upper,Above).is_ok());
+    }
+
+    #[test]
+    fn clipping_filter_gaps_resolve_adjacent_owners_and_keep_selection_boundaries() {
+        use crate::operation_test_support as f;use OccurrenceDropPosition::*;
+        let mut original=f::document([32,32],&["Top","Saved","Member","Group","Child","Fill","Base","Free","Other"]);
+        f::saved(&mut original,"Saved",crate::Selection::empty());f::nest(&mut original,"Group",&["Child"]);
+        f::effect(&mut original,"Fill","solid_color");f::effect(&mut original,"Free","exposure");
+        for name in ["Fill","Group","Member","Top"] {let h=f::id(&original,name);original.apply(original.attachment_edit(h,true,false).unwrap()).unwrap();}
+        let free=f::id(&original,"Free");let base=f::id(&original,"Base");
+        for hidden in [false,true] {
+            for (target,position,owner) in [("Member",Above,"Member"),("Saved",Below,"Member"),("Member",Below,"Group"),("Group",Above,"Group"),("Fill",Below,"Base"),("Base",Above,"Base")] {
+                let mut doc=original.clone();let owner=f::id(&doc,owner);doc.artwork.occurrences.get_mut(owner).unwrap().visible=!hidden;
+                let before=doc.clone();let plan=doc.drop_occurrence_edit(free,f::id(&doc,target),position).unwrap();
+                let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().effect_owner(free),Some(owner));
+                for name in ["Top","Member","Group","Fill"] {assert_eq!(doc.scene().clipping_base(f::id(&doc,name)),Some(base));}
+                let attached=doc.clone();let redo=doc.apply(undo).unwrap();f::restored(&before,&doc);doc.apply(redo).unwrap();f::restored(&attached,&doc);
+                let reopened=f::roundtrip(&doc);assert_eq!(reopened.scene().effect_owner(f::id(&reopened,"Free")),Some(f::id(&reopened,&doc.scene().occurrence(owner).unwrap().name)));
+            }
+        }
+        for (target,position) in [("Saved",Above),("Top",Below),("Fill",Above),("Group",Below)] {
+            assert!(original.drop_occurrence_edit(free,f::id(&original,target),position).is_err(),"{target} {position:?}");
+        }
+        for (target,position) in [("Top",Above),("Base",Below),("Group",Into)] {
+            let mut doc=original.clone();doc.apply(doc.drop_occurrence_edit(free,f::id(&doc,target),position).unwrap().edit).unwrap();assert_eq!(doc.scene().effect_owner(free),None);
+        }
+        let group=f::id(&original,"Group");assert!(original.drop_occurrence_edit(free,f::id(&original,"Fill"),Attach).is_err());
+        assert!(original.group_blend_edit(group,crate::LayerBlend::PassThrough).is_err());
+        let saved=f::id(&original,"Saved");let member=f::id(&original,"Member");
+        original.apply(original.drop_occurrence_edit(free,member,Attach).unwrap().edit).unwrap();
+        assert_eq!(original.scene().effect_owner(free),Some(member));assert_eq!(original.scene().position(saved).unwrap()+1,original.scene().position(free).unwrap());
+    }
+
+    #[test]
+    fn filter_gap_noops_preserve_topmost_and_ordinary_owner_attachments() {
+        use crate::operation_test_support as f;use OccurrenceDropPosition::*;
+        for clipped in [false,true] {
+            let mut doc=f::document([32,32],&["FX","Owner","Base"]);f::effect(&mut doc,"FX","exposure");
+            let fx=f::id(&doc,"FX");let owner=f::id(&doc,"Owner");
+            if clipped {doc.apply(doc.attachment_edit(owner,true,false).unwrap()).unwrap();}
+            doc.apply(doc.attachment_edit(fx,true,false).unwrap()).unwrap();let before=doc.clone();
+            doc.apply(doc.drop_occurrence_edit(fx,owner,Above).unwrap().edit).unwrap();f::restored(&before,&doc);
+            assert_eq!(doc.artwork,before.artwork);
+        }
+    }
+
+    #[test]
+    fn multi_filter_gaps_keep_order_and_anchor_feedback_outside_the_moving_rows() {
+        use crate::operation_test_support as f;use OccurrenceDropPosition::*;
+        let mut original=f::document([32,32],&["Top","Existing","Owner","Base","A","Unselected","B"]);
+        for name in ["Existing","A","B"] {f::effect(&mut original,name,"exposure");}
+        for name in ["Existing","Owner","Top"] {original.apply(original.attachment_edit(f::id(&original,name),true,false).unwrap()).unwrap();}
+        let owner=f::id(&original,"Owner");let a=f::id(&original,"A");let b=f::id(&original,"B");let existing=f::id(&original,"Existing");
+        for (target,position) in [(existing,Below),(owner,Above)] {
+            let mut doc=original.clone();let plan=doc.drop_layers_edit(&[b,a],target,position).unwrap();
+            assert_eq!((plan.target,plan.position),(owner,Above));
+            let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().attached_effects(owner),[b,a,existing]);
+            assert_eq!(f::names(&doc),["Top","Existing","A","B","Owner","Base","Unselected","Paper"]);
+            doc.apply(undo).unwrap();f::restored(&original,&doc);
+        }
+        let mut doc=original.clone();doc.artwork.occurrences.get_mut(b).unwrap().locked=true;let before=doc.clone();
+        assert!(doc.drop_layers_edit(&[a,b],owner,Above).is_err());assert_eq!(doc,before);
+    }
+
+    #[test]
+    fn structural_filter_edits_protect_current_and_destination_owner_locks() {
+        use crate::operation_test_support as f;use OccurrenceDropPosition::*;
+        let mut original=f::document([32,32],&["Top","A","B","Owner","Base","Free","Other"]);
+        for name in ["A","B","Free"] {f::effect(&mut original,name,"exposure");}
+        for name in ["B","A","Owner","Top"] {original.apply(original.attachment_edit(f::id(&original,name),true,false).unwrap()).unwrap();}
+        let a=f::id(&original,"A");let b=f::id(&original,"B");let owner=f::id(&original,"Owner");let free=f::id(&original,"Free");let other=f::id(&original,"Other");
+        original.artwork.occurrences.get_mut(owner).unwrap().locked=true;
+        for (source,target,position) in [(a,other,Attach),(a,b,Below),(a,other,Above),(free,owner,Above),(free,a,Above),(free,owner,Attach)] {
+            assert!(matches!(original.drop_occurrence_edit(source,target,position),Err(DocumentError::ProtectedOccurrence(h)) if h==owner));
+        }
+        assert!(original.attachment_edit(a,false,false).is_err());
+        original.artwork.occurrences.get_mut(owner).unwrap().locked=false;
+        original.artwork.occurrences.get_mut(owner).unwrap().alpha_locked=true;
+        assert!(original.drop_occurrence_edit(free,owner,Above).is_ok());
+        let base=f::id(&original,"Base");original.artwork.occurrences.get_mut(base).unwrap().locked=true;
+        assert!(original.drop_occurrence_edit(free,owner,Above).is_ok());
+    }
+
+    #[test]
+    fn masked_filter_transfer_preserves_world_placement_and_protects_both_groups() {
+        use crate::operation_test_support as f;use OccurrenceDropPosition::*;
+        for linked in [false,true] {
+            let mut doc=f::document([32,32],&["From","FX","Old owner","To","Top","Member","Base"]);
+            f::effect(&mut doc,"FX","exposure");f::nest(&mut doc,"From",&["FX","Old owner"]);f::nest(&mut doc,"To",&["Top","Member","Base"]);
+            let fx=f::id(&doc,"FX");let from=f::id(&doc,"From");let to=f::id(&doc,"To");let member=f::id(&doc,"Member");
+            for name in ["FX","Member","Top"] {doc.apply(doc.attachment_edit(f::id(&doc,name),true,false).unwrap()).unwrap();}
+            for (id,translation) in [(from,Point{x:40.,y:60.}),(to,Point{x:-11.,y:23.}),(fx,Point{x:5.,y:9.})] {doc.artwork.occurrences.get_mut(id).unwrap().translation=translation;}
+            let coverage=mask(&mut doc,fx,Point{x:19.,y:23.});doc.artwork.occurrences.get_mut(fx).unwrap().mask.as_mut().unwrap().linked=linked;
+            let before=doc.clone();let offset=doc.layer_offset(fx);let geometry=doc.target_geometry(SourceTarget::Coverage(coverage));
+            let undo=doc.apply(doc.drop_occurrence_edit(fx,member,Above).unwrap().edit).unwrap();
+            assert_eq!(doc.scene().effect_owner(fx),Some(member));assert_eq!(doc.scene().parent(fx),Some(to));
+            assert_eq!(doc.layer_offset(fx),offset);assert_eq!(doc.target_geometry(SourceTarget::Coverage(coverage)),geometry);
+            let attached=doc.clone();let redo=doc.apply(undo).unwrap();f::restored(&before,&doc);doc.apply(redo).unwrap();f::restored(&attached,&doc);
+            let reopened=f::roundtrip(&doc);let restored=f::id(&reopened,"FX");let restored_mask=reopened.scene().mask(restored).unwrap().0.source;
+            assert_eq!(reopened.layer_offset(restored),offset);assert_eq!(reopened.target_geometry(SourceTarget::Coverage(restored_mask)),geometry);
+            for locked in [from,to] {let mut doc=before.clone();doc.artwork.occurrences.get_mut(locked).unwrap().locked=true;assert!(doc.drop_occurrence_edit(fx,member,Above).is_err());}
+        }
     }
 
     #[test]

@@ -953,7 +953,7 @@ impl NativeHost {
                 let hint = (epoch == current)
                     .then(|| self.session.layer_drop_preview(id, target, fraction, surface))
                     .flatten();
-                json!({ "epoch": current, "target": hint.map(|h| h.target), "position": hint.map(|h| h.position) })
+                json!({ "epoch": current, "target": hint.map(|h| h.target), "position": hint.map(|h| h.position), "effect_owner": hint.and_then(|h| h.effect_owner) })
             }
             Query::LayerThumbnails { requests } => {
                 let (accepted, images) = self.layer_thumbnails(requests)?;
@@ -1308,17 +1308,23 @@ mod tests {
         for surface in [None,Some("row")] {
             let mut query=json!({"type":"layer_drop","epoch":epoch,"id":id,"target":ink,"fraction":1.});
             if let Some(surface)=surface{query["surface"]=json!(surface);}
-            assert_eq!(host.query(query).unwrap(),json!({"epoch":epoch,"target":paper,"position":"above"}));
+            assert_eq!(host.query(query).unwrap(),json!({"epoch":epoch,"target":paper,"position":"above","effect_owner":null}));
         }
         assert_eq!(host.session.engine().document().revision,revision);
         host.dispatch(UiAction::Effect{action:EffectAction::Insert{effect:"curves".into()}}).unwrap();
         let effect=host.session.state().layers.iter().find(|row|row.editing).unwrap().id;
         let revision=host.session.engine().document().revision;
         let query=json!({"type":"layer_drop","epoch":epoch,"id":effect,"target":ink,"fraction":0.5,"surface":"thumbnail"});
-        assert_eq!(host.query(query.clone()).unwrap(),json!({"epoch":epoch,"target":ink,"position":"attach"}));
+        assert_eq!(host.query(query.clone()).unwrap(),json!({"epoch":epoch,"target":ink,"position":"attach","effect_owner":ink}));
         let mut stale=query.clone();stale["epoch"]=json!(epoch+1);
-        assert_eq!(host.query(stale).unwrap(),json!({"epoch":epoch,"target":null,"position":null}));
+        assert_eq!(host.query(stale).unwrap(),json!({"epoch":epoch,"target":null,"position":null,"effect_owner":null}));
         let mut invalid=query;invalid["surface"]=json!("unknown");assert!(host.query(invalid).is_err());
+        assert_eq!(host.session.engine().document().revision,revision);
+        host.dispatch(UiAction::Layer{action:LayerAction::Clip{id,value:true}}).unwrap();
+        let revision=host.session.engine().document().revision;
+        for (target,fraction) in [(id,1.),(ink,0.)] {
+            assert_eq!(host.query(json!({"type":"layer_drop","epoch":epoch,"id":effect,"target":target,"fraction":fraction,"surface":"row"})).unwrap(),json!({"epoch":epoch,"target":ink,"position":"above","effect_owner":ink}));
+        }
         assert_eq!(host.session.engine().document().revision,revision);
     }
 

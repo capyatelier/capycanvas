@@ -80,6 +80,44 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
 }
 
 #[test]
+fn clipping_filter_drops_render_in_owner_order_through_undo_and_reopen() {
+    use layer_core::{Attachment,Document,EffectValue,OccurrenceDropPosition};
+    use layer_core::color::{DocumentColor,SampleDepth,RgbSpace};
+    use super::native_effects::{insert_source,set_effect,roundtrip};
+    let extent=[32;2];let color=DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let source=|rgba|crate::test_support::depth_source(extent,SampleDepth::F32,RgbSpace::Srgb,1024*1024,|_,_|rgba);
+    let mut doc=empty_document(extent,color);
+    let top=insert_source(&mut doc,"Top",source([0.;4]));
+    let member=insert_source(&mut doc,"Member",source([0.2,0.2,0.2,1.]));
+    let base=insert_source(&mut doc,"Base",source([1.,0.,0.,0.25]));
+    let gain=insert_effect(&mut doc,EffectInstance::new(fixture("exposure").program()));
+    let offset=insert_effect(&mut doc,EffectInstance::new(fixture("exposure").program()));
+    set_effect(&mut doc,gain,"exposure",EffectValue::Number(1.));
+    set_effect(&mut doc,offset,"offset",EffectValue::Number(0.1));mask(&mut doc,gain,0.5);
+    for id in [top,member] {doc.artwork.occurrences.get_mut(id).unwrap().attachment=Attachment::Clip;}
+    refresh(&mut doc);
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();
+    let render=|r:&mut WgpuRasterizer,doc:&Document,reset| {
+        r.submit(FramePacket{reset_layers:reset,composite_all:false,..packet(doc.scene(),extent)}).unwrap();
+        let bytes=crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
+        std::array::from_fn::<_,4,_>(|c|f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))
+    };
+    let check=|pixel:[f32;4],gray:f32| {
+        for value in &pixel[..3] {assert!((*value-gray*0.25).abs()<1e-6,"{pixel:?}, expected gray {gray}");}
+        assert_eq!(pixel[3],0.25);
+    };
+    check(render(&mut r,&doc,true),0.2);
+    let undo=doc.apply(doc.drop_layers_edit(&[offset,gain],member,OccurrenceDropPosition::Above).unwrap().edit).unwrap();
+    assert_eq!(doc.scene().attached_effects(member),[offset,gain]);assert_eq!(doc.scene().clipping_base(member),Some(base));
+    check(render(&mut r,&doc,false),0.45);
+    let reorder=doc.apply(doc.drop_occurrence_edit(gain,member,OccurrenceDropPosition::Above).unwrap().edit).unwrap();
+    check(render(&mut r,&doc,false),0.4);doc.apply(reorder).unwrap();check(render(&mut r,&doc,false),0.45);
+    let redo=doc.apply(undo).unwrap();check(render(&mut r,&doc,false),0.2);
+    doc.apply(redo).unwrap();check(render(&mut r,&doc,false),0.45);
+    check(render(&mut r,&roundtrip(doc),true),0.45);
+}
+
+#[test]
 fn attached_spatial_effects_expand_owner_alpha_before_common_base_clipping() {
     use layer_core::{Attachment, EffectAlpha, EffectPass, EffectSampling};
     use layer_core::color::{DocumentColor, SampleDepth, RgbSpace};

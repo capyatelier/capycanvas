@@ -195,6 +195,25 @@ export async function checkLayerRelationships({call,evaluate,settle}) {
   await layer({op:'select',id:base,mask:false});
   await layer({op:'new',group:false,clipped:true});const owner=await active();
   await layer({op:'rename',id:owner,name:'Shadows'});
+  await layer({op:'new',group:false,clipped:true});const gapTop=await active();
+  await layer({op:'select',id:base,mask:false});const gapFilter=await insert('exposure');
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for(const target of [owner,base]) {
+      await layer({op:'select',id:gapFilter,mask:false});
+      await rect(`${row(gapFilter)} .layer-name`);await rect(row(target));
+      const points=await evaluate(`(()=>{const a=document.querySelector('${row(gapFilter)} .layer-name').getBoundingClientRect(),b=document.querySelector('${row(target)}').getBoundingClientRect();return{source:{x:a.x+a.width/2,y:a.y+a.height/2},target:{x:b.x+b.width*.7,y:b.y+2}}})()`);
+      await mouse('mousePressed',points.source);await mouse('mouseMoved',points.target);
+      assert.equal(await evaluate(`document.querySelector('${row(target)} .layer-thumbnail').classList.contains('layer-drop-attach')`),true,'gap preview identifies the filter owner');
+      assert.equal(await evaluate(`document.querySelector('${row(target)}').classList.contains('layer-drop-before')`),true);
+      await mouse('mouseReleased',points.target);
+      assert.equal(await evaluate(`Number(layerApp.state().layers.find(l=>Number(l.id)===${gapFilter}).relationship.target)`),target);
+      await invoke('undo');await invoke('redo');await invoke('undo');
+    }
+  }
+  await layer({op:'delete',id:gapFilter});await layer({op:'delete',id:gapTop});
+  await layer({op:'select',id:owner,mask:false});
+
   await layer({op:'add_mask',id:owner,replace:false});
   await layer({op:'select',id:owner,mask:false});
   const first=await insert('curves');await attach();

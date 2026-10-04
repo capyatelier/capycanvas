@@ -71,7 +71,7 @@ private suspend fun CanvasHost.layerQuery(value: JSONObject): JSONObject? = susp
 }
 private data class PreviewRequest(val id: Long, val key: String, val target: Long, val revision: Long)
 private data class LayerThumbnail(val hit: Rect, val anchor: Rect)
-private data class LayerDrag(val id: Long, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f, val surface: String = "row", val hintTarget: Long? = null, val position: String? = null)
+private data class LayerDrag(val id: Long, val pointer: Offset, val target: Long? = null, val fraction: Float = 0f, val surface: String = "row", val hintTarget: Long? = null, val position: String? = null, val effectOwner: Long? = null)
 private fun iconName(name: String) = name.removePrefix("layer-").removeSuffix("-symbolic")
 
 /** Transient native gesture state, shared by retained layer panels in this window. */
@@ -142,7 +142,7 @@ internal class LayerSwipe {
             val normalized = hint.optLong("target").takeUnless { hint.isNull("target") }
             if (finished) {
                 if (normalized != null && position != null) host.layer(obj("op" to "drop","id" to id,"target" to target,"fraction" to fraction,"surface" to surface))
-            } else drag = next.copy(hintTarget=normalized,position=position)
+            } else drag = next.copy(hintTarget=normalized,position=position,effectOwner=hint.optLong("effect_owner").takeUnless { hint.isNull("effect_owner") })
         }
     }
     LaunchedEffect(host, epoch) {
@@ -227,7 +227,7 @@ internal class LayerSwipe {
                     items(layers,key={it.getLong("id")}) { layer ->
                         val id=layer.getLong("id")
                         val highlight=drag?.takeIf { it.hintTarget==id }?.position
-                        LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,
+                        LayerRow(host,layer,view.optLong("rename_layer",-1),images,Modifier.imageDropTarget(host,id).onSizeChanged { rowHeight = it.height / density.density }.onGloballyPositioned { bounds[id]=it.boundsInRoot() },highlight,attachment=drag?.effectOwner==id,
                             context={mask,point -> contextMenu(layer,mask,point)},
                             contentBounds={rect,shift -> if(rect==null) { thumbnails.remove(id);bounds.remove(id) } else thumbnails[id]=LayerThumbnail(rect,rect.translate(Offset(shift.roundToInt().toFloat(),0f)))},
                             held={contactHeld=it},cancelContext={menuGeneration++; menu=null},
@@ -269,7 +269,7 @@ internal class LayerSwipe {
 }
 
 @Composable private fun LayerRow(host:CanvasHost,layer:JSONObject,rename:Long,images:Map<String,ImageBitmap>,modifier:Modifier=Modifier,highlight:String?=null,
-    preview:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},contentBounds:(Rect?,Float)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
+    preview:Boolean=false,attachment:Boolean=false,context:(Boolean,Offset)->Unit={_,_->},contentBounds:(Rect?,Float)->Unit={_,_->},held:(Boolean)->Unit={},cancelContext:()->Unit={},drag:(Offset,Boolean,Boolean)->Unit={_,_,_->}) {
     val colors=LocalPalette.current
     val id=layer.getLong("id")
     val label=layer.getString("label")
@@ -431,7 +431,7 @@ internal class LayerSwipe {
                 .combinedClickable(onClick={host.layer(operation)},onLongClick={openContext(mask)})
                 .drawWithContent {
                     drawContent()
-                    if(!mask && highlight=="attach") drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
+                    if(!mask && (attachment || highlight=="attach")) drawRect(colors.accent,style=androidx.compose.ui.graphics.drawscope.Stroke(2*density))
                     if(selected) for((x,y,dx,dy) in listOf(listOf(1f,1f,1f,1f),listOf(size.width-1,1f,-1f,1f),listOf(1f,size.height-1,1f,-1f),listOf(size.width-1,size.height-1,-1f,-1f))) {
                         for((color,width) in listOf(Color.Black to 3f,Color.White to 1f)) {
                             drawLine(color,Offset(x,y+dy*6*density),Offset(x,y),width*density); drawLine(color,Offset(x,y),Offset(x+dx*6*density,y),width*density)

@@ -138,20 +138,23 @@ struct LayerPanel: View {
         interaction.openMenu(id: layer["id"].uint, mask: mask, source: source)
     }
     @ViewBuilder private func dropMark(_ layer: JSON) -> some View {
-        if let drag = interaction.drag, drag.target == layer["id"].uint, let position = drag.position {
-            if position == "attach", let frame = interaction.frames[layer["id"].uint] {
+        if let drag = interaction.drag {
+            if drag.effectOwner == layer["id"].uint, let frame = interaction.frames[layer["id"].uint] {
                 Rectangle().stroke(palette.accent, lineWidth: 2)
                     .frame(width: frame.content.width, height: frame.content.height)
                     .offset(x: frame.content.minX - frame.row.minX, y: frame.content.minY - frame.row.minY)
                     .allowsHitTesting(false)
-            } else if position == "into" {
-                Rectangle().stroke(palette.accent, lineWidth: 2).allowsHitTesting(false)
-            } else {
-                VStack(spacing: 0) {
-                    if position == "below" { Spacer(minLength: 0) }
-                    Rectangle().fill(palette.accent).frame(height: 2)
-                    if position == "above" { Spacer(minLength: 0) }
-                }.allowsHitTesting(false)
+            }
+            if drag.target == layer["id"].uint, let position = drag.position {
+                if position == "into" {
+                    Rectangle().stroke(palette.accent, lineWidth: 2).allowsHitTesting(false)
+                } else if position == "above" || position == "below" {
+                    VStack(spacing: 0) {
+                        if position == "below" { Spacer(minLength: 0) }
+                        Rectangle().fill(palette.accent).frame(height: 2)
+                        if position == "above" { Spacer(minLength: 0) }
+                    }.allowsHitTesting(false)
+                }
             }
         }
     }

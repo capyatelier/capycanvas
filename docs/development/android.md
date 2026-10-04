@@ -398,6 +398,8 @@ APK calls, so test-APK benchmarks use the unminified build.
   with mouse contacts after immediate pickup, with one priming gesture and
   three five-second gestures. The `layer-reorder-<run>.json` external files
   retain moving-window `FrameMetrics` timestamps, camera and layer state.
+  Add `-e layerRelationshipBenchmark true` to drag an attached filter through
+  owner-chain gaps with clipping connectors and attachment feedback visible.
 - **Grouped tool drawer scrolling.**
   `AndroidWorkspacePerformanceTest#groupedDrawerScrollFrameTiming` runs with
   `-e groupedToolBenchmark true -e photo <readable-tier-photo.jpg>`. It uses the

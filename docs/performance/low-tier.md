@@ -111,6 +111,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Figure or ruler drag | 60 | | |
 | Layer opacity scrub | 60 | **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
 | Layer reorder drag | 60 | | |
+| Attached filter drag inside a clipping run | 60 | **Not met.** 55.64–59.72 native UI fps; moving-frame gap p99 16.75–33.34 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
 | Panel, tab, column or toolbar drag and docking | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: group/tab placements 47.38/60.22 Hz; Navigator assertion failed | Web workspace diagnostic below; no tier qualification |
@@ -1389,3 +1390,27 @@ Head modification time measures observed publication age rather than the fsync
 completion instant. The paused workload and 136–144 GPU timing samples do not
 qualify a moving-frame rate. [The short-contact summary](../../artifacts/seamless-restart/android/short-checkpoint-summary.json)
 retains each interval and its raw source.
+
+## Filter attachment feedback
+
+Measured 2026-10-04 on TCL TAB 11 Gen 2, thermal status 0 before and after,
+with the 4248 × 2832 reference photo at Fit, default workspace and panel glass,
+one clipped empty paint layer, and attached Gaussian Blur and Curves.
+`AndroidTitleBarTest#layerSwipeFrameTiming` with `layerReorderBenchmark` and
+`layerRelationshipBenchmark` drags Curves through the neighboring filter gaps.
+One priming gesture precedes three five-second mouse gestures; every drop is
+canceled.
+
+| Run | 1 | 2 | 3 |
+| --- | --- | --- | --- |
+| Native UI frames/s | 55.89 | 55.64 | 59.72 |
+| Moving-frame interval p99, ms | 33.33 | 33.34 | 16.75 |
+
+These `FrameMetrics` observations do not meet the tier target. They measure the
+attached-filter workload, separately from ordinary row reorder. No matched
+baseline was measured. The benchmark APK uses release Rust and unminified Kotlin
+from `7f69a9356` plus the clipping-filter changes. APK/source hashes, raw frames,
+display and thermal records, and the summary are in
+`artifacts/clipping-filter/build-provenance.json`,
+`artifacts/clipping-filter/low/` and
+`artifacts/clipping-filter/motion-summary.json`.

@@ -47,7 +47,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     void commit(bool cancel);
     void context(bool mask,UIElement const& anchor);
     bool loadThumbnail(bool mask);
-    void highlight(int position);
+    void highlight(int position, bool attachment = false);
 };
 struct ElementFactory : implements<ElementFactory,IElementFactory> {
     std::weak_ptr<LayersView> owner;

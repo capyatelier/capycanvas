@@ -70,6 +70,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         var hit: DropHit?
         var target: UInt64?
         var position: String?
+        var effectOwner: UInt64?
     }
     weak var store: EditorStore?
     let contact = ReorderContact()
@@ -166,7 +167,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
         drag.point = point
         let hit = hit(point, excluding: drag.id)
         if !refresh && drag.hit == hit { self.drag = drag; return }
-        drag.hit = hit; drag.target = nil; drag.position = nil; self.drag = drag
+        drag.hit = hit; drag.target = nil; drag.position = nil; drag.effectOwner = nil; self.drag = drag
         let request = UUID(), currentEpoch = epoch; dropRequest = request
         guard let hit else { return }
         let id = drag.id
@@ -177,6 +178,7 @@ enum LayerMenuSource: Equatable { case row(UInt64), footer }
                   layers.contains(where: { $0["id"].uint == hit.target }) else { return }
             if !result["position"].isNull && !result["target"].isNull {
                 current.target = result["target"].uint; current.position = result["position"].string
+                current.effectOwner = result["effect_owner"].isNull ? nil : result["effect_owner"].uint
             }
             self.drag = current
         }

@@ -1241,7 +1241,7 @@ class AndroidTitleBarTest {
                 val effect=state().getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
                 action(obj("type" to "layer","action" to obj("op" to "attach_effect","id" to effect,"owner" to owner)))
             }
-            action(obj("type" to "layer","action" to obj("op" to "select","id" to owner,"mask" to false)))
+            if(!reorder)action(obj("type" to "layer","action" to obj("op" to "select","id" to owner,"mask" to false)))
         }
         showSwipeLayers()
         action(obj("type" to "invoke","command" to "fit_canvas"))
@@ -1353,7 +1353,7 @@ class AndroidTitleBarTest {
         action(obj("type" to "restore_workspace","workspace" to relationshipWorkspace));select(curves)
         waitFor("all relationship rows") { listOf(base,owner,blur,curves,isolated,through,saved).all { node("layer-row-$it")!=null } }
         waitFor("relationship controls") { node("layer-attachment")!=null && node("layer-content-$curves")!=null }
-        assertTrue(row(isolated).getString("description").contains("Normal"))
+        assertFalse(row(isolated).getBoolean("pass_through"))
         assertNotNull(node("layer-group-pass-through-$through"));assertNull(node("layer-group-pass-through-$isolated"))
         tap("layer-attachment");assertNull(row(curves).objectOrNull("relationship"))
         tap("layer-attachment");assertEquals(highlights,row(curves).getJSONObject("relationship").getLong("target"))
@@ -1399,7 +1399,6 @@ class AndroidTitleBarTest {
             event(if(cancel)MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP);idle()
         }
         layer(obj("op" to "blend","id" to isolated,"value" to 1))
-        val mode=row(isolated).getString("description")
         for((theme,pointer) in listOf("light" to MotionEvent.TOOL_TYPE_FINGER,"dark" to MotionEvent.TOOL_TYPE_STYLUS)) {
             action(obj("type" to "set_theme","theme" to theme));tool=pointer
             swipe(isolated,12f);assertFalse(row(isolated).getBoolean("pass_through"))
@@ -1407,7 +1406,7 @@ class AndroidTitleBarTest {
             swipe(isolated,-60f);assertNotNull(node("layer-delete-$isolated"))
             swipe(isolated,90f);assertNull(node("layer-delete-$isolated"));assertFalse(row(isolated).getBoolean("pass_through"))
             swipe(isolated,60f);assertTrue(row(isolated).getBoolean("pass_through"));assertFalse(row(isolated).getBoolean("alpha_locked"))
-            swipe(isolated,60f);assertFalse(row(isolated).getBoolean("pass_through"));assertEquals(mode,row(isolated).getString("description"))
+            swipe(isolated,60f);assertFalse(row(isolated).getBoolean("pass_through"));assertEquals("Normal",row(isolated).getString("blend_label"))
             undo();assertTrue(row(isolated).getBoolean("pass_through"));undo();assertFalse(row(isolated).getBoolean("pass_through"))
             swipe(base,60f);assertTrue(row(base).getBoolean("alpha_locked"));undo();assertFalse(row(base).getBoolean("alpha_locked"))
         }
@@ -1426,6 +1425,22 @@ class AndroidTitleBarTest {
             event(MotionEvent.ACTION_UP);idle()
             if(thumbnail)assertEquals(isolated,row(curves).getJSONObject("relationship").getLong("target")) else assertNotEquals(before,order())
             undo();assertEquals(before,order());assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+        }
+        for(theme in listOf("light","dark")) for(pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE,MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS)) {
+            action(obj("type" to "set_theme","theme" to theme));tool=pointer;select(curves)
+            val before=order()
+            down("layer-row-$curves")
+            if(pointer!=MotionEvent.TOOL_TYPE_MOUSE)SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong()+150)
+            event(MotionEvent.ACTION_MOVE,point+Offset(-30*density,0f))
+            waitFor("filter gap pickup") { node("layer-drag-preview")!=null }
+            val target=bounds("layer-row-$base").let { Offset(it.right-64*density,it.top+2*density) }
+            event(MotionEvent.ACTION_MOVE,target)
+            shot("layer-filter-gap-$theme-$pointer")
+            event(MotionEvent.ACTION_UP);idle()
+            assertEquals(base,row(curves).getJSONObject("relationship").getLong("target"))
+            assertEquals(base,row(owner).getJSONObject("relationship").getLong("target"))
+            undo();assertEquals(before,order());assertEquals(owner,row(curves).getJSONObject("relationship").getLong("target"))
+            action(obj("type" to "invoke","command" to "redo"));assertEquals(base,row(curves).getJSONObject("relationship").getLong("target"));undo()
         }
         for(theme in listOf("light","dark")) {
             host.newDocument(2048,1536)

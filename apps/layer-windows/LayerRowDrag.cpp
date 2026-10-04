@@ -34,7 +34,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     struct Hit {double id;int zone;bool thumbnail;bool operator==(Hit const&)const=default;};
     std::optional<Hit> hit,answered;
     hstring placement,epoch;
-    double id=-1,normalizedTarget=-1,slopX=4,slopY=4;
+    double id=-1,normalizedTarget=-1,effectOwner=-1,slopX=4,slopY=4;
     Point origin{},position{};
     double initialScroll=0,sourceOpacity=1,initialSwipe=0;
     bool swiping=false;
@@ -71,7 +71,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             {L"grip",B(grip)},{L"mask",B(mask)},{L"captured",B(owns(surface))},{L"ignore_click",B(ignoreClick)},
             {L"scroll_claimed",B(scrollInput.has_value())},{L"menu_open",B(owner&&owner->menuOpen)},
             {L"pointer_id",pointer?N(pointer.PointerId()):JsonValue::CreateNullValue()},
-            {L"can_drop",B(!placement.empty())},{L"position",S(placement)},
+            {L"effect_owner",effectOwner>=0?N(effectOwner):JsonValue::CreateNullValue()},{L"can_drop",B(!placement.empty())},{L"position",S(placement)},
             {L"target",normalizedTarget>=0?N(normalizedTarget):JsonValue::CreateNullValue()},{L"surface",S(hit&&hit->thumbnail?L"thumbnail":L"row")}});
         if(lastRelease.Size())value.Insert(L"last_release",lastRelease);
         if(lastCancel.Size())value.Insert(L"last_cancel",lastCancel);
@@ -89,7 +89,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     }
     void marks(){
         if(auto owner=view.lock())for(auto const& [element,row]:owner->rows)
-            row->highlight(normalizedTarget==row->id?(placement==L"attach"?4:placement==L"into"?3:placement==L"above"?1:placement==L"below"?2:0):0);
+            row->highlight(normalizedTarget==row->id?(placement==L"attach"?4:placement==L"into"?3:placement==L"above"?1:placement==L"below"?2:0):0,effectOwner==row->id);
     }
     void release(){
         releasing=true;surface.ReleasePointerCaptures();
@@ -103,7 +103,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
         if(swiping)if(auto row=source.lock())row->swipe(0);
         if(dragging)if(auto row=source.lock())row->root.Opacity(sourceOpacity);
         ++generation;pointer=nullptr;source.reset();held=false;dragging=false;swiping=false;finishing=false;busy=false;
-        hit.reset();answered.reset();placement=L"";normalizedTarget=-1;timer.Stop();
+        hit.reset();answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;timer.Stop();
         if(recognizing){recognizing=false;recognizer.CompleteGesture();}
         release();if(closeMenu)hideMenu();
         marks();deferClick();evidence();
@@ -206,6 +206,8 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
                 auto result=object(packet,L"result");self->answered=requested;
                 self->placement=num(result,L"epoch",-1)==std::stod(to_string(self->epoch))?str(result,L"position"):L"";
                 self->normalizedTarget=self->placement.empty()?-1:num(result,L"target",-1);
+                auto attachment=result.GetNamedValue(L"effect_owner",JsonValue::CreateNullValue());
+                self->effectOwner=!self->placement.empty()&&attachment.ValueType()==JsonValueType::Number?attachment.GetNumber():-1;
                 self->marks();self->evidence();
             }
             self->query();
@@ -213,7 +215,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
     }
     void target(){
         auto next=pick();
-        if(hit!=next){hit=next;answered.reset();placement=L"";normalizedTarget=-1;marks();evidence();}
+        if(hit!=next){hit=next;answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;marks();evidence();}
         query();
     }
     void motion(PointerRoutedEventArgs const& e){
@@ -255,7 +257,7 @@ struct LayerRowDrag::Impl:std::enable_shared_from_this<Impl>{
             finishing=true;ignoreClick=true;e.Handled(true);release();
             // A release always asks current shared policy again, even when the
             // pointer stayed in a cached target while another action changed it.
-            ++revision;answered.reset();placement=L"";normalizedTarget=-1;target();evidence();
+            ++revision;answered.reset();placement=L"";normalizedTarget=-1;effectOwner=-1;target();evidence();
         }else{
             if(held||grip)e.Handled(true);
             if(trace)lastRelease=O({{L"source",N(id)},{L"commit",B(false)},{L"held",B(held)}});
@@ -328,7 +330,7 @@ void LayerRowDrag::Attach(std::shared_ptr<LayerRow> const& row){
 void LayerRowDrag::Refresh(){
     if(impl->pointer){
         if(!impl->current())impl->cancel(L"source_invalid");
-        else if(impl->dragging){++impl->revision;impl->answered.reset();impl->placement=L"";impl->normalizedTarget=-1;impl->marks();impl->query();}
+        else if(impl->dragging){++impl->revision;impl->answered.reset();impl->placement=L"";impl->normalizedTarget=-1;impl->effectOwner=-1;impl->marks();impl->query();}
     }
 }
 void LayerRowDrag::MenuChanged(){impl->evidence();}

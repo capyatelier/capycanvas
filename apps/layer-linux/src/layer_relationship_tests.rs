@@ -222,7 +222,7 @@ fn native_layer_relationship_review() {
     let saved = state(&w).layers.iter().find(|r| r.selection_layer).unwrap().id;
     name(saved, "Saved selection");
     let before_saved_drop = order();
-    assert_eq!(ui_session(&w).layer_drop_preview(saved,shadows,0.,layer_ui::LayerDropSurface::Row), Some(layer_ui::LayerDropHint { target: curves, position: layer_ui::LayerDropPosition::Above }));
+    assert_eq!(ui_session(&w).layer_drop_preview(saved,shadows,0.,layer_ui::LayerDropSurface::Row), Some(layer_ui::LayerDropHint { target: curves, position: layer_ui::LayerDropPosition::Above, effect_owner: None }));
     relationship_action(&w, A::Drop { id: saved, target: shadows, fraction: 0., surface: layer_ui::LayerDropSurface::Row });
     let rows = order();
     let saved_at = rows.iter().position(|id| *id == saved).unwrap();
@@ -397,13 +397,12 @@ fn native_layer_relationship_review() {
     relationship_swipe(&mut input, &w, "touch", isolated, 0., true);
     assert_eq!(revision(), before, "capture cancellation creates no mode edit");
     relationship_action(&w, A::Blend { id: isolated, value: 1 });
-    let isolated_mode = view(isolated).description;
     relationship_swipe(&mut input, &w, "touch", isolated, 60., true);
     assert!(view(isolated).pass_through);
     assert!(!view(isolated).alpha_locked);
     relationship_swipe(&mut input, &w, "touch", isolated, 60., true);
     assert!(!view(isolated).pass_through);
-    assert_eq!(view(isolated).description, isolated_mode);
+    assert_eq!(view(isolated).blend_label, "Normal");
     undo();
     assert!(view(isolated).pass_through, "one undo restores the previous group mode");
     undo();
@@ -465,7 +464,11 @@ fn native_layer_relationship_review() {
         let controllers = source.observe_controllers();
         let drag = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>()).unwrap();
         assert!(drag.drag().is_some(), "boundary pickup starts native DND");
-        input.perform(serde_json::json!([contact("mouse","move",end),contact("mouse","move",[end[0]+1.,end[1]]),contact("mouse","up",end)]));
+        input.perform(serde_json::json!([contact("mouse","move",end),contact("mouse","move",[end[0]+1.,end[1]])]));
+        if let Some(owner)=ui_session(&w).layer_drop_preview(id,target,at[1] as f32,layer_ui::LayerDropSurface::Row).and_then(|hint|hint.effect_owner) {
+            assert!(thumb(owner).has_css_class("layer-drop-attach"));
+        }
+        input.perform(serde_json::json!([contact("mouse","up",end)]));
         assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
         assert!(!w.status.is_visible(), "{}", w.status.text());
     };
@@ -504,6 +507,18 @@ fn native_layer_relationship_review() {
     undo();
     assert_eq!(order(),before);
     assert!(view(inserted).relationship.is_none());
+    select(base);
+    relationship_action(&w,A::New { group:false,clipped:true });
+    let gap_owner=current();
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme:Some(theme) });pump(160);
+        for owner in [gap_owner,base] {
+            let before=order();mouse_drop(&mut input,inserted,owner,[0.7,0.05]);
+            relationship(inserted,R::Effect,owner);relationship(shadows,R::Clip,base);
+            undo();assert_eq!(order(),before);assert!(view(inserted).relationship.is_none());
+        }
+    }
+    relationship_action(&w,A::Delete { id:gap_owner });
     select(isolated);
     relationship_action(&w, A::New { group: false, clipped: false });
     let group_base = current();
@@ -526,9 +541,9 @@ fn native_layer_relationship_review() {
     assert_eq!(order(),before);
     assert!(view(standalone).relationship.is_none());
     let mut idle_scenes = Vec::new();
-    while let Some(id) = order().into_iter().find(|id| *id != 1 && *id != 2) {
-        relationship_action(&w,A::Delete { id });
-    }
+    relationship_action(&w,A::SelectAllLayers { selected:true });
+    for id in [1,2] { relationship_action(&w,A::ToggleSelection { id }); }
+    relationship_action(&w,A::DeleteSelected);
     name(1,"Layer");
     select(1);
     relationship_action(&w,A::New { group:false,clipped:true });

@@ -67,7 +67,7 @@ function Relationship-Point([string]$Id,[double]$Fraction=.5){
     @{x=[int]($r.X+$r.Width*.5);y=[int]($r.Y+$r.Height*$Fraction)}
 }
 function Relationship-Gesture{try{(Find 'layer-list').Current.ItemStatus|ConvertFrom-Json}catch{}}
-function Relationship-Drop([double]$Id,[double]$Target,[string]$Surface,[double]$Fraction,[double]$Expected,[string]$Position,[switch]$Cancel,[switch]$Refused){
+function Relationship-Drop([double]$Id,[double]$Target,[string]$Surface,[double]$Fraction,[double]$Expected,[string]$Position,[switch]$Cancel,[switch]$Refused,[double]$Owner=-1){
     $before=Relationship-Rows
     $from=Relationship-Point "layer-$Id-drag"
     [CapyRowPointer]::Down('mouse',$from.x,$from.y);Start-Sleep -Milliseconds 35
@@ -87,6 +87,8 @@ function Relationship-Drop([double]$Id,[double]$Target,[string]$Surface,[double]
         @{gesture=(Relationship-Gesture);source=$Id;target=$Target;surface=$Surface;fraction=$Fraction;expected=$Expected;position=$Position;from=$from;to=$to}|ConvertTo-Json -Depth 12|Set-Content (Join-Path $run 'relationships-drop-failure.json')
         throw
     }
+    if($Owner -ge 0 -and (Relationship-Gesture).effect_owner -ne $Owner){throw 'Filter gap did not highlight its shared owner'}
+    if($Owner -ge 0){Capture "relationships-filter-gap-$((Model).state.theme)" -Composed -WithModel}
     if($Cancel){[CapyRowPointer]::Key(0x1b)}
     [CapyRowPointer]::Up()
     Wait-Until {(Relationship-Gesture).phase -eq 'idle'} 'Layer drop did not retire its contact'
@@ -165,7 +167,7 @@ function Test-LayerRelationships{
         Wait-Until {(Relationship-Layer $group).pass_through} 'Group right swipe did not enter Pass Through'
         Capture 'relationships-pass-through' -Composed -WithModel
         Relationship-Swipe $group 'pen' 75
-        Wait-Until {!(Relationship-Layer $group).pass_through -and (Relationship-Layer $group).blend_label -eq 'Multiply'} 'Group right swipe did not restore its retained blend'
+        Wait-Until {!(Relationship-Layer $group).pass_through -and (Relationship-Layer $group).blend_label -eq 'Normal'} 'Group right swipe did not return to Normal'
         $groupFx=Relationship-Insert 'Tone' 'Exposure';Relationship-Attach $groupFx 'effect' $group
         if($null -ne (Relationship-Layer $group).right_swipe){throw 'A group effect owner admitted Pass Through'}
         Invoke "layer-$group-content"
@@ -186,6 +188,12 @@ function Test-LayerRelationships{
         Relationship-Drop $top $blur 'row' .875 $owner 'above'
         Relationship-Undo
         $extra=Relationship-Insert 'Tone' 'Exposure'
+        foreach($theme in 1..2){
+            Relationship-Drop $extra $baseFx 'row' .125 $baseFx 'above' -Owner $base
+            if((Relationship-Layer $extra).relationship.target -ne $base){throw 'Clipping gap did not attach to its base'}
+            Relationship-Undo
+            Relationship-Theme
+        }
         Relationship-Drop $extra $group 'thumbnail' .5 $group 'attach'
         if((Relationship-Layer $extra).relationship.target -ne $group){throw 'Group thumbnail drop did not attach to the group output'}
         Relationship-Undo

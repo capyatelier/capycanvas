@@ -96,6 +96,7 @@ current-source results.
 | Figure or ruler drag | 120 | | |
 | Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 120 | **Met.** Native UI 117.20–119.41 fps; moving-frame gap p99 8.38–16.67 ms | [Layer reorder and retained photo translation](#layer-reorder-and-retained-photo-translation), 2026-10-04 |
+| Attached filter drag inside a clipping run | 120 | **Not met.** 93.24–102.71 native UI fps; moving-frame gap p99 25.00–33.33 ms | [Filter attachment feedback](#filter-attachment-feedback), 2026-10-04 |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |
 | Panel, tab, column or toolbar drag and docking | 120 | **Not met.** Toolbar or component drag 103–119 fps | `dc27e04d`, 2026-09-23 |
@@ -1766,3 +1767,27 @@ Raw moving windows, FrameMetrics, renderer measurements, thermal boundaries,
 SurfaceFlinger traces and the strict-window summary are in
 `artifacts/layer-audit-validation/performance/`. Low and mid tiers and sustained
 edge autoscroll were not measured here.
+
+## Filter attachment feedback
+
+Measured 2026-10-04 on MovinkPad Pro 14, thermal status 0 before and after,
+with the 9504 × 6336 reference photo at Fit, default workspace and panel glass,
+one clipped empty paint layer, and attached Gaussian Blur and Curves.
+`AndroidTitleBarTest#layerSwipeFrameTiming` with `layerReorderBenchmark` and
+`layerRelationshipBenchmark` drags Curves through the neighboring filter gaps.
+One priming gesture precedes three five-second mouse gestures; every drop is
+canceled.
+
+| Run | 1 | 2 | 3 |
+| --- | --- | --- | --- |
+| Native UI frames/s | 93.24 | 93.93 | 102.71 |
+| Moving-frame interval p99, ms | 33.33 | 33.33 | 25.00 |
+
+These `FrameMetrics` observations do not meet the tier target. They measure the
+attached-filter workload, separately from ordinary row reorder. No matched
+baseline was measured. The benchmark APK uses release Rust and unminified Kotlin
+from `7f69a9356` plus the clipping-filter changes. APK/source hashes, raw frames,
+display and thermal records, and the summary are in
+`artifacts/clipping-filter/build-provenance.json`,
+`artifacts/clipping-filter/top/` and
+`artifacts/clipping-filter/motion-summary.json`.

@@ -496,13 +496,21 @@ The preview reports the actual insertion target after accounting for attached
 effects and clipping runs. Moving an owner carries its effects, and moving a
 clipping base carries the run. A Pass Through thumbnail cannot silently become
 an isolated effect owner.
-Row gaps join a chain only between its remaining members and its owner or base.
-Drops above the top member, below the owner or base, between independent chains,
-or at the beginning of a group stay outside that relationship. This also applies
-to imported images. Effect gaps use adjacent rows; saved Selections cannot be
-skipped to infer an effect attachment. Moves that would split an existing
-clipping run with a standalone adjustment are refused.
-Dragging a checked row moves the checked roots together in display order. Raise
+Inside a clipping run, an adjustment dropped immediately above eligible content
+or its attached effects joins that owner's filter chain, including the first
+filter on a clipped member or its base. The preview highlights the owner's
+thumbnail alongside the insertion line. Saved Selections and generators cannot
+be skipped to infer an owner; hidden owners remain eligible.
+Outside clipping runs, effect gaps join only between remaining effects and their
+owner. Drops above the top member, below the owner or base, between independent
+chains, or at the beginning of a group stay outside that relationship. This also
+applies to imported images. Dropping back at the same parent and position preserves
+attachments and creates no undo step. Moves that would split an existing clipping
+run with a standalone adjustment are refused. Reordering, transferring or releasing
+attached filters protects both their old and new owners' locks, including locked
+ancestor groups; alpha lock does not prevent filter attachment.
+Dragging a checked row moves the checked roots together in display order, with
+the insertion line anchored outside the entire moving set. Raise
 and Lower use sibling positions for every layer kind. Web edge scrolling continues
 the same drag without changing its target semantics.
 Dropping a saved Selection inside an effect chain previews and inserts it above

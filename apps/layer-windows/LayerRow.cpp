@@ -185,10 +185,9 @@ void LayerRow::commit(bool cancel){
     bool blank=text.find_first_not_of(L" \t\r\n")==std::wstring_view::npos;
     action(cancel||blank||rename.Text()==str(model(),L"label")?O({{L"op",S(L"cancel_rename")}}):O({{L"op",S(L"rename")},{L"id",N(id)},{L"name",S(rename.Text())}}));
 }
-void LayerRow::highlight(int position){
-    // Keep row geometry stable throughout the drag.
+void LayerRow::highlight(int position, bool attachment){
     dropMark.BorderThickness(position==3?Thickness{2,2,2,2}:position==1?Thickness{0,2,0,0}:position==2?Thickness{0,0,0,2}:Thickness{0});
-    content.BorderBrush(accent(data));content.BorderThickness(position==4?Thickness{2,2,2,2}:Thickness{0});
+    content.BorderBrush(accent(data));content.BorderThickness(attachment||position==4?Thickness{2,2,2,2}:Thickness{0});
     AutomationProperties::SetHelpText(root,position==3?data->caption(L"layers",L"drop_into"):position==1?data->caption(L"layers",L"drop_above"):position==2?data->caption(L"layers",L"drop_below"):L"");
 }
 void LayerRow::refresh(){
