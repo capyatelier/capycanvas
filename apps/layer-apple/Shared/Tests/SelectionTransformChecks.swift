@@ -779,7 +779,7 @@ extension XCTestCase {
         XCTAssertTrue(group.waitForExistence(timeout: 5)); expectInk(baseline)
         workspaceActivate(group.staticTexts.matching(NSPredicate(format: "label BEGINSWITH %@ OR value BEGINSWITH %@", "Group ", "Group ")).firstMatch)
         let collapse = group.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-thumbnail-")).firstMatch
-        expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: collapse)
+        expectation(for: NSPredicate(format: "selected == true"), evaluatedWith: group.buttons["layer-Select layer without changing drawing target"])
         waitForExpectations(timeout: 5)
         workspaceActivate(collapse)
         expectation(for: NSPredicate { _, _ in rows.count == 2 }, evaluatedWith: app)
