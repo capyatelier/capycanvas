@@ -1,12 +1,216 @@
---- a/gdk/gdksurface.c
-+++ b/gdk/gdksurface.c
-@@ -2990,7 +2990,8 @@
-   gint64 begin_time = GDK_PROFILER_CURRENT_TIME;
-   gboolean handled = FALSE;
+--- a/gdk/wayland/gdkseat-wayland.c
++++ b/gdk/wayland/gdkseat-wayland.c
+@@ -2239,6 +2239,7 @@
+     {
+       GdkWaylandTabletPadData *pad = tablet->pads->data;
  
--  if (!GDK_SURFACE_IS_MAPPED (surface))
-+  /* A pad mode notification can precede keyboard focus on Wayland. */
-+  if (surface == NULL || !GDK_SURFACE_IS_MAPPED (surface))
-     return FALSE;
++      g_clear_object (&pad->focus);
+       pad->current_tablet = NULL;
+       tablet->pads = g_list_remove (tablet->pads, pad);
+     }
+@@ -2257,11 +2258,33 @@
+   g_free (tablet);
+ }
  
-   if (check_autohide (event))
++void
++gdk_wayland_seat_clear_pad_focus (GdkWaylandSeat *seat,
++                                 GdkSurface     *surface)
++{
++  GList *l;
++
++  for (l = seat->tablet_pads; l; l = l->next)
++    {
++      GdkWaylandTabletPadData *pad = l->data;
++
++      if (pad->focus == surface)
++        g_clear_object (&pad->focus);
++    }
++}
++
++static gboolean
++tablet_pad_has_focus (GdkWaylandTabletPadData *pad)
++{
++  return pad->device && pad->focus && !GDK_SURFACE_DESTROYED (pad->focus);
++}
++
+ static void
+ _gdk_wayland_seat_remove_tablet_pad (GdkWaylandSeat          *seat,
+                                      GdkWaylandTabletPadData *pad)
+ {
+   seat->tablet_pads = g_list_remove (seat->tablet_pads, pad);
++  g_clear_object (&pad->focus);
+ 
+   if (pad->device)
+     {
+@@ -3376,7 +3399,10 @@
+   GDK_SEAT_DEBUG (seat, EVENTS,
+                   "tablet pad ring handle frame, ring = %p", wp_tablet_pad_ring);
+ 
+-  event = gdk_pad_event_new_ring (seat->keyboard_focus,
++  if (!tablet_pad_has_focus (pad))
++    return;
++
++  event = gdk_pad_event_new_ring (pad->focus,
+                                   pad->device,
+                                   time,
+                                   g_list_index (pad->mode_groups, group),
+@@ -3453,7 +3479,10 @@
+                   "tablet pad strip handle frame, strip = %p",
+                   wp_tablet_pad_strip);
+ 
+-  event = gdk_pad_event_new_strip (seat->keyboard_focus,
++  if (!tablet_pad_has_focus (pad))
++    return;
++
++  event = gdk_pad_event_new_strip (pad->focus,
+                                    pad->device,
+                                    time,
+                                    g_list_index (pad->mode_groups, group),
+@@ -3579,7 +3608,10 @@
+   group->current_mode = mode;
+   n_group = g_list_index (pad->mode_groups, group);
+ 
+-  event = gdk_pad_event_new_group_mode (seat->keyboard_focus,
++  if (!tablet_pad_has_focus (pad))
++    return;
++
++  event = gdk_pad_event_new_group_mode (pad->focus,
+                                         pad->device,
+                                         time,
+                                         n_group,
+@@ -3616,7 +3648,10 @@
+   GDK_SEAT_DEBUG (seat, EVENTS,
+                   "tablet pad dial handle frame, dial = %p", wp_tablet_pad_dial);
+ 
+-  event = gdk_pad_event_new_dial (seat->keyboard_focus,
++  if (!tablet_pad_has_focus (pad))
++    return;
++
++  event = gdk_pad_event_new_dial (pad->focus,
+                                   pad->device,
+                                   time,
+                                   g_list_index (pad->mode_groups, group),
+@@ -3752,10 +3787,13 @@
+ 
+   n_group = g_list_index (pad->mode_groups, group);
+ 
++  if (!tablet_pad_has_focus (pad))
++    return;
++
+   event = gdk_pad_event_new_button (state == ZWP_TABLET_PAD_V2_BUTTON_STATE_PRESSED
+                                        ? GDK_PAD_BUTTON_PRESS
+                                        : GDK_PAD_BUTTON_RELEASE,
+-                                    GDK_WAYLAND_SEAT (pad->seat)->keyboard_focus,
++                                    pad->focus,
+                                     pad->device,
+                                     time,
+                                     n_group,
+@@ -3773,12 +3811,22 @@
+                          struct wl_surface        *surface)
+ {
+   GdkWaylandTabletPadData *pad = data;
+-  GdkWaylandTabletData *tablet = zwp_tablet_v2_get_user_data (wp_tablet);
++  GdkWaylandTabletData *tablet;
+ 
+   GDK_SEAT_DEBUG (pad->seat, EVENTS,
+                   "tablet pad handle enter, pad = %p, tablet = %p surface = %p",
+                   wp_tablet_pad, wp_tablet, surface);
+ 
++  g_clear_object (&pad->focus);
++
++  if (!wp_tablet ||
++      wl_proxy_get_listener ((struct wl_proxy *) wp_tablet) !=
++      (const void *) &tablet_listener)
++    return;
++
++  tablet = zwp_tablet_v2_get_user_data (wp_tablet);
++  g_set_object (&pad->focus, gdk_wayland_surface_from_wl_surface (surface));
++
+   if (pad->device && pad->current_tablet != tablet)
+     {
+       gdk_seat_device_removed (GDK_SEAT (pad->seat), pad->device);
+@@ -3787,6 +3835,8 @@
+     }
+ 
+   /* Relate pad and tablet */
++  if (pad->current_tablet)
++    pad->current_tablet->pads = g_list_remove (pad->current_tablet->pads, pad);
+   tablet->pads = g_list_prepend (tablet->pads, pad);
+   pad->current_tablet = tablet;
+ 
+@@ -3830,6 +3880,8 @@
+   GDK_SEAT_DEBUG (pad->seat, EVENTS,
+                   "tablet pad handle leave, pad = %p, surface = %p",
+                   wp_tablet_pad, surface);
++
++  g_clear_object (&pad->focus);
+ 
+   if (pad->current_tablet)
+     {
+--- a/gdk/wayland/gdkseat-wayland.h
++++ b/gdk/wayland/gdkseat-wayland.h
+@@ -34,6 +34,9 @@
+   GdkSeatClass parent_class;
+ };
+ 
++void gdk_wayland_seat_clear_pad_focus (GdkWaylandSeat *seat,
++                                       GdkSurface *surface);
++
+ void gdk_wayland_seat_clear_touchpoints (GdkWaylandSeat *seat,
+                                          GdkSurface     *surface);
+ 
+--- a/gdk/wayland/gdkdevice-wayland-private.h
++++ b/gdk/wayland/gdkdevice-wayland-private.h
+@@ -112,6 +112,7 @@
+   GdkDevice *device;
+ 
+   GdkWaylandTabletData *current_tablet;
++  GdkSurface *focus;
+ 
+   uint32_t enter_serial;
+   uint32_t n_buttons;
+--- a/gdk/wayland/gdksurface-wayland.c
++++ b/gdk/wayland/gdksurface-wayland.c
+@@ -881,6 +881,17 @@
+   surface_preferred_buffer_transform,
+ };
+ 
++GdkSurface *
++gdk_wayland_surface_from_wl_surface (struct wl_surface *surface)
++{
++  if (!surface ||
++      wl_proxy_get_listener ((struct wl_proxy *) surface) !=
++      (const void *) &surface_listener)
++    return NULL;
++
++  return wl_surface_get_user_data (surface);
++}
++
+ static void
+ preferred_changed (GdkWaylandColorSurface *color,
+                    GdkColorState          *color_state,
+@@ -957,6 +968,13 @@
+ static void
+ gdk_wayland_surface_destroy_wl_surface (GdkWaylandSurface *self)
+ {
++  GList *seats, *l;
++
++  seats = gdk_display_list_seats (gdk_surface_get_display (GDK_SURFACE (self)));
++  for (l = seats; l; l = l->next)
++    gdk_wayland_seat_clear_pad_focus (GDK_WAYLAND_SEAT (l->data), GDK_SURFACE (self));
++  g_list_free (seats);
++
+   g_clear_pointer (&self->display_server.viewport, wp_viewport_destroy);
+   g_clear_pointer (&self->display_server.fractional_scale, wp_fractional_scale_v1_destroy);
+   g_clear_pointer (&self->display_server.color, gdk_wayland_color_surface_free);
+--- a/gdk/wayland/gdksurface-wayland-private.h
++++ b/gdk/wayland/gdksurface-wayland-private.h
+@@ -156,6 +156,8 @@
+ void _gdk_wayland_surface_set_grab_seat (GdkSurface      *surface,
+                                          GdkSeat         *seat);
+ 
++GdkSurface *gdk_wayland_surface_from_wl_surface (struct wl_surface *surface);
++
+ struct wl_output *gdk_wayland_surface_get_wl_output (GdkSurface *surface);
+ 
+ void gdk_wayland_surface_inhibit_shortcuts (GdkSurface *surface,

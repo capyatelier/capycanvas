@@ -1,9 +1,12 @@
 # Packaged GTK runtime
 
 The Linux packager and development launcher invoke `build.sh BUILD_DIRECTORY PREFIX`
-and use the resulting GTK 4.22.4 library. `pad-event-surface.patch` prevents a null
-Wayland pad-mode event surface from being dereferenced before keyboard focus.
-Device state and targeted input remain enabled.
+and use the resulting GTK 4.22.4 library. `pad-event-surface.patch` retains the
+surface from Wayland tablet-pad entry and uses it for mode, button, ring, strip
+and dial events. Pad focus is independent of keyboard focus. Events without a
+live pad target or device are discarded before construction; mode state still
+updates. References are cleared on leave, removal and surface destruction.
+Protocol objects are checked for GTK ownership before reading their user data.
 `tablet-proximity-cursor.patch` waits for the pen's first positioned motion
 before delivering its window entry. A proximity-only frame must not choose a
 cursor using stale coordinates and briefly flash an arrow over the canvas.
@@ -16,11 +19,13 @@ Capy Canvas uses public GTK APIs and can link to system GTK. Direct Cargo
 builds use it unless `LD_LIBRARY_PATH` selects the local runtime; see the
 [Linux guide](../../../docs/development/linux.md#build-and-run).
 
-The crash fix protects GTK's own event dispatch. A Wayland tablet-pad mode
+The crash fix corrects GTK's event producers. A Wayland tablet-pad mode
 event can arrive after pad entry but before keyboard focus. GTK creates the
 event with `seat->keyboard_focus` as its surface, then
 `gdk_surface_handle_event` dereferences it before emitting `GdkSurface::event`.
 Application event controllers cannot discard the event before this access.
+Dropping NULL surfaces in dispatch alone also misses GTK's earlier debug sanity
+check and still misroutes events when the keyboard targets a different window.
 GTK 4.22.4 and 4.22.5 contain this path, and the official
 [GTK 4.24.1 source](https://download.gnome.org/sources/gtk/4.24/gtk-4.24.1.tar.xz)
 still contains both the nullable event surface and its unchecked dereference.
@@ -46,10 +51,18 @@ departure before any motion:
 
 ```sh
 python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.22.4
+python3 tools/build/gtk-runtime/test-pad-focus.py target/gtk-runtime/gtk-4.22.4
 python3 tools/build/gtk-runtime/test-runtime.py \
   target/gtk-runtime/prefix target/gtk-runtime/gtk-4.22.4/subprojects
 python3 tools/build/gtk-runtime/test-configure.py
 ```
+
+The pad check executes GTK's actual callbacks without a display, checking all
+event producers, independent keyboard/pad focus, retained mode state, missing
+devices, foreign surfaces, tablet reassociation and balanced surface references.
+It fails against the unpatched source when an initial mode event has no keyboard
+focus. Native pen journeys still run through the private compositor in the
+[Linux guide](../../../docs/development/linux.md#tests).
 
 The source archive is pinned by SHA-256. TIFF and JPEG use GTK's checksum-pinned
 Meson wraps and link statically into the local GTK library. System TIFF and JPEG
