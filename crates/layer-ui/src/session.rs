@@ -98,7 +98,7 @@ pub use clipboard::{ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
-    GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+    GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropHint, LayerDropPosition, LayerDropSurface, LayersView, RegionSource,
 };
 #[path = "application_menu.rs"]
 mod application_menu;
@@ -5704,13 +5704,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
-                if l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
+                if l.kind() == LayerKind::Group || l.blend != layer_core::LayerBlend::Normal { parts.push(effects::blend_label(l.blend, &self.state.localization).to_string()); }
                 if l.opacity < 1. { parts.push(format!("{}%", (l.opacity * 100.).round() as u32)); }
                 parts.join(" · ")
             },
             can_delete: doc.can_delete_layers(&[id]),
             can_alpha_lock: art_layers::LayerControls::for_layer(doc, id, l).alpha_lock,
             visible: doc.effective_visibility(id),
+            visibility_blocked: l.is_artwork() && l.visible && !scene.visible(id),
+            adjustment_effect: scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Adjustment),
             opacity: l.opacity,
             selected: !self.selection_masks.quick() && self.layer_interaction.selected.contains(&id),
             load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
@@ -5734,6 +5736,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             alpha_locked: l.alpha_locked,
             locked: doc.is_locked(id),
             clipped: l.attachment != layer_core::Attachment::None,
+            relationship: crate::layer_relationships::relation(doc, id),
+            right_swipe: crate::layer_relationships::right_swipe(doc, id),
+            pass_through: l.passes_through(),
             reference: l.reference,
             group: l.kind() == LayerKind::Group,
             can_drop_below: true,
@@ -5763,16 +5768,18 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_properties = effects::properties(doc, self.state.settings.selection_painting, self.localization());
         self.state.layer_tools.controls = doc.working.occurrence.and_then(|id| doc.scene().occurrence(id).map(|l| art_layers::LayerControls::for_layer(doc, id, l))).unwrap_or_default();
         self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();
+        self.state.layer_tools.attachment = crate::layer_relationships::attachment_control(doc, doc.working.occurrence, self.localization());
         if self.selection_masks.quick() {
             let row = LayerState {
                 id: 0, selection_layer: true, quick_mask: true, can_rename: false, has_thumbnail: true,
                 content_icon: Some("layer-selection-brush-symbolic".into()),
                 label: self.localization().text(MessageId::COMMAND_QUICK_MASK).to_string(), description: String::new(),
                 can_delete: true, can_alpha_lock: false, visible: self.selection_masks.quick_visible,
+                visibility_blocked: false, adjustment_effect: false,
                 opacity: 1., selected: true, mask_selected: false, selection_icon: "layer-brush-symbolic",
                 load_selection_tooltip: "Finish Quick Mask and use it as the current selection",
                 editing: true, drawing: true, has_mask: false, mask_enabled: false, mask_linked: false,
-                alpha_locked: false, locked: false, clipped: false, reference: false, group: false,
+                alpha_locked: false, locked: false, clipped: false, relationship: None, right_swipe: None, pass_through: false, reference: false, group: false,
                 can_drop_below: false, depth: 0, collapsed: false, blend: layer_core::LayerBlend::Normal.code(),
                 blend_label: effects::blend_label(layer_core::LayerBlend::Normal, &self.state.localization).to_string(),
                 paint_revision: self.selection_masks.preview_revision(None), mask_revision: 0, mask_id: None,
@@ -5780,8 +5787,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.layer_tools.editing_layer = Some(row.clone());
             self.state.layers.insert(0, row);
             self.state.layer_tools.controls = LayerControls::default();
+            self.state.layer_tools.attachment = crate::layer_relationships::attachment_control(doc, None, self.localization());
             self.state.layer_properties = selection_properties::properties(0, &self.localization().text(MessageId::COMMAND_QUICK_MASK), &self.selection_masks.quick_properties, self.state.settings.selection_painting, true, self.localization());
         }
+        self.state.layer_tools.connections = crate::layer_relationships::connections(doc, &self.state.layers);
         effects::publish_properties(&mut self.state.layer_properties,doc,&mut self.property_editor,self.effect_gesture.as_ref(),&self.state.localization);
         if let Some(id) = self.state.layer_properties.layer.and_then(|id| occurrence_handle(id).ok()).and_then(|id| self.effect_analyses.status(id)) {
             let status = self.state.localization.text(id);
@@ -6216,6 +6225,7 @@ mod tests {
     include!("targeted_curve_tests.rs");
     include!("histogram_tests.rs");
     include!("session_source_tests.rs");
+    include!("layer_relationship_tests.rs");
     include!("selection_tests.rs");
     include!("selection_pixel_tests.rs");
     include!("merge_tests.rs");
@@ -9658,7 +9668,10 @@ mod tests {
         let base = s.engine.document().working.occurrence.unwrap();
         insert_effect(&mut s, "curves");
         let effect = s.engine.document().working.occurrence.unwrap();
-        layer(&mut s, LayerAction::Clip { id: occurrence_token(effect), value: true });
+        let before_attach=s.engine.document().artwork.clone();
+        assert_eq!(s.layer_drop_preview(occurrence_token(effect),occurrence_token(base),0.5,LayerDropSurface::Thumbnail),Some(LayerDropHint{target:occurrence_token(base),position:LayerDropPosition::Attach}));
+        assert_eq!(s.engine.document().artwork,before_attach);
+        layer(&mut s, LayerAction::Drop { id: occurrence_token(effect), target: occurrence_token(base), fraction: 0.5, surface: LayerDropSurface::Thumbnail });
         assert_eq!(s.engine.document().scene().effect_owner(effect), Some(base));
         layer(&mut s, LayerAction::Select { id: occurrence_token(base), mask: false });
         layer(&mut s, LayerAction::New { group: false, clipped: true });
@@ -9675,7 +9688,7 @@ mod tests {
         assert_eq!(s.engine.document().artwork, before);
         layer(&mut s, LayerAction::New { group: true, clipped: false });
         let group = s.engine.document().working.occurrence.unwrap();
-        layer(&mut s, LayerAction::Drop { id: occurrence_token(base), target: occurrence_token(group), fraction: 0.5 });
+        layer(&mut s, LayerAction::Drop { id: occurrence_token(base), target: occurrence_token(group), fraction: 0.5, surface: LayerDropSurface::Row, });
         let scene = s.engine.document().scene();
         for id in [clipped, effect, base] { assert_eq!(scene.parent(id), Some(group)); }
         assert_eq!(scene.effect_owner(effect), Some(base));
@@ -9851,7 +9864,7 @@ mod tests {
                 lock = occurrence_token(s.engine.document().working.occurrence.unwrap());
                 target = lock;
                 if kind == "inherited" {
-                    layer(&mut s, LayerAction::Drop { id: paint, target: lock, fraction: 0.5, });
+                    layer(&mut s, LayerAction::Drop { id: paint, target: lock, fraction: 0.5,  surface: LayerDropSurface::Row, });
                     target = paint;
                 }
             }
@@ -9997,10 +10010,10 @@ mod tests {
         assert!(row.has_thumbnail);
         assert_eq!(row.content_icon.as_deref(), Some("layer-fill-symbolic"));
         assert_eq!(s.engine.document().try_drawing_target(), Err(layer_core::DrawingRefusal::Fill));
-        layer(&mut s, LayerAction::Drop { id: 2, target: 1, fraction: 0. });
+        layer(&mut s, LayerAction::Drop { id: 2, target: 1, fraction: 0., surface: LayerDropSurface::Row, });
         assert_eq!(s.state.layers[0].id, 2);
         assert_eq!(s.engine.document().try_drawing_target(), Err(layer_core::DrawingRefusal::Fill));
-        layer(&mut s, LayerAction::Drop { id: 1, target: 2, fraction: 1. });
+        layer(&mut s, LayerAction::Drop { id: 1, target: 2, fraction: 1., surface: LayerDropSurface::Row, });
         assert_eq!(s.state.layers.last().unwrap().id, 1);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
         layer(&mut s, LayerAction::AddMask { id: 2, replace: false });
@@ -10083,6 +10096,7 @@ mod tests {
     #[test]
     fn layer_drop_preview_rejects_invalid_moves_and_does_not_create_history() {
         let mut s = session(Platform::Gtk);
+        let paper=occurrence_token(s.engine.document().scene().order()[1]);
         let original = s.engine.document().clone();
         layer(&mut s, LayerAction::New { group: false, clipped: false, });
         let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
@@ -10098,14 +10112,15 @@ mod tests {
             s.layer_drop_hint(id, 1, 1.0),
             Some(LayerDropPosition::Below)
         );
+        assert_eq!(s.layer_drop_preview(id,1,1.0,LayerDropSurface::Row),Some(LayerDropHint{target:paper,position:LayerDropPosition::Above}));
         test_support::assert_live_artwork_eq(s.engine.document(), &created);
-        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0, });
+        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 0.0,  surface: LayerDropSurface::Row, });
         // The no-op drop must not consume Undo ahead of the preceding New layer.
         s.engine.undo().unwrap();
         test_support::assert_live_artwork_eq(s.engine.document(), &original);
         s.engine.redo().unwrap();
         test_support::assert_live_artwork_eq(s.engine.document(), &created);
-        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 1.0, });
+        layer(&mut s, LayerAction::Drop { id, target: 1, fraction: 1.0,  surface: LayerDropSurface::Row, });
         let moved = s.engine.document().clone();
         assert_ne!(moved.artwork.stacks, created.artwork.stacks);
         s.engine.undo().unwrap();
@@ -10150,7 +10165,7 @@ mod tests {
                 id: 1,
                 target: occurrence_token(group),
                 fraction: 0.5,
-            },
+             surface: LayerDropSurface::Row, },
         ] {
             layer(&mut s, action);
         }

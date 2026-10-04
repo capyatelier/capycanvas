@@ -134,6 +134,8 @@ pub struct LayersView {
     pub editing_layer: Option<LayerState>,
     pub rename_layer: Option<u64>,
     pub controls: LayerControls,
+    pub attachment: LayerAttachmentControl,
+    pub connections: Vec<LayerConnection>,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize)]
 pub struct LayerControls {
@@ -320,15 +322,16 @@ pub enum LayerAction {
         id: u64,
         target: u64,
         fraction: f32,
+        #[serde(default)]
+        surface: LayerDropSurface,
     },
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub use layer_core::OccurrenceDropPosition as LayerDropPosition;
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LayerDropPosition {
-    Above,
-    Below,
-    Into,
-}
+pub enum LayerDropSurface { #[default] Row, Thumbnail }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LayerDropHint { pub target: u64, pub position: LayerDropPosition }
 /// Captured destination for an external image insertion. Resolve and validate
 /// again against the same document revision when prepared sources arrive.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,46 +423,21 @@ impl<R: CanvasRenderer> UiSession<R> {
         probe.apply(edit.clone()).map_err(error)?;
         Ok((probe.artwork != doc.artwork).then_some(edit))
     }
-    fn layer_drop_edit(
-        &self,
-        id: u64,
-        target: u64,
-        fraction: f32,
-    ) -> Result<Option<(Edit, LayerDropPosition)>, String> {
-        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction) {
-            return Err("Invalid layer drop position".into());
-        }
-        if id == target {
-            return Ok(None);
-        }
-        let doc = self.engine.document();
-        let scene = doc.scene();
-        let target_handle = occurrence_handle(target)?;
-        let row = scene.occurrence(target_handle).ok_or("Unknown destination")?;
-        let into = row.kind() == LayerKind::Group && (0.25..0.75).contains(&fraction);
-        let position = if into { LayerDropPosition::Into } else if fraction < 0.5 { LayerDropPosition::Above } else { LayerDropPosition::Below };
-        let parent = if into { Some(target_handle) } else { scene.parent(target_handle) };
-        let siblings = scene.children(parent);
-        let mut index = if into { 0 } else { siblings.iter().position(|h| *h == target_handle).ok_or("Unknown destination")? + usize::from(fraction >= 0.5) };
-        let handle = occurrence_handle(id)?;
-        if scene.parent(handle) == parent {
-            let moved = doc.relationship_roots(&[handle]);
-            index -= siblings[..index].iter().filter(|h| moved.contains(h)).count();
-        }
-        Ok(self.layer_reparent_edit(id, parent.map(occurrence_token), index as u32)?.map(|edit| (edit, position)))
+    fn layer_drop_edit(&self,id:u64,target:u64,fraction:f32,surface:LayerDropSurface)->Result<Option<(Edit,LayerDropHint)>,String> {
+        if !fraction.is_finite() || !(0.0..=1.0).contains(&fraction){return Err("Invalid layer drop position".into());}
+        let doc=self.engine.document();let scene=doc.scene();let handle=occurrence_handle(id)?;let target=occurrence_handle(target)?;
+        let row=scene.occurrence(target).ok_or("Unknown destination")?;
+        let attach=surface==LayerDropSurface::Thumbnail&&scene.effect(handle).is_some_and(|e|e.program.kind==layer_core::EffectKind::Adjustment);
+        let position=if attach {LayerDropPosition::Attach}else if row.kind()==LayerKind::Group&&(0.25..0.75).contains(&fraction){LayerDropPosition::Into}else if fraction<0.5{LayerDropPosition::Above}else{LayerDropPosition::Below};
+        let plan=doc.drop_occurrence_edit(handle,target,position).map_err(error)?;
+        let mut probe=doc.clone();probe.apply(plan.edit.clone()).map_err(error)?;
+        Ok((probe.artwork!=doc.artwork).then_some((plan.edit,LayerDropHint{target:occurrence_token(plan.target),position:plan.position})))
     }
-    /// Validated row feedback without changing document, selection, or history.
-    /// Revalidate on release by dispatching LayerAction::Drop with the same hit.
-    pub fn layer_drop_hint(
-        &self,
-        id: u64,
-        target: u64,
-        fraction: f32,
-    ) -> Option<LayerDropPosition> {
-        self.layer_drop_edit(id, target, fraction)
-            .ok()
-            .flatten()
-            .map(|(_, position)| position)
+    pub fn layer_drop_preview(&self,id:u64,target:u64,fraction:f32,surface:LayerDropSurface)->Option<LayerDropHint> {
+        self.layer_drop_edit(id,target,fraction,surface).ok().flatten().map(|(_,hint)|hint)
+    }
+    pub fn layer_drop_hint(&self,id:u64,target:u64,fraction:f32)->Option<LayerDropPosition> {
+        self.layer_drop_preview(id,target,fraction,LayerDropSurface::Row).map(|hint|if hint.position==LayerDropPosition::Into {hint.position}else if fraction<0.5 {LayerDropPosition::Above}else{LayerDropPosition::Below})
     }
     /// Shared external-image feedback, independent of a dragged internal layer.
     pub fn image_placement_context(
@@ -505,6 +483,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let id = destination.map(|d| d.target).or(doc.working.occurrence).ok_or("Unknown layer")?;
         let row = scene.occurrence(id).ok_or("The destination layer was removed")?;
         let position = destination.map_or(if row.kind() == LayerKind::Group { LayerDropPosition::Into } else { LayerDropPosition::Above }, |d| d.position);
+        if position==LayerDropPosition::Attach{return Err("Images can be inserted into a group".into());}
         let parent = if position == LayerDropPosition::Into {
             if row.kind() != LayerKind::Group { return Err("Images can be inserted into a group".into()); }
             Some(id)
@@ -799,10 +778,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let selection = self.engine.document().working.selection.clone().ok_or("Make a selection first")?;
                 self.fill_selection(selection)?;
             }
-            LayerAction::Drop { id, target, fraction } => {
-                if let Some((edit, position)) = self.layer_drop_edit(id, target, fraction)? {
+            LayerAction::Drop { id, target, fraction, surface } => {
+                if let Some((edit, hint)) = self.layer_drop_edit(id, target, fraction, surface)? {
                     self.layer_edit(edit)?;
-                    if position == LayerDropPosition::Into { self.layer_interaction.collapsed.remove(&occurrence_handle(target)?); }
+                    if hint.position == LayerDropPosition::Into { self.layer_interaction.collapsed.remove(&occurrence_handle(hint.target)?); }
                 }
             }
             LayerAction::New { group, clipped } => {
@@ -1371,33 +1350,20 @@ impl<R: CanvasRenderer> UiSession<R> {
                     l.alpha_locked,
                 ));
             }
-            protection.extend([
-                check(
-                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_LOCK_EDITING).as_ref(),
-                    A::Lock {
-                        id,
-                        value: !l.locked,
-                    },
-                    l.locked,
-                ),
-                check(
-                    self.localization().text(MessageId::RESOURCES_LAYER_MENU_CLIP_TO_LAYER_BELOW).as_ref(),
-                    A::Clip {
-                        id,
-                        value: l.attachment == Attachment::None,
-                    },
-                    l.attachment != Attachment::None,
-                ),
-                if multiple {
-                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES).as_ref(), A::ReferenceSelection)
-                } else {
-                    check(
-                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_AS_REFERENCE).as_ref(),
-                        A::Reference { id },
-                        l.reference,
-                    )
-                },
-            ]);
+            protection.push(check(
+                self.localization().text(MessageId::RESOURCES_LAYER_MENU_LOCK_EDITING).as_ref(),
+                A::Lock { id, value: !l.locked },
+                l.locked,
+            ));
+            if let Some(mode) = crate::layer_relationships::group_mode_menu(doc, handle, self.localization()) {
+                protection.push(mode);
+            }
+            protection.push(crate::layer_relationships::attachment_control(doc, Some(handle), self.localization()).menu_item());
+            protection.push(if multiple {
+                item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES).as_ref(), A::ReferenceSelection)
+            } else {
+                check(self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_AS_REFERENCE).as_ref(), A::Reference { id }, l.reference)
+            });
             if Some(handle) == doc.working.occurrence {
                 let state = self.command(CommandId::ApplyTransformPixels);
                 let mut apply = ContextMenuItem::command(state.label.as_ref(), UiAction::Invoke { command: state.id });

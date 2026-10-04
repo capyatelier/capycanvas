@@ -13,8 +13,9 @@ mod imp {
         pub offset: Cell<f64>,
         pub origin: Cell<f64>,
         pub admitted: Cell<bool>,
-        pub can_alpha_lock: Cell<bool>,
+        pub can_swipe_right: Cell<bool>,
         pub animation: RefCell<Option<adw::TimedAnimation>>,
+        pub changed: OnceCell<Box<dyn Fn()>>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for SwipeRow {
@@ -55,8 +56,9 @@ glib::wrapper! {
         @extends gtk::Widget, @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 impl SwipeRow {
-    pub fn new(content: &impl IsA<gtk::Widget>, remove: impl Fn() + 'static, toggle_alpha_lock: impl Fn() + 'static, opening: impl Fn(&Self) + 'static) -> Self {
+    pub fn new(content: &impl IsA<gtk::Widget>, remove: impl Fn() + 'static, swipe_right: impl Fn() + 'static, opening: impl Fn(&Self) + 'static, changed: impl Fn() + 'static) -> Self {
         let row: Self = glib::Object::new();
+        let _ = row.imp().changed.set(Box::new(changed));
         row.set_overflow(gtk::Overflow::Hidden);
         let copy = layer_ui::CommonCopy::new(crate::launch_localization());
         let delete = gtk::Button::with_label(copy.delete.as_ref());
@@ -91,7 +93,7 @@ impl SwipeRow {
             if !row.imp().admitted.get() {
                 if !row.drag_check_threshold(0, 0, dx as i32, dy as i32) { return; }
                 let allowed = if dx < 0. { row.imp().delete.get().unwrap().is_sensitive() }
-                    else { row.imp().origin.get() > 0. || row.imp().can_alpha_lock.get() };
+                    else { row.imp().origin.get() > 0. || row.imp().can_swipe_right.get() };
                 if dy.abs() >= dx.abs() || !allowed {
                     g.set_state(gtk::EventSequenceState::Denied); return;
                 }
@@ -99,7 +101,7 @@ impl SwipeRow {
                 g.set_state(gtk::EventSequenceState::Claimed);
                 opening(&row);
             }
-            let minimum = if row.imp().origin.get() == 0. && row.imp().can_alpha_lock.get() { -REVEAL } else { 0. };
+            let minimum = if row.imp().origin.get() == 0. && row.imp().can_swipe_right.get() { -REVEAL } else { 0. };
             row.position((row.imp().origin.get() - dx).clamp(minimum, REVEAL));
         }));
         drag.connect_drag_end(glib::clone!(#[weak] row, move |g, _, _| {
@@ -107,7 +109,7 @@ impl SwipeRow {
                 let released = g.current_event().is_some_and(|e| matches!(e.event_type(), gtk::gdk::EventType::ButtonRelease | gtk::gdk::EventType::TouchEnd));
                 let toggle = released && row.imp().offset.get() <= -REVEAL * 0.4;
                 row.reveal(released && row.imp().offset.get() >= REVEAL * 0.4);
-                if toggle { toggle_alpha_lock(); }
+                if toggle { swipe_right(); }
             }
         }));
         drag.connect_cancel(glib::clone!(#[weak] row, move |_, _| {
@@ -122,15 +124,16 @@ impl SwipeRow {
         self.imp().offset.set(offset);
         self.imp().delete.get().unwrap().set_can_target(offset > 0.);
         self.queue_allocate();
+        if let Some(changed) = self.imp().changed.get() { changed(); }
     }
     pub fn reset(&self) {
         if let Some(a) = self.imp().animation.take() { a.pause(); }
         self.position(0.);
     }
-    pub fn set_actions(&self, can_delete: bool, can_alpha_lock: bool) {
+    pub fn set_actions(&self, can_delete: bool, can_swipe_right: bool) {
         self.imp().delete.get().unwrap().set_sensitive(can_delete);
-        self.imp().can_alpha_lock.set(can_alpha_lock);
-        if (!can_delete && self.is_open()) || (!can_alpha_lock && self.imp().offset.get() < 0.) { self.reset(); }
+        self.imp().can_swipe_right.set(can_swipe_right);
+        if (!can_delete && self.is_open()) || (!can_swipe_right && self.imp().offset.get() < 0.) { self.reset(); }
     }
     pub fn reveal(&self, open: bool) {
         if let Some(a) = self.imp().animation.take() { a.pause(); }

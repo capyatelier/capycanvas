@@ -425,6 +425,54 @@ The camera works in physical pixels. Web uses the fractional
 renders at the widget's integer `scale_factor()`, so under fractional Wayland
 scaling the compositor rescales the canvas and 100% is not exactly 1:1.
 
+### Layer relationships
+
+The shared layer view publishes typed clipping and effect relationships, resolved
+targets, connector endpoints, the contextual attachment control and each row's
+right-swipe action. Hosts render these values without scanning sibling rows to
+infer ownership. The [authored model](../reference/authored-model.md) owns the
+composition and editing rules.
+
+GTK uses one header button for both operations. Its tooltip and accessible label
+say **Clip to {base}** or **Release clipping from {base}** for content, and
+**Apply to {owner}** or **Apply to layers below** for effects. The effect action
+uses the vertical link symbol. Attaching across a Pass Through boundary requires
+the explicit **Isolate group and attach** action. The same actions appear in
+Layer settings, with shared availability and checked state.
+
+A straight clipping rail runs through the common-base stack, ending without a
+notch at the bottom of the base thumbnail. It continues past an expanded clipped group's children, but
+stops at a base group's header. Effect links occupy the existing gaps between
+effect thumbnails and their owner, independently of the left rail. Saved
+Selection rows stay outside the contiguous effect chain. Neither
+indicator adds a column, indentation or row height. The clipping rail uses the
+shared `relationship` palette color, derived from a darker shade of the accent.
+Effect links match the existing
+content-to-mask link's neutral color and shape, oriented vertically.
+
+Adjustment effects show their icon without a thumbnail background in the
+existing hit area; content generators retain their content thumbnails. Hiding
+an owner also hides its attached effects without changing their individual
+visibility settings. The shared row marks inherited hiding for a dimmed eye.
+Showing the owner restores effects that were not individually hidden.
+Use Selection is a normal icon button with squircle corners, a transparent idle
+background and the usual hover/pressed states, within its existing hit area.
+
+Pass Through groups have a through-arrow badge inside the folder thumbnail;
+expansion keeps its separate folder shape. Every group shows its blend mode in
+the subtitle, including Normal. Right swipe invokes the shared group-mode action
+or paint alpha lock; see the [gesture rules](drag-and-reorder.md#scrolling-menus-and-cancellation).
+
+Layer drop previews and commits use the same shared planner. A thumbnail hit can
+attach an effect to an owner; a row hit chooses a gap or a group destination.
+The preview reports the actual insertion target after accounting for attached
+effects and clipping runs. Moving an owner carries its effects, and moving a
+clipping base carries the run. A Pass Through thumbnail cannot silently become
+an isolated effect owner.
+Dropping a saved Selection inside an effect chain previews and inserts it above
+the top effect. Attaching across saved Selections moves them above the resulting
+chain atomically. A drop below the owner remains a separate valid position.
+
 ### Layer blend menu
 
 The Layers header's blend control shows the active layer's `blend_label` and

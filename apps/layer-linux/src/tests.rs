@@ -80,6 +80,8 @@ mod gpu_recovery;
 mod icons;
 #[path = "layer_hold_tests.rs"]
 mod layer_hold;
+#[path = "layer_relationship_tests.rs"]
+mod layer_relationships;
 #[path = "tooltip_tests.rs"]
 mod tooltip;
 #[path = "workspace_drawer_style_tests.rs"]

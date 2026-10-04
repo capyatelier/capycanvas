@@ -66,6 +66,11 @@ change the immediate pickup rule for handles and title/tab bars.
   on a closed paint-layer row toggles alpha lock. Locked layers cannot toggle alpha
   lock. Release commits one undo step; a short or cancelled swipe changes nothing.
   Swiping right to close Delete does not also toggle alpha lock.
+- GTK group rows use the same right swipe to toggle Pass Through, whether the
+  folder is expanded or collapsed. Returning to isolation restores its previous
+  blend mode. Locked groups and groups needed by clipping or attached effects
+  cannot enter Pass Through. The shared optional row action controls availability;
+  closing Delete, a short swipe and cancellation never change group mode.
 - Before a touch/pen list-row hold wins, motion remains available to normal list
   scrolling and cancels the pending reorder hold. Lifting, cancellation, capture
   loss, focus loss, or invalidating the source also retires pending holds.
@@ -173,6 +178,12 @@ and `--native-test=native_layer_swipe_mouse` (without `--tablet`), Web
 `AndroidTitleBarTest#layerSwipeFrameTiming` with `-e layerSwipeBenchmark true`
 and `-e photo <device-path>` pointing to the mid-tier photo; it writes
 `layer-swipe-1.json` through `layer-swipe-3.json` in the test app's external files.
+GTK `--native-test=native_layer_relationship_review` covers group-mode
+swipes, clipped owners, effect thumbnail drops, normalized gap feedback and
+relationship geometry in both themes at narrow and wide panel widths.
+Run its pen branch with `LAYER_RELATIONSHIP_PEN=1` and `--tablet`; the tablet
+proxy checks pen hold, swipe and cancellation but cannot authorize compositor
+drag-and-drop with its synthetic serials.
 
 ## Known gaps
 

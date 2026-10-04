@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16">
+  <g fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+    <rect class="transparent-fill foreground-stroke" x="5.5" y="1.5" width="5" height="6" rx="2.5"/>
+    <rect class="transparent-fill foreground-stroke" x="5.5" y="8.5" width="5" height="6" rx="2.5"/>
+    <path class="transparent-fill foreground-stroke" d="M8 5.5v5"/>
+  </g>
+</svg>

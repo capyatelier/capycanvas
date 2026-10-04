@@ -367,6 +367,16 @@ resources-size-new = 새 크기: { $width } × { $height } px
 
 resources-size-resolution-only = 해상도만 { $resolution } ppi로 변경
 
+resources-layer-attach-clip = { $target }에 클리핑
+resources-layer-attach-release = { $target }에 대한 클리핑 해제
+resources-layer-attach-effect = { $target }에 적용
+resources-layer-attach-stack = 아래 레이어들에 적용
+resources-layer-attach-isolate = 그룹을 격리하고 연결
+resources-layer-attach-unavailable = 연결할 아래 레이어가 없습니다
+resources-layer-isolate-group = 그룹 격리
+resources-layer-use-pass-through = { resources-blend-pass-through } 사용
+resources-layer-effect-owner = { $target }에 적용됨
+
 resources-layer-menu-add-mask = 마스크 추가
 
 resources-layer-menu-alpha-lock = 투명도 잠금

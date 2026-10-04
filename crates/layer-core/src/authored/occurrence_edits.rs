@@ -14,16 +14,34 @@ fn content_position(scene:SceneView<'_>,entries:&[OccurrenceHandle],index:usize)
 }
 fn invalid(message: &'static str) -> DocumentError { DocumentError::InvalidLayerOperation(message) }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OccurrenceDropPosition { Above, Below, Into, Attach }
+#[derive(Clone, Debug)]
+pub struct OccurrenceDropPlan {
+    pub edit: Edit,
+    pub target: OccurrenceHandle,
+    pub position: OccurrenceDropPosition,
+}
+
 impl Document {
+    pub fn group_blend_refusal(&self,id:OccurrenceHandle,blend:crate::LayerBlend)->Option<DocumentError> {
+        let scene=self.scene();let Some(original)=scene.occurrence(id) else{return Some(DocumentError::MissingOccurrence(id));};
+        if !matches!(original.content,OccurrenceContent::Stack(_)){return Some(invalid("Choose a group"));}
+        if self.is_locked(id){return Some(DocumentError::ProtectedOccurrence(id));}
+        if blend==crate::LayerBlend::PassThrough && (original.attachment!=Attachment::None || !scene.attached_effects(id).is_empty() || scene.order().iter().any(|h|scene.clipping_base(*h)==Some(id))) {return Some(invalid("Release the group's clipping and effects before using Pass Through"));}
+        None
+    }
     pub fn group_blend_edit(&self,id:OccurrenceHandle,blend:crate::LayerBlend)->Result<Edit,DocumentError> {
-        let scene=self.scene();let original=scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
-        if !matches!(original.content,OccurrenceContent::Stack(_)){return Err(invalid("Choose a group"));}
-        if self.is_locked(id){return Err(DocumentError::ProtectedOccurrence(id));}
-        if blend==crate::LayerBlend::PassThrough && (original.attachment!=Attachment::None || !scene.attached_effects(id).is_empty() || scene.order().iter().any(|h|scene.clipping_base(*h)==Some(id))) {return Err(invalid("Release the group's clipping and effects before using Pass Through"));}
-        let mut occurrence=original.clone();
+        if let Some(refusal)=self.group_blend_refusal(id,blend){return Err(refusal);}
+        let mut occurrence=self.scene().occurrence(id).unwrap().clone();
         if blend==crate::LayerBlend::PassThrough {if occurrence.blend!=blend {occurrence.isolated_blend=occurrence.blend;}} else {occurrence.isolated_blend=blend;}
         occurrence.blend=blend;
         Ok(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences,id,Some(occurrence))?))
+    }
+    pub fn attachment_candidate(&self,id:OccurrenceHandle)->Option<OccurrenceHandle> {
+        let scene=self.scene();if !scene.occurrence(id)?.is_artwork(){return None;}
+        self.attachment_target_below(id,!scene.effect(id).is_some_and(|e|e.program.kind==crate::EffectKind::Adjustment))
     }
     pub fn attachment_edit(&self,id:OccurrenceHandle,enabled:bool,isolate:bool)->Result<Edit,DocumentError> {
         let scene=self.scene();let original=scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;
@@ -119,6 +137,37 @@ impl Document {
         if old_stack!=new_stack {let mut old=self.artwork.stacks.get(old_stack).unwrap().clone();old.entries.retain(|h|!moving.contains(h));edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,old_stack,Some(old))?));}
         if self.artwork.stacks.get(new_stack)!=Some(&destination){edits.push(Edit::Stack(RecordChange::replace(&self.artwork.stacks,new_stack,Some(destination))?));}
         self.checked_relationship_edit(Edit::Batch(edits),&moving)
+    }
+
+    pub fn drop_occurrence_edit(&self,id:OccurrenceHandle,target:OccurrenceHandle,position:OccurrenceDropPosition)->Result<OccurrenceDropPlan,DocumentError> {
+        let scene=self.scene();scene.occurrence(id).ok_or(DocumentError::MissingOccurrence(id))?;scene.occurrence(target).ok_or(DocumentError::MissingOccurrence(target))?;
+        let moving=self.relationship_roots(&[id]);
+        if moving.contains(&target){return Ok(OccurrenceDropPlan {edit:Edit::Batch(Vec::new()),target,position});}
+        if position==OccurrenceDropPosition::Attach {
+            let index=scene.attached_effects(target).iter().filter(|h|**h!=id).count();
+            return Ok(OccurrenceDropPlan {edit:self.attach_effect_edit(id,target,index,false)?,target,position});
+        }
+        let into=position==OccurrenceDropPosition::Into;
+        let parent=if into {Some(target)}else{scene.parent(target)};
+        let siblings=scene.children(parent);
+        let mut index=if into{0}else{siblings.iter().position(|h|*h==target).ok_or(DocumentError::MissingOccurrence(target))?+usize::from(position==OccurrenceDropPosition::Below)};
+        if scene.parent(id)==parent {index-=siblings[..index].iter().filter(|h|moving.contains(h)).count();}
+        let remaining:Vec<_>=siblings.iter().copied().filter(|h|!moving.contains(h)).collect();
+        let edit=if scene.effect(id).is_some_and(|e|e.program.kind==crate::EffectKind::Adjustment) {
+            let next=remaining[index..].iter().copied().find(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork()));
+            let previous=remaining[..index].iter().rev().copied().find(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork()));
+            let owner=next.and_then(|h|scene.effect_owner(h).or_else(||(scene.eligible_target(h)&&(scene.effect_owner(id)==Some(h)||previous.is_some_and(|p|scene.effect_owner(p)==Some(h)))).then_some(h)));
+            if let Some(owner)=owner {
+                let index=scene.attached_effects(owner).iter().filter(|h|**h!=id&&remaining.iter().position(|v|v==*h).is_some_and(|at|at>=index)).count();
+                self.attach_effect_edit(id,owner,index,false)?
+            }else{self.reparent_occurrence_edit(id,parent,index)?}
+        }else{self.reparent_occurrence_edit(id,parent,index)?};
+        if into{return Ok(OccurrenceDropPlan{edit,target,position});}
+        let mut candidate=self.clone();candidate.apply(edit.clone())?;let next=candidate.scene().children(parent);
+        let at=next.iter().position(|h|moving.contains(h)).ok_or(DocumentError::MissingOccurrence(id))?;
+        let below=next[at..].iter().copied().find(|h|!moving.contains(h));
+        let (target,position)=if let Some(below)=below {(below,OccurrenceDropPosition::Above)}else{(*next[..at].last().ok_or(DocumentError::MissingOccurrence(target))?,OccurrenceDropPosition::Below)};
+        Ok(OccurrenceDropPlan{edit,target,position})
     }
 
     pub fn duplicate_layers_edit(&self, roots: &[OccurrenceHandle]) -> Result<(Edit, Vec<OccurrenceHandle>), DocumentError> {
@@ -244,6 +293,25 @@ mod tests {
         doc.apply(doc.group_blend_edit(group,LayerBlend::Multiply).unwrap()).unwrap();doc.apply(doc.group_blend_edit(group,LayerBlend::PassThrough).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().isolated_blend,LayerBlend::Multiply);
         assert!(doc.attach_effect_edit(fx,group,0,false).is_err());let undo=doc.apply(doc.attach_effect_edit(fx,group,0,true).unwrap()).unwrap();assert_eq!(doc.scene().occurrence(group).unwrap().blend,LayerBlend::Multiply);assert!(doc.group_blend_edit(group,LayerBlend::PassThrough).is_err());
         let reopened=f::roundtrip(&doc);assert_eq!(reopened.scene().occurrence(f::id(&reopened,"Group")).unwrap().isolated_blend,LayerBlend::Multiply);doc.apply(undo).unwrap();
+    }
+    #[test]
+    fn drop_plans_distinguish_owner_hits_and_chain_gaps_and_preserve_preview_targets() {
+        use crate::{operation_test_support as f,LayerBlend};use OccurrenceDropPosition::*;
+        let mut doc=f::document([32,32],&["Top","Curves","Saved","Blur","Shade","Base","Outside","Group","Child"]);
+        f::effect(&mut doc,"Curves","exposure");f::effect(&mut doc,"Blur","gaussian_blur");f::saved(&mut doc,"Saved",crate::Selection::empty());f::nest(&mut doc,"Group",&["Child"]);
+        let h=|name|f::id(&doc,name);let top=h("Top");let curves=h("Curves");let blur=h("Blur");let shade=h("Shade");let base=h("Base");let outside=h("Outside");let saved=h("Saved");let group=h("Group");
+        for id in [blur,curves,shade,top]{doc.apply(doc.attachment_edit(id,true,false).unwrap()).unwrap();}
+        assert_eq!(doc.attachment_candidate(curves),Some(shade));assert_eq!(doc.attachment_candidate(saved),None);
+        let original=doc.clone();
+        let plan=doc.drop_occurrence_edit(curves,blur,Below).unwrap();assert_eq!(plan.target,shade);assert_eq!(plan.position,Above);
+        let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().attached_effects(shade),[curves,blur]);assert_eq!(doc.scene().effect_owner(blur),Some(shade));doc.apply(undo).unwrap();f::restored(&original,&doc);
+        let plan=doc.drop_occurrence_edit(blur,outside,Attach).unwrap();assert_eq!((plan.target,plan.position),(outside,Attach));let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().effect_owner(blur),Some(outside));doc.apply(undo).unwrap();
+        let plan=doc.drop_occurrence_edit(blur,outside,Below).unwrap();let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().effect_owner(blur),None);assert_eq!(doc.scene().clipping_base(top),Some(base));doc.apply(undo).unwrap();
+        let plan=doc.drop_occurrence_edit(shade,group,Into).unwrap();let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().parent(shade),Some(group));assert_eq!(doc.scene().effect_owner(curves),Some(shade));assert_eq!(doc.scene().clipping_base(top),Some(base));doc.apply(undo).unwrap();
+        let plan=doc.drop_occurrence_edit(base,group,Into).unwrap();let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().parent(top),Some(group));assert_eq!(doc.scene().clipping_base(top),Some(base));assert_eq!(doc.scene().effect_owner(blur),Some(shade));doc.apply(undo).unwrap();
+        doc.apply(doc.group_blend_edit(group,LayerBlend::PassThrough).unwrap()).unwrap();assert_eq!(doc.attachment_candidate(outside),Some(group));assert!(doc.drop_occurrence_edit(blur,group,Attach).is_err());
+        let plan=doc.drop_occurrence_edit(blur,group,Into).unwrap();let undo=doc.apply(plan.edit).unwrap();assert_eq!(doc.scene().parent(blur),Some(group));doc.apply(undo).unwrap();
+        doc.artwork.occurrences.get_mut(outside).unwrap().locked=true;assert!(doc.drop_occurrence_edit(blur,outside,Attach).is_err());
     }
     #[test]
     fn saved_selections_stay_above_contiguous_effect_chains_and_undo_atomically() {

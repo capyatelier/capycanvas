@@ -103,6 +103,8 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
+mod layer_relationships;
+pub use layer_relationships::{LayerAttachmentControl, LayerConnection, LayerRelation, LayerRelationKind};
 pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory, GradientToolSettings, GradientDestination, GradientEdit, GradientControls};
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 pub mod keymaps;
@@ -114,7 +116,7 @@ mod glass;
 pub use glass::{BlurStyle, GlassColor, GlassPalette, Transparency};
 mod workspace;
 mod workspace_manager_ui;
-pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropPosition, LayersView, RegionSource};
+pub use session::{ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerDropHint, LayerDropPosition, LayerDropSurface, LayersView, RegionSource};
 pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceCommand};
 mod stats;
 pub use session::{HistogramAction, HistogramView};
@@ -1186,6 +1188,8 @@ pub struct LayerState {
     pub can_delete: bool,
     pub can_alpha_lock: bool,
     pub visible: bool,
+    pub visibility_blocked: bool,
+    pub adjustment_effect: bool,
     pub opacity: f32,
     pub selected: bool,
     pub mask_selected: bool,
@@ -1201,6 +1205,9 @@ pub struct LayerState {
     pub alpha_locked: bool,
     pub locked: bool,
     pub clipped: bool,
+    pub relationship: Option<LayerRelation>,
+    pub right_swipe: Option<LayerAction>,
+    pub pass_through: bool,
     pub reference: bool,
     pub group: bool,
     pub can_drop_below: bool,

@@ -19,3 +19,4 @@ mod scene;
 pub use scene::{EffectBaseline, SceneIndex, SceneScope, SceneSnapshot, SceneView};
 
 mod occurrence_edits;
+pub use occurrence_edits::{OccurrenceDropPlan, OccurrenceDropPosition};

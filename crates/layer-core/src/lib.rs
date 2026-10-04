@@ -1258,7 +1258,7 @@ impl Stroke {
 pub use authored::{
     Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
     CoverageSource, Definition, DefinitionHandle, EffectApplication, EffectHandle,
-    EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceHandle,
+    EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceDropPlan, OccurrenceDropPosition, OccurrenceHandle,
     Output, OutputHandle, PaintHandle, PaintSource, PortableId, RecordChange, SavedSelection,
     SceneIndex, SceneScope, SceneSnapshot, SceneView, SelectionHandle, SourceTarget, Stack,
     StackHandle, Store, WorkingState,

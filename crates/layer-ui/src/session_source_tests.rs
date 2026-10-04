@@ -155,6 +155,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     assert_eq!(session.image_layer_drop_hint(occurrence_token(ink), 0.1), Some(LayerDropPosition::Above));
     assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.9), Some(LayerDropPosition::Below));
     assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.1), Some(LayerDropPosition::Above));
+    assert!(session.image_placement_context(None,Some(ImageLayerDestination{target:group_id,position:LayerDropPosition::Attach})).is_err());
     let original = session.engine.document().clone();
     session.place_layer_sources(vec![("Clipped import".into(), source.clone())], None,
         Some(ImageLayerDestination { target: ink, position: LayerDropPosition::Above })).unwrap();

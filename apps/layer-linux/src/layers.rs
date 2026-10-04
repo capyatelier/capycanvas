@@ -8,6 +8,7 @@ use std::{
     collections::HashMap,
     rc::{Rc, Weak},
 };
+mod connections;
 
 struct LayerCopy {
     layer: layer_ui::native_copy::LayerCopy,
@@ -50,28 +51,28 @@ pub struct LayerPanel {
     context: gtk::PopoverMenu,
     owner: Rc<RefCell<Weak<Workspace>>>,
     rows: Rc<RefCell<HashMap<usize, Row>>>,
+    connections: connections::Connections,
     previews: RefCell<HashMap<(u64, bool), (u64, gdk::Texture)>>,
     requested: RefCell<HashMap<(u64, bool), u64>>,
     pending: RefCell<HashMap<u64, (u64, bool, u64)>>,
     next_preview: Cell<u64>,
-    updating: Cell<bool>,
 }
 #[derive(Clone)]
 struct Row {
     copy: Rc<RefCell<LayerCopy>>,
     id: Cell<u64>,
+    bound: Cell<bool>,
     swipe: crate::swipe_row::SwipeRow,
     content_image: gtk::Picture,
     effect_icon: gtk::Image,
+    pass_through: gtk::Image,
     mask_image: gtk::Picture,
     root: gtk::Box,
     eye: gtk::Button,
     selection: gtk::Button,
     thumbnails: gtk::Box,
-    clipping: gtk::Box,
     content: gtk::Button,
     load_selection: gtk::Button,
-    content_preview: gtk::Overlay,
     content_frame: gtk::DrawingArea,
     mask: gtk::Button,
     mask_frame: gtk::DrawingArea,
@@ -268,23 +269,27 @@ pub(crate) fn drag_preview(
         row.height() as f32,
     )))
 }
-fn drop_hint(root: &gtk::Box, state: Option<LayerState>, y: f64) {
-    for class in ["layer-drop-before", "layer-drop-after", "layer-drop-into"] {
-        root.remove_css_class(class);
+fn dragged_layer(value: &glib::Value) -> Option<u64> {
+    value.get::<String>().ok()?.strip_prefix("capy-layer:")?.parse().ok()
+}
+fn drop_hit(root: &gtk::Box, content: &gtk::Button, x: f64, y: f64) -> (f32, layer_ui::LayerDropSurface) {
+    let thumbnail = content.compute_bounds(root).is_some_and(|rect| rect.contains_point(&gtk::graphene::Point::new(x as f32, y as f32)));
+    ((y / root.height().max(1) as f64) as f32, if thumbnail { layer_ui::LayerDropSurface::Thumbnail } else { layer_ui::LayerDropSurface::Row })
+}
+fn show_drop_hint(rows: &RefCell<HashMap<usize, Row>>, hint: Option<layer_ui::LayerDropHint>) {
+    for row in rows.borrow().values() {
+        for class in ["layer-drop-before", "layer-drop-after", "layer-drop-into"] { row.root.remove_css_class(class); }
+        row.content.remove_css_class("layer-drop-attach");
+        if let Some(hint) = hint.filter(|hint| hint.target == row.id.get()) {
+            use layer_ui::LayerDropPosition as P;
+            match hint.position {
+                P::Attach => row.content.add_css_class("layer-drop-attach"),
+                P::Above => row.root.add_css_class("layer-drop-before"),
+                P::Below => row.root.add_css_class("layer-drop-after"),
+                P::Into => row.root.add_css_class("layer-drop-into"),
+            }
+        }
     }
-    let group = state.as_ref().is_some_and(|s| s.group);
-    let fraction = if state.as_ref().is_some_and(|s| s.can_drop_below) {
-        y / root.height().max(1) as f64
-    } else {
-        0.
-    };
-    root.add_css_class(if group && (0.25..0.75).contains(&fraction) {
-        "layer-drop-into"
-    } else if fraction < 0.5 {
-        "layer-drop-before"
-    } else {
-        "layer-drop-after"
-    });
 }
 fn row_button_action(row: &LayerState, kind: u8) -> UiAction {
     if kind == 5 {
@@ -418,6 +423,7 @@ impl LayerPanel {
         let alpha = toggle("layer-alpha-lock-symbolic", copy.borrow().layer.alpha_lock.as_ref());
         let lock = toggle("layer-lock-symbolic", copy.borrow().layer.lock_editing.as_ref());
         let clip = toggle("layer-clip-symbolic", copy.borrow().layer.clip.as_ref());
+        clip.set_widget_name("layer-attachment");
         let reference = toggle(
             "layer-reference-symbolic",
             copy.borrow().reference.as_ref(),
@@ -430,7 +436,10 @@ impl LayerPanel {
         let model = gio::ListStore::new::<glib::BoxedAnyObject>();
         let factory = gtk::SignalListItemFactory::new();
         let rows: Rc<RefCell<HashMap<usize, Row>>> = Rc::default();
+        let connections = connections::Connections::new(rows.clone());
         factory.connect_setup(glib::clone!(
+            #[weak]
+            connections,
             #[strong]
             copy,
             #[strong]
@@ -454,9 +463,9 @@ impl LayerPanel {
                 selection.add_css_class("layer-column");
                 root.append(&selection);
                 let thumbnails = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-                let clipping = gtk::Box::new(gtk::Orientation::Vertical, 0);
-                clipping.add_css_class("layer-clipping");
-                thumbnails.append(&clipping);
+                let gutter = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                gutter.add_css_class("layer-connection-gutter");
+                thumbnails.append(&gutter);
                 let (content, content_image, content_preview, content_frame) =
                     thumbnail(copy.borrow().layer.edit_content.as_ref());
                 let effect_icon = gtk::Image::new();
@@ -464,6 +473,14 @@ impl LayerPanel {
                 effect_icon.set_can_target(false);
                 content_preview.remove_overlay(&content_frame);
                 content_preview.add_overlay(&effect_icon);
+                let pass_through = crate::icons::image("layer-group-pass-through-symbolic");
+                pass_through.set_pixel_size(12);
+                pass_through.set_halign(gtk::Align::End);
+                pass_through.set_valign(gtk::Align::End);
+                pass_through.set_can_target(false);
+                pass_through.add_css_class("layer-type-symbol");
+                pass_through.add_css_class("layer-group-pass-through");
+                content_preview.add_overlay(&pass_through);
                 content_preview.add_overlay(&content_frame);
                 thumbnails.append(&content);
                 let link = button("layer-link-symbolic", copy.borrow().layer.link_mask_to_layer.as_ref());
@@ -497,6 +514,7 @@ impl LayerPanel {
                 name_stack.add_named(&name_entry, Some("edit"));
                 text.append(&name_stack);
                 let meta = gtk::Label::new(None);
+                meta.add_css_class("layer-meta");
                 meta.add_css_class("dim-label");
                 meta.set_xalign(0.);
                 meta.set_ellipsize(gtk::pango::EllipsizeMode::End);
@@ -504,7 +522,7 @@ impl LayerPanel {
                 text.append(&meta);
                 root.append(&text);
                 let load_selection = button("layer-selection-load-symbolic", copy.borrow().load_selection.as_ref());
-                load_selection.add_css_class("layer-thumbnail");
+                load_selection.set_size_request(30, 30);
                 load_selection.set_valign(gtk::Align::Center);
                 thumbnails.insert_child_after(&load_selection, Some(&content));
                 let lock = gtk::Image::new();
@@ -765,73 +783,39 @@ impl LayerPanel {
                 root.add_controller(hold.clone());
                 hold.group_with(&drag);
                 let drop = gtk::DropTarget::new(String::static_type(), gdk::DragAction::MOVE);
+                drop.set_preload(true);
                 drop.connect_accept(|_, drop| !drop.formats().contain_mime_type("text/uri-list"));
-                drop.connect_enter(glib::clone!(
-                    #[weak]
-                    item,
-                    #[weak]
-                    root,
-                    #[upgrade_or]
-                    gdk::DragAction::empty(),
-                    move |_, _, y| {
-                        drop_hint(&root, row_state(&item), y);
-                        gdk::DragAction::MOVE
+                let preview = glib::clone!(
+                    #[weak] item, #[weak] root, #[weak] content, #[strong] owner, #[strong] rows,
+                    #[upgrade_or] gdk::DragAction::empty(),
+                    move |drop: &gtk::DropTarget, x: f64, y: f64| {
+                        let hint = (|| {
+                            let id = dragged_layer(&drop.value()?)?;
+                            let row = row_state(&item)?;
+                            let w = owner.borrow().upgrade()?;
+                            let (fraction, surface) = drop_hit(&root, &content, x, y);
+                            let gpu = w.gpu.borrow();
+                            gpu.as_ref()?.session.layer_drop_preview(id, row.id, fraction, surface)
+                        })();
+                        show_drop_hint(&rows, hint);
+                        if hint.is_some() { gdk::DragAction::MOVE } else { gdk::DragAction::empty() }
                     }
-                ));
-                drop.connect_motion(glib::clone!(
-                    #[weak]
-                    root,
-                    #[weak]
-                    item,
-                    #[upgrade_or]
-                    gdk::DragAction::empty(),
-                    move |_, _, y| {
-                        drop_hint(&root, row_state(&item), y);
-                        gdk::DragAction::MOVE
-                    }
-                ));
-                drop.connect_leave(glib::clone!(
-                    #[weak]
-                    root,
-                    move |_| {
-                        root.remove_css_class("layer-drop-before");
-                        root.remove_css_class("layer-drop-after");
-                        root.remove_css_class("layer-drop-into");
-                    }
-                ));
+                );
+                drop.connect_enter(preview.clone());
+                drop.connect_motion(preview);
+                drop.connect_leave(glib::clone!(#[strong] rows, move |_| show_drop_hint(&rows, None)));
                 drop.connect_drop(glib::clone!(
-                    #[weak]
-                    item,
-                    #[weak]
-                    root,
-                    #[strong]
-                    owner,
-                    #[upgrade_or]
-                    false,
-                    move |_, value, _, y| {
-                        root.remove_css_class("layer-drop-before");
-                        root.remove_css_class("layer-drop-after");
-                        root.remove_css_class("layer-drop-into");
-                        let Some(id) = value.get::<String>().ok().and_then(|s| {
-                            s.strip_prefix("capy-layer:").and_then(|s| s.parse().ok())
-                        }) else {
-                            return false;
-                        };
-                        let Some(row) = row_state(&item) else {
-                            return false;
-                        };
-                        let Some(w) = owner.borrow().upgrade() else {
-                            return false;
-                        };
-                        action(
-                            &w,
-                            A::Drop {
-                                id,
-                                target: row.id,
-                                fraction: (y / root.height().max(1) as f64) as f32,
-                            },
-                        );
-                        true
+                    #[weak] item, #[weak] root, #[weak] content, #[strong] owner, #[strong] rows,
+                    #[upgrade_or] false,
+                    move |_, value, x, y| {
+                        show_drop_hint(&rows, None);
+                        let Some(id) = dragged_layer(value) else { return false; };
+                        let Some(row) = row_state(&item) else { return false; };
+                        let Some(w) = owner.borrow().upgrade() else { return false; };
+                        let (fraction, surface) = drop_hit(&root, &content, x, y);
+                        let valid = w.gpu.borrow().as_ref().is_some_and(|g| g.session.layer_drop_preview(id, row.id, fraction, surface).is_some());
+                        if valid { action(&w, A::Drop { id, target: row.id, fraction, surface }); }
+                        valid
                     }
                 ));
                 root.add_controller(drop);
@@ -850,7 +834,7 @@ impl LayerPanel {
                     }),
                     glib::clone!(#[weak] item, #[strong] owner, move || {
                         if let (Some(row), Some(w)) = (row_state(&item), owner.borrow().upgrade()) {
-                            action(&w, A::ToggleAlphaLock { id: row.id });
+                            if let Some(command) = row.right_swipe { action(&w, command); }
                         }
                     }),
                     move |opened| {
@@ -859,25 +843,25 @@ impl LayerPanel {
                                 if row.swipe != *opened && row.swipe.is_open() { row.swipe.reveal(false); }
                             }
                         }
-                    });
+                    }, glib::clone!(#[weak] connections, move || connections.queue_draw()));
                 item.set_child(Some(&swipe));
                 rows.borrow_mut().insert(
                     item.as_ptr() as usize,
                     Row {
                         copy: copy.clone(),
                         id: Cell::new(0),
+                        bound: Cell::new(false),
                         swipe,
                         content_image,
                         effect_icon,
+                        pass_through,
                         mask_image,
                         root,
                         eye,
                         selection,
                         thumbnails,
-                        clipping,
                         content,
                         load_selection,
-                        content_preview,
                         content_frame,
                         mask,
                         mask_frame,
@@ -893,6 +877,8 @@ impl LayerPanel {
             }
         ));
         factory.connect_bind(glib::clone!(
+            #[weak]
+            connections,
             #[strong]
             rows,
             move |_, item| {
@@ -900,7 +886,9 @@ impl LayerPanel {
                 let Some(state) = row_state(item) else { return };
                 let rows = rows.borrow();
                 let row = &rows[&(item.as_ptr() as usize)];
+                row.bound.set(true);
                 row.refresh(&state);
+                connections.queue_draw();
             }
         ));
         factory.connect_teardown(glib::clone!(
@@ -915,6 +903,7 @@ impl LayerPanel {
             rows,
             move |_, item| {
                 if let Some(row) = rows.borrow().get(&(item.as_ptr() as usize)) {
+                    row.bound.set(false);
                     crate::files::drop::clear_row(&row.root);
                     // Selection can rebind the same row. Keep its image until
                     // refresh sees a different ID; detached rows are not polled.
@@ -933,7 +922,13 @@ impl LayerPanel {
             .min_content_height(0)
             .child(&view)
             .build());
-        root.append(&list);
+        let overlay = gtk::Overlay::new();
+        overlay.set_child(Some(&list));
+        overlay.add_overlay(&connections);
+        overlay.set_measure_overlay(&connections, false);
+        overlay.set_clip_overlay(&connections, true);
+        list.vadjustment().connect_value_changed(glib::clone!(#[weak] connections, move |_| connections.queue_draw()));
+        root.append(&overlay);
         let footer = gtk::Box::new(gtk::Orientation::Horizontal, 2);
         footer.add_css_class("layer-footer");
         root.append(&footer);
@@ -943,6 +938,7 @@ impl LayerPanel {
             header,
             footer,
             list,
+            connections,
             opacity,
             model,
             blend,
@@ -964,7 +960,6 @@ impl LayerPanel {
             requested: Default::default(),
             pending: Default::default(),
             next_preview: Cell::new(1),
-            updating: Cell::new(false),
         }
     }
     /// The virtual ListView's request describes its viewport, not all rows.
@@ -1093,10 +1088,7 @@ impl LayerPanel {
                             id,
                             value: !row.locked,
                         },
-                        _ => A::Clip {
-                            id,
-                            value: !row.clipped,
-                        },
+                        _ => s.layer_tools.attachment.action.clone()?,
                     },
                 })
             });
@@ -1199,16 +1191,9 @@ impl LayerPanel {
         self.clip.connect_clicked(glib::clone!(
             #[weak]
             w,
-            move |b| {
-                if let Some(id) = active(&w) {
-                    action(
-                        &w,
-                        A::Clip {
-                            id,
-                            value: b.is_active(),
-                        },
-                    );
-                }
+            move |_| {
+                let command = w.gpu.borrow().as_ref().and_then(|g| g.session.state().layer_tools.attachment.action.clone());
+                if let Some(command) = command { action(&w, command); }
             }
         ));
         self.lock.connect_clicked(glib::clone!(
@@ -1242,6 +1227,7 @@ impl LayerPanel {
             if picked.is_none() || (release && !on_delete) { row.swipe.reveal(false); }
         }
     }
+    pub(crate) fn refresh_theme(&self) { self.connections.queue_draw(); }
     pub(crate) fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
         *self.copy.borrow_mut() = LayerCopy::new(&localization);
         let copy = self.copy.borrow();
@@ -1272,7 +1258,6 @@ impl LayerPanel {
         }
     }
     pub fn refresh(&self, state: &UiState) {
-        self.updating.set(true);
         // Update only changed rows; list virtualization bounds GTK widget count.
         let same = self.model.n_items() as usize == state.layers.len()
             && state.layers.iter().enumerate().all(|(i, l)| {
@@ -1314,14 +1299,19 @@ impl LayerPanel {
             self.blend_label.set_text(&l.blend_label);
             self.alpha.set_active(l.alpha_locked);
             self.lock.set_active(l.locked);
-            self.clip.set_active(l.clipped);
         }
+        let attachment = &state.layer_tools.attachment;
+        self.clip.set_active(attachment.checked);
+        self.clip.set_sensitive(attachment.action.is_some());
+        crate::icons::set_button(&self.clip, attachment.icon);
+        caption(&self.clip, &attachment.label);
+        self.clip.update_property(&[gtk::accessible::Property::Description(&attachment.description)]);
+        self.connections.refresh(&state.layers, &state.layer_tools.connections);
         let controls = state.layer_tools.controls;
         self.opacity.set_sensitive(controls.opacity);
         self.blend.set_sensitive(controls.blend);
         self.alpha.set_sensitive(controls.alpha_lock);
         self.lock.set_sensitive(controls.edit_lock);
-        self.clip.set_sensitive(controls.clip);
         self.mask_action.set_sensitive(controls.mask);
         self.delete.set_sensitive(state.layer_tools.can_delete);
         self.reference
@@ -1344,7 +1334,6 @@ impl LayerPanel {
             row.name_entry.grab_focus();
             row.name_entry.select_region(0, -1);
         }
-        self.updating.set(false);
     }
     fn update_previews(&self, w: &Workspace, extra: &[Rc<Self>]) {
         let rows: Vec<_> = std::iter::once(self)
@@ -1494,15 +1483,19 @@ impl Row {
             self.mask_image.set_paintable(None::<&gdk::Paintable>);
         }
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
-        self.swipe.set_actions(s.can_delete, s.can_alpha_lock);
-        self.effect_icon.set_visible(s.content_icon.is_some() && !s.selection_layer);
-        self.content_image.set_visible(s.has_thumbnail);
-        self.effect_icon.set_pixel_size(if s.has_thumbnail { 12 } else { 24 });
-        self.effect_icon.set_halign(if s.has_thumbnail { gtk::Align::End } else { gtk::Align::Center });
-        self.effect_icon.set_valign(if s.has_thumbnail { gtk::Align::End } else { gtk::Align::Center });
-        if s.has_thumbnail && self.effect_icon.is_visible() { self.effect_icon.add_css_class("layer-type-symbol"); }
+        self.swipe.set_actions(s.can_delete, s.right_swipe.is_some());
+        let thumbnail = s.has_thumbnail && !s.adjustment_effect;
+        self.effect_icon.set_visible(s.group || s.content_icon.is_some() && !s.selection_layer);
+        self.content_image.set_visible(thumbnail);
+        self.effect_icon.set_pixel_size(if thumbnail { 12 } else { 24 });
+        self.effect_icon.set_halign(if thumbnail { gtk::Align::End } else { gtk::Align::Center });
+        self.effect_icon.set_valign(if thumbnail { gtk::Align::End } else { gtk::Align::Center });
+        if thumbnail && self.effect_icon.is_visible() { self.effect_icon.add_css_class("layer-type-symbol"); }
         else { self.effect_icon.remove_css_class("layer-type-symbol"); }
-        crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
+        if s.adjustment_effect { self.content.add_css_class("layer-effect"); }
+        else { self.content.remove_css_class("layer-effect"); }
+        crate::icons::set(&self.effect_icon, if s.group { Some(if s.collapsed { "layer-folder-symbolic" } else { "layer-folder-open-symbolic" }) } else { s.content_icon.as_deref() });
+        self.pass_through.set_visible(s.pass_through);
         self.load_selection.set_visible(s.selection_layer);
         caption(&self.load_selection, copy.load_selection.as_ref());
         self.load_selection.set_widget_name(&format!("selection-load-{}", s.id));
@@ -1526,15 +1519,15 @@ impl Row {
         if let Some(icon) = self.selection.child() {
             icon.update_property(&[gtk::accessible::Property::Label(if drawing_target { copy.layer.drawing_target.as_ref() } else { "" })]);
         }
-        self.clipping.set_opacity(if s.clipped { 1. } else { 0. });
         crate::icons::set_button(
             &self.eye,
-            if s.visible {
+            if s.visible && !s.visibility_blocked {
                 "layer-eye-symbolic"
             } else {
                 "layer-eye-hidden-symbolic"
             },
         );
+        self.eye.set_opacity(if s.visibility_blocked { 0.35 } else { 1. });
         caption(&self.eye, match (s.selection_layer,s.visible) {
             (true,true) => copy.layer.hide_selection.as_ref(), (true,false) => copy.layer.show_selection.as_ref(),
             (false,true) => copy.layer.hide.as_ref(), (false,false) => copy.layer.show.as_ref(),
@@ -1549,18 +1542,9 @@ impl Row {
         self.grip.set_visible(s.can_drop_below);
         if s.group {
             self.content.add_css_class("layer-folder");
-            crate::icons::set_button(
-                &self.content,
-                if s.collapsed {
-                    "layer-folder-symbolic"
-                } else {
-                    "layer-folder-open-symbolic"
-                },
-            );
             caption(&self.content, if s.collapsed { copy.layer.expand.as_ref() } else { copy.layer.collapse.as_ref() });
         } else {
             self.content.remove_css_class("layer-folder");
-            self.content.set_child(Some(&self.content_preview));
             caption(&self.content, copy.layer.edit_content.as_ref());
         }
         crate::icons::set(

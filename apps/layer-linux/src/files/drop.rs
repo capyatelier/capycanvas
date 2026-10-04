@@ -201,6 +201,7 @@ pub(crate) fn install_row(
                     LayerDropPosition::Above => "layer-drop-before",
                     LayerDropPosition::Below => "layer-drop-after",
                     LayerDropPosition::Into => "layer-drop-into",
+                    LayerDropPosition::Attach => return None,
                 });
                 Some(position)
             }

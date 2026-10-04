@@ -338,6 +338,16 @@ resources-size-resample-nearest = Vecino más cercano
 resources-size-current = Tamaño actual: { $width } × { $height } px
 resources-size-new = Tamaño nuevo: { $width } × { $height } px
 resources-size-resolution-only = Solo cambia la resolución, a { $resolution } ppi
+resources-layer-attach-clip = Recortar a { $target }
+resources-layer-attach-release = Desvincular el recorte de { $target }
+resources-layer-attach-effect = Aplicar a { $target }
+resources-layer-attach-stack = Aplicar a las capas inferiores
+resources-layer-attach-isolate = Aislar grupo y vincular
+resources-layer-attach-unavailable = No hay una capa inferior a la que vincular
+resources-layer-isolate-group = Aislar grupo
+resources-layer-use-pass-through = Usar { resources-blend-pass-through }
+resources-layer-effect-owner = Aplicado a { $target }
+
 resources-layer-menu-add-mask = Añadir máscara
 resources-layer-menu-alpha-lock = Bloquear alfa
 resources-layer-menu-apply-mask-to-layer = Aplicar máscara a la capa

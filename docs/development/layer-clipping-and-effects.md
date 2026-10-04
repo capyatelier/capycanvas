@@ -130,7 +130,12 @@ the old content bounds or exposing tile seams.
 The effect nearest its owner runs first; each effect above receives the previous
 effect's result. Newly appended processing appears above the existing chain.
 Reordering effects changes processing order. A hidden effect is bypassed without
-retargeting its neighbors.
+retargeting its neighbors. Hiding an owner also hides its attached effects while
+preserving each effect's own visibility setting. The layer list shows this
+inherited hidden state with a dimmed eye; showing the owner restores effects
+that were not individually hidden. Hidden paint remains the owner. Each attached
+effect chain and its owner form a contiguous unit; saved Selection rows remain
+outside it.
 
 ```text
 Panel order       Processing order
@@ -164,8 +169,8 @@ hosts do not infer meaning from row icons.
 ### 7. Clipping stays left; effect chains link vertically between thumbnails
 
 Extend the existing clipping rail through the run to the bottom of its base's
-thumbnail. Its terminal distinguishes the base from clipped members without an
-arrowhead or a wider gutter. Effect rows can be crossed by the rail without
+thumbnail. Keep the rail straight, with no terminal notch, foot or arrowhead.
+Effect rows can be crossed by the rail without
 being represented as clipped paint. Stop at the group header when the base is
 a group; descendants are not additional members of the outer run.
 
@@ -175,6 +180,19 @@ An unattached effect has no such link. The glyph may slightly overlap thumbnail
 borders if needed for legibility. Do not increase panel width, row height or
 thumbnail indentation; do not introduce a right-side gutter, arrowheads or extra
 `fx` labels. The glyph is an indicator, not a tiny new interaction target.
+Use the existing content-to-mask link's neutral color and stroke weight with
+an upright, symmetric chain glyph. Adjustment effects show their icon without a
+thumbnail background in the existing thumbnail slot. Preserve the hit area and
+selection/focus indicators; content generators retain their content thumbnails.
+Saved Selection rows never interrupt this connection. A drop inside an attached
+effect chain snaps above its top effect. Attaching across saved selections moves
+those selections above the resulting chain in the same undo step; a deliberate
+drop below the owner remains possible. Preview the normalized position before
+committing it.
+The saved Selection's Use Selection control is an ordinary icon button with
+squircle corners, a transparent idle background and standard hover/pressed
+states. Keep its existing position and hit area; do not style it as a mask
+thumbnail.
 
 This schematic uses `:` for the vertical chain-link glyph:
 
@@ -194,14 +212,15 @@ Base. The existing horizontal content-to-mask link remains distinct by position
 and orientation. Selection/hover may emphasize an effect's chain and owner
 border without adding permanent controls.
 
-Evaluate a complement of the accent as the shared relationship color. This is
-a color direction, not approval of an untested hue rotation. Derive a semantic
+Use a darker shade of the accent for the clipping rail. Derive a semantic
 palette role in [theme.rs](../../crates/layer-ui/src/theme.rs), with lightness and
 chroma adjusted for custom accents, light/dark surfaces, selection and hover.
-Use a neutral fallback for neutral accents where needed. Both relationship
-types may share this color; their geometry carries the distinction. Qualify
-essential indicators against the [3:1 non-text contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html).
-Exact glyph geometry and color values remain subject to native-size review.
+Neutral accents produce a darker neutral rail. Apply this role to the clipping
+rail; effect links use the neutral link color. A strictly darker accent cannot
+always meet the [3:1 non-text contrast guidance](https://www.w3.org/WAI/WCAG22/Understanding/non-text-contrast.html)
+on dark selected rows. Preserve the requested shade rather than silently
+brightening it, and assess those rows at native size. Relationship labels and
+resolved targets remain available independently of the line's color.
 
 ### 8. Direct targets must be paint or isolated groups
 
@@ -264,7 +283,7 @@ Owner visibility hides its whole attached output; hidden owners never cause
 effects to retarget. An unattached effect remains a stack operation. Keep such
 operations outside an uninterrupted clipping run: place them above the complete
 run or use a group. Saved-selection rows do not supply an image or change an
-effect's owner; connection metadata must handle their presence explicitly.
+effect's owner; structural edits keep them outside attached effect chains.
 
 ### 10. Dragging joins, releases and reorders relationships
 
@@ -275,6 +294,7 @@ effect's owner; connection metadata must handle their presence explicitly.
 | Effect onto an eligible owner's thumbnail | Attach to that owner; preview the exact position in its chain. |
 | Effect within its chain | Change processing order. |
 | Effect into an ordinary stack position | Become an effect on the stack below. |
+| Saved Selection inside an attached effect chain | Insert above the top effect; preview that normalized position. |
 | Owner with attached effects | Move its effects with it. |
 | Clipping base | Move its clipping run and all member effect chains together by default. |
 
@@ -571,6 +591,7 @@ account for input reads and any intermediate pass work separately.
 | Mask and group edits | Paint owner and effect masks separately; change opacity, nested isolation and clipping-base coverage. Correct downstream scope and old/new bounds without invalidating independent groups. |
 | Structural edits and shared backing | Reorder/reattach/reparent within and between groups, move a base with its run, and edit one duplicated layer sharing immutable backing. Its independent source changes without invalidating the other copy. Shifted row indices do not invalidate unrelated effects. Reused editable source handles remain outside the admitted subset and retain the unsupported-package outcome. |
 | Preview correction and refinement | Replacing/cancelling predicted strokes removes old predicted halos. Settled output matches the exact render. New input interrupts refinement without losing damage or reusing stale mip/thumbnail/Navigator pixels. |
+| Stroke backing publication | After canonical stroke pixels are composed, publishing their backing must not dirty the same source/output pages again or discard completed refinement. Resume input while publication and refinement are pending; undo, external restores and capture without composition must still invalidate changed pixels. |
 | Global/animated dependency | A genuinely document-wide filter updates its required domain; independent owners retain their caches. Freeze phases when comparing pixels. Hiding animation stops its pixel work without retargeting attachments. |
 | No artwork change | After settling, a no-op frame, row selection, rename or group expansion causes zero artwork recomposition and effect dispatches. Keep UI drawing and requested thumbnail work separate. |
 

@@ -367,6 +367,16 @@ resources-size-new = 新しいサイズ：{ $width } × { $height } px
 
 resources-size-resolution-only = 解像度のみを{ $resolution } ppiに変更
 
+resources-layer-attach-clip = { $target }でクリッピング
+resources-layer-attach-release = { $target }でのクリッピングを解除
+resources-layer-attach-effect = { $target }に適用
+resources-layer-attach-stack = 下のレイヤーに適用
+resources-layer-attach-isolate = グループを分離して関連付け
+resources-layer-attach-unavailable = 関連付け先となる下のレイヤーがありません
+resources-layer-isolate-group = グループを分離
+resources-layer-use-pass-through = { resources-blend-pass-through }を使用
+resources-layer-effect-owner = { $target }に適用中
+
 resources-layer-menu-add-mask = マスクを追加
 
 resources-layer-menu-alpha-lock = 透明度をロック

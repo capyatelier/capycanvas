@@ -13,7 +13,7 @@ pub fn register() {
     });
 }
 
-fn paintable(name: &str, color: Option<layer_ui::HexColor>) -> Option<gtk::Svg> {
+pub(crate) fn paintable(name: &str, color: Option<layer_ui::HexColor>) -> Option<gtk::Svg> {
     register();
     PAINTABLES.with_borrow_mut(|cache| {
         let cache_key = format!("{name}:{color:?}");

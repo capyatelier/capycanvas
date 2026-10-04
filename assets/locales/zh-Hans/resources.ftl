@@ -367,6 +367,16 @@ resources-size-new = 新大小：{ $width } × { $height } px
 
 resources-size-resolution-only = 仅将分辨率改为{ $resolution } ppi
 
+resources-layer-attach-clip = 剪贴到 { $target }
+resources-layer-attach-release = 取消对 { $target } 的剪贴
+resources-layer-attach-effect = 应用到 { $target }
+resources-layer-attach-stack = 应用到下方图层
+resources-layer-attach-isolate = 隔离图层组并附加
+resources-layer-attach-unavailable = 没有可附加到的下方图层
+resources-layer-isolate-group = 隔离图层组
+resources-layer-use-pass-through = 使用{ resources-blend-pass-through }
+resources-layer-effect-owner = 已应用到 { $target }
+
 resources-layer-menu-add-mask = 添加蒙版
 
 resources-layer-menu-alpha-lock = 锁定透明度

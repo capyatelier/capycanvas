@@ -55,6 +55,7 @@ in the table is transformed per channel using the same rule as a grey.
 | Web preference row divider | `#80808026` | Same | Keep translucent neutral |
 | Settings slider inactive track / inactive switch | Text at 12% / 20% | Same | Keep overlay |
 | Accent, focus, links, checked controls, drop indicators | Resolved accent: saved, else system (GTK, Android 12+), else `#3584e4` (drop hint currently separate blue) | Same | Not derived from the base |
+| Layer clipping rail (`relationship`) | Accent with OKLCH lightness reduced by 0.06, clamped at zero | Same | Preserve hue; reduce chroma only to stay in gamut. FX connectors use ordinary neutral link ink. |
 | Panel and toolbar selection | Accent tint of reference grey 82, same as the title bar | Accent tint of reference grey 213 (`#c0d7f6`) | See [Accent color](#accent-color) |
 | Error / warning text, invalid numeric border | Web `#ff7b63` / `#e5a50a`, border `#ee5555`; native semantic roles | Web `#c01c28` / `#9c5700`, same border; native semantic roles | Fixed semantic colors per mode |
 | Shadows, inset shades, modal dimming | Black with existing opacities; panel 16%, expanded drawer 40%, web modal 8/15 | Same shadows; web modal 2/15 | Keep; already blends over new surfaces |

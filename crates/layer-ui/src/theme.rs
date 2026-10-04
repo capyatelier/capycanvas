@@ -112,6 +112,10 @@ impl HexColor {
             b.atan2(a),
         )
     }
+    fn relationship(self) -> Self {
+        let [lightness, a, b] = self.oklab();
+        Self::oklch((lightness - 0.06).max(0.), a.hypot(b), b.atan2(a))
+    }
     pub fn contrasting(self) -> Self {
         Self(if self.oklab()[0] > 0.72 {
             [46, 46, 50]
@@ -154,6 +158,7 @@ pub struct ThemePalette {
     pub button: HexColor,
     pub accent: HexColor,
     pub accent_foreground: HexColor,
+    pub relationship: HexColor,
     pub selection: HexColor,
     pub header_selection: HexColor,
     pub header_selection_hover: HexColor,
@@ -191,6 +196,8 @@ impl Settings {
         let accent = self.accent.or(system_accent).unwrap_or(DEFAULT_ACCENT);
         let header = surface([82; 3], [196; 3]);
         let panel = surface([65; 3], [237; 3]);
+        let input = surface([51; 3], [250; 3]);
+        let view = surface([43; 3], [228; 3]);
         let tabbar = surface([46; 3], [210; 3]);
         let selection = surface([82; 3], [213; 3]).tint(accent, 0.0);
         let header_selection = header.tint(accent, 0.0);
@@ -198,8 +205,8 @@ impl Settings {
             bg,
             panel,
             tabbar,
-            input: surface([51; 3], [250; 3]),
-            view: surface([43; 3], [228; 3]),
+            input,
+            view,
             settings: surface([51; 3], if android { [250; 3] } else { [250, 250, 251] }),
             sidebar: surface(
                 if android { [46; 3] } else { [46, 46, 50] },
@@ -214,6 +221,7 @@ impl Settings {
             button: HexColor([if dark { 255 } else { 0 }; 3]),
             accent,
             accent_foreground: accent.contrasting(),
+            relationship: accent.relationship(),
             selection,
             header_selection,
             header_selection_hover: header.tint(accent, if dark { 0.03 } else { -0.03 }),
@@ -372,6 +380,61 @@ mod tests {
             "grey accent keeps grey tints: {}",
             grey.selection
         );
+    }
+
+    #[test]
+    fn relationships_are_darker_accent_shades_with_practical_surface_contrast() {
+        let accents: Vec<_> = ACCENTS.into_iter().map(|(_, color)| color).chain([
+            HexColor([0; 3]), HexColor([128; 3]), HexColor([255; 3]),
+            HexColor([1, 0, 0]), HexColor([255, 254, 255]),
+            HexColor([255, 0, 255]), HexColor([0, 255, 0]),
+        ]).collect();
+        let luminance = |color: HexColor| {
+            let [r, g, b, _] = color.linear();
+            0.2126 * r + 0.7152 * g + 0.0722 * b
+        };
+        let contrast = |color: HexColor, surface: HexColor| {
+            let (indicator, background) = (luminance(color), luminance(surface));
+            (indicator.max(background) + 0.05) / (indicator.min(background) + 0.05)
+        };
+        for theme in [Theme::Light, Theme::Dark] {
+            for base in theme.base_choices() {
+                for &accent in &accents {
+                    let palette = Settings {
+                        light_base: base, dark_base: base, accent: Some(accent),
+                        ..Settings::default()
+                    }.palette(theme, Platform::Gtk, None);
+                    let [lightness, a, b] = accent.oklab();
+                    let [darker, da, db] = palette.relationship.oklab();
+                    assert!(darker <= lightness + 0.001, "accent {accent}: {}", palette.relationship);
+                    if lightness > 0.06 {
+                        assert!((lightness - darker - 0.06).abs() < 0.005, "accent {accent}: {}", palette.relationship);
+                    }
+                    if a.hypot(b) > 0.02 && da.hypot(db) > 0.02 {
+                        let difference = (hue(palette.relationship) - hue(accent) + 180.).rem_euclid(360.) - 180.;
+                        assert!(difference.abs() < 3., "accent {accent}: {} changes hue by {difference}", palette.relationship);
+                    }
+                    if accent.0[0] == accent.0[1] && accent.0[1] == accent.0[2] {
+                        let [r, g, b] = palette.relationship.0;
+                        assert_eq!([r, g, b], [r; 3], "neutral accent {accent}");
+                    }
+                    if theme == Theme::Light && ACCENTS.iter().any(|(_, color)| *color == accent) {
+                        for surface in [palette.panel, palette.selection, palette.view, palette.input] {
+                            let ratio = contrast(palette.relationship, surface);
+                            assert!(ratio >= 2., "base {base} accent {accent}: {} against {surface} is {ratio}:1", palette.relationship);
+                        }
+                    }
+                }
+            }
+        }
+        let dark = Settings::default().palette(Theme::Dark, Platform::Gtk, None);
+        let light = Settings::default().palette(Theme::Light, Platform::Gtk, None);
+        for surface in [light.panel, light.selection, light.view, light.input] {
+            assert!(contrast(light.relationship, surface) >= 3.);
+        }
+        assert!((1.5..2.).contains(&contrast(dark.relationship, dark.selection)));
+        assert!(contrast(dark.accent, dark.selection) < 3.);
+        assert!(contrast(HexColor([0; 3]), dark.view) < 3.);
     }
 
     #[test]

@@ -2902,6 +2902,7 @@ impl Workspace {
             ("text", palette.text),
             ("accent", palette.accent),
             ("accent-foreground", palette.accent_foreground),
+            ("relationship", palette.relationship),
             ("selection", palette.selection),
             ("header-selection", palette.header_selection),
             ("header-selection-hover", palette.header_selection_hover),
@@ -2930,6 +2931,7 @@ impl Workspace {
         }
         css.push('}');
         self.palette_css.load_from_string(&css);
+        self.layer_panel.refresh_theme();
         if glass.transparency.enabled() {
             self.window.add_css_class("glass");
         } else {
