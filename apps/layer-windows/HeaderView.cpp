@@ -16,7 +16,7 @@ using namespace CapyUi;
 namespace {
 J invoke(hstring const& command){return O({{L"type",S(L"invoke")},{L"command",S(command)}});}
 J edit(J const& action){return O({{L"type",S(L"customize")},{L"action",O({{L"type",S(L"header")},{L"action",action}})}});}
-Windows::UI::Color blend(Windows::UI::Color bg,Windows::UI::Color ink,float amount){
+winrt::Windows::UI::Color blend(winrt::Windows::UI::Color bg,winrt::Windows::UI::Color ink,float amount){
     float alpha=bg.A*(1-amount)+ink.A*amount;
     auto channel=[&](uint8_t a,uint8_t b){return uint8_t(alpha>0?std::lround((a*bg.A*(1-amount)+b*ink.A*amount)/alpha):0);};
     return {uint8_t(std::lround(alpha)),channel(bg.R,ink.R),channel(bg.G,ink.G),channel(bg.B,ink.B)};
@@ -84,7 +84,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     static fire_and_forget launchLink(std::weak_ptr<Impl> weak,uint32_t id,hstring url){
         hstring failureText;{auto context=weak.lock();if(!context)co_return;failureText=context->recoveryText(L"link_failed");}V error=JsonValue::CreateNullValue();
         try{
-            if(!co_await Windows::System::Launcher::LaunchUriAsync(Windows::Foundation::Uri(url)))
+            if(!co_await winrt::Windows::System::Launcher::LaunchUriAsync(winrt::Windows::Foundation::Uri(url)))
                 error=S(failureText);
         }catch(hresult_error const& failure){
             OutputDebugStringW(failure.message().c_str());error=S(failureText);
@@ -140,7 +140,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 Primitives::ToggleButton item;item.UseLayoutRounding(false);item.MinWidth(0);item.MinHeight(0);item.Height(26);item.Padding({8,0,8,0});
                 item.BorderThickness({0});item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontSize(data->textSize());
                 // Chrome resolves the shared CSS medium weight to Segoe UI Semibold.
-                item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                item.FontFamily(FontFamily(L"Segoe UI"));item.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 item.Foreground(data->brush(L"text"));item.Background(fill({0,0,0,0}));
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundPointerOver"),data->tint(L"text",20));
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundPressed"),data->tint(L"text",41));
@@ -149,7 +149,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 item.Resources().Insert(box_value(L"ToggleButtonBackgroundCheckedPressed"),hover);
                 item.Resources().Insert(box_value(L"ToggleButtonForegroundChecked"),data->brush(L"text"));
                 AutomationProperties::SetAutomationId(item,L"workspace-switch-"+id);
-                auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                auto label=CapyUi::label(data,L"");label.UseLayoutRounding(false);label.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 label.TextTrimming(TextTrimming::CharacterEllipsis);label.MaxWidth(110);item.Content(label);
                 item.Click([weak=weak_from_this(),id](auto&&,auto&&){
                     if(auto self=weak.lock()){
@@ -165,7 +165,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             auto content=item.Content().as<TextBlock>();
             if(content.Text()!=name){
                 content.Text(name);
-                auto measure=CapyUi::label(data,name,false,false);measure.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+                auto measure=CapyUi::label(data,name,false,false);measure.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
                 measure.UseLayoutRounding(false);measure.Measure({std::numeric_limits<float>::infinity(),36});
                 item.Tag(box_value(double(measure.DesiredSize().Width)));
                 tooltip(item,data->caption(O({{L"type",S(L"switch_workspace")},{L"title",S(name)}})));
@@ -194,7 +194,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
     }
     double textWidth(hstring const& text,bool bold=false,bool semibold=false)const{
-        auto value=label(data,text,bold);value.UseLayoutRounding(false);if(semibold)value.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+        auto value=label(data,text,bold);value.UseLayoutRounding(false);if(semibold)value.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
         value.Measure({std::numeric_limits<float>::infinity(),60});return value.DesiredSize().Width;
     }
     void schedule(){
@@ -223,13 +223,13 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
             self->requestTimer.Stop();self->geometryTimer.Stop();
         }});
     }
-    MenuFlyout menu(std::function<void(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>)> populate){
+    MenuFlyout menu(std::function<void(winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase>)> populate){
         MenuFlyout result;TrackPopup(result,data);
-        result.Opening([populate](Windows::Foundation::IInspectable const& sender,auto&&){
+        result.Opening([populate](winrt::Windows::Foundation::IInspectable const& sender,auto&&){
             auto value=sender.as<MenuFlyout>();value.Items().Clear();populate(value.Items());
         });return result;
     }
-    void fillMenu(Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,J const& model){
+    void fillMenu(winrt::Windows::Foundation::Collections::IVector<MenuFlyoutItemBase> const& target,J const& model){
         NativeMenuItems(target,array(model,L"sections"),data,[data=data](J action){data->dispatch(action);});
     }
     Button command(hstring const& id){
@@ -243,7 +243,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         menuLabels.UseLayoutRounding(false);menuWidth=8;
         for(auto value:array(data->model,L"application_menus")){
             auto spec=value.GetObject();auto id=str(spec,L"id");auto item=button(data,str(spec,L"label"),[]{});style(item,data,false);item.Padding({8,0,8,0});
-            item.Height(26);item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontWeight(Windows::UI::Text::FontWeights::SemiBold());
+            item.Height(26);item.CornerRadius({13*CornerFit,13*CornerFit,13*CornerFit,13*CornerFit});item.FontWeight(winrt::Windows::UI::Text::FontWeights::SemiBold());
             item.Width(textWidth(str(spec,L"label"),false,true)+16);menuWidth+=item.Width()+(menus.empty()?0:2);
             AutomationProperties::SetAutomationId(item,L"application-menu-"+id);
             item.Flyout(menu([weak=weak_from_this(),id](auto target){if(auto self=weak.lock())
@@ -663,7 +663,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         if(surface)for(auto role:{L"chip",L"switcher",L"panel"})if(surface==data->glass(role)){appendGlass(regions,element,reference,cornerRadii(corners));return;}
         for(int i=0,count=VisualTreeHelper::GetChildrenCount(node);i<count;++i)glass(regions,VisualTreeHelper::GetChild(node,i),reference);
     }
-    std::vector<Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const{
+    std::vector<winrt::Windows::Graphics::RectInt32> drag(float scale,uint32_t width)const{
         if(editing)return {};
         std::vector<std::pair<float,float>> controls;
         auto take=[&](FrameworkElement item){
@@ -676,7 +676,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
         }
         for(auto item:overflow)take(item);take(recovery);
         std::sort(controls.begin(),controls.end());float next=leftInset,limit=float(width)/scale-rightInset;
-        std::vector<Windows::Graphics::RectInt32> result;
+        std::vector<winrt::Windows::Graphics::RectInt32> result;
         auto add=[&](float from,float to){int32_t x=int32_t(std::ceil(from*scale)),end=int32_t(std::floor(to*scale));
             if(end>x)result.push_back({x,0,end-x,int32_t(std::lround(height*scale))});
         };
@@ -702,7 +702,7 @@ void HeaderView::SetFullscreen(bool active){
 }
 void HeaderView::SetBlocked(bool blocked){impl->data->externalPopup=blocked;if(blocked)impl->input->Cancel();}
 bool HeaderView::Key(Input::KeyRoutedEventArgs const& e,bool pressed){
-    using Windows::System::VirtualKey;auto key=e.Key();bool shift=GetKeyState(VK_SHIFT)&0x8000;
+    using winrt::Windows::System::VirtualKey;auto key=e.Key();bool shift=GetKeyState(VK_SHIFT)&0x8000;
     if(pressed&&(GetKeyState(VK_CONTROL)&0x8000)&&!(GetKeyState(VK_MENU)&0x8000)&&impl->drawings&&impl->drawings->available()){
         if(key==VirtualKey::Tab||key==VirtualKey::PageDown||key==VirtualKey::PageUp){
             e.Handled(true);impl->drawings->send(O({{L"op",S(L"adjacent")},{L"forward",B(key==VirtualKey::PageDown||(key==VirtualKey::Tab&&!shift))}}));return true;
@@ -716,15 +716,15 @@ void HeaderView::SetDrawerSources(A const& sources){
     impl->data->drawerSources=A::Parse(sources.Stringify());if(impl->built)impl->applyItems();
 }
 void HeaderView::AppendGlass(A& regions,UIElement const& reference)const{if(impl->built&&!impl->hidden&&!impl->editing)impl->glass(regions,impl->root,reference);}
-std::vector<Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<Windows::Graphics::RectInt32>{};}
+std::vector<winrt::Windows::Graphics::RectInt32> HeaderView::DragRegions(float scale,uint32_t width)const{return impl->built?impl->drag(scale,width):std::vector<winrt::Windows::Graphics::RectInt32>{};}
 
-std::vector<Windows::Graphics::RectInt32> HeaderView::InputRegions(float scale,uint32_t width)const{
+std::vector<winrt::Windows::Graphics::RectInt32> HeaderView::InputRegions(float scale,uint32_t width)const{
     if(!impl->built||scale<=0)return {};
     auto caption=impl->drag(scale,width);
     int32_t next=int32_t(std::ceil(impl->leftInset*scale));
     int32_t limit=int32_t(width)-int32_t(std::ceil(impl->rightInset*scale));
     int32_t height=int32_t(std::lround(impl->height*scale));
-    std::vector<Windows::Graphics::RectInt32> result;
+    std::vector<winrt::Windows::Graphics::RectInt32> result;
     for(auto region:caption){
         if(region.X>next)result.push_back({next,0,region.X-next,height});
         next=std::max(next,region.X+region.Width);

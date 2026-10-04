@@ -10,11 +10,12 @@ inline V colorUi(CapyLocalization const* localization,J const& request) {
     if(!raw)throw hresult_error(E_OUTOFMEMORY);
     return JsonValue::Parse(to_hstring(raw.get()));
 }
-inline Windows::UI::Color displayColor(J const& value){
-    auto a=array(value,L"rgba");if(a.Size()!=4)return {};
+inline Windows::UI::Color previewColor(A const& a){
+    if(a.Size()!=4)return {};
     auto byte=[&](int i){return uint8_t(std::round(std::clamp(a.GetNumberAt(i),0.,1.)*255));};
     return {byte(3),byte(0),byte(1),byte(2)};
 }
+inline Windows::UI::Color displayColor(J const& value){return previewColor(array(value,L"rgba"));}
 // Native draft controls; Rust owns coordinates, parsing, conversion and precision.
 struct ColorForm : std::enable_shared_from_this<ColorForm> {
     std::shared_ptr<WorkspaceData> data;

@@ -138,12 +138,9 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
             Border swatch;swatch.CornerRadius({4,4,4,4});pick.Content(swatch);anchors.insert_or_assign(L"brush_color",pick);
             AutomationProperties::SetAutomationId(pick,L"configure-brush-color");
             bindings.emplace_back([data=data,swatch,key=std::make_shared<hstring>()]{
-                auto colors=displayColors(data->state);
-                A paint;paint.Append(object(colors,str(colors,L"slot")==L"background"?L"background":L"foreground"));
+                auto paint=array(object(data->model,L"paint_pair"),L"rgba");
                 if(auto next=paint.Stringify();next!=*key){
-                    *key=next;auto previews=colorUi(data->localization.get(),O({{L"type",S(L"preview")},{L"colors",paint}}));
-                    if(previews.ValueType()==JsonValueType::Array&&previews.GetArray().Size()==1)
-                        swatch.Background(fill(displayColor(previews.GetArray().GetObjectAt(0))));
+                    *key=next;swatch.Background(fill(previewColor(paint)));
                 }
             });
             return pick;

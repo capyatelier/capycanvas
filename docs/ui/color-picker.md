@@ -31,11 +31,12 @@ swatch with the color panel view.
 The visible circular rim belongs to the button's hit area, and the selection or
 hover border covers the paint fill.
 
-GTK, Web and Android live paint icons in the toolbar and window bar use the same
-front swatch as the panel. Each circle has an opaque transparency checker beneath
-its paint, so the rear circle cannot show through it. Selecting a paint updates
-retained icons even when neither paint color changes. HDR rendition changes update
-their displayed colors too. Panel-category icons remain static symbols.
+GTK, Web, Android and Windows live paint icons in the toolbar and window bar use
+the same front swatch as the panel. Each circle has an opaque transparency checker
+beneath its paint, so the rear circle cannot show through it. Selecting a paint
+updates retained icons even when neither paint color changes. HDR rendition
+changes update their displayed colors too. Panel-category icons remain static
+symbols.
 
 Compact color fields show and edit the remembered paint while transparency is
 selected, including independent temporary black or white. Mask editing uses the
