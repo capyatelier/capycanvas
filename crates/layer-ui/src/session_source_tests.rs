@@ -117,7 +117,7 @@ fn photo_batch_placement_is_atomic_ordered_and_transforms_retained_sources_toget
     assert!(!session.engine.can_undo(), "the whole batch is one artwork history entry");
     invoke(&mut session, CommandId::Redo);
     assert_live_artwork_eq(session.engine.document(), &committed);
-    let restored = reopen_capture(&session.capture_project_recovery().unwrap());
+    let restored = reopen_capture(&session.capture_artwork().unwrap());
     for &h in committed.scene().order() {
         let portable = committed.artwork.occurrences.id(h).unwrap();
         let restored_handle = restored.artwork.occurrences.resolve(portable).unwrap();
@@ -206,7 +206,7 @@ fn rejected_photo_placement_start_keeps_the_previous_tool_and_selection() {
     assert_eq!(session.layer_interaction.tool, tool);
     assert_eq!(session.layer_interaction.selected, selected);
     assert_eq!(session.engine.document(), &before);
-    assert!(session.capture_project_recovery().is_ok(), "failed start must not block Save/recovery");
+    assert!(session.capture_artwork().is_ok(), "failed start must not block Save/recovery");
 }
 
 #[test]
@@ -224,7 +224,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     assert_eq!(matrix.map(Point { x: 300., y: 200. }), Point { x: 100., y: 75. });
     assert!(session.operation.placing());
     assert!(!session.engine.can_undo(), "provisional import has no artwork history");
-    assert!(session.capture_project_recovery().is_err(), "pending placement cannot enter recovery/save");
+    assert!(session.capture_artwork().is_err(), "pending placement cannot enter recovery/save");
     assert!(session.state.tool_actions.iter().any(|a| a.command == CommandId::PlacementOriginalSize));
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
@@ -245,7 +245,7 @@ fn photo_placement_fit_cancel_apply_original_size_and_one_step_history() {
     assert_eq!(session.engine.document().scene().occurrence(id2).unwrap(), &placed);
 
     let portable = session.engine.document().artwork.occurrences.id(id2).unwrap();
-    let mut restored = reopen_capture(&session.capture_project_recovery().unwrap());
+    let mut restored = reopen_capture(&session.capture_artwork().unwrap());
     let id2 = restored.artwork.occurrences.resolve(portable).unwrap();
     restored.apply(restored.select_occurrence_edit(id2).unwrap()).unwrap();
     let mut reopened = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, restored, [800, 600], Platform::Gtk).unwrap();
@@ -348,7 +348,7 @@ fn retained_import_transform_clear_and_undo_keep_source_precision() {
     invoke(&mut session, CommandId::Redo);
     check(&session);
     let portable = session.engine.document().artwork.occurrences.id(id).unwrap();
-    let restored = reopen_capture(&session.capture_project_recovery().unwrap());
+    let restored = reopen_capture(&session.capture_artwork().unwrap());
     let handle = restored.artwork.occurrences.resolve(portable).unwrap();
     assert_eq!(restored.scene().paint_source(handle).unwrap().original.as_deref(), Some(&source));
 }
@@ -421,7 +421,7 @@ fn source_profile_repair_preserves_samples_and_baked_edits() {
     assert_eq!(doc.working.occurrence, Some(next_id));
     let old_identity = doc.artwork.paint.id(paint).unwrap();
     let new_identity = doc.artwork.paint.id(next_paint).unwrap();
-    let reopened = reopen_capture(&session.capture_project_recovery().unwrap());
+    let reopened = reopen_capture(&session.capture_artwork().unwrap());
     let old_paint = reopened.artwork.paint.resolve(old_identity).unwrap();
     let new_paint = reopened.artwork.paint.resolve(new_identity).unwrap();
     assert_eq!(reopened.artwork.paint.get(old_paint).unwrap().original.as_deref(), Some(original.as_ref()));
@@ -477,7 +477,7 @@ fn rasterizing_an_image_preserves_full_extent_edits_masks_and_history() {
     assert!(!session.command(CommandId::RepairSourceProfile).enabled); assert!(!session.command(CommandId::RasterizeSource).enabled);
     let paint_identity = session.engine.document().artwork.paint.id(paint).unwrap();
     let occurrence_identity = session.engine.document().artwork.occurrences.id(id).unwrap();
-    let restored = reopen_capture(&session.capture_project_recovery().unwrap());
+    let restored = reopen_capture(&session.capture_artwork().unwrap());
     let restored_paint = restored.artwork.paint.resolve(paint_identity).unwrap();
     let restored_occurrence = restored.artwork.occurrences.resolve(occurrence_identity).unwrap();
     assert_eq!(restored.artwork.paint.get(restored_paint).unwrap().original.as_deref(), Some(converted.as_ref()));

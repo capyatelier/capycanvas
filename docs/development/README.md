@@ -42,7 +42,7 @@ substitute for the platform build scripts.
 
 | Change | Start here |
 | --- | --- |
-| Layer semantics, edit history or saved drawing data | [Documents and edits](../internals/documents.md), then `layer-core`. |
+| Layer semantics, edit history or saved drawing data | [Documents and edits](../internals/documents.md), [session recovery](../internals/session-recovery.md), then `layer-core`. |
 | Stroke placement, pressure or brush dynamics | [Brushes](../internals/brushes.md), then `layer-engine`. |
 | Pixel operations, blend behaviour or GPU performance | [Rendering](../internals/rendering.md), then `layer-render-wgpu`. |
 | Tools, commands, docking or customization | [Workspace and UI](../ui/README.md), then `layer-ui` and the affected client. |
@@ -58,9 +58,6 @@ and how parity is checked.
 
 ## Work in progress
 
-- [Automatic recovery](autorecovery.md) is deferred until the qualified application
-  cutover lands, then revisits session restoration and checkpoint storage through
-  the [authored capture boundary](../reference/authored-model.md#capture-phases-and-recovery-extension).
 - [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
   presets, export, masking, retouching and host qualification work. Current
   measurements and remaining targets belong in the

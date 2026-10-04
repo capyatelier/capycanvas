@@ -96,10 +96,9 @@ fn native_document_color_assignment_conversion_depth_history_and_copy() {
     let created = Rc::new(RefCell::new(None));
     *w.open_document.borrow_mut() = Some({
         let created = created.clone();
-        Rc::new(move |project, location, recovered| {
+        Rc::new(move |project, location| {
             assert!(location.is_none());
-            assert!(recovered.is_none());
-            created.replace(Some(project));
+                        created.replace(Some(project));
         })
     });
     w.window.present();

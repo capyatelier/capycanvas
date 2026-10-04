@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (recuperado)
+documents-destination-changed = El dibujo guardado cambió o no está disponible. Usa Guardar como para conservar ambas copias.

@@ -66,18 +66,6 @@ pub extern "system" fn Java_art_capycanvas_Native_profileLibrary(
 }
 
 #[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_recoveryUpdate(
-    mut env: JNIEnv, _: JClass, state: JString, event: JString,
-) -> jni::sys::jstring {
-    let result = (|| {
-        let state = read(&mut env, &state)?;
-        let event = serde_json::from_str(&read(&mut env, &event)?).map_err(error)?;
-        serde_json::to_string(&layer_ui::recovery::recovery_update(&state, event)?).map_err(error)
-    })();
-    crate::android::string(&mut env, result)
-}
-
-#[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_paletteFile(
     mut env: JNIEnv,
     _: JClass,

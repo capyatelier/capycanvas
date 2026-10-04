@@ -54,7 +54,6 @@ struct Task {
     epoch: u64,
     revision: u64,
     request: u32,
-    recovered: bool,
     source: layer_ui::ImportSource,
     place: Option<SourceTarget>,
     gpu_generation: u64,
@@ -64,7 +63,7 @@ struct Task {
 impl Task {
     fn new(owner: u64, epoch: u64, revision: u64, request: u32, gpu_generation: u64, payload: Payload) -> Self {
         Self { owner, epoch, revision, request, gpu_generation, payload,
-            recovered: false, source: layer_ui::ImportSource::Master, place: None, open_control: Default::default() }
+            source: layer_ui::ImportSource::Master, place: None, open_control: Default::default() }
     }
 }
 #[unsafe(no_mangle)]
@@ -154,7 +153,7 @@ fn prepare(t: &mut Task, input: Option<File>, width: u32, height: u32) -> Result
     let imported = match input {
         Some(file) => {
             let outcome = e.open.read(file,
-                if t.recovered { layer_ui::ImportIntent::Recovery } else if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
+                if t.place.is_some() { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
                 &e.source_name, control.cancellation_flag())?;
             let imported = match outcome {
                 layer_ui::ImportOutcome::Editable(imported) => imported,
@@ -413,7 +412,7 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         let Payload::Open { candidate, .. } = &mut t.payload else {
             return Err("Not an open request".into());
         };
-        let open = OpenAdoption { epoch: t.epoch, revision: t.revision, location, recovered: t.recovered };
+        let open = OpenAdoption { epoch: t.epoch, revision: t.revision, location };
         let retired = a.window.adopt(&mut a.host, candidate, open, || true, |s| s)?;
         a.document_retired();
         t.payload = Payload::Retired { _renderer: retired };
@@ -527,74 +526,6 @@ pub extern "system" fn Java_art_capycanvas_Native_projectExportOptions(
     fail(&mut env, result);
 }
 
-/// Capture on the render owner; recovery reads/writes and candidate preparation
-/// still belong to the file worker. No manual-save checkpoint is acknowledged.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryTask(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    opening: jboolean,
-) -> jlong {
-    let result = (|| {
-        let a = unsafe { app(handle) };
-        let session = &a.host.session;
-        // Background recovery waits for a committed snapshot boundary. Active
-        // placements and region operations are normal deferrals, not failures
-        // that should put a modal dialog over an in-progress canvas gesture.
-        if opening == 0 && session.recovery_document().busy {
-            return Ok(0);
-        }
-        let payload = if opening != 0 {
-            session.require_document_idle()?;
-            Payload::Open {
-                environment: Some(Environment::new(
-                    OpenEnvironment::capture(
-                        session,
-                        a.window.documents.admission(&session.retained_document_tiles()),
-                        a.host.renderer_options(Some(a.cache_directory.clone().into())),
-                    )?,
-                    session.engine().document().composition().color.space,
-                    "Recovered drawing".into(),
-                )),
-                candidate: None,
-            }
-        } else {
-            Payload::Save(Some(session.capture_project_recovery()?))
-        };
-        Ok(Box::into_raw(Box::new(Task {
-            recovered: true,
-            ..Task::new(a.window.documents.selected(), session.state().document_file.epoch,
-                session.engine().document().revision, 0, a.gpu_generation, payload)
-        })) as jlong)
-    })();
-    or_throw(&mut env, result, 0)
-}
-
-/// File worker only. The shared Unix writer fsyncs the complete sibling file,
-/// renames it, then fsyncs the parent. Encoding failure retains the prior copy.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_projectPublish(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-    path: JString,
-) {
-    let result = (|| {
-        let path = read(&mut env, &path)?;
-        let Payload::Save(project) = &mut unsafe { crate::inspection::borrow::<Task>(handle) }.payload else {
-            return Err("Not a recovery save".into());
-        };
-        let project = project.take().ok_or("Recovery already encoded")?;
-        {
-            let cancelled = AtomicBool::new(false);
-            let package = PreparedPackage::prepare(&project, None, &cancelled)?;
-            layer_core::atomic_write(std::path::Path::new(&path), |output| package.write(output, &cancelled))
-        }
-    })();
-    fail(&mut env, result);
-}
-
 /// Complete only this transfer's initiating request, then poll exact backing.
 /// Its stable owner and activation generation remain checked during adoption.
 #[unsafe(no_mangle)]
@@ -604,24 +535,11 @@ pub extern "system" fn Java_art_capycanvas_Native_projectParkReady(mut env:JNIEn
         if t.owner!=a.window.documents.selected() || t.epoch!=a.host.session.state().document_file.epoch || t.revision!=a.host.session.engine().document().revision || t.gpu_generation!=a.gpu_generation {
             return Err("The drawing changed while opening; try again".into());
         }
-        if !t.recovered && a.host.session.state().requests.iter().any(|r|r.id==t.request) {
+        if a.host.session.state().requests.iter().any(|r|r.id==t.request) {
             a.host.session.complete_document_request(t.request,Ok(true))?;
         }
         a.window.park_ready(&a.host)
     })();or_throw(&mut env, result.map(|ready| u8::from(ready)), 0)
-}
-
-/// Capture before handing an immutable recovery write to the serialized worker.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_projectRecoveryFor(mut env:JNIEnv,_:JClass,handle:jlong,id:jlong)->jlong {
-    let result=(|| {
-        let a=unsafe{app(handle)};let session=a.window.session(&a.host,id as u64)?;
-        if session.recovery_document().busy {return Ok(0);}
-        Ok(Box::into_raw(Box::new(Task{
-            recovered:true,..Task::new(id as u64,session.state().document_file.epoch,
-                session.engine().document().revision,0,a.gpu_generation,Payload::Save(Some(session.capture_project_recovery()?)))
-        })) as jlong)
-    })();or_throw(&mut env, result, 0)
 }
 
 /// Shared native-drawing/photo classification for external drop routing. Actual

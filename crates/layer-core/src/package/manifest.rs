@@ -147,7 +147,7 @@ fn resource_supported(record: &Value) -> Result<bool, String> {
     for (key, options) in enums { if let Some(value) = data.get(*key) { values_supported &= options.contains(&string(value)?); } }
     Ok(values_supported && encoding_supported && !extras(fields, &["id", "type", "data", "encoding", "location", "bytes", "crc32"]) && !extras(data, keys))
 }
-fn resource(record: Value, id: PortableId, directory: &Directory, members: &BTreeMap<&str, (usize, &Member)>) -> Result<ResourceRecord, String> {
+pub(crate) fn resource(record: Value, id: PortableId, directory: &Directory, members: &BTreeMap<&str, (usize, &Member)>) -> Result<ResourceRecord, String> {
     let fields = object(&record)?;
     kind(&record)?; object(required(fields, "data")?)?; string(required(fields, "encoding")?)?;
     let bytes = decimal_u64(required(fields, "bytes")?)?;
@@ -172,7 +172,7 @@ fn resource(record: Value, id: PortableId, directory: &Directory, members: &BTre
     if let Some(range) = range { range.offset.checked_add(range.length).filter(|end| *end <= directory.length).ok_or("Resource outside archive")?; }
     Ok(ResourceRecord { value: record, bytes, crc32, range })
 }
-fn overlaps(resources: &BTreeMap<PortableId, ResourceRecord>) -> Result<(), String> {
+pub(crate) fn overlaps(resources: &BTreeMap<PortableId, ResourceRecord>) -> Result<(), String> {
     let mut ranges: Vec<_> = resources.values().filter_map(|r| r.range.map(|range| (range, r))).collect();
     ranges.sort_by_key(|(r, _)| (r.member, r.offset, r.length));
     let mut previous: Option<(ResourceRange, &ResourceRecord)> = None;

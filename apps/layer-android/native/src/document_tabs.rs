@@ -11,7 +11,7 @@ use jni::{
 };
 use layer_host::{
     Renderer,
-    window::{Activation, DocumentWindow, TabRequest},
+    window::{Activation, DocumentWindow, TabRequest, PreparedClose},
 };
 use layer_ui::UiSession;
 
@@ -65,6 +65,32 @@ pub extern "system" fn Java_art_capycanvas_Native_documentSwitch(
         Ok(Box::into_raw(Box::new(activation)) as jlong)
     })();
     or_throw(&mut env, result, 0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentPrepareClose(mut env: JNIEnv, _: JClass, handle: jlong) -> jlong {
+    let result = (|| {
+        let a = unsafe {app(handle)};
+        let options = a.host.renderer_options(Some(a.cache_directory.clone().into()));
+        a.window.prepare_close(&mut a.host, options).map(|job|Box::into_raw(Box::new(job)) as jlong)
+    })();
+    or_throw(&mut env,result,0)
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentCommitClose(_: JNIEnv, _: JClass, handle: jlong, job: jlong) -> jlong {
+    let a = unsafe {app(handle)};
+    let prepared = *unsafe {Box::from_raw(job as *mut PreparedClose)};
+    let (activation,_) = a.window.commit_close(&mut a.host,prepared,|_|{});
+    a.document_retired();a.blank_presented=false;
+    Box::into_raw(Box::new(activation)) as jlong
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_art_capycanvas_Native_documentCancelPreparedClose(mut env: JNIEnv, _: JClass, handle: jlong, job: jlong) {
+    let a = unsafe {app(handle)};
+    let prepared = *unsafe {Box::from_raw(job as *mut PreparedClose)};
+    fail(&mut env,a.window.cancel_close(&mut a.host,prepared))
 }
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentResumeWork(

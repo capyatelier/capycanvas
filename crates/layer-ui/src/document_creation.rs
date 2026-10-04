@@ -411,7 +411,7 @@ mod tests {
         assert_eq!(session.engine().document().scene().occurrence(imported).unwrap().name.as_ref(), imported_name);
         let paint_id = session.engine().document().artwork.occurrences.id(paint).unwrap();
         let imported_id = session.engine().document().artwork.occurrences.id(imported).unwrap();
-        let captured = session.capture_project_recovery().unwrap();
+        let captured = session.capture_artwork().unwrap();
         let read = reopen(&captured);
         let paint = read.artwork.occurrences.resolve(paint_id).unwrap();
         let imported = read.artwork.occurrences.resolve(imported_id).unwrap();

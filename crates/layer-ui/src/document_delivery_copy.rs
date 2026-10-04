@@ -19,6 +19,7 @@ pub struct DocumentDeliveryCopy {
     pub switching_drawing: Arc<str>,
     pub converted_filename_invalid: Arc<str>,
     pub separate_copy: Arc<str>,
+    pub destination_changed: Arc<str>,
     pub preparing_converted_copy: Arc<str>,
     pub writing_converted_copy: Arc<str>,
     pub drag_panel: Arc<str>,
@@ -54,6 +55,7 @@ impl DocumentDeliveryCopy {
             switching_drawing: localization.text(MessageId::DOCUMENTS_DELIVERY_SWITCHING_DRAWING),
             converted_filename_invalid: localization.text(MessageId::DOCUMENTS_DELIVERY_CONVERTED_FILENAME_INVALID),
             separate_copy: localization.text(MessageId::DOCUMENTS_ERROR_SEPARATE_COPY),
+            destination_changed: localization.text(MessageId::DOCUMENTS_DESTINATION_CHANGED),
             preparing_converted_copy: localization.text(MessageId::DOCUMENTS_DELIVERY_PREPARING_CONVERTED_COPY),
             writing_converted_copy: localization.text(MessageId::DOCUMENTS_DELIVERY_WRITING_CONVERTED_COPY),
             drag_panel: localization.text(MessageId::DOCUMENTS_DELIVERY_DRAG_PANEL),
@@ -77,6 +79,7 @@ impl DocumentDeliveryCopy {
 #[derive(Clone, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum DocumentDeliveryMessage {
+    DestinationChanged,
     ClipboardUnavailable,
     ClipboardTooLarge,
     ClipboardEmpty,
@@ -98,6 +101,7 @@ impl DocumentDeliveryMessage {
     pub fn message(&self, localization: &Localizer) -> String {
         let mut args = FluentArgs::new();
         let id = match self {
+            Self::DestinationChanged => MessageId::DOCUMENTS_DESTINATION_CHANGED,
             Self::ClipboardUnavailable => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_UNAVAILABLE,
             Self::ClipboardTooLarge => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_TOO_LARGE,
             Self::ClipboardEmpty => MessageId::DOCUMENTS_DELIVERY_CLIPBOARD_EMPTY,

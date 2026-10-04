@@ -336,3 +336,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (dipulihkan)
+documents-destination-changed = Gambar tersimpan berubah atau tidak tersedia. Gunakan Simpan Sebagai untuk menyimpan kedua salinan.

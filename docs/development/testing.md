@@ -30,6 +30,14 @@ GPU and platform crates that a given machine may not be able to run.
 
 ## Shared Rust
 
+Private session persistence changes must retain the compile-time field and edit
+classification checks and the failure-boundary tests described in
+[session recovery](../internals/session-recovery.md#regression-checks). Run core
+`package::session`, `package::session_transfer`, `package::session_store` and
+`persistence_tests`, UI `session_recovery` and `recovery`, and affected native
+restore/close fixtures. Web storage also runs
+`node apps/layer-web/restart-store.test.mjs` against its private browser fixture.
+
 Use `session::test_support` for `layer-ui`'s Recorder fixtures, action dispatch,
 pointer records, selections and document-space pen input. Platform changes belong
 in that test fixture module; production sessions keep the host's platform.
@@ -73,8 +81,10 @@ Mesh fixtures pass a previously constructed projective map to `MeshMap::fit`.
 Raster corruption fixtures retain their exact pixel descriptor. File-format
 changes must read the checked-in `layer-core/src/package/codec/fixtures` files,
 then edit/save/reopen them and compile their current filter implementations.
-Keep historical fixture inputs fixed. Add a fixture for a concrete conversion;
-do not regenerate old inputs from the current writer. Protect stable keys,
+Keep fixture inputs fixed while their data versions remain supported; do not
+regenerate them from the current writer. When removing a superseded pre-release
+format, retain its exact value and resource assertions in a current-design fixed
+fixture without adding a conversion reader. Protect stable keys,
 choice IDs, accepted bounds, all explicit default-valued parameters, LUT samples,
 watercolor state and SDR settings independently of editor defaults and GPU layouts.
 Renderer float fixtures share readback and presenter setup. Keep pooled and

@@ -87,11 +87,28 @@ platform guarantees. Non-seekable input is spooled into private bounded storage.
 Web workers use the shared resource transfer and stream to private browser
 storage before publication, preserving the original Blob for unsupported files.
 
-Recovery publication is separate from manual-save acknowledgement. Current
-recovery writes ordinary artwork packages and retains its existing policy.
-Resource enumeration does not require archive assembly, so later session and
-bounded-history capture can use the same owners and generations. The
-[automatic recovery plan](../development/autorecovery.md) remains separate work.
+Recovery publication is separate from manual-save acknowledgement.
+[`Editor::capture_session`](../../crates/layer-core/src/package/session.rs)
+freezes working state, bounded Undo/Redo and edit/stroke identities alongside the
+artwork capture. Workers encode private complete checkpoint metadata with shared
+record versions and an immutable resource inventory. Sparse raster-index chunks
+and original-image descriptors are shared across changed paint records; small
+strokes do not repeat the complete canvas/photo index per Undo entry.
+Ordinary `.capy` saves
+continue to contain authored artwork only. The private reader validates resource
+bytes, working targets, history transitions and budgets before returning an
+editor. Invalid or unsupported state remains a restoration failure, preserving
+the stored copy for diagnosis rather than substituting empty artwork or dropping
+history.
+
+Session metadata holds camera, drawing names and manual-save state separately.
+Private sessions retain all ancillary records, including non-copy-safe data and
+subjects temporarily absent after an edit. Native private storage publishes
+resources before metadata and retains complete generations and live readers
+through cleanup. Trusted worker session transfer is separate from the disk codec:
+its verification receipts never bypass validation of persisted bytes. Exhaustive
+field and edit-variant boundaries plus the shared restart/Undo/Redo fixture force
+new editor features to classify their session persistence behavior.
 
 ## Photo metadata
 

@@ -25,7 +25,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
     Dispatch send,report;
     PreviewTransport query;
     hstring workflowStamp,recoveryStamp,packageStamp;
-    bool busyDialog=false,busyCompleted=false,recoveryProgress=false;
+    bool busyDialog=false,busyCompleted=false;
     std::function<void()> changed;
     std::shared_ptr<WorkspaceData> data=std::make_shared<WorkspaceData>();
     std::shared_ptr<CapyLocalization> localization;
@@ -607,28 +607,15 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         showing=false;changed();
     }
     fire_and_forget recovering(J state){
-        auto lifetime=shared_from_this();showing=true;changed();auto closing=flag(state,L"closing");auto storageError=!str(state,L"error").empty()&&str(state,L"offer").empty();hstring action=closing?L"keep_open":L"later";
+        auto lifetime=shared_from_this();showing=true;changed();hstring action=L"keep_open";
         try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(closing||storageError?recovery(L"attention"):recovery(L"title")));
-            dialog.PrimaryButtonText(closing||storageError?recovery(L"retry"):recovery(L"restore"));if(closing||!storageError)dialog.SecondaryButtonText(closing?common(L"keep_open"):recovery(L"discard"));dialog.CloseButtonText(closing?common(L"keep_open"):recovery(L"later"));
-            TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);
-            text.Text(str(state,L"error").empty()?recovery(L"explanation"):str(state,L"error"));dialog.Content(text);
-            presentationChanged=[this,closing,storageError,text]{
-                auto current=object(model,L"windows_recovery");dialog.Title(box_value(closing||storageError?recovery(L"attention"):recovery(L"title")));
-                dialog.PrimaryButtonText(closing||storageError?recovery(L"retry"):recovery(L"restore"));if(closing||!storageError)dialog.SecondaryButtonText(closing?common(L"keep_open"):recovery(L"discard"));dialog.CloseButtonText(closing?common(L"keep_open"):recovery(L"later"));text.Text(str(current,L"error").empty()?recovery(L"explanation"):str(current,L"error"));
-            };
-            auto result=co_await dialog.ShowAsync();if(result==ContentDialogResult::Primary)action=closing||storageError?L"retry":L"restore";
-            else if(result==ContentDialogResult::Secondary)action=closing?L"keep_open":L"discard";
+            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(recovery(L"attention")));
+            dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));
+            TextBlock text;text.MaxWidth(420);text.TextWrapping(TextWrapping::Wrap);text.Text(str(state,L"error"));dialog.Content(text);
+            presentationChanged=[this,text]{dialog.Title(box_value(recovery(L"attention")));dialog.PrimaryButtonText(recovery(L"retry"));dialog.CloseButtonText(common(L"keep_open"));text.Text(str(object(model,L"windows_recovery"),L"error"));};
+            if(co_await dialog.ShowAsync()==ContentDialogResult::Primary)action=L"retry";
         }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
         dialog=nullptr;presentationChanged={};if(!stopping)send(to_string(O({{L"operation",S(L"recovery")},{L"action",O({{L"op",S(action)}})}}).Stringify()));showing=false;changed();
-    }
-    fire_and_forget restoring(){
-        auto lifetime=shared_from_this();showing=true;recoveryProgress=true;changed();
-        try{
-            dialog=ContentDialog();dialog.XamlRoot(window.Content().XamlRoot());dialog.Title(box_value(recovery(L"restoring")));
-            ProgressRing progress;progress.IsActive(true);progress.Width(48);progress.Height(48);dialog.Content(progress);co_await dialog.ShowAsync();
-        }catch(hresult_error const& error){if(!stopping)report(to_string(error.message()));}
-        dialog=nullptr;recoveryProgress=false;showing=false;changed();
     }
     hstring busyTitle(J const& state){auto title=str(state,L"title");return title.empty()?str(object(catalog,L"bootstrap"),L"preparing_document"):title;}
     fire_and_forget working(J state){
@@ -652,17 +639,14 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(relocalize&&dialog){
             dialog.Language(data->language());
             if(busyDialog){dialog.Title(box_value(busyTitle(object(model,L"windows_document"))));dialog.CloseButtonText(common(L"cancel"));}
-            if(recoveryProgress)dialog.Title(box_value(recovery(L"restoring")));
         }
         if(creationPresetsChanged)creationPresetsChanged();
         if(busyDialog&&str(object(model,L"windows_document"),L"type")!=L"workflow_busy"&&str(object(model,L"windows_document"),L"type")!=L"opening_busy"&&str(object(model,L"windows_document"),L"type")!=L"package_busy"){busyCompleted=true;if(dialog)dialog.Hide();}
-        if(recoveryProgress&&!flag(object(model,L"windows_recovery"),L"restoring")){if(dialog)dialog.Hide();}
         if(stopping||blocked||showing)return;
-        auto recovery=object(model,L"windows_recovery");auto offer=str(recovery,L"offer"),failure=str(recovery,L"error");
-        if(flag(recovery,L"restoring")){restoring();return;}
-        if(offer.empty()&&failure.empty())recoveryStamp=L"";
-        if(!flag(recovery,L"busy")&&(!offer.empty()||!failure.empty())){
-            auto stamp=offer+L"/"+failure+L"/"+(flag(recovery,L"closing")?L"close":L"open");if(stamp!=recoveryStamp){recoveryStamp=stamp;recovering(recovery);return;}
+        auto recovery=object(model,L"windows_recovery");auto failure=str(recovery,L"error");
+        if(failure.empty())recoveryStamp=L"";
+        if(!flag(recovery,L"busy")&&!failure.empty()){
+            auto stamp=failure+L"/"+(flag(recovery,L"closing")?L"close":L"open");if(stamp!=recoveryStamp){recoveryStamp=stamp;recovering(recovery);return;}
         }
         auto document=object(model,L"windows_document");
         if(str(document,L"type")==L"workflow_busy"||str(document,L"type")==L"opening_busy"||str(document,L"type")==L"package_busy"){handled=uint32_t(num(document,L"id"));working(document);return;}

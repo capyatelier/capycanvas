@@ -105,6 +105,9 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         }
         return true
     }
+    fun observeDestination(uri: String?, task: Long = 0): String = uri?.let {
+        runCatching {application.contentResolver.openFileDescriptor(Uri.parse(it),"r")?.use {fd -> if(task == 0L)Native.sessionFingerprint(fd.detachFd()) else Native.sessionObserve(task,fd.detachFd())}}.getOrNull()
+    } ?: "null"
     private fun sameDestination(original: Uri, destination: Uri): Boolean {
         if (original.normalizeScheme() == destination.normalizeScheme()) return true
         if (original.scheme == "file" && destination.scheme == "file") {
@@ -267,7 +270,6 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             val id = request.getInt("id")
             val document = request.getJSONObject("kind").getJSONObject("request")
             val kind = document.getString("type")
-            val ownerId=JSONObject(host.drawingTabs.query(obj("op" to "view"))).getLong("selected")
             var transitioning=false
             var task = 0L
             var control = 0L
@@ -296,6 +298,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 } else task = host.withNative { Native.projectTask(it, id, location?.toString() ?: "null", approved.first, approved.second) }
                 if (opening) Native.projectOpenControl(task, control)
                 if (kind == "save" || kind == "export") {
+                    val expectation = if(kind == "save") host.withNative { Native.sessionDestination(it) }.takeUnless { it == "null" }?.let(::JSONObject) else null
                     // Finish encoding before opening/truncating the destination.
                     temporary = withContext(Dispatchers.IO) { File.createTempFile("capy-save-", if (kind == "export") ".png" else ".capy", application.cacheDir) }
                     withContext(Dispatchers.IO) {
@@ -305,18 +308,32 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     }
                     if (kind == "export" && exportCancelled) { finish(id, false); return@launch }
                     if (kind == "export") publishing = true
+                    val fingerprint = if(kind == "save")withContext(Dispatchers.IO) {
+                        Native.sessionFingerprint(ParcelFileDescriptor.open(temporary, ParcelFileDescriptor.MODE_READ_ONLY).detachFd())
+                    } else null
+                    if(kind == "save")check(host.recovery.checkpointForSave()) {actionFailed}
                     withContext(Dispatchers.IO) {
+                        if(expectation?.getJSONObject("location")?.getString("uri") == uri.toString()) {
+                            val observed = observeDestination(uri.toString())
+                            check(Native.sessionDestinationMatches(expectation.toString(), observed)) { host.catalog.getJSONObject("document_delivery_copy").getString("destination_changed") }
+                        }
                         application.contentResolver.openOutputStream(uri!!, "wt")?.use { output ->
                             temporary!!.inputStream().use { it.copyTo(output) }; output.flush()
                         } ?: error(actionFailed)
                     }
-                    finish(id, true)
+                    if(kind == "save") {
+                        host.withNative { Native.sessionCompleteSave(it, id, location!!.toString(), fingerprint!!) }
+                        host.documentChanged()
+                    } else finish(id, true)
                     if(kind=="export"&&document.objectOrNull("repeat")==null)try {
                         val color=JSONObject(host.withNative{Native.query(it,obj("type" to "document_color").toString())})
                         ColorPreferencesStore.presets(application,color,obj("type" to "remember","index" to if(exportDestination<4)exportDestination else 3,"recipe" to exportRecipe))
                     }catch(e:Exception){host.reportActionError(deliveryMessage("export_preferences", "detail" to (e.message ?: actionFailed)))}
-                    if (kind == "save" && !JSONObject(host.drawingTabs.query(obj("op" to "recovery", "id" to ownerId))).getBoolean("modified")) host.recovery.retire(ownerId)
+                    if (kind == "save") host.recovery.capture()
                 } else {
+                    val sourceFingerprint = if(kind == "open" && uri != null)withContext(Dispatchers.IO) {
+                        runCatching { application.contentResolver.openFileDescriptor(uri, "r")?.let { Native.sessionFingerprint(it.detachFd()) } }.getOrNull()
+                    } else null
                     withContext(Dispatchers.IO) {
                         val fd = if (uri == null) -1 else application.contentResolver.openFileDescriptor(uri, "r")?.detachFd() ?: error(actionFailed)
                         if (options != null) Native.projectOptions(task, options.toString())
@@ -334,6 +351,10 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                     if (exportCancelled) { finish(id, false); return@launch }
                     if(kind=="new"||kind=="open") { host.drawingTabs.beforeAdopt(task); transitioning=true }
                     host.withNative { Native.projectAdopt(it, task, location?.toString() ?: "null") }
+                    val adoptedDestination = host.withNative { Native.sessionDestination(it) }.takeUnless { it == "null" }?.let(::JSONObject)
+                    if(sourceFingerprint != null && location != null && adoptedDestination?.getJSONObject("location")?.getString("uri") == uri.toString()) {
+                        host.withNative { Native.sessionRecordDestination(it, location.toString(), sourceFingerprint) }
+                    }
                     host.documentChanged()
                 }
             } catch (e: CancellationException) {
@@ -366,13 +387,12 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     val recoveryCopy = host.bootstrap!!.getJSONObject("recovery")
     val common = host.bootstrap!!.getJSONObject("common")
     if (recovery.candidate != null) AlertDialog(
-        onDismissRequest = { recovery.dismiss(false) },
+        onDismissRequest = { recovery.dismiss() },
         title = { Text(recoveryCopy.getString("title")) },
         text = { Text(recoveryCopy.getString(if (recovery.working) "restoring" else "explanation")) },
         confirmButton = { TextButton({ recovery.recover() }, enabled = !recovery.working, modifier = Modifier.testTag("recover-drawing")) { Text(recoveryCopy.getString("restore")) } },
         dismissButton = { Row {
-            TextButton({ recovery.dismiss(false) }, enabled = !recovery.working) { Text(recoveryCopy.getString("later")) }
-            TextButton({ recovery.dismiss(true) }, enabled = !recovery.working) { Text(recoveryCopy.getString("discard")) }
+            TextButton({ recovery.dismiss() }, enabled = !recovery.working) { Text(recoveryCopy.getString("later")) }
         } }
     )
     val controller = host.documents

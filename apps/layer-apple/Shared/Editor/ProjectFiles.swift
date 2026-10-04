@@ -55,7 +55,6 @@ import UIKit
     private var externalOpen: (item: PhotoItem, submitted: Bool)?
     private var droppedPhotos: (items: [PhotoItem], placement: JSON)?
     private var loadingPhoto = false
-    private var recovering: RecoveryRecord?
     private var closeCompletion: ((Bool) -> Void)?
     /// Dialog dependency keeps editor/file effects testable without driving
     /// platform panels. The app uses the native implementation by default.
@@ -204,7 +203,7 @@ import UIKit
         // attachment, so wait for full startup before submitting the request.
         // Publications resume this one pending request.
         guard externalOpen?.submitted == false, let store,
-            store.workspaces?.ready != false, store.snapshot["shaders_ready"].bool,
+            store.workspaces?.ready != false, !store.recovery.restoring, store.snapshot["shaders_ready"].bool,
             store.command("open_document")["enabled"].bool else { return }
         externalOpen?.submitted = true
         // Admission and command dispatch share the serial owner. A New/Open
@@ -214,13 +213,6 @@ import UIKit
             externalOpen?.submitted = false
             submitExternalOpen()
         }
-    }
-    func recover(_ record: RecoveryRecord) {
-        guard !busy, externalOpen == nil, let url = store?.recovery.files.archive(record),
-            store?.command("open_document")["enabled"].bool == true else {
-            error = "Finish the current canvas operation before recovering a drawing"; return
-        }
-        recovering = record; openURL(url)
     }
     func confirmClose(_ completion: @escaping (Bool) -> Void) {
         guard let store else { completion(false); return }
@@ -249,7 +241,7 @@ import UIKit
             DispatchQueue.main.async {
                 guard let self else { return }
                 if let error { self.report(error) }
-                if choice == "cancel" { self.externalOpen = nil; self.recovering = nil }
+                if choice == "cancel" { self.externalOpen = nil }
                 self.released()
             }
         }
@@ -432,14 +424,14 @@ import UIKit
         return true
     }
     private func place(_ task: NativeProjectTask, inputs: [PhotoItem], index: Int = 0) {
-        guard index < inputs.count else { prepare(task, url: nil, recovery: nil) {}; return }
+        guard index < inputs.count else { prepare(task, url: nil) {}; return }
         let id = requestID, item = inputs[index]
         loadingPhoto = true
         item.load { [weak self, weak task] result in
             guard let self, let task, requestID == id, !finishing else { return }
             loadingPhoto = false
             if cancelled { finish(); return }
-            prepare(task, url: nil, recovery: nil, next: { [weak self] in
+            prepare(task, url: nil, next: { [weak self] in
                 self?.place(task, inputs: inputs, index: index + 1)
             }) {
                 switch try result.get() {
@@ -450,7 +442,6 @@ import UIKit
         }
     }
     private func openItem(_ item: PhotoItem) {
-        let recovery = recovering
         store?.recovery.flush { [weak self] saved in
             guard let self else { return }
             guard saved else { fail("Could not preserve the current drawing for recovery"); return }
@@ -463,8 +454,8 @@ import UIKit
                     if cancelled { finish(); return }
                     do {
                         switch try result.get() {
-                        case .file(let url): prepare(task, url: url, recovery: recovery) { try task.read(from: url) }
-                        case .image(let data): prepare(task, url: nil, recovery: recovery) { try task.read(image: data, name: item.name) }
+                        case .file(let url): prepare(task, url: url) { try task.read(from: url) }
+                        case .image(let data): prepare(task, url: nil) { try task.read(image: data, name: item.name) }
                         }
                     } catch { fail(error.localizedDescription) }
                 }
@@ -472,20 +463,19 @@ import UIKit
         }
     }
     private func open(_ url: URL?, options: JSON? = nil) {
-        let recovery = recovering
         // Preserve the outgoing drawing's checkpoint before it becomes inactive.
         store?.recovery.flush { [weak self] saved in
             guard let self else { return }
             guard saved else { fail("Could not preserve the current drawing for recovery"); return }
-            beginOpen(url, options: options, recovery: recovery)
+            beginOpen(url, options: options)
         }
     }
-    private func beginOpen(_ url: URL?, options: JSON?, recovery: RecoveryRecord?) {
+    private func beginOpen(_ url: URL?, options: JSON?) {
         task(.open) { [weak self] task in
-            self?.prepare(task, url: url, recovery: recovery) { try task.read(from: url, options: options) }
+            self?.prepare(task, url: url) { try task.read(from: url, options: options) }
         }
     }
-    private func prepare(_ task: NativeProjectTask, url: URL?, recovery: RecoveryRecord?, next: (() -> Void)? = nil, work: @escaping () throws -> Void) {
+    private func prepare(_ task: NativeProjectTask, url: URL?, next: (() -> Void)? = nil, work: @escaping () throws -> Void) {
         NativeProjectTask.io.async { [weak self] in
             do {
                 try work()
@@ -511,22 +501,19 @@ import UIKit
                             guard let self else { return }
                             guard let choice else { self.finish(); return }
                             self.interpreting = true
-                            self.prepare(task, url: url, recovery: recovery, next: next) { try task.assumeProfile(choice) }
+                            self.prepare(task, url: url, next: next) { try task.assumeProfile(choice) }
                         }
                         return
                     }
                     self.profileCompletion = nil; self.pendingProfile = nil
                     if let next { next(); return }
-                    self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url,
-                        recovered: recovery != nil) { [weak self] error in
+                    self.store?.native?.finishProject(task, opening: true, title: url?.lastPathComponent ?? "Untitled", url: url) { [weak self] error in
                         DispatchQueue.main.async {
                             guard let self else { return }
                             if let error { self.report(error) }
                             else {
-                                self.destination = recovery == nil ? url : nil
-                                if let recovery { self.store?.recovery.didRestore(recovery) }
+                                self.destination = url
                             }
-                            self.recovering = nil
                             self.finish(error == nil)
                         }
                     }
@@ -545,7 +532,7 @@ import UIKit
     }
     func closePackage() {
         guard !packageCopying else { return }
-        packageSummary = nil; packageImage = nil; packageSource = nil; recovering = nil
+        packageSummary = nil; packageImage = nil; packageSource = nil
         finish()
     }
     func copyPackage() {
@@ -598,7 +585,6 @@ import UIKit
             receive(state)
             if requestID == nil && closeCompletion != nil { finishClose(state["document_file"]["close_ready"].bool) }
             if requestID == nil {
-                recovering = nil
                 if !cancelled { submitQueuedOpen() }
             }
         }

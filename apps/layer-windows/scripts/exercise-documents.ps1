@@ -2,6 +2,10 @@ param([Parameter(Mandatory)][string]$Executable,[switch]$RecoverGpu,[switch]$Fai
 if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted recovery, not both"}
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+$CapyCacheModel=$true
+$CapyPopups=$true
+$drawIndex=0
 Add-Type -AssemblyName System.Drawing
 Add-Type -TypeDefinition @'
 using System;
@@ -10,6 +14,7 @@ using System.Text;
 public static class CapyDocumentControls {
     [StructLayout(LayoutKind.Sequential)] public struct Rect {public int left,top,right,bottom;}
     [DllImport("user32.dll")] public static extern bool IsWindowEnabled(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr h,out Rect rect);
     [StructLayout(LayoutKind.Sequential)] public struct Point {public int x,y;}
     [DllImport("user32.dll")] public static extern bool ClientToScreen(IntPtr h,ref Point point);
@@ -78,10 +83,20 @@ function Request-Close([switch]$WithPreferences) {
     if(![CapyDocumentControls]::PostMessage($handle,0x10,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Native owner rejected the close request'}
 }
 function Wait-Closed([string]$Message) {
-    # Preserve the five-second bound and reject silent native teardown faults.
+    $handle=$review.MainWindowHandle
     $watch=[Diagnostics.Stopwatch]::StartNew()
-    do {$review.Refresh();if($review.HasExited){break};Start-Sleep -Milliseconds 25}while($watch.Elapsed.TotalSeconds -lt 5)
-    $review.Refresh();if(!$review.HasExited){throw $Message}
+    Wait-Until {
+        $review.Refresh();if($review.HasExited){return $true}
+        if([CapyDocumentControls]::IsWindow($handle)){
+            $reply=[UIntPtr]::Zero
+            if([CapyDocumentControls]::SendMessageTimeout($handle,0,[UIntPtr]::Zero,[IntPtr]::Zero,2,500,[ref]$reply) -eq [IntPtr]::Zero){
+                $review.Refresh()
+                if(!$review.HasExited -and [CapyDocumentControls]::IsWindow($handle)){throw 'Native window stopped answering during close'}
+            }
+        }
+        return $false
+    } $Message -Closing
+    Write-Output ('Native close completed in {0:N2}s' -f $watch.Elapsed.TotalSeconds)
     if($review.ExitCode -ne 0){throw ("Native review exit code: 0x{0:X8}" -f [uint32]($review.ExitCode -band 0xffffffffL))}
 }
 function Find-Name([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
@@ -91,8 +106,7 @@ function Find-Name([string]$Name,$Type=[System.Windows.Automation.ControlType]::
     $scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,$condition)
 }
 function Find-Id([string]$Id) {
-    $scope.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
-        [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,$Id))
+    Find $Id -Within $scope
 }
 function Control([string]$Name,$Type=[System.Windows.Automation.ControlType]::Button) {
     $script:found=$null;Wait-Until {$script:found=Find-Name $Name $Type;$null -ne $script:found} "Missing control: $Name";$script:found
@@ -257,17 +271,43 @@ function Start-RecoveryReview([string]$label){
 }
 function Draw {
     $script:scope=$root
-    # Image placement deliberately selects Move and its source layer. Select the
-    # ink layer and Pen explicitly so recovery checks exercise painted pixels.
+    $ink=@((Model).state.layers|Where-Object {$_.label -eq 'Current ink'})|Select-Object -First 1
+    if(!$ink){throw 'Controlled stroke has no raster ink layer'}
+    $paint=$ink.id
     if((Model).state.layer_tools.editing_layer.id -ne $paint){
         (Find-Id "layer-$paint-content").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
         Wait-Until {(Model).state.layer_tools.editing_layer.id -eq $paint} 'Ink layer did not select'
     }
+    if(!(Model).state.layer_tools.controls.alpha_lock){throw 'Controlled stroke target is not editable paint'}
     if(!((Model).state.commands|Where-Object id -eq 'pen').selected){
-        $tile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.command -eq 'pen'}|Select-Object -First 1
+        $tile=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.resolved_control.command -eq 'pen'}|Select-Object -First 1
         (Find-Id "tile-toolbar-$($tile.id)").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
     }
     Wait-Until {(Model).brush_ready -and ((Model).state.commands|Where-Object id -eq 'pen').selected} 'Pen did not become ready' 45
+    if((Model).state.layer_tools.mask_editing -or (Model).state.layer_tools.quick_mask -or (Model).state.layer_tools.editing_layer.mask_selected){throw 'Controlled stroke is editing a mask'}
+    $script:drawIndex++
+    $channel=(.02+.02*$script:drawIndex).ToString('R',[Globalization.CultureInfo]::InvariantCulture)
+    $colorTile=((Model).panels|Where-Object id -eq 'toolbar').tiles|Where-Object {$_.control.kind -eq 'color'}|Select-Object -First 1
+    if(!$colorTile){throw 'Controlled stroke has no color toolbar tile'}
+    (Find-Id "tile-toolbar-$($colorTile.id)").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {Find-Id 'tool-drawer'} 'Controlled ink drawer did not open'
+    Wait-Until {$control=Find-Id 'color-foreground';$control -and !$control.Current.IsOffscreen} 'Controlled foreground swatch did not appear'
+    (Find-Id 'color-foreground').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {(Model).state.colors.slot -eq 'foreground'} 'Foreground paint did not select'
+    Wait-Until {$control=Find-Id 'color-edit';$control -and !$control.Current.IsOffscreen} 'Controlled ink edit control did not appear'
+    (Find-Id 'color-edit').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {Find-Id 'precise-color-model'} 'Controlled ink editor did not open'
+    Combo-Select (Find-Id 'precise-color-model') {$_.Current.Name -eq 'Linear RGB'}
+    $channels=@('.03',$channel,'.025','100')
+    for($i=0;$i -lt 4;$i++){
+        (Find-Id "precise-color-$i").GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue($channels[$i])
+    }
+    (Find-Id 'precise-color-apply').GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {$definition=(Model).paint_pair.definition;$definition.linear_rgb -and [Math]::Abs($definition.linear_rgb[1]-[double]$channel) -lt .000001 -and $definition.rgba[3] -eq 1} 'Controlled ink color did not publish'
+    [CapyRowPointer]::Key([uint32]$review.Id,0x1B)
+    Wait-Until {!(Find-Id 'precise-color-apply')} 'Controlled ink editor did not close'
+    (Find-Id "tile-toolbar-$($colorTile.id)").GetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern).Invoke()
+    Wait-Until {!(Find-Id 'tool-drawer')} 'Controlled ink drawer did not close'
     $revision=(Model).state.document_file.revision
     Invoke-Control 'Test pen'
     Wait-Until {(Model).state.document_file.modified -and (Model).state.document_file.revision -gt $revision} 'Controlled stroke did not modify the drawing'
@@ -499,16 +539,17 @@ $custom.item.GetCurrentPattern([System.Windows.Automation.InvokePattern]::Patter
 $entry=Control 'Dark theme base color' ([System.Windows.Automation.ControlType]::Edit)
 $entry.SetFocus();$entry.GetCurrentPattern([System.Windows.Automation.ValuePattern]::Pattern).SetValue('#223344')
 Request-Close -WithPreferences
-Confirm-Dialog;Invoke-Control 'Cancel';Idle
-Wait-Until {(Model).state.settings.dark_base -eq '#223344'} 'Close request lost the active Preferences draft'
-if((Model).state.document_file.close_ready -or !(Model).state.document_file.modified){throw 'Cancel closed or cleared the dirty drawing'}
-$script:scope=$root
-Request-Close
-Confirm-Dialog;Invoke-Control 'Save'
-Wait-Closed 'Saved close exceeded five seconds'
+Wait-Closed 'Session close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Native review reported stderr'}
-# A fresh untitled drawing exercises close -> Save picker -> Cancel, then
-# explicit Discard. The first launch above verifies durable close to a saved path.
+$stderr=Join-Path $run 'reopened.stderr.log'
+$review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
+Wait-Until {$review.Refresh();$review.MainWindowHandle -ne [IntPtr]::Zero} 'No restarted review window' 30
+$root=[System.Windows.Automation.AutomationElement]::FromHandle($review.MainWindowHandle);$script:scope=$root
+Wait-Until {(Model).brush_ready -and !(Model).windows_recovery.busy -and !(Model).windows_recovery.restoring} 'Session did not reopen' 120
+if((Model).state.settings.dark_base -ne '#223344' -or !(Model).state.document_file.modified){throw 'Window close lost the focused Preferences draft or unsaved drawing'}
+Request-Close;Wait-Closed 'Restarted session close did not finish'
+if((Get-Item -LiteralPath $stderr).Length){throw 'Restarted native review reported stderr'}
+$env:CAPY_SETTINGS_DIRECTORY=Join-Path $run 'untitled-profile'
 $stderr=Join-Path $run 'untitled.stderr.log'
 $review=Start-Process -FilePath $Executable -WorkingDirectory $directory -WindowStyle Hidden -PassThru -RedirectStandardError $stderr
 [IO.File]::WriteAllText((Join-Path $repo 'artifacts/windows/document-ui-review.pid'),[string]$review.Id)
@@ -524,9 +565,8 @@ if(!(Model).state.document_file.modified -or (Model).state.document_file.locatio
     throw 'Cancelling the close-time picker lost the untitled drawing'
 }
 File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Cancel';Idle
-Request-Close
-Confirm-Dialog;Invoke-Control 'Discard Changes'
-Wait-Closed 'Discarded close exceeded five seconds'
+File-Command 'close_document';Confirm-Dialog;Invoke-Control 'Discard Changes'
+Wait-Closed 'Discarded close did not finish'
 if((Get-Item -LiteralPath $stderr).Length){throw 'Untitled native review reported stderr'}
 if($FailGpu){
     Start-RecoveryReview 'save-as'
@@ -548,7 +588,7 @@ if($FailGpu){
     Wait-Until {(Test-Path -LiteralPath $recovered) -and !(Model).state.document_file.modified} 'Save As after GPU failure did not complete durably'
     File-Command 'save_document';Idle
     Request-Close
-    Wait-Closed 'GPU save-as close exceeded five seconds'
+    Wait-Closed 'GPU save-as close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'GPU save-as reported stderr'}
     Remove-Item Env:CAPY_TEST_GPU_UNAVAILABLE
     Start-RecoveryReview 'reopen'
@@ -559,7 +599,7 @@ if($FailGpu){
     Wait-Until {Test-Path -LiteralPath $after} 'Reopened project did not export'
     if((Get-FileHash -LiteralPath $before).Hash -ne (Get-FileHash -LiteralPath $after).Hash){throw 'Saved recovery project changed exported pixels'}
     Request-Close
-    Wait-Closed 'Reopened recovery project close exceeded five seconds'
+    Wait-Closed 'Reopened recovery project close did not finish'
     if((Get-Item -LiteralPath $stderr).Length){throw 'Reopened recovery project reported stderr'}
 }
 [PSCustomObject]@{

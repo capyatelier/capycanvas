@@ -567,7 +567,7 @@ fn native_large_photo_placement_workflow() {
 
     let opened = Rc::new(RefCell::new(None));
     let result = opened.clone();
-    *restored.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+    *restored.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
         result.replace(Some((project, location)));
     }));
     invoke(&restored, CommandId::OpenDocument);

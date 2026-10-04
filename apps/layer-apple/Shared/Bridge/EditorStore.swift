@@ -37,6 +37,7 @@ import SwiftUI
     var cursorChanged: (() -> Void)?
     var handCursor: Bool { panCursor || state["layer_tools"]["tool"].string == "hand" }
     var systemSceneID: String?
+    let sessionIdentity: String
     private(set) var native: NativeOwner?
     private(set) var workspaces: WorkspaceController?
     private var drawingWorkload: DrawingWorkload?
@@ -50,20 +51,8 @@ import SwiftUI
     lazy var contentDrawers = ContentDrawersPresentation(store: self)
     lazy var projectFiles = ProjectFiles(store: self)
     lazy var windowPresentation = WindowPresentation(store: self)
-    private var recoveries: [UInt64: ArtworkRecovery] = [:]
     lazy var drawingTabs = DrawingTabsController(store: self)
-    var recovery: ArtworkRecovery {
-        let id = snapshot["document_tabs"]["selected"].uint == 0 ? 1 : snapshot["document_tabs"]["selected"].uint
-        if let value = recoveries[id] { return value }
-        let value = ArtworkRecovery(store: self, document: id); recoveries[id] = value; return value
-    }
-    func forgetRecovery(_ id: UInt64) { recoveries.removeValue(forKey: id); projectFiles.forgetDocument(id) }
-    func closeRecoveries(_ completion: @escaping (Bool) -> Void) {
-        let values = Array(recoveries.values)
-        guard !values.isEmpty else { completion(true); return }
-        var remaining = values.count, success = true
-        for value in values { value.close { ok in success = success && ok; remaining -= 1; if remaining == 0 { completion(success) } } }
-    }
+    lazy var recovery = ArtworkRecovery(store: self)
     lazy var histogram = HistogramController(store: self)
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
@@ -96,6 +85,7 @@ import SwiftUI
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared,
         managedWorkspaces: Bool = true) {
+        sessionIdentity = UUID(uuidString: scene)?.uuidString ?? UUID().uuidString
         do {
             let workload = try DrawingWorkloadPlan.configured()
             // Performance runs never read or replace the artist's preferences
@@ -180,7 +170,6 @@ import SwiftUI
                 drawingTabs.receive()
                 projectFiles.receive(state.json)
                 windowPresentation.receive(state.json)
-                recovery.observe(state["document_file"])
                 contentDrawers.refresh()
                 workspace.refresh()
                 if state["requests"].array.contains(where: { $0["kind"]["type"].string == "workspace" }) {
@@ -201,6 +190,7 @@ import SwiftUI
             }
             cameraRevision = state["camera"]["revision"].uint
             notice.publish(state["notice"])
+            recovery.observe()
         }
         wake?()
     }
@@ -220,14 +210,14 @@ import SwiftUI
             }
         }
     }
-    func flushPersistence(_ completion: @escaping @MainActor (Bool) -> Void) {
+    func flushPersistence(cleanExit: Bool = false, _ completion: @escaping @MainActor (Bool) -> Void) {
         guard let native else { completion(false); return }
         // Scene teardown may release its view while this barrier is in flight.
         // Keep the document owner through the final recovery acknowledgement.
         native.flushPersistence { [self] succeeded in DispatchQueue.main.async {
             Task { @MainActor in
                 let finish = { [self] (stored: Bool) in
-                    self.recovery.flush { [self] result in
+                    self.recovery.flush(cleanExit: cleanExit) { [self] result in
                         completion(succeeded && stored && result); withExtendedLifetime(self) {}
                     }
                 }
@@ -240,28 +230,11 @@ import SwiftUI
         guard !stores.isEmpty else { completion(true); return }
         var remaining = stores.count, succeeded = true
         for store in stores {
-            store.flushPersistence { result in
+            store.flushPersistence(cleanExit: true) { result in
                 succeeded = succeeded && result; remaining -= 1
                 if remaining == 0 { completion(succeeded) }
             }
         }
-    }
-    static func confirmCloseAll(_ completion: @escaping @MainActor (Bool) -> Void) {
-        var stores = instances.allObjects
-        func next() {
-            guard let store = stores.popLast() else { completion(true); return }
-            store.projectFiles.confirmClose { allowed in
-                if allowed { next() }
-                else {
-                    resetCloseApprovals()
-                    completion(false)
-                }
-            }
-        }
-        next()
-    }
-    static func resetCloseApprovals() {
-        for live in instances.allObjects { live.query(["type": "document_tabs", "op": "reset_close"]) { _ in } }
     }
     static func workspaceOwner(_ owner: String) -> EditorStore? {
         instances.allObjects.first { $0.workspaces?.ready == true && $0.workspaces?.view["owner"].string == owner }
@@ -295,32 +268,18 @@ import SwiftUI
     func prepareClose(_ completion: @escaping @MainActor (Bool) -> Void) {
         flushPersistence { [self] saved in
             guard saved else { completion(false); return }
-            closeRecoveries { [self] saved in
+            let retire: @MainActor (Bool) -> Void = { [self] saved in
                 guard saved else { cancelPreparedClose { completion(false) }; return }
-                guard let workspaces else { completion(true); return }
-                workspaces.close { completion($0) }
+                recovery.close { saved in completion(saved) }
             }
+            if let workspaces { workspaces.close(retire) } else { retire(true) }
         }
     }
     func cancelPreparedClose(_ completion: @escaping @MainActor () -> Void = {}) {
         query(["type": "document_tabs", "op": "reset_close"]) { _ in }
-        for value in recoveries.values { value.resume() }
+        recovery.resume()
         workspaces?.keepOpen()
         completion()
-    }
-    static func finishClosingAll(_ completion: @escaping @MainActor (Bool) -> Void) {
-        let stores = instances.allObjects
-        var pending = stores
-        func cancel() {
-            guard !stores.isEmpty else { completion(false); return }
-            var count = stores.count
-            for store in stores { store.cancelPreparedClose { count -= 1; if count == 0 { completion(false) } } }
-        }
-        func next() {
-            guard let store = pending.popLast() else { completion(true); return }
-            store.prepareClose { saved in if saved { next() } else { cancel() } }
-        }
-        next()
     }
     func dispatch(_ action: JSON) {
         if action["type"].string == "invoke" && action["command"].string == "search_commands" { reportCommandFocus() }

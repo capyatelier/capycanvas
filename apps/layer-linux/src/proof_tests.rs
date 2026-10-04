@@ -814,7 +814,7 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
     let snapshot = {
         let gpu = restored.gpu.borrow();
         let session = &gpu.as_ref().unwrap().session;
-        let capture = session.capture_project_recovery().unwrap();
+        let capture = session.capture_artwork().unwrap();
         let time = capture.output().context.elapsed;
         DocumentExport {
             capture,
@@ -860,7 +860,7 @@ fn native_open_and_profile_pickers_remember_separate_folders() {
     use super::new_photo::profile_action;
     let app = native_test_app("art.capycanvas.FileFolders");
     let w = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
-    *w.open_document.borrow_mut() = Some(Rc::new(|_, _, _| {}));
+    *w.open_document.borrow_mut() = Some(Rc::new(|_, _| {}));
     w.window.present();
     ready(&w);
     let root = std::env::temp_dir().join(format!("capy-picker-folders-{}", std::process::id()));

@@ -71,6 +71,9 @@ private final class ContactEvent: UIEvent {
         let url = root.appendingPathComponent("ruler.capy")
         let store = EditorStore(platform: 0,
             persistence: EditorPersistence(root: root.appendingPathComponent("state")), managedWorkspaces: false)
+        store.projectFiles = ProjectFiles(store: store, dialogs: .init(
+            open: { _, done in done([]) }, save: { _, _, done in done(url) },
+            create: { _, done in done(nil) }, exportOptions: { $0.choose($0.recipe) }))
         let canvas = CanvasView(store: store)
         canvas.contentScaleFactor = 1
         defer { canvas.stop() }
@@ -100,24 +103,14 @@ private final class ContactEvent: UIEvent {
             let prepared = await withCheckedContinuation { done in native.flushPersistence { done.resume(returning: $0) } }
             try require(prepared, "Prepare completed ruler input")
             try await flush()
-            let file = store.state["document_file"]
-            let task = try await withCheckedThrowingContinuation { (done: CheckedContinuation<NativeProjectTask, Error>) in
-                native.recoveryTask(expected: (file["epoch"].uint, file["revision"].uint)) { task, error in
-                    if let task { done.resume(returning: task) }
-                    else { done.resume(throwing: HostFailure(message: error ?? "Prepare ruler archive")) }
-                }
+            try? FileManager.default.removeItem(at: url)
+            try await action(["type": "invoke", "command": "save_document_as"])
+            let deadline = Date().addingTimeInterval(30)
+            while !FileManager.default.fileExists(atPath: url.path) || store.projectFiles.busy {
+                try require(Date() < deadline && store.projectFiles.error == nil, store.projectFiles.error ?? "Save ruler package")
+                try await Task.sleep(for: .milliseconds(10))
             }
-            try await withCheckedThrowingContinuation { (done: CheckedContinuation<Void, Error>) in
-                NativeProjectTask.io.async {
-                    do { try task.write(to: url); done.resume() }
-                    catch { done.resume(throwing: error) }
-                }
-            }
-            let bytes = try Data(contentsOf: url)
-            try require(bytes.count >= 52 && bytes.prefix(10) == Data("CAPYRASTER".utf8), "Ruler archive header")
-            let count = bytes[12..<20].enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
-            try require(count <= bytes.count - 52, "Complete ruler archive")
-            return JSON(try JSONSerialization.jsonObject(with: bytes.subdata(in: 52..<(52 + Int(count)))))["document"]["rulers"]
+            return try savedRulers(url)
         }
         try await flush()
         store.cameraRevision = store.state["camera"]["revision"].uint

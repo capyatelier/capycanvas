@@ -284,7 +284,7 @@ fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
         s.dispatch(UiAction::Layer { action: LayerAction::Delete { id } }).unwrap();
     }
     assert!(s.state.layers.is_empty());
-    let project = s.capture_project_recovery().unwrap();
+    let project = s.capture_artwork().unwrap();
     let loaded=reopen_capture(&project);
     assert!(loaded.scene().order().is_empty());
     s.dispatch(UiAction::Layer { action: LayerAction::New { group: false, clipped: false } }).unwrap();

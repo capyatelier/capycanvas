@@ -298,7 +298,7 @@ fn install_actions(app: &adw::Application, active: &Rc<RefCell<Vec<Rc<workspace:
         #[strong]
         active,
         move |_, _| {
-            open_workspace(&app, &active, None, None);
+            open_workspace(&app, &active, None);
         }
     ));
     app.add_action(&new_window);
@@ -308,14 +308,13 @@ fn open_workspace(
     app: &adw::Application,
     active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
     project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
-    recovered: Option<std::path::PathBuf>,
 ) {
     let hold = app.hold();
     glib::spawn_future_local(glib::clone!(#[weak] app, #[strong] active, async move {
         let (settings, localization) = prepare_application_context(&app, &active).await;
         let offer_recovery = project.is_none() && active.borrow().is_empty();
-        open_workspace_ready(&app, &active, project, recovered, settings, localization);
-        if offer_recovery { if let Some(workspace) = active.borrow().last() { recovery::offer_stale(workspace); } }
+        open_workspace_ready(&app, &active, project, settings, localization);
+        if offer_recovery { if let Some(workspace) = active.borrow().last() { recovery::restore_stale(workspace, &app, &active); } }
         drop(hold);
     }));
 }
@@ -345,7 +344,6 @@ fn open_workspace_ready(
     app: &adw::Application,
     active: &Rc<RefCell<Vec<Rc<workspace::Workspace>>>>,
     project: Option<(layer_core::Document, Option<layer_ui::DocumentLocation>)>,
-    recovered: Option<std::path::PathBuf>,
     settings: Option<layer_ui::Settings>,
     localization: std::sync::Arc<layer_ui::Localizer>,
 ) {
@@ -354,11 +352,9 @@ fn open_workspace_ready(
         Some(project) => workspace::Workspace::with_project_localized(app, Some(project), localization),
     };
     let owner = Rc::downgrade(&workspace);
-    *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location, recovered| {
-        if let Some(w) = owner.upgrade() { w.documents.enqueue(&w, (project, location, recovered)); }
+    *workspace.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
+        if let Some(w) = owner.upgrade() { w.documents.enqueue(&w, (project, location)); }
     }));
-    workspace.recovery().recovered.set(recovered.is_some());
-    if let Err(error) = workspace.recovery().set_origin(recovered) { eprintln!("Recovery ownership failed: {error}"); }
     active.borrow_mut().push(workspace.clone());
     workspace.window.present();
     if let Some(settings) = settings {

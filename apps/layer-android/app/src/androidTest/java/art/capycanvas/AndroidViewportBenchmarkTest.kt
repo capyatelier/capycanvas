@@ -26,6 +26,8 @@ class AndroidViewportBenchmarkTest {
         val label = args.getString("label", "baseline")!!
         val interval = args.getString("intervalMs", "4.166667")!!.toDouble()
         val duration = args.getString("durationMs", "5000")!!.toInt()
+        val contact = args.getString("contactMs", "0")!!.toInt()
+        val pause = args.getString("pauseMs", "100")!!.toInt()
         val repeats = args.getString("repeats", "3")!!.toInt()
         val size = args.getString("canvasSize", "1024")!!.toInt()
         val pressure = args.getString("pressure")?.toDouble()
@@ -215,6 +217,7 @@ class AndroidViewportBenchmarkTest {
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true }
             val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
+            info.put("thermal_status",activity.getSystemService(android.os.PowerManager::class.java).currentThermalStatus)
             File(output, "$label-info.json").writeText(info.toString(2))
             assertEquals(if (retainedMotion) "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
             assertEquals(retainedMotion, info.getJSONObject("display").getBoolean("retained_target"))
@@ -235,6 +238,17 @@ class AndroidViewportBenchmarkTest {
                 native { Native.presentationTimings(it, true); Native.completionTimings(it, true) }
                 val beforeRenderer = native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) }
                 activePresent = present
+                val sessionSamples = JSONArray()
+                val sessionSampler = java.util.concurrent.Executors.newSingleThreadScheduledExecutor()
+                fun sessionSample() {
+                    val files = device.recovery.walkTopDown().filter {it.isFile}.toList()
+                    val newest = files.filter {it.name == "head.json"}.maxOfOrNull {it.lastModified()}
+                    val io = File("/proc/self/io").readLines().associate {line ->line.substringBefore(':') to line.substringAfter(':').trim().toLong()}
+                    synchronized(sessionSamples) {sessionSamples.put(obj("time_ns" to System.nanoTime(),"disk_bytes" to files.sumOf {it.length()},
+                        "durable_age_ms" to newest?.let {System.currentTimeMillis()-it},"process_write_bytes" to io["write_bytes"],"process_wchar" to io["wchar"]))}
+                }
+                sessionSample()
+                sessionSampler.scheduleWithFixedDelay({sessionSample()},100,100,java.util.concurrent.TimeUnit.MILLISECONDS)
                 val switchedTag = languageSwitches.takeIf { it.isNotEmpty() }?.let { it[run % it.size] }
                 switchLanguage = switchedTag
                 val began = System.nanoTime()
@@ -248,9 +262,11 @@ class AndroidViewportBenchmarkTest {
                         queryResults.put(result.put("begin_ns", start).put("end_ns", System.nanoTime()))
                     }
                 }
-                if (retainedMotion) stroke(run + 1, duration, motion == "hover") else gesture(duration)
+                if (motion == "stroke"&&contact > 0)repeat(duration/(contact+pause)) {index ->stroke((run+1)*1000+index,contact);SystemClock.sleep(pause.toLong())}
+                else if (retainedMotion) stroke(run + 1, duration, motion == "hover") else gesture(duration)
                 val ended = System.nanoTime()
                 val endedBoot = SystemClock.elapsedRealtimeNanos()
+                sessionSampler.shutdown();assertTrue(sessionSampler.awaitTermination(10,java.util.concurrent.TimeUnit.SECONDS));sessionSample()
                 try { queryFuture.get(180, java.util.concurrent.TimeUnit.SECONDS) } finally { queryPool.shutdownNow() }
                 activePresent = null
                 val languageVisible = switchedTag?.let { tag -> waitFor { host.languageTag == tag }; System.nanoTime() }
@@ -269,6 +285,8 @@ class AndroidViewportBenchmarkTest {
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
                 if (motion == "hover") assertEquals("Hover never paints", beforeRevision, afterRevision)
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
+                    .put("session_samples",sessionSamples)
+                    .put("contact_ms",contact).put("pause_ms",pause)
                     .put("artwork_queries", queryResults)
                     .put("statistics_preview", statisticsPreview)
                     .put("statistics_exact", statisticsExact)
@@ -281,8 +299,10 @@ class AndroidViewportBenchmarkTest {
                     .put("revision_before", beforeRevision).put("revision_after", afterRevision)
                     .put("display", native { JSONObject(Native.displayStatus(it)) })
                     .put("renderer_before", beforeRenderer).put("renderer", native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) })
-                assertTrue("CPU frame instrumentation must be enabled", data.getJSONArray("frames").length() > 100)
-                assertTrue("GPU timestamps must be collected", (0 until present.length()).sumOf { present.getJSONArray(it).length() } > 100)
+                File(output, "$label-$run.json").writeText(data.toString())
+                val minimumSamples = if(contact > 0)maxOf(1,100*contact/(contact+pause)) else 100
+                assertTrue("CPU frame instrumentation must be enabled", data.getJSONArray("frames").length() > minimumSamples)
+                assertTrue("GPU timestamps must be collected", (0 until present.length()).sumOf { present.getJSONArray(it).length() } > minimumSamples)
                 if (switchedTag != null) {
                     val visible = checkNotNull(languageVisible)
                     val resumed = checkNotNull(resumed)

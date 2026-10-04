@@ -318,7 +318,7 @@ fn native_new_presets_and_profiled_photo_master() {
     let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
         result.replace(Some((project, location)));
     }));
     w.window.present();
@@ -510,7 +510,7 @@ fn native_new_presets_and_profiled_photo_master() {
     ready(&photo);
     native_pen_path(&photo, &[[200., 120.], [230., 120.], [270., 120.]]);
     ready(&photo);
-    let edited_capture = ui_session(&photo).capture_project_recovery().unwrap();
+    let edited_capture = ui_session(&photo).capture_artwork().unwrap();
     let edited = capture_document(&edited_capture);
     assert!(
         !paint_at(&edited, 0).raster

@@ -542,7 +542,7 @@ native-dialog-later = Nanti
 
 native-dialog-restoring = Memulihkan gambar
 
-native-dialog-explanation = Gambar yang belum selesai dari sesi sebelumnya tersedia. Pemulihan mempertahankan salinan pemulihan hingga gambar yang dipulihkan memiliki titik simpan permanen baru.
+native-dialog-explanation = Gambar ini tidak dapat dibuka kembali. Salinan sesi tersimpan tetap disimpan. Anda dapat mencoba lagi, menundanya, atau membuangnya.
 
 native-dialog-loading = Memuat…
 

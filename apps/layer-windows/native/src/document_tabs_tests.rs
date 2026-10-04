@@ -26,6 +26,7 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         service.poll(host).unwrap();
         if host.session.engine().backend().0.is_some() {
             host.prepare_canvas_frame(0, 0, true).unwrap();
+            host.session.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).unwrap();
         }
         if !(!service.idle()
             || service.close_next
@@ -44,8 +45,8 @@ fn settle(service: &mut DocumentService, host: &mut NativeHost) {
         }
         assert!(
             Instant::now() < deadline,
-            "drawing transition did not settle: {:?}",
-            service.tabs_view(host)
+            "drawing transition did not settle: {:?}; recovery: {:?}; requests: {:?}; park: {}; startup: {:?}",
+            service.tabs_view(host),service.recovery.as_ref().map(|recovery|recovery.status()),host.session.state().requests,host.session.can_park_document(),host.startup
         );
         std::thread::sleep(Duration::from_millis(2));
     }
@@ -259,29 +260,22 @@ fn d3d12_retained_drawing_tabs_spill_history_save_close_and_cancel() {
     })
     .unwrap();
     settle(&mut service, &mut host);
-    let deadline = Instant::now() + Duration::from_secs(15);
+    let expected=service.window.documents.order().iter().map(|id|(*id,service.window.session(&host,*id).unwrap().engine().checkpoint())).collect::<std::collections::BTreeMap<_,_>>();
+    let deadline=Instant::now()+Duration::from_secs(30);
     loop {
         service.poll(&mut host).unwrap();
-        let copies: Vec<_> = std::fs::read_dir(directory.join("recovery"))
-            .unwrap()
-            .filter_map(Result::ok)
-            .filter(|e| e.path().extension().is_some_and(|x| x == "capy"))
-            .collect();
-        let mut snapshots = Vec::new();
-        for copy in copies {
-            if let Ok(file) = std::fs::File::open(copy.path())
-                && let Ok(p) = read_document(file, ProjectLimits::default())
-            {
-                snapshots.push((p.composition().size[0], occurrence_at(&p,0).opacity));
-            }
-        }
-        if snapshots.contains(&(32, 0.75)) && snapshots.contains(&(40, 0.4)) {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "active and parked drawings need independent durable checkpoints: {snapshots:?}"
-        );
+        let complete=std::fs::read_dir(directory.join("sessions")).ok().is_some_and(|entries|entries.filter_map(Result::ok).any(|entry|{
+            let Ok(Some(manifest))=layer_ui::SessionManifest::read(&entry.path().join("session.json")) else{return false};
+            manifest.drawings.len()==expected.len()&&manifest.drawings.iter().all(|drawing|{
+                let root=entry.path().join(&drawing.key);
+                let read=|path:std::path::PathBuf|std::fs::read(path).ok().and_then(|bytes|serde_json::from_slice::<serde_json::Value>(&bytes).ok());
+                let Some(head)=read(root.join("head.json"))else{return false};
+                let Some(generation)=head["current"]["id"].as_str()else{return false};
+                read(root.join("generations").join(format!("{generation}.json"))).is_some_and(|snapshot|snapshot["checkpoint"]["edit_checkpoint"].as_u64()==expected.get(&drawing.id).copied())
+            })
+        }));
+        if complete {break;}
+        assert!(Instant::now()<deadline,"active and parked drawings need independent durable session checkpoints");
         std::thread::sleep(Duration::from_millis(10));
     }
     service

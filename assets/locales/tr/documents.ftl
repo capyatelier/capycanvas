@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (kurtarıldı)
+documents-destination-changed = Kaydedilen çizim değişti veya kullanılamıyor. İki kopyayı da saklamak için Farklı Kaydet seçeneğini kullanın.

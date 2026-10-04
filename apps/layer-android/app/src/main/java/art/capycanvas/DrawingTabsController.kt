@@ -46,8 +46,11 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         val pending=inspections.toMap(); pending.keys.forEach(Native::captureCancel); pending.values.forEach { it.join() }
     }
     private fun resume() { host.filterPreviewCache.resume(); host.proof.resume(); host.hdr.resume(); host.documentChanged(); refresh() }
-    suspend fun waitReady(close: Boolean = false) = withTimeout(30_000) {
-        while (!JSONObject(query(obj("op" to "ready"))).optBoolean(if (close) "close" else "park")) { host.documentChanged(); delay(16) }
+    suspend fun waitReady(close: Boolean = false, settle: () -> Boolean = {false}) = withTimeout(30_000) {
+        while (!JSONObject(query(obj("op" to "ready"))).optBoolean(if (close) "close" else "park")) {
+            if(settle())host.withNative {Native.sessionSettle(it,System.nanoTime())} else host.documentChanged()
+            delay(16)
+        }
     }
     suspend fun trim() = storage.withLock {
         try {
@@ -60,7 +63,7 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         } catch(e:CancellationException) { throw e }
         catch(e:Exception) {
             query(obj("op" to "storage", "error" to (e.message ?: "Drawing cache failed")))
-            host.reportActionError("Drawing cache unavailable; open drawings are retained: ${e.message}")
+            host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),false)})
         }
         refresh()
     }
@@ -74,7 +77,15 @@ internal class DrawingTabsController(private val host: CanvasHost) {
             host.recovery.capture()?.join()
         } catch(e:Exception) { afterAdopt(); throw e }
     }
-    suspend fun afterAdopt() { try { trim(); host.recovery.ensureOwners() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError("Recovery unavailable: ${e.message}")} finally {transition(false);if(currentCoroutineContext().isActive)resume()} }
+    suspend fun beforeSessionAdopt(settle: () -> Boolean = {false}) {
+        check(!switching) { "Another drawing transition is active" }
+        transition(true)
+        try { drain(); waitReady(settle=settle) } catch(e:Exception) { afterAdopt(); throw e }
+    }
+    suspend fun selectRestored(id: Long) {
+        drain(); waitReady(); activate(id); trim(); refresh(); resume()
+    }
+    suspend fun afterAdopt() { try { trim(); host.recovery.ensureOwners() } catch(e:CancellationException){throw e} catch(e:Exception){host.reportActionError(host.withNative {Native.sessionFailure(it,e.message.orEmpty(),true)})} finally {transition(false);if(currentCoroutineContext().isActive)resume()} }
     private suspend fun activate(id: Long, close: Boolean = false) {
         var task=0L
         try {
@@ -113,27 +124,68 @@ internal class DrawingTabsController(private val host: CanvasHost) {
         }
     }
     fun closeSelected() { if(!blocked) { if(selected==0L)host.closeWorkspaceWindow() else select(selected,true) } }
-    fun closeWindow() { if(!blocked) { closingWindow=true; closeSelected() } }
+    fun closeWindow() {
+        if(blocked) return
+        closingWindow=true; transition(true)
+        host.viewModelScope.launch {
+            var preserved=false
+            try {
+                drain(); waitReady()
+                host.withNative { Native.sessionClose(it) }
+                preserved=host.recovery.flush()
+                if(preserved)host.closeWorkspaceWindow { cancelWindowClose() }
+            } catch(e:CancellationException) { throw e }
+            catch(e:Exception) { host.reportActionError(e.message ?: "Could not preserve drawing session") }
+            finally {
+                if(!preserved) {
+                    query(obj("op" to "reset_close"));closingWindow=false;transition(false)
+                    if(currentCoroutineContext().isActive)resume()
+                }
+            }
+        }
+    }
+    private fun cancelWindowClose() {
+        host.viewModelScope.launch {
+            query(obj("op" to "reset_close"));closingWindow=false;transition(false);resume()
+        }
+    }
     fun cancelClose() { closingWindow=false }
     /** Approval is published by Compose, but the transaction belongs to the
      * window's ViewModel. Its own switching/epoch publications recompose the UI;
      * neither those publications nor Activity recreation may cancel retirement.
      */
     fun acceptClose() {
-        if(switching || selected==0L) return
+        if(switching || closingWindow || selected==0L) return
         transition(true)
         host.viewModelScope.launch {
+            var prepared=0L;var activation=0L
             try {
                 if(!JSONObject(query(obj("op" to "ready"))).optBoolean("approved"))return@launch
                 val closingId=JSONObject(query(obj("op" to "view"))).getLong("selected")
-                drain(); waitReady(); host.recovery.retire(closingId,closedTab=true)?.join()
-                activate(closingId,true); trim()
+                drain(); waitReady()
+                prepared=host.withNative {Native.documentPrepareClose(it)}
+                withContext(NonCancellable) {
+                    host.recovery.remove(closingId)
+                    activation=host.withNative {Native.documentCommitClose(it,prepared)};prepared=0L
+                    host.recovery.closed(closingId)
+                }
+                withContext(Dispatchers.IO) {Native.documentResumeWork(activation)}
+                host.withNative {Native.documentResume(it,activation)}
+                host.documentCanvasFailure(null);trim()
                 val next=JSONObject(query(obj("op" to "view"))); view=next
                 if(next.array("tabs").length()==0) host.closeWorkspaceWindow()
-                else if(closingWindow) { waitReady(true); host.withNative { Native.dispatch(it,obj("type" to "invoke","command" to "close_document").toString()) }; host.documentChanged() }
             } catch(e:CancellationException) { throw e }
-            catch(e:Exception) { closingWindow=false; host.reportActionError(e.message ?: "Could not close drawing") }
-            finally { transition(false); if(currentCoroutineContext().isActive && selected!=0L)resume() }
+            catch(e:Exception) {
+                if(activation!=0L)host.documentCanvasFailure(e.message ?: "Drawing renderer unavailable")
+                closingWindow=false; host.reportActionError(e.message ?: "Could not close drawing")
+            }
+            finally {
+                withContext(NonCancellable) {
+                    if(prepared!=0L)host.withNative {Native.documentCancelPreparedClose(it,prepared)}
+                    if(activation!=0L)withContext(Dispatchers.IO) {Native.documentResumeFree(activation)}
+                }
+                transition(false); if(currentCoroutineContext().isActive && selected!=0L)resume()
+            }
         }
     }
     fun order(request:JSONObject) { host.viewModelScope.launch { reorder(request) } }

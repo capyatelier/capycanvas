@@ -5,7 +5,7 @@ fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
     let project = {
         let canvas = w.gpu.borrow();
         let session = &canvas.as_ref().unwrap().session;
-        session.capture_project_recovery().unwrap()
+        session.capture_artwork().unwrap()
     };
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
         let extent = project.composition().size;
@@ -177,7 +177,7 @@ fn check_gpu_failure_recovery(app: &adw::Application, color: layer_core::color::
         assert!(session.command(CommandId::SaveDocumentAs).enabled);
         assert!(session.state().document_file.modified);
         let mut bytes = Vec::new();
-        write_capture(&session.capture_project_recovery().unwrap(), &mut bytes).unwrap();
+        write_capture(&session.capture_artwork().unwrap(), &mut bytes).unwrap();
         let project = open_native_document(std::io::Cursor::new(bytes));
         assert_eq!(project.composition().color, color);
     }

@@ -16,6 +16,33 @@ private final class LanguageJob: @unchecked Sendable {
     deinit { capy_language_free(handle) }
 }
 
+private final class SessionJob: @unchecked Sendable {
+    let handle: OpaquePointer
+    private let failure: String
+    init(_ handle: OpaquePointer, failure: String) { self.handle = handle; self.failure = failure }
+    deinit { let handle = handle; NativeProjectTask.io.async { capy_session_free(handle) } }
+    func work() -> String? {
+        guard capy_session_work(handle, { uri in
+            guard let uri, let url = URL(string: String(cString: uri)), url.isFileURL else { return nil }
+            var observed: OpaquePointer?
+            do {
+                try ProjectFileIO.coordinate(url, writing: false) { source in
+                    let file = try FileHandle(forReadingFrom: source)
+                    defer { try? file.close() }
+                    observed = capy_session_destination_read(file.fileDescriptor)
+                }
+                return observed
+            } catch {
+                capy_session_destination_free(observed)
+                return nil
+            }
+        }) < 0 else { return nil }
+        guard let text = capy_session_error(handle) else { return failure }
+        defer { capy_apple_string_free(text) }
+        return String(cString: text)
+    }
+}
+
 private final class PersistenceLoad: @unchecked Sendable {
     private let lock = NSLock()
     private var loaded = EditorPersistence.Loaded()
@@ -42,6 +69,9 @@ final class NativeOwner: @unchecked Sendable {
     private var gpuHealth: DispatchSourceTimer?
     private var hdrDocument = false
     private var selectedDocument: UInt64 = 1
+    private var launchSessionPending = false
+    private var pendingClose: DocumentJob?
+    private var documentDeliveryCopy = JSON()
     /// Returning from occlusion/suspension needs a fresh frame even when the
     /// document has no further edits.
     func displayHeadroom(_ value: Double) {
@@ -105,6 +135,7 @@ final class NativeOwner: @unchecked Sendable {
         let preferredLanguages = Locale.preferredLanguages
         self.queue = queue; self.receive = receive
         self.persistence = persistence; self.managedWorkspaces = managedWorkspaces
+        launchSessionPending = persistence.root != nil
         #if DEBUG
         initialActions = fixtureActions
         workspaceInitialized = !managedWorkspaces
@@ -168,6 +199,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func publish() throws {
         if let snapshot = try request(7) {
+            if !snapshot["catalog"].isNull { documentDeliveryCopy = snapshot["catalog"]["document_delivery_copy"] }
             if !snapshot["document_tabs"].isNull { selectedDocument = snapshot["document_tabs"]["selected"].uint }
             if !snapshot["proof_panel"].isNull {
                 let hdr = snapshot["proof_panel"]["hdr"].bool
@@ -360,22 +392,50 @@ final class NativeOwner: @unchecked Sendable {
             } catch { completion(error.localizedDescription) }
         }
     }
-    /// Capture only a committed raster boundary. Active ink may continue; its
-    /// preceding committed pixels remain recoverable until the next pen-up.
-    func recoveryTask(document: UInt64? = nil, expected: (UInt64, UInt64), completion: @escaping @Sendable (NativeProjectTask?, String?) -> Void) {
+    func restoreSession(path: String, retry: Bool = false, completion: @escaping @Sendable (String?, Bool) -> Void) {
         queue.async { [self] in
-            defer { try? publish() }
-            let id = document ?? selectedDocument
-            let ready = id == selectedDocument ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : 0
-            guard ready == 0 else {
-                completion(nil, ready < 0 ? capy_apple_error(handle).map(String.init(cString:)) : nil); return
+            guard let pointer = path.withCString({ capy_apple_session_open(handle, $0, retry) }) else {
+                launchSessionPending = false
+                completion(capy_apple_error(handle).map(String.init(cString:)) ?? documentDeliveryCopy["open_operation"].string, false); return
             }
-            guard let pointer = capy_apple_document_recovery(handle, id) else {
-                completion(nil, capy_apple_error(handle).map(String.init(cString:))); return
+            let task = SessionJob(pointer, failure: documentDeliveryCopy["change_in_progress"].string)
+            NativeProjectTask.io.async { [self] in
+                if let failure = task.work() { queue.async { [self] in launchSessionPending = false; completion(failure, false) }; return }
+                queue.async { [self] in
+                    launchSessionPending = false
+                    do {
+                        try check(capy_apple_session_adopt(handle, task.handle)); try publish()
+                        NativeProjectTask.io.async {
+                            let result = capy_session_restore_finished(task.handle)
+                            let text = result < 0 ? capy_session_error(task.handle) : nil
+                            defer { if let text { capy_apple_string_free(text) } }
+                            completion(text.map(String.init(cString:)), true)
+                        }
+                    } catch { completion(error.localizedDescription, false) }
+                }
             }
-            let task = NativeProjectTask(pointer)
-            completion(capy_project_matches(pointer, expected.0, expected.1) == 1 ? task : nil, nil)
         }
+    }
+    func checkpointSession(exclusion: UInt64 = 0, cleanExit: Bool = false,
+        completion: @escaping @Sendable (String?, Bool) -> Void) {
+        let deadline = DispatchTime.now() + .seconds(30)
+        @Sendable func poll() {
+            if let pendingClose, capy_apple_document_close_validate(handle, pendingClose.handle) < 0 {
+                completion(capy_apple_error(handle).map(String.init(cString:)) ?? documentDeliveryCopy["selected_changed"].string, false); return
+            }
+            let ready = capy_apple_prepare_recovery(handle, FrameTrace.now())
+            if ready == 1 {
+                if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
+                else { completion(documentDeliveryCopy["change_in_progress"].string, false) }
+                return
+            }
+            guard ready == 0, let pointer = capy_apple_session_capture(handle, exclusion, cleanExit) else {
+                completion(capy_apple_error(handle).map(String.init(cString:)) ?? documentDeliveryCopy["change_in_progress"].string, false); return
+            }
+            let task = SessionJob(pointer, failure: documentDeliveryCopy["change_in_progress"].string)
+            NativeProjectTask.io.async { let failure = task.work(); completion(failure, capy_session_committed(task.handle)) }
+        }
+        queue.async(execute: poll)
     }
     /// Poll only while document/export shaders prepare. GPU synchronization and
     /// pixel packing happen later on the file worker through the returned job.
@@ -392,7 +452,7 @@ final class NativeOwner: @unchecked Sendable {
         }
         queue.async(execute: poll)
     }
-    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?, recovered: Bool = false,
+    func finishProject(_ task: NativeProjectTask, opening: Bool, title: String, url: URL?,
         completion: @escaping @Sendable (String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(15)
         @Sendable func attempt() {
@@ -405,8 +465,7 @@ final class NativeOwner: @unchecked Sendable {
                 try check(ready)
                 try title.withCString { name in
                     try (url?.absoluteString ?? "").withCString { uri in
-                        try check(recovered ? capy_apple_project_recover(handle, task.handle)
-                            : opening ? capy_apple_project_adopt(handle, task.handle, name, uri)
+                        try check(opening ? capy_apple_project_adopt(handle, task.handle, name, uri)
                             : capy_apple_project_saved(handle, task.handle, name, uri))
                     }
                 }
@@ -421,7 +480,9 @@ final class NativeOwner: @unchecked Sendable {
         init(_ handle: OpaquePointer) { self.handle = handle }
         deinit { let pointer = handle; NativeProjectTask.io.async { capy_document_free(pointer) } }
     }
-    func switchDocument(_ id: UInt64, closing: Bool = false, completion: @escaping @Sendable (String?) -> Void) {
+    func switchDocument(_ id: UInt64, closing: Bool = false,
+        removing: (@Sendable (@escaping @Sendable (Bool) -> Void) -> Void)? = nil,
+        completion: @escaping @Sendable (String?) -> Void) {
         let deadline = DispatchTime.now() + .seconds(15)
         @Sendable func attempt() {
             do {
@@ -432,7 +493,23 @@ final class NativeOwner: @unchecked Sendable {
                 }
                 try check(ready)
                 guard let task = capy_apple_document_switch(handle, id, closing) else { try check(-1); return }
-                runDocumentJob(DocumentJob(task), completion: completion)
+                let job = DocumentJob(task)
+                if closing {
+                    guard let removing else {
+                        try check(capy_apple_document_close_commit(handle, task, false))
+                        completion(documentDeliveryCopy["close_operation"].string); return
+                    }
+                    pendingClose = job
+                    removing { [self, job] accepted in queue.async { [self, job] in
+                        do {
+                            pendingClose = nil
+                            try check(capy_apple_document_close_commit(handle, job.handle, accepted))
+                            try publish()
+                            if accepted { runDocumentJob(job, completion: completion) }
+                            else { completion(documentDeliveryCopy["close_operation"].string) }
+                        } catch { completion(error.localizedDescription) }
+                    } }
+                } else { runDocumentJob(job, completion: completion) }
             } catch { completion(error.localizedDescription) }
         }
         queue.async(execute: attempt)
@@ -646,7 +723,7 @@ final class NativeOwner: @unchecked Sendable {
     }
     private func applyInitialActions() throws {
         #if DEBUG
-        guard workspaceInitialized && surfaceSized && canvasReady else { return }
+        guard workspaceInitialized && surfaceSized && canvasReady && !launchSessionPending else { return }
         if initialActions.contains(where: { $0["type"].string == "workspace_manager" }) {
             // Workspace fixture commands have the same idle requirement as
             // their UI entries.
@@ -680,6 +757,7 @@ final class NativeOwner: @unchecked Sendable {
         let observation = trace.flatMap { $0.isRecording ? $0 : nil }
         let queued = observation == nil ? 0 : FrameTrace.now()
         perform { [self] in
+            guard !launchSessionPending else { return }
             let start = observation == nil ? 0 : FrameTrace.now()
             var succeeded = false
             defer {

@@ -64,8 +64,7 @@ struct ApplicationMenuButton<Label: View>: View {
         #if os(iOS)
         EditorMenuButton(menu: {
             AppleContextMenu(model) { action in
-                if action["type"].string == "apple_recovery" { store.recovery.refresh(); store.recovery.presented = true }
-                else { store.dispatch(action) }
+                store.dispatch(action)
             }
         }, identifier: "application-menu-content", label: label)
             .disabled(!store.snapshot["preferences"].isNull)
@@ -86,14 +85,7 @@ struct ApplicationMenuButton<Label: View>: View {
 
 @MainActor func editorApplicationMenu(_ store: EditorStore, id: String? = nil) -> JSON {
     func catalog(_ id: String) -> JSON {
-        var value = store.applicationMenu(id)["model"]
-        if id == "file" {
-            value = value.replacing("sections", with: JSON(value["sections"].array.map(\.raw) + [[[
-                "label": "Recovered Drawings…", "enabled": store.snapshot["preferences"].isNull && !store.projectFiles.busy,
-                "action": ["type": "apple_recovery"]
-            ]]]))
-        }
-        return value
+        store.applicationMenu(id)["model"]
     }
     if let id { return catalog(id) }
     let primary = store.snapshot["header"]["primary_menu"]
@@ -117,11 +109,7 @@ struct CatalogMenuItems: View {
         }.filter { !$0.isEmpty })
         MenuItems(store: store, sections: sections, usesShortcuts: true)
             .disabled(!store.snapshot["preferences"].isNull)
-        if id == "file" {
-            Divider()
-            Button("Recovered Drawings…") { store.recovery.refresh(); store.recovery.presented = true }
-                .disabled(!store.snapshot["preferences"].isNull || store.projectFiles.busy)
-        }
+
     }
 }
 

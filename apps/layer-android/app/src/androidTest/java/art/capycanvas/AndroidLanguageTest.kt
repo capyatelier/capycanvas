@@ -542,9 +542,7 @@ class AndroidLanguageTest {
                         switch(host, tag)
                         idle("before saved fixture")
                         val file = File(device.root, "$theme-$tag-日本-ไทย-Tiếng Việt.capy")
-                        val selected = tabs().getLong("selected")
-                        val capture = native { Native.projectRecoveryFor(it, selected) }
-                        try { Native.projectPublish(capture, file.absolutePath) } finally { Native.projectFree(capture) }
+                        host.writeDrawingCopy(file)
                         val count = tabs().array("tabs").length()
                         compose.runOnIdle { assertTrue(host.documents.openUris(listOf(Uri.fromFile(file)))) }
                         host.awaitMain("saved Unicode fixture reopened", 120_000, { tabs().toString() }, compose) { host.drawingTabs.rows.size == count + 1 && !host.documents.working && !host.drawingTabs.blocked }

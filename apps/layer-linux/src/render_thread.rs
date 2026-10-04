@@ -80,6 +80,7 @@ struct Frame {
     commit_rasters: bool,
     blend_space: layer_core::BlendSpace,
     geometry: Geometry,
+    present: bool,
     surround: [f32; 4],
     picker: Option<layer_render::ColorPickerOverlay>,
     cursor: Vec<CursorSegment>,
@@ -297,6 +298,7 @@ pub struct RenderWorker {
     effect_validation_pending: bool,
     effect_validation: Option<layer_render::EffectValidationResult>,
     pub(super) geometry: Option<Geometry>,
+    pub(super) present_frames: bool,
     pub(super) surround: [f32; 4],
     pub(super) picker: Option<layer_render::ColorPickerOverlay>,
     pub(super) cursor: Vec<CursorSegment>,
@@ -501,6 +503,7 @@ impl RenderWorker {
             effect_validation_pending: false,
             effect_validation: None,
             geometry: None,
+            present_frames: true,
             surround: [0.033; 4],
             picker: None,
             cursor: Vec::new(),
@@ -556,6 +559,7 @@ impl RenderWorker {
         transform: bool,
         mode: StartupMode,
     ) -> Result<(), String> {
+        self.present_frames=matches!(mode,StartupMode::VisibleFirst);
         self.startup_generation += 1;
         self.startup_key = Some((layer_render_wgpu::ShaderDocument::new(&document), brush.clone(), transform));
         self.startup = Default::default();
@@ -1024,6 +1028,7 @@ impl CanvasRenderer for RenderWorker {
             commit_rasters: packet.commit_rasters,
             blend_space: packet.blend_space,
             geometry,
+            present: self.present_frames,
             surround: self.surround,
             picker: self.picker,
             cursor: self.cursor.clone(),
@@ -1782,7 +1787,7 @@ impl Worker {
         {
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
-        self.set_view(frame.view, frame.geometry, frame.surround);
+        if frame.present {self.set_view(frame.view, frame.geometry, frame.surround);}
         #[cfg(test)]
         timing.rendering(&self.renderer);
         self.renderer
@@ -1818,6 +1823,7 @@ impl Worker {
         }
         #[cfg(test)]
         timing.mark(0);
+        if !frame.present {return Ok(());}
         self.picker = frame.picker;
         self.presenter.set_color_picker(&self.renderer, self.picker);
         self.cursor.clone_from(&frame.cursor);

@@ -24,7 +24,7 @@ export function createRasterWorker() {
       else if (data.error) job.reject(new Error(data.error)); else job.resolve(data.result);
       // Wasm heaps cannot shrink. Release an oversized idle file arena after
       // its transferred result is owned by the editor and no OPFS job is live.
-      if(kind==="files" && data.retire && !pending.size)idleTimer=setTimeout(()=>{
+      if((kind==="files"||kind==="checkpoint") && data.retire && !pending.size)idleTimer=setTimeout(()=>{
         if(!pending.size){worker.terminate();owners.delete(kind);}
       },5000);
     };
@@ -54,8 +54,8 @@ export function createRasterWorker() {
       try{const output=await send(state,request,cancelled);outputs.set(output.token,state);return output;}
       catch(error){state.fail(error);throw error;}
     }
-    if(op==='recover-write'){const state=owner(`archive:${++next}`);try{return await send(state,request,cancelled);}finally{state.fail(new DOMException('Archive finished','AbortError'));}}
-    if(op==='read'){
+    if(['restart-begin','restart-write','restart-retain'].includes(op))return send(owner('checkpoint'),request,cancelled);
+    if(op==='read'||op==='restart-open'){
       const state=owner(`read:${++next}`);reads.add(state);
       try{return await send(state,request,cancelled);}finally{reads.delete(state);state.fail(new DOMException('Reading finished','AbortError'));}
     }

@@ -30,7 +30,6 @@ pub struct WebProject {
     request: u32,
     epoch: u64,
     revision: u64,
-    recovered: bool,
     source: layer_ui::ImportSource,
     placed: Option<std::sync::Arc<layer_core::color::source::SourceImage>>,
     source_name: String,
@@ -161,16 +160,6 @@ impl WebApp {
             artwork_transfer::save(project).await
         }))
     }
-    pub fn recovery_update(&self, state: &str, event: JsValue) -> Result<JsValue, JsValue> {
-        let event = serde_wasm_bindgen::from_value(event).map_err(js)?;
-        serialize(&layer_ui::recovery::recovery_update(state, event).map_err(js)?)
-    }
-    pub fn save_recovery(&self, key: String) -> Result<js_sys::Promise, JsValue> {
-        let project = self.session.capture_project_recovery().map_err(js)?;
-        Ok(future_to_promise(async move {
-            artwork_transfer::save_recovery(project, key).await
-        }))
-    }
     pub fn prepare_document(
         &self,
         id: u32,
@@ -179,7 +168,6 @@ impl WebApp {
         height: u32,
         epoch: u64,
         revision: u64,
-        recovered: Option<bool>,
         source_name: Option<String>,
         options: JsValue,
         interpret: Option<js_sys::Function>,
@@ -193,17 +181,7 @@ impl WebApp {
                 "The document changed while choosing a file; review those changes first",
             ));
         }
-        let recovered = recovered.unwrap_or(false);
-        if recovered
-            && (id != 0
-                || bytes.is_none()
-                || self.session.state().document_file.busy)
-        {
-            return Err(js("Recovery requires an idle drawing"));
-        }
-        let request = if recovered {
-            Some(DocumentRequest::Open)
-        } else {
+        let request =
             self.session.state().requests.iter().find_map(|r| {
                 if r.id == id {
                     if let HostRequestKind::Document { request } = &r.kind {
@@ -215,7 +193,6 @@ impl WebApp {
                     None
                 }
             })
-        }
         .ok_or_else(|| js("The document request is no longer active"))?;
         if !matches!(
             (&request, &bytes),
@@ -279,7 +256,7 @@ impl WebApp {
                             dimension: limits.dimension,
                             photo_policy,
                             names: layer_ui::photo_document_names(&source_name, &localization),
-                            intent: if recovered { layer_ui::ImportIntent::Recovery } else if placing { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
+                            intent: if placing { layer_ui::ImportIntent::Place } else { layer_ui::ImportIntent::Open },
                             source_bytes: None,
                         },
                     )
@@ -290,7 +267,7 @@ impl WebApp {
             check_cancelled()?;
             let (mut imported,fallback)=match imported {
                 artwork_transfer::Opened::Editable {document,fallback}=>(document,fallback),
-                artwork_transfer::Opened::Package {presentation,preview}=>return Ok(WebProject{session:None,request:id,epoch,revision,recovered:false,source:layer_ui::ImportSource::Master,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into()),
+                artwork_transfer::Opened::Package {presentation,preview}=>return Ok(WebProject{session:None,request:id,epoch,revision,source:layer_ui::ImportSource::Master,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into()),
             };
             check_cancelled()?;
             if let Some(source) = imported.interpretation_required(photo_policy) {
@@ -318,7 +295,6 @@ impl WebApp {
                     request: id,
                     epoch,
                     revision,
-                    recovered: false,
                     source: source_kind,
                     placed: Some(source),
                     source_name: project.scene().order().first().and_then(|h|project.scene().occurrence(*h)).map(|o|o.name.to_string()).unwrap_or_default(),
@@ -328,60 +304,8 @@ impl WebApp {
                 }
                 .into());
             }
-            let prepared:Result<_,JsValue>=async {
-            hdr::admit_document(&project)?;
             admission.admit(&project).map_err(|reason|js(reason.message(&localization)))?;
-            let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
-                adapter,
-                device,
-                queue,
-                project.composition().color,
-            )
-            .map_err(js)?;
-            raster_worker::install(&mut renderer);
-            let programs=project.artwork.definitions.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
-            let mut validating = !programs.is_empty();
-            if validating {
-                renderer
-                    .request_effect_validation(layer_render::EffectValidationRequest {
-                        request_id: 1,
-                        retained_programs: programs.clone(),
-                        programs,
-                    })
-                    .map_err(js)?;
-            }
-            renderer
-                .prepare_startup(&project, &brush, false)
-                .map_err(js)?;
-            let start = js_sys::Date::now();
-            loop {
-                check_cancelled()?;
-                renderer.compile_startup_step(false).await.map_err(js)?;
-                if validating && let Some(result) = renderer.take_effect_validation() {
-                    result.result.map_err(js)?;
-                    validating = false;
-                }
-                let ready = renderer.poll_startup().map_err(js)?;
-                if !validating && ready.canvas_ready && ready.brush_ready {
-                    break;
-                }
-                if js_sys::Date::now() - start > 60_000. {
-                    return Err(js("Project canvas preparation timed out"));
-                }
-                yield_browser().await?;
-            }
-            let mut candidate = UiSession::from_project_localized(
-                AttachedRenderer(Some(Box::new(renderer))),
-                project,
-                None,
-                viewport,
-                layer_ui::Platform::Web,
-                localization,
-            )
-            .map_err(js)?;
-            candidate.frame(0, 0).map_err(js)?;
-            Ok(candidate)
-            }.await;
+            let prepared=prepare_session(project,adapter,device,queue,&brush,viewport,localization,cancelled.as_ref()).await;
             let candidate=match prepared {
                 Ok(candidate)=>candidate,
                 Err(error)=>{
@@ -389,7 +313,7 @@ impl WebApp {
                     if lost.lock().unwrap().is_some(){return Err(error);}
                     if let Some((mut presentation,preview))=fallback {
                         presentation.reason=error.as_string().unwrap_or_else(||format!("{error:?}"));
-                        return Ok(WebProject {session:None,request:id,epoch,revision,recovered:false,source:source_kind,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into());
+                        return Ok(WebProject {session:None,request:id,epoch,revision,source:source_kind,placed:None,source_name,target,lost,package:Some((presentation,preview))}.into());
                     }
                     return Err(error);
                 }
@@ -399,7 +323,6 @@ impl WebApp {
                 request: id,
                 epoch,
                 revision,
-                recovered,
                 source: source_kind,
                 placed: None,
                 source_name,
@@ -463,7 +386,6 @@ impl WebApp {
         { return Err(js("The drawing changed while opening; try again")); }
         let mut candidate = *project.session.take().ok_or_else(|| js("Project already adopted"))?;
         candidate.initialize_document_location(location).map_err(js)?;
-        if project.recovered { candidate.mark_recovered(); }
         candidate.set_document_replacement(false);
         candidate.inherit_window_state(&self.session).map_err(js)?;
         candidate.inherit_initial_drawing_tools(&self.session).map_err(js)?;
@@ -491,4 +413,62 @@ impl WebApp {
 pub fn raster_worker_properties(metadata: &str) -> Result<JsValue, JsValue> {
     let info: layer_color::DocumentInfo = serde_json::from_str(metadata).map_err(js)?;
     serialize(&info.inspect().map_err(js)?)
+}
+
+pub(super) async fn prepare_session(
+    project:layer_core::Document,adapter:wgpu::Adapter,device:wgpu::Device,queue:wgpu::Queue,
+    brush:&layer_core::BrushSnapshot,viewport:[u32;2],localization:std::sync::Arc<layer_ui::Localizer>,
+    cancelled:Option<&js_sys::Function>,
+)->Result<UiSession<AttachedRenderer>,JsValue>{
+    hdr::admit_document(&project)?;
+    let mut renderer = WgpuRasterizer::from_wgpu_native_staged(
+        adapter,
+        device,
+        queue,
+        project.composition().color,
+    )
+    .map_err(js)?;
+    raster_worker::install(&mut renderer);
+    let programs=project.artwork.definitions.iter().map(|(_,_,d)|d.program.clone()).collect::<Vec<_>>();
+    let mut validating = !programs.is_empty();
+    if validating {
+        renderer
+            .request_effect_validation(layer_render::EffectValidationRequest {
+        request_id: 1,
+        retained_programs: programs.clone(),
+        programs,
+            })
+            .map_err(js)?;
+    }
+    renderer
+        .prepare_startup(&project, &brush, false)
+        .map_err(js)?;
+    let start = js_sys::Date::now();
+    loop {
+        if let Some(check)=cancelled {if check.call0(&JsValue::NULL)?.as_bool()==Some(true){return Err(js("Opening cancelled"));}}
+        renderer.compile_startup_step(false).await.map_err(js)?;
+        if validating && let Some(result) = renderer.take_effect_validation() {
+            result.result.map_err(js)?;
+            validating = false;
+        }
+        let ready = renderer.poll_startup().map_err(js)?;
+        if !validating && ready.canvas_ready && ready.brush_ready {
+            break;
+        }
+        if js_sys::Date::now() - start > 60_000. {
+            return Err(js("Project canvas preparation timed out"));
+        }
+        yield_browser().await?;
+    }
+    let mut candidate = UiSession::from_project_localized(
+        AttachedRenderer(Some(Box::new(renderer))),
+        project,
+        None,
+        viewport,
+        layer_ui::Platform::Web,
+        localization,
+    )
+    .map_err(js)?;
+    candidate.frame(0, 0).map_err(js)?;
+    Ok(candidate)
 }

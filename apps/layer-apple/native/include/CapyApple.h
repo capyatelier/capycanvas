@@ -21,21 +21,36 @@ void capy_apple_destroy(CapyApple *app);
 const char *capy_apple_error(const CapyApple *app); /* borrowed until next call */
 void capy_apple_string_free(char *text);
 typedef struct CapyDocumentTask CapyDocumentTask;
+typedef struct CapySessionTask CapySessionTask;
+typedef struct CapySessionDestination CapySessionDestination;
+typedef CapySessionDestination *(*CapySessionDestinationObserver)(const char *uri);
+CapySessionTask *capy_apple_session_open(CapyApple *app, const char *path, bool retry);
+CapySessionTask *capy_apple_session_capture(CapyApple *app, uint64_t exclusion, bool clean_exit);
+int32_t capy_session_work(CapySessionTask *task, CapySessionDestinationObserver observe);
+CapySessionDestination *capy_session_destination_read(int32_t fd);
+void capy_session_destination_free(CapySessionDestination *fingerprint);
+int32_t capy_apple_session_adopt(CapyApple *app, CapySessionTask *task);
+int32_t capy_session_restore_finished(CapySessionTask *task);
+char *capy_session_error(const CapySessionTask *task);
+bool capy_session_committed(const CapySessionTask *task);
+void capy_session_free(CapySessionTask *task);
 CapyDocumentTask *capy_apple_document_switch(CapyApple *app, uint64_t id, bool closing);
 int32_t capy_apple_document_prepare_switch(CapyApple *app, uint64_t now);
 CapyDocumentTask *capy_apple_document_storage(CapyApple *app);
 int32_t capy_document_prepare(CapyDocumentTask *task, const char *directory);
+int32_t capy_apple_document_close_commit(CapyApple *app, CapyDocumentTask *task, bool accept);
+int32_t capy_apple_document_close_validate(CapyApple *app, const CapyDocumentTask *task);
 int32_t capy_apple_document_resume(CapyApple *app, CapyDocumentTask *task);
 void capy_document_free(CapyDocumentTask *task);
 typedef struct CapyProjectTask CapyProjectTask;
 int32_t capy_apple_project_prepare_adopt(CapyApple *app, const CapyProjectTask *task, uint64_t now);
-CapyProjectTask *capy_apple_document_recovery(CapyApple *app, uint64_t id);
 /* Capture/context and adopt/saved run on the editor owner. read/write/free run
    on the file worker. Jobs own immutable data, never an editor pointer. */
-/* kind: 0 save, 1 open, 2 recovery, 3 Place/Paste, 4 color/history, 5 properties, 6 source, 7 histogram. */
+/* kind: 0 save, 1 open, 3 Place/Paste, 4 color/history, 5 properties, 6 source, 7 histogram. */
 CapyProjectTask *capy_apple_project_task(CapyApple *app, uint32_t kind, const char *placement);
 int32_t capy_apple_project_ready(CapyApple *app); /* 0 ready, 1 preparing filters, -1 interaction/error */
 int32_t capy_project_matches(const CapyProjectTask *task, uint64_t epoch, uint64_t revision);
+int32_t capy_project_destination_matches(const CapyProjectTask *task, int32_t descriptor, const char *uri);
 int32_t capy_project_write(const CapyProjectTask *task, int32_t fd);
 int32_t capy_project_export_preview(const CapyProjectTask *task, int32_t fd);
 int32_t capy_apple_export_task(CapyApple *app, uint32_t id, uint64_t now, CapyProjectTask **output);
@@ -78,9 +93,7 @@ char *capy_project_package_summary(const CapyProjectTask *task);
 /* Worker only; bounded straight sRGB RGBA8, retained by task until free. */
 int32_t capy_project_package_preview(const CapyProjectTask *task, CapyProjectPreview *output);
 int32_t capy_apple_project_adopt(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
-int32_t capy_apple_project_recover(CapyApple *app, const CapyProjectTask *task);
 int32_t capy_apple_prepare_recovery(CapyApple *app, uint64_t now); /* 0 capturable, 1 preparing, -1 error; not durable */
-char *capy_recovery_update(const char *state_json, const char *event_json); /* shared policy; opaque state, owned result/error JSON */
 int32_t capy_apple_project_saved(CapyApple *app, const CapyProjectTask *task, const char *title, const char *uri);
 int32_t capy_apple_document_complete(CapyApple *app, uint32_t id, uint32_t succeeded);
 int32_t capy_apple_document_close(CapyApple *app, uint32_t id, uint32_t decision);

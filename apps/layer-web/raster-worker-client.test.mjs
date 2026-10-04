@@ -96,8 +96,9 @@ test('separate save outputs retain independent owners',()=>withFixture(async f=>
   const closeSecond=f.run(request('output-close',{metadata:'second'}));b.reply(true);await closeSecond;assert.equal(b.terminated,true);
 }));
 
-test('failed saves and completed recovery release archive workers',()=>withFixture(async f=>{
+test('failed saves release archive workers and checkpoints reuse their cache owner',()=>withFixture(async f=>{
   const pending=f.run(request('write'));const rejected=assert.rejects(pending,/Publication failed/);
   f.workers[0].reply(undefined,{error:'Publication failed'});await rejected;assert.equal(f.workers[0].terminated,true);
-  const recovery=f.run(request('recover-write'));f.workers[1].reply(true);assert.equal(await recovery,true);assert.equal(f.workers[1].terminated,true);
+  const recovery=f.run(request('restart-write'));f.workers[1].reply(true);assert.equal(await recovery,true);assert.equal(f.workers[1].terminated,false);
+  const begin=f.run(request('restart-begin'));f.workers[1].reply([]);assert.deepEqual(await begin,[]);assert.equal(f.workers.length,2);
 }));

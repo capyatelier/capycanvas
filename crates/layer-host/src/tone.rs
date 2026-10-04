@@ -170,7 +170,7 @@ impl ToneService {
                 .changed
                 .is_none_or(|v| v.elapsed() >= Duration::from_millis(180))
         {
-            let project = s.capture_project_recovery()?;
+            let project = s.capture_artwork()?;
             let capture = gpu.snapshot_gpu();
             let key = self.wanted.clone().unwrap();
             let control = CaptureControl::default();

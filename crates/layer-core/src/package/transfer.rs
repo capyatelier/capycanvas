@@ -5,13 +5,14 @@ use serde_json::{Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, mem::MaybeUninit, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TransferLayout {
     compositions: Vec<PortableId>, stacks: Vec<PortableId>, occurrences: Vec<PortableId>,
     paint: Vec<PortableId>, coverage: Vec<PortableId>, effects: Vec<PortableId>,
     definitions: Vec<PortableId>, selections: Vec<PortableId>, guides: Vec<PortableId>, outputs: Vec<PortableId>,
 }
 impl TransferLayout {
-    fn capture(art: &Artwork)->Self {
+    pub(crate) fn capture(art: &Artwork)->Self {
         fn slots<T>(store:&Store<T>)->Vec<PortableId>{(0..store.capacity()).map(|i|store.id(Handle::from_index(i as u32)).unwrap()).collect()}
         Self {compositions:slots(&art.compositions),stacks:slots(&art.stacks),occurrences:slots(&art.occurrences),paint:slots(&art.paint),coverage:slots(&art.coverage),effects:slots(&art.effects),definitions:slots(&art.definitions),selections:slots(&art.selections),guides:slots(&art.guides),outputs:slots(&art.outputs)}
     }
@@ -46,7 +47,9 @@ pub struct TransferDescriptor {
     resources: BTreeMap<PortableId,VerifiedResource>,
     selections: Vec<SelectionTransfer>,
     retained_resources: BTreeMap<PortableId,usize>,
+    private_resources:BTreeMap<PortableId,(Value,usize)>,
 }
+#[derive(Clone)]
 enum TransferPayload {Bytes(Arc<[u8]>),Tile(Arc<crate::raster::TileBlob>),Code(Resource<str>),Words(Arc<[u32]>),Opaque(Arc<OpaqueResource>)}
 impl TransferPayload {
     fn len(&self)->u64 {match self {Self::Bytes(v)=>v.len() as u64,Self::Tile(v)=>v.compressed_len() as u64,Self::Code(v)=>v.len() as u64,Self::Words(v)=>v.len() as u64*4,Self::Opaque(v)=>v.length}}
@@ -74,15 +77,18 @@ impl PreparedTransfer {
         Self::capture_with_selection(capture,&None,cancel)
     }
     pub fn capture_with_selection(capture:&ArtworkCapture,selection:&Option<crate::Selection>,cancel:&AtomicBool)->Result<Self,String>{
+        Self::capture_with_additional(capture,selection,ResourceInventory::for_transfer(),BTreeMap::new(),cancel)
+    }
+    pub(crate) fn capture_with_additional(capture:&ArtworkCapture,selection:&Option<crate::Selection>,inventory:ResourceInventory,mut additional_luts:BTreeMap<PortableId,Arc<Lut3d>>,cancel:&AtomicBool)->Result<Self,String>{
         active(cancel)?;let art=&capture.artwork;
         if capture.checkpoint.document!=art.id{return Err("Capture belongs to another artwork".into());}
         if art.paint.iter().any(|(_,_,s)|!s.operations.is_empty())||art.coverage.iter().any(|(_,_,s)|!s.operations.is_empty()){return Err("Wait for the current edit before transferring".into());}
-        let (mut objects,mut inventory)=artwork_records::encode_with_inventory(art,cancel,ResourceInventory::for_transfer())?;
+        let (mut objects,mut inventory)=artwork_records::encode_with_inventory(art,cancel,inventory)?;
         let working_selection=selection.as_ref().map(|selection|super::selection_records::encode_selection(selection,&mut inventory)).transpose()?;
         let live=objects.iter().map(|r|r["id"].as_str().ok_or("Missing object ID")?.parse().map_err(str::to_string)).collect::<Result<BTreeSet<_>,String>>()?;
         let (extensions,opaque)=art.extensions.edited_retained(&live)?;objects.extend(extensions);
         let mut roots=crate::RootInventory::default();roots.artwork(art);
-        let luts:BTreeMap<_,_>=roots.resources.into_iter().filter_map(|lut|lut.resource().map(|r|(r.id(),lut))).collect();
+        additional_luts.extend(roots.resources.into_iter().filter_map(|lut|lut.resource().map(|r|(r.id(),lut.clone()))));let luts=additional_luts;
         let mut payloads=Vec::new();let mut verification=BTreeMap::new();let mut records=Vec::new();
         fn push(payloads:&mut Vec<TransferPayload>,payload:TransferPayload)->usize{let id=payloads.len();payloads.push(payload);id}
         fn encoded(payloads:&mut Vec<TransferPayload>,bytes:Option<&EncodedBytes>)->Option<EncodedPayload>{bytes.map(|v|EncodedPayload{encoding:v.encoding,payload:push(payloads,TransferPayload::Bytes(v.bytes.clone()))})}
@@ -114,7 +120,7 @@ impl PreparedTransfer {
                 let record=records.iter_mut().find(|record|record["id"]==json!(resource.id)).unwrap();
                 *record=resource.record(json!({"member":format!("data/{}",resource.id)}));
                 let shared=match &verification[&resource.id] {
-                    VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,..}=>{
+                    VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,digest:_,spaces:_}=>{
                         if resource.encoding.as_ref()=="capy.lz4-bytes/1" {encoded.as_ref().filter(|e|e.encoding==ResourceEncoding::Lz4).map(|e|e.payload)}else{Some(*payload)}
                     },
                     VerifiedResource::Tile{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>Some(*payload),
@@ -132,8 +138,54 @@ impl PreparedTransfer {
             "outputs":art.outputs.iter().map(|(_,id,_)|resources::reference(id)).collect::<Vec<_>>(),"default_output":resources::reference(art.outputs.id(art.default_output).ok_or("Missing output")?)});
         let metadata:serde_json::Map<_,_>=["exif","xmp","iptc"].into_iter().zip(art.metadata.blocks()).filter_map(|(kind,bytes)|bytes.as_ref().map(|b|(kind.to_string(),resources::reference(b.id())))).collect();
         if !metadata.is_empty(){value["metadata"]=Value::Object(metadata);}
-        let descriptor=TransferDescriptor {manifest:value,layout:TransferLayout::capture(art),checkpoint:capture.checkpoint,working_selection,lengths:payloads.iter().map(TransferPayload::len).collect(),resources:verification,selections,retained_resources};
+        let descriptor=TransferDescriptor {manifest:value,layout:TransferLayout::capture(art),checkpoint:capture.checkpoint,working_selection,lengths:payloads.iter().map(TransferPayload::len).collect(),resources:verification,selections,retained_resources,private_resources:BTreeMap::new()};
         Ok(Self {descriptor,payloads})
+    }
+    pub(crate) fn append_private_resource(&mut self,resource:Arc<OpaqueResource>)->Result<(),String>{
+        if self.descriptor.private_resources.contains_key(&resource.id){return Err("Duplicate private transfer resource".into());}
+        let index=self.payloads.len();let record=resource.record(json!({"member":format!("private/{}",resource.id)}));
+        self.descriptor.lengths.push(resource.length);self.descriptor.private_resources.insert(resource.id,(record,index));
+        self.payloads.push(TransferPayload::Opaque(resource));Ok(())
+    }
+    pub(crate) fn private_resource(&self,id:PortableId)->Result<Arc<OpaqueResource>,String>{
+        let (record,index)=self.descriptor.private_resources.get(&id).ok_or("Missing private transfer resource")?;
+        if let Some(TransferPayload::Opaque(resource))=self.payloads.get(*index){return Ok(resource.clone());}
+        let bytes=self.bytes(*index)?;let length=bytes.len() as u64;
+        if super::manifest::decimal_u64(&record["bytes"]).map_err(|e|e.to_string())?!=length{return Err("Private resource length mismatch".into());}
+        let crc32=u32::from_str_radix(record["crc32"].as_str().ok_or("Missing private resource checksum")?,16).map_err(|e|e.to_string())?;
+        let mut extra=record.as_object().ok_or("Invalid private resource record")?.clone();for key in ["id","type","data","encoding","location","bytes","crc32"]{extra.remove(key);}
+        let backing=ImmutableBacking::new(Arc::new(bytes)).map_err(str::to_string)?;
+        Ok(Arc::new(OpaqueResource {id,kind:record["type"].as_str().ok_or("Missing private resource type")?.into(),data:record["data"].clone(),
+            encoding:record["encoding"].as_str().ok_or("Missing private resource encoding")?.into(),extra_fields:extra,backing,offset:0,length,crc32}))
+    }
+    fn payload_keys(&self)->Result<BTreeMap<Vec<u8>,usize>,String> {
+        let mut keys=BTreeMap::new();
+        let records=self.descriptor.manifest["resources"].as_array().ok_or("Missing transfer resources")?.iter().map(|record|{
+            let id:PortableId=record["id"].as_str().ok_or("Missing transfer resource identity")?.parse().map_err(str::to_string)?;Ok((id,record))
+        }).collect::<Result<BTreeMap<_,_>,String>>()?;
+        let mut add=|id:PortableId,role:&str,payload:usize,extra:Value|->Result<(),String>{
+            let mut record=(*records.get(&id).ok_or("Missing transfer resource descriptor")?).clone();
+            record.as_object_mut().ok_or("Invalid transfer resource descriptor")?.remove("location");
+            let key=serde_json::to_vec(&json!({"resource":record,"role":role,"extra":extra,"bytes":*self.descriptor.lengths.get(payload).ok_or("Missing transfer payload length")?})).map_err(|e|e.to_string())?;
+            if keys.insert(key,payload).is_some(){return Err("Ambiguous transfer payload identity".into());}Ok(())
+        };
+        for (id,state) in &self.descriptor.resources {match state {
+            VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}=>{add(*id,"raw",*payload,Value::Null)?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!(encoded.encoding))?;}},
+            VerifiedResource::Lut{payload,encoded,digest,spaces}=>{add(*id,"raw",*payload,json!([digest,spaces]))?;if let Some(encoded)=encoded {add(*id,"encoded",encoded.payload,json!([encoded.encoding,digest,spaces]))?;}},
+            VerifiedResource::Coverage{payload:Some(payload)}|VerifiedResource::Tile{payload}|VerifiedResource::Opaque{payload}=>add(*id,"raw",*payload,Value::Null)?,
+            VerifiedResource::Coverage{payload:None}=>(),
+        }}
+        for (id,payload) in &self.descriptor.retained_resources {add(*id,"retained",*payload,Value::Null)?;}
+        for (id,(record,payload)) in &self.descriptor.private_resources {
+            let mut record=record.clone();record.as_object_mut().ok_or("Invalid private resource descriptor")?.remove("location");
+            let key=serde_json::to_vec(&json!({"private":id,"record":record,"length":self.descriptor.lengths.get(*payload).ok_or("Missing private resource payload")?})).map_err(|e|e.to_string())?;
+            if keys.insert(key,*payload).is_some(){return Err("Ambiguous private payload identity".into());}
+        }
+        for selection in &self.descriptor.selections {
+            let key=serde_json::to_vec(&json!({"selection":selection.chunks,"extent":selection.extent,"bounds":selection.bounds,"bytes":selection.bytes,"length":*self.descriptor.lengths.get(selection.payload).ok_or("Missing selection payload length")?})).map_err(|e|e.to_string())?;
+            if keys.insert(key,selection.payload).is_some(){return Err("Ambiguous selection payload identity".into());}
+        }
+        Ok(keys)
     }
     pub fn descriptor(&self)->&TransferDescriptor{&self.descriptor}
     pub fn payload_count(&self)->usize{self.payloads.len()}
@@ -151,9 +203,15 @@ impl PreparedTransfer {
         self.adopt_verified_with_selection(limits,cancel).map(|(capture,_)|capture)
     }
     pub fn adopt_verified_with_selection(&self,limits:ProjectLimits,cancel:&AtomicBool)->Result<(ArtworkCapture,Option<crate::Selection>),String>{
+        self.adopt_verified_with_retention(limits,cancel,false,|_,_|Ok(())).map(|(capture,selection,())|(capture,selection))
+    }
+    pub(crate) fn adopt_verified_with<T>(&self,limits:ProjectLimits,cancel:&AtomicBool,additional:impl FnOnce(&Artwork,&mut ResourceReader<'_>)->Result<T,String>)->Result<(ArtworkCapture,Option<crate::Selection>,T),String>{
+        self.adopt_verified_with_retention(limits,cancel,true,additional)
+    }
+    fn adopt_verified_with_retention<T>(&self,limits:ProjectLimits,cancel:&AtomicBool,retained:bool,additional:impl FnOnce(&Artwork,&mut ResourceReader<'_>)->Result<T,String>)->Result<(ArtworkCapture,Option<crate::Selection>,T),String>{
         active(cancel)?;let manifest=manifest(&self.descriptor,limits)?;
         let empty:Arc<[u8]>=Arc::from([]);let backing=ImmutableBacking::new(Arc::new(empty)).map_err(str::to_string)?;
-        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.require_verified();
+        let mut reader=if retained {ResourceReader::for_history(&manifest,&backing,cancel,limits)}else{ResourceReader::new(&manifest,&backing,cancel,limits)};reader.require_verified();
         if manifest.resources.len()!=self.descriptor.resources.len()||self.descriptor.checkpoint.document!=manifest.document{return Err("Transfer identity inventory mismatch".into());}
         let mut decoded=0u64;
         for (id,state) in &self.descriptor.resources {
@@ -172,7 +230,8 @@ impl PreparedTransfer {
             let record=&manifest.resources[id].value;if record["type"]!="capy.raster-tile/1"{return Err("Transfer tile type mismatch".into());}
             let descriptor=resources::parse_descriptor(&record["data"]).map_err(|e|e.to_string())?;
             let profile=record["data"].get("profile").map(|r|{let id=resources::reference_id(r).map_err(|e|e.to_string())?;reader.bytes.get(&id).cloned().ok_or_else(||"Missing verified tile profile".to_string())}).transpose()?;
-            decoded=decoded.saturating_add(descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64);
+            let raw=descriptor.byte_len([super::RASTER_TILE_SIZE;2]).ok_or("Invalid verified tile descriptor")? as u64;
+            decoded=decoded.saturating_add(if retained {self.payload_len(*payload)?}else{raw});
             reader.tiles.insert(*id,Arc::new(crate::raster::TileBlob::from_verified_resource(*id,descriptor,self.bytes(*payload)?,profile)?));
         }}
         for selection in &self.descriptor.selections {
@@ -182,7 +241,7 @@ impl PreparedTransfer {
             let pixels=Arc::new(SelectionPixels::from_verified_words(selection.extent,selection.bounds,selection.bytes,words,selection.chunks.clone(),cached)?);
             reader.selections.insert((selection.extent,selection.bounds,selection.bytes,selection.chunks.clone()),pixels);
         }
-        if decoded>limits.raster_bytes{return Err("Transfer resources exceed decoded memory admission".into());}
+        if decoded>limits.raster_bytes.saturating_add(if retained {crate::history_budget::BYTE_BUDGET as u64}else{0}){return Err("Transfer resources exceed decoded memory admission".into());}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&self.descriptor.layout)).map_err(|e|e.to_string())?;
         let working_selection=self.descriptor.working_selection.as_ref().map(|value|super::selection_records::decode_selection(value,&mut reader)).transpose().map_err(|e|e.to_string())?;
         let mut extensions=Extensions {records:manifest.objects.iter().filter(|(_,r)|r["ancillary"]==true).map(|(id,r)|(*id,r.clone())).collect(),..Default::default()};
@@ -198,31 +257,59 @@ impl PreparedTransfer {
         }
         artwork.extensions=Arc::new(extensions);
         crate::Document::from_artwork(artwork.clone()).map_err(|e|e.to_string())?.validate(limits)?;
+        let extra=additional(&artwork,&mut reader)?;
         active(cancel)?;
-        Ok((ArtworkCapture{artwork:Arc::new(artwork),checkpoint:self.descriptor.checkpoint},working_selection))
+        Ok((ArtworkCapture{artwork:Arc::new(artwork),checkpoint:self.descriptor.checkpoint},working_selection,extra))
     }
 }
-enum PayloadBuffer {Bytes(Arc<[MaybeUninit<u8>]>),Words(Arc<[MaybeUninit<u32>]>) }
+enum PayloadBuffer {Bytes(Arc<[MaybeUninit<u8>]>),Words(Arc<[MaybeUninit<u32>]>),Ready(TransferPayload) }
 pub struct TransferReceiver {descriptor:TransferDescriptor,buffers:Vec<PayloadBuffer>,positions:Vec<u64>}
 impl TransferReceiver {
     pub fn new(descriptor:TransferDescriptor,limits:ProjectLimits)->Result<Self,String>{
-        manifest(&descriptor,limits)?;
+        Self::new_with_reuse(descriptor,limits,None)
+    }
+    pub(crate) fn new_reusing(descriptor:TransferDescriptor,limits:ProjectLimits,previous:&PreparedTransfer)->Result<Self,String>{
+        Self::new_with_reuse(descriptor,limits,Some(previous))
+    }
+    fn new_with_reuse(descriptor:TransferDescriptor,limits:ProjectLimits,previous:Option<&PreparedTransfer>)->Result<Self,String>{
+        let parsed=manifest(&descriptor,limits)?;
+        if !parsed.resources.keys().eq(descriptor.resources.keys()) || parsed.document!=descriptor.checkpoint.document {return Err("Transfer identity inventory mismatch".into());}
+        let mut bytes=BTreeSet::new();let mut words=BTreeSet::new();
+        for resource in descriptor.resources.values() {match resource {
+            VerifiedResource::Bytes{payload,encoded}|VerifiedResource::Code{payload,encoded}|VerifiedResource::Lut{payload,encoded,..}=>{bytes.insert(*payload);if let Some(encoded)=encoded {bytes.insert(encoded.payload);}},
+            VerifiedResource::Tile{payload}|VerifiedResource::Opaque{payload}|VerifiedResource::Coverage{payload:Some(payload)}=>{bytes.insert(*payload);},
+            VerifiedResource::Coverage{payload:None}=>(),
+        }}
+        bytes.extend(descriptor.retained_resources.values().copied());bytes.extend(descriptor.private_resources.values().map(|(_,index)|*index));
+        words.extend(descriptor.selections.iter().map(|selection|selection.payload));
+        if !bytes.is_disjoint(&words)||bytes.union(&words).count()!=descriptor.lengths.len()
+            ||bytes.union(&words).any(|index|*index>=descriptor.lengths.len()) {return Err("Unindexed or conflicting transfer payloads".into());}
+        let mut reuse=BTreeMap::new();
+        if let Some(previous)=previous {
+            let candidate=PreparedTransfer {descriptor:descriptor.clone(),payloads:Vec::new()};
+            let keys=candidate.payload_keys()?;let old=previous.payload_keys()?;
+            for (key,index) in keys {if let Some(before)=old.get(&key) {reuse.insert(index,previous.payloads[*before].clone());}}
+        }
+        for (id,(record,payload)) in &descriptor.private_resources {
+            if record["id"]!=json!(id)||super::manifest::decimal_u64(&record["bytes"]).map_err(|e|e.to_string())?!=*descriptor.lengths.get(*payload).ok_or("Missing private resource payload")? {return Err("Private transfer inventory mismatch".into());}
+        }
         if descriptor.retained_resources.keys().any(|id|!descriptor.resources.contains_key(id)){return Err("Unknown retained transfer resource".into());}
         let total=descriptor.lengths.iter().try_fold(0u64,|a,b|a.checked_add(*b).ok_or("Transfer length overflow"))?;
         if total>limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_mul(2){return Err("Transfer exceeds memory admission".into());}
-        let words:BTreeSet<_>=descriptor.selections.iter().map(|s|s.payload).collect();
-        if words.iter().any(|i|*i>=descriptor.lengths.len()){return Err("Missing selection transfer payload".into());}
         let buffers=descriptor.lengths.iter().enumerate().map(|(i,length)|{
+            if let Some(payload)=reuse.remove(&i) {return Ok(PayloadBuffer::Ready(payload));}
             let length=usize::try_from(*length).map_err(|_|"Transfer allocation overflow")?;
             if words.contains(&i){if length%4!=0{return Err("Misaligned selection words".into());}Ok(PayloadBuffer::Words(Arc::<[u32]>::new_uninit_slice(length/4)))}
             else{Ok(PayloadBuffer::Bytes(Arc::<[u8]>::new_uninit_slice(length)))}
         }).collect::<Result<Vec<_>,String>>()?;
-        let positions=vec![0;buffers.len()];Ok(Self{descriptor,buffers,positions})
+        let positions=buffers.iter().enumerate().map(|(i,buffer)|if matches!(buffer,PayloadBuffer::Ready(_)){descriptor.lengths[i]}else{0}).collect();Ok(Self{descriptor,buffers,positions})
     }
+    pub fn missing_payloads(&self)->Vec<usize>{self.positions.iter().zip(&self.descriptor.lengths).enumerate().filter_map(|(i,(position,length))|(position!=length).then_some(i)).collect()}
     pub fn push_chunk(&mut self,index:usize,bytes:&[u8])->Result<(),String>{
         let position=*self.positions.get(index).ok_or("Missing transfer payload")?;
         if bytes.len()>MAX_RANGE_BYTES||position.checked_add(bytes.len() as u64).is_none_or(|n|n>self.descriptor.lengths[index]){return Err("Transfer chunk exceeds admission".into());}
         match &mut self.buffers[index] {
+            PayloadBuffer::Ready(_)=>return Err("Transfer payload was already reused".into()),
             PayloadBuffer::Bytes(buffer)=>{let start=position as usize;for (out,input) in Arc::get_mut(buffer).unwrap()[start..start+bytes.len()].iter_mut().zip(bytes){out.write(*input);}},
             PayloadBuffer::Words(buffer)=>{if !position.is_multiple_of(4)||!bytes.len().is_multiple_of(4){return Err("Misaligned selection transfer chunk".into());}let start=position as usize/4;for (out,input) in Arc::get_mut(buffer).unwrap()[start..start+bytes.len()/4].iter_mut().zip(bytes.as_chunks::<4>().0){out.write(u32::from_le_bytes(*input));}},
         }
@@ -231,6 +318,7 @@ impl TransferReceiver {
     pub fn finish(self)->Result<PreparedTransfer,String>{
         if self.positions!=self.descriptor.lengths{return Err("Incomplete transfer payloads".into());}
         let payloads=self.buffers.into_iter().map(|buffer|match buffer {
+            PayloadBuffer::Ready(payload)=>payload,
             PayloadBuffer::Bytes(bytes)=>TransferPayload::Bytes(unsafe{bytes.assume_init()}),
             PayloadBuffer::Words(words)=>TransferPayload::Words(unsafe{words.assume_init()}),
         }).collect();
@@ -437,6 +525,21 @@ mod tests {
             let actual=artwork.extensions.resources[&id].read_chunk((index*MAX_RANGE_BYTES) as u64,expected.len(),&cancel).unwrap();
             assert_eq!(&*actual,expected);assert!(actual.retained_bytes()<=MAX_RANGE_BYTES);
         }
+    }
+    #[test]
+    fn receiver_rejects_unindexed_and_conflicting_payload_roles_before_allocation() {
+        let prepared=PreparedTransfer::capture(&capture(),&AtomicBool::new(false)).unwrap();
+        let mut descriptor=prepared.descriptor().clone();descriptor.lengths.push(1);
+        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
+        let mut descriptor=prepared.descriptor().clone();
+        let payload=match descriptor.resources.values().next().unwrap() {
+            VerifiedResource::Bytes{payload,..}|VerifiedResource::Code{payload,..}|VerifiedResource::Tile{payload}|VerifiedResource::Lut{payload,..}|VerifiedResource::Opaque{payload}=>*payload,
+            VerifiedResource::Coverage{payload}=>payload.unwrap(),
+        };
+        descriptor.selections.push(SelectionTransfer {extent:[8,1],bounds:[0,0,8,1],bytes:false,chunks:vec![PortableId::random()],payload});
+        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
+        let mut descriptor=prepared.descriptor().clone();let id=*descriptor.resources.keys().next().unwrap();descriptor.resources.remove(&id);
+        assert!(TransferReceiver::new(descriptor,ProjectLimits::default()).is_err());
     }
     #[test]
     fn transfer_rejects_incomplete_chunks_missing_verification_and_foreign_layout(){

@@ -224,7 +224,7 @@ extension XCTestCase {
         let menu = app.descendants(matching: .any)["application-menu-content"].firstMatch
         XCTAssertTrue(menu.waitForExistence(timeout: 10))
         workspaceActivate(menu.buttons["File"])
-        XCTAssertTrue(menu.buttons["Recovered Drawings…"].waitForExistence(timeout: 10))
+        XCTAssertFalse(menu.buttons["Recovered Drawings…"].exists)
         workspaceActivate(menu.buttons["editor-menu-back"])
         workspaceActivate(menu.buttons["Window"])
         workspaceActivate(menu.buttons["Customize Title Bar…"])

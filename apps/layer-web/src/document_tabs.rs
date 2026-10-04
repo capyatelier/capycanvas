@@ -11,22 +11,30 @@ pub(super) struct DocumentGpu {
 }
 
 #[wasm_bindgen]
-pub struct WebRecoveryCapture(Option<layer_core::ArtworkCapture>);
-#[wasm_bindgen]
-impl WebRecoveryCapture {
-    pub fn write(&mut self, key: String) -> Result<js_sys::Promise, JsValue> {
-        let project = self
-            .0
-            .take()
-            .ok_or_else(|| js("Recovery capture already written"))?;
-        Ok(wasm_bindgen_futures::future_to_promise(async move {
-            artwork_transfer::save_recovery(project, key).await
-        }))
-    }
+pub struct WebDocumentClose {
+    blank:Option<(UiSession<AttachedRenderer>,layer_ui::DocumentSessions<UiSession<AttachedRenderer>>)>,
 }
 
 #[wasm_bindgen]
 impl WebApp {
+    pub fn session_stamp_for(&self,id:u64)->Result<JsValue,JsValue> {
+        serialize(&self.document_session(id)?.session_stamp())
+    }
+    pub fn session_manifest_update(&self,state:&str,event:JsValue)->Result<JsValue,JsValue> {
+        serialize(&layer_ui::session_manifest_update(state,serde_wasm_bindgen::from_value(event).map_err(js)?).map_err(js)?)
+    }
+    pub fn session_checkpoint_interval(&self)->u32 {layer_ui::CHECKPOINT_INTERVAL_MS as u32}
+    pub fn session_can_replace_startup(&self,stamp:JsValue)->Result<bool,JsValue> {
+        let stamp=serde_wasm_bindgen::from_value(stamp).map_err(js)?;
+        Ok(self.documents.order().len()==1&&self.session.can_replace_startup_session(&stamp))
+    }
+    pub fn session_destination_matches(&self,observed:JsValue)->Result<bool,JsValue> {
+        let observed:Option<layer_ui::DestinationFingerprint>=serde_wasm_bindgen::from_value(observed).map_err(js)?;
+        Ok(self.session.destination_matches(observed.as_ref()))
+    }
+    pub fn session_record_destination(&mut self,location:JsValue,fingerprint:JsValue)->Result<(),JsValue> {
+        self.session.record_destination_fingerprint(&serde_wasm_bindgen::from_value(location).map_err(js)?,serde_wasm_bindgen::from_value(fingerprint).map_err(js)?).map_err(js)
+    }
     pub fn resume_document_gpu(&mut self) -> Result<bool, JsValue> {
         let Some(context) = self.document_gpu.as_ref() else {
             return Ok(false);
@@ -51,13 +59,6 @@ impl WebApp {
     }
     pub fn recovery_document_for(&self, id: u64) -> Result<JsValue, JsValue> {
         serialize(&self.document_session(id)?.recovery_document())
-    }
-    pub fn capture_tab_recovery(&self, id: u64) -> Result<WebRecoveryCapture, JsValue> {
-        Ok(WebRecoveryCapture(Some(
-            self.document_session(id)?
-                .capture_project_recovery()
-                .map_err(js)?,
-        )))
     }
     pub fn document_tabs(&self, width: f32) -> Result<JsValue, JsValue> {
         serialize(&serde_json::json!({
@@ -181,20 +182,16 @@ impl WebApp {
         self.document_changed()
     }
 
-    pub fn close_document_tab(&mut self) -> Result<JsValue, JsValue> {
+    pub fn prepare_document_close(&mut self) -> Result<WebDocumentClose, JsValue> {
         if !self.session.state().document_file.close_ready {
             return Err(js("Confirm closing the drawing first"));
         }
-        if self.documents.order().len() > 1 {
+        let blank=if self.documents.order().len() > 1 {
             let id = self.documents.after_close().unwrap();
             let next = self.documents.parked_owner_mut(id).unwrap();
             next.inherit_window_state(&self.session).map_err(js)?;
-            self.session.park_document().map_err(js)?;
-            self.retire_document_gpu();
-            self.session = self.documents.close_selected().unwrap();
+            None
         } else {
-            // Keep the existing browser window usable after its last drawing
-            // closes, with a new identity and no retained discarded history.
             let mut next = UiSession::blank_localized(
                 AttachedRenderer::default(),
                 self.session.state().camera.viewport,
@@ -204,18 +201,27 @@ impl WebApp {
             .map_err(js)?;
             next.inherit_window_state(&self.session).map_err(js)?;
             next.set_document_replacement(false);
-            self.session.park_document().map_err(js)?;
-            self.retire_document_gpu();
-            self.documents.close_selected();
-            self.documents.start_empty(next.localization()).map_err(|reason| js(reason.message(next.localization())))?;
-            self.session = next;
-        }
+            let documents=self.documents.prepare_empty(next.localization()).map_err(|reason|js(reason.message(next.localization())))?;
+            Some((next,documents))
+        };
+        self.session.park_document().map_err(js)?;
+        Ok(WebDocumentClose {blank})
+    }
+    pub fn commit_document_close(&mut self,prepared:WebDocumentClose)->Result<JsValue,JsValue> {
+        self.retire_document_gpu();
+        if let Some((next,documents))=prepared.blank {
+            self.documents=documents;self.session=next;
+        }else{self.session=self.documents.close_selected().expect("Prepared next drawing");}
         self.document_changed()
+    }
+    pub fn cancel_document_close(&mut self)->Result<JsValue,JsValue> {
+        self.session.reset_document_close();
+        if self.session.rendering_suspended(){serialize(&self.session.cancel_document_park().map_err(js)?)}else{self.document_changed()}
     }
 }
 
 impl WebApp {
-    fn document_session(&self, id: u64) -> Result<&UiSession<AttachedRenderer>, JsValue> {
+    pub(super) fn document_session(&self, id: u64) -> Result<&UiSession<AttachedRenderer>, JsValue> {
         if id == self.documents.selected() {
             return Ok(&self.session);
         }

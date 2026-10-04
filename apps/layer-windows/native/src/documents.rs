@@ -74,7 +74,6 @@ pub(crate) fn recovery_environment(session: &UiSession<Renderer>) -> Result<Open
 struct Opening { environment: OpenEnvironment, imported: layer_ui::ImportedDocument, profiles: Vec<layer_ui::profile_library::ProfileEntry>, profile_view: serde_json::Value, language: layer_ui::UiLanguage }
 enum Source {
     Create(layer_ui::NewDocumentOptions),
-    Recovery(PathBuf),
     Interpret(Box<layer_ui::ImportedDocument>, crate::color_storage::ProfileChoice),
     Open(PathBuf),
 }
@@ -87,6 +86,8 @@ enum Job {
     Save {
         project: Box<ArtworkCapture>,
         path: PathBuf,
+        expected:Option<layer_ui::DestinationExpectation>,
+        changed_message:String,
     },
     Prepare {
         environment: Box<OpenEnvironment>,
@@ -104,15 +105,15 @@ enum Completed {
     Interpretation(Box<Opening>),
     ProfileFailure(layer_ui::ColorFeatureError),
     PhotoPrepared(Box<UiSession<Renderer>>),
-    Saved,
+    Saved(layer_ui::DestinationFingerprint),
     Prepared(Box<UiSession<Renderer>>),
 }
 #[derive(Default)]
 struct Mailbox {
     pending: Option<Job>,
     completed: Option<Result<Completed, String>>,
-    retired: Option<Box<UiSession<Renderer>>>,
-    retired_renderer: Option<Renderer>,
+    retired: Vec<Box<UiSession<Renderer>>>,
+    retired_renderer: Vec<Renderer>,
     retired_workflow: Option<Box<crate::document_workflows::Task>>,
 }
 #[derive(Default)]
@@ -138,8 +139,8 @@ impl Worker {
                     let (job, retired, retired_workflow, retired_renderer, stopping, completed) = {
                         let mut mailbox = state.mailbox.lock().unwrap();
                         while mailbox.pending.is_none()
-                            && mailbox.retired.is_none()
-                            && mailbox.retired_renderer.is_none()
+                            && mailbox.retired.is_empty()
+                            && mailbox.retired_renderer.is_empty()
                             && mailbox.retired_workflow.is_none()
                             && !state.stopping.load(Ordering::Acquire)
                         {
@@ -148,9 +149,9 @@ impl Worker {
                         let stopping = state.stopping.load(Ordering::Acquire);
                         (
                             mailbox.pending.take(),
-                            mailbox.retired.take(),
+                            std::mem::take(&mut mailbox.retired),
                             mailbox.retired_workflow.take(),
-                            mailbox.retired_renderer.take(),
+                            std::mem::take(&mut mailbox.retired_renderer),
                             stopping,
                             if stopping {
                                 mailbox.completed.take()
@@ -192,15 +193,13 @@ impl Worker {
     }
     fn retire(&self, session: Box<UiSession<Renderer>>) {
         let mut mailbox = self.shared.mailbox.lock().unwrap();
-        assert!(mailbox.retired.is_none());
-        mailbox.retired = Some(session);
+        mailbox.retired.push(session);
         self.shared.ready.notify_one();
     }
     fn retire_renderer(&self, renderer: Renderer) {
         if renderer.0.is_none() { return; }
         let mut mailbox = self.shared.mailbox.lock().unwrap();
-        assert!(mailbox.retired_renderer.is_none());
-        mailbox.retired_renderer = Some(renderer);
+        mailbox.retired_renderer.push(renderer);
         self.shared.ready.notify_one();
     }
     fn retire_workflow(&self, task: Box<crate::document_workflows::Task>) {
@@ -247,9 +246,20 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         Job::Spill { tiles, directory } => layer_core::raster_storage::spill_to_directory(&tiles, &directory).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
-        Job::Save { project, path } => {
-            atomic_write(&path, cancel, |mut file| PreparedPackage::prepare(&project, None, cancel)?.write(&mut file, cancel))?;
-            Ok(Completed::Saved)
+        Job::Save { project, path,expected,changed_message } => {
+            let mut fingerprint=None;
+            crate::document_io::atomic_write_checked(&path,cancel,|file|{
+                let mut writer=layer_ui::FingerprintWriter::new(file);
+                PreparedPackage::prepare(&project,None,cancel)?.write(&mut writer,cancel)?;
+                fingerprint=Some(writer.finish());Ok(())
+            },||{
+                if let Some(expected)=&expected {
+                    let observed=match layer_ui::DestinationFingerprint::read_path(&path){Ok(value)=>Some(value),Err(error)=>{if path.exists(){return Err(error)}None}};
+                    if !expected.matches(observed.as_ref()){return Err(changed_message.clone());}
+                }
+                Ok(())
+            })?;
+            Ok(Completed::Saved(fingerprint.ok_or("Save fingerprint is missing")?))
         }
         Job::Prepare {
             environment,
@@ -284,16 +294,18 @@ fn prepare(
     source: Source,
     cancel: &AtomicBool,
 ) -> Result<Completed, String> {
+    let mut opened_destination=None;
     let imported = match source {
         Source::Create(options) => layer_ui::ImportOutcome::Editable(layer_ui::ImportedDocument::new(options.project(&environment.localization)?,layer_ui::ImportSource::Master)),
-        Source::Recovery(path) => environment.read(layer_core::Cancellable { inner: File::open(path).map_err(|e| io_error("open recovery", e))?, cancelled: || cancel.load(Ordering::Acquire) },
-            layer_ui::ImportIntent::Recovery, "Recovered drawing", cancel)?,
         Source::Interpret(mut imported, profile) => {
             let profile=match profile.resolve(cancel, &environment.localization) { Ok(profile)=>profile,Err(reason)=>return Ok(Completed::ProfileFailure(reason)) };
             imported.interpret(profile)?; layer_ui::ImportOutcome::Editable(*imported)
         },
         Source::Open(path) => {
-            let file = File::open(&path).map_err(|e| io_error("open", e))?;
+            let mut file = File::open(&path).map_err(|e| io_error("open", e))?;
+            let fingerprint=layer_ui::DestinationFingerprint::read(&mut file)?;
+            std::io::Seek::rewind(&mut file).map_err(|e|io_error("read",e))?;
+            opened_destination=Some((location(path.to_str().ok_or("Drawing path is invalid")?)?,fingerprint));
             environment.read(layer_core::Cancellable { inner: BufReader::new(file), cancelled: || cancel.load(Ordering::Acquire) }, layer_ui::ImportIntent::Open,
                 path.file_name().and_then(|v| v.to_str()).unwrap_or("Photo"), cancel)?
         }
@@ -306,7 +318,7 @@ fn prepare(
         return Ok(Completed::Interpretation(Box::new(Opening { environment, imported, profiles, profile_view, language })));
     }
     let kind = imported.source;
-    let candidate = match environment.prepare(imported.project.clone(), || cancel.load(Ordering::Acquire)) {
+    let mut candidate = match environment.prepare(imported.project.clone(), || cancel.load(Ordering::Acquire)) {
         Ok(candidate)=>candidate,
         Err(reason)=>{
             check_cancelled(cancel)?;
@@ -316,17 +328,14 @@ fn prepare(
             };
         },
     };
+    if kind!=layer_ui::ImportSource::Photo && let Some((location,fingerprint))=opened_destination {candidate.initialize_document_location(Some(location.clone()))?;candidate.record_destination_fingerprint(&location,fingerprint)?;}
     Ok(if kind == layer_ui::ImportSource::Photo { Completed::PhotoPrepared(candidate) } else { Completed::Prepared(candidate) })
 }
-pub(crate) enum RecoveryPrepared {
-    Editable(Box<UiSession<Renderer>>),
-    Package {view:layer_ui::PackageView,path:PathBuf},
-}
-pub(crate) fn prepare_recovery(environment: OpenEnvironment, path: PathBuf, cancel: &AtomicBool) -> Result<RecoveryPrepared, String> {
-    match prepare(environment, Source::Recovery(path.clone()), cancel)? {
-        Completed::Prepared(candidate) => Ok(RecoveryPrepared::Editable(candidate)),
-        Completed::Package(view) => Ok(RecoveryPrepared::Package {view,path}),
-        _ => Err("Recovery is not a native drawing".into()),
+#[cfg(test)]
+pub(crate) fn prepare_package(environment:OpenEnvironment,path:PathBuf,cancel:&AtomicBool)->Result<Box<UiSession<Renderer>>,String>{
+    match prepare(environment,Source::Open(path),cancel)?{
+        Completed::Prepared(candidate)=>Ok(candidate),
+        _=>Err("The package did not admit an editable drawing".into()),
     }
 }
 struct Active {
@@ -348,7 +357,9 @@ pub(crate) struct DocumentService {
     spilling: bool,
     deferred_action: Option<DocumentAction>,
     close_window: bool,
+    quit_pending:bool,
     close_next: bool,
+    prepared_close:Option<layer_host::window::PreparedClose>,
     pub proof: crate::proof::Service,
     pub tone: layer_host::tone::ToneService,
     pub palettes: crate::palette_files::Service,
@@ -396,7 +407,9 @@ impl DocumentService {
             spilling: false,
             deferred_action: None,
             close_window: false,
+            quit_pending:false,
             close_next: false,
+            prepared_close:None,
             worker: Worker::start(move || notify())?,
             active: None,
             opening: None,
@@ -583,7 +596,6 @@ impl DocumentService {
             host.invalidate_snapshot();
             return Ok(());
         }
-        if self.recovery.as_ref().is_some_and(|r| r.restoring()) { return Err(layer_ui::DocumentTransportRefusal::RecoveryInProgress.message(host.session.localization()).to_string()); }
         if self.spilling {
             if self.deferred_action.is_some() { return Err("A file response is already queued".into()); }
             self.deferred_action = Some(action);
@@ -676,10 +688,11 @@ impl DocumentService {
             return host.dispatch(layer_ui::UiAction::NewDocumentPreferences {action});
         }
         if let DocumentAction::Close = action {
-            if self.recovery.as_ref().is_some_and(|s| s.restoring()) { return Ok(()); }
             self.close_window = true;
+            self.quit_pending=host.session.state().document_file.busy||self.active.is_some()||self.activating||!host.session.can_park_document();
+            if self.quit_pending{return Ok(());}
             let previous = host.session.state().revision;
-            let change = host.session.request_document_close()?;
+            let change = host.session.request_session_close()?;
             host.apply_change(previous, change);
             return Ok(());
         }
@@ -752,6 +765,8 @@ impl DocumentService {
                     (
                         Job::Save {
                             project: Box::new(project),
+                            changed_message:layer_ui::DocumentDeliveryMessage::DestinationChanged.message(host.session.localization()),
+                            expected:host.session.save_destination_expectation().filter(|expected|expected.location.uri==selected.uri),
                             path: PathBuf::from(path),
                         },
                         Some(selected),
@@ -811,9 +826,6 @@ impl DocumentService {
     }
     pub(crate) fn poll(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.poll_tabs(host)?;
-        if let Some(package)=self.recovery.as_mut().and_then(|recovery|recovery.take_package()) {
-            self.present_recovery_package(host,package)?;
-        }
         self.palettes.poll(host);
         self.open_queued(host);
         if let Some(result) = self.recording_save.as_ref().and_then(|receiver| receiver.try_recv().ok()) {
@@ -824,6 +836,8 @@ impl DocumentService {
             }
             host.invalidate_snapshot();
         }
+        let prepared=self.worker.shared.mailbox.lock().unwrap().completed.as_ref().is_some_and(|result|matches!(result,Ok(Completed::Prepared(_)|Completed::PhotoPrepared(_))));
+        if prepared && !self.active.as_ref().and_then(|active|active.cancelled.as_ref()).is_some_and(|cancel|cancel.load(Ordering::Acquire)) && !self.window.adoption_ready(host)? {return Ok(());}
         let Some(completed) = self.worker.take() else {
             return Ok(());
         };
@@ -900,9 +914,11 @@ impl DocumentService {
         let result = match completed {
             Ok(Completed::Cancelled) => Ok(false),
             Ok(Completed::Interpretation(_) | Completed::PhotoPrepared(_) | Completed::Workflow(_) | Completed::Activated(_) | Completed::Spilled) => unreachable!(),
-            Ok(Completed::Saved) => {
+            Ok(Completed::Saved(fingerprint)) => {
                 if active.epoch == host.session.state().document_file.epoch {
-                    Ok(true)
+                    let location=active.location.clone().ok_or("Saved drawing destination is missing")?;
+                    Self::complete(host,active.id,Ok(true))?;
+                    host.session.record_destination_fingerprint(&location,fingerprint)?;return Ok(())
                 } else {
                     Err("The completed file belongs to a document that is no longer open".into())
                 }
@@ -926,16 +942,7 @@ impl DocumentService {
         self.package=Some(PackageOpening{id:self.next_package_id,name,original,view,summary,serial:0,writing:None,close_requested:false,cancelled:Arc::new(AtomicBool::new(false))});
         host.invalidate_snapshot();Ok(())
     }
-    fn present_recovery_package(&mut self,host:&mut NativeHost,package:crate::recovery::RecoveredPackage)->Result<(),String> {
-        let crate::recovery::RecoveredPackage {token,identity,view,path}=package;
-        let result=(||{
-            if self.active.is_some()||self.activating||self.package.is_some() {return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());}
-            Self::matches(host,identity.0,identity.1)?;
-            self.present_package(host,view,Some(path))
-        })();
-        self.recovery.as_mut().ok_or("Recovery service is unavailable")?.complete_package(&mut host.session,token,result)?;
-        host.invalidate_snapshot();Ok(())
-    }
+
     #[cfg_attr(all(not(target_os = "windows"), not(test)), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn preview(&self, id: u32, index: usize) -> Result<crate::previews::CapyPreview, String> {
         if let Some(package)=self.package.as_ref().filter(|p|p.id==id) {
@@ -950,9 +957,6 @@ impl DocumentService {
         if let Some(package)=&self.package {package.cancelled.store(true,Ordering::Release);}
         if let Some(cancelled) = self.active.as_ref().and_then(|a| a.cancelled.as_ref()) { cancelled.store(true, Ordering::Release); }
         if let Some(recovery) = &mut self.recovery { recovery.stop()?; }
-        for (_, parked) in self.window.documents.parked_mut() {
-            if let Some(recovery) = &mut parked.owner.recovery { recovery.stop()?; }
-        }
         self.tone.clear();
         let proof = self.proof.stop();
         if let Some((_, control)) = &self.workflow_control { control.cancel(); }
@@ -1031,6 +1035,19 @@ mod tests {
         }
     }
 
+    #[test]
+    fn window_quit_preserves_unsaved_work_without_a_discard_prompt() {
+        let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();let checkpoint=f.host.session.engine().checkpoint();
+        f.host.suspend_renderer().unwrap();f.act(DocumentAction::Close);f.service.poll(&mut f.host).unwrap();
+        assert!(f.host.session.state().document_file.close_ready);assert!(f.host.session.state().document_file.modified);assert_eq!(f.host.session.engine().checkpoint(),checkpoint);assert!(f.host.session.engine().can_undo());assert!(f.host.session.state().requests.is_empty());
+    }
+    #[test]
+    fn window_quit_waits_for_an_accepted_save_and_preserves_later_edits() {
+        let mut f=Fixture::new();f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();f.invoke(CommandId::SaveDocumentAs);let path=f.path("accepted-save.capy");f.act(DocumentAction::Save{id:f.request(),path:path.clone()});
+        f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let checkpoint=f.host.session.engine().checkpoint();f.act(DocumentAction::Close);
+        assert!(f.service.quit_pending);assert!(!f.host.session.state().document_file.close_ready);f.finish();f.service.poll(&mut f.host).unwrap();
+        assert!(std::path::Path::new(&path).is_file());assert!(f.host.session.state().document_file.close_ready);assert!(f.host.session.state().document_file.modified);assert_eq!(f.host.session.engine().checkpoint(),checkpoint);
+    }
     #[test]
     fn package_outcomes_preserve_the_editor_and_write_original_or_verified_preview_on_the_worker() {
         use layer_core::package::{ImmutableBacking,codec::OpenOutcome,preview::Preview,transport::ChunkedBytes};
@@ -1112,7 +1129,7 @@ mod tests {
         f.host.session =
             UiSession::from_project(Renderer(None), project, None, [256, 256], Platform::Windows).unwrap();
         f.host.session.set_document_replacement(true);
-        f.host.session.mark_recovered();
+        f.host.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();
         f.host.suspend_renderer().unwrap();
         f.service.renderer_unavailable(&mut f.host).unwrap();
         assert!(
@@ -1124,7 +1141,7 @@ mod tests {
         assert!(f.host.session.command(CommandId::SaveDocumentAs).enabled);
         assert!(!f.host.session.command(CommandId::ExportDocument).enabled);
         assert!(!f.host.session.command(CommandId::Undo).enabled);
-        f.act(DocumentAction::Close);
+        f.invoke(CommandId::CloseDocument);
         let state = f.host.session.state().document_file.clone();
         f.act(DocumentAction::RespondClose {
             id: f.request(),
@@ -1163,7 +1180,7 @@ mod tests {
             bytes
         );
         assert!(!f.host.session.state().document_file.modified);
-        f.act(DocumentAction::Close);
+        f.invoke(CommandId::CloseDocument);
         assert!(f.host.session.state().document_file.close_ready);
     }
 
@@ -1181,7 +1198,7 @@ mod tests {
         });
         // Completion deliberately stays unacknowledged until after a newer edit.
         f.invoke(CommandId::AddLayer);
-        f.act(DocumentAction::Close);
+        f.invoke(CommandId::CloseDocument);
         assert!(f.host.session.state().document_file.busy);
         assert!(!f.host.session.state().document_file.close_ready);
         f.finish();
@@ -1291,7 +1308,7 @@ mod tests {
     fn stale_discard_and_open_responses_preserve_intervening_edits() {
         let mut f = Fixture::new();
         f.invoke(CommandId::AddLayer);
-        f.act(DocumentAction::Close);
+        f.invoke(CommandId::CloseDocument);
         let state = &f.host.session.state().document_file;
         let (id, epoch, revision) = (f.request(), state.epoch, state.revision);
         f.invoke(CommandId::AddLayer);

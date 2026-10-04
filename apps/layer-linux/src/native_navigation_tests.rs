@@ -263,7 +263,7 @@ fn native_large_photo_navigation() {
         let snapshot = {
             let g = w.gpu.borrow();
             let session = &g.as_ref().unwrap().session;
-            DocumentExport { capture: session.capture_project_recovery().unwrap(),
+            DocumentExport { capture: session.capture_artwork().unwrap(),
                 time: session.engine().animation_time() }
         };
         let prefix = std::path::PathBuf::from(std::env::var("LAYER_PACING_REPORT").unwrap());
@@ -592,7 +592,7 @@ fn native_spatial_filter_windows() {
         super::pointwise::assert_saved_artwork(&saved,&reopened);
         std::fs::write(format!("{dir}/{}-{theme:?}.capy",w.window.width()),bytes).unwrap();
         let activation=state(&w).document_file.epoch;
-        w.documents.enqueue(&w,(reopened,None,None));
+        w.documents.enqueue(&w,(reopened,None));
         super::new_photo::ready(&w);
         assert!(state(&w).document_file.epoch>activation,"spatial filter archive activation");wait();
         assert_live_artwork_eq(ui_session(&w).engine().document(),&capture_document(&saved));

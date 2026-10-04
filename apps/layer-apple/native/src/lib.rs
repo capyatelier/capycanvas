@@ -3,6 +3,8 @@
 mod metal;
 mod document_tabs;
 pub use document_tabs::*;
+mod session;
+pub use session::*;
 
 /// SDR viewing contract shared by canvas, UI values and image transports.
 /// Core Animation/ColorSync maps tagged P3 to the current screen, including sRGB.
@@ -24,6 +26,8 @@ pub struct CapyApple {
     metal: metal::MetalHost,
     host: NativeHost,
     window: document_tabs::Window,
+    session_disk: Option<std::sync::Arc<std::sync::Mutex<session::WindowDisk>>>,
+    session_capture_sequence: u64,
     error: Option<CString>,
     chrome_facts: layer_ui::ChromeFacts,
     dismissed_contacts: std::collections::BTreeSet<u64>,
@@ -142,6 +146,8 @@ fn apple_launch_on_stack(platform: u32, saved: &str, localization: std::sync::Ar
             published_language: None,
             host,
             window,
+            session_disk: None,
+            session_capture_sequence: 0,
             metal: metal::MetalHost::default(),
             error: None,
             chrome_facts: Default::default(),

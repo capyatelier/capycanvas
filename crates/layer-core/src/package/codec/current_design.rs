@@ -1,17 +1,9 @@
 use super::*;
 
-const SAVED: &[u8] = include_bytes!("fixtures/authored-filters-v1-occurrences-v2.capy");
+const SAVED: &[u8] = include_bytes!("fixtures/authored-filters.capy");
 
 #[test]
-fn old_occurrence_records_preserve_the_original_package() {
-    let bytes=include_bytes!("fixtures/authored-v1.capy");
-    let outcome=open(backing(bytes.to_vec()),Default::default(),&AtomicBool::new(false)).unwrap();
-    let OpenOutcome::Preserved {reason,..}=outcome else {panic!("{outcome:?}")};
-    assert_eq!(reason,"Unknown authored object capy.occurrence/1");
-}
-
-#[test]
-fn saved_v1_artwork_retains_authored_values_resources_and_current_builtin_controls() {
+fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls() {
     let artwork=editable(SAVED.to_vec());
     let document=crate::Document::from_artwork(artwork.clone()).unwrap();
     assert_eq!(document.composition().color.depth,SampleDepth::F32);
@@ -27,15 +19,14 @@ fn saved_v1_artwork_retains_authored_values_resources_and_current_builtin_contro
         builtin_ids.insert(builtin.id());
         assert!(Arc::ptr_eq(&definition.program,&builtin.program()));
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
-        assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":1}));
+        assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":if matches!(builtin.id(),"gradient_map"|"gradient_fill"){2}else{1}}));
     }
     assert_eq!(builtin_ids.len(),52);
     for (_,id,application) in artwork.effects.iter() {
         let program=&artwork.definitions.get(application.definition).unwrap().program;
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
-        let gradient_v1=matches!(program.id.as_ref(),"gradient_map"|"gradient_fill");
-        assert_eq!(record["data"]["values"].as_object().map_or(0,|v|v.len()),program.parameters.len()+usize::from(gradient_v1));
-        if gradient_v1 {
+        assert_eq!(record["data"]["values"].as_object().map_or(0,|v|v.len()),program.parameters.len());
+        if matches!(program.id.as_ref(),"gradient_map"|"gradient_fill") {
             let Some(EffectValue::Gradient(gradient))=crate::EffectView::new(program,&application.values).value("gradient") else {panic!()};
             assert_eq!(gradient.interpolation,crate::ColorMixSpace::Classic);
         }
@@ -65,7 +56,7 @@ fn saved_v1_artwork_retains_authored_values_resources_and_current_builtin_contro
 
 #[test]
 fn saved_numeric_bounds_remain_accepted_independently_of_slider_ranges() {
-    let bounds:Value=serde_json::from_str(include_str!("fixtures/parameter-bounds-v1.json")).unwrap();
+    let bounds:Value=serde_json::from_str(include_str!("fixtures/parameter-bounds.json")).unwrap();
     for (id,parameters) in bounds.as_object().unwrap() {
         let builtin=crate::bundled_effect_catalog().get(id).unwrap();
         for (key,range) in parameters.as_object().unwrap() {

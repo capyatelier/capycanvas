@@ -11,7 +11,7 @@ fn proof(app: &App, action: Value) -> Value {
         .unwrap()
 }
 #[test]
-fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
+fn apple_hdr_edit_proof_export_and_analysis_reuse() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
@@ -158,8 +158,8 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             guide.byte_len()
         );
         original = unsafe { &*app.0 }.host.session.engine().document().clone();
-        // Exact archive/recovery bytes, including the saved rendition.
-        let save = ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) });
+        // Exact artwork bytes, including the saved rendition.
+        let save = ProjectJob::new(&app, false);
         assert!(!save.0.is_null());
         let mut archive = fixtures::tempfile();
         assert_eq!(
@@ -172,6 +172,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
         let saved = read_document(&mut archive);
         assert_saved_document(&saved, &original);
         assert_eq!(saved.output().sdr, original.output().sdr);
+        assert_eq!(unsafe { capy_apple_project_saved(app.0, save.0, c"HDR.capy".as_ptr(), c"file:///fixture-hdr.capy".as_ptr()) }, 0);
         // Profiled SDR and portable HDR PNG use the actual immutable file worker.
         app.invoke("export_document");
         let id = app.state()["requests"]
@@ -246,7 +247,7 @@ fn apple_hdr_edit_proof_export_recovery_and_analysis_reuse() {
             },
             0
         );
-        assert_eq!(unsafe { capy_apple_project_recover(restored.0, open.0) }, 0);
+        assert_eq!(unsafe { capy_apple_project_adopt(restored.0, open.0, c"HDR.capy".as_ptr(), c"".as_ptr()) }, 0);
         restored.draw_until_idle();
         assert_saved_document(
             unsafe { &*restored.0 }.host.session.engine().document(),

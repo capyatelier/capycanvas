@@ -83,7 +83,7 @@ fn native_new_options_preserve_space_depth_background_and_captured_defaults() {
 }
 
 #[test]
-fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement() {
+fn native_p3_u8_and_prophoto_u16_survive_save_open_and_gpu_replacement() {
     for platform in [0, 1] {
         for (space, depth) in [
             (RgbSpace::DisplayP3, SampleDepth::U8),
@@ -164,12 +164,8 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
             );
             assert!(app.pixels() == painted);
 
-            for recovered in [false, true] {
-                let save = if recovered {
-                    ProjectJob(unsafe { capy_apple_project_task(app.0, 2, std::ptr::null()) })
-                } else {
-                    ProjectJob::new(&app, false)
-                };
+            {
+                let save = ProjectJob::new(&app, false);
                 assert!(!save.0.is_null());
                 file.set_len(0).unwrap();
                 file.rewind().unwrap();
@@ -193,18 +189,8 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                     "{:?}",
                     open.error()
                 );
-                let result = if recovered {
-                    unsafe { capy_apple_project_recover(restored.0, open.0) }
-                } else {
-                    unsafe {
-                        capy_apple_project_adopt(
-                            restored.0,
-                            open.0,
-                            c"Saved.capy".as_ptr(),
-                            c"file:///fixture.capy".as_ptr(),
-                        )
-                    }
-                };
+                let result = unsafe { capy_apple_project_adopt(restored.0, open.0,
+                    c"Saved.capy".as_ptr(), c"file:///fixture.capy".as_ptr()) };
                 assert_eq!(result, 0);
                 restored.draw_until_idle();
                 assert_saved_document(
@@ -212,7 +198,7 @@ fn native_p3_u8_and_prophoto_u16_survive_save_open_recovery_and_gpu_replacement(
                     &document,
                 );
                 assert!(restored.pixels() == painted);
-                assert_eq!(restored.state()["document_file"]["modified"], recovered);
+                assert_eq!(restored.state()["document_file"]["modified"], false);
                 assert_eq!(unsafe { capy_apple_suspend_renderer(restored.0) }, 0);
                 let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(color).unwrap();
                 let owner = unsafe { &mut *restored.0 };

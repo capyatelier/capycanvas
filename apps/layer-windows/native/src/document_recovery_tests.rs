@@ -119,7 +119,7 @@ fn new_open_and_save_keep_the_authoritative_document_across_removal() {
     invoke(&mut f.host, CommandId::AddLayer);
     let expected = image(&mut f.host).bytes;
     let mut expected_project = Vec::new();
-    write_capture(&f.host.session.capture_project_recovery().unwrap(),&mut expected_project).unwrap();
+    write_capture(&f.host.session.capture_artwork().unwrap(),&mut expected_project).unwrap();
     let path = f.path("drawing.capy");
     invoke(&mut f.host, CommandId::SaveDocument);
     let (id, _, _) = request(&f.host);

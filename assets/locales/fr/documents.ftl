@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (récupéré)
+documents-destination-changed = Le dessin enregistré a changé ou est indisponible. Utilisez Enregistrer sous pour conserver les deux copies.

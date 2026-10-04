@@ -46,12 +46,44 @@ uses the final manifest adapters plus private runtime identity and verification
 receipts; Web has no second artwork schema. Main-thread adoption consumes verified
 owners without image decoding or decoded-content hashing. Package writes stream
 to private OPFS output jobs and return a Blob for picker/download publication;
-completion closes that job. Recovery uses the same writer and separate shared
-publication tokens. Unsupported files keep their original Blob and show shared
+completion closes that job. Unsupported files keep their original Blob and show shared
 package status, available outputs and an optional preview with Copy Original and
 Export Preview Image. Preview export refuses the original file handle. The
 manual-save worker retains its output job and storage lock until publication
 finishes and the host closes the job.
+
+Restart snapshots use the shared session codec, preserving every open drawing,
+tab order, selection, camera, undo/redo and manual-save checkpoint. Browser events
+schedule shared checkpoint intervals; unchanged stamps skip preparation and writes.
+The retained checkpoint worker reuses immutable payloads, and prepares session
+metadata and validates disk bytes away from the input thread. Live session transfer
+uses shared history records and bounded resource chunks without replaying history
+on the browser thread.
+Export profile payloads use the same immutable resource inventory and worker delta
+cache; stamps and transfer metadata retain references instead of inline ICC bytes.
+
+`restart-store.js` publishes immutable resources and current/previous drawing heads
+in strict IndexedDB transactions. Exact checkpoint metadata is protected by SHA-256
+and checked before decoding. A separate authoritative window manifest records
+membership before a drawing's first publication. Closing a drawing removes its
+membership and stored resources together. Automatic restore holds Web Locks,
+admits the candidate before adopting it, then transfers the same drawing key between
+window manifests in one transaction. A failed transaction preserves the old owner;
+a failed restore retains its copy and offers Retry, Later or Discard. Corrupt current
+data may use the previous complete drawing, with a recovered title until saving.
+The next checkpoint retains that verified drawing as its previous generation.
+Lost acknowledgements retry with newer drawing generations or identical manifest
+receipts, including an already committed ownership transfer.
+
+Ordinary restart opens drawings without a dialog. An up-to-date private checkpoint
+permits quiet browser exit; pending state requests the browser's native exit warning.
+Saved originals are read through retained handles without requesting permission.
+A missing, changed or inaccessible original protects the restored drawing until
+the painter saves or explicitly discards it. A verified original stays clean.
+Visibility and page-exit events request final writes, but browsers may stop async
+work during exit. Original and Export Again handles are retained when supported. Save rechecks permission
+and the shared destination fingerprint; unavailable or externally changed files
+require choosing a destination rather than overwriting unrelated changes.
 
 Language changes use the running session's browser language tags and shared
 `LanguageTransition`. Preparation runs in short event-loop tasks and publication
@@ -86,6 +118,24 @@ Pure unit tests need no browser or GPU:
 node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization}.test.mjs
 node --test apps/layer-web/{numeric,histogram,raster-worker-client,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy}.test.mjs
 ```
+
+The storage regression launches its own temporary Chrome profile and local server:
+
+```bash
+node apps/layer-web/restart-store.test.mjs
+```
+
+It covers aborted resource publication, immutable-ID conflicts, metadata corruption, current/previous
+retention, interrupted restore, stale writes, atomic ownership transfer and closed
+membership. `--drawing-tabs-recovery` walks automatic restart in both themes with
+clean and dirty drawings, tab order, cameras, undo/redo, save checkpoints and close.
+`--session-restart-performance` records three six-second pen gestures alongside
+background checkpoints, logical resource/metadata bytes, snapshot age
+at publication and browser callback/input costs under `artifacts/seamless-restart/web`.
+It excludes still callbacks from motion statistics and checks unchanged state
+does not write again. These desktop diagnostics do not qualify a tablet tier;
+use the reference hardware, canvas and completed-update rules in
+[performance measuring](../performance/measuring.md).
 
 The localization tests cover retained semantic copy, optional fields, binding
 replacement and composite labels that contain native inputs. The copy suites check

@@ -342,7 +342,7 @@ pub(super) fn photo_workspace(app: &NativeTestApp) -> Rc<Workspace> {
     let w=Workspace::with_project(app,Some((new_drawing(512,512,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
     w.window.maximize();w.window.present();ready(&w);
     let weak=Rc::downgrade(&w);
-    *w.open_document.borrow_mut()=Some(Rc::new(move |project,location,origin| {if let Some(w)=weak.upgrade() {w.documents.enqueue(&w,(project,location,origin));}}));
+    *w.open_document.borrow_mut()=Some(Rc::new(move |project,location| {if let Some(w)=weak.upgrade() {w.documents.enqueue(&w,(project,location));}}));
     invoke(&w,CommandId::OpenDocument);let dialog=super::new_photo::chooser();
     let photo=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/photo-editing-color/g2-inputs/portrait.png");
     dialog.set_file(&gtk::gio::File::for_path(photo)).unwrap();pump(200);dialog.response(gtk::ResponseType::Accept);
@@ -466,7 +466,7 @@ fn native_histogram_live_language() {
     composition_mut(&mut project).blend = layer_core::BlendSpace::Linear;
     std::sync::Arc::make_mut(paint_at_mut(&mut project,0).original.as_mut().unwrap()).interpretation.profile =
         ColorProfile::Icc(layer_color::profile_bytes(&ColorProfile::Builtin(RgbSpace::DisplayP3)).unwrap().into());
-    crate::open_workspace(&app, &active, Some((project, None)), None);
+    crate::open_workspace(&app, &active, Some((project, None)));
     until(|| !active.borrow().is_empty(), "prepared histogram language window");
     let w = active.borrow().last().unwrap().clone();
     w.window.maximize();w.window.present();ready(&w);

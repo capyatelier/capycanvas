@@ -432,5 +432,5 @@ fn valid_preview_remains_independent_when_its_png_is_corrupt_or_mismatched() {
 #[path = "roundtrip_semantics.rs"]
 mod roundtrip_semantics;
 
-#[path="compatibility.rs"]
-mod compatibility;
+#[path="current_design.rs"]
+mod current_design;

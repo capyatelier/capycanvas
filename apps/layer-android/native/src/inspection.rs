@@ -131,7 +131,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionTask(
         let a = unsafe { app(handle) };
         let session = &a.host.session;
         session.require_document_snapshot_idle()?;
-        let capture = session.capture_project_recovery()?;
+        let capture = session.capture_artwork()?;
         let snapshot = session.engine().scene_snapshot();
         let selection = session.engine().document().working.selection.clone();
         let gpu = session

@@ -15,7 +15,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
     await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(b=>b.textContent==='Choose File…').click()`);
   }};
   await invoke('fit_canvas');
-  await invoke('export_document');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   console.log('Initial export',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length,header:Array.from(bytes.slice(0,16))}))'));
   assert.ok(await evaluate('[...rasterFiles.values()].some(bytes=>bytes[0]===137)'));
   await evaluate(`window.rasterBlank=[...rasterFiles.values()][0].slice();`);
@@ -24,7 +24,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
     await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();
   }
   await wait('layerApp.state().document_file.modified');
-  await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
+  await invoke('save_document_as');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   assert.deepEqual(await evaluate('Array.from([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,4))'),[80,75,3,4]);
   console.log('Captured raster archive',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length}))'));
   await evaluate(`(async()=>{window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
@@ -33,16 +33,16 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
     window.showOpenFilePicker=async()=>[{name:'restored.capy',async getFile(){return new File([rasterOriginal],'restored.capy')}}];})()`);
   const originalPackage = await readPackage(evaluate, 'rasterOriginal');
   assert.ok(packageResourceIdentity(originalPackage).length>0);
-  await invoke('export_document');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   await evaluate(`window.rasterPaintPng=[...rasterFiles].find(([name])=>name.endsWith('.png'))[1].slice();
     window.rasterHash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).join(',');`);
   assert.notEqual(await evaluate('rasterHash(rasterBlank)'),await evaluate('rasterHash(rasterPaintPng)'),'Committed contact changes exported pixels');
   await invoke('undo');await invoke('redo');
-  await invoke('open_document');await wait('!layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="restored.capy"');
+  await invoke('open_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy && layerApp.state().document_file.location?.name==="restored.capy"');
   await wait('layerApp.app.brush_ready()');
-  await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');
+  await invoke('save_document_as');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   assert.deepEqual(packageResourceIdentity(await readPackage(evaluate, "rasterFiles.get('restored.capy')")),packageResourceIdentity(originalPackage));
-  await invoke('export_document');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   assert.equal(await evaluate(`rasterHash(rasterFiles.get('restored.png'))`),await evaluate('rasterHash(rasterPaintPng)'),'Restoring exact tiles produces identical full-canvas PNG pixels');
   await evaluate(`window.rasterGood=rasterOriginal.slice();rasterOriginal[rasterOriginal.length-1]^=1;`);
   const epoch=await evaluate('Number(layerApp.state().document_file.epoch)');
@@ -55,7 +55,7 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
     assert.ok(failed.reason.length>0);
     assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt package inspection keeps the live document');
     await evaluate(`(()=>{const close=[...document.querySelectorAll('dialog[open].document-dialog button')].find(button=>button.textContent===rasterFailedPackage.close);if(!close)throw Error('Missing failed package Close action');close.click()})()`);
-    await wait('!layerApp.state().document_file.busy');
+    await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
     assert.equal(await evaluate('Number(layerApp.state().document_file.epoch)'),epoch,'Corrupt archive cannot replace the document');
   } finally {await evaluate('layerApp.app.package_view=rasterPackageView');}
   await evaluate('rasterOriginal=rasterGood');
@@ -70,23 +70,23 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   })()`);
   assert.equal(await evaluate('window.suspendedNavigator'),false,'A queued Navigator reflow defers while the GPU is suspended');
   await wait('layerApp.app.brush_ready() && layerApp.startupTimes.complete!==null');
-  await invoke('export_document');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   assert.equal(await evaluate(`rasterHash(rasterFiles.get('restored.png'))`),await evaluate('rasterHash(rasterPaintPng)'),'GPU replacement retains committed pixels');
   console.log('Exact raster save/reopen, undo/redo, corrupt-file retention and GPU replacement passed');
 
   const expected=await evaluate('rasterHash(rasterPaintPng)');
-  await evaluate(`layerApp.app.save_recovery('abandoned-raster-test')`);
+  const prior=await evaluate("JSON.parse(JSON.stringify(layerApp.state().document_file,(_,value)=>typeof value==='bigint'?Number(value):value))");
+  await evaluate('layerApp.documents.autosave()');
   await call('Page.reload',{ignoreCache:true});
   await new Promise(resolve=>setTimeout(resolve,1000));
-  await wait('!![...document.querySelectorAll("dialog[open].document-dialog h2")].find(n=>n.textContent==="Recover drawing?")');
-  await evaluate('[...document.querySelectorAll(".document-dialog button")].find(n=>n.textContent==="Recover").click()');
-  await wait('layerApp.state().document_file.modified && layerApp.app.brush_ready()');
-  assert.equal(await evaluate('layerApp.state().document_file.location??null'),null,'Recovery has no durable user save location');
+  await wait('window.layerApp?.app.brush_ready()');
+  await evaluate('layerApp.documents.startRecovery()');
+  assert.equal(await evaluate('layerApp.state().document_file.location?.name??null'),prior.location?.name??null,'Restart retains the manual-save destination');
   await evaluate(`window.rasterFiles=new Map();window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(value){bytes=new Uint8Array(value instanceof Blob?await value.arrayBuffer():value)},async close(){rasterFiles.set(options.suggestedName,bytes)},async abort(){}}}});`);
-  await invoke('export_document');await wait('!layerApp.state().document_file.busy');
+  await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   const recovered=await evaluate(`(async()=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',[...rasterFiles.values()][0]))).join(','))()`);
   assert.equal(recovered,expected,'An abandoned tab recovers exactly the same pixels');
-  assert.equal(await evaluate('layerApp.state().document_file.modified'),true,'Export does not acknowledge the recovered save checkpoint');
-  console.log('Worker IndexedDB recovery survives reload and remains unsaved');
+  assert.equal(await evaluate('layerApp.state().document_file.modified'),prior.location?true:prior.modified,'Export keeps the restored checkpoint protected when no persistent original handle is available');
+  console.log('Worker IndexedDB restart survives reload with its manual-save checkpoint');
 
 }

@@ -105,7 +105,7 @@ impl WebApp {
         self.session.require_document_snapshot_idle().map_err(js)?;
         let key = ToneKey::current(&self.session)
             .ok_or_else(|| js("HDR analysis requires HDR artwork"))?;
-        let project = self.session.capture_project_recovery().map_err(js)?;
+        let project = self.session.capture_artwork().map_err(js)?;
         let gpu = self
             .session
             .engine()

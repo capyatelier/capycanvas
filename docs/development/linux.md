@@ -88,6 +88,44 @@ worker. Export Preview Image writes the verified PNG to a separate destination
 and rejects the original path and filesystem aliases before publication. Closing
 the dialog leaves the editable drawing and recovery source intact.
 
+## Session restart
+
+Quitting preserves every open drawing without a save prompt. The next launch
+restores the active drawing first, then the other tabs in their saved order,
+including clean and untitled drawings. Camera, selection, editing targets,
+modified state and bounded Undo/Redo history come from the shared private
+session codec. An ordinary restart retains the normal title. Drawings restored after an
+interrupted exit or from a previous complete checkpoint carry the shared
+recovered caption until Save succeeds. Closing a tab still uses Save/Discard/Cancel and removes its
+membership durably before retiring the private copy.
+
+`recovery.rs` supplies the GTK timing and worker transport around shared
+`SessionCapture`, `SessionManifest` and `SessionStore`. Private checkpoints run
+at a two-second observation interval, skip unchanged state and reuse immutable
+resource files. File encoding, validation, publication and cleanup run on
+workers. The window stops accepting new edits during an orderly exit and waits
+asynchronously for drawing and workspace publication. Storage failure keeps the
+window open and preserves the previous complete checkpoint.
+
+Saved sessions live in `$XDG_STATE_HOME/capycanvas/sessions` (or
+`~/.local/state/capycanvas/sessions`). `CAPY_RECOVERY_DIR` selects an isolated
+session directory for tests. Window and drawing locks protect live owners;
+unfinished restoration attempts are retained and skipped on subsequent launch.
+Saving to a restored destination verifies its original immutable bytes before
+replacement; an unavailable or externally changed destination opens Save As.
+Restoring a saved drawing also checks that original on a worker. A missing or
+changed original keeps the private copy unsaved until Save or explicit Discard.
+The private checkpoint never overwrites the artist's project file.
+
+`native_session_restart` checks automatic multi-tab restart, order, active tab,
+camera, modified state, retained Undo/Redo and explicit close cancellation and
+discard. `native_session_restart_saved_origins` checks that intact saved originals
+remain clean, missing or changed originals require an explicit close decision,
+and Save As preserves the restored drawing. `native_document_files` checks saved
+project pixels and preservation of the clean drawing's private copy. Run each
+through the private-display runner, with a fresh `CAPY_RECOVERY_DIR`, and set `CAPY_NATIVE_TEST_THEME=light`
+or `dark` for both presentations.
+
 ## Native text input
 
 Editable submission paths use `input::guard_entry_activation` for entries and

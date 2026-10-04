@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (wiederhergestellt)
+documents-destination-changed = Die gespeicherte Zeichnung wurde geändert oder ist nicht verfügbar. Verwende Speichern unter, um beide Kopien zu behalten.

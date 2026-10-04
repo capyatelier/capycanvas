@@ -80,9 +80,7 @@ import AppKit
     @MainActor func windowShouldClose(_ sender: NSWindow) -> Bool {
         if approved {
             approved = false
-            let allowed = downstream?.windowShouldClose?(sender) ?? true
-            if !allowed { store?.cancelPreparedClose() }
-            return allowed
+            return true
         }
         guard !asking else { return false }
         guard let store else { return downstream?.windowShouldClose?(sender) ?? true }
@@ -90,6 +88,7 @@ import AppKit
         let confirm: (Bool) -> Void = { [weak self, weak sender] allowed in
             guard let self else { return }
             guard allowed else { self.asking = false; return }
+            guard let sender, self.downstream?.windowShouldClose?(sender) ?? true else { self.asking = false; store.cancelPreparedClose(); return }
             store.prepareClose { [weak self, weak sender] saved in
                 guard let self else { return }
                 self.asking = false
@@ -108,7 +107,6 @@ import AppKit
         return false
     }
     @MainActor func windowWillClose(_ notification: Notification) {
-        store?.recovery.close()
         downstream?.windowWillClose?(notification)
     }
     func windowDidBecomeKey(_ notification: Notification) {

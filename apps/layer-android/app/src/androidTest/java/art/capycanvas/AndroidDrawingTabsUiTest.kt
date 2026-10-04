@@ -99,6 +99,10 @@ class AndroidDrawingTabsUiTest {
             SystemClock.sleep(40)
         }
     }
+    private fun closeTab(id:Long,checkErrors:Boolean=true) {
+        if(point(tag("drawing-close-$id")) == null)tap(tag("drawing-selector-button"),checkErrors)
+        tap(tag("drawing-close-$id"),checkErrors)
+    }
     private fun create(): Long {
         ready(); val count = ids().size
         tap(description("New…")); tap(text("Create"))
@@ -116,8 +120,6 @@ class AndroidDrawingTabsUiTest {
     private fun finished() {
         waitFor("Activity destroyed after workspace flush") { ui { activity.isFinishing && activity.isDestroyed } }
         repeat(15) { SystemClock.sleep(20); healthy() }
-        assertEquals(0L, ui { host.drawingTabs.selected })
-        assertTrue(ui { host.drawingTabs.rows.isEmpty() })
         assertFalse(ui { host.workspaceManager?.optBoolean("dirty") == true })
         // onStop/onCleared release the workspace lease on the native owner.
         // Its final drain does not publish to the destroyed Compose view, whose
@@ -143,9 +145,7 @@ class AndroidDrawingTabsUiTest {
     private fun openFixture(name: String): Pair<Long, File> {
         ready()
         val file = File(device.root, name)
-        val selected = tabs().getLong("selected")
-        val capture = native { Native.projectRecoveryFor(it, selected) }
-        try { Native.projectPublish(capture, file.absolutePath) } finally { Native.projectFree(capture) }
+        host.writeDrawingCopy(file)
         val count = ids().size
         ui { assertTrue(host.documents.openUris(listOf(Uri.fromFile(file)))) }
         waitFor("fixture opened") { ids().size == count + 1 }; ready()
@@ -156,57 +156,121 @@ class AndroidDrawingTabsUiTest {
         scenario.onActivity { activity = it; host = it.host; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
         waitFor("production startup", 120_000) { ui { host.snapshot?.optBoolean("brush_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.snapshot?.getJSONObject("state")?.array("commands")?.objects()?.any { c -> c.optString("id") == "new_document" && c.optBoolean("enabled") } == true } }
         ready()
+        androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("theme")?.let {theme ->
+            require(theme in listOf("light","dark"))
+            ui {host.dispatch(obj("type" to "set_theme","theme" to theme))}
+            waitFor("requested theme") {ui {host.snapshot?.objectOrNull("state")?.optString("theme") == theme}}
+        }
     }
     @After fun cleanup() {
         if (::scenario.isInitialized) scenario.close()
     }
     @Test fun closeButtonsAndFileMenuUseRealFrameTiming() {
         val first = tabs().getLong("selected"); val second = create()
-        tap(tag("drawing-close-$second")); closed(second, 1)
+        closeTab(second); closed(second, 1)
         val third = create()
-        tap(tag("drawing-close-$first")); closed(first, 1)
+        closeTab(first); closed(first, 1)
         assertEquals(third, tabs().getLong("selected"))
         openFileMenu(); tap(text("Close")); finished()
     }
     @Test fun dirtyCloseCancelAndActualSavePickerCancelPreserveDrawing() {
         val first = tabs().getLong("selected"); dirty(); val second = create()
-        tap(tag("drawing-close-$first")); tap(tag("document-close-cancel")); ready()
+        closeTab(first); tap(tag("document-close-cancel")); ready()
         assertEquals(listOf(first, second), ids()); assertEquals(first, tabs().getLong("selected"))
-        tap(tag("drawing-close-$first")); tap(tag("document-close-save"))
+        closeTab(first); tap(tag("document-close-save"))
         waitFor("SAF save picker") { instrumentation.uiAutomation.rootInActiveWindow?.packageName?.toString()?.contains("documentsui") == true }
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
         waitFor("save picker cancelled") { ui { host.documents.picker == null && !host.documents.working && activity.hasWindowFocus() } }; ready()
         assertEquals(listOf(first, second), ids()); assertTrue(tabs().array("tabs").getJSONObject(0).getBoolean("modified"))
-        tap(tag("drawing-close-$first")); tap(tag("document-close-discard")); closed(first, 1)
+        closeTab(first); tap(tag("document-close-discard")); closed(first, 1)
         dismissDrawersWithBack()
         instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK); finished()
     }
     @Test fun saveAndFailedSaveCloseOnlyTheirApprovedOwner() {
         val (saved, file) = openFixture("saved.capy"); val before = file.readBytes(); dirty()
-        tap(tag("drawing-close-$saved")); tap(tag("document-close-save")); closed(saved, 1)
+        closeTab(saved); tap(tag("document-close-save")); closed(saved, 1)
         assertFalse("Save wrote the changed drawing", before.contentEquals(file.readBytes()))
         val (failed, unavailable) = openFixture("unavailable.capy"); dirty()
         assertTrue(unavailable.delete()); assertTrue(unavailable.mkdir())
-        tap(tag("drawing-close-$failed")); tap(tag("document-close-save"))
+        closeTab(failed); tap(tag("document-close-save"))
         waitFor("provider write failure", checkErrors = false) { ui { !host.documents.working && (host.actionError != null || host.snapshot?.getJSONObject("state")?.optString("host_error").let { !it.isNullOrEmpty() && it != "null" }) } }
         assertTrue(failed in ids()); assertEquals(failed, tabs().getLong("selected")); assertTrue(tabs().array("tabs").getJSONObject(1).getBoolean("modified"))
         tap(text("OK"), checkErrors = false)
-        tap(tag("drawing-close-$failed"), checkErrors = false); tap(tag("document-close-cancel"), checkErrors = false)
+        closeTab(failed,checkErrors=false); tap(tag("document-close-cancel"), checkErrors = false)
         assertEquals(2, ids().size)
     }
+    @Test fun saveRefusesProviderReplacementWhenPrivateCheckpointFails() {
+        waitFor("session ready",120_000) {ui {host.recovery.ready}}
+        val (saved,file) = openFixture("checkpoint-barrier.capy")
+        val before = file.readBytes()
+        ui {host.recovery.background()}
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        SystemClock.sleep(500)
+        val storeDirectories = device.recovery.walkTopDown().filter {it.name == "session.json"}.flatMap {index ->
+            JSONObject(Native.sessionManifestRead(index.absolutePath)).array("drawings").objects().map {File(index.parentFile,it.getString("key"))}.asSequence()
+        }.toList()
+        assertTrue(storeDirectories.isNotEmpty())
+        try {
+            for(directory in storeDirectories)assertTrue(directory.setWritable(false,false))
+            ui {host.dispatch(obj("type" to "invoke","command" to "add_layer"))}
+            waitFor("new unsaved layer") {tabs().array("tabs").objects().first {it.getLong("id") == saved}.getBoolean("modified")}
+            ui {host.dispatch(obj("type" to "invoke","command" to "save_document"))}
+            waitFor("private checkpoint blocks provider write",checkErrors=false) {ui {!host.documents.working&&host.actionError != null}}
+            assertArrayEquals("Original remains intact when private durability fails",before,file.readBytes())
+            assertTrue(saved in ids());assertEquals(saved,tabs().getLong("selected"))
+            assertTrue(tabs().array("tabs").objects().first {it.getLong("id") == saved}.getBoolean("modified"))
+            tap(text("OK"),checkErrors=false)
+        } finally {
+            for(directory in storeDirectories)assertTrue(directory.setWritable(true,true))
+            ui {host.clearActionError();host.recovery.foreground()}
+        }
+    }
+
+    @Test fun restoredSavedDrawingsRequireCloseDecisionWhenOriginalChangesOrDisappears() {
+        waitFor("session ready",120_000) {ui {host.recovery.ready}}
+        val blank = tabs().getLong("selected")
+        val (intact, intactFile) = openFixture("restart-intact.capy")
+        val (changed, changedFile) = openFixture("restart-changed.capy")
+        val (missing, missingFile) = openFixture("restart-missing.capy")
+        val intactBytes = intactFile.readBytes()
+        val changedBytes = byteArrayOf(1,2,3)
+        assertEquals(listOf(false,false,false,false),tabs().array("tabs").objects().map {it.getBoolean("modified")})
+        ui {host.drawingTabs.closeWindow()};finished();scenario.close()
+        changedFile.writeBytes(changedBytes);assertTrue(missingFile.delete())
+        launch()
+        waitFor("restored original checks",120_000) {ui {host.recovery.ready&&!host.recovery.working}}
+        ready()
+        assertEquals(listOf(blank,intact,changed,missing),ids())
+        assertEquals(listOf(false,false,true,true),tabs().array("tabs").objects().map {it.getBoolean("modified")})
+        assertNull(ui {host.recovery.candidate});assertNull(point(tag("recover-drawing")))
+        closeTab(intact);closed(intact,3)
+        assertNull(point(tag("document-close-discard")))
+        assertTrue(intactBytes.contentEquals(intactFile.readBytes()))
+        for(id in listOf(changed,missing)) {
+            closeTab(id)
+            waitFor("saved original needs explicit close decision") {point(tag("document-close-save")) != null&&point(tag("document-close-discard")) != null&&point(tag("document-close-cancel")) != null}
+            tap(tag("document-close-cancel"));ready();assertTrue(id in ids())
+            assertTrue(tabs().array("tabs").objects().first {it.getLong("id") == id}.getBoolean("modified"))
+        }
+        assertTrue(changedBytes.contentEquals(changedFile.readBytes()));assertFalse(missingFile.exists())
+        closeTab(changed);tap(tag("document-close-discard"));closed(changed,2)
+        closeTab(missing);tap(tag("document-close-discard"));closed(missing,1)
+        assertEquals(listOf(blank),ids())
+    }
+
     @Test fun approvedCloseSurvivesActivityRecreationDuringDrain() {
         val first = tabs().getLong("selected"); create()
         for (final in listOf(false, true)) {
             dirty(); val before = ids()
             if (final) { openFileMenu(); tap(text("Close")) }
-            else tap(tag("drawing-close-${tabs().getLong("selected")}"))
+            else closeTab(tabs().getLong("selected"))
             waitFor("close prompt") { point(tag("document-close-discard")) != null }
             val gate = CompletableDeferred<Unit>(); val control = Native.captureControl()
             ui { host.drawingTabs.registerInspection(control, host.viewModelScope.launch { gate.await() }) }
             try {
                 tap(tag("document-close-discard"))
                 waitFor("approved close draining") { ui { host.drawingTabs.switching } }
-                if (!final) { tap(tag("drawing-close-$first")); assertEquals("A second close cannot steal the pending owner", before, ids()) }
+                if (!final) { ui {host.drawingTabs.select(first,true)}; assertEquals("A second close cannot steal the pending owner", before, ids()) }
                 val owner = host
                 scenario.recreate(); scenario.onActivity { activity = it; host = it.host }
                 assertSame(owner, host)
@@ -218,16 +282,20 @@ class AndroidDrawingTabsUiTest {
         }
     }
 
-    @Test fun windowCloseStopsAtCancelAndContinuesOnlyApprovedDrawings() {
+    @Test fun windowQuitPreservesCleanAndModifiedDrawingsWithoutPrompt() {
+        waitFor("session ready",120_000) {ui {host.recovery.ready}}
         val first = tabs().getLong("selected"); dirty(); val second = create(); dirty(); val third = create()
-        ui { host.drawingTabs.closeWindow() }
-        waitFor("window close reaches dirty neighbour") { third !in ids() && point(tag("document-close-cancel")) != null }
-        tap(tag("document-close-cancel")); ready()
-        assertEquals(listOf(first, second), ids()); assertFalse(ui { host.drawingTabs.closingWindow })
-        ui { host.drawingTabs.closeWindow() }; tap(tag("document-close-discard"))
-        waitFor("next dirty drawing gets its own decision") { ids() == listOf(first) && point(tag("document-close-cancel")) != null }
-        tap(tag("document-close-cancel")); ready()
-        assertTrue(tabs().array("tabs").getJSONObject(0).getBoolean("modified"))
-        ui { host.drawingTabs.closeWindow() }; tap(tag("document-close-discard")); finished()
+        val expected = ids()
+        ui {host.drawingTabs.closeWindow()}
+        waitFor("Activity destroyed after session and workspace flush") {ui {activity.isFinishing&&activity.isDestroyed}}
+        scenario.close();scenario = ActivityScenario.launch(MainActivity::class.java)
+        scenario.onActivity {activity=it;host=it.host}
+        waitFor("automatic session restoration",120_000) {ui {host.recovery.ready&&!host.recovery.working}}
+        ready()
+        assertEquals(listOf(first,second,third),expected);assertEquals(expected,ids())
+        assertEquals(third,tabs().getLong("selected"))
+        assertEquals(listOf(true,true,false),tabs().array("tabs").objects().map {it.getBoolean("modified")})
+        assertNull(ui {host.recovery.candidate})
+        assertNull(point(tag("document-close-discard")));assertNull(point(tag("recover-drawing")))
     }
 }

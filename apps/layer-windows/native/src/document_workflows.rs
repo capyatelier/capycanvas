@@ -296,7 +296,7 @@ impl Task {
                 (
                     "histogram",
                     Payload::Histogram {
-                        project: Some(Box::new(session.capture_project_recovery()?)),
+                        project: Some(Box::new(session.capture_artwork()?)),
                         gpu: gpu.snapshot_gpu(),
                     },
                 )
@@ -1002,7 +1002,7 @@ mod tests {
         host.session =
             UiSession::from_project(Renderer(Some(gpu.into())), project, None, [48, 36], Platform::Windows).unwrap();
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        let crate::documents::RecoveryPrepared::Editable(candidate)=crate::documents::prepare_recovery(environment, master, &Default::default()).unwrap() else{panic!("Native master must admit an editable session")};
+        let candidate=crate::documents::prepare_package(environment, master, &Default::default()).unwrap();
         host.session = *candidate;
         host.session.set_document_replacement(true);
         host.document_adopted();
@@ -1242,7 +1242,7 @@ mod tests {
 
         let mut unnamed = profile.clone();
         let tags = u32::from_be_bytes(unnamed[128..132].try_into().unwrap()) as usize;
-        for tag in unnamed[132..132 + tags * 12].chunks_exact_mut(12) {
+        for tag in unnamed[132..132 + tags * 12].as_chunks_mut::<12>().0 {
             if &tag[..4] == b"desc" { tag[..4].copy_from_slice(b"zzzz"); }
         }
         assert_eq!(layer_color::profile_description_optional(&ColorProfile::Icc(unnamed.clone().into())).unwrap(), None);
@@ -1288,9 +1288,9 @@ mod tests {
             assert_eq!(host.session.engine().checkpoint(), proof_checkpoint);
         }
         let portable = directory.join("proof-portable.capy");
-        write_capture(&host.session.capture_project_recovery().unwrap(),std::fs::File::create(&portable).unwrap()).unwrap();
+        write_capture(&host.session.capture_artwork().unwrap(),std::fs::File::create(&portable).unwrap()).unwrap();
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        let crate::documents::RecoveryPrepared::Editable(restored)=crate::documents::prepare_recovery(environment, portable, &Default::default()).unwrap() else{panic!("Proof package must admit an editable session")};
+        let restored=crate::documents::prepare_package(environment, portable, &Default::default()).unwrap();
         assert_eq!(restored.engine().document().output().proof, Some(embedded.clone()));
         assert!(!restored.state().soft_proof && !restored.state().gamut_warning);
         let mut replacement = begin(&mut host, CommandId::SoftProofSetup);

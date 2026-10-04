@@ -48,8 +48,24 @@ the system FXC compiler, which is several times slower. Set
 `WGPU_DX12_COMPILER=fxc` to compare the two. The Windows App SDK runtime is also
 copied beside the executable, so development builds run unpackaged.
 
-Preferences live in `settings.json` and workspaces in `workspaces.sqlite3` under
-`%LOCALAPPDATA%\CapyAtelier\CapyCanvas`.
+Preferences live in `settings.json`, workspaces in `workspaces.sqlite3` and private
+editing sessions in `sessions/` under `%LOCALAPPDATA%\CapyAtelier\CapyCanvas`.
+Ordinary restarts reopen saved and untitled drawings automatically, retaining tab
+order, the active drawing, camera, selection and bounded Undo/Redo. Closing the
+window flushes the session asynchronously and destroys its GPU and storage owners
+on a worker after detaching the surface; explicitly closing a drawing still
+uses Save/Discard/Cancel and removes its durable membership before cleanup.
+Abnormal restores mark drawings as recovered until their next save.
+
+Session workers reuse immutable resources and coalesce changes over two seconds.
+Unchanged drawings produce no periodic writes. Atomic publication preserves the
+previous complete drawing checkpoint when storage fails, and live windows hold
+exclusive leases. Startup admits the complete session before preparing renderers;
+inactive drawings use one scratch renderer at a time. The active canvas appears
+after this bounded preparation of all tabs. Unfinished restore attempts remain on disk and require an
+explicit retry; Keep Open starts a separate session while retaining those copies.
+A restored destination is checked before saving so external changes cannot be
+silently overwritten. Use Save As when the original drawing changed.
 File workers use `color_storage::export_profile` for imported profiles in export
 options, export presets and print-proof setup.
 
@@ -59,8 +75,8 @@ status, available output names and bounded preview, with Copy Original, Export
 Preview and Close actions. Copy Original writes the retained package bytes on the
 document worker. Export Preview appears when the package has a verified preview
 and writes those exact PNG bytes to a new destination on the document worker.
-Recovery files opened in this view remain on disk. Only editable recovery
-adoption acknowledges a restore.
+Unsupported portable packages remain in that view. Private session failures
+retain their snapshots on disk and present Retry or Keep Open.
 
 Language changes prepare shared copy on the profile worker, then update retained
 controls in every window using that private profile. Publication waits for native
@@ -206,6 +222,12 @@ Signing, installed update and uninstall, and installs on a clean machine have no
 been verified.
 
 ## Test
+
+`exercise-artwork-recovery.ps1 -Executable <path> -Theme dark` checks automatic
+crash and orderly restarts, tab membership, the active drawing, Undo/Redo,
+cancelled and discarded drawing closes, missing or changed saved originals,
+and idle write coalescing. Repeat with
+`-Theme light`; the VM fixture runner selects both variants.
 
 Drawer and expansion query lifecycle tests live in `layer-host`. Windows
 workspace tests cover native snapshot insets and the JSON/CPU packet boundary.

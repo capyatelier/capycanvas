@@ -220,33 +220,50 @@ pub struct ResourceReader<'a> {
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
     pub(crate) tiles: BTreeMap<PortableId, Arc<TileBlob>>, pub(crate) luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
     verified: bool,
-    aliases: BTreeMap<(usize,u64,u64), PortableId>,
+    retained_tiles: bool,
+    aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>,
     rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
     pub(crate) selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>,
     pub(crate) originals: BTreeMap<String, Arc<crate::color::source::SourceImage>>,
 }
+#[derive(Default)]
+pub(crate) struct ResourceCache {
+    bytes: BTreeMap<PortableId, Resource<[u8]>>, texts: BTreeMap<PortableId, Resource<str>>,
+    tiles: BTreeMap<PortableId, Arc<TileBlob>>, luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
+    aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>, rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
+    selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>, originals: BTreeMap<String, Arc<crate::color::source::SourceImage>>,
+}
 impl<'a> ResourceReader<'a> {
     pub fn new(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        Self {manifest,backing,cancelled,limits,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),originals:BTreeMap::new()}
+        Self {manifest,backing,cancelled,limits,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,retained_tiles:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),originals:BTreeMap::new()}
+    }
+    pub(crate) fn for_history(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
+        let mut reader=Self::new(manifest,backing,cancelled,limits);reader.retained_tiles=true;reader
+    }
+    pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
+        self.bytes=cache.bytes;self.texts=cache.texts;self.tiles=cache.tiles;self.luts=cache.luts;self.decoded=cache.decoded;
+        self.aliases=cache.aliases;self.rasters=cache.rasters;self.selections=cache.selections;self.originals=cache.originals;
+    }
+    pub(crate) fn into_cache(self)->ResourceCache {
+        ResourceCache {bytes:self.bytes,texts:self.texts,tiles:self.tiles,luts:self.luts,decoded:self.decoded,
+            aliases:self.aliases,rasters:self.rasters,selections:self.selections,originals:self.originals}
     }
     pub(crate) fn require_verified(&mut self) { self.verified = true; }
     fn alias(&self, id:PortableId) -> DecodeResult<Option<PortableId>> {
         if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
         let record=self.manifest.resources.get(&id).ok_or("Missing resource")?;
         let Some(range)=record.range else { return Ok(None) };
-        let Some(&alias)=self.aliases.get(&(range.member,range.offset,range.length)) else { return Ok(None) };
-        let previous=&self.manifest.resources[&alias];
+        let Some((alias,previous))=self.aliases.get(&(range.member,range.offset,range.length)) else { return Ok(None) };
         let identity_field=|key:&&String| key.as_str()!="id"&&key.as_str()!="location";
-        if record.bytes!=previous.bytes || record.crc32!=previous.crc32
-            || !record.value.as_object().ok_or("Invalid resource record")?.iter().filter(|(key,_)|identity_field(key))
-                .eq(previous.value.as_object().ok_or("Invalid resource record")?.iter().filter(|(key,_)|identity_field(key))) {
+        if !record.value.as_object().ok_or("Invalid resource record")?.iter().filter(|(key,_)|identity_field(key))
+                .eq(previous.as_object().ok_or("Invalid resource record")?.iter().filter(|(key,_)|identity_field(key))) {
             return Err("Conflicting aliased resource descriptors".into());
         }
-        Ok(Some(alias))
+        Ok(Some(*alias))
     }
     fn remember_alias(&mut self,id:PortableId) {
         if let Some(range)=self.manifest.resources[&id].range {
-            self.aliases.entry((range.member,range.offset,range.length)).or_insert(id);
+            self.aliases.entry((range.member,range.offset,range.length)).or_insert_with(||(id,self.manifest.resources[&id].value.clone()));
         }
     }
     fn charge(&self, bytes: u64) -> DecodeResult<()> {
@@ -332,14 +349,15 @@ impl<'a> ResourceReader<'a> {
         let profile=record["data"].get("profile").cloned();
         let profile=profile.as_ref().map(|reference|self.bytes(reference,"capy.icc/1",crate::color::source::MAX_PROFILE_BYTES)).transpose()?;
         let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
-        self.charge(size as u64)?;
+        let retained=if self.retained_tiles {self.manifest.resources[&id].bytes}else{size as u64};
+        self.charge(retained)?;
         let (bytes,integrity)=self.stored(id,lz4_flex::block::get_maximum_output_size(size))?;
         let tile=Arc::new(match profile {
             Some(profile)=>TileBlob::from_profiled_package(id,descriptor,bytes,profile),
             None=>TileBlob::from_package(id,descriptor,bytes),
         }.map_err(|e|self.backing.fail(e))?);
         tile.compressed.set_integrity(integrity)?;
-        self.decoded+=size as u64; self.remember_alias(id);
+        self.decoded+=retained; self.remember_alias(id);
         self.tiles.insert(id,tile.clone()); Ok(tile)
     }
 }

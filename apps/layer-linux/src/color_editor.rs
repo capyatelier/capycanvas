@@ -478,7 +478,7 @@ mod tests {
         app.register(None::<&gtk::gio::Cancellable>).unwrap();
         for depth in [SampleDepth::U8, SampleDepth::F16] {
             let index = active.borrow().len();
-            crate::open_workspace(&app, &active, Some((new_drawing_at(64, 64, depth), None)), None);
+            crate::open_workspace(&app, &active, Some((new_drawing_at(64, 64, depth), None)));
             until(|| active.borrow().len() > index, "prepared color draft window");
             let w = active.borrow().last().unwrap().clone();
             w.window.maximize(); w.window.present(); ready(&w);
@@ -619,7 +619,7 @@ mod tests {
             assert!(w.gpu.borrow().as_ref().unwrap().session.can_park_document());
             let before_epoch = w.gpu.borrow().as_ref().unwrap().session.state().document_file.epoch;
             let before_notice = w.gpu.borrow().as_ref().unwrap().session.state().notice.as_ref().map(|notice|notice.id);
-            let mut opening = std::pin::pin!(w.documents.open(&w, (new_drawing_at(80, 80, depth), None, None)));
+            let mut opening = std::pin::pin!(w.documents.open(&w, (new_drawing_at(80, 80, depth), None)));
             let mut shown = false;
             glib::MainContext::default().block_on(std::future::poll_fn(|context| {
                 use std::future::Future;

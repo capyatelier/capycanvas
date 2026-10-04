@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name }（已恢复）
+documents-destination-changed = 已保存的绘图已更改或无法访问。请使用“另存为”保留两个副本。

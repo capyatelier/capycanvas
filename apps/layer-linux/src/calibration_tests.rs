@@ -117,7 +117,7 @@ fn native_white_balance_picker_contacts_and_atomic_history() {
 fn native_white_balance_live_language() {
     let (app, active) = crate::application("art.capycanvas.WhiteBalanceLanguages");
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    crate::open_workspace(&app, &active, Some((fixture(), None)), None);
+    crate::open_workspace(&app, &active, Some((fixture(), None)));
     until(|| !active.borrow().is_empty(), "prepared white balance window");
     let w = active.borrow().last().unwrap().clone();
     w.window.maximize(); w.window.present(); ready(&w);

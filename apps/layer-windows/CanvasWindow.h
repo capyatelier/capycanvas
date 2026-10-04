@@ -144,6 +144,7 @@ private:
     void Run();
     void Stop();
     void Finish();
+    void CloseViews();
     void Fail(std::string message);
     void Send(std::string json, CanvasCommandKind kind=CanvasCommandKind::Action);
     bool SendIndependent(CanvasWork item);

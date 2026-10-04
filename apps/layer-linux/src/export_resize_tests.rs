@@ -76,7 +76,7 @@ fn native_export_again_retains_recipe_and_current_pixels_per_document() {
         let destination = output.join("retained.png");
         let mut project = new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         paint_at_mut(&mut project, 0).original = Some(rgba8_source([64, 48], |_, _| [128, 128, 128, 255]));
-        crate::open_workspace(&app, &windows, Some((project, None)), None);
+        crate::open_workspace(&app, &windows, Some((project, None)));
         until(|| windows.borrow().last().is_some_and(|w| w.window.is_mapped()), "export owner window mapped");
         let w = windows.borrow().last().unwrap().clone();
         w.window.maximize(); w.window.present(); ready(&w);

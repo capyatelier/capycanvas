@@ -1,11 +1,22 @@
 //! Drawing identities/order are independent of native tab widgets and renderers.
-#[derive(Debug)]
+pub(crate) fn drawing_after_close(order: impl IntoIterator<Item = u64>, selected: u64) -> Option<u64> {
+    let mut order = order.into_iter();
+    let mut previous = None;
+    while let Some(id) = order.next() {
+        if id == selected { return order.next().or(previous); }
+        previous = Some(id);
+    }
+    None
+}
+
+#[derive(Clone, Debug)]
 pub struct DocumentTabs {
     order: Vec<u64>,
     selected: u64,
     next: u64,
     undo: Vec<Vec<u64>>,
     redo: Vec<Vec<u64>>,
+    reserved: std::collections::BTreeSet<u64>,
 }
 impl Default for DocumentTabs {
     fn default() -> Self {
@@ -15,10 +26,46 @@ impl Default for DocumentTabs {
             next: 2,
             undo: Vec::new(),
             redo: Vec::new(),
+            reserved: Default::default(),
         }
     }
 }
 impl DocumentTabs {
+    pub(crate) fn reserve_identities(&mut self, ids: &[u64]) -> Result<(), String> {
+        let ids: std::collections::BTreeSet<_> = ids.iter().copied().collect();
+        if ids.iter().any(|id| *id==0 || *id>crate::session_recovery::MAX_SESSION_DRAWING_ID) {
+            return Err("Invalid restored drawing identity".into());
+        }
+        self.reserved.extend(ids.into_iter().filter(|id| !self.order.contains(id)));
+        Ok(())
+    }
+    pub(crate) fn add_parked_identity(&mut self, id: u64) -> Result<(), String> {
+        if id==0 || id>crate::session_recovery::MAX_SESSION_DRAWING_ID || self.selected==0 || self.order.contains(&id) {
+            return Err("Invalid restored drawing identity".into());
+        }
+        self.order.push(id);
+        self.reserved.remove(&id);
+        self.next=if id==crate::session_recovery::MAX_SESSION_DRAWING_ID {1}else {self.next.max(id+1)};
+        self.undo.clear();self.redo.clear();
+        Ok(())
+    }
+    pub(crate) fn restore_identity(&mut self, id: u64) -> Result<(), String> {
+        if id==0 || id>crate::session_recovery::MAX_SESSION_DRAWING_ID || self.selected==0 || (id!=self.selected && self.order.contains(&id)) {
+            return Err("Invalid restored drawing identity".into());
+        }
+        let selected=self.order.iter_mut().find(|entry|**entry==self.selected).ok_or("Missing selected drawing")?;
+        self.reserved.remove(&id);
+        *selected=id;self.selected=id;self.next=if id==crate::session_recovery::MAX_SESSION_DRAWING_ID {1}else {self.next.max(id+1)};self.undo.clear();self.redo.clear();
+        Ok(())
+    }
+    pub(crate) fn restore_order(&mut self, order:&[u64], selected:u64)->Result<(),String> {
+        let mut expected=self.order.clone();expected.sort_unstable();
+        let mut supplied=order.to_vec();supplied.sort_unstable();
+        if expected!=supplied || supplied.windows(2).any(|pair|pair[0]==pair[1]) || selected!=self.selected {
+            return Err("Restored drawing membership changed".into());
+        }
+        self.order=order.to_vec();self.undo.clear();self.redo.clear();Ok(())
+    }
     pub fn order(&self) -> &[u64] {
         &self.order
     }
@@ -26,8 +73,11 @@ impl DocumentTabs {
         self.selected
     }
     pub fn add(&mut self) -> u64 {
-        let id = self.next;
-        self.next += 1;
+        let mut id = self.next;
+        while self.order.contains(&id) || self.reserved.contains(&id) {
+            id = if id == crate::session_recovery::MAX_SESSION_DRAWING_ID { 1 } else { id + 1 };
+        }
+        self.next = if id == crate::session_recovery::MAX_SESSION_DRAWING_ID { 1 } else { id + 1 };
         self.order.push(id);
         self.selected = id;
         self.undo.clear();
@@ -51,15 +101,10 @@ impl DocumentTabs {
         let Some(index) = self.order.iter().position(|v| *v == id) else {
             return false;
         };
-        self.order.remove(index);
         if id == self.selected {
-            self.selected = self
-                .order
-                .get(index)
-                .or_else(|| self.order.last())
-                .copied()
-                .unwrap_or(0);
+            self.selected = self.after_close().unwrap_or(0);
         }
+        self.order.remove(index);
         // Opening/closing changes membership; order undo must never resurrect a
         // discarded document or silently remove a newly opened drawing.
         self.undo.clear();
@@ -67,11 +112,7 @@ impl DocumentTabs {
         true
     }
     pub fn after_close(&self) -> Option<u64> {
-        let i = self.order.iter().position(|&id| id == self.selected)?;
-        self.order
-            .get(i + 1)
-            .or_else(|| i.checked_sub(1).and_then(|i| self.order.get(i)))
-            .copied()
+        drawing_after_close(self.order.iter().copied(), self.selected)
     }
     pub fn reorder(&mut self, id: u64, before: Option<u64>) -> bool {
         if !self.order.contains(&id) || before.is_some_and(|v| !self.order.contains(&v) || v == id)
@@ -256,6 +297,35 @@ impl DocumentTabDrag {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pending_restore_identities_are_skipped_until_hydrated() {
+        let mut tabs = DocumentTabs::default();
+        tabs.reserve_identities(&[2, 3, crate::session_recovery::MAX_SESSION_DRAWING_ID]).unwrap();
+        assert_eq!(tabs.add(), 4);
+        assert!(tabs.reserve_identities(&[5, 0]).is_err());
+        assert_eq!(tabs.add(), 5);
+        tabs.add_parked_identity(2).unwrap();
+        assert!(!tabs.reserved.contains(&2));
+        let selected = tabs.selected();
+        tabs.next = crate::session_recovery::MAX_SESSION_DRAWING_ID;
+        assert_eq!(tabs.add(), 6);
+        assert_ne!(tabs.selected(), selected);
+    }
+    #[test]
+    fn restored_identity_keeps_allocation_exact_and_skips_live_collisions() {
+        let mut tabs = DocumentTabs::default();
+        tabs.add();
+        tabs.add();
+        tabs.restore_identity(crate::session_recovery::MAX_SESSION_DRAWING_ID).unwrap();
+        assert_eq!(tabs.add(), 3);
+        tabs.next = crate::session_recovery::MAX_SESSION_DRAWING_ID;
+        assert_eq!(tabs.add(), 4);
+        let order = tabs.order().to_vec();
+        for id in [0, crate::session_recovery::MAX_SESSION_DRAWING_ID + 1, u64::MAX, 1] {
+            assert!(tabs.restore_identity(id).is_err());
+            assert_eq!(tabs.order(), order);
+        }
+    }
     #[test]
     fn order_history_never_changes_selection_or_resurrects_closed_drawings() {
         let mut tabs = DocumentTabs::default();

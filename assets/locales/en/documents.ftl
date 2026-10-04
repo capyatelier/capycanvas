@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (recovered)
+documents-destination-changed = The saved drawing changed or is unavailable. Use Save As to keep both copies.

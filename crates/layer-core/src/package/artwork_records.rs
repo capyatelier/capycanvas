@@ -48,10 +48,11 @@ fn material(value:&Value)->DecodeResult<Option<RasterWatercolor>> {
 }
 fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:DocumentColor,resources:&mut ResourceInventory,cancel:&AtomicBool)->Result<Map<String,Value>,String> {
     let raster=raster.wait_data_cancellable(cancel)?; raster.validate_index(domain,mask,color)?;
+    let RasterData {tiles:raster_tiles,watercolor}=raster.as_ref();
     let mut data=Map::new();
-    if !raster.tiles.is_empty() {
+    if !raster_tiles.is_empty() {
         let mut tiles=Vec::new();
-        for (key,tile) in &raster.tiles {
+        for (key,tile) in raster_tiles {
             if cancel.load(Ordering::Relaxed) {return Err("Package operation cancelled".into());}
             let backing=tile.wait_backing_cancellable(cancel)?;
             if backing.descriptor!=key.plane.descriptor(color) {return Err("Wrong raster tile interpretation".into());}
@@ -59,11 +60,13 @@ fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:Documen
         }
         data.insert("tiles".into(),Value::Array(tiles));
     }
-    if let Some(w)=raster.watercolor {data.insert("material".into(),json!({"watercolor":{"wet_edge":f64::from(w.wet_edge),"burnt_edge":f64::from(w.burnt_edge),"edge_width":f64::from(w.edge_width)}}));}
+    if let Some(RasterWatercolor {wet_edge,burnt_edge,edge_width})=watercolor {
+        data.insert("material".into(),json!({"watercolor":{"wet_edge":f64::from(*wet_edge),"burnt_edge":f64::from(*burnt_edge),"edge_width":f64::from(*edge_width)}}));
+    }
     data.insert("domain".into(),v::encode_domain(domain)?); Ok(data)
 }
 fn decode_raster(data:&Map<String,Value>,domain:[u32;2],mask:bool,color:DocumentColor,reader:&mut ResourceReader<'_>)->DecodeResult<RasterRevision> {
-    let mut raster=RasterData {watercolor:data.get("material").map(material).transpose()?.flatten(),..Default::default()};
+    let mut raster=RasterData {tiles:BTreeMap::new(),watercolor:data.get("material").map(material).transpose()?.flatten()};
     if let Some(tiles)=data.get("tiles") {
         let tiles=list(tiles)?;
         if tiles.len()>reader.limits.tiles {return Err(DecodeError::Unsupported("Too many raster tiles".into()));}
@@ -90,7 +93,7 @@ fn encode_original(source:&SourceImage,resources:&mut ResourceInventory)->Result
     let mut interpretation=json!({"channels":channels,"depth":v::encode_depth(source.interpretation.depth),"profile":resources.profile(&source.interpretation.profile)?});
     if source.interpretation.profile_assumed {interpretation["profile_assumed"]=true.into();}
     let mut data=json!({"extent":v::encode_size(source.extent)?,"interpretation":interpretation,"tiles":source.tiles.iter().map(|(coordinate,tile)|Ok(json!({"coordinate":coordinate,"resource":resources.tile(tile.clone())?}))).collect::<Result<Vec<_>,String>>()?});
-    if source.kind==SourceKind::Rasterized {data["role"]="rasterized".into();}
+    match source.kind {SourceKind::Original=>{},SourceKind::Rasterized=>{data["role"]="rasterized".into();}}
     if let Some(resolution)=source.resolution {data["resolution"]=v::encode_resolution(resolution)?;}
     Ok(data)
 }
@@ -146,60 +149,62 @@ fn decode_guides(value:&Value)->DecodeResult<Guides> {
     }} Ok(Guides {rulers})
 }
 
-pub fn encode(art:&Artwork,cancel:&AtomicBool)->Result<(Vec<Value>,ResourceInventory),String> {
-    encode_with_inventory(art,cancel,ResourceInventory::default())
-}
-pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resources:ResourceInventory)->Result<(Vec<Value>,ResourceInventory),String> {
-    art.topology()?;
+pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut ResourceInventory,cancel:&AtomicBool)->Result<Value,String> {
     let canvas=art.compositions.get(art.root).ok_or("Missing root composition")?;
-    let mut records=Vec::new();
-    for (_,identity,c) in art.compositions.iter() {
-        if c.color.depth.is_float() && c.blend!=BlendSpace::Linear {return Err("Floating compositions require linear light blending".into());}
+    match edit {
+        crate::Edit::Composition(change)=>{let identity=change.id;let c=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            if c.color.depth.is_float() && c.blend!=BlendSpace::Linear {return Err("Floating compositions require linear light blending".into());}
         let mut data=json!({"frame":v::encode_frame(c.origin,c.size)?,"result":endpoint(id(&art.stacks,c.result)?)}).as_object().unwrap().clone();
         optional_object(&mut data,"color",v::encode_document_color(c.color)?);
         if c.blend!=BlendSpace::Linear {data.insert("blend".into(),v::encode_blend_space(c.blend));}
         if let Some(resolution)=c.resolution {data.insert("resolution".into(),v::encode_resolution(resolution)?);}
-        records.push(record(identity,"capy.composition/1",Value::Object(data)));
-    }
-    for (_,identity,stack) in art.stacks.iter() {
-        let entries=stack.entries.iter().map(|h|id(&art.occurrences,*h).map(reference)).collect::<Result<Vec<_>,_>>()?;
-        records.push(record(identity,"capy.stack/1",if entries.is_empty(){json!({})}else{json!({"entries":entries})}));
-    }
-    for (_,identity,paint) in art.paint.iter() {
-        let mut data=encode_raster(&paint.raster,paint.domain,false,canvas.color,&mut resources,cancel)?;
-        if let Some(source)=&paint.original {validate_original_color(source,canvas.color)?;data.insert("original".into(),encode_original(source,&mut resources)?);}
-        records.push(record(identity,"capy.paint-source/1",Value::Object(data)));
-    }
-    for (_,identity,coverage) in art.coverage.iter() {
-        let mut data=encode_raster(&coverage.raster,coverage.domain,true,canvas.color,&mut resources,cancel)?;
+        Ok(record(identity,"capy.composition/1",Value::Object(data)))
+        },
+        crate::Edit::Stack(change)=>{let identity=change.id;let stack=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            let entries=stack.entries.iter().map(|h|id(&art.occurrences,*h).map(reference)).collect::<Result<Vec<_>,_>>()?;
+        Ok(record(identity,"capy.stack/1",if entries.is_empty(){json!({})}else{json!({"entries":entries})}))
+        },
+        crate::Edit::Paint(change)=>{let identity=change.id;let paint=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            if !paint.operations.is_empty() {return Err("Wait for the current edit before transferring".into());}
+            let mut data=encode_raster(&paint.raster,paint.domain,false,canvas.color,resources,cancel)?;
+        if let Some(source)=&paint.original {validate_original_color(source,canvas.color)?;data.insert("original".into(),encode_original(source,resources)?);}
+        Ok(record(identity,"capy.paint-source/1",Value::Object(data)))
+        },
+        crate::Edit::Coverage(change)=>{let identity=change.id;let coverage=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            if !coverage.operations.is_empty() {return Err("Wait for the current edit before transferring".into());}
+            let mut data=encode_raster(&coverage.raster,coverage.domain,true,canvas.color,resources,cancel)?;
         if !(0. ..=1.).contains(&coverage.default_coverage) {return Err("Invalid default coverage".into());}
         set_float(&mut data,"default_coverage",coverage.default_coverage,1.)?;
-        if let Some(selection)=&coverage.initial {data.insert("initial".into(),selection_records::encode_selection(selection,&mut resources)?);}
-        records.push(record(identity,"capy.coverage-source/1",Value::Object(data)));
-    }
-    for (_,identity,definition) in art.definitions.iter() {records.push(record(identity,"capy.effect-definition/1",effect_records::encode_definition(definition,&mut resources)?));}
-    for (_,identity,effect) in art.effects.iter() {
-        let definition=art.definitions.get(effect.definition).ok_or("Missing effect definition")?;
+        if let Some(selection)=&coverage.initial {data.insert("initial".into(),selection_records::encode_selection(selection,resources)?);}
+        Ok(record(identity,"capy.coverage-source/1",Value::Object(data)))
+        },
+        crate::Edit::Definition(change)=>{let identity=change.id;let definition=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            Ok(record(identity,"capy.effect-definition/1",effect_records::encode_definition(definition,resources)?))
+        },
+        crate::Edit::Effect(change)=>{let identity=change.id;let effect=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            let definition=art.definitions.get(effect.definition).ok_or("Missing effect definition")?;
         let mut data=json!({"definition":reference(id(&art.definitions,effect.definition)?),"domain":v::encode_domain(effect.domain)?}).as_object().unwrap().clone();
-        optional_object(&mut data,"values",effect_records::encode_values(&definition.program,&effect.values,&mut resources)?);
-        records.push(record(identity,"capy.effect/1",Value::Object(data)));
-    }
-    for (_,identity,selection) in art.selections.iter() {
-        selection.display.validate().map_err(|e|e.to_string())?;
-        let mut data=selection_records::encode_selection(&selection.selection,&mut resources)?.as_object().unwrap().clone();
+        optional_object(&mut data,"values",effect_records::encode_values(&definition.program,&effect.values,resources)?);
+        Ok(record(identity,"capy.effect/1",Value::Object(data)))
+        },
+        crate::Edit::SavedSelection(change)=>{let identity=change.id;let selection=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            selection.display.validate().map_err(|e|e.to_string())?;
+        let mut data=selection_records::encode_selection(&selection.selection,resources)?.as_object().unwrap().clone();
         let color=v::encode_rgb_color(selection.display.color)?;
         if selection.display.color.space!=crate::color::RgbSpace::Srgb || selection.display.color.rgba.map(f32::to_bits)!=[1f32.to_bits(),0,0,1f32.to_bits()] || selection.display.color.linear_rgb.is_some() {data.insert("color".into(),color);}
         set_float(&mut data,"opacity",selection.display.opacity,0.5)?;
-        records.push(record(identity,"capy.selection/1",Value::Object(data)));
-    }
-    for (_,identity,guides) in art.guides.iter() {records.push(record(identity,"capy.guides/1",encode_guides(guides)?));}
-    for (_,identity,occurrence) in art.occurrences.iter() {
-        if !(0. ..=1.).contains(&occurrence.opacity) {return Err("Invalid occurrence opacity".into());}
+        Ok(record(identity,"capy.selection/1",Value::Object(data)))
+        },
+        crate::Edit::Guides(change)=>{let identity=change.id;let guides=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            Ok(record(identity,"capy.guides/1",encode_guides(guides)?))
+        },
+        crate::Edit::Occurrence(change)=>{let identity=change.id;let occurrence=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            if !(0. ..=1.).contains(&occurrence.opacity) {return Err("Invalid occurrence opacity".into());}
         if occurrence.blend==LayerBlend::PassThrough && !matches!(occurrence.content,OccurrenceContent::Stack(_)) {return Err("Pass through requires a stack".into());}
         let content=match &occurrence.content {OccurrenceContent::Paint(h)=>json!({"paint":reference(id(&art.paint,*h)?)}),OccurrenceContent::Stack(h)=>json!({"stack":reference(id(&art.stacks,*h)?)}),OccurrenceContent::Effect(h)=>json!({"effect":reference(id(&art.effects,*h)?)}),OccurrenceContent::Selection(h)=>json!({"selection":reference(id(&art.selections,*h)?)})};
         let mut data=json!({"content":content}).as_object().unwrap().clone(); set_name(&mut data,&occurrence.name);
         for (key,value,default) in [("visible",occurrence.visible,true),("locked",occurrence.locked,false),("alpha_locked",occurrence.alpha_locked,false),("reference",occurrence.reference,false)] {set_bool(&mut data,key,value,default);}
-        if occurrence.attachment!=Attachment::None {data.insert("attachment".into(),json!(match occurrence.attachment {Attachment::Clip=>"clip",Attachment::Effect=>"effect",Attachment::None=>unreachable!()}));}
+        match occurrence.attachment {Attachment::None=>{},Attachment::Clip=>{data.insert("attachment".into(),json!("clip"));},Attachment::Effect=>{data.insert("attachment".into(),json!("effect"));}}
         if occurrence.isolated_blend!=LayerBlend::Normal {data.insert("isolated_blend".into(),v::encode_layer_blend(occurrence.isolated_blend));}
         set_float(&mut data,"opacity",occurrence.opacity,1.)?;
         if occurrence.blend!=LayerBlend::Normal {data.insert("blend".into(),v::encode_layer_blend(occurrence.blend));}
@@ -211,10 +216,10 @@ pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resource
             optional_object(&mut m,"placement",v::encode_mask_placement(mask.translation,mask.placement,Rect::from_extent(source.domain))?);
             data.insert("mask".into(),Value::Object(m));
         }
-        records.push(record(identity,"capy.occurrence/2",Value::Object(data)));
-    }
-    for (_,identity,output) in art.outputs.iter() {
-        let mut data=json!({"source":endpoint(id(&art.compositions,output.composition)?)}).as_object().unwrap().clone(); set_name(&mut data,&output.name);
+        Ok(record(identity,"capy.occurrence/2",Value::Object(data)))
+        },
+        crate::Edit::Output(change)=>{let identity=change.id;let output=change.value.as_ref().ok_or("Cannot encode removed record")?;
+            let mut data=json!({"source":endpoint(id(&art.compositions,output.composition)?)}).as_object().unwrap().clone(); set_name(&mut data,&output.name);
         let mut context=Map::new(); set_float(&mut context,"elapsed",output.context.elapsed,0.)?;
         let mut seen=BTreeSet::new(); let mut phases=Vec::new();
         for (effect,phase) in output.context.phases.iter() {
@@ -229,8 +234,28 @@ pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resource
         if output.scale.map(f32::to_bits)!=[1f32.to_bits();2] {data.insert("scale".into(),output.scale.map(f64::from).into());}
         optional_object(&mut data,"sdr",v::encode_sdr(output.sdr)?);
         if let Some(proof)=&output.proof {data.insert("proof".into(),v::encode_proof(proof,|profile|resources.profile(profile))?);}
-        records.push(record(identity,"capy.output/1",Value::Object(data)));
+        Ok(record(identity,"capy.output/1",Value::Object(data)))
+        },
+        crate::Edit::Working(_)|crate::Edit::Batch(_)|crate::Edit::SetRaster{..}=>Err("Expected an authored record change".into()),
     }
+}
+
+pub fn encode(art:&Artwork,cancel:&AtomicBool)->Result<(Vec<Value>,ResourceInventory),String> {
+    encode_with_inventory(art,cancel,ResourceInventory::default())
+}
+pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resources:ResourceInventory)->Result<(Vec<Value>,ResourceInventory),String> {
+    art.topology()?;
+    let mut records=Vec::new();
+    for (handle,id,value) in art.compositions.iter() {records.push(encode_change(art,&crate::Edit::Composition(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.stacks.iter() {records.push(encode_change(art,&crate::Edit::Stack(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.paint.iter() {records.push(encode_change(art,&crate::Edit::Paint(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.coverage.iter() {records.push(encode_change(art,&crate::Edit::Coverage(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.definitions.iter() {records.push(encode_change(art,&crate::Edit::Definition(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.effects.iter() {records.push(encode_change(art,&crate::Edit::Effect(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.selections.iter() {records.push(encode_change(art,&crate::Edit::SavedSelection(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.guides.iter() {records.push(encode_change(art,&crate::Edit::Guides(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.occurrences.iter() {records.push(encode_change(art,&crate::Edit::Occurrence(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
+    for (handle,id,value) in art.outputs.iter() {records.push(encode_change(art,&crate::Edit::Output(crate::RecordChange {handle,id,value:Some(value.clone())}),&mut resources,cancel)?);}
     art.metadata.validate()?;
     for (kind,block) in ["exif","xmp","iptc"].into_iter().zip(art.metadata.blocks()) {if let Some(bytes)=block {resources.bytes("capy.photo-metadata/1",bytes,json!({"kind":kind}))?;}}
     if cancel.load(Ordering::Relaxed) {return Err("Package operation cancelled".into());}
@@ -242,27 +267,36 @@ fn payload(record:&Value)->DecodeResult<(&str,&Value)> {
     if bool_field(data,"ancillary",false)? || bool_field(data,"copy_safe",false)? {return Err("Known artwork cannot be ancillary".into());}
     Ok((v::string(v::required(data,"type")?)?,v::required(data,"data")?))
 }
-pub fn decode(manifest:&Manifest,reader:&mut ResourceReader<'_>)->DecodeResult<Artwork> {
-    decode_with_layout(manifest,reader,None)
+fn reserve<T>(store:&mut Store<T>,id:PortableId,strict:bool)->DecodeResult<()> {
+    if store.allocated(id).is_none() {if strict {return Err("Object is absent from runtime handle layout".into());}store.reserve(id)?;}Ok(())
 }
-pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'_>,layout:Option<&super::transfer::TransferLayout>)->DecodeResult<Artwork> {
-    let mut art=Artwork::new([1,1])?;
-    art.id=manifest.document; art.compositions=Store::default();art.stacks=Store::default();art.occurrences=Store::default();art.paint=Store::default();art.coverage=Store::default();art.effects=Store::default();art.definitions=Store::default();art.selections=Store::default();art.guides=Store::default();art.outputs=Store::default();
-    if let Some(layout)=layout {layout.install(&mut art)?;}
-    fn reserve<T>(store:&mut Store<T>,id:PortableId,strict:bool)->DecodeResult<()> {
-        if store.allocated(id).is_none() {if strict {return Err("Object is absent from runtime handle layout".into());}store.reserve(id)?;}Ok(())
+pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,Value>,reader:&mut ResourceReader<'_>)->DecodeResult<()> {
+    for (identity,record) in objects {
+        match record["type"].as_str().ok_or("Missing object type")? {
+            "capy.composition/1"=>{if let Some(handle)=art.compositions.allocated(*identity) {art.compositions.remove(handle);}},
+            "capy.stack/1"=>{if let Some(handle)=art.stacks.allocated(*identity) {art.stacks.remove(handle);}},
+            "capy.occurrence/2"=>{if let Some(handle)=art.occurrences.allocated(*identity) {art.occurrences.remove(handle);}},
+            "capy.paint-source/1"=>{if let Some(handle)=art.paint.allocated(*identity) {art.paint.remove(handle);}},
+            "capy.coverage-source/1"=>{if let Some(handle)=art.coverage.allocated(*identity) {art.coverage.remove(handle);}},
+            "capy.effect/1"=>{if let Some(handle)=art.effects.allocated(*identity) {art.effects.remove(handle);}},
+            "capy.effect-definition/1"=>{if let Some(handle)=art.definitions.allocated(*identity) {art.definitions.remove(handle);}},
+            "capy.selection/1"=>{if let Some(handle)=art.selections.allocated(*identity) {art.selections.remove(handle);}},
+            "capy.guides/1"=>{if let Some(handle)=art.guides.allocated(*identity) {art.guides.remove(handle);}},
+            "capy.output/1"=>{if let Some(handle)=art.outputs.allocated(*identity) {art.outputs.remove(handle);}},
+            _=>{},
+        }
     }
     let mut known=Vec::new();
-    for (identity,record) in &manifest.objects {
+    for (identity,record) in objects {
         let kind=record["type"].as_str().ok_or("Missing object type")?;
         if !matches!(kind,"capy.composition/1"|"capy.stack/1"|"capy.occurrence/2"|"capy.paint-source/1"|"capy.coverage-source/1"|"capy.effect/1"|"capy.effect-definition/1"|"capy.selection/1"|"capy.guides/1"|"capy.output/1") {
             if record["ancillary"].as_bool()==Some(true) {continue;}
             return Err(DecodeError::Unsupported(format!("Unknown authored object {kind}")));
         }
         let (kind,data)=payload(record)?; known.push((*identity,kind,data));
-        match kind {"capy.composition/1"=>{reserve(&mut art.compositions,*identity,layout.is_some())?;},"capy.stack/1"=>{reserve(&mut art.stacks,*identity,layout.is_some())?;},"capy.occurrence/2"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},"capy.paint-source/1"=>{reserve(&mut art.paint,*identity,layout.is_some())?;},"capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,layout.is_some())?;},"capy.effect/1"=>{reserve(&mut art.effects,*identity,layout.is_some())?;},"capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,layout.is_some())?;},"capy.selection/1"=>{reserve(&mut art.selections,*identity,layout.is_some())?;},"capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},"capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},_=>unreachable!()}
+        match kind {"capy.composition/1"=>{reserve(&mut art.compositions,*identity,true)?;},"capy.stack/1"=>{reserve(&mut art.stacks,*identity,true)?;},"capy.occurrence/2"=>{reserve(&mut art.occurrences,*identity,true)?;},"capy.paint-source/1"=>{reserve(&mut art.paint,*identity,true)?;},"capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,true)?;},"capy.effect/1"=>{reserve(&mut art.effects,*identity,true)?;},"capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,true)?;},"capy.selection/1"=>{reserve(&mut art.selections,*identity,true)?;},"capy.guides/1"=>{reserve(&mut art.guides,*identity,true)?;},"capy.output/1"=>{reserve(&mut art.outputs,*identity,true)?;},_=>unreachable!()}
+
     }
-    art.root=art.compositions.allocated(manifest.root).ok_or("Root is not a composition")?;
     for (identity,kind,value) in &known {if *kind=="capy.composition/1" {
         let data=fields(value,&["frame","resolution","color","blend","result"])?;
         let (origin,size)=v::parse_frame(v::required(data,"frame")?)?;
@@ -294,9 +328,7 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
         let data=fields(value,&["definition","domain","values","bindings","inputs"])?;
         for key in ["bindings","inputs"] {if let Some(value)=data.get(key) && !value.as_object().ok_or("Expected keyed effect map")?.is_empty() {return Err(DecodeError::Unsupported("Explicit effect inputs or bindings are unsupported".into()));}}
         let definition=handle(&art.definitions,v::required(data,"definition")?)?;let program=&art.definitions.get(definition).ok_or("Missing effect definition")?.program;
-        let definition_record=&manifest.objects[&art.definitions.id(definition).ok_or("Missing definition ID")?]["data"];
-        let version=definition_record.get("version").map(v::u32_value).transpose()?;
-        let values=effect_records::decode_values(program,data.get("values").unwrap_or(&json!({})),version,reader)?;
+        let values=effect_records::decode_values(program,data.get("values").unwrap_or(&json!({})),reader)?;
         let domain=dimension(v::required(data,"domain")?,reader)?;
         art.effects.install(art.effects.allocated(*identity).unwrap(),EffectApplication {definition,values,domain})?;
     }}
@@ -307,7 +339,7 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
             let content=fields(v::required(data,"content")?,&["paint","stack","effect","selection"])?;
             if content.len()!=1 {return Err("Occurrence requires one content alternative".into());}
             let (kind,value)=content.iter().next().unwrap();let content=match kind.as_str() {"paint"=>OccurrenceContent::Paint(handle(&art.paint,value)?),"stack"=>OccurrenceContent::Stack(handle(&art.stacks,value)?),"effect"=>OccurrenceContent::Effect(handle(&art.effects,value)?),"selection"=>OccurrenceContent::Selection(handle(&art.selections,value)?),_=>unreachable!()};
-            let bounds=content_bounds(&art,&content,canvas.size)?;
+            let bounds=content_bounds(art,&content,canvas.size)?;
             let (translation,placement)=data.get("placement").map(|v|v::parse_placement(v,bounds)).transpose()?.unwrap_or((Point::default(),LayerPlacement::IDENTITY));
             let blend=data.get("blend").map(v::parse_layer_blend).transpose()?.unwrap_or(LayerBlend::Normal);
             if blend==LayerBlend::PassThrough && !matches!(content,OccurrenceContent::Stack(_)) {return Err("Pass through requires a stack".into());}
@@ -344,6 +376,33 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
         let output=Output {composition,name:name(data)?,context,scale,frame:data.get("frame").map(v::parse_frame).transpose()?,sdr:data.get("sdr").map(v::parse_sdr).transpose()?.unwrap_or(SdrRendition {exposure:0.,contrast:1.,headroom:2.3004484,highlight_color:0.3,balance:0.}),proof:data.get("proof").map(|v|v::parse_proof(v,|profile|reader.profile(profile))).transpose()?};
         art.outputs.install(art.outputs.allocated(*identity).unwrap(),output)?;
     }}
+    Ok(())
+}
+
+pub fn decode(manifest:&Manifest,reader:&mut ResourceReader<'_>)->DecodeResult<Artwork> {
+    decode_with_layout(manifest,reader,None)
+}
+pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'_>,layout:Option<&super::transfer::TransferLayout>)->DecodeResult<Artwork> {
+    let mut art=Artwork::new([1,1])?;
+    art.id=manifest.document; art.compositions=Store::default();art.stacks=Store::default();art.occurrences=Store::default();art.paint=Store::default();art.coverage=Store::default();art.effects=Store::default();art.definitions=Store::default();art.selections=Store::default();art.guides=Store::default();art.outputs=Store::default();
+    if let Some(layout)=layout {layout.install(&mut art)?;}
+    for (identity,record) in &manifest.objects {
+        match record["type"].as_str().ok_or("Missing object type")? {
+            "capy.composition/1"=>{reserve(&mut art.compositions,*identity,layout.is_some())?;},
+            "capy.stack/1"=>{reserve(&mut art.stacks,*identity,layout.is_some())?;},
+            "capy.paint-source/1"=>{reserve(&mut art.paint,*identity,layout.is_some())?;},
+            "capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,layout.is_some())?;},
+            "capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,layout.is_some())?;},
+            "capy.effect/1"=>{reserve(&mut art.effects,*identity,layout.is_some())?;},
+            "capy.selection/1"=>{reserve(&mut art.selections,*identity,layout.is_some())?;},
+            "capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},
+            "capy.occurrence/2"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},
+            "capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},
+            _=>{},
+        }
+    }
+    art.root=art.compositions.allocated(manifest.root).ok_or("Root is not a composition")?;
+    decode_records_into(&mut art,&manifest.objects,reader)?;
     let mut metadata=PhotoMetadata::default();
     if let Some(value)=&manifest.metadata {
         let data=fields(value,&["exif","xmp","iptc"])?;

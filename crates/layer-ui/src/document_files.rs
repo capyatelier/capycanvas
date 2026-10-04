@@ -121,6 +121,7 @@ pub struct DocumentFileState {
     /// Suggested master name for an opened photo; never a save destination.
     pub unsaved_name: Option<String>,
     pub modified: bool,
+    pub recovered: bool,
     pub busy: bool,
     /// The host closes only after this authorization, not on an initial request.
     pub close_ready: bool,
@@ -132,7 +133,7 @@ impl Default for DocumentFileState {
 }
 impl DocumentFileState {
     pub fn localized(localization: &Localizer) -> Self {
-        Self { epoch: 0, revision: 0, location: None, export_uri: None, unsaved_name: None, modified: false,
+        Self { epoch: 0, revision: 0, location: None, export_uri: None, unsaved_name: None, modified: false, recovered: false,
             busy: false, close_ready: false, untitled: localization.text(MessageId::DOCUMENTS_UNTITLED) }
     }
     pub fn set_localization(&mut self, localization: &Localizer) {
@@ -155,8 +156,8 @@ pub enum DocumentColorOperation { Assign, Convert, Depth }
 pub struct LookupTarget {pub document: PortableId, pub activation:u64, pub layer:u64, pub epoch:u64, pub key:String}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ExportRepeat {
-    pub recipe: ExportRecipe,
+pub struct ExportRepeat<P = ExportProfile> {
+    pub recipe: ExportRecipe<P>,
     pub location: DocumentLocation,
 }
 
@@ -312,6 +313,8 @@ enum DocumentRequestCopy {
 pub(super) struct DocumentFiles {
     pub(super) saved_checkpoint: u64,
     pub(super) unpublished: bool,
+    pub(super) destination: Option<super::session_recovery::DestinationFingerprint>,
+    pub(super) check_destination: bool,
     pub(super) pending_modified_change: bool,
     replace_in_place: bool,
     replace_after: Option<bool>,
@@ -322,6 +325,14 @@ pub(super) struct DocumentFiles {
     host_error_copy: Option<DocumentHostErrorCopy>,
     pub(super) last_export: Option<ExportRepeat>,
     pending_export: Option<(u64, u64, ExportRepeat)>,
+}
+impl DocumentFiles {
+    pub(super) fn session_state(&self,file:&DocumentFileState,camera:super::session_recovery::SessionCamera)->super::session_recovery::SessionDocumentState {
+        let Self {saved_checkpoint,unpublished,destination,last_export,pending_export:_,check_destination:_,pending_modified_change:_,replace_in_place:_,replace_after:_,pending:_,close_after:_,pending_copy:_,cut:_,host_error_copy:_}=self;
+        let DocumentFileState {epoch:_,revision:_,location,export_uri:_,unsaved_name,modified:_,recovered,busy:_,close_ready:_,untitled:_}=file;
+        super::session_recovery::SessionDocumentState {camera,location:location.clone(),unsaved_name:unsaved_name.clone(),saved_checkpoint:*saved_checkpoint,
+            unpublished:*unpublished,recovered:*recovered,destination:destination.clone(),last_export:last_export.as_ref().map(super::session_recovery::detach_export)}
+    }
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -420,14 +431,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         session.refresh_document();
         Ok(session)
-    }
-
-    /// A recovered private checkpoint still needs an explicit user save.
-    pub fn mark_recovered(&mut self) {
-        self.files.unpublished = true;
-        self.state.document_file.location = None;
-        self.refresh_document();
-        self.refresh_commands();
     }
 
     /// A prepared, unpublished session receives its destination before joining
@@ -532,6 +535,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// A cancelled application termination can keep an already approved window.
     pub fn reset_document_close(&mut self) {
         self.state.document_file.close_ready = false;
+        self.files.close_after = false;
+        self.files.replace_after = None;
         self.refresh_commands();
         self.changed(regions::DOCUMENT | regions::COMMANDS, false);
     }
@@ -567,10 +572,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         )
     }
 
-    /// Capture the last committed raster boundary, including while drawing.
-    /// Pending tile backing is awaited by the file worker. Active contact pixels
-    /// are excluded; recovery never acknowledges a manual save checkpoint.
-    pub fn capture_project_recovery(&self) -> Result<ArtworkCapture, String> {
+    /// Capture committed artwork without private history or a save acknowledgement.
+    pub fn capture_artwork(&self) -> Result<ArtworkCapture, String> {
         self.require_raster_snapshot()?;
         self.engine.capture_artwork(self.state.document_file.epoch).map_err(error)
     }
@@ -587,7 +590,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::NotExportRequest.message(self.localization()));
         }
         self.require_document_idle()?;
-        let capture = self.capture_project_recovery()?;
+        let capture = self.capture_artwork()?;
         let time = capture.artwork.outputs.get(capture.artwork.default_output).expect("captured output").context.elapsed;
         Ok(DocumentExport {
             capture,
@@ -609,7 +612,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         {
             return Err(FileFailure::InvalidSaveRequest.message(self.localization()));
         }
-        let capture = self.capture_project_recovery()?;
+        let capture = self.capture_artwork()?;
         self.files.pending.as_mut().unwrap().1 = Some((capture.checkpoint, location));
         Ok(capture)
     }
@@ -686,6 +689,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.files.saved_checkpoint = checkpoint.edit_checkpoint;
             self.files.unpublished = false;
             self.state.document_file.location = Some(location);
+            self.state.document_file.recovered = false;
+            self.files.destination = None;
+            self.files.check_destination = false;
         }
         self.refresh_file_state();
         self.files.close_after &= success;
@@ -771,6 +777,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.refresh_file_state();
         self.refresh_commands();
         Ok(self.changed(regions::DOCUMENT | regions::COMMANDS | regions::HOST, false))
+    }
+
+    pub(crate) fn recovery_file_busy(&self)->bool {
+        self.state.document_file.busy && !self.files.pending.as_ref().is_some_and(|(id,_)|
+            matches!(self.document_request(*id),Ok(DocumentRequest::Save {..})))
     }
 
     pub(crate) fn require_raster_snapshot(&self) -> Result<(), String> {

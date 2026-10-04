@@ -80,8 +80,7 @@ cancel, stepping and artwork undo. Search and rename key handlers also defer to
 native composition. UIKit's numeric field carries the active interface tag in
 its accessibility language and text-input context identifier; system keyboard
 selection and system font fallback remain native. The SwiftUI locale carries the active tag for interface text and font fallback.
-The recovery date explicitly uses the system locale; system status formatters
-and shared numeric strings retain their existing formatting.
+System status formatters and shared numeric strings retain their existing formatting.
 
 ## Checks
 
@@ -100,3 +99,4 @@ key, wheel, pinch and rotation events, application suspend and resume, and a
 Metal restart. The UIKit fixtures `canvas-hover.swift`, `pencil-estimates.swift`
 and `canvas-modifiers.swift` supply recognizer states and touches to the real
 iPad callbacks. None of these replace a physical Pencil or tablet check.
+Ruler fixtures read the new package manifest with `tests/support/PackageManifest.swift`.

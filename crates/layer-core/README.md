@@ -24,6 +24,26 @@ package without exporting working state or history. Shared open outcomes separat
 editable artwork from preserved or recovered package views. Hosts execute file
 transport; shared UI policy handles admission, replacement and save acknowledgement.
 
+`Editor::capture_session` freezes the same artwork checkpoint with working state,
+bounded Undo/Redo and the next edit/stroke identities. `package::session` prepares
+private checkpoint metadata on a worker, reusing portable artwork and selection
+adapters with one immutable resource inventory. Identical record versions and
+resource owners are shared across history. Sparse raster indexes reuse 64-entry
+metadata chunks; immutable original-image descriptors are interned once, so a
+small stroke does not repeat the complete canvas or photo index for every Undo
+entry. Expansion uses the existing artwork adapters and admission limits.
+Private checkpoints preserve ancillary
+records exactly, including records whose subjects are temporarily absent after
+an edit; the portable save's edited-retention rule does not remove session data.
+`open_parts` independently verifies resource bytes, artwork, working targets,
+history transitions and budgets before returning a complete `Editor`. Invalid or
+unsupported sessions return an error; they never substitute artwork or drop
+history. Host metadata holds camera, drawing names and manual-save state outside
+the portable artwork contract. `SessionMetadata` carries lightweight JSON together with immutable
+color profiles; ICC bytes use the same bounded resource inventory and verified
+worker transfer as artwork profiles. `OpenSession` returns the complete wrapper,
+so a caller cannot forward metadata while accidentally omitting its profiles.
+
 ## Where to start
 
 | Source | Contents |

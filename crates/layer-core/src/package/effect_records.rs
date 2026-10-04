@@ -46,9 +46,13 @@ fn encode_value(value: &EffectValue, kind: &EffectParameterKind, writer: &mut im
             json!(options.get(*index as usize).ok_or("Invalid effect choice")?.value())
         },
         EffectValue::Color(v) => values::encode_rgb_color(*v)?, EffectValue::Curve(v) => json!(v),
-        EffectValue::Gradient(gradient) => json!({"stops":gradient.stops.iter().map(|stop| Ok(json!({"position":stop.position,
-            "color":values::encode_rgb_color(stop.color)?}))).collect::<Result<Vec<_>, String>>()?,
-            "interpolation":gradient.interpolation}),
+        EffectValue::Gradient(gradient) => {
+            let crate::GradientDefinition {stops,interpolation}=gradient;
+            json!({"stops":stops.iter().map(|stop| {
+                let GradientStop {position,color}=stop;
+                Ok(json!({"position":position,"color":values::encode_rgb_color(*color)?}))
+            }).collect::<Result<Vec<_>,String>>()?,"interpolation":interpolation})
+        },
         EffectValue::Lut3d(None) => Value::Null, EffectValue::Lut3d(Some(resource)) => writer.lut(resource)?,
     };
     Ok(json!({"kind":kind_name(kind),"value":payload}))
@@ -100,7 +104,7 @@ fn encode_kind(kind: &EffectParameterKind) -> Value {
         EffectParameterKind::Choice {options} => json!({"kind":"choice","options":options.iter().map(|option| match option {
             EffectOption::Literal(value) => json!(value), EffectOption::Labeled {value,label} => json!({"value":value,"label":encode_label(label)})
         }).collect::<Vec<_>>()}),
-        _ => json!({"kind":kind_name(kind)}),
+        EffectParameterKind::Toggle|EffectParameterKind::Color|EffectParameterKind::Curve|EffectParameterKind::Gradient|EffectParameterKind::Lut3d=>json!({"kind":kind_name(kind)}),
     }
 }
 fn decode_kind(value: &Value) -> DecodeResult<EffectParameterKind> {
@@ -167,54 +171,56 @@ fn decode_dimension(fields: &Map<String,Value>) -> DecodeResult<Dimension> {
 }
 
 pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWriter) -> Result<Value,String> {
-    let program=&definition.program;
+    let Definition {program}=definition;
     if let Some(builtin)=crate::bundled_effect_catalog().get(&program.id) {
         if program != &builtin.program() { return Err("Reserved built-in filter ID".into()); }
         return Ok(json!({"builtin":program.id,"version":builtin_version(&program.id)}));
     }
     if !program.literal_labels() { return Err("Custom filters require literal labels".into()); }
-    text(&json!(program.id)).map_err(|error|error.to_string())?;
+    let EffectProgram {abi,id,label,kind,constant_color,alpha,space,resolution,wgsl,entry,passes,time,lookups,auxiliary,pages,parameters:program_parameters,constraints}=program.as_ref();
+    text(&json!(id)).map_err(|error|error.to_string())?;
     EffectInstance::new(program.clone()).validate().map_err(str::to_string)?;
     let mut parameters=Map::new();
-    for parameter in program.parameters.iter() {
+    for parameter in program_parameters.iter() {
+        let EffectParameter {dimension,opaque,key,label:parameter_label,section,page,visible_when,soft_bounds,mapping,kind:parameter_kind,default}=parameter;
         let mut fields=Map::new();
-        fields.insert("kind".into(),encode_kind(&parameter.kind));
-        fields.insert("default".into(),encode_value(&parameter.default,&parameter.kind,writer)?);
-        fields.insert("label".into(),encode_label(&parameter.label));
-        if let Some(section)=&parameter.section {fields.insert("section".into(),encode_label(section));}
-        if let Some(page)=&parameter.page {fields.insert("page".into(),json!(page));}
-        if let Some(condition)=&parameter.visible_when {
-            let target=program.parameters.iter().find(|p|p.key==condition.key).ok_or("Unknown visibility parameter")?;
+        fields.insert("kind".into(),encode_kind(parameter_kind));
+        fields.insert("default".into(),encode_value(default,parameter_kind,writer)?);
+        fields.insert("label".into(),encode_label(parameter_label));
+        if let Some(section)=section {fields.insert("section".into(),encode_label(section));}
+        if let Some(page)=page {fields.insert("page".into(),json!(page));}
+        if let Some(condition)=visible_when {
+            let target=program_parameters.iter().find(|p|p.key==condition.key).ok_or("Unknown visibility parameter")?;
             fields.insert("visible_when".into(),json!({"key":condition.key,"value":encode_value(&condition.value,&target.kind,writer)?}));
         }
-        if let Some(bounds)=parameter.soft_bounds {fields.insert("soft_bounds".into(),json!(bounds));}
-        match parameter.mapping {NumericMapping::Linear=>{},NumericMapping::Log=>{fields.insert("mapping".into(),json!({"type":"log"}));},
+        if let Some(bounds)=soft_bounds {fields.insert("soft_bounds".into(),json!(bounds));}
+        match mapping {NumericMapping::Linear=>{},NumericMapping::Log=>{fields.insert("mapping".into(),json!({"type":"log"}));},
             NumericMapping::Power {exponent}=>{fields.insert("mapping".into(),json!({"type":"power","exponent":exponent}));}}
-        if parameter.opaque {fields.insert("opaque".into(),json!(true));}
-        encode_dimension(&mut fields,&parameter.dimension);
-        parameters.insert(parameter.key.to_string(),Value::Object(fields));
+        if *opaque {fields.insert("opaque".into(),json!(true));}
+        encode_dimension(&mut fields,dimension);
+        parameters.insert(key.to_string(),Value::Object(fields));
     }
-    let mut data=json!({"key":program.id,"contract":"capy.filter/1","abi":program.abi,"label":encode_label(&program.label),
-        "kind":match program.kind {EffectKind::Adjustment=>"adjustment",EffectKind::Generator=>"generator"},
-        "code":encode_code(&program.wgsl,writer)?,"entry":program.entry,"parameters":parameters,
-        "slots":program.parameters.iter().map(|p| &p.key).collect::<Vec<_>>()});
-    if program.alpha!=EffectAlpha::Preserve {data["alpha"]=json!("filter");}
-    if program.space!=EffectSpace::Linear {data["space"]=json!("blending");}
-    if program.resolution!=EffectResolution::Native {data["resolution"]=json!("display");}
-    if program.time {data["time"]=json!(true);}
-    if let Some(key)=&program.constant_color {data["constant_color"]=json!(key);}
-    if !program.passes.is_empty() {data["passes"]=Value::Array(program.passes.iter().map(|pass| json!({"entry":pass.entry,"sampling":match &pass.sampling {
+    let mut data=json!({"key":id,"contract":"capy.filter/1","abi":abi,"label":encode_label(label),
+        "kind":match kind {EffectKind::Adjustment=>"adjustment",EffectKind::Generator=>"generator"},
+        "code":encode_code(wgsl,writer)?,"entry":entry,"parameters":parameters,
+        "slots":program_parameters.iter().map(|p| &p.key).collect::<Vec<_>>()});
+    match alpha {EffectAlpha::Preserve=>{},EffectAlpha::Filter=>{data["alpha"]=json!("filter");}}
+    match space {EffectSpace::Linear=>{},EffectSpace::Blending=>{data["space"]=json!("blending");}}
+    match resolution {EffectResolution::Native=>{},EffectResolution::Display=>{data["resolution"]=json!("display");}}
+    if *time {data["time"]=json!(true);}
+    if let Some(key)=constant_color {data["constant_color"]=json!(key);}
+    if !passes.is_empty() {data["passes"]=Value::Array(passes.iter().map(|pass| {let EffectPass {entry,sampling}=pass;json!({"entry":entry,"sampling":match sampling {
         EffectSampling::Neighborhood {radius}=>json!({"kind":"neighborhood","radius":radius}),
         EffectSampling::Parameter {key,scale,padding}=>json!({"kind":"parameter","key":key,"scale":scale,"padding":padding}),
-        EffectSampling::Document=>json!({"kind":"document"})}})).collect());}
-    if !program.lookups.is_empty() {data["lookups"]=Value::Array(program.lookups.iter().map(|lookup| Ok(json!({"code":encode_code(&lookup.wgsl,writer)?,
-        "entry":lookup.entry,"dependencies":lookup.dependencies,"values":lookup.values,"workgroup_size":lookup.workgroup_size,"workgroups":lookup.workgroups})))
+        EffectSampling::Document=>json!({"kind":"document"})}})}).collect());}
+    if !lookups.is_empty() {data["lookups"]=Value::Array(lookups.iter().map(|lookup| {let EffectLookup {wgsl,entry,dependencies,values,workgroup_size,workgroups}=lookup;Ok(json!({"code":encode_code(wgsl,writer)?,
+        "entry":entry,"dependencies":dependencies,"values":values,"workgroup_size":workgroup_size,"workgroups":workgroups}))})
         .collect::<Result<_,String>>()?);}
-    if let Some(auxiliary)=&program.auxiliary {data["auxiliary"]=match auxiliary {
+    if let Some(auxiliary)=auxiliary {data["auxiliary"]=match auxiliary {
         EffectAuxiliary::Lut3d {resource,color_space}=>json!({"kind":"lut3d","resource":resource,"color_space":color_space}),
-        EffectAuxiliary::Analysis {analysis}=>json!({"kind":"analysis","analysis":analysis})};}
-    if !program.pages.is_empty() {data["pages"]=json!(program.pages.iter().map(|page|json!({"id":page.id,"label":encode_label(&page.label)})).collect::<Vec<_>>());}
-    if !program.constraints.is_empty() {data["constraints"]=json!(program.constraints.iter().map(|constraint|match constraint {
+        EffectAuxiliary::Analysis {analysis}=>json!({"kind":"analysis","analysis":match analysis {EffectAnalysisKind::LocalIllumination=>"local_illumination",EffectAnalysisKind::Dehaze=>"dehaze"}})};}
+    if !pages.is_empty() {data["pages"]=json!(pages.iter().map(|page|{let EffectPage {id,label}=page;json!({"id":id,"label":encode_label(label)})}).collect::<Vec<_>>());}
+    if !constraints.is_empty() {data["constraints"]=json!(constraints.iter().map(|constraint|match constraint {
         EffectConstraint::OrderedNumbers {lower,upper,gap}=>json!({"kind":"ordered_numbers","lower":lower,"upper":upper,"gap":gap})}).collect::<Vec<_>>());}
     Ok(data)
 }
@@ -258,10 +264,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
     if value.get("builtin").is_some() {
         let fields=object(value,&["builtin","version"])?;
         let id=string(required(fields,"builtin")?)?;
-        match (id,u32_value(required(fields,"version")?)?) {
-            (_,1)|("gradient_map"|"gradient_fill",2)=>{},
-            _=>return Err(unsupported("built-in parameter version")),
-        }
+        if u32_value(required(fields,"version")?)?!=builtin_version(id) {return Err(unsupported("built-in parameter version"));}
         let builtin=crate::bundled_effect_catalog().get(id).ok_or_else(||unsupported("built-in ID"))?;
         return Ok(Definition {program:builtin.program()});
     }
@@ -343,22 +346,13 @@ pub fn encode_values(program: &Arc<EffectProgram>, values: &[EffectValue], write
     }
     Ok(Value::Object(fields))
 }
-pub fn decode_values(program: &Arc<EffectProgram>, value: &Value, version: Option<u32>, reader: &mut impl ResourceReader) -> DecodeResult<Vec<EffectValue>> {
+pub fn decode_values(program: &Arc<EffectProgram>, value: &Value, reader: &mut impl ResourceReader) -> DecodeResult<Vec<EffectValue>> {
     let fields=value.as_object().ok_or("Expected keyed effect values")?;
-    let gradient_v1=version==Some(1) && matches!(program.id.as_ref(),"gradient_map"|"gradient_fill");
-    if fields.keys().any(|key|!(gradient_v1 && key=="reverse") && !program.parameters.iter().any(|p|p.key.as_ref()==key)) {return Err(unsupported("parameter key"));}
-    if fields.len()!=program.parameters.len()+usize::from(gradient_v1) {return Err("Missing authored effect parameter".into());}
-    let values=program.parameters.iter().map(|parameter| {
-        let record=required(fields,&parameter.key)?;
-        if gradient_v1 && parameter.key.as_ref()=="gradient" {
-            let record=object(record,&["kind","value"])?;
-            if string(required(record,"kind")?)?!="gradient" {return Err("Effect value kind mismatch".into());}
-            let mut gradient=crate::GradientDefinition {stops:decode_gradient_stops(required(record,"value")?)?,interpolation:crate::ColorMixSpace::Classic};
-            gradient.validate()?;
-            if decode_value(required(fields,"reverse")?,&EffectParameterKind::Toggle,reader)?==EffectValue::Toggle(true) {gradient.reverse();}
-            Ok(EffectValue::Gradient(gradient))
-        } else {decode_value(record,&parameter.kind,reader)}
-    }).collect::<DecodeResult<Vec<_>>>()?;
+    if fields.keys().any(|key|!program.parameters.iter().any(|p|p.key.as_ref()==key)) {return Err(unsupported("parameter key"));}
+    if fields.len()!=program.parameters.len() {return Err("Missing authored effect parameter".into());}
+    let values=program.parameters.iter().map(|parameter|
+        decode_value(required(fields,&parameter.key)?,&parameter.kind,reader)
+    ).collect::<DecodeResult<Vec<_>>>()?;
     let instance=EffectInstance {program:program.clone(),values};
     instance.validate()?;
     Ok(instance.values)
@@ -404,10 +398,10 @@ mod tests {
             for instance in [EffectInstance::new(filter.program()),filter.preview().unwrap()] {
                 let values=encode_values(&definition.program,&instance.values,&mut resources).unwrap();
                 assert_eq!(values.as_object().unwrap().len(),definition.program.parameters.len());
-                assert_eq!(decode_values(&decoded.program,&values,Some(builtin_version(filter.id())),&mut resources).unwrap(),instance.values);
+                assert_eq!(decode_values(&decoded.program,&values,&mut resources).unwrap(),instance.values);
                 if let Some(parameter)=definition.program.parameters.first() {
                     let mut incomplete=values;incomplete.as_object_mut().unwrap().remove(parameter.key.as_ref());
-                    assert!(decode_values(&decoded.program,&incomplete,None,&mut resources).is_err());
+                    assert!(decode_values(&decoded.program,&incomplete,&mut resources).is_err());
                 }
             }
         }
@@ -415,7 +409,7 @@ mod tests {
     #[test]
     fn builtin_versions_ids_and_embedded_overrides_are_explicit() {
         let mut resources=Resources::default();
-        for value in [json!({"builtin":"exposure","version":2}),json!({"builtin":"unknown","version":1})] {
+        for value in [json!({"builtin":"exposure","version":2}),json!({"builtin":"gradient_map","version":1}),json!({"builtin":"gradient_fill","version":1}),json!({"builtin":"unknown","version":1})] {
             assert!(matches!(decode_definition(&value,&mut resources),Err(DecodeError::Unsupported(_))));
         }
         let mut definition=fixture();
@@ -466,6 +460,12 @@ mod tests {
                 assert!(decode_value(&stale,&kind,&mut resources).is_err());
                 let mut extra=encoded.clone();extra["value"]["dither"]=json!(false);
                 assert!(decode_value(&extra,&kind,&mut resources).is_err());
+                let mut future=encoded.clone();future["value"]["interpolation"]=json!("Future");
+                assert!(matches!(decode_value(&future,&kind,&mut resources),Err(DecodeError::Unsupported(_))));
+                let mut extra=encoded.clone();extra["value"]["stops"][0]["future"]=json!(true);
+                assert!(matches!(decode_value(&extra,&kind,&mut resources),Err(DecodeError::Unsupported(_))));
+                let mut invalid=encoded.clone();invalid["value"]["stops"][1]["position"]=json!(0.);
+                assert!(matches!(decode_value(&invalid,&kind,&mut resources),Err(DecodeError::Invalid(_))));
             }
             if let EffectValue::Lut3d(Some(reopened))=decoded {
                 assert_eq!(encoded["value"],json!({"ref":lut.resource().unwrap().id().to_string()}));
@@ -493,7 +493,7 @@ mod tests {
         assert!(matches!(decode_definition(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
         let mut malformed=encoded;malformed.as_object_mut().unwrap().remove("entry");
         assert!(matches!(decode_definition(&malformed,&mut resources),Err(DecodeError::Invalid(_))));
-        assert!(matches!(decode_values(&definition.program,&json!({"future": {"kind":"number","value":1}}),None,&mut resources),Err(DecodeError::Unsupported(_))));
+        assert!(matches!(decode_values(&definition.program,&json!({"future": {"kind":"number","value":1}}),&mut resources),Err(DecodeError::Unsupported(_))));
         let kind=EffectParameterKind::Choice {options:vec![EffectOption::Literal("known".into())].into()};
         assert!(matches!(decode_value(&json!({"kind":"choice","value":"future"}),&kind,&mut resources),Err(DecodeError::Unsupported(_))));
         assert!(matches!(decode_value(&json!({"kind":"choice","value":0}),&kind,&mut resources),Err(DecodeError::Invalid(_))));
@@ -517,29 +517,9 @@ mod tests {
         parameters[0].soft_bounds=Some([-1.,1.]);
         parameters.reverse();
         let saved=json!({"exposure":{"kind":"number","value":7.25},"offset":{"kind":"number","value":0},"gamma":{"kind":"number","value":1}});
-        let values=decode_values(&program,&saved,None,&mut Resources::default()).unwrap();
+        let values=decode_values(&program,&saved,&mut Resources::default()).unwrap();
         assert_eq!(EffectView::new(&program,&values).value("exposure"),Some(&EffectValue::Number(7.25)));
         assert_eq!(EffectView::new(&program,&values).value("gamma"),Some(&EffectValue::Number(1.)));
-    }
-    #[test]
-    fn gradient_v1_converts_reverse_and_freezes_the_old_interpolation() {
-        for id in ["gradient_map","gradient_fill"] {
-            let program=crate::bundled_effect_catalog().get(id).unwrap().program();
-            let mut resources=Resources::default();
-            let original=EffectInstance::new(program.clone());
-            let mut saved=encode_values(&program,&original.values,&mut resources).unwrap();
-            saved["gradient"]["value"]=saved["gradient"]["value"]["stops"].clone();
-            saved["reverse"]=json!({"kind":"toggle","value":true});
-            let values=decode_values(&program,&saved,Some(1),&mut resources).unwrap();
-            let EffectValue::Gradient(gradient)=&values[0] else {panic!()};
-            assert_eq!(gradient.interpolation,crate::ColorMixSpace::Classic);
-            assert_eq!(gradient.stops[0].color.rgba,[1.;4]);
-            assert_eq!(gradient.stops[1].color.rgba,[0.,0.,0.,1.]);
-            let current=encode_values(&program,&values,&mut resources).unwrap();
-            assert!(current.get("reverse").is_none());
-            assert_eq!(decode_values(&program,&current,Some(2),&mut resources).unwrap(),values);
-            assert!(decode_values(&program,&saved,Some(2),&mut resources).is_err());
-        }
     }
     #[test]
     fn lookup_choice_ids_survive_option_reordering_and_label_changes() {
@@ -551,7 +531,7 @@ mod tests {
             if let EffectOption::Labeled {label,..}=option {*label="Renamed color space".into();}
         }
         let saved=json!({"resource":{"kind":"lut3d","value":null},"color_space":{"kind":"choice","value":"display_p3"},"intensity":{"kind":"number","value":100}});
-        let values=decode_values(&program,&saved,None,&mut Resources::default()).unwrap();
+        let values=decode_values(&program,&saved,&mut Resources::default()).unwrap();
         let view=EffectView::new(&program,&values);
         assert_eq!(view.choice("color_space"),Some("display_p3"));
         assert_eq!(view.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap()[2][0],1.);

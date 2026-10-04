@@ -4,6 +4,10 @@ use super::*;
 impl<R: CanvasRenderer> UiSession<R> {
     /// The host has no modal work and must wait for this boundary before normal
     /// parking. Failed renderers remain navigable/saveable/closeable.
+    pub(super) fn document_park_interaction_idle(&self)->bool {
+        self.require_workspace_idle().is_ok() && !self.workspace_transition && !self.state.customization.header_editing
+            && self.state.requests.is_empty() && !self.state.document_file.busy
+    }
     pub fn can_park_document(&self) -> bool {
         (self.rendering_suspended || (self.require_workspace_idle().is_ok()
             && (if self.state.document_file.close_ready { self.require_document_snapshot_idle() } else { self.require_document_idle() }).is_ok()
@@ -86,6 +90,8 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// layout/history/settings forward without overwriting this drawing's view,
     /// tools, history, dirty checkpoint or color interpretation.
     pub fn inherit_window_state(&mut self, previous: &Self) -> Result<UiChange, String> {
+        let navigation=self.camera_navigation_revision();
+        let camera=(!self.initial_fit).then(||super::session_recovery::SessionCamera::capture(&self.state.camera));
         self.set_localization(previous.localization().clone());
         self.localization_generation = previous.localization_generation;
         self.preferences_revision = self.preferences_revision.max(previous.preferences_revision);
@@ -122,10 +128,12 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.set_viewport(logical, previous.state.camera.viewport)?;
         }
         self.sync_work_area();
+        if let Some(camera)=camera {self.state.camera=camera.restore(&self.state.camera)?;}
         // A window can still have queued native input from the previous tab.
         // Preserve each drawing's camera while retiring that input generation.
         self.state.camera.revision = self.state.camera.revision.max(previous.state.camera.revision)
             .checked_add(1).ok_or("Camera generation exhausted")?;
+        self.automatic_camera_revision=self.state.camera.revision.checked_sub(navigation).ok_or("Camera revision moved backwards")?;
         self.sync_camera();
         self.refresh_commands();
         Ok(self.changed(regions::ALL, true))
@@ -152,6 +160,37 @@ impl<R: CanvasRenderer> UiSession<R> {
 
     pub fn rendering_suspended(&self) -> bool {
         self.rendering_suspended
+    }
+
+    pub fn inherit_parked_viewport(&mut self, previous: &Self) -> UiChange {
+        assert!(self.rendering_suspended, "Viewport adoption requires a parked drawing");
+        let navigation = self.camera_navigation_revision();
+        if let Some(logical) = previous.logical_viewport {
+            let physical = previous.state.camera.viewport;
+            let old_scale = self.logical_viewport.map_or(1.0, |v| self.state.camera.viewport[0] as f32 / v[0]);
+            let new_scale = physical[0] as f32 / logical[0];
+            self.state.camera.resize(physical);
+            self.logical_viewport = Some(logical);
+            if let Some(event) = self.cursor.event.as_mut() {
+                event.surface_position.x *= new_scale / old_scale;
+                event.surface_position.y *= new_scale / old_scale;
+            }
+            self.sync_work_area();
+        }
+        self.state.camera.revision = self.state.camera.revision.max(previous.state.camera.revision)
+            .checked_add(1).expect("Camera generation exhausted");
+        self.automatic_camera_revision = self.state.camera.revision - navigation;
+        self.sync_camera();
+        self.changed(regions::CAMERA, true)
+    }
+
+    pub fn cancel_document_park(&mut self) -> Result<UiChange, String> {
+        if !self.rendering_suspended {
+            return Err("The drawing is not parked".into());
+        }
+        self.rendering_suspended = false;
+        self.refresh_commands();
+        Ok(self.changed(regions::DOCUMENT | regions::COMMANDS, true))
     }
 
     pub(super) fn command_without_renderer(command: CommandId) -> bool {
@@ -420,7 +459,7 @@ mod tests {
         let checkpoint = s.engine.checkpoint();
         s.suspend_renderer().unwrap();
         assert!(s.rendering_suspended());
-        assert!(s.capture_project_recovery().is_ok());
+        assert!(s.capture_artwork().is_ok());
         assert!(!s.command(CommandId::Redo).enabled);
         invoke(&mut s, CommandId::SaveDocument);
         let request = s.files.pending.as_ref().unwrap().0;
@@ -518,7 +557,7 @@ mod tests {
         assert!(s.state.filter_load.error.is_some());
         assert_eq!(s.effect_catalog.filters(), catalog.filters());
         assert_eq!(s.engine.document(), &document);
-        let recovered = s.capture_project_recovery().unwrap();
+        let recovered = s.capture_artwork().unwrap();
         let paint = match document.scene().occurrence(imported).unwrap().content { OccurrenceContent::Paint(paint) => paint, _ => unreachable!() };
         let retained = document.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();
         let recovered = recovered.artwork.paint.get(paint).unwrap().original.as_ref().unwrap();

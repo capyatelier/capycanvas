@@ -108,7 +108,7 @@ fn native_gpu_tone_retains_preview_cancels_and_refreshes_after_drawing() {
     }
     let next = new_drawing_at(4096, 2160, SampleDepth::F32);
     glib::MainContext::default()
-        .block_on(w.documents.open(&w, (next, None, None)))
+        .block_on(w.documents.open(&w, (next, None)))
         .unwrap();
     assert!(
         w.local_tone.preview_count().is_none(),

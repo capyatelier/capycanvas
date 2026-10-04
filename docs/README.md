@@ -17,6 +17,7 @@ time and link to implementation details when they become relevant.
 | Topic | What it explains |
 | --- | --- |
 | [Documents and edits](internals/documents.md) | Layers, strokes, undo, editable projects and file-operation ownership. |
+| [Session recovery](internals/session-recovery.md) | Automatic restart, private history, crash-safe publication and bounded cleanup. |
 | [Workspace and UI](ui/README.md) | The editor session, commands, configurable panels, docking and Zen mode. |
 | [Settings and persistence](ui/settings.md) | Shared defaults and validation, shortcuts, saved preferences and workspace state. |
 | [Rendering and composition](internals/rendering.md) | GPU storage, incremental updates, masks, filters and readback. |

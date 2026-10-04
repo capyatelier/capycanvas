@@ -51,10 +51,9 @@ fn native_color_preferences_profiles_and_untagged_photo_policy() {
     let created = Rc::new(RefCell::new(None));
     *w.open_document.borrow_mut() = Some({
         let created = created.clone();
-        Rc::new(move |project, location, recovery| {
+        Rc::new(move |project, location| {
             assert!(location.is_none());
-            assert!(recovery.is_none());
-            *created.borrow_mut() = Some(project);
+                        *created.borrow_mut() = Some(project);
         })
     });
     let original = super::place_source::authored_snapshot(&w);

@@ -914,6 +914,8 @@ pub struct Workspace {
     pub(crate) proof_panel: Rc<crate::files::proof::ProofPanel>,
     pub(crate) screen: Rc<crate::screen_view::ScreenView>,
     pub(crate) recovery: RefCell<Rc<crate::recovery::Recovery>>,
+    pub(crate) restart: crate::recovery::Restart,
+    pub(crate) saved_fingerprint: RefCell<Option<(layer_ui::DocumentLocation,layer_ui::session_recovery::DestinationFingerprint)>>,
     pub(crate) documents: crate::documents::Documents,
     pub input: Rc<crate::input::Input>,
     pub(crate) tooltips: Rc<crate::tooltips::PenTooltips>,
@@ -1246,6 +1248,8 @@ impl Workspace {
             local_tone,
             screen,
             recovery: RefCell::new(Rc::new(crate::recovery::Recovery::default())),
+            restart: Default::default(),
+            saved_fingerprint: Default::default(),
             documents: crate::documents::Documents::new_localized(&localization),
             surface,
             palette_css,
@@ -2212,6 +2216,9 @@ impl Workspace {
             }
         }
     }
+    pub(crate) fn restart_busy(&self)->bool {
+        self.gpu.borrow().as_ref().is_none_or(|gpu| gpu.session.recovery_document().busy)
+    }
     pub fn changed(self: &Rc<Self>, result: Result<UiChange, String>) {
         match result {
             Ok(mut change) => {
@@ -2566,10 +2573,7 @@ impl Workspace {
                     return;
                 }
                 match GpuCanvas::with_project_localized(area, this.initial_project.borrow_mut().take(), this.localization(), this.initial_settings.borrow_mut().take()) {
-                    Ok(mut gpu) => {
-                        if this.recovery().recovered.get() {
-                            gpu.session.mark_recovered();
-                        }
+                    Ok(gpu) => {
                         *this.gpu.borrow_mut() = Some(gpu);
                         this.fullscreen_changed(this.window.is_fullscreen());
                         this.refresh(regions::ALL);

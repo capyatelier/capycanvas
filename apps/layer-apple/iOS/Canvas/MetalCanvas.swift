@@ -124,7 +124,6 @@ final class CanvasView: UIView {
         } else {
             store.focusWindow = nil
             store.acceptsGamepad = nil
-            if store.state["document_file"]["close_ready"].bool { store.recovery.close() }
             stop()
         }
     }

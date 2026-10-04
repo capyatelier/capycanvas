@@ -48,10 +48,10 @@ pub enum ColorProfile {
 }
 
 /// Metadata reference into a transport's binary ICC table.
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub enum ProfileReference {
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProfileReference<R = usize> {
     Builtin(RgbSpace),
-    Embedded(usize),
+    Embedded(R),
 }
 impl ProfileReference {
     pub fn detach(profile: &ColorProfile, payloads: &mut Vec<Arc<[u8]>>) -> Self {

@@ -175,3 +175,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (восстановлено)
+documents-destination-changed = Сохранённый рисунок изменён или недоступен. Используйте «Сохранить как», чтобы оставить обе копии.

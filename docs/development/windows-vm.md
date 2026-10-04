@@ -94,8 +94,11 @@ fixture at a time, from a visible console that gives each fixture foreground
 rights. It stops only CapyCanvas processes launched during that run from the
 selected executable and records each exit code, duration and final error. It
 sets `CAPY_WAIT_SCALE=3`, which lengthens every `CapyUia.ps1` wait for the slower
-adapter. Name fixtures
-(`layers`) or single variants (`header:pen`). A bare name includes all its variants;
+adapter. The document fixture uses that bound for process cleanup and checks that
+the window continues answering native messages while the GPU queue drains.
+Software-adapter shutdown timing does not establish hardware performance.
+
+Name fixtures (`layers`) or single variants (`header:pen`). A bare name includes all its variants;
 `localization:default` selects only the default dark, normal-text run. Split long
 matrices across separate owned VMs with `localization:default localization:LargeText`
 on one and `localization:light localization:light-large` on the other.

@@ -49,7 +49,7 @@ fn native_local_tone_sustained_qualification() {
         let gpu = w.snapshot_gpu().unwrap();
         let snapshot = {
             let g = w.gpu.borrow(); let session = &g.as_ref().unwrap().session;
-            DocumentExport { capture: session.capture_project_recovery().unwrap(),
+            DocumentExport { capture: session.capture_artwork().unwrap(),
                 time: session.engine().animation_time() }
         };
         let prefix = prefix.clone();

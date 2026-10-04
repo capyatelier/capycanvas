@@ -72,6 +72,7 @@ class MainActivity : ComponentActivity() {
     }
     override fun onStart() {
         super.onStart()
+        host.recovery.foreground()
         getSystemService(android.hardware.input.InputManager::class.java).registerInputDeviceListener(devices, null)
         host.systemLocalesChanged(resources.configuration.locales)
         host.filterPreviewCache.resume()
@@ -85,7 +86,7 @@ class MainActivity : ComponentActivity() {
     override fun onStop() {
         getSystemService(android.hardware.input.InputManager::class.java).unregisterInputDeviceListener(devices)
         host.filterPreviewCache.pause()
-        host.recovery.capture()
+        host.recovery.background()
         host.restartingWindow = isChangingConfigurations
         if (!host.restartingWindow) host.workspaceInput(obj("type" to "suspend"))
         super.onStop()

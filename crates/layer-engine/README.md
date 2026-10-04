@@ -39,6 +39,12 @@ worker. Hosts with an asynchronous render owner pair these roots with an ordered
 context capture before exact file or preview jobs. Renderer replacement starts
 from the same integrated playback context.
 
+`capture_session` pairs that artwork boundary with the editor's working state and
+bounded undo/redo history. A decoded editor can replace the editor in a prepared
+engine through `restore_editor` only when its document matches the admitted
+drawing and input is idle. Restoration preserves checkpoints without submitting
+GPU work or reading input.
+
 ## Where to start
 
 | Source | Contents |

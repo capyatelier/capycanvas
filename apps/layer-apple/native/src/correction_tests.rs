@@ -22,7 +22,7 @@ fn document(app: &App) -> Document {
 }
 fn samples(app: &App) -> Vec<[f32; 4]> {
     let s = &unsafe { &*app.0 }.host.session;
-    let project = s.capture_project_recovery().unwrap();
+    let project = s.capture_artwork().unwrap();
     let mut snapshot = s
         .engine()
         .backend()

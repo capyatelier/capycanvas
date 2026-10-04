@@ -21,6 +21,22 @@ pub fn atomic_write_checked(
     write: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>,
     ready: impl FnOnce() -> Result<(), String>,
 ) -> Result<(), String> {
+    atomic_write_outcome(path, write, ready).map_err(|error| error.error)
+}
+pub(crate) fn atomic_write_outcome(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>,
+    ready: impl FnOnce() -> Result<(), String>,
+) -> Result<(), crate::package::session_store::AtomicReplaceError> {
+    publish_using(path, write, ready, |parent| std::fs::File::open(parent)
+        .and_then(|dir| dir.sync_all()).map_err(|e| format!("Cannot finish saving: {e}")))
+}
+fn publish_using(
+    path: &Path,
+    write: impl FnOnce(&mut BufWriter<std::fs::File>) -> Result<(), String>,
+    ready: impl FnOnce() -> Result<(), String>,
+    sync_parent: impl FnOnce(&Path) -> Result<(), String>,
+) -> Result<(), crate::package::session_store::AtomicReplaceError> {
     use std::os::unix::fs::OpenOptionsExt;
     static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let parent = path.parent().ok_or("Choose a destination folder")?;
@@ -35,7 +51,7 @@ pub fn atomic_write_checked(
         {
             Ok(file) => break (candidate, file),
             Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-            Err(e) => return Err(format!("Cannot save drawing: {e}")),
+            Err(e) => return Err(format!("Cannot save drawing: {e}").into()),
         }
     };
     struct Cleanup(std::path::PathBuf);
@@ -52,9 +68,7 @@ pub fn atomic_write_checked(
         .map_err(|e| format!("Cannot finish saving: {e}"))?;
     ready()?;
     std::fs::rename(&cleanup.0, path).map_err(|e| format!("Cannot replace drawing: {e}"))?;
-    std::fs::File::open(parent)
-        .and_then(|dir| dir.sync_all())
-        .map_err(|e| format!("Cannot finish saving: {e}"))?;
+    sync_parent(parent).map_err(|error| crate::package::session_store::AtomicReplaceError { published: true, error })?;
     Ok(())
 }
 
@@ -81,6 +95,30 @@ mod tests {
         assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
         atomic_write_checked(&path, write, || Ok(())).unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"TIFF payload");
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn publication_errors_record_whether_the_destination_was_replaced() {
+        let dir = std::env::temp_dir().join(format!("capy-atomic-outcome-{}", crate::PortableId::random()));
+        std::fs::create_dir(&dir).unwrap();
+        let path = dir.join("manifest.json");
+        std::fs::write(&path, b"old").unwrap();
+        let write = |file: &mut BufWriter<std::fs::File>| file.write_all(b"removed").map_err(|e| e.to_string());
+        let failed_write = publish_using(&path, |_| Err("encode failed".into()), || Ok(()), |_| Ok(())).unwrap_err();
+        assert!(!failed_write.published);
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        let cancelled = publish_using(&path, write, || Err("cancelled".into()), |_| Ok(())).unwrap_err();
+        assert!(!cancelled.published);
+        assert_eq!(std::fs::read(&path).unwrap(), b"old");
+        let unsynchronized = publish_using(&path, write, || Ok(()), |_| Err("directory sync failed".into())).unwrap_err();
+        assert!(unsynchronized.published);
+        assert_eq!(unsynchronized.error, "directory sync failed");
+        assert_eq!(std::fs::read(&path).unwrap(), b"removed");
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
+        atomic_write_outcome(&path, write, || Ok(())).unwrap();
+        let rename_failed = publish_using(&dir, write, || Ok(()), |_| Ok(())).unwrap_err();
+        assert!(!rename_failed.published);
         std::fs::remove_dir_all(dir).unwrap();
     }
 }

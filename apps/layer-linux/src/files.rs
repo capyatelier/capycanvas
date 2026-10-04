@@ -25,7 +25,7 @@ mod chooser;
 pub(crate) use chooser::choose_next_save;
 
 pub(crate) type OpenDocument =
-    Rc<dyn Fn(Document, Option<DocumentLocation>, Option<std::path::PathBuf>)>;
+    Rc<dyn Fn(Document, Option<DocumentLocation>)>;
 
 impl Workspace {
     pub(crate) fn install_document_close(self: &Rc<Self>) {
@@ -52,34 +52,29 @@ impl Workspace {
                     if let Some(dialog) = w.window.visible_dialog() { dialog.force_close(); }
                     return glib::Propagation::Stop;
                 }
-                if w.gpu
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|g| g.session.state().document_file.close_ready)
-                {
-                    if w.documents.len() > 1 {
-                        w.documents.close_completed(&w);
-                        return glib::Propagation::Stop;
-                    }
-                    return if w.workspaces.request_close(&w) {
-                        glib::Propagation::Stop
-                    } else {
-                        w.recovery().discard();
-                        glib::Propagation::Proceed
-                    };
+                if w.documents.exit_ready.get() {
+                    return if w.workspaces.request_close(&w) { glib::Propagation::Stop } else { glib::Propagation::Proceed };
                 }
-                let result = {
-                    let mut gpu = w.gpu.borrow_mut();
-                    let Some(gpu) = gpu.as_mut() else {
-                        return glib::Propagation::Proceed;
-                    };
-                    gpu.session.request_document_close()
-                };
-                glib::idle_add_local_once(glib::clone!(
-                    #[weak]
-                    w,
-                    move || w.changed(result)
-                ));
+                if w.documents.exit_flushing.get() { return glib::Propagation::Stop; }
+                let prepare=w.gpu.borrow_mut().as_mut().map(|gpu|gpu.session.request_session_close());
+                match prepare {
+                    Some(Err(error))=>{w.documents.closing_window.set(false);w.changed(Err(error));return glib::Propagation::Stop;}
+                    None=>return glib::Propagation::Proceed,
+                    Some(Ok(_))=>{},
+                }
+                w.documents.exit_flushing.set(true);
+                glib::spawn_future_local(glib::clone!(#[weak] w, async move {
+                    while w.restart.busy() {glib::timeout_future(std::time::Duration::from_millis(10)).await;}
+                    let result=w.restart.checkpoint(&w,true).await;
+                    w.documents.exit_flushing.set(false);
+                    match result {
+                        Ok(())=> {w.documents.exit_ready.set(true);w.window.close();}
+                        Err(error)=> {
+                            if let Some(gpu)=w.gpu.borrow_mut().as_mut() {gpu.session.reset_document_close();}
+                            w.documents.closing_window.set(false);w.changed(Err(error));
+                        }
+                    }
+                }));
                 glib::Propagation::Stop
             }
         ));
@@ -166,6 +161,11 @@ impl Workspace {
                                     g.session.complete_document_request(request.id, outcome)
                                 });
                                 if let Some(result) = result {
+                                    if result.is_ok() {
+                                        if let Some((location,fingerprint))=w.saved_fingerprint.borrow_mut().take() {
+                                            if let Some(gpu)=w.gpu.borrow_mut().as_mut() {let _=gpu.session.record_destination_fingerprint(&location,fingerprint);}
+                                        }
+                                    } else {w.saved_fingerprint.borrow_mut().take();}
                                     w.changed(result);
                                 }
                             }
@@ -230,7 +230,7 @@ async fn document_request(
     request: &DocumentRequest,
 ) -> Result<bool, String> {
     if matches!(request, DocumentRequest::ImportLookup {..}) {
-        let Some(file) = choose_file(w, request).await? else {return Ok(false);};
+        let Some((file,_)) = choose_file(w, request).await? else {return Ok(false);};
         let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
         let resource = gio::spawn_blocking(move || {
             use std::io::Read;
@@ -270,13 +270,13 @@ async fn document_request(
         w.open_document
             .borrow()
             .as_ref()
-            .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization()))?(project, None, None);
+            .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization()))?(project, None);
         return Ok(true);
     }
     if let DocumentRequest::Export { name, owner, repeat, .. } = request {
         return export::run(w, id, name, *owner, repeat.as_ref()).await;
     }
-    let Some(file) = choose_file(w, request).await? else {
+    let Some((file,approved)) = choose_file(w, request).await? else {
         return Ok(false);
     };
     let path = file.path().ok_or_else(|| DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
@@ -298,23 +298,38 @@ async fn document_request(
             let Some((project, location)) = open::prepare(&w.window, Some(w), file, policy, working, photo_document_names(&location.name, &w.localization()), &w.localization()).await? else {
                 return Ok(false);
             };
-            w.documents.enqueue_imported(w, project, location, None);
+            w.documents.enqueue_imported(w, project, location);
         }
         DocumentRequest::Save { .. } => {
-            let (mut project, context) = {
+            let (mut project, context, expectation) = {
                 let mut gpu = w.gpu.borrow_mut();
                 let session = &mut gpu.as_mut().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
-                let capture = session.capture_project_save(id, location)?;
-                (capture, session.engine().backend().capture_context()?)
+                let expectation=session.save_destination_expectation().filter(|expected|!approved&&expected.location==location);
+                let capture = session.capture_project_save(id, location.clone())?;
+                (capture, session.engine().backend().capture_context()?, expectation)
             };
-            gio::spawn_blocking(move || {
+            let destination_changed=DocumentDeliveryMessage::DestinationChanged.message(&w.localization());
+            let fingerprint=gio::spawn_blocking(move || {
                 context.install(&mut project)?;
                 let cancelled = std::sync::atomic::AtomicBool::new(false);
                 let package = layer_core::package::codec::PreparedPackage::prepare(&project, None, &cancelled)?;
-                atomic_write(&path, |file| package.write(file, &cancelled))
+                let mut fingerprint=None;
+                layer_core::atomic_write_checked(&path,|file| {
+                    let mut writer=layer_ui::FingerprintWriter::new(file);
+                    package.write(&mut writer,&cancelled)?;
+                    fingerprint=Some(writer.finish());Ok(())
+                },|| {
+                    if let Some(expected)=&expectation {
+                        let observed=layer_ui::DestinationFingerprint::observe_path(&path,expected.fingerprint.as_ref());
+                        if !expected.matches(observed.as_ref()) {return Err(destination_changed);}
+                    }
+                    Ok(())
+                })?;
+                Ok::<_,String>(fingerprint.unwrap())
             })
                 .await
                 .map_err(|_| DocumentHostError::ProjectWriterFailed.message(&w.localization()))??;
+            w.saved_fingerprint.replace(Some((location,fingerprint)));
         }
         _ => unreachable!(),
     }
@@ -324,18 +339,27 @@ async fn document_request(
 async fn choose_file(
     w: &Workspace,
     request: &DocumentRequest,
-) -> Result<Option<gio::File>, String> {
+) -> Result<Option<(gio::File,bool)>, String> {
     if let DocumentRequest::Save {
         location: Some(location),
         ..
     } = request
     {
-        return Ok(Some(gio::File::for_uri(&location.uri)));
+        let expected=w.gpu.borrow().as_ref().and_then(|gpu|gpu.session.save_destination_expectation());
+        let file=gio::File::for_uri(&location.uri);
+        if let Some(expected)=expected.filter(|expected|expected.required) {
+            let path=file.path();
+            let unchanged=gio::spawn_blocking(move || {
+                let observed=path.and_then(|path|layer_ui::DestinationFingerprint::observe_path(&path,expected.fingerprint.as_ref()));
+                expected.matches(observed.as_ref())
+            }).await.map_err(|_|"Saved drawing verification stopped".to_string())?;
+            if unchanged {return Ok(Some((file,false)));}
+        } else {return Ok(Some((file,false)));}
     }
     if matches!(request, DocumentRequest::Open)
         && let Some(incoming) = w.image_drop.borrow_mut().take()
     {
-        return Ok(Some(incoming.files.into_iter().next().ok_or_else(|| DocumentHostError::NoDrawingToOpen.message(&w.localization()))?));
+        return Ok(Some((incoming.files.into_iter().next().ok_or_else(|| DocumentHostError::NoDrawingToOpen.message(&w.localization()))?,false)));
     }
     let dialog = gtk::FileDialog::builder()
         .title(request.title(&w.localization()).as_ref())
@@ -373,7 +397,7 @@ async fn choose_file(
         _ => unreachable!(),
     };
     match result {
-        Ok(file) => Ok(Some(file)),
+        Ok(file) => Ok(Some((file,true))),
         Err(error)
             if error.matches(gtk::DialogError::Dismissed)
                 || error.matches(gtk::DialogError::Cancelled) =>

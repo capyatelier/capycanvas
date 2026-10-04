@@ -273,6 +273,30 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.capture(session_generation, self.evaluation_context.clone())
     }
 
+    pub fn capture_session(&self, session_generation: u64) -> Result<layer_core::package::session::EditorCapture, DocumentError> {
+        let Self {editor,settings:_,used_colors:_,recording:_,backend:_,input:_,queued_contacts:_,contact_settings:_,
+            view:_,transforms:_,clone_stroke:_,retouch_points:_,prepared_retouch:_,builder:_,dab_generator:_,
+            finalized_real_points:_,active_stroke:_,completed_stroke:_,completed_at:_,completed_before:_,
+            completed_clone_start:_,restore_rasters:_,pending_frame:_,rebuild_completed:_,estimates:_,
+            pending_smudge_dabs:_,dabs:_,batches:_,transform_preview:_,transform_selection:_,selection_display:_,
+            scene_preview:_,rebuild_all:_,composite_all:_,raster_dirty:_,animation_origin_ns:_,animation_time:_,
+            animation_seed:_,evaluation_context:_,metrics:_}=self;
+        editor.capture_session(self.capture_artwork(session_generation)?)
+    }
+
+    pub fn restore_editor(&mut self, editor: Editor) -> Result<(), DocumentError> {
+        if self.has_pending_input() || self.has_active_stroke() || self.pending_frame.is_some()
+            || !self.batches.is_empty() || self.rebuild_completed || self.raster_dirty
+        {
+            return Err(DocumentError::InvalidLayerOperation("Finish the current operation before restoring a session"));
+        }
+        if editor.document() != self.document() {
+            return Err(DocumentError::InvalidLayerOperation("The restored session does not match the prepared drawing"));
+        }
+        self.editor = editor;
+        Ok(())
+    }
+
     pub fn scene_snapshot(&self) -> Arc<layer_core::SceneSnapshot> {
         let mut context = self.evaluation_context.clone();
         context.retain_effects(&self.document().artwork);
@@ -2591,6 +2615,42 @@ mod tests {
         canvas.replace_backend(RecordingRenderer::default()).unwrap();
         assert_eq!(canvas.backend().evaluation_context(),captured.output().context);
         assert_eq!(canvas.scene_snapshot().context,captured.output().context);
+    }
+
+    #[test]
+    fn restored_editor_keeps_redo_and_checkpoint_without_rendering() {
+        let (_, source) = engine("Session history", 64, 64);
+        let mut editor = Editor::new(source.document().clone());
+        let mut occurrence = active_occurrence(editor.document()).clone();
+        occurrence.opacity = 0.25;
+        editor.perform(replace_occurrence(editor.document(), occurrence)).unwrap();
+        let changed = editor.checkpoint();
+        editor.undo().unwrap();
+        let (_, mut restored) = engine_with(RecordingRenderer::default(), editor.document().clone(), view(64,64), TRANSFORM);
+        restored.restore_editor(editor).unwrap();
+        assert_eq!(restored.checkpoint(), 0);
+        assert!(restored.can_redo());
+        assert_eq!(restored.metrics().frames, 0);
+        restored.redo().unwrap();
+        assert_eq!(restored.checkpoint(), changed);
+        assert_eq!(active_occurrence(restored.document()).opacity, 0.25);
+        restored.render_frame().unwrap();
+        restored.undo().unwrap();
+        assert_eq!(restored.checkpoint(), 0);
+        assert_eq!(active_occurrence(restored.document()).opacity, 1.);
+    }
+
+    #[test]
+    fn restoring_an_editor_rejects_another_document_or_queued_input() {
+        let (mut input, mut canvas) = engine("Session restore fence", 64, 64);
+        let document = canvas.document().clone();
+        let (_, different) = engine("Other session", 64, 64);
+        assert!(canvas.restore_editor(Editor::new(different.document().clone())).is_err());
+        assert_eq!(canvas.document(), &document);
+        input.push(event(1, PenPhase::Down, 16.)).unwrap();
+        assert!(canvas.restore_editor(Editor::new(document.clone())).is_err());
+        assert_eq!(canvas.document(), &document);
+        assert!(canvas.has_pending_input());
     }
 
     #[test]

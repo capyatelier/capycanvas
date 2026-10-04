@@ -24,6 +24,9 @@ impl NativeWorkspaces {
                 if response == "discard" {
                     w.workspaces.send(&w, WorkspaceInput::DiscardClose);
                 } else {
+                    if let Some(gpu)=w.gpu.borrow_mut().as_mut() {gpu.session.reset_document_close();}
+                    w.documents.exit_ready.set(false);
+                    w.documents.closing_window.set(false);
                     w.workspaces.close_requested.set(false);
                     w.workspaces.send(&w, WorkspaceInput::Resume);
                 }

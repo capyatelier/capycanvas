@@ -69,7 +69,9 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
     override fun before() {
         val context = instrumentation.targetContext
         userPreferences = context.getSharedPreferences("capy-canvas", 0).all
-        root = File(context.cacheDir, "capy-tests/${UUID.randomUUID()}").apply { mkdirs() }
+        val fixture = InstrumentationRegistry.getArguments().getString("restartFixture")
+        require(fixture == null || fixture.matches(Regex("[a-zA-Z0-9_-]{1,64}")))
+        root = File(context.cacheDir, if(fixture == null)"capy-tests/${UUID.randomUUID()}" else "capy-tests/restart-$fixture").apply {mkdirs()}
         CanvasHost.workspaceDirectoryForTest = File(root, "workspace").absolutePath
         RecoveryController.directoryForTest = recovery
         ColorPreferencesStore.directoryForTest = File(root, "colors")
@@ -84,7 +86,7 @@ class CapyDeviceRule(private val nativeFileJobs: Boolean = false) : ExternalReso
         RecoveryController.directoryForTest = null
         ColorPreferencesStore.directoryForTest = null
         DocumentController.nativeFileJobsForTest = false
-        root.deleteRecursively()
+        if(InstrumentationRegistry.getArguments().getString("restartPhase") != "prepare")root.deleteRecursively()
         assertEquals("User preferences are preserved", userPreferences, context.getSharedPreferences("capy-canvas", 0).all)
     }
 }
@@ -102,7 +104,7 @@ fun launchCapy(timeout: Long = 60_000, compose: ComposeTestRule? = null): Activi
 
 fun CanvasHost.awaitReady(timeout: Long = 60_000, compose: ComposeTestRule? = null) =
     awaitMain("brush and workspace ready", timeout, { "$workspaceManager" }, compose) {
-        snapshot?.optBoolean("brush_ready") == true && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
+        snapshot?.optBoolean("brush_ready") == true && recovery.ready && workspaceManager?.let { it.optBoolean("ready") && !it.optBoolean("busy") } == true
     }
 
 fun CanvasHost.narrowPhotoPanels(compose: ComposeTestRule) {
@@ -307,3 +309,26 @@ fun findNode(match: (SemanticsNode) -> Boolean, first: ViewRootForTest? = null):
 fun findTag(tag: String, first: ViewRootForTest? = null) = findNode(hasTag(tag), first)
 
 internal fun createEnglishHostForTest(profiling: Boolean = false): Long = Native.create("", arrayOf("en"), profiling)
+
+internal fun CanvasHost.writeDrawingCopy(file: File) = runBlocking {
+    val previous = DocumentController.nativeFileJobsForTest
+    DocumentController.nativeFileJobsForTest = true
+    var task = 0L; var request = 0
+    try {
+        withNative { handle ->
+            Native.dispatch(handle,obj("type" to "invoke","command" to "save_document_as").toString())
+            val state = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+            request = state.array("requests").objects().first {it.getJSONObject("kind").optString("type") == "document"}.getInt("id")
+            val owner = state.getJSONObject("document_file")
+            task = Native.projectTask(handle,request,obj("uri" to android.net.Uri.fromFile(file).toString(),"name" to file.name).toString(),owner.getLong("epoch"),owner.getLong("revision"))
+        }
+        kotlinx.coroutines.withContext(Dispatchers.IO) {
+            Native.projectWork(task,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
+        }
+    } finally {
+        if(request != 0)withNative {Native.documentComplete(it,request,false,"null")}
+        kotlinx.coroutines.withContext(Dispatchers.IO) {if(task != 0L)Native.projectFree(task)}
+        DocumentController.nativeFileJobsForTest = previous
+        documentChanged()
+    }
+}

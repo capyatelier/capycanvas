@@ -780,7 +780,7 @@ mod tests {
     #[test]
     fn builtin_shaders_and_saved_fixture_compile_with_the_current_catalog() {
         use layer_core::package::{codec::{open,OpenOutcome},ImmutableBacking,transport::ChunkedBytes};
-        let bytes=include_bytes!("../../layer-core/src/package/codec/fixtures/authored-filters-v1-occurrences-v2.capy");
+        let bytes=include_bytes!("../../layer-core/src/package/codec/fixtures/authored-filters.capy");
         let backing=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();
         let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() else {panic!("saved fixture must be editable")};
         let mut programs:std::collections::BTreeMap<_,_>=fixtures().iter().map(|f|(f.id().to_string(),f.program())).collect();

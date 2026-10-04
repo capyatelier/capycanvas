@@ -2,6 +2,7 @@ import {checkGradientDefinitions} from './gradient.test.mjs';
 import {checkScopes,checkScopesSmoke} from './scopes.test.mjs';
 import {checkTonalControls} from './tonal-controls.test.mjs';
 import {checkDocumentErrors} from './document-errors-journey.test.mjs';
+import {measureSessionRestart} from './session-restart-performance.test.mjs';
 import {runJourney} from "./journeys.mjs";
 import {checkPointwiseEffects,checkLookupTransport} from './pointwise-effects.test.mjs';
 import {checkTonalSelections} from './tonal-selection.test.mjs';
@@ -205,6 +206,7 @@ try {
       await checkSettingsUpdates({evaluate,settle});
     }, checkErrors],
     [process.argv.includes("--drawing-tabs-recovery"), () => checkDrawingTabRecovery({call,evaluate,settle}), checkRasterErrors],
+    [process.argv.includes("--session-restart-performance"), () => measureSessionRestart({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--drawing-tabs"), () => checkDrawingTabs({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--portable-photo"), () => checkPortablePhoto({call,evaluate,settle}), checkRasterErrors],
     [process.argv.includes("--package-view"), () => checkPackageView({evaluate,settle}), checkRasterErrors],

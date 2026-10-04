@@ -3,58 +3,134 @@ import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
 export async function checkDrawingTabRecovery({call,evaluate,settle}) {
-  // Exercise natural startup discovery, with independent recovery owners.
-  // Ordinary tab switches are covered separately without a browser reload.
-  const wait=(condition,recovering=false)=>evaluate(`new Promise((resolve,reject)=>{
-    const end=performance.now()+240000;
-    const details=()=>{const app=window.layerApp,state=app?.state();return JSON.stringify({status:document.querySelector('#status')?.textContent,dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>({title:dialog.querySelector('h2')?.textContent,reason:[...dialog.querySelectorAll('p')].map(p=>p.textContent),actions:[...dialog.querySelectorAll('button')].map(b=>b.textContent)})),progress:[...document.querySelectorAll('.file-progress')].map(n=>n.textContent),tabs:app?.app.document_tabs(0),file:state?.document_file,requests:state?.requests,busy:app?.documents.busy()},(_,v)=>typeof v==='bigint'?String(v):v);};
-    function poll(){
-      const status=document.querySelector('#status')?.textContent??'';
-      const packageView=[...document.querySelectorAll('dialog[open] button')].some(b=>b.textContent.startsWith('Copy Original'));
-      if(${recovering}&&(/Recovery (?:operation|capture) failed|Recovery unavailable/.test(status)||packageView))reject(Error('Recovery did not adopt the saved drawing: '+details()));
-      else if(${condition})resolve();
-      else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+details()));
-      else setTimeout(poll,30);
-    }
-    poll();
-  })`);
-  const ready=()=>wait('window.layerApp?.app.brush_ready()&&!layerApp.documents.busy()&&layerApp.app.document_park_ready()');
+  const wait=async condition=>{
+    const deadline=Date.now()+250000;
+    for(;;)try{return await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+240000;function check(){if(${condition})resolve();else if(performance.now()>end)reject(Error(${JSON.stringify(condition)}+': '+document.querySelector('#status')?.textContent));else setTimeout(check,30);}check();})`);}
+    catch(error){if(!/navigated|context/i.test(String(error))||Date.now()>deadline)throw error;await new Promise(resolve=>setTimeout(resolve,50));}
+  };
+  const ready=async()=>{await wait('window.layerApp?.app.brush_ready()&&!layerApp.documents.busy()&&layerApp.app.document_park_ready()');await evaluate(`Promise.race([layerApp.documents.startRecovery(),new Promise((_,reject)=>{const deadline=performance.now()+45000;function check(){if(!document.querySelector('dialog[open]')&&performance.now()<deadline){setTimeout(check,30);return;}reject(Error(JSON.stringify({dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>dialog.textContent),file:layerApp.state().document_file,host_error:layerApp.state().host_error,notice:layerApp.state().notice,status:document.querySelector('#status')?.textContent},(_,value)=>typeof value==='bigint'?String(value):value)));}check();})])`);};
   const invoke=command=>evaluate(`layerApp.dispatch({type:'invoke',command:${JSON.stringify(command)}})`);
-  await ready();
-  const base=await evaluate('layerApp.state().layers.length');
-  await invoke('add_layer');await ready();await evaluate("layerApp.app.save_recovery('drawing-tabs-recovery-a')");
-  await invoke('add_layer');await ready();await evaluate("layerApp.app.save_recovery('drawing-tabs-recovery-b')");
-  await invoke('undo');await ready();await invoke('undo');await ready();
-  assert.equal(await evaluate('layerApp.state().document_file.modified'),false);
+  const tabs=()=>evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==='bigint'?Number(v):v))`);
+  const select=async id=>{await ready();await evaluate(`layerApp.documents.select(BigInt(${id})).catch(error=>{throw Error(JSON.stringify({error,tabs:layerApp.app.document_tabs(0),busy:layerApp.documents.busy(),dialogs:[...document.querySelectorAll('dialog[open]')].map(dialog=>dialog.textContent)},(_,v)=>typeof v==='bigint'?String(v):v));})`);await ready();};
+  const create=async()=>{
+    const count=(await tabs()).tabs.length;await invoke('new_document');
+    await wait(`!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Create')`);
+    await evaluate(`(()=>{const form=document.querySelector('dialog[open]');for(const input of form.querySelectorAll('input[type=number]'))input.value=96;[...form.querySelectorAll('button')].find(button=>button.textContent==='Create').click();})()`);
+    await wait(`layerApp.app.document_tabs(0).tabs.length===${count+1}`);await ready();return (await tabs()).selected;
+  };
+  const installSave=()=>evaluate(`window.showSaveFilePicker=async options=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals',{create:true});return directory.getFileHandle(crypto.randomUUID()+'.'+options.suggestedName.split('.').at(-1),{create:true});};`);
+  const snapshot=()=>evaluate(`(()=>{const state=layerApp.state(),stamp=layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected);return JSON.parse(JSON.stringify({layers:state.layers.map(({label,selected,editing,mask_selected})=>({label,selected,editing,mask_selected})),camera:stamp.state.camera,modified:state.document_file.modified,location:state.document_file.location?.name??null,checkpoint:stamp.checkpoint,selection:state.layer_tools.has_selection,undo:state.commands.find(command=>command.id==='undo')?.enabled,redo:state.commands.find(command=>command.id==='redo')?.enabled},(_,v)=>typeof v==='bigint'?Number(v):v));})()`);
+  await ready();await installSave();
+  const first=(await tabs()).selected;
+  const pending=await create();
+  await evaluate(`window.sessionCaptureOriginal=layerApp.app.capture_tab_session.bind(layerApp.app);layerApp.app.capture_tab_session=id=>String(id)===String(${pending})?{write:async()=>{throw Error('Injected first checkpoint failure')},free(){}}:sessionCaptureOriginal(id);`);
+  try {
+    assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'First checkpoint failure is reported');
+    assert.equal(await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !(await store.read(drawing.key));}return false;})()`),true,'First checkpoint failure retains authoritative membership for retry');
+    assert.equal(await evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`),true,'Pending unsaved state prevents quiet browser exit');
+  } finally {await evaluate('layerApp.app.capture_tab_session=sessionCaptureOriginal');}
   await evaluate('layerApp.documents.autosave()');
-  const previousOrigin=await evaluate('performance.timeOrigin');
-  await call('Page.reload',{ignoreCache:true});
-  const navigationDeadline=Date.now()+30000;
-  for(;;){
-    try{if(await evaluate(`performance.timeOrigin!==${previousOrigin}&&document.readyState==='complete'`))break;}
-    catch(error){if(!/navigated|context|closed/i.test(String(error)))throw error;}
-    if(Date.now()>navigationDeadline)throw Error('Recovery test navigation did not finish');
-    await new Promise(resolve=>setTimeout(resolve,50));
+  const beforeLostAck=await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const drawing=(await store.manifest(key)).drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing){window.lostAckKey=drawing.key;return (await store.read(drawing.key)).current.generation;}}})()`);
+  await evaluate(`layerApp.app.capture_tab_session=id=>{const capture=sessionCaptureOriginal(id);if(String(id)===String(${pending})){const write=capture.write.bind(capture);capture.write=async(...args)=>{await write(...args);throw Error('Injected lost checkpoint acknowledgement');};}return capture;};layerApp.dispatch({type:'set_zoom',zoom:.31});`);
+  try {assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'A lost acknowledgement leaves the checkpoint pending');}
+  finally {await evaluate('layerApp.app.capture_tab_session=sessionCaptureOriginal');}
+  await evaluate('layerApp.documents.autosave()');
+  assert.deepEqual(await evaluate(`(async()=>{const record=await (await import('./restart-store.js')).createRestartStore().read(lostAckKey);return [record.current.generation,record.previous.generation];})()`),[beforeLostAck+2,beforeLostAck],'A committed but unacknowledged checkpoint retries with a newer generation and retains the acknowledged base');
+  await evaluate("window.sessionCloseOriginal=layerApp.app.prepare_document_close.bind(layerApp.app);layerApp.app.prepare_document_close=()=>{throw Error('Injected close preflight failure')};");
+  try {
+    await evaluate(`layerApp.documents.close(BigInt(${pending}))`);await ready();
+    assert.equal((await tabs()).tabs.length,2,'Failed close preflight retains the live drawing');
+    assert.equal(await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const key of await store.windows()){const manifest=await store.manifest(key),drawing=manifest.drawings.find(drawing=>String(drawing.id)===String(${pending}));if(drawing)return !!(await store.read(drawing.key));}return false;})()`),true,'Failed close preflight retains durable membership and its drawing');
+  } finally {await evaluate('layerApp.app.prepare_document_close=sessionCloseOriginal');}
+  await evaluate(`layerApp.documents.close(BigInt(${pending}))`);await wait('layerApp.app.document_tabs(0).tabs.length===1');await ready();
+  await invoke('add_layer');await ready();await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');await ready();
+  await invoke('add_layer');await ready();
+  const second=await create();await invoke('add_layer');await ready();await invoke('undo');await ready();
+  const third=await create();await invoke('add_layer');await ready();await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');await ready();await invoke('select_all');await ready();assert.equal(await evaluate('layerApp.state().layer_tools.has_selection'),true);
+  await evaluate(`layerApp.app.reorder_document(BigInt(${third}),BigInt(${first}));layerApp.documents.refresh()`);
+  const expected=new Map();
+  for(const [index,id] of [first,second,third].entries()) {
+    await select(id);await evaluate(`layerApp.dispatch({type:'set_zoom',zoom:${[.37,.5,.75][index]}})`);await settle();
+    expected.set(id,await snapshot());
   }
-  await ready();
-  for(const count of [2,3]){
-    await wait(`!![...document.querySelectorAll('dialog[open] h2')].find(n=>n.textContent==='Recover drawing?')`);
-    await evaluate(`[...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Recover').click()`);
-    await wait(`layerApp.app.document_tabs(0).tabs.length===${count}`,true);
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);await select(first);
+    await evaluate('layerApp.documents.autosave()');
+    assert.equal(await evaluate(`(()=>{const event=new Event('beforeunload',{cancelable:true});window.dispatchEvent(event);return event.defaultPrevented;})()`),false,'A complete private checkpoint permits a seamless browser restart');
+    const old=await evaluate('performance.timeOrigin');await call('Page.reload',{ignoreCache:true});
+    await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
+    assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Ordinary restart restores automatically');
+    assert.deepEqual((await tabs()).tabs.map(tab=>tab.id),[third,first,second]);
+    assert.equal((await tabs()).selected,first,'Restart preserves the active drawing');console.log(`${theme} restart tab titles: ${JSON.stringify((await tabs()).tabs.map(tab=>tab.title))}`);
+    for(const id of [first,second,third]) {await select(id);const actual=await snapshot(),prior=expected.get(id);for(let axis=0;axis<2;axis++)assert.ok(Math.abs(actual.camera.center[axis]-prior.camera.center[axis])<.002,'Restart preserves the canvas center within floating-point camera precision');actual.camera.center=prior.camera.center;assert.deepEqual(actual,prior,`${theme} restart preserves drawing ${id}, history, selection, camera and manual-save checkpoint`);}
+    await select(second);await invoke('redo');await ready();assert.equal((await snapshot()).layers.length,expected.get(second).layers.length+1);await invoke('undo');await ready();
+    await select(first);await invoke('undo');await ready();assert.equal(await evaluate('layerApp.state().document_file.modified'),false,'Undo reaches the retained manual-save checkpoint');await invoke('redo');await ready();assert.equal(await evaluate('layerApp.state().document_file.modified'),true);
+    await installSave();
   }
-  await evaluate('layerApp.documents.startRecovery()');await ready();
-  const tabs=await evaluate(`JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==='bigint'?Number(v):v))`);
-  assert.equal(tabs.tabs.length,3);assert.deepEqual(tabs.tabs.map(t=>t.modified),[false,true,true]);
-  const counts=[];
-  for(const tab of tabs.tabs.slice(1)){
-    await evaluate(`layerApp.documents.select(BigInt(${tab.id}))`);await ready();
-    counts.push(await evaluate('layerApp.state().layers.length'));
-    assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}})`);
+    const originals=[];
+    for(const kind of ['intact','missing','changed']) {
+      const id=await create();await invoke('add_layer');await ready();await invoke('save_document_as');await wait('!layerApp.state().document_file.busy');await ready();
+      assert.equal(await evaluate('layerApp.state().document_file.modified'),false,'A manual save establishes a clean checkpoint');
+      const original={id,kind,layers:(await snapshot()).layers.length};originals.push(original);
+      if(kind==='intact') {
+        await invoke('export_document');await wait('!!document.querySelector("dialog[open] select[aria-label=Format]")');
+        await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Choose File…').click()");await wait('!layerApp.state().document_file.busy');await ready();
+        original.export=await evaluate(`(async()=>{const name=layerApp.app.session_stamp_for(layerApp.app.document_tabs(0).selected).state.last_export.location.name,directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals'),file=await(await directory.getFileHandle(name)).getFile();return{name,modified:file.lastModified};})()`);
+        await evaluate('layerApp.documents.autosave()');
+        const beforeInvalid=await evaluate(`(async()=>{const store=(await import('./restart-store.js')).createRestartStore();for(const window of await store.windows()){const drawing=(await store.manifest(window)).drawings.find(drawing=>String(drawing.id)===String(${id}));if(drawing){globalThis.invalidExportKey=drawing.key;const record=await store.read(drawing.key);return [record.current.generation,record.previous?.generation??null];}}})()`);
+        await evaluate(`globalThis.invalidExportPost=Worker.prototype.postMessage;Worker.prototype.postMessage=function(value,...args){if(value.request?.operation==='restart-begin'){const request=JSON.parse(value.request.metadata);if(request.key===invalidExportKey){const envelope=JSON.parse(request.project);envelope.descriptor.metadata.last_export.recipe.jpeg_quality=0;request.project=JSON.stringify(envelope);value.request.metadata=JSON.stringify(request);}}return invalidExportPost.call(this,value,...args);};layerApp.dispatch({type:'set_zoom',zoom:.43});`);
+        try {
+          assert.equal(await evaluate('layerApp.documents.autosave().then(()=>false,()=>true)'),true,'The worker rejects malformed export metadata before publication');
+          assert.deepEqual(await evaluate("(async()=>{const record=await (await import('./restart-store.js')).createRestartStore().read(invalidExportKey);return [record.current.generation,record.previous?.generation??null];})()"),beforeInvalid,'Rejected export metadata retains both complete checkpoint generations');
+        } finally {await evaluate('Worker.prototype.postMessage=invalidExportPost');}
+        await evaluate('layerApp.documents.autosave()');
+      }
+      if(kind!=='intact')await evaluate(`(async()=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals'),name=layerApp.state().document_file.location.name;if(${JSON.stringify(kind)}==='missing')await directory.removeEntry(name);else{const stream=await(await directory.getFileHandle(name)).createWritable();await stream.write(new Uint8Array([42]));await stream.close();}})()`);
+    }
+    await evaluate('layerApp.documents.autosave()');const origin=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${origin}&&window.layerApp?.app.brush_ready()`);await ready();
+    assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'Original verification never prompts during restart');
+    for(const {id,kind,layers} of originals) {
+      await select(id);assert.equal((await snapshot()).layers.length,layers,'The private checkpoint retains the drawing independently of its original');
+      assert.equal(await evaluate('layerApp.state().document_file.modified'),kind!=='intact',`${theme} ${kind} original determines restored protection`);
+      if(kind==='intact') {
+        await evaluate("window.showSaveFilePicker=async()=>{throw Error('Export Again must reuse its persisted handle')}");
+        await invoke('export_again');await wait('!layerApp.state().document_file.busy');await ready();
+        const exported=originals.find(original=>original.id===id).export;
+        assert.ok(await evaluate(`(async()=>{const directory=await(await navigator.storage.getDirectory()).getDirectoryHandle('capy-test-session-originals');return(await(await directory.getFileHandle(${JSON.stringify(exported.name)})).getFile()).lastModified>${exported.modified};})()`),'Restored Export Again writes through its retained browser handle without another picker');
+        await installSave();
+      }
+      const count=(await tabs()).tabs.length;await evaluate(`layerApp.documents.close(BigInt(${id}))`);
+      if(kind!=='intact') {
+        await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Cancel')");
+        await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Cancel').click()");await ready();assert.equal((await tabs()).tabs.length,count,'Cancel retains the only protected drawing');
+        await evaluate(`layerApp.documents.close(BigInt(${id}))`);await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')");
+        await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()");
+      }
+      await wait(`layerApp.app.document_tabs(0).tabs.length===${count-1}`);await ready();
+      assert.equal(await evaluate("document.querySelectorAll('dialog[open]').length"),0,'An intact clean original closes seamlessly after validation');
+    }
+    await installSave();
   }
-  assert.deepEqual(counts.sort((a,b)=>a-b),[base+1,base+2],'Each recovery record restores the project captured for that owner');
-  await evaluate(`layerApp.documents.select(BigInt(${tabs.tabs[0].id}))`);await ready();
-  assert.equal(await evaluate(`(()=>{const e=new Event('beforeunload',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented;})()`),true,'Inactive unsaved drawings protect the browser window');
-  console.log('PASS drawing tab recovery: multiple append offers, independent captured owners, no master destinations, inactive unsaved unload protection');
+  await select(first);await evaluate(`layerApp.documents.close(BigInt(${first}))`);
+  await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Cancel')");
+  await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Cancel').click()");await ready();assert.equal((await tabs()).tabs.length,3,'Cancelled close preserves the drawing');
+  await evaluate(`layerApp.documents.close(BigInt(${first}))`);
+  await wait("!![...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes')");
+  await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()");await wait('layerApp.app.document_tabs(0).tabs.length===2');await ready();
+  await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
+  assert.deepEqual((await tabs()).tabs.map(tab=>tab.id),[third,second],'An acknowledged close cannot resurrect on restart');
+  await evaluate('layerApp.documents.autosave()');
+  const injection=await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{let current;Object.defineProperty(window,'layerApp',{configurable:true,get:()=>current,set:value=>{current=value;const prepare=value.app.prepare_session_restart.bind(value.app);let entered=false;value.app.prepare_session_restart=(...args)=>{const pending=prepare(...args);if(!entered){entered=true;window.liveStartupLayers=value.state().layers.length+1;value.dispatch({type:'invoke',command:'add_layer'});}return pending;};}});})()`});
+  try {
+    const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
+    const resumed=await tabs();assert.equal(resumed.tabs.length,3,'Input during restore keeps its live drawing beside restored drawings');
+    assert.ok(![third,second].includes(resumed.selected),'Restore preserves the active startup drawing after input');
+    assert.equal(await evaluate('layerApp.state().layers.length===liveStartupLayers&&layerApp.state().document_file.modified'),true,'Startup edits remain present and unsaved');
+    assert.deepEqual(resumed.tabs.filter(tab=>[third,second].includes(tab.id)).map(tab=>tab.id),[third,second],'Restored drawings retain their original relative order');
+  } finally {await call('Page.removeScriptToEvaluateOnNewDocument',{identifier:injection.identifier});}
+  console.log('PASS seamless restart in both themes: clean/dirty tabs, order, active drawing, camera, undo/redo, save checkpoint, cancelled close and durable discard');
 }
 
 export async function checkDrawingTabs({call,evaluate,settle}) {

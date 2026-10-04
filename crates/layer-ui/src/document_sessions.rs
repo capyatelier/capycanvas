@@ -48,6 +48,17 @@ impl<T> Deref for DocumentSessions<T> {
     }
 }
 impl<T> DocumentSessions<T> {
+    pub fn reserve_identities(&mut self, ids: &[u64]) -> Result<(), String> {
+        self.tabs.reserve_identities(ids)
+    }
+    pub fn restore_identity(&mut self,id:u64)->Result<(),String> {
+        self.tabs.restore_identity(id)?;
+        self.untitled=DocumentTabLabel::untitled(id,&Localizer::shared(self.language));
+        Ok(())
+    }
+    pub fn restore_order(&mut self,order:&[u64],selected:u64)->Result<(),String> {
+        self.tabs.restore_order(order,selected)
+    }
     pub fn localized(localization: &Localizer) -> Self {
         Self {
             tabs: Default::default(), parked: Default::default(), clock: 0, language: localization.language(),
@@ -104,6 +115,25 @@ impl<T> DocumentSessions<T> {
         self.untitled = DocumentTabLabel::untitled(id, localization);
         id
     }
+    pub fn append_parked(&mut self, owner: T, tiles: RetainedTiles, localization: &Localizer) -> u64 {
+        assert_ne!(self.selected(), 0, "an inactive drawing needs an active owner");
+        self.set_localization(localization);
+        let selected = self.selected();
+        let id = self.tabs.add();
+        let untitled = std::mem::replace(&mut self.untitled, DocumentTabLabel::untitled(id, localization));
+        self.park(id, owner, tiles);
+        self.untitled = untitled;
+        self.tabs.select(selected);
+        id
+    }
+    pub fn append_parked_with_id(&mut self, id: u64, owner: T, tiles: RetainedTiles, localization: &Localizer) -> Result<(), (String, T)> {
+        if let Err(error) = self.tabs.add_parked_identity(id) { return Err((error, owner)); }
+        self.set_localization(localization);
+        let untitled = std::mem::replace(&mut self.untitled, DocumentTabLabel::untitled(id, localization));
+        self.park(id, owner, tiles);
+        self.untitled = untitled;
+        Ok(())
+    }
     /// A host such as Web can leave a fresh drawing after closing the final
     /// tab. Its identity must be new, without retaining the discarded owner.
     pub fn start_empty(&mut self, localization: &Localizer) -> Result<u64, DocumentSessionError> {
@@ -114,6 +144,20 @@ impl<T> DocumentSessions<T> {
         let id = self.tabs.add();
         self.untitled = DocumentTabLabel::untitled(id, localization);
         Ok(id)
+    }
+    pub fn prepare_empty(&self, localization: &Localizer) -> Result<Self, DocumentSessionError> {
+        if self.order().len() != 1 || !self.parked.is_empty() {
+            return Err(DocumentSessionError::DrawingsStillOpen);
+        }
+        let mut next = Self::localized(localization);
+        next.tabs = self.tabs.clone();
+        next.tabs.close(self.selected());
+        let id = next.tabs.add();
+        next.untitled = DocumentTabLabel::untitled(id, localization);
+        next.budget = self.budget;
+        next.clip = self.clip.clone();
+        next.storage_error = self.storage_error.clone();
+        Ok(next)
     }
     pub fn labels<'a>(
         &'a self,
@@ -311,22 +355,19 @@ pub struct DocumentAdmission {
     storage_error: Option<String>,
 }
 impl DocumentAdmission {
-    pub fn admit(&self, candidate: &Document) -> Result<(), DocumentSessionError> {
+    pub fn admit_sessions<'a>(&self, editors: impl IntoIterator<Item = &'a layer_core::Editor>) -> Result<(), DocumentSessionError> {
         if let Some(error) = &self.storage_error {
             return Err(DocumentSessionError::StorageUnavailable { detail: error.clone() });
         }
-        let metadata = layer_core::Editor::new(candidate.clone())
-            .retained_tiles()
-            .metadata_bytes;
-        if self
-            .existing
-            .saturating_add(metadata)
-            .saturating_add(2 * 1024 * 1024)
-            > self.limit
-        {
-            return Err(DocumentSessionError::MetadataBudgetExceeded);
+        let mut metadata = self.existing;
+        for editor in editors {
+            metadata = metadata.saturating_add(editor.retained_tiles().metadata_bytes).saturating_add(2 * 1024 * 1024);
+            if metadata > self.limit { return Err(DocumentSessionError::MetadataBudgetExceeded); }
         }
         Ok(())
+    }
+    pub fn admit(&self, candidate: &Document) -> Result<(), DocumentSessionError> {
+        self.admit_sessions(std::iter::once(&layer_core::Editor::new(candidate.clone())))
     }
 }
 
@@ -352,6 +393,10 @@ impl DocumentTabLabel {
         localization.format(MessageId::DOCUMENTS_UNTITLED_NUMBERED, &args)
     }
     fn with_title(id: u64, file: &DocumentFileState, title: String, localization: &Localizer) -> Self {
+        let title=if file.recovered {
+            let mut args=FluentArgs::new();args.set("name",title);
+            localization.format(MessageId::DOCUMENTS_RECOVERED_NAME,&args)
+        } else {title};
         Self {
             id,
             title,
@@ -379,6 +424,62 @@ mod tests {
     fn english() -> std::sync::Arc<Localizer> { Localizer::shared(crate::UiLanguage::English) }
     fn inventory() -> RetainedTiles {
         RetainedTiles::default()
+    }
+    #[test]
+    fn session_admission_counts_the_whole_batch_before_gpu_preparation() {
+        let document = Document::new(layer_core::PortableId::random(), 64, 64, layer_core::DocumentNames {paint:"Ink".into(),paper:"Paper".into()});
+        let editor = layer_core::Editor::new(document);
+        let bytes = editor.retained_tiles().metadata_bytes + 2 * 1024 * 1024;
+        let admission = DocumentAdmission {existing:0,limit:bytes * 2 - 1,storage_error:None};
+        assert!(admission.admit_sessions([&editor]).is_ok());
+        assert_eq!(admission.admit_sessions([&editor, &editor]), Err(DocumentSessionError::MetadataBudgetExceeded));
+    }
+    #[test]
+    fn prepared_empty_collection_retains_allocator_and_original_until_commit() {
+        let mut sessions = DocumentSessions::<String>::default();
+        sessions.reserve_identities(&[2]).unwrap();
+        let prepared = sessions.prepare_empty(&english()).unwrap();
+        assert_eq!(sessions.order(), [1]);
+        assert_eq!(sessions.selected(), 1);
+        assert_eq!(prepared.order(), [3]);
+        assert_eq!(prepared.selected(), 3);
+        assert_eq!(prepared.untitled, "Untitled 3");
+        sessions.append_parked("inactive".into(), inventory(), &english());
+        assert!(sessions.prepare_empty(&english()).is_err());
+        assert_eq!(sessions.order(), [1, 3]);
+    }
+    #[test]
+    fn restored_inactive_membership_preserves_active_owner_and_caption() {
+        let mut sessions = DocumentSessions::default();
+        sessions.restore_identity(crate::session_recovery::MAX_SESSION_DRAWING_ID).unwrap();
+        let before = sessions.untitled.clone();
+        assert_eq!(sessions.append_parked("restored", inventory(), &english()), 1);
+        assert_eq!(sessions.selected(), crate::session_recovery::MAX_SESSION_DRAWING_ID);
+        assert_eq!(sessions.untitled, before);
+        assert_eq!(sessions.parked_owner_mut(1).map(|owner| *owner), Some("restored"));
+        let file = DocumentFileState::localized(&english());
+        assert_eq!(sessions.labels(&file, |_| &file, &english()).first().unwrap().title, before);
+    }
+    #[test]
+    fn explicit_inactive_identity_preserves_selection_and_returns_refused_owner() {
+        let mut sessions = DocumentSessions::default();
+        let caption = sessions.untitled.clone();
+        sessions.append_parked_with_id(9, Box::new("Restored drawing".to_string()), inventory(), &english()).unwrap();
+        assert_eq!(sessions.selected(), 1);
+        assert_eq!(sessions.untitled, caption);
+        assert_eq!(sessions.order(), [1, 9]);
+        let order = sessions.order().to_vec();
+        for id in [0, 1, 9, crate::session_recovery::MAX_SESSION_DRAWING_ID + 1] {
+            let owner = Box::new("Refused drawing".to_string());
+            let identity = std::ptr::from_ref(owner.as_ref());
+            let (_, owner) = sessions.append_parked_with_id(id, owner, inventory(), &english()).unwrap_err();
+            assert_eq!(std::ptr::from_ref(owner.as_ref()), identity);
+            assert_eq!(sessions.order(), order);
+            assert_eq!(sessions.selected(), 1);
+            assert_eq!(sessions.untitled, caption);
+        }
+        let file = DocumentFileState::localized(&english());
+        assert_eq!(sessions.labels(&file, |_| &file, &english()).iter().map(|label| label.title.as_str()).collect::<Vec<_>>(), ["Untitled 1", "Untitled 9"]);
     }
     #[test]
     fn tab_language_refresh_retains_membership_and_literal_names() {

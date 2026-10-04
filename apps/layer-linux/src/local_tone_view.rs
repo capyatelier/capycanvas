@@ -174,7 +174,7 @@ impl LocalToneView {
                 return None;
             }
             Some((
-                session.capture_project_recovery().ok()?,
+                session.capture_artwork().ok()?,
                 w.snapshot_gpu().ok()?,
             ))
         })();

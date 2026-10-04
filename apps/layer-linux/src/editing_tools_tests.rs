@@ -118,7 +118,7 @@ fn native_portable_paint_pointer_workflow() {
         save.set_current_name(&name); pump(150); save.response(gtk::ResponseType::Accept); finish(&w);
         assert!(!state(&w).document_file.modified);
         let opened = Rc::new(RefCell::new(None)); let result = opened.clone();
-        *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+        *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
             *result.borrow_mut() = Some((project, location));
         }));
         invoke(&w, CommandId::OpenDocument);

@@ -73,7 +73,7 @@ fn native_blending_new_drawing_edit_menu_and_properties() {
 
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, _, _| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, _| {
         result.replace(Some(project));
     }));
     w.dispatch(UiAction::Invoke { command: CommandId::NewDocument });

@@ -66,6 +66,7 @@ pub struct NativeHost {
     pub error: Option<String>,
     pub sequence: u64,
     pub startup: layer_render_wgpu::StartupProgress,
+    pub(crate) document_close_prepared: bool,
     pub proof: layer_ui::proof_workflow::ProofView,
     deferred_contacts: contacts::DeferredContacts,
     last_pen: Option<PenEvent>,
@@ -86,6 +87,14 @@ pub struct NativeHost {
 }
 
 impl NativeHost {
+    fn require_document_owner(&self) -> Result<(), String> {
+        if self.document_close_prepared {
+            return Err(layer_ui::DocumentTransportRefusal::ChangeInProgress.message(self.session.localization()).to_string());
+        }
+        Ok(())
+    }
+    pub fn document_close_prepared(&self) -> bool { self.document_close_prepared }
+
     fn prepare_ui_previews(&mut self) -> Result<(), String> {
         let rendition = self.session.engine().document().composition().color.depth.is_float()
             .then(|| self.session.effective_sdr_rendition());
@@ -163,6 +172,7 @@ impl NativeHost {
             proof: Default::default(),
             // Eager hosts are ready on GPU attachment; staged hosts reset this.
             startup: layer_render_wgpu::StartupProgress::COMPLETE,
+            document_close_prepared: false,
             deferred_contacts: Default::default(),
             last_pen: None,
             paint_start_sequence: 0,
@@ -272,6 +282,7 @@ impl NativeHost {
         Ok(())
     }
     pub fn dispatch(&mut self, action: UiAction) -> Result<(), String> {
+        self.require_document_owner()?;
         if matches!(action, UiAction::RestoreWorkspace { .. }) {
             self.header_drag = None;
         }
@@ -338,6 +349,10 @@ impl NativeHost {
         }
     }
     pub fn input(&mut self, input: UiInput) -> Result<layer_ui::InputReply, String> {
+        if self.document_close_prepared {
+            return Ok(layer_ui::InputReply {change:layer_ui::UiChange {revision:self.session.state().revision,..Default::default()},
+                handled:true,chrome_hidden:self.chrome_hidden,keep_zen_button:self.keep_zen_button,pan_cursor:self.pan_cursor,..Default::default()});
+        }
         if matches!(input, UiInput::Blur) {
             self.header_drag = None;
         }
@@ -369,6 +384,7 @@ impl NativeHost {
         {
             return Err("Invalid native scroll".into());
         }
+        if self.document_close_prepared { return Ok(()); }
         let previous = self.session.state().revision;
         let change = self
             .session
@@ -385,6 +401,7 @@ impl NativeHost {
         {
             return Err("Invalid native gesture".into());
         }
+        if self.document_close_prepared { return Ok(()); }
         let previous = self.session.state().revision;
         let change = self.session.gesture(anchor, anchor, scale, rotation)?;
         self.apply_change(previous, change);

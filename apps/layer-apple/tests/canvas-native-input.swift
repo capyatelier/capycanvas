@@ -195,13 +195,7 @@ private final class TabletEvent: NSEvent {
                 FileManager.default.fileExists(atPath: project.path) && !store.projectFiles.busy
             }
             try require(store.projectFiles.error == nil, store.projectFiles.error ?? "")
-            // Read the actual saved document's JSON manifest; ruler overlays
-            // are intentionally absent from exported artwork.
-            let bytes = try Data(contentsOf: project)
-            try require(bytes.count >= 52 && bytes.prefix(10) == Data("CAPYRASTER".utf8), "Expected an indexed raster project")
-            let count = bytes[12..<20].enumerated().reduce(UInt64(0)) { $0 | UInt64($1.element) << ($1.offset * 8) }
-            try require(count <= bytes.count - 52, "Complete project manifest")
-            return JSON(try JSONSerialization.jsonObject(with: bytes.subdata(in: 52..<(52 + Int(count)))))["document"]["rulers"]
+            return try savedRulers(project)
         }
         func send(_ type: NSEvent.EventType, _ point: CGPoint, flags: NSEvent.ModifierFlags = []) async throws {
             if type == .leftMouseDown {

@@ -172,3 +172,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (กู้คืนแล้ว)
+documents-destination-changed = ภาพวาดที่บันทึกไว้เปลี่ยนแปลงหรือไม่พร้อมใช้งาน ใช้บันทึกเป็นเพื่อเก็บทั้งสองสำเนาไว้

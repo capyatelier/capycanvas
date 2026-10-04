@@ -79,6 +79,37 @@ targeted Curves forward shared actions through the existing native contact and
 loupe path. Unfinished numeric text keeps its native focus and selection through
 statistics updates. Ending an edit retires its late native text callbacks.
 
+Restart restores the selected drawing first, then hydrates the other tabs without
+changing the selected canvas. The shared private session format retains tab order,
+camera, working state, manual save checkpoint and bounded undo/redo history for
+both saved and unsaved drawings. Common restart has no dialog. A drawing restored
+after an interrupted exit shows the shared recovered suffix until its next save;
+failed copies remain on disk and offer Retry or Later.
+
+`Recovery.kt` owns native timing, window leases and provider access. Shared Rust
+validates the window manifest, restore attempt tickets and incremental resource
+stores. Membership is durable before a new drawing's first checkpoint. A two-second
+poll coalesces changes and writes only changed session stamps; background and Quit
+wait for a durable checkpoint. Polling stops in the background; returning to the
+canvas marks the session active again without blocking input. Explicit tab close prepares the native transaction
+and retirement intent, removes membership durably, then commits the prepared close.
+Resource collection respects restored readers. Save preserves this private history
+and updates the manual save checkpoint rather than retiring the session.
+Activity teardown completes accepted restores and settles pending edits on the
+native owner without a presentation surface before its final checkpoint. Storage
+leases and the native editor stay alive until that work completes.
+
+Persisted provider permissions permit reopening saved destinations after process
+restart. Restore observes the saved destination on an I/O worker without opening
+a permission dialog. Missing, unreadable or changed originals retain their private
+copy and require Save, Discard or Cancel when closing. A shared fingerprint check
+compares the destination immediately before replacement; an externally changed
+or unreadable destination refuses direct Save.
+Save As remains available. Save must durably checkpoint the current drawing
+before opening a provider destination for replacement. A failed checkpoint leaves
+the original untouched. Provider replacement retains the provider's own durability
+guarantees.
+
 ## Prerequisites
 
 Install Java 17 or newer, Node.js, Rust, Android Studio or the Android command-line tools,
@@ -193,6 +224,15 @@ behavior and high-refresh presentation need a real tablet.
 
 ### Where to start
 
+`AndroidSessionRestartTest#processRestartRetainsSavedAndUnsavedHistory` is a
+paired process-crash fixture. Run first with `-e restartPhase prepare
+-e restartFixture UNIQUE -e theme light|dark`, then with `-e restartPhase verify
+-e restartFixture UNIQUE`. Preparation deliberately kills its isolated test
+process and reports `Process crashed`; verification must report `OK (1 test)`.
+It preserves only that named test directory between invocations and removes it
+after verification. It checks saved and dirty tabs, camera, recovered labels,
+manual save checkpoints and undo/redo after an actual process death.
+
 - `AndroidHostTest#nativeGradientStopContactsAndCompactControlsRetainDefinition`
   checks native stop contacts, precise positions, interpolation, color and
   history, with archive reopening and Activity recreation.
@@ -232,6 +272,10 @@ behavior and high-refresh presentation need a real tablet.
   themes. Native drag capture respects panel stacking: a drawer blocks covered
   resize handles while its own controls remain interactive.
 - `AndroidRasterTest`: document, file and GPU lifecycle.
+  - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
+    active tab, camera, saved checkpoints and independent undo/redo history.
+    `#failedInactiveSessionRetriesWithoutLosingNewDrawing` preserves a failed
+    checkpoint while another drawing is edited, then retries and restarts.
   - `#navigationBuffersAndPenReturnsToFrontBuffer` and
     `#frontBufferSurfaceLifecycle` cover the switch between buffered navigation
     and front-buffer ink, rotation, surface recreation and GPU recovery,
@@ -452,6 +496,10 @@ APK calls, so test-APK benchmarks use the unminified build.
   and restores the camera before measurement. `-e motion pan|pinch` measures navigation;
   the default `stroke` draws, with `osInput`, `canvasSize`, `brushSize`,
   `intervalMs`, `durationMs`, `repeats`, `blending` and `label`.
+  `contactMs` with `pauseMs` runs repeated short contacts as a checkpoint/history
+  diagnostic. Pauses remain in the reported interval; this does not qualify a
+  continuous stroke target. `session_samples` records process-wide kernel write
+  counters, disk footprint and newest checkpoint age on a separate IO sampler.
   `-e languageSwitches ja,zh-Hans,zh-Hant` requests a language halfway through
   each stroke and records the deferred publication and first resumed completion
   separately from the moving-frame window. Photo runs move the empty paint layer above

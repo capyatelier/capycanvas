@@ -57,10 +57,7 @@ internal object Native {
     @JvmStatic external fun documentSpillTask(handle: Long): Long
     @JvmStatic external fun documentSpillWork(task: Long)
     @JvmStatic external fun projectParkReady(handle: Long, task: Long): Boolean
-    @JvmStatic external fun projectRecoveryFor(handle: Long, id: Long): Long
-    @JvmStatic external fun projectRecoveryTask(handle: Long, opening: Boolean): Long
     /** File worker only: atomic publication of a captured recovery snapshot. */
-    @JvmStatic external fun projectPublish(task: Long, path: String)
     @JvmStatic external fun projectTask(handle: Long, request: Int, location: String, epoch: Long, revision: Long): Long
     @JvmStatic external fun importSource(prefix: ByteArray): String
     @JvmStatic external fun photoFormats(): String
@@ -83,7 +80,37 @@ internal object Native {
     @JvmStatic external fun pasteClip(handle: Long, request: Int)
     /** File worker only; consumes the detached descriptor, retains the task. */
     @JvmStatic external fun exportPresets(bytes: ByteArray, request: String, color: String): Array<Any?>
-    @JvmStatic external fun recoveryUpdate(state: String, event: String): String
+    @JvmStatic external fun sessionStamp(handle: Long, id: Long): String
+    @JvmStatic external fun sessionCapture(handle: Long, id: Long): Long
+    @JvmStatic external fun sessionSettle(handle: Long, now: Long)
+    @JvmStatic external fun sessionStoreOpen(directory: String): Long
+    @JvmStatic external fun sessionStoreFree(store: Long)
+    @JvmStatic external fun sessionStoreRetire(store: Long)
+    @JvmStatic external fun sessionStorePrepareRetirement(store: Long)
+    @JvmStatic external fun sessionCommit(task: Long, store: Long)
+    @JvmStatic external fun sessionRestoreTask(handle: Long, stamp: String = "null"): Long
+    @JvmStatic external fun sessionReserveIdentities(handle: Long, identities: String)
+    @JvmStatic external fun sessionRequireEmptyRetry(handle: Long)
+    @JvmStatic external fun sessionFailure(handle: Long, detail: String, recovery: Boolean): String
+    @JvmStatic external fun sessionRead(task: Long, store: Long, recovered: Boolean): String
+    @JvmStatic external fun sessionObserve(task: Long, fd: Int): String
+    @JvmStatic external fun sessionPrepare(task: Long, id: Long, observed: String)
+    @JvmStatic external fun sessionAdopt(handle: Long, task: Long, active: Long, reserved: String): String
+    @JvmStatic external fun sessionHydrate(handle: Long, task: Long, id: Long): Long
+    @JvmStatic external fun documentPrepareClose(handle: Long): Long
+    @JvmStatic external fun documentCommitClose(handle: Long, job: Long): Long
+    @JvmStatic external fun documentCancelPreparedClose(handle: Long, job: Long)
+    @JvmStatic external fun sessionFree(task: Long)
+    @JvmStatic external fun sessionManifestRead(path: String): String
+    @JvmStatic external fun sessionManifestWrite(path: String, value: String): String
+    @JvmStatic external fun sessionManifestUpdate(state: String, event: String): String
+    @JvmStatic external fun sessionCollect(directory: String, manifest: String)
+    @JvmStatic external fun sessionClose(handle: Long)
+    @JvmStatic external fun sessionFingerprint(fd: Int): String
+    @JvmStatic external fun sessionDestination(handle: Long): String
+    @JvmStatic external fun sessionDestinationMatches(expectation: String, observed: String): Boolean
+    @JvmStatic external fun sessionRecordDestination(handle: Long, location: String, fingerprint: String)
+    @JvmStatic external fun sessionCompleteSave(handle: Long, request: Int, location: String, fingerprint: String)
     @JvmStatic external fun profileLibrary(request: String, bytes: ByteArray): String
     @JvmStatic external fun paletteFile(request: String, bytes: ByteArray): Array<Any>
     @JvmStatic external fun projectPackagePrompt(task: Long): String

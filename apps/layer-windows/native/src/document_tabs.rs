@@ -6,7 +6,6 @@ use serde_json::Value;
 
 pub(super) struct Parked {
     pub session: UiSession<Renderer>,
-    pub recovery: Option<crate::recovery::Service>,
 }
 impl layer_host::window::Parked for Parked {
     fn session(&self) -> &UiSession<Renderer> {
@@ -65,7 +64,7 @@ impl DocumentService {
         self.window.gpu.as_ref().map(|g| &g.device)
     }
     pub(crate) fn window_close_ready(&self, host: &NativeHost) -> bool {
-        self.window.documents.order().len() == 1 && host.session.state().document_file.close_ready
+        (self.close_window || self.window.documents.order().len()==1) && host.session.state().document_file.close_ready
     }
     #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
     pub(crate) fn tabs_view(&self, host: &NativeHost) -> Value {
@@ -105,11 +104,8 @@ impl DocumentService {
     }
     fn switch(&mut self, host: &mut NativeHost, id: u64, closing: bool) -> Result<(), String> {
         let options = host.renderer_options(None);
-        let recovery = &mut self.recovery;
         let Some((activation, closed)) =
-            self.window.switch(host, id, closing, options, |incoming| {
-                std::mem::swap(recovery, &mut incoming.recovery)
-            })?
+            self.window.switch(host, id, closing, options, |_| {})?
         else {
             return Ok(());
         };
@@ -133,27 +129,17 @@ impl DocumentService {
         candidate: &mut Option<Box<UiSession<Renderer>>>,
     ) -> Result<Option<Box<WgpuRasterizer>>, String> {
         Self::matches(host, active.epoch, active.revision)?;
-        let mut recovery = if self.recovery.is_some() {
-            Some(self.new_recovery()?)
-        } else {
-            None
-        };
         let open = OpenAdoption {
             epoch: active.epoch,
             revision: active.revision,
             location: active.location,
-            recovered: false,
         };
-        let slot = &mut self.recovery;
         self.window.adopt(
             host,
             candidate,
             open,
             || true,
-            |session| {
-                std::mem::swap(slot, &mut recovery);
-                Parked { session, recovery }
-            },
+            |session| Parked { session },
         )
     }
     pub(super) fn append_candidate(
@@ -183,60 +169,17 @@ impl DocumentService {
         host: &mut NativeHost,
         restored: crate::recovery::Restored,
     ) -> Result<(), String> {
-        let crate::recovery::Restored {
-            token,
-            identity,
-            mut candidate,
-        } = restored;
-        let checked = (|| {
-            if self.active.is_some() || self.activating || !host.session.can_park_document() {
-                return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
-            }
-            Self::matches(host, identity.0, identity.1)?;
-            if host
-                .session
-                .engine()
-                .backend()
-                .0
-                .as_ref()
-                .map(|g| g.device())
-                != candidate.engine().backend().0.as_ref().map(|g| g.device())
-            {
-                return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
-            }
-            self.window.documents.admit(
-                &host.session.retained_document_tiles(),
-                candidate.engine().document(),
-            ).map_err(|reason| reason.message(host.session.localization()))?;
-            candidate.mark_recovered();
-            candidate.inherit_window_state(&host.session)?;
-            candidate.inherit_initial_drawing_tools(&host.session)?;
-            let outgoing_recovery = self.new_recovery()?;
-            let tiles = host.session.park_document()?;
-            Ok((outgoing_recovery, tiles))
-        })();
-        let result = match checked {
-            Ok((outgoing_recovery, tiles)) => {
-                self.document_retired(host)?;
-                self.worker
-                    .retire_renderer(Renderer(self.window.retire_gpu(host)));
-                let outgoing = Parked {
-                    session: std::mem::replace(&mut host.session, *candidate),
-                    recovery: Some(outgoing_recovery),
-                };
-                self.window.documents.append(outgoing, tiles, host.session.localization());
-                self.window.changed(host);
-                Ok(())
-            }
-            Err(error) => {
-                self.worker.retire(candidate);
-                Err(error)
-            }
+        let crate::recovery::Restored { mut candidates, active, stamp } = restored;
+        let order=self.recovery.as_ref().unwrap().restore_order();
+        let result=if self.window.documents.order().len()==1&&host.session.can_replace_startup_session(&stamp){
+            self.window.restore_sessions(host,&mut candidates,active,stamp,|session|Parked{session}).and_then(|retired|{self.window.documents.restore_order(&order,active)?;Ok(retired)})
+        }else{
+            self.window.append_restored_sessions(host,&mut candidates,|session|Parked{session}).and_then(|(mapping,retired)|{self.recovery.as_mut().unwrap().remap_restored(mapping)?;Ok(retired)})
         };
-        self.recovery
-            .as_mut()
-            .unwrap()
-            .complete_restore(&mut host.session, token, result)?;
+        match result {
+            Ok(retired)=>{for renderer in retired{self.worker.retire_renderer(Renderer(Some(renderer)));}self.document_retired(host)?;self.recovery.as_mut().unwrap().complete_restore(Ok(()))?;},
+            Err(error)=>{for (_,candidate) in candidates{self.worker.retire(candidate);}self.recovery.as_mut().unwrap().complete_restore(Err(error))?;}
+        }
         host.invalidate_snapshot();
         Ok(())
     }
@@ -343,18 +286,23 @@ impl DocumentService {
         Ok(())
     }
     pub(super) fn poll_tabs(&mut self, host: &mut NativeHost) -> Result<(), String> {
+        if self.prepared_close.is_some()&&!host.session.state().document_file.close_ready {let prepared=self.prepared_close.take().unwrap();self.window.cancel_close(host,prepared)?;}
+        if !self.close_window && host.session.state().document_file.close_ready && self.prepared_close.is_none() {
+            if !self.idle()||!self.window.adoption_ready(host)? {return Ok(());}
+            let options=host.renderer_options(None);self.prepared_close=Some(self.window.prepare_close(host,options)?);
+        }
+        if let Some(prepared)=&self.prepared_close {self.window.validate_close(host,prepared)?;}
         if let Some(recovery) = &mut self.recovery
-            && recovery.poll(&mut host.session, true)?
+            && recovery.poll(host, &self.window, self.close_window && host.session.state().document_file.close_ready)?
         {
             host.invalidate_snapshot();
         }
-        if let Some(restored) = self.recovery.as_mut().and_then(|r| r.take_restored()) {
-            self.adopt_recovery(host, restored)?;
+        if self.prepared_close.is_some() && (!host.session.state().document_file.close_ready || self.recovery.as_ref().is_some_and(|recovery|recovery.failed())) {
+            let prepared=self.prepared_close.take().unwrap();self.window.cancel_close(host,prepared)?;
         }
-        for (_, p) in self.window.documents.parked_mut() {
-            if let Some(r) = &mut p.owner.recovery {
-                r.poll(&mut p.owner.session, false)?;
-            }
+        if !self.activating && self.active.is_none() && host.session.can_park_document()
+            && let Some(restored) = self.recovery.as_mut().and_then(|r| r.take_restored()) {
+            self.adopt_recovery(host, restored)?;
         }
         if self.close_next && self.idle() && host.session.can_park_document() {
             self.close_next = false;
@@ -362,21 +310,20 @@ impl DocumentService {
                 command: layer_ui::CommandId::CloseDocument,
             })?;
         }
-        if self.close_window
-            && !self.close_next
-            && self.idle()
-            && !host.session.state().document_file.busy
-            && !host.session.state().document_file.close_ready
-        {
-            self.close_window = false;
+        if self.close_window && self.idle() && !host.session.state().document_file.busy && !host.session.state().document_file.close_ready {
+            if self.quit_pending {
+                self.quit_pending=false;let previous=host.session.state().revision;let change=host.session.request_session_close()?;host.apply_change(previous,change);
+            }else{self.close_window=false;}
         }
-        if host.session.state().document_file.close_ready
+        if !self.close_window && host.session.state().document_file.close_ready
             && self.window.documents.order().len() > 1
             && self.idle()
             && self.recovery.as_ref().is_none_or(|r| r.close_ready())
         {
-            self.switch(host, 0, true)?;
-            self.close_next = self.close_window;
+            let prepared=self.prepared_close.take().ok_or("The drawing close is not prepared")?;
+            let (activation,closed)=self.window.commit_close(host,prepared,|_|{});
+            self.document_retired(host)?;if let Some(closed)=closed{self.worker.retire(Box::new(closed.session));}self.activate(host,activation);
+            self.close_next = false;
         }
         if self.idle()
             && host.session.can_park_document()

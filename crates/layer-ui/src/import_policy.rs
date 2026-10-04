@@ -15,7 +15,6 @@ use std::{
 pub enum ImportIntent {
     Open,
     Place,
-    Recovery,
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ImportSource {
@@ -32,9 +31,6 @@ impl ImportSource {
         };
         match (intent, source) {
             (ImportIntent::Place, Self::Master) => Err("Choose a supported photo to place".into()),
-            (ImportIntent::Recovery, Self::Photo) => {
-                Err("Recovery file is not a native drawing".into())
-            }
             _ => Ok(source),
         }
     }
@@ -83,6 +79,10 @@ pub enum ImportOutcome {
     Package(layer_core::package::codec::OpenOutcome),
 }
 impl ImportedDocument {
+    pub fn destination_fingerprint(&self,cancelled:&AtomicBool)->Result<Option<crate::session_recovery::DestinationFingerprint>,String> {
+        let Some(native)=&self.native else {return Ok(None);};
+        crate::session_recovery::DestinationFingerprint::read(layer_core::package::transport::BackingReader::new(&native.source,cancelled)).map(Some)
+    }
     pub fn new(project: Document, source: ImportSource) -> Self { Self { project, source, native: None } }
     pub fn preserve_unsupported(&self, reason: impl Into<String>) -> Option<layer_core::package::codec::OpenOutcome> {
         let native = self.native.as_ref()?;
@@ -551,7 +551,6 @@ mod tests {
                 .map(|(key, blob)| (key, blob.content_digest().unwrap()))
                 .collect::<Vec<_>>()
         );
-        assert!(open(&png, ImportIntent::Recovery, policy, "recovery.capy").is_err());
     }
     #[test]
     fn an_opened_photo_keeps_its_metadata_through_interpretation_and_saving() {

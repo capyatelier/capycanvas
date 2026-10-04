@@ -337,7 +337,7 @@ pub(super) async fn run(
     state.workflow.borrow_mut().comparison_completed()?;
     if state.workflow.borrow().is_copy() {
         let project = state.workflow.borrow().copy_project(false)?.clone();
-        w.open_document.borrow().as_ref().ok_or("New drawing window is unavailable")?(project, None, None);
+        w.open_document.borrow().as_ref().ok_or("New drawing window is unavailable")?(project, None);
         Ok(true)
     } else {
         adopt(w, &mut state.workflow.borrow_mut(), &state.gpu).await

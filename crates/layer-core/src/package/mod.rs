@@ -23,3 +23,9 @@ pub mod artwork_records;
 pub mod codec;
 
 pub mod transfer;
+
+pub mod session;
+pub mod session_transfer;
+
+#[cfg(not(target_arch = "wasm32"))]
+pub mod session_store;

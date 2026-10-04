@@ -402,9 +402,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   await reload();
   await wait("window.layerApp && document.body.dataset.gpu==='ready'", "reload", 60000);
   await idle();
-  await wait("!!document.querySelector('dialog.document-dialog[open] .suggested-action')", "drawing recovery offered");
-  await evaluate("document.querySelector('dialog.document-dialog[open] .suggested-action').click()");
-  await wait("!document.querySelector('dialog.document-dialog[open]')", "drawing recovery completes");
+  await evaluate('layerApp.documents.startRecovery()');
   await idle();
   const restored = await library();
   assert.deepEqual(restored.palettes, saved.palettes, "palettes survive reload");

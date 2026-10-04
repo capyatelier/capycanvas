@@ -196,7 +196,7 @@ strong deduplication remain separate from editable source identity.
 | `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
 | `Definition.program` | Shared immutable runtime program. Built-in wire records store only stable ID and parameter-data version; custom records embed their definition. | Built-ins resolve the current catalog on open; custom code and literal labels retain their owners. |
 | `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths; UI unit labels never decide scaling. |
-| `EffectParameter.opaque` | Color-control capability, default false. | RGB-only parameters author opaque colors; ignored old alpha remains readable. |
+| `EffectParameter.opaque` | Color-control capability, default false. | RGB-only controls author opaque colors; stored alpha remains intact even when the filter ignores it. |
 
 Built-in shader ABI, code, passes, preparation, labels, page layout and slider
 presentation are runtime details. They are absent from artwork records. Rendering
@@ -214,8 +214,9 @@ Choice selections use stable option IDs; runtime indices are derived on load.
 LUT color-space IDs map explicitly to RGB spaces and GPU codes. Numbers, toggles,
 portable colors, curve control points, gradient stops and LUT bindings remain
 authored data. Missing values and unknown parameters/options never silently use
-current defaults. A concrete data change needs an explicit per-filter conversion
-and a fixed compatibility fixture; otherwise retain support for its meaning.
+current defaults. Fixed-file fixtures protect the supported authored meaning.
+Pre-release readers support only the current data versions, without conversions
+for superseded representations.
 See the [package contract](capy-package.md) for the wire grammar and evolution rules.
 
 ## Validation and supported editing
@@ -403,8 +404,21 @@ host capture barrier supply the context from the matching successful source
 submission. Capture filters removed effects from the supplied phase inventory;
 it never reconstructs integrated phases. The caller need not clone history.
 Resources are enumerable directly from the capture, independently of ZIP writing.
-A future private session/history codec can capture working state and bounded
-history at this same ordered boundary without extending the portable manifest.
+`Editor::capture_session` freezes working state, bounded Undo/Redo and the next
+edit/stroke identities at this same ordered boundary. The private
+[`session` codec](../../crates/layer-core/src/package/session.rs) prepares
+checkpoint metadata and one resource inventory on a worker without extending the
+portable manifest. Historical states share identical record versions and
+immutable payload owners. Sparse tile indexes reuse 64-entry metadata chunks,
+and original-image descriptors are interned once across changed paint records;
+small strokes do not repeat the whole canvas/photo index in every history entry.
+Expansion checks the projected metadata size before cloning shared chunks, then
+uses the portable artwork adapters and admission limits. The captured checkpoint
+cannot change when a host installs the captured output context.
+Reopening independently validates resources, working
+targets, reversible history transitions, checkpoint ordering and admission budgets before returning a
+complete editor. The manual-save checkpoint remains separate host metadata;
+`Editor::validate_checkpoint` rejects identities outside the captured edit lineage.
 
 The output context pairs source roots, effect phases and source-analysis inputs
 from one committed boundary. It includes composition/output identity, framing,
@@ -449,11 +463,24 @@ owners without decoding, hashing or color management on the UI thread. Ancillary
 references can retain original encoded bytes while sharing one resource ID with
 live authored content.
 
-Current recovery writes captures through `PreparedPackage`; enumerating metadata
-and unchanged resources does not require constructing or reopening an archive.
-Private session restoration, persisted inverse edits, incremental storage and
-recovery lifecycle changes belong to the later
-[automatic-recovery work](../development/autorecovery.md).
+Private sessions preserve every retained ancillary record and payload, including
+non-copy-safe records and subjects temporarily absent during Undo. Portable
+save's `edited_retained` filtering does not govern private session data.
+[`PreparedSessionTransfer`](../../crates/layer-core/src/package/session_transfer.rs)
+carries exact working state and inverse edits between trusted worker heaps using
+the same record adapters. Its verified receipts are transient; they never replace
+independent validation of bytes read from storage. Native
+[`SessionStore`](../../crates/layer-core/src/package/session_store.rs) publishes
+immutable resources before checkpoint metadata and retains complete generations
+and live readers during cleanup.
+
+Persistence boundaries destructure editor, document, artwork and working fields
+exhaustively. Edit transport also matches every edit variant. Adding a field or
+variant requires classifying it at those boundaries before the code compiles.
+The [session fixture](../../crates/layer-core/src/package/session_tests.rs) compares
+all authored records, working state, resource identities and exact checkpoints
+through transfer, restart, Undo/Redo and branching; it does not establish host or
+performance qualification.
 
 ## Regression oracles
 
@@ -464,6 +491,7 @@ or qualify host behavior and performance.
 | --- | --- |
 | Bake lifetime and composition | [`merge_tests.rs`](../../crates/layer-core/src/merge_tests.rs) and [`scene/stack.rs`](../../crates/layer-render-wgpu/src/scene/stack.rs) |
 | Shared roots, selection and history admission | [`history_budget/tests.rs`](../../crates/layer-core/src/history_budget/tests.rs), [`retained_geometry_tests.rs`](../../crates/layer-core/src/retained_geometry_tests.rs) and [`raster/restore_tests.rs`](../../crates/layer-render-wgpu/src/raster/restore_tests.rs) |
+| Private session/history and worker transport | [`package/session_tests.rs`](../../crates/layer-core/src/package/session_tests.rs), [`package/session.rs`](../../crates/layer-core/src/package/session.rs) and [`package/session_transfer.rs`](../../crates/layer-core/src/package/session_transfer.rs) |
 | Portable codec, verified transfer and exact preview context | [`package/codec/tests.rs`](../../crates/layer-core/src/package/codec/tests.rs), [`package/transfer.rs`](../../crates/layer-core/src/package/transfer.rs) and [`authored/tests.rs`](../../crates/layer-core/src/authored/tests.rs) |
 | Groups, masks, native precision and transforms | [`scene/scale/tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/tests.rs), [`effect_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/effect_tests.rs), [`transform_tests.rs`](../../crates/layer-render-wgpu/src/scene/scale/transform_tests.rs) and [`placement_material_tests.rs`](../../crates/layer-render-wgpu/src/placement_material_tests.rs) |
 | Captured phases and source-aware analysis | [`artwork_sample_tests.rs`](../../crates/layer-render-wgpu/src/artwork_sample_tests.rs), [`effect_analysis_lease_tests.rs`](../../crates/layer-render-wgpu/src/effect_analysis_lease_tests.rs) and [`snapshot/tests/local_adjustments.rs`](../../crates/layer-render-wgpu/src/snapshot/tests/local_adjustments.rs) |

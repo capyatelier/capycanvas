@@ -46,8 +46,8 @@ mod header;
 mod input;
 #[path = "navigator_tests.rs"]
 mod navigator;
-#[path = "recovery_tests.rs"]
-mod recovery;
+#[path = "session_tests.rs"]
+mod session;
 #[path = "region_tests.rs"]
 mod region;
 #[path = "selection_tests.rs"]

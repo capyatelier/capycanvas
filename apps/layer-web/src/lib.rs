@@ -4,6 +4,7 @@ mod clipboard;
 mod documents;
 mod document_tabs;
 mod document_storage;
+mod session_restart;
 mod image_import;
 mod color_edit;
 mod source_edit;

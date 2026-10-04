@@ -308,7 +308,8 @@ impl NativeWorkspaces {
         }
         self.tick(w);
     }
-    pub fn accepts_input(&self, _w: &Rc<Workspace>) -> bool {
+    pub fn accepts_input(&self, w: &Rc<Workspace>) -> bool {
+        if w.documents.closing_window.get() || w.documents.exit_flushing.get() {return false;}
         #[cfg(test)]
         if self.paused.get() {
             return false;

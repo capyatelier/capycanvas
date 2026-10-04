@@ -250,6 +250,7 @@ web client uses browser file access and downloads. See the
 [platform guides](../platforms/README.md) before assuming a workflow is available
 or fully validated on a particular client.
 
-Some hosts also keep recovery copies independently of manual saves. Apple’s
-[private recovery implementation](../../apps/layer-apple/PERSISTENCE.md) keeps
-recovered artwork unsaved until the user completes a manual save.
+[Session recovery](session-recovery.md) preserves open drawings, working state and
+bounded undo/redo independently of manual saves. Restart restores the session;
+explicit close removes a drawing. Recovery preserves the manual-save checkpoint
+so Undo and the modified indicator retain their meaning.

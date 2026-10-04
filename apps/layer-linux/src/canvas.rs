@@ -158,6 +158,7 @@ impl GpuCanvas {
             self.needs_present = true;
             return Ok(UiChange::default());
         }
+        renderer.present_frames=true;
         let view_color_changed = self.view_color != renderer.view_color;
         self.view_color = renderer.view_color;
         let geometry = Geometry::of(area);

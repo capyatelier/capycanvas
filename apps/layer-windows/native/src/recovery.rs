@@ -1,23 +1,22 @@
-//! Windows recovery transport. Shared RecoveryState owns checkpoint, origin and
-//! close ordering. File locks keep concurrent windows from claiming one copy.
-use crate::{
-    document_io::{atomic_write, check_cancelled, io_error},
-    documents::recovery_environment,
+use crate::{document_io::io_error, documents::recovery_environment};
+use layer_core::package::session_store::{OwnerLock, SessionStore, create_directory,collect_unreferenced_stores};
+use layer_host::{
+    NativeHost, Renderer,
+    window::{DocumentWindow, Parked},
 };
-use layer_core::authored::ArtworkCapture;
-use layer_core::package::codec::PreparedPackage;
-use layer_host::Renderer;
 use layer_ui::{
-    UiSession,
-    recovery::{RecoveryEvent, RecoveryState, RecoveryUpdate, RecoveryWork, RecoveryWorkKind},
+    DestinationFingerprint, UiSession,
+    session_recovery::{
+        SessionCapture, SessionDrawing, SessionManifest, SessionRestore, SessionRestoreAttempt, SessionStamp,
+    },
 };
 use serde::Deserialize;
 use std::{
-    collections::{BTreeSet, VecDeque},
-    fs::{self, File, OpenOptions},
+    collections::{BTreeMap, VecDeque},
+    fs,
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, AtomicU64, Ordering},
         mpsc::{self, Receiver, SyncSender},
     },
@@ -25,278 +24,274 @@ use std::{
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 static NEXT: AtomicU64 = AtomicU64::new(1);
-static KEPT_FOR_LATER: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-fn valid(key: &str) -> bool {
-    !key.is_empty() && key.len() <= 96 && key.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-')
+fn key() -> String {
+    format!(
+        "{:x}-{:x}-{:x}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    )
 }
 struct Storage {
     directory: PathBuf,
-    key: String,
-    _lease: File,
-    origin: Option<(String, File)>,
+    _lease: OwnerLock,
+    manifest: SessionManifest,
+    stores: BTreeMap<String, SessionStore>,
 }
 impl Storage {
-    fn open(directory: PathBuf) -> Result<Self, String> {
-        fs::create_dir_all(&directory).map_err(|e| io_error("prepare recovery storage", e))?;
-        let key = format!(
-            "{:x}-{:x}-{:x}",
-            std::process::id(),
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos(),
-            NEXT.fetch_add(1, Ordering::Relaxed)
-        );
-        let lease = OpenOptions::new()
-            .create_new(true)
-            .read(true)
-            .write(true)
-            .open(directory.join(format!("{key}.lock")))
-            .map_err(|e| io_error("claim recovery", e))?;
-        lease
-            .try_lock()
-            .map_err(|_| "Could not claim private recovery storage")?;
+    fn create(root: &std::path::Path) -> Result<Self, String> {
+        let directory = root.join(key());
+        create_directory(&directory)?;
+        let lease = OwnerLock::claim(&directory.join("owner.lock"))?
+            .ok_or("Session storage is already open")?;
         Ok(Self {
             directory,
-            key,
             _lease: lease,
-            origin: None,
+            manifest: SessionManifest {
+                generation: 0,
+                drawings: vec![],
+                active: 0,
+                clean_exit: false,
+                restoring: vec![],
+                blocked: vec![],
+            },
+            stores: BTreeMap::new(),
         })
     }
-    fn claim(&mut self, kept: &BTreeSet<String>) -> Result<Option<String>, String> {
-        if self.origin.is_some() {
-            return Ok(None);
-        }
+    fn open(root: &std::path::Path) -> Result<Self, String> {
+        create_directory(root)?;
         let mut candidates = Vec::new();
-        for entry in
-            fs::read_dir(&self.directory).map_err(|e| io_error("list recovery copies", e))?
-        {
-            let entry = entry.map_err(|e| io_error("list recovery copies", e))?;
-            let path = entry.path();
-            if path.extension().and_then(|v| v.to_str()) != Some("capy") {
-                continue;
-            }
-            let Some(id) = path
-                .file_stem()
-                .and_then(|v| v.to_str())
-                .filter(|v| valid(v) && *v != self.key && !kept.contains(*v))
-            else {
-                continue;
-            };
-            let metadata = entry
-                .metadata()
-                .map_err(|e| io_error("inspect recovery copy", e))?;
-            if metadata.is_file() {
-                candidates.push((metadata.modified().unwrap_or(UNIX_EPOCH), id.to_string()));
+        for entry in fs::read_dir(root).map_err(|e| io_error("list sessions", e))? {
+            let entry = entry.map_err(|e| io_error("list sessions", e))?;
+            if entry
+                .file_type()
+                .map_err(|e| io_error("inspect session", e))?
+                .is_dir()
+            {
+                candidates.push((
+                    entry
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(UNIX_EPOCH),
+                    entry.path(),
+                ));
             }
         }
-        candidates.sort_by_key(|entry| std::cmp::Reverse(entry.0));
-        for (_, id) in candidates {
-            let Ok(lease) = OpenOptions::new()
-                .create(true)
-                .truncate(false)
-                .read(true)
-                .write(true)
-                .open(self.directory.join(format!("{id}.lock")))
-            else {
+        candidates.sort_by_key(|(modified, _)| std::cmp::Reverse(*modified));
+        for (_,directory) in &candidates {
+            let Some(_lease)=OwnerLock::claim(&directory.join("owner.lock"))? else{continue};
+            if matches!(SessionManifest::read(&directory.join("session.json")),Ok(Some(manifest)) if manifest.drawings.is_empty()) {
+                collect_unreferenced_stores(directory,&Default::default(),&AtomicBool::new(false))?;
+            }
+        }
+        for (_, directory) in candidates {
+            let Some(lease) = OwnerLock::claim(&directory.join("owner.lock"))? else {
                 continue;
             };
-            if lease.try_lock().is_ok() {
-                self.origin = Some((id.clone(), lease));
-                return Ok(Some(id));
+            let path = directory.join("session.json");
+            let Some(manifest)=SessionManifest::read(&path)? else {continue};
+            if manifest.drawings.is_empty() {
+                continue;
             }
+            let mut storage = Self {
+                directory,
+                _lease: lease,
+                manifest,
+                stores: BTreeMap::new(),
+            };
+            if !storage.manifest.restoring.is_empty() {
+                let manifest = storage.manifest.recover_interrupted()?;
+                storage.publish(manifest, &AtomicBool::new(false))?;
+            }
+            collect_unreferenced_stores(&storage.directory,&storage.manifest.drawings.iter().map(|drawing|drawing.key.clone()).collect(),&AtomicBool::new(false))?;
+            return Ok(storage);
         }
-        Ok(None)
+        Self::create(root)
     }
-    fn path(&self, key: &str) -> Result<PathBuf, String> {
-        if !valid(key)
-            || (key != self.key && self.origin.as_ref().map(|(id, _)| id.as_str()) != Some(key))
-        {
-            return Err("Recovery copy is not owned by this window".into());
+    fn publish(
+        &mut self,
+        manifest: SessionManifest,
+        cancel: &AtomicBool,
+    ) -> Result<(), String> {
+        manifest.validate()?;
+        if cancel.load(Ordering::Acquire) {
+            return Err("Session operation cancelled".into());
         }
-        Ok(self.directory.join(format!("{key}.capy")))
-    }
-    fn remove(&self, key: &str) -> Result<(), String> {
-        match fs::remove_file(self.path(key)?) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(io_error("retire recovery copy", e)),
+        match manifest.publish_checked(&self.directory.join("session.json")) {
+            Ok(())=>{self.manifest=manifest;Ok(())},
+            Err(failure)=>{if failure.published{self.manifest=manifest;}Err(failure.error)},
         }
     }
+    fn store(&mut self,_id:u64,store_key:&str)->Result<&mut SessionStore,String>{
+        if !self.stores.contains_key(store_key){self.stores.insert(store_key.into(),SessionStore::open(&self.directory.join(store_key))?);}
+        Ok(self.stores.get_mut(store_key).unwrap())
+    }
+    fn collect(&mut self,cancel:&AtomicBool)->Result<(),String>{
+        let reachable=self.manifest.drawings.iter().map(|drawing|drawing.key.clone()).collect::<std::collections::BTreeSet<_>>();
+        for key in self.stores.keys().filter(|key|!reachable.contains(*key)).cloned().collect::<Vec<_>>() {self.stores.get_mut(&key).unwrap().retire()?;self.stores.remove(&key);}
+        collect_unreferenced_stores(&self.directory,&reachable,cancel)?;Ok(())
+    }
+
 }
 enum Job {
-    Initialize,
-    Work {
-        work: RecoveryWork,
-        project: Option<Box<ArtworkCapture>>,
-        environment: Option<Box<layer_host::open::OpenEnvironment>>,
+    Restore {
+        environment: Box<layer_host::open::OpenEnvironment>,
     },
-    Release(Vec<String>),
-    Claim(BTreeSet<String>),
-    RetiredSession(Box<UiSession<Renderer>>),
-    RetiredRenderer(Box<Renderer>),
+    Adopt{mapping:Vec<(u64,u64)>,attempts:Vec<SessionRestoreAttempt>},
+    Capture {
+        manifest: SessionManifest,
+        captures: Vec<(u64, SessionCapture)>,
+    },
+    Fresh,
+    Retry,
+    RetireSession(Box<UiSession<Renderer>>),
+    #[cfg_attr(
+        not(target_os = "windows"),
+        expect(dead_code, reason = "Used by the Windows host")
+    )]
+    RetireRenderer(Box<Renderer>),
     Stop,
 }
 enum Finished {
-    Storage(Result<(), String>),
-    Claimed(Result<Option<String>, String>),
-    Work(u64, Result<Option<crate::documents::RecoveryPrepared>, String>),
+    Opened(Result<SessionManifest, String>),
+    Restored(Result<PreparedRestore, String>),
+    Captured{result:Result<(),String>,manifest:Option<SessionManifest>},
+    Updated{result:Result<(),String>,manifest:Option<SessionManifest>},
 }
 #[derive(Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case", deny_unknown_fields)]
 pub(crate) enum Action {
-    Restore,
-    Later,
-    Discard,
     Retry,
     KeepOpen,
 }
 pub(crate) struct Restored {
-    pub token: u64,
-    pub identity: (u64,u64),
-    pub candidate: Box<UiSession<Renderer>>,
+    pub candidates: Vec<(u64, Box<UiSession<Renderer>>)>,
+    pub active: u64,
+    pub stamp: SessionStamp,
 }
-pub(crate) struct RecoveredPackage {
-    pub token:u64,
-    pub identity:(u64,u64),
-    pub view:layer_ui::PackageView,
-    pub path:PathBuf,
-}
+struct PreparedRestore{candidates:Vec<(u64,Box<UiSession<Renderer>>)>,attempts:Vec<SessionRestoreAttempt>}
 pub(crate) struct Service {
-    package:Option<RecoveredPackage>,
-    restored: Option<Restored>,
-    changed: bool,
-    state: RecoveryState,
-    update: RecoveryUpdate,
     send: SyncSender<Job>,
     receive: Receiver<Finished>,
-    completed: Option<Finished>,
     thread: Option<JoinHandle<()>>,
     cancel: Arc<AtomicBool>,
+    deferred: VecDeque<Job>,
+    manifest: SessionManifest,
+    startup_stamp: Option<SessionStamp>,
+    stamps: BTreeMap<u64, SessionStamp>,
+    pending_stamps: BTreeMap<u64, SessionStamp>,
+    restored: Option<Restored>,
+    restore_queue: VecDeque<u64>,
+    restore_mapping:Vec<(u64,u64)>,
+    restore_attempts:Vec<SessionRestoreAttempt>,
     ready: bool,
+    busy: bool,
+    restoring: bool,
     closing: bool,
+    closed: bool,
     error: Option<String>,
     next_observation: Instant,
-    restore_identity: Option<(u64, u64)>,
-    deferred: VecDeque<Job>,
-    seeking: bool,
-    claiming: bool,
+    changed: bool,
 }
 impl Service {
     pub fn open(wake: impl Fn() + Send + 'static) -> Result<Self, String> {
-        let directory = crate::settings::data_directory()?.join("recovery");
-        let (send, jobs) = mpsc::sync_channel(4);
+        let root = crate::settings::data_directory()?.join("sessions");
+        let (send, jobs) = mpsc::sync_channel(1);
         let (reply, receive) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
         let stopping = cancel.clone();
-        let thread = std::thread::Builder::new()
-            .name("capy-recovery".into())
-            .stack_size(8 * 1024 * 1024)
-            .spawn(move || {
-                let (mut storage, opened) = match Storage::open(directory.clone()) {
-                    Ok(s) => (Some(s), Ok(())),
-                    Err(e) => (None, Err(e)),
-                };
-                let _ = reply.send(Finished::Storage(opened));
-                wake();
-                while let Ok(job) = jobs.recv() {
-                    match job {
-                        Job::Initialize => {
-                            let opened = Storage::open(directory.clone()).map(|next| {
-                                storage = Some(next);
-                            });
-                            let _ = reply.send(Finished::Storage(opened));
-                            wake();
+        let thread=std::thread::Builder::new().name("capy-session".into()).stack_size(8*1024*1024).spawn(move||{
+            let (mut storage,initial)=match Storage::open(&root){Ok(storage)=>{let manifest=storage.manifest.clone();(Some(storage),Ok(manifest))},Err(error)=>(None,Err(error))};let _=reply.send(Finished::Opened(initial));wake();
+            while let Ok(job)=jobs.recv(){
+                let completed=match job {
+                    Job::Stop=>break,Job::RetireSession(session)=>{drop(session);continue},Job::RetireRenderer(renderer)=>{drop(renderer);continue},
+                    Job::Retry=>{if let Some(storage)=&mut storage {let result=(||{let mut manifest=storage.manifest.clone();manifest.restoring.clear();manifest.blocked.clear();manifest.generation=manifest.generation.checked_add(1).ok_or("Session generation exhausted")?;storage.publish(manifest,&stopping)?;storage.collect(&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:Some(storage.manifest.clone())});wake();}else{let result=Storage::open(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);manifest});let _=reply.send(Finished::Opened(result));wake();}continue},
+                    Job::Fresh=>{let result=Storage::create(&root).map(|next|{let manifest=next.manifest.clone();storage=Some(next);manifest});Finished::Opened(result)},
+                    Job::Adopt{mapping,attempts}=>{let result=(||{let storage=storage.as_mut().ok_or("Session storage is unavailable")?;let mut manifest=storage.manifest.clone();for attempt in attempts{manifest=manifest.finish_restore(attempt,true)?;}let manifest=manifest.remap(&mapping)?;storage.publish(manifest,&stopping)?;Ok(())})();let _=reply.send(Finished::Updated{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())});wake();continue},
+                    Job::Restore{environment}=>Finished::Restored((||{
+                        let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
+                        if !storage.manifest.restoring.is_empty()||!storage.manifest.blocked.is_empty(){return Err("A drawing could not finish reopening. Its session copy has been kept.".into());}
+                        let mut drawings=storage.manifest.drawings.clone();
+                        if let Some(position)=drawings.iter().position(|drawing|drawing.id==storage.manifest.active){drawings.swap(0,position);}
+                        let recovered=!storage.manifest.clean_exit;
+                        let mut decoded:Vec<(u64,SessionRestore,bool)>=Vec::new();
+                        let mut attempts=Vec::new();
+                        for drawing in drawings {
+                            let manifest=storage.manifest.begin_restore(drawing.id)?;storage.publish(manifest,&stopping)?;
+                            attempts.push(*storage.manifest.restoring.iter().find(|attempt|attempt.id==drawing.id).ok_or("Session restore attempt is missing")?);
+                            let store=storage.store(drawing.id,&drawing.key)?;
+                            let opened=store.load(environment.limits(),&stopping)?.ok_or("Session drawing is missing")?;
+                            let drawing_recovered=recovered||store.recovered_previous();
+                            let restored=SessionRestore::from_core(opened)?;
+                            environment.admit_sessions(decoded.iter().map(|(_,restore,_)|&restore.editor).chain(std::iter::once(&restored.editor)))?;
+                            decoded.push((drawing.id,restored,drawing_recovered));
                         }
-                        Job::Claim(kept) => {
-                            let claimed = storage
-                                .as_mut()
-                                .ok_or_else(|| "Recovery storage is unavailable".to_string())
-                                .and_then(|storage| storage.claim(&kept));
-                            let _ = reply.send(Finished::Claimed(claimed));
-                            wake();
-                        }
-                        Job::Stop => break,
-                        Job::RetiredSession(session) => drop(session),
-                        Job::RetiredRenderer(renderer) => drop(renderer),
-                        Job::Release(keys) => {
-                            if let Some(storage) = &mut storage
-                                && storage
-                                    .origin
-                                    .as_ref()
-                                    .is_some_and(|(id, _)| keys.contains(id))
-                            {
-                                storage.origin = None;
+                        let mut candidates=Vec::new();
+                        for (id,restored,recovered) in decoded {
+                            let mut candidate=environment.prepare(restored.document().clone(),||stopping.load(Ordering::Acquire))?;
+                            let observed=restored.state.location.as_ref().and_then(|location|DestinationFingerprint::observe_path(std::path::Path::new(&location.uri),restored.state.destination.as_ref()));
+                            candidate.restore_session(restored,recovered,observed)?;
+                            let deadline=Instant::now()+layer_host::open::PREPARE_DEADLINE;
+                            while !candidate.can_park_document()||candidate.retained_document_tiles().try_blobs()?.is_none(){
+                                if stopping.load(Ordering::Acquire){return Err("Session operation cancelled".into());}
+                                candidate.frame(0,0)?;
+                                if let Some(renderer)=candidate.engine().backend().0.as_ref(){renderer.device().poll(wgpu::PollType::Poll).map_err(|error|error.to_string())?;}
+                                if Instant::now()>=deadline{return Err("Session drawing preparation timed out".into());}
+                                std::thread::sleep(Duration::from_millis(2));
                             }
+                            if id!=storage.manifest.active {candidate.park_document()?;drop(candidate.renderer_mut().0.take());}
+                            candidates.push((id,candidate));
                         }
-                        Job::Work {
-                            work,
-                            project,
-                            environment,
-                        } => {
-                            let result =
-                                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                                    check_cancelled(&stopping)?;
-                                    let storage = storage
-                                        .as_mut()
-                                        .ok_or("Recovery storage is unavailable")?;
-                                    match work.kind {
-                                        RecoveryWorkKind::Capture => {
-                                            let project =
-                                                project.ok_or("Recovery snapshot is missing")?;
-                                            atomic_write(
-                                                &storage.path(&storage.key)?,
-                                                &stopping,
-                                                |mut file| PreparedPackage::prepare(&project, None, &stopping)?.write(&mut file, &stopping),
-                                            )?;
-                                            Ok(None)
-                                        }
-                                        RecoveryWorkKind::Retire => {
-                                            storage.remove(&storage.key)?;
-                                            Ok(None)
-                                        }
-                                        RecoveryWorkKind::RetireOrigin { key } => {
-                                            storage.remove(&key)?;
-                                            Ok(None)
-                                        }
-                                        RecoveryWorkKind::Restore { key } => {
-                                            crate::documents::prepare_recovery(
-                                                *environment
-                                                    .ok_or("Recovery GPU is unavailable")?,
-                                                storage.path(&key)?,
-                                                &stopping,
-                                            )
-                                            .map(Some)
-                                        }
-                                    }
-                                }))
-                                .unwrap_or_else(|_| Err("Recovery worker failed".into()));
-                            let _ = reply.send(Finished::Work(work.token, result));
-                            wake();
-                        }
-                    }
-                }
-            })
-            .map_err(|_| "Could not start recovery worker")?;
+                        Ok(PreparedRestore{candidates,attempts})
+                    })()),
+                    Job::Capture{manifest,captures}=>{let result=(||{
+                        let storage=storage.as_mut().ok_or("Session storage is unavailable")?;
+                        if manifest.generation!=storage.manifest.generation {return Err("Stale session checkpoint membership".into());}
+                        if manifest.drawings.iter().any(|drawing|!storage.manifest.drawings.iter().any(|previous|previous.key==drawing.key)){let staged=storage.manifest.stage(manifest.drawings.clone(),manifest.active)?;storage.publish(staged,&stopping)?;}
+                        for (id,capture) in captures {let drawing=manifest.drawings.iter().find(|d|d.id==id).ok_or("Session drawing is missing")?;let prepared=capture.prepare(&stopping)?;storage.store(id,&drawing.key)?.commit(&prepared,&stopping)?;}
+                        let retired=storage.manifest.drawings.iter().filter(|d|!manifest.drawings.iter().any(|live|live.key==d.key)).cloned().collect::<Vec<_>>();
+                        for drawing in &retired{storage.store(drawing.id,&drawing.key)?.prepare_retirement()?;}
+                        let mut committed=storage.manifest.clone();for drawing in &retired{committed=committed.remove(drawing.id)?;}
+                        let committed=committed.reconcile(manifest.drawings,manifest.active,manifest.clean_exit)?;storage.publish(committed,&stopping)?;
+                        for drawing in retired {storage.store(drawing.id,&drawing.key)?.retire()?;storage.stores.remove(&drawing.key);}
+                        storage.collect(&stopping)?;
+                        Ok(())
+                    })();Finished::Captured{result,manifest:storage.as_ref().map(|storage|storage.manifest.clone())}},
+                };let _=reply.send(completed);wake();
+            }
+        }).map_err(|_|"Could not start session worker")?;
         Ok(Self {
-            package:None,
-            restored: None,
-            changed: true,
-            state: Default::default(),
-            update: Default::default(),
             send,
             receive,
-            completed: None,
             thread: Some(thread),
             cancel,
+            deferred: VecDeque::new(),
+            manifest: SessionManifest {
+                generation: 0,
+                drawings: vec![],
+                active: 0,
+                clean_exit: false,
+                restoring: vec![],
+                blocked: vec![],
+            },
+            startup_stamp: None,
+            stamps: BTreeMap::new(),
+            pending_stamps: BTreeMap::new(),
+            restored: None,
+            restore_queue: VecDeque::new(),
+            restore_mapping:vec![],
+            restore_attempts:vec![],
             ready: false,
+            busy: true,
+            restoring: false,
             closing: false,
+            closed: false,
             error: None,
             next_observation: Instant::now(),
-            restore_identity: None,
-            deferred: VecDeque::new(),
-            seeking: true,
-            claiming: false,
+            changed: true,
         })
     }
     fn queue(&mut self, job: Job) {
@@ -305,290 +300,247 @@ impl Service {
     fn drain(&mut self) -> Result<(), String> {
         while let Some(job) = self.deferred.pop_front() {
             match self.send.try_send(job) {
-                Ok(()) => (),
+                Ok(()) => {}
                 Err(mpsc::TrySendError::Full(job)) => {
                     self.deferred.push_front(job);
                     break;
                 }
-                Err(mpsc::TrySendError::Disconnected(_)) => {
-                    return Err("Recovery worker stopped".into());
-                }
+                Err(_) => return Err("Session worker stopped".into()),
             }
         }
         Ok(())
     }
-    fn event(&mut self, session: &mut UiSession<Renderer>, event: RecoveryEvent) -> Result<(), String> {
-        let published = self.status();
-        let offered = self.update.offer.is_some();
-        self.update = self.state.event(event)?;
-        self.seeking |= offered && self.update.offer.is_none();
-        loop {
-            if !self.update.release.is_empty() {
-                let release = std::mem::take(&mut self.update.release);
-                self.queue(Job::Release(release));
-            }
-            if let Some(work) = self.update.work.take() {
-                let prepared = (|| {
-                    let project = if matches!(work.kind, RecoveryWorkKind::Capture) {
-                        Some(Box::new(session.capture_project_recovery()?))
-                    } else {
-                        None
-                    };
-                    let environment = if matches!(work.kind, RecoveryWorkKind::Restore { .. }) {
-                        self.restore_identity = Some((
-                            session.state().document_file.epoch,
-                            session.engine().document().revision,
-                        ));
-                        Some(Box::new(recovery_environment(session)?))
-                    } else {
-                        None
-                    };
-                    Ok::<_, String>((project, environment))
-                })();
-                match prepared {
-                    Ok((project, environment)) => {
-                        self.queue(Job::Work {
-                            work,
-                            project,
-                            environment,
-                        });
-                        break;
-                    }
-                    Err(error) => {
-                        self.restore_identity = None;
-                        self.error = Some(error);
-                        self.update = self.state.event(RecoveryEvent::Complete {
-                            token: work.token,
-                            success: false,
-                        })?;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
-        let drained = self.drain();
-        self.changed |= self.status() != published;
-        drained
-    }
-    pub fn poll(
+    pub fn poll<P: Parked>(
         &mut self,
-        session: &mut UiSession<Renderer>,
-        active: bool,
+        host: &mut NativeHost,
+        window: &DocumentWindow<P>,
+        quitting: bool,
     ) -> Result<bool, String> {
-        while let Some(completed) = self
-            .completed
-            .take()
-            .or_else(|| self.receive.try_recv().ok())
-        {
-            // Startup filter validation may still own document replacement. Keep
-            // the prepared candidate and its origin until the shared idle check
-            // permits adoption; do not turn this transient state into a failure.
-            if matches!(&completed, Finished::Work(_, Ok(Some(crate::documents::RecoveryPrepared::Editable(_)))))
-                && session.require_document_idle().is_err()
-            {
-                self.completed = Some(completed);
-                break;
-            }
+        loop {
+            let completed=match self.receive.try_recv(){
+                Ok(completed)=>completed,
+                Err(mpsc::TryRecvError::Empty)=>break,
+                Err(mpsc::TryRecvError::Disconnected)=>{
+                    let error="Session worker stopped unexpectedly".to_string();
+                    self.changed|=self.error.as_ref()!=Some(&error);self.error=Some(error);self.busy=false;break;
+                }
+            };
+            self.busy = false;
+            self.changed = true;
             match completed {
-                Finished::Storage(result) => match result {
-                    Ok(()) => {
-                        self.ready = true;
-                        self.event(session, RecoveryEvent::Ownership { owned: true })?;
+                Finished::Opened(result) => match result {
+                    Ok(manifest) => {
+                        self.restore_queue = manifest.drawings.iter().map(|d| d.id).collect();
+                        if let Some(position) = self
+                            .restore_queue
+                            .iter()
+                            .position(|id| *id == manifest.active)
+                        {
+                            self.restore_queue.swap(0, position);
+                        }
+                        self.manifest = manifest;
+                        self.ready = true
+                    }
+                    Err(error) => self.error = Some(error),
+                },
+                Finished::Restored(result) => match result {
+                    Ok(PreparedRestore{candidates,attempts}) => {
+                        self.restore_attempts=attempts;
+                        self.restored = Some(Restored {
+                            candidates,
+                            active: self.manifest.active,
+                            stamp: self
+                                .startup_stamp
+                                .take()
+                                .ok_or("Session startup identity is missing")?,
+                        })
                     }
                     Err(error) => {
-                        self.error = Some(error);
-                        self.changed = true;
+                        self.restoring = false;
+                        self.error = Some(error)
                     }
                 },
-                Finished::Claimed(result) => {
-                    self.claiming = false;
-                    match result {
-                        Ok(Some(key)) => {
-                            self.event(
-                                session,
-                                RecoveryEvent::Offer {
-                                    key: key.clone(),
-                                    owned: true,
-                                },
-                            )?;
-                            if self.update.offer.as_deref() != Some(key.as_str()) {
-                                self.queue(Job::Release(vec![key]));
-                            }
-                        }
-                        Ok(None) => self.seeking = false,
-                        Err(error) => {
-                            self.seeking = false;
-                            self.error = Some(error);
-                            self.changed = true;
-                        }
-                    }
-                }
-                Finished::Work(token, result) => {
-                    if let Ok(Some(prepared)) = result {
-                        let identity=self.restore_identity.ok_or("Recovery identity missing")?;
-                        if self.cancel.load(Ordering::Acquire) {
-                            if let crate::documents::RecoveryPrepared::Editable(candidate)=prepared {self.queue(Job::RetiredSession(candidate));}
-                            self.complete_package(session,token,Err("Document operation cancelled".into()))?;
-                        } else {
-                            match prepared {
-                                crate::documents::RecoveryPrepared::Editable(candidate)=>self.restored=Some(Restored {token,identity,candidate}),
-                                crate::documents::RecoveryPrepared::Package {view,path}=>self.package=Some(RecoveredPackage {token,identity,view,path}),
-                            }
-                            self.changed=true;
-                        }
-                        continue;
-                    }
-                    if result.is_err() {
-                        self.restore_identity = None;
-                    }
-                    self.error = result.as_ref().err().cloned();
-                    self.event(
-                        session,
-                        RecoveryEvent::Complete {
-                            token,
-                            success: result.is_ok(),
-                        },
-                    )?;
-                    self.next_observation = Instant::now();
-                }
+                Finished::Updated{result,manifest}=>{
+                    if let Some(manifest)=manifest{self.manifest=manifest;}
+                    if let Err(error)=result{self.error=Some(error);}
+                },
+                Finished::Captured{result,manifest} => {if let Some(manifest)=manifest{self.manifest=manifest;}match result {
+                    Ok(()) => {self.stamps=std::mem::take(&mut self.pending_stamps);self.closed=self.closing;}
+                    Err(error)=>{self.pending_stamps.clear();self.closed=self.closing&&!quitting&&!self.manifest.drawings.iter().any(|drawing|drawing.id==window.documents.selected());self.error=Some(error);}
+                }},
             }
         }
-        {
-            if session.state().document_file.close_ready && !self.closing {
-                self.closing = true;
-                self.event(
-                    session,
-                    RecoveryEvent::Retire {
-                        discard_origin: true,
-                    },
-                )?;
-                self.event(session, RecoveryEvent::Close)?;
-            } else if !session.state().document_file.close_ready
-                && self.closing
-                && !self.update.busy
-            {
-                self.closing = false;
-                self.event(session, RecoveryEvent::Resume)?;
-            }
-            if self.ready && !self.closing && Instant::now() >= self.next_observation {
-                self.next_observation = Instant::now() + Duration::from_secs(15);
-                self.event(
-                    session,
-                    RecoveryEvent::Observe {
-                        document: session.recovery_document(),
-                        owned: true,
-                    },
-                )?;
-            }
+        if self.closed && (quitting || host.session.state().document_file.close_ready) {
+            self.drain()?;
+            return Ok(std::mem::take(&mut self.changed));
         }
-        if active
-            && self.seeking
-            && !self.claiming
-            && self.ready
-            && !self.closing
-            && self.error.is_none()
-            && self.update.offer.is_none()
-            && !self.update.busy
-            && self.restored.is_none()
-            && self.package.is_none()
-            && self.completed.is_none()
-        {
-            self.claiming = true;
-            let kept = KEPT_FOR_LATER
-                .lock()
-                .map_err(|_| "Recovery state is unavailable")?
-                .clone();
-            self.queue(Job::Claim(kept));
+        if !host.session.state().document_file.close_ready && !quitting {
+            self.closing = false;
+            self.closed = false;
+        }
+        if self.ready && !self.busy && self.error.is_none() && self.restored.is_none() {
+            if !self.restore_queue.is_empty() {
+                if host.session.can_park_document() {
+                    let mut environment = recovery_environment(&host.session)?;
+                    environment.admission = window
+                        .documents
+                        .admission(&host.session.retained_document_tiles());
+                    self.startup_stamp = Some(host.session.session_stamp());
+                    self.restoring = true;
+                    self.busy = true;
+                    self.queue(Job::Restore {
+                        environment: Box::new(environment),
+                    });
+                }
+            } else if !host.session.recovery_document().busy && (quitting || Instant::now() >= self.next_observation) {
+                self.next_observation = Instant::now() + Duration::from_secs(2);
+                let closing_drawing = host.session.state().document_file.close_ready && !quitting;
+                let ids = window
+                    .documents
+                    .order()
+                    .iter()
+                    .copied()
+                    .filter(|id| !closing_drawing || *id != window.documents.selected())
+                    .collect::<Vec<_>>();
+                let mut manifest = SessionManifest {
+                    generation: self.manifest.generation,
+                    drawings: vec![],
+                    active: if ids.contains(&window.documents.selected()) {
+                        window.documents.selected()
+                    } else {
+                        window.documents.after_close().filter(|id|ids.contains(id)).unwrap_or(0)
+                    },
+                    clean_exit: quitting,
+                    restoring: vec![],
+                    blocked: vec![],
+                };
+                let mut captures = Vec::new();
+                let mut stamps = BTreeMap::new();
+                for id in ids {
+                    let session = window.session(host, id)?;
+                    let stamp = session.session_stamp();
+                    let key = self
+                        .manifest
+                        .drawings
+                        .iter()
+                        .find(|d| d.id == id)
+                        .map(|d| d.key.clone())
+                        .unwrap_or_else(key);
+                    manifest.drawings.push(SessionDrawing { id, key });
+                    if self.stamps.get(&id) != Some(&stamp) {
+                        captures.push((id, session.capture_session()?));
+                    }
+                    stamps.insert(id, stamp);
+                }
+                if !captures.is_empty()
+                    || manifest.drawings != self.manifest.drawings
+                    || manifest.active != self.manifest.active
+                    || quitting
+                    || closing_drawing
+                {
+                    self.closing = quitting || closing_drawing;
+                    self.closed = false;
+                    self.pending_stamps = stamps;
+                    self.busy = true;
+                    self.queue(Job::Capture { manifest, captures });
+                }
+            }
         }
         self.drain()?;
         Ok(std::mem::take(&mut self.changed))
     }
-    pub fn dispatch(&mut self, session: &mut UiSession<Renderer>, action: Action) -> Result<(), String> {
-        if matches!(action, Action::Restore | Action::Retry | Action::Discard) {
-            self.error = None;
+    pub fn take_restored(&mut self) -> Option<Restored> {
+        self.restored.take()
+    }
+    pub fn complete_restore(&mut self, result: Result<(), String>) -> Result<(), String> {
+        if result.is_ok() {
+            self.restore_queue.clear();
+            self.manifest.restoring.clear();
+            let mapping=std::mem::take(&mut self.restore_mapping);let attempts=std::mem::take(&mut self.restore_attempts);self.busy=true;self.queue(Job::Adopt{mapping,attempts});
+        } else {
+            self.error = result.err();
         }
+        self.restoring = false;
+        self.next_observation = Instant::now();
+        self.changed = true;
+        self.drain()
+    }
+    pub fn remap_restored(&mut self,mapping:Vec<(u64,u64)>)->Result<(),String>{
+        self.manifest=self.manifest.remap(&mapping)?;self.restore_mapping=mapping;Ok(())
+    }
+    pub fn restore_order(&self) -> Vec<u64> {
+        self.manifest
+            .drawings
+            .iter()
+            .map(|drawing| drawing.id)
+            .collect()
+    }
+    pub fn dispatch(
+        &mut self,
+        session: &mut UiSession<Renderer>,
+        action: Action,
+    ) -> Result<(), String> {
         match action {
-            Action::Restore => self.event(session, RecoveryEvent::Restore),
-            Action::Later => {
-                if let Some(key) = &self.update.offer {
-                    KEPT_FOR_LATER
-                        .lock()
-                        .map_err(|_| "Recovery state is unavailable")?
-                        .insert(key.clone());
-                }
-                self.event(session, RecoveryEvent::Dismiss { discard: false })
-            }
-            Action::Discard => self.event(session, RecoveryEvent::Dismiss { discard: true }),
-            Action::Retry if !self.ready => {
-                self.queue(Job::Initialize);
-                self.drain()
-            }
             Action::Retry => {
+                self.error = None;
+                self.closed = false;
                 self.next_observation = Instant::now();
-                self.event(
-                    session,
-                    if self.closing {
-                        RecoveryEvent::Retire {
-                            discard_origin: true,
-                        }
-                    } else {
-                        RecoveryEvent::Observe {
-                            document: session.recovery_document(),
-                            owned: true,
-                        }
-                    },
-                )
+                self.queue(Job::Retry);self.busy=true;
             }
             Action::KeepOpen => {
                 session.reset_document_close();
-                self.changed = true;
-                Ok(())
+                self.closing = false;
+                self.closed = false;
+                if !self.restore_queue.is_empty() || !self.ready {
+                    self.restore_queue.clear();
+                    self.stamps.clear();
+                    self.ready = false;
+                    self.busy = true;
+                    self.queue(Job::Fresh);
+                }
+                self.error = None;
             }
         }
-    }
-    pub fn take_restored(&mut self) -> Option<Restored> { self.restored.take() }
-    pub fn take_package(&mut self)->Option<RecoveredPackage> {self.package.take()}
-    pub fn complete_package(&mut self,session:&mut UiSession<Renderer>,token:u64,result:Result<(),String>)->Result<(),String> {
-        self.restore_identity=None;
-        self.error=result.err();
-        self.event(session,RecoveryEvent::Complete {token,success:false})?;
-        self.next_observation=Instant::now();Ok(())
-    }
-    pub fn complete_restore(&mut self, session: &mut UiSession<Renderer>, token: u64, result: Result<(),String>) -> Result<(),String> {
-        self.restore_identity = None;
-        if result.is_ok() { self.event(session, RecoveryEvent::Observe { document: session.recovery_document(), owned: true })?; }
-        self.error = result.as_ref().err().cloned();
-        self.event(session, RecoveryEvent::Complete { token, success: result.is_ok() })?;
-        self.next_observation = Instant::now();
-        Ok(())
+        self.changed = true;
+        self.drain()
     }
     pub fn restoring(&self) -> bool {
-        self.restore_identity.is_some() && self.update.busy
+        self.restoring
     }
     pub fn close_ready(&self) -> bool {
-        self.closing && self.update.current && self.error.is_none()
+        self.closed && !self.busy
     }
+    pub fn failed(&self)->bool{self.error.is_some()&&!self.closed}
+    #[cfg_attr(
+        not(target_os = "windows"),
+        expect(dead_code, reason = "Used by the Windows host")
+    )]
     pub fn status(&self) -> serde_json::Value {
-        serde_json::json!({"offer":self.update.offer,"busy":self.update.busy,"restoring":self.restoring(),"closing":self.closing,"ready":self.close_ready(),"error":self.error})
+        serde_json::json!({"busy":self.busy,"restoring":self.restoring,"closing":self.closing,"ready":self.close_ready(),"error":self.error})
     }
-    #[cfg_attr(not(target_os = "windows"), expect(dead_code, reason = "Used by the Windows host"))]
+    #[cfg_attr(
+        not(target_os = "windows"),
+        expect(dead_code, reason = "Used by the Windows host")
+    )]
     pub fn retire_renderer(&mut self, renderer: Renderer) {
-        self.queue(Job::RetiredRenderer(Box::new(renderer)));
+        self.queue(Job::RetireRenderer(Box::new(renderer)));
     }
     pub fn stop(&mut self) -> Result<(), String> {
+        if self.thread.is_none() {
+            return Ok(());
+        }
         self.cancel.store(true, Ordering::Release);
-        self.package=None;
-        if let Some(restored) = self.restored.take() { self.queue(Job::RetiredSession(restored.candidate)); }
-        if let Some(Finished::Work(_, Ok(Some(crate::documents::RecoveryPrepared::Editable(candidate))))) = self.completed.take() {
-            self.queue(Job::RetiredSession(candidate));
+        if let Some(restored) = self.restored.take() {
+            for (_, candidate) in restored.candidates {
+                self.queue(Job::RetireSession(candidate));
+            }
         }
         while let Some(job) = self.deferred.pop_front() {
-            self.send.send(job).map_err(|_| "Recovery worker stopped")?;
+            self.send.send(job).map_err(|_| "Session worker stopped")?;
         }
         let _ = self.send.send(Job::Stop);
         if let Some(thread) = self.thread.take() {
-            thread.join().map_err(|_| "Recovery shutdown failed")?;
+            thread.join().map_err(|_| "Session shutdown failed")?;
         }
         Ok(())
     }
@@ -603,108 +555,56 @@ impl Drop for Service {
 mod tests {
     use super::*;
     use crate::test_support::TempDir;
-    fn open(dir: &TempDir) -> (Storage, Option<String>) {
-        let mut storage = Storage::open(dir.path.clone()).unwrap();
-        let offer = storage.claim(&BTreeSet::new()).unwrap();
-        (storage, offer)
-    }
-    fn checkpoint(dir: &TempDir, age: u64) -> String {
-        let storage = Storage::open(dir.path.clone()).unwrap();
-        let path = storage.path(&storage.key).unwrap();
-        fs::write(&path, b"durable checkpoint").unwrap();
-        File::options()
-            .write(true)
-            .open(&path)
-            .unwrap()
-            .set_modified(SystemTime::now() - Duration::from_secs(age))
-            .unwrap();
-        storage.key.clone()
+    use layer_ui::{Platform, UiAction};
+    fn capture() -> SessionCapture {
+        UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None,[32,24],Platform::Windows).unwrap().capture_session().unwrap()
     }
     #[test]
-    fn read_only_recovery_completion_keeps_origin_and_never_acknowledges_restore() {
-        use layer_core::package::{ImmutableBacking,codec::OpenOutcome,preview::Preview};
-        for disposition in 0..3 {
-            for cancelled in [false,true] {
-                let dir=TempDir::new();let key=checkpoint(&dir,0);let (storage,offer)=open(&dir);assert_eq!(offer.as_deref(),Some(key.as_str()));
-                let path=storage.path(&key).unwrap();let bytes=fs::read(&path).unwrap();let source=ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes.clone()))).unwrap();
-                let preview=Preview::from_rgba([1,1],Arc::from([16,32,48,255])).unwrap();
-                let outcome=match disposition {0=>OpenOutcome::Preserved{source,preview:Some(preview),outputs:Vec::new(),reason:"unsupported renderer".into()},1=>OpenOutcome::RecoveredView{source,preview,reason:"invalid graph".into()},_=>OpenOutcome::Failure{source,reason:"invalid package".into()}};
-                let view=layer_ui::PackageView::new(outcome).unwrap();let mut host=layer_host::NativeHost::new(layer_ui::Platform::Windows).unwrap();
-                let document=host.session.engine().document().clone();let identity=(host.session.state().document_file.epoch,document.revision);
-                let mut state=RecoveryState::default();state.event(RecoveryEvent::Ownership{owned:true}).unwrap();state.event(RecoveryEvent::Offer{key:key.clone(),owned:true}).unwrap();
-                let mut update=state.event(RecoveryEvent::Restore).unwrap();let token=update.work.take().unwrap().token;
-                let (send,_jobs)=mpsc::sync_channel(4);let (_reply,receive)=mpsc::channel();
-                let mut service=Service{package:None,restored:None,changed:false,state,update,send,receive,completed:Some(Finished::Work(token,Ok(Some(crate::documents::RecoveryPrepared::Package{view,path:path.clone()})))),thread:None,cancel:Arc::new(AtomicBool::new(cancelled)),ready:true,closing:false,error:None,next_observation:Instant::now()+Duration::from_secs(15),restore_identity:Some(identity),deferred:VecDeque::new(),seeking:false,claiming:false};
-                service.poll(&mut host.session,false).unwrap();assert!(service.take_restored().is_none());
-                if cancelled {
-                    assert!(service.take_package().is_none());assert!(service.status()["error"].is_string());
-                } else {
-                    let package=service.take_package().unwrap();assert_eq!(package.identity,identity);assert_eq!(package.path,path);
-                    assert_eq!(package.view.preview().is_some(),disposition!=2);let mut copied=Vec::new();package.view.copy_original(&mut copied,&AtomicBool::new(false)).unwrap();assert_eq!(copied,bytes);
-                    service.complete_package(&mut host.session,token,Ok(())).unwrap();assert!(service.status()["error"].is_null());
-                }
-                assert_eq!(service.status()["offer"],key);assert_eq!(service.status()["busy"],false);assert_eq!(service.status()["restoring"],false);assert_eq!(host.session.engine().document(),&document);
-                assert_eq!(fs::read(&path).unwrap(),bytes);assert_eq!(service.state.event(RecoveryEvent::Restore).unwrap().work.unwrap().kind,RecoveryWorkKind::Restore{key});
-            }
-        }
+    fn window_membership_survives_restart_and_live_owners_are_never_claimed() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);
+        let mut original=Storage::create(&root.path).unwrap();
+        let prepared=capture().prepare(&cancel).unwrap();
+        original.store(4,"drawing-four").unwrap().commit(&prepared,&cancel).unwrap();
+        original.store(7,"drawing-seven").unwrap().commit(&prepared,&cancel).unwrap();
+        let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:7,key:"drawing-seven".into()},SessionDrawing{id:4,key:"drawing-four".into()}],4,false).unwrap();
+        original.publish(manifest,&cancel).unwrap();
+        let concurrent=Storage::open(&root.path).unwrap();assert_ne!(concurrent.directory,original.directory);assert!(concurrent.manifest.drawings.is_empty());
+        drop(concurrent);
+        let directory=original.directory.clone();drop(original);
+        let mut restored=Storage::open(&root.path).unwrap();assert_eq!(restored.directory,directory);assert_eq!(restored.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7,4]);assert_eq!(restored.manifest.active,4);
+        let closed=restored.manifest.remove(4).unwrap();restored.publish(closed,&cancel).unwrap();restored.store(4,"drawing-four").unwrap().retire().unwrap();drop(restored);
+        let reopened=Storage::open(&root.path).unwrap();assert_eq!(reopened.manifest.drawings.iter().map(|drawing|drawing.id).collect::<Vec<_>>(),[7]);assert_eq!(reopened.manifest.active,7);
     }
     #[test]
-    fn live_windows_cannot_claim_each_others_checkpoint() {
-        let dir = TempDir::new();
-        let (first, offer) = open(&dir);
-        assert!(offer.is_none());
-        fs::write(first.path(&first.key).unwrap(), b"durable checkpoint").unwrap();
-        let (second, offer) = open(&dir);
-        assert!(offer.is_none());
-        let key = first.key.clone();
-        drop(first);
-        let (third, offer) = open(&dir);
-        assert_eq!(offer.as_deref(), Some(key.as_str()));
-        let (fourth, offer) = open(&dir);
-        assert!(offer.is_none());
-        assert!(third.path("../drawing").is_err());
-        assert!(third.path(&second.key).is_err());
-        drop(fourth);
-        drop(third);
-        drop(second);
+    fn stale_membership_cannot_resurrect_an_explicitly_closed_drawing() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
+        let original=storage.manifest.stage(vec![SessionDrawing{id:3,key:"drawing".into()}],3).unwrap();storage.publish(original.clone(),&cancel).unwrap();let removed=storage.manifest.remove(3).unwrap();storage.publish(removed,&cancel).unwrap();
+        assert!(storage.publish(original,&cancel).is_err());assert!(SessionManifest::read(&storage.directory.join("session.json")).unwrap().unwrap().drawings.is_empty());
     }
     #[test]
-    fn each_released_copy_leads_to_the_next_newest_unless_kept_for_later() {
-        let dir = TempDir::new();
-        let oldest = checkpoint(&dir, 30);
-        let newest = checkpoint(&dir, 10);
-        let middle = checkpoint(&dir, 20);
-        let mut storage = Storage::open(dir.path.clone()).unwrap();
-        let mut kept = BTreeSet::new();
-        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(newest.as_str()));
-        assert!(storage.claim(&kept).unwrap().is_none());
-        storage.origin = None;
-        kept.insert(newest.clone());
-        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(middle.as_str()));
-        let (other, offer) = open(&dir);
-        assert_eq!(offer.as_deref(), Some(newest.as_str()));
-        storage.remove(&middle).unwrap();
-        storage.origin = None;
-        assert_eq!(storage.claim(&kept).unwrap().as_deref(), Some(oldest.as_str()));
-        storage.remove(&oldest).unwrap();
-        storage.origin = None;
-        assert!(storage.claim(&kept).unwrap().is_none());
-        drop(other);
+    fn staged_first_checkpoint_remains_reachable_after_interruption() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
+        let staged=storage.manifest.stage(vec![SessionDrawing{id:9,key:"first-drawing".into()}],9).unwrap();storage.publish(staged,&cancel).unwrap();let directory=storage.directory.clone();drop(storage);
+        let mut reopened=Storage::open(&root.path).unwrap();assert_eq!(reopened.directory,directory);assert_eq!(reopened.manifest.drawings[0].id,9);assert!(!reopened.manifest.clean_exit);
+        assert!(reopened.store(9,"first-drawing").unwrap().load(Default::default(),&cancel).unwrap().is_none());
+        let prepared=capture().prepare(&cancel).unwrap();reopened.store(9,"first-drawing").unwrap().commit(&prepared,&cancel).unwrap();drop(reopened);
+        let mut completed=Storage::open(&root.path).unwrap();assert_eq!(completed.manifest.drawings[0].key,"first-drawing");assert!(completed.store(9,"first-drawing").unwrap().load(Default::default(),&cancel).unwrap().is_some());
     }
     #[test]
-    fn failed_atomic_checkpoint_preserves_the_durable_copy() {
-        let dir = TempDir::new();
-        let storage = Storage::open(dir.path.clone()).unwrap();
-        let path = storage.path(&storage.key).unwrap();
-        fs::write(&path, b"previous").unwrap();
-        let cancel = AtomicBool::new(false);
-        let result = atomic_write(&path, &cancel, |file| {
-            file.write_all(b"partial").unwrap();
-            Err("simulated encoder failure".into())
-        });
-        assert!(result.is_err());
-        assert_eq!(fs::read(path).unwrap(), b"previous");
-        storage.remove(&storage.key).unwrap();
-        storage.remove(&storage.key).unwrap();
+    fn interrupted_restore_is_blocked_and_corrupt_membership_is_preserved() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
+        let manifest=SessionManifest::default().reconcile(vec![SessionDrawing{id:1,key:"drawing".into()}],1,true).unwrap();storage.publish(manifest,&cancel).unwrap();
+        let interrupted=storage.manifest.begin_restore(1).unwrap();storage.publish(interrupted,&cancel).unwrap();let directory=storage.directory.clone();drop(storage);
+        let restored=Storage::open(&root.path).unwrap();assert_eq!(restored.manifest.blocked,[1]);assert!(restored.manifest.restoring.is_empty());drop(restored);
+        fs::write(directory.join("session.json"),b"incomplete membership").unwrap();assert!(Storage::open(&root.path).is_err());assert_eq!(fs::read(directory.join("session.json")).unwrap(),b"incomplete membership");
+    }
+    #[test]
+    fn cancelled_checkpoint_keeps_the_previous_artwork_and_history() {
+        let root=TempDir::new();let cancel=AtomicBool::new(false);let mut storage=Storage::create(&root.path).unwrap();
+        let mut session=UiSession::from_project(Renderer(None),layer_ui::new_drawing(32,24,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None,[32,24],Platform::Windows).unwrap();
+        session.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.4}).unwrap();
+        let expected=session.engine().checkpoint();let first=session.capture_session().unwrap().prepare(&cancel).unwrap();storage.store(1,"drawing").unwrap().commit(&first,&cancel).unwrap();
+        session.dispatch(UiAction::SetLayerOpacity{id:None,opacity:0.8}).unwrap();let next=session.capture_session().unwrap().prepare(&cancel).unwrap();cancel.store(true,Ordering::Release);assert!(storage.store(1,"drawing").unwrap().commit(&next,&cancel).is_err());cancel.store(false,Ordering::Release);
+        let restored=storage.store(1,"drawing").unwrap().load(Default::default(),&cancel).unwrap().unwrap();assert_eq!(restored.editor.checkpoint(),expected);assert!(restored.editor.can_undo());
     }
 }

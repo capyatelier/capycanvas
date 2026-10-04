@@ -71,12 +71,6 @@ async fn unpack_with_selection(metadata:&str,buffers:js_sys::Array)->Result<(Art
 }
 fn parts(wire:&JsValue)->Result<(String,js_sys::Array),JsValue>{Ok((js_sys::Reflect::get(wire,&js("metadata"))?.as_string().ok_or_else(||js("Missing artwork transfer metadata"))?,js_sys::Reflect::get(wire,&js("buffers"))?.dyn_into()?))}
 pub(super) async fn save(capture:ArtworkCapture)->Result<JsValue,JsValue>{let wire=pack_capture(capture).await?;let (metadata,buffers)=parts(&wire)?;JsFuture::from(raster_worker::call("write",&metadata,&buffers)?).await}
-pub(super) async fn save_recovery(capture:ArtworkCapture,key:String)->Result<JsValue,JsValue>{
-    let wire=pack_capture(capture).await?;let(metadata,buffers)=parts(&wire)?;
-    let metadata=serde_json::to_string(&serde_json::json!({"key":key,"project":metadata})).map_err(js)?;
-    JsFuture::from(raster_worker::call("recover-write",&metadata,&buffers)?).await
-}
-
 #[derive(Serialize,Deserialize)]
 pub(super) struct OpenOptions {pub dimension:u32,pub photo_policy:layer_ui::PhotoOpenPolicy,pub names:layer_core::DocumentNames,pub intent:layer_ui::ImportIntent,#[serde(default)]pub source_bytes:Option<usize>}
 pub(super) type Preserved = (layer_ui::PackagePresentation,Option<js_sys::Uint8Array>);
@@ -133,7 +127,7 @@ fn package_value(outcome:layer_core::package::codec::OpenOutcome)->Result<JsValu
 }
 
 #[wasm_bindgen]
-pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_sys::Function)->Result<(),JsValue>{
+pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_sys::Function)->Result<JsValue,JsValue>{
     struct Output {write:js_sys::Function,offset:u64}
     impl std::io::Write for Output {
         fn write(&mut self,bytes:&[u8])->std::io::Result<usize>{
@@ -144,7 +138,9 @@ pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_
         fn flush(&mut self)->std::io::Result<()>{Ok(())}
     }
     let capture=unpack_capture(&metadata,buffers).await?;let cancelled=AtomicBool::new(false);
-    layer_core::package::codec::PreparedPackage::prepare(&capture,None,&cancelled).map_err(js)?.write(&mut Output{write,offset:0},&cancelled).map_err(js)
+    let mut output=layer_ui::FingerprintWriter::new(Output{write,offset:0});
+    layer_core::package::codec::PreparedPackage::prepare(&capture,None,&cancelled).map_err(js)?.write(&mut output,&cancelled).map_err(js)?;
+    serialize(&output.finish())
 }
 
 pub(super) fn photo_memory_budget()->layer_color::photo::PhotoMemoryBudget {

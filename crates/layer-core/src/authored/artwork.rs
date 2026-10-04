@@ -147,6 +147,7 @@ pub struct WorkingState {
     pub inspect_mask: Option<OccurrenceHandle>,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct CaptureCheckpoint {
     pub owner: u64,
     pub document: PortableId,

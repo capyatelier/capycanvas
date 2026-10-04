@@ -5,8 +5,8 @@
 Settings use the versioned Rust model and atomic JSON files; workspaces use the
 shared SQLite library. Both apps expose New, Open, Save and Save As with the
 shared [Capy package](../../docs/reference/capy-package.md), profiled image
-export, and private recovery copies of unsaved artwork. Window close uses the
-shared unsaved-change decision; macOS also protects app termination.
+export, and private checkpoints for open drawing sessions. Explicit window close uses the
+shared unsaved-change decision. App termination preserves the open session.
 
 **File → New Window** opens another editor on both platforms. Each scene owns its
 document, camera and Undo history, and closing one leaves the others open. An
@@ -16,14 +16,14 @@ iPad without multiple-window support reports that limitation.
 
 - Everything lives in the app's own Application Support directory:
   `settings.json` for app settings, `workspaces.sqlite3` for the workspace
-  library, and `recovery/` for recovery copies. Debug builds can redirect this
+  library, and `sessions/<scene UUID>/` for drawing checkpoints. Debug builds can redirect this
   with `CAPY_PERSISTENCE_NAMESPACE` or disable it with
   `CAPY_DISABLE_PERSISTENCE=1`; Release builds ignore both.
 - `EditorPersistence` uses one background I/O queue per process. Neither the UI
   thread nor the render owner reads or writes files. The render owner reserves
   its first operation for restoration; queued input, fixtures and surface
   attachment follow it.
-- JSON preferences and recovery indexes are limited to 1 MiB. A preference
+- JSON preferences and session indexes are limited to 1 MiB. A preference
   write syncs a private temporary file, renames it atomically and syncs the
   directory before acknowledging. Rust keeps the settings request pending until
   then. A failed save keeps the accepted in-memory edit and offers Retry Save.
@@ -61,12 +61,12 @@ iPad without multiple-window support reports that limitation.
 ## Artwork files
 
 - Shared Rust owns busy state, save checkpoints and Save/Discard/Cancel. Apple
-  replaces the window's current document. Undo back to the saved checkpoint marks
+  opens drawings in the window's tab collection. Undo back to the saved checkpoint marks
   the document clean. New, Open and close decisions wait for an idle canvas, and
   a late result cannot change a replacement document.
-- External Open and recovery reserve their pending URL before shared busy state
+- External Open reserves their pending URL before shared busy state
   arrives, so nothing else can overtake them. Delivery during launch waits for
-  the first editor state, native startup, workspace restoration and
+  the first editor state, native startup, workspace and drawing-session restoration, and
   `shaders_ready`.
 - macOS attaches `NSOpenPanel` and `NSSavePanel` to the owning window. iPad uses
   `UIDocumentPickerViewController`; Save As prepares the archive in a private
@@ -96,64 +96,80 @@ iPad without multiple-window support reports that limitation.
   file presenters. Recovery restores a private copy, not access to the original
   destination.
 
-## Artwork recovery
+## Drawing session restart
 
-- Unsaved changes schedule a recovery capture. Each editor keeps one capture in
-  flight plus the latest wanted revision. Capture keeps the last committed raster
-  during a stroke and prepares queued pen-up work without a drawable. The full
-  shared package codec is reused; working selection, navigation and Undo history
-  are not stored.
-- Copies live in `recovery/<runtime UUID>`, separate from the scene ID, so a new
-  process's blank canvas cannot overwrite an earlier drawing. Each archive is a
-  generation; its contents and directory are synced before an atomic
-  `current.json` publishes it, and older generations are reclaimed afterwards. A
-  failed write keeps the previous generation. Corrupt records are reported and
-  left in place. No provider URL, bookmark, account or hardware identifier is
-  stored.
-- **File → Recovered Drawings…** and the launch prompt list copies not owned by a
-  live editor. Opening one goes through the normal replacement flow; recovered
-  content stays unsaved until a manual save. The copy remains until the new owner
-  publishes its own copy or the user saves or discards.
-- Lifecycle flushing waits for preferences, workspace writes and the recovery
-  manifest before acknowledging. On iPad it runs inside a background task whose
-  expiration handler ends the task synchronously on the main actor. A kill before
-  publication leaves the previous complete copy.
-- Shared `layer-ui::recovery::RecoveryState` decides checkpoint freshness,
-  replacement order and close resumption; Swift executes its tickets with the
-  atomic file helpers.
-- GPU loss or an uncaptured validation error suspends the session and retires
-  the renderer on a worker. The editor keeps the CPU document, sources, rasters,
-  history and settings, cancels any unfinished contact, and offers Restart Canvas
-  or Save As. Restart rebuilds the document through the shared
-  renderer-replacement API.
+- Each system-restored scene uses its `SceneStorage` UUID for a private session
+  directory. A permanent shared `SessionLease` excludes a second owner. The
+  serial render owner captures the window's ordered drawing list and shared
+  `SessionCapture` values; one file worker encodes and publishes them.
+- The private shared session codec preserves authored artwork, working selection,
+  editing target, bounded Undo/Redo, camera, saved checkpoint, modified state and
+  drawing names. Portable `.capy` exports remain artwork files. The old full
+  package recovery folders, picker and opaque recovery-policy bridge are removed.
+- `SessionStore` publishes immutable resources and checkpoint metadata before its
+  atomic current/previous head. File and directory syncs precede acknowledgement.
+  Unchanged resources are reused, and unchanged prepared metadata skips a drawing
+  commit. New membership is registered before the first drawing checkpoint, so
+  a crash cannot strand a durable drawing outside the index. The final index
+  acknowledgement follows all drawing checkpoints. Explicit removal publishes
+  first; drawing storage is retired after accepted close. A window manifest is never replaced by an
+  older manifest when it is unreadable.
+- The native two-second timer coalesces changes without restarting the timer for
+  every edit. One window write runs at a time. Lifecycle barriers wait for the
+  latest observed checkpoint and report failure after a bounded wait. Encoding,
+  decoding, GPU preparation, storage and durability waits stay on workers.
+- Startup restores drawing candidates through the shared GPU admission path,
+  prepares the active drawing first, parks each inactive candidate and releases
+  its GPU before preparing the next, then installs validated membership atomically.
+  Apple currently waits for all tab candidates before showing the first restored
+  canvas; it keeps at most the active GPU and one scratch GPU during preparation.
+  Ordinary restart has no chooser. Abnormal restart uses the shared recovered tab
+  title until a manual save. Input arriving during preparation cannot overwrite
+  the live drawing through stale adoption.
+- Restore attempts are recorded before decoding each drawing. An interrupted or
+  failed attempt preserves its data and exposes Retry. Markers remain pending
+  until actual owner adoption, including the worker-to-owner transfer. Retry uses the retained
+  original session; a failed restore never publishes a blank session over it.
+- Save destinations remain display identities after restart. A restored Apple
+  drawing asks for a destination on Save because provider access/bookmarks have
+  not been restored. Before adoption, the file worker attempts a security-scoped,
+  coordinated read of each original and passes its fingerprint to shared Rust.
+  A matching original preserves clean state; changed, missing or inaccessible
+  originals require Save or Discard before close. Unavailable access does not
+  prompt during restart. Private checkpoints never overwrite an original project.
+- GPU loss retains the CPU document, sources, rasters, history and settings. The
+  shared renderer replacement supports Restart Canvas or Save As.
 
 ## Lifecycle
 
 Close flushes accepted edits before releasing the workspace claim; a failed
 release keeps the close pending. Sleep and iPad backgrounding suspend input and
 flush; activation revalidates ownership before editing resumes. Discarded iPad
-scenes attempt a final workspace close and keep their recovery copy.
+scenes attempt a final workspace close and preserve their drawing session. macOS
+Quit flushes open drawings and releases workspace owners without prompting to
+save or retiring drawing membership. Explicit drawing/window close retains
+Save/Discard/Cancel and publishes removal before native destruction.
 
 ## Checks
 
 ```sh
 bash apps/layer-apple/scripts/test-persistence.sh
 bash apps/layer-apple/scripts/test-project-files.sh
-bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/recovery.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-coordinator.swift
 bash apps/layer-apple/scripts/test-project-files.sh apps/layer-apple/tests/workspace-manager.swift
 python3 apps/layer-apple/scripts/test-project-access.py
-python3 apps/layer-apple/scripts/test-recovery-interruption.py
 python3 apps/layer-apple/tests/background-expiration.py
-cargo test -p layer-apple tests::recovery -- --test-threads=1
+cargo test --locked -p layer-apple tests::session -- --test-threads=1
+cargo test --locked -p layer-apple tests::document_tabs -- --test-threads=1
+cargo test --locked -p layer-core package::session_store -- --test-threads=1
 cargo test -p layer-apple renderer_failure_retains -- --test-threads=1
 cargo test -p layer-apple -p layer-workspace -p layer-ui -p layer-host --features layer-workspace/native
 ```
 
-`tests/sdr-recovery.swift` covers P3/U8 and ProPhoto/U16 projects with retained
-photos and corrections; run it with `CAPY_TEST_ASSETS_APP` set. The XCTest
-journeys `testSettingsAndWorkspaceRestart`, `testArtworkRecoveryAfterRestart`,
-`testIndependentEditorWindows`, `testFailedProjectOpenPreservesArtwork` and
-`testRendererRecovery` cover the same contracts through the native UI. None of
-these checks covers physical background-task expiration or file-provider
-delivery.
+The portable `tests::session` bridge journeys cover both Apple policies, exact
+pixels, selection, Undo/Redo after restart, orderly restart, explicit removal,
+failed peer checkpoint publication and stale adoption. Tab checks cover cancelling
+a prepared close before membership changes. The XCTest `testArtworkRecoveryAfterRestart` journey expects
+immediate restored editing without a chooser. macOS/iPadOS builds, light/dark UI,
+system scene restoration, background-task expiration and provider delivery still
+require Apple hardware validation; Linux bridge checks do not qualify them.

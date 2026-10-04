@@ -163,7 +163,7 @@ fn unshuffle_samples(descriptor: PixelDescriptor, bytes: &[u8]) -> Vec<u8> {
         let pixels = bytes.len() / N;
         let planes: [&[u8]; N] = std::array::from_fn(|i| &bytes[i * pixels..(i + 1) * pixels]);
         let mut result = vec![0; bytes.len()];
-        for (pixel, destination) in result.chunks_exact_mut(N).enumerate() {
+        for (pixel, destination) in result.as_chunks_mut::<N>().0.iter_mut().enumerate() {
             for (channel, byte) in destination.iter_mut().enumerate() {
                 *byte = planes[channel][pixel];
             }

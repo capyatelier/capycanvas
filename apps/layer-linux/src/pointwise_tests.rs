@@ -107,7 +107,7 @@ fn native_property_draft_is_retired_when_document_changes_with_reused_layer_ids(
     let old=number(&w,"lightness");scroll_to(old.upcast_ref());
     let display=find_css(old.upcast_ref(),"number-value").unwrap();input.click(screen_point(&display,&w.window,[0.5,0.5]));
     let entry=descendant::<gtk::Entry>(&old).unwrap();entry.set_text("73.");
-    w.documents.enqueue(&w,(next,None,None));ready(&w);
+    w.documents.enqueue(&w,(next,None));ready(&w);
     assert_ne!(state(&w).document_file.epoch,old_epoch);assert_eq!(document(&w).working.occurrence.unwrap(),layer);
     assert_ne!(number(&w,"lightness"),old);assert!(old.root().is_none());
     assert_eq!(value(&w,"lightness"),EffectValue::Number(23.));
@@ -150,7 +150,7 @@ fn unchanged_sources(w: &Rc<Workspace>, before: &layer_core::Document) {
     }
 }
 pub(super) fn saved_artwork(w: &Rc<Workspace>) -> (layer_core::authored::ArtworkCapture, Vec<u8>) {
-    let capture = ui_session(w).capture_project_recovery().unwrap();
+    let capture = ui_session(w).capture_artwork().unwrap();
     let mut bytes = Vec::new();
     write_capture(&capture, &mut bytes).unwrap();
     (capture, bytes)
@@ -391,7 +391,7 @@ fn native_lookup_builtin_looks_and_discoverable_import() {
         edit(&w,&mut input,"intensity","50");let adjusted=canvas_pixel(&w);
         let authored=document(&w);let occurrence_id=authored.artwork.occurrences.id(authored.working.occurrence.unwrap()).unwrap();
         let (saved,bytes)=saved_artwork(&w);let reopened=open_native_document(std::io::Cursor::new(bytes));assert_saved_artwork(&saved,&reopened);
-        w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),adjusted);
+        w.documents.enqueue(&w,(reopened,None));ready(&w);assert_eq!(canvas_pixel(&w),adjusted);
         let restored=document(&w).artwork.occurrences.resolve(occurrence_id).unwrap();
         w.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(restored)});ready(&w);
         lookup_action(&w,&mut input,|action|matches!(action,EffectAction::LookupPreset {preset:None,..}));ready(&w);assert_eq!(canvas_pixel(&w),original);assert_eq!(value(&w,"intensity"),EffectValue::Number(50.));
@@ -444,7 +444,7 @@ fn native_color_lookup_import_replace_and_persistence() {
         let restored=reopened.artwork.occurrences.resolve(occurrence_id).unwrap();
         assert_eq!(reopened.scene().effect_handle(restored),reopened.artwork.effects.resolve(effect_id));
         let loaded=reopened.scene().effect(restored).unwrap().lut3d().unwrap();assert_eq!(loaded.payload(),replacement.payload());
-        w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),replaced_pixel);capture(&w,&output,&format!("lookup-reopened-{}-{theme:?}",w.window.width()));
+        w.documents.enqueue(&w,(reopened,None));ready(&w);assert_eq!(canvas_pixel(&w),replaced_pixel);capture(&w,&output,&format!("lookup-reopened-{}-{theme:?}",w.window.width()));
         let restored=document(&w).artwork.occurrences.resolve(occurrence_id).unwrap();
         w.dispatch(UiAction::SelectLayer {id:layer_ui::occurrence_token(restored)});ready(&w);
         assert_eq!(document(&w).working.occurrence,Some(restored));
@@ -506,7 +506,7 @@ fn native_local_adjustments_analysis_history_and_recreation() {
         let deleted=[dehaze,clarity,shadows,lower].map(|h|document(&w).artwork.occurrences.id(h).unwrap());
         let (saved,bytes)=saved_artwork(&w);std::fs::write(output.join(format!("local-adjustments-{width}-{theme:?}.capy")),&bytes).unwrap();
         let reopened=open_native_document(std::io::Cursor::new(bytes));assert_saved_artwork(&saved,&reopened);
-        let epoch=state(&w).document_file.epoch;w.documents.enqueue(&w,(reopened,None,None));until(||state(&w).document_file.epoch!=epoch,"local-adjustment archive owner replacement");ready(&w);settled(&w);assert_eq!(sample(&w),changed);
+        let epoch=state(&w).document_file.epoch;w.documents.enqueue(&w,(reopened,None));until(||state(&w).document_file.epoch!=epoch,"local-adjustment archive owner replacement");ready(&w);settled(&w);assert_eq!(sample(&w),changed);
         w.restart_gpu();ready(&w);settled(&w);assert_eq!(sample(&w),changed,"recreated GPU rebuilds live analysis");capture(&w,output,&format!("local-recreated-{width}-{theme:?}"));
         samples.push(json!({"theme":format!("{theme:?}"),"original":original,"shadows_highlights":adjusted,"clarity_positive":positive,"clarity_negative":negative,"dehaze_positive":dehaze_positive,"dehaze_negative":dehaze_negative,"lower_changed":changed}));
         for id in deleted {let handle=document(&w).artwork.occurrences.resolve(id).unwrap();w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:layer_ui::occurrence_token(handle),mask:false}});w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);}assert_source_scene(&w,&source);

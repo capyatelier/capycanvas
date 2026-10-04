@@ -64,6 +64,9 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
 | Tool cursor hover, with and without brush size | 60 | Unmeasured on the reference tablet | [Top-tier rendering measurements](top-tier.md#tool-cursors) do not qualify this tier |
+| Pan during private session checkpoints | 60 | Unqualified: renderer 60.00–60.12 submissions/s, interval p99 18.70–18.92 ms; screen presentation and thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
+| G-Pen 1024 px during private session checkpoints | 60 | Unqualified: 77.6–79.0 fresh completed updates/s, completion gap p99 23.36–24.07 ms; thermal status unmeasured | [Session checkpoints](#session-checkpoints) |
+| G-Pen 1024 px, repeated short contacts during checkpoints | 60 | Diagnostic only: 11.02–14.27 MiB process writes per 50 contacts; observed head age max 3.52–4.37 s. Paused motion has no qualified frame rate | [Session checkpoints](#session-checkpoints) |
 | Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.31 presents/s, p99 ≤16.70 ms; renderer 59.71 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Pinch zoom | 60 | Photo, Navigator open: screen 59.43 presents/s, p99 ≤16.86 ms; renderer 59.83 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Pan: Hand tool, one or two fingers, M3 BUILD20 | 60 | **Unqualified on current M3.** 59.078–59.729 completed updates/s; completion gap p99 18.821–19.033 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison); older actual presents below |
@@ -1284,3 +1287,44 @@ zero before each gesture; the final after-snapshot was not captured.
 Raw records and complete APK/test-fixture provenance are retained under
 `artifacts/reference-localization/`. The initial overflowing paint footprint
 and hidden-Navigator numeric attempts are excluded and retained separately.
+
+## Session checkpoints
+
+TCL release-profile diagnostic, 2026-10-04, working changes based on
+`a9180575e60670cdd61d73771674ece7f2096d9f`; APK SHA-256
+`ea04f5478d3e28795a7bc1269d498e9dfbcb99d781377d490ddc4274b8cda13a`.
+The reference 4248 × 2832 photo and a paint layer use Fit zoom and Navigator,
+with the default workspace. Each workload warms up and runs three five-second
+motions while the two-second session poll is enabled. The G-Pen uses 1024 px,
+with a contained 100 × 80 surface-pixel ellipse.
+
+Pan reaches 60.00–60.12 renderer submissions/s with p99 intervals of
+18.70–18.92 ms. G-Pen reaches 77.6–79.0 fresh completed updates/s with completion
+gap p99 23.36–24.07 ms. The process writes 262–418 KiB per pan gesture and
+172–1,664 KiB per continuous stroke. Pan's session storage grows 14,604 bytes in
+the first run, then stays nearly constant. Painting grows it by 0–275,422 bytes
+per run. The newest checkpoint age is 2.05–2.07 seconds in steady navigation,
+with a four-second initial maximum. Continuous contact defers capture until
+release and reaches 5.03–6.51 seconds.
+
+These runs collect process-wide kernel write counters and sample session files;
+the counters include all process disk writes. Pan records renderer submissions,
+not screen presentation. Thermal status was not recorded before these runs, so
+neither workload qualifies its tier target. There is no matched baseline APK.
+[Raw timing and checkpoint samples](../../artifacts/seamless-restart/android/viewport-benchmark/)
+and summaries are under `artifacts/seamless-restart/android/`. Mid and top tiers
+remain unmeasured for this change because their reference tablets were reserved
+by other work.
+
+The repeated-contact diagnostic uses the same photo, brush and layout with
+50 contacts of 100 ms separated by 100 ms pauses in each of three intervals.
+Actual intervals are 9.827–9.834 seconds. APK SHA-256 is
+`5938506b8c553a5b451e2215254843301c2cb163167f5ba65e39857ed27a08b5`,
+with working changes based on `0516be628`; thermal status before the run is 0.
+Each interval writes 11.02–14.27 MiB process-wide and grows session storage by
+2.08–2.36 MiB. Observed head age reaches 3.52–4.37 seconds. The sampler targets
+100 ms; actual median gaps are 125–187 ms and maximum gaps are 149–222 ms.
+Head modification time measures observed publication age rather than the fsync
+completion instant. The paused workload and 136–144 GPU timing samples do not
+qualify a moving-frame rate. [The short-contact summary](../../artifacts/seamless-restart/android/short-checkpoint-summary.json)
+retains each interval and its raw source.

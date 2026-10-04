@@ -814,7 +814,7 @@ fn native_photo_file_drops() {
     *w.open_document.borrow_mut() = Some(Rc::new(glib::clone!(
         #[strong]
         opened,
-        move |project, location, _| {
+        move |project, location| {
             opened.replace(Some((project, location)));
         }
     )));

@@ -186,19 +186,40 @@ class AndroidRasterTest {
         for(i in 1..6) {SystemClock.sleep(10);point(2,i*15.0,dy)}
         point(3,90.0,dy);tick()
     }
-    private fun saveTask(): Pair<Long,Int> = native { handle ->
+    private fun captureSession(directory: File) {
+        val capture = native {Native.sessionCapture(it,tabs().getLong("selected"))}
+        assertNotEquals("Session capture ready",0L,capture)
+        val store = Native.sessionStoreOpen(directory.absolutePath)
+        try {Native.sessionCommit(capture,store)} finally {Native.sessionFree(capture);Native.sessionStoreFree(store)}
+    }
+    private fun restoreSessionTask(directory: File, id: Long = 1): Long {
+        val task = native {Native.sessionRestoreTask(it)}
+        val store = Native.sessionStoreOpen(directory.absolutePath)
+        try {Native.sessionRead(task,store,true);Native.sessionPrepare(task,id,"null")} catch(e:Exception) {Native.sessionFree(task);throw e} finally {Native.sessionStoreFree(store)}
+        return task
+    }
+    private fun adoptSession(task: Long, id: Long = 1) {
+        compose.waitUntil(120_000) {tick();native {JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}
+        val result = native {JSONObject(Native.sessionAdopt(it,task,id,"[]"))}
+        val selected = result.getJSONObject("ids").getLong(id.toString())
+        if(result.getBoolean("preserved"))runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.drawingTabs.selectRestored(selected)}}
+        compose.runOnUiThread {host.documentChanged()}
+    }
+    private fun saveTask(name: String): Pair<Long,Int> = native { handle ->
         val (id,file)=request(handle,"save_document_as")
-        Native.projectTask(handle,id,obj("uri" to "test:private.capy","name" to "private.capy").toString(),file.getLong("epoch"),file.getLong("revision")) to id
+        Native.projectTask(handle,id,obj("uri" to android.net.Uri.fromFile(File(files,name)).toString(),"name" to name).toString(),file.getLong("epoch"),file.getLong("revision")) to id
     }
     private fun finishSave(job: Pair<Long,Int>, name: String): ByteArray {
         val file=File(files,name)
         try {
             Native.projectWork(job.first,ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE or ParcelFileDescriptor.MODE_READ_WRITE).detachFd(),0,0)
-            native {Native.documentComplete(it,job.second,true,"null")}
+            val fingerprint = Native.sessionFingerprint(ParcelFileDescriptor.open(file,ParcelFileDescriptor.MODE_READ_ONLY).detachFd())
+            val location = obj("uri" to android.net.Uri.fromFile(file).toString(),"name" to name)
+            native {Native.sessionCompleteSave(it,job.second,location.toString(),fingerprint)}
             return file.readBytes()
         } finally {Native.projectFree(job.first)}
     }
-    private fun save(name: String)=finishSave(saveTask(),name)
+    private fun save(name: String)=finishSave(saveTask(name),name)
     private fun open(file: File, corrupt: Boolean=false, input: (() -> ParcelFileDescriptor)?=null) {
         val job=native {handle -> val (id,state)=request(handle,"open_document")
             Native.projectTask(handle,id,"null",state.getLong("epoch"),state.getLong("revision")) to id }
@@ -622,12 +643,12 @@ class AndroidRasterTest {
         // metadata-limit error, and parse its candidate before any adoption.
         val recovery=File(files,"tonal-61mp-recovery.capy")
         val saveStart=SystemClock.elapsedRealtimeNanos()
-        val capture=native {Native.projectRecoveryTask(it,false)}
-        try {Native.projectPublish(capture,recovery.absolutePath)} finally {Native.projectFree(capture)}
+        captureSession(recovery)
         val saveMs=(SystemClock.elapsedRealtimeNanos()-saveStart)/1_000_000
-        val index=manifest(recovery.readBytes())
-        assertTrue(index.getJSONObject("selections").getJSONArray("pixels").length()>0)
-        assertTrue("Selection metadata stays small",index.toString().length<512*1024)
+        val head=JSONObject(File(recovery,"head.json").readText())
+        val index=JSONObject(File(recovery,"generations/${head.getString("current")}.json").readText())
+        assertFalse(index.getJSONObject("current").getJSONObject("working").isNull("selection"))
+        assertTrue("Selection/history metadata stays bounded",index.toString().length<16*1024*1024)
         invoke("quick_mask")
         val quick=send(obj("type" to "tonal","action" to obj("kind" to "preset","index" to 2)))
         assertTrue(native {state(it).getJSONObject("layer_tools").getBoolean("quick_mask")})
@@ -641,20 +662,18 @@ class AndroidRasterTest {
         }
         runBlocking {
             val id=JSONObject(host.drawingTabs.query(obj("op" to "view"))).getLong("selected")
-            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.retire(id,closedTab=true)?.join()}
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.remove(id)}
         }
         val activation=native {Native.documentSwitch(it,0,true)}
         if(activation!=0L) try {Native.documentResumeWork(activation);native {Native.documentResume(it,activation)}} finally {Native.documentResumeFree(activation)}
-        val restore=native {Native.projectRecoveryTask(it,true)}
+        val restore=restoreSessionTask(recovery)
         try {
-            Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
-            compose.waitUntil(120_000) {tick();native {Native.projectParkReady(it,restore)}}
-            native {Native.projectAdopt(it,restore,"null")}
-        } finally {Native.projectFree(restore)}
+            adoptSession(restore)
+        } finally {Native.sessionFree(restore)}
         compose.waitUntil(60_000) {!tick()}
         assertTrue("Recovery restores the 61 MP mask",native {state(it).getJSONObject("layer_tools").getBoolean("has_selection")})
         assertNull(host.actionError);assertNull(host.failure)
-        val report="PASS native Android 61 MP RGB: first_mask=${timings.first()}ms; warm=${timings.drop(1)}ms; quick_mask=${quick}ms; recovery=${saveMs}ms; archive=${recovery.length()} bytes; metadata=${index.toString().length} bytes"
+        val report="PASS native Android 61 MP RGB: first_mask=${timings.first()}ms; warm=${timings.drop(1)}ms; quick_mask=${quick}ms; recovery=${saveMs}ms; archive=${recovery.walkTopDown().filter {it.isFile}.sumOf {it.length()}} bytes; metadata=${index.toString().length} bytes"
         println(report)
         File(activity.getExternalFilesDir(null),"tonal-61mp-result.txt").writeText(report)
         assertTrue("Warm 61 MP adjustments should finish within one second: $timings",timings.drop(1).all {it<1000})
@@ -1213,14 +1232,13 @@ class AndroidRasterTest {
         png("hdr-pq.png",clipped)
         val exr=native{h->JSONObject(Native.query(h,obj("type" to "export_draft","recipe" to recipe,"action" to obj("type" to "format","value" to "Exr")).toString())).getJSONObject("recipe")}
         val exrBytes=png("hdr-exact.exr",exr);assertArrayEquals(byteArrayOf(0x76,0x2f,0x31,0x01),exrBytes.copyOfRange(0,4))
-        val recovery=File(files,"hdr-recovery.capy");val capture=native{Native.projectRecoveryTask(it,false)}
-        try{Native.projectPublish(capture,recovery.absolutePath)}finally{Native.projectFree(capture)}
+        val recovery=File(files,"hdr-session");captureSession(recovery)
         native{Native.destroyGpuForTest(it)};compose.runOnUiThread{host.documentChanged()};compose.waitUntil(10_000){host.failure!=null}
         compose.runOnUiThread{host.restartCanvas()};compose.waitUntil(60_000){host.surfaceReady&&host.snapshot?.optBoolean("brush_ready")==true};ready()
         assertEquals(original,histogram());assertEquals(changed,form().getJSONObject("rendition").toString());assertEquals(hash(sdr),hash(png("hdr-recovered-sdr.png")))
         save("hdr-after-gpu-recovery.capy")
-        val restore=native{Native.projectRecoveryTask(it,true)}
-        try{Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0);native{Native.projectAdopt(it,restore,"null")}}finally{Native.projectFree(restore)}
+        val restore=restoreSessionTask(recovery)
+        try{adoptSession(restore)}finally{Native.sessionFree(restore)}
         refresh();ready();assertEquals(original,histogram());assertTrue(native{state(it).getJSONObject("document_file").getBoolean("modified")})
         scenario.recreate();scenario.onActivity{activity=it};compose.waitUntil(60_000){host.surfaceReady};refresh();ready();assertEquals(original,histogram())
         open(File(files,"hdr-exact.exr"));refresh();ready();val exact=JSONObject(histogram());assertEquals("F32",exact.getJSONObject("color").getString("depth"));assertTrue(exact.getJSONArray("channels").objects().any{it.getLong("below")>0})
@@ -1746,7 +1764,7 @@ class AndroidRasterTest {
         val baseCount=count()
         batch(photos);assertEquals(baseCount+photos.size,count());memoryStage("provisional batch")
         if (!affineSmoke) {
-            assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.projectRecoveryTask(it, false) })
+            assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.sessionCapture(it,tabs().getLong("selected")) })
             press("cancel_transform");assertEquals(baseCount,count())
             batch(photos)
         }
@@ -3699,7 +3717,7 @@ class AndroidRasterTest {
         }
         val firstPng=png("first.png")
         point(1,0.0,120.0);point(2,40.0,120.0)
-        val during=saveTask() // Must exclude this active contact without blocking it.
+        val during=saveTask("during.capy") // Must exclude this active contact without blocking it.
         point(3,90.0,120.0)
         val duringBytes=finishSave(during,"during.capy")
         assertEquals(manifest(first).rasterResources().toString(),manifest(duringBytes).rasterResources().toString())
@@ -3708,7 +3726,7 @@ class AndroidRasterTest {
         assertNotEquals(hash(firstPng),hash(secondPng))
         val beforeFailedSave = native { state(it).getJSONObject("document_file").toString() }
         val previousFile = File(files,"failed-save.capy").apply { writeBytes(first) }
-        val failedSave = saveTask()
+        val failedSave = saveTask("failed-save.capy")
         try {
             assertNotNull("Read-only JNI output rejects the save", runCatching {
                 Native.projectWork(failedSave.first,ParcelFileDescriptor.open(previousFile,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
@@ -3758,23 +3776,20 @@ class AndroidRasterTest {
         open(corrupt,true)
         assertEquals(epoch,native {state(it).getJSONObject("document_file").getLong("epoch")})
         val recovery=File(files,"atomic-recovery.capy")
-        val capture=native {Native.projectRecoveryTask(it,false)}
-        try {Native.projectPublish(capture,recovery.absolutePath)} finally {Native.projectFree(capture)}
-        val stale=native {Native.projectRecoveryTask(it,true)}
+        captureSession(recovery)
+        val stale=restoreSessionTask(recovery)
         try {
-            Native.projectWork(stale,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
             compose.runOnUiThread {host.restartCanvas()}
             try { compose.waitUntil(15_000) {host.surfaceReady && host.snapshot?.optBoolean("brush_ready")==true} }
             catch(e: Exception) { throw AssertionError("Restart: surface=${host.surfaceReady}; brush=${host.snapshot?.optBoolean("brush_ready")}; failure=${host.failure}; activity=${scenario.state}; focus=${activity.hasWindowFocus()}", e) }
-            try {native {Native.projectAdopt(it,stale,"null")};fail("Candidate from the retired device was adopted")}
+            try {native {Native.sessionAdopt(it,stale,1,"[]")};fail("Candidate from the retired device was adopted")}
             catch(e: IllegalStateException) {assertTrue(e.message.orEmpty().contains("canvas changed"))}
             assertEquals(hash(firstPng),hash(png("stale-candidate-retained.png")))
-        } finally {Native.projectFree(stale)}
-        val restore=native {Native.projectRecoveryTask(it,true)}
+        } finally {Native.sessionFree(stale)}
+        val restore=restoreSessionTask(recovery)
         try {
-            Native.projectWork(restore,ParcelFileDescriptor.open(recovery,ParcelFileDescriptor.MODE_READ_ONLY).detachFd(),0,0)
-            native {Native.projectAdopt(it,restore,"null")}
-        } finally {Native.projectFree(restore)}
+            adoptSession(restore)
+        } finally {Native.sessionFree(restore)}
         tick()
         assertEquals(hash(firstPng),hash(png("recovered.png")))
         val recovered=native {state(it).getJSONObject("document_file")}
@@ -3786,33 +3801,20 @@ class AndroidRasterTest {
         assertSame(retained, host)
         compose.waitUntil(60_000) { host.surfaceReady }
         assertEquals(hash(firstPng),hash(png("surface-recreated.png")))
-        // Exercise the production controller and offer UI with a fresh session.
-        val changed = java.util.concurrent.CountDownLatch(1)
-        compose.runOnUiThread { host.documentChanged { changed.countDown() } }
-        assertTrue(changed.await(10,java.util.concurrent.TimeUnit.SECONDS))
-        var write: Job? = null
-        compose.runOnUiThread { write = host.recovery.capture() }
-        runBlocking { write?.join() }
-        // Opening/recovering now creates drawing tabs, each with its own copy.
-        val modifiedTabs=native{h->JSONObject(Native.documentTabs(h,obj("op" to "view").toString())).array("tabs").objects().count {tab->
-            JSONObject(Native.documentTabs(h,obj("op" to "recovery","id" to tab.getLong("id")).toString())).getBoolean("modified")
-        }}
-        assertEquals(modifiedTabs,device.recovery.listFiles().orEmpty().count { it.extension == "capy" })
+        val expectedTabs = tabs().array("tabs").objects().map {it.getString("title")}
+        val expectedSelected = tabs().getLong("selected")
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){host.recovery.flush()}})
         assertNull(host.actionError)
-        scenario.close()
-        launch()
+        scenario.close(); launch()
+        compose.waitUntil(120_000) {host.recovery.ready && !host.recovery.working}
         assertNotSame(retained,host)
-        compose.waitUntil(10_000) {host.recovery.candidate != null}
-        val offered=host.recovery.candidate
-        compose.onNodeWithTag("recover-drawing").performClick()
-        compose.waitUntil(60_000) {host.recovery.candidate != offered && !host.recovery.working}
-        assertNull(host.actionError)
-        assertEquals(hash(firstPng),hash(png("controller-recovered.png")))
-        assertTrue(native {state(it).getJSONObject("document_file").getBoolean("modified")})
-        assertTrue(native {state(it).getJSONObject("document_file").isNull("location")})
-        assertEquals(modifiedTabs,device.recovery.listFiles().orEmpty().count { it.extension == "capy" })
-        activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS: exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, atomic recovery, Activity recreation, recovery offer/adoption\n")
+        assertNull(host.recovery.candidate); assertNull(host.actionError)
+        assertEquals(expectedTabs,tabs().array("tabs").objects().map {it.getString("title")})
+        assertEquals(expectedSelected,tabs().getLong("selected"))
+        assertEquals(hash(firstPng),hash(png("controller-restored.png")))
+        activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, Activity recreation and seamless restart\n")
     }
+
     @Test fun drawingTabsKeepHistorySpillAndLifecycle() {
         fun closeDecision(label:String)=native { handle ->
             val state=state(handle)
@@ -3881,42 +3883,187 @@ class AndroidRasterTest {
         activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-native.txt").writeText("PASS independent history, exact redo-only disk backing, device reuse, order undo, Activity recreation, corrupt open, close cancellation/neighbour/final ownership")
     }
 
-    @Test fun drawingTabsRecoverMultipleInactiveDrawings() {
+    @Test fun drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt() {
+        compose.waitUntil(120_000){host.recovery.ready}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};tick()}
         action("add_layer")
+        val first = tabs().getLong("selected")
         val firstLayers=native{state(it).array("layers").length()}
+        save("restart-saved.capy")
+        val firstFile=native {state(it).getJSONObject("document_file")}
         val task=native{h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
         try{Native.projectWork(task,-1,640,480);compose.waitUntil(60_000){tick();native{Native.projectParkReady(it,task)}};native{Native.projectAdopt(it,task,"null")}}finally{Native.projectFree(task)}
         tick();compose.waitUntil(120_000){native{JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}
+        val second = tabs().getLong("selected")
         action("add_layer");action("add_layer")
+        action("zoom_in")
         val secondLayers=native{state(it).array("layers").length()}
-        var write:Job?=null
-        compose.runOnIdle{host.documentChanged();write=host.recovery.capture()}
-        assertNotNull("Recovery capture is started for the ready drawing window",write)
-        runBlocking{write!!.join()}
-        val observations=native {handle -> JSONObject(Native.documentTabs(handle,obj("op" to "view").toString())).array("tabs").objects().map {tab ->
-            Native.documentTabs(handle,obj("op" to "recovery","id" to tab.getLong("id")).toString())
-        }}
-        assertNull("Recovery capture failed: observations=$observations; tabs=${tabs()}",host.actionError)
-        assertEquals("Recovery observations=$observations; tabs=${tabs()}",2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
-        assertEquals(listOf(true,true),tabs().array("tabs").objects().map{it.getBoolean("modified")})
+        val expectedZoom=native {state(it).getJSONObject("camera").getDouble("zoom")}
+        native {Native.documentTabs(it,obj("op" to "reorder","id" to second,"before" to first).toString())}
+        val expected = tabs().array("tabs").objects().map {it.getLong("id")}
+        val expectedFile = native {state(it).getJSONObject("document_file")}
+        val protected = runBlocking{kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main){host.recovery.flush()}}
+        assertTrue("Session checkpoint: ${host.actionError}",protected)
+        assertNull(host.actionError)
         scenario.close();launch()
-        repeat(2) {
-            compose.waitUntil(30_000){host.recovery.candidate!=null&&!host.recovery.working}
-            compose.onNodeWithTag("recover-drawing").performClick()
-            compose.waitUntil(120_000){!host.recovery.working&&tabs().array("tabs").length()==it+2}
-            assertNull(host.failure);assertNull(host.actionError)
+        compose.waitUntil(120_000){host.recovery.ready&&!host.recovery.working}
+        assertNull(host.failure);assertNull(host.actionError);assertNull(host.recovery.candidate)
+        compose.onNodeWithTag("recover-drawing").assertDoesNotExist()
+        assertEquals(expected,tabs().array("tabs").objects().map{it.getLong("id")})
+        assertEquals(second,tabs().getLong("selected"))
+        assertEquals(expectedFile.getBoolean("modified"),native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        assertEquals(secondLayers,native{state(it).array("layers").length()})
+        assertEquals(expectedZoom,native{state(it).getJSONObject("camera").getDouble("zoom")},1e-9)
+        action("undo");assertEquals(secondLayers-1,native{state(it).array("layers").length()})
+        action("redo");assertEquals(secondLayers,native{state(it).array("layers").length()})
+        compose.runOnUiThread{host.drawingTabs.select(first)}
+        compose.waitUntil(120_000){!host.drawingTabs.switching&&tabs().getLong("selected")==first}
+        assertEquals(firstLayers,native{state(it).array("layers").length()})
+        assertEquals(jsonValue(firstFile.getJSONObject("location")),jsonValue(native{state(it).getJSONObject("document_file").getJSONObject("location")}))
+        assertFalse(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        action("undo");assertEquals(firstLayers-1,native{state(it).array("layers").length()})
+        assertTrue(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        action("redo");assertEquals(firstLayers,native{state(it).array("layers").length()})
+        assertFalse(native{state(it).getJSONObject("document_file").getBoolean("modified")})
+        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS automatic multiple-tab restore, order, active drawing, independent bounded undo/redo and modified state")
+    }
+
+    @Test fun failedInactiveSessionRetriesWithoutLosingNewDrawing() {
+        compose.waitUntil(120_000) {host.recovery.ready}
+        fun command(name:String) {native {Native.dispatch(it,obj("type" to "invoke","command" to name).toString())};tick()}
+        command("add_layer")
+        val first = tabs().getLong("selected")
+        host.newDocument(640,480);refresh();command("add_layer");command("add_layer")
+        val failed = tabs().getLong("selected")
+        val failedLayers = native {state(it).array("layers").length()}
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close()
+        val session = device.recovery.walkTopDown().first {it.name == "session.json"}
+        awaitSessionRelease(session)
+        val row = JSONObject(Native.sessionManifestRead(session.absolutePath)).array("drawings").objects().first {it.getLong("id") == failed}
+        val generations = File(session.parentFile,row.getString("key")+"/generations").listFiles().orEmpty().filter {it.extension == "json"}.associateWith {it.readBytes()}
+        assertTrue(generations.isNotEmpty())
+        generations.keys.forEach {it.writeText("broken checkpoint")}
+        launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
+        compose.runOnUiThread {host.clearActionError()}
+        assertEquals(listOf(first),ids())
+        host.newDocument(320,240);refresh();command("add_layer")
+        val added = tabs().getLong("selected")
+        assertNotEquals(failed,added)
+        val before = native {state(it).getJSONObject("document_file").getLong("revision")}
+        generations.forEach {(file,bytes)->file.writeBytes(bytes)}
+        compose.runOnUiThread {host.recovery.recover()}
+        compose.waitUntil(120_000) {!host.recovery.working&&host.recovery.candidate == null&&failed in ids()}
+        assertNull(host.failure);assertNull(host.actionError)
+        assertEquals(added,tabs().getLong("selected"))
+        assertEquals(before,native {state(it).getJSONObject("document_file").getLong("revision")})
+        assertEquals(setOf(first,failed,added),ids().toSet())
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close();launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNull(host.recovery.candidate);assertEquals(setOf(first,failed,added),ids().toSet())
+        assertEquals(added,tabs().getLong("selected"))
+        compose.runOnUiThread {host.drawingTabs.select(failed)}
+        compose.waitUntil(120_000) {!host.drawingTabs.switching&&tabs().getLong("selected") == failed}
+        assertEquals(failedLayers,native {state(it).array("layers").length()})
+        command("undo");assertEquals(failedLayers-1,native {state(it).array("layers").length()})
+    }
+
+    private fun awaitSessionRelease(session:File) {
+        compose.waitUntil(30_000) {
+            runCatching {
+                java.nio.channels.FileChannel.open(File(session.parentFile,"owner.lock").toPath(),java.nio.file.StandardOpenOption.WRITE).use {channel ->
+                    channel.tryLock()?.let {it.release();true} ?: false
+                }
+            }.getOrDefault(false)
         }
-        assertEquals(3,tabs().array("tabs").length());assertNull(host.recovery.candidate)
-        val counts=tabs().array("tabs").objects().drop(1).map { tab ->
-            assertTrue(tab.getBoolean("modified"));assertTrue(tab.isNull("uri"))
-            val capture=native{Native.projectRecoveryFor(it,tab.getLong("id"))};val file=File(files,"recovered-tab-${tab.getLong("id")}.capy")
-            try{Native.projectPublish(capture,file.absolutePath)}finally{Native.projectFree(capture)}
-            manifest(file.readBytes()).occurrenceRecords().length()
+    }
+    private fun wholeManifestRetry(liveWork:Boolean) {
+        fun artwork(): String {
+            val selected = tabs().getLong("selected")
+            return native {JSONObject(Native.sessionStamp(it,selected)).getString("artwork")}
         }
-        assertEquals(setOf(firstLayers,secondLayers),counts.toSet())
-        assertEquals(2,device.recovery.listFiles().orEmpty().count{it.extension=="capy"})
-        activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-recovery.txt").writeText("PASS two independently owned inactive/active recovery snapshots; sequential offers append unsaved independent drawings; durable origins retired only after publication")
+        compose.waitUntil(120_000) {host.recovery.ready}
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick()
+        val originalLayers = native {state(it).array("layers").length()}
+        val originalArtwork = artwork()
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close()
+        val session = device.recovery.walkTopDown().first {it.name == "session.json"}
+        awaitSessionRelease(session)
+        val original = session.readBytes();session.writeText("broken window metadata")
+        launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
+        compose.runOnUiThread {host.clearActionError()}
+        if(liveWork) {native {Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick()}
+        val currentArtwork = artwork()
+        val currentLayers = native {state(it).array("layers").length()}
+        session.writeBytes(original)
+        compose.runOnUiThread {host.recovery.recover()}
+        compose.waitUntil(120_000) {!host.recovery.working}
+        if(liveWork) {
+            assertNotNull(host.recovery.candidate);assertNotNull(host.actionError)
+            assertEquals(currentArtwork,artwork())
+            assertEquals(currentLayers,native {state(it).array("layers").length()})
+            assertArrayEquals(original,session.readBytes())
+            compose.runOnUiThread {host.clearActionError()}
+        } else {
+            assertNull(host.recovery.candidate);assertNull(host.actionError)
+            assertEquals(originalArtwork,artwork())
+            assertEquals(originalLayers,native {state(it).array("layers").length()})
+        }
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+    }
+    @Test fun repairedWindowManifestRefusesToReplaceLiveDrawing() = wholeManifestRetry(true)
+    @Test fun repairedWindowManifestAdoptsIntoPristineBlank() = wholeManifestRetry(false)
+
+    @Test fun stoppedStartupReleasesSessionAndRetainsDrawing() {
+        compose.waitUntil(120_000) {host.recovery.ready}
+        native {Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())};tick()
+        val layers = native {state(it).array("layers").length()}
+        val selected = tabs().getLong("selected")
+        val artwork = native {JSONObject(Native.sessionStamp(it,selected)).getString("artwork")}
+        assertTrue(runBlocking {kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.flush()}})
+        scenario.close()
+        val session = device.recovery.walkTopDown().first {it.name == "session.json"}
+        awaitSessionRelease(session)
+        val gate = kotlinx.coroutines.CompletableDeferred<Unit>()
+        val control = Native.captureControl()
+        val monitor = androidx.test.runner.lifecycle.ActivityLifecycleMonitorRegistry.getInstance()
+        val callback = androidx.test.runner.lifecycle.ActivityLifecycleCallback {created,stage ->
+            if(created is MainActivity&&stage==androidx.test.runner.lifecycle.Stage.CREATED)
+                created.host.drawingTabs.registerInspection(control,created.host.viewModelScope.launch {gate.await()})
+        }
+        var liveArtwork = "";var liveLayers = 0
+        instrumentation.runOnMainSync {monitor.addLifecycleCallback(callback)}
+        try {
+            scenario = ActivityScenario.launch(MainActivity::class.java)
+            scenario.onActivity {activity=it;it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)}
+            compose.waitUntil(120_000) {JSONObject(Native.sessionManifestRead(session.absolutePath)).array("restoring").length()>0}
+            val liveId = tabs().getLong("selected")
+            liveArtwork = native {JSONObject(Native.sessionStamp(it,liveId)).getString("artwork")}
+            assertNotEquals("The edit precedes restored owner adoption",artwork,liveArtwork)
+            native {Native.dispatch(it,obj("type" to "invoke","command" to "add_layer").toString())}
+            liveLayers = native {state(it).array("layers").length()}
+            scenario.moveToState(androidx.lifecycle.Lifecycle.State.CREATED)
+            scenario.close()
+            awaitSessionRelease(session)
+        } finally {
+            gate.complete(Unit)
+            instrumentation.runOnMainSync {monitor.removeLifecycleCallback(callback);host.drawingTabs.releaseInspection(control)}
+            Native.captureFree(control)
+        }
+        launch();compose.waitUntil(120_000) {host.recovery.ready&&!host.recovery.working}
+        val saved = tabs().array("tabs").objects().single {row ->native {JSONObject(Native.sessionStamp(it,row.getLong("id"))).getString("artwork")} == artwork}.getLong("id")
+        assertEquals(2,tabs().array("tabs").length())
+        compose.runOnUiThread {host.drawingTabs.select(saved)}
+        compose.waitUntil(120_000) {!host.drawingTabs.switching&&tabs().getLong("selected")==saved}
+        assertEquals(layers,native {state(it).array("layers").length()})
+        val live = tabs().array("tabs").objects().single {row ->native {JSONObject(Native.sessionStamp(it,row.getLong("id"))).getString("artwork")} == liveArtwork}.getLong("id")
+        compose.runOnUiThread {host.drawingTabs.select(live)}
+        compose.waitUntil(120_000) {!host.drawingTabs.switching&&tabs().getLong("selected")==live}
+        assertEquals(liveLayers,native {state(it).array("layers").length()})
+        assertNull(host.recovery.candidate);assertNull(host.failure)
     }
 
     @Test fun drawingTabsNativePointerReorder() {

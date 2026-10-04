@@ -59,6 +59,10 @@ impl OpenEnvironment {
         }
     }
 
+    pub fn admit_sessions<'a>(&self, editors: impl IntoIterator<Item = &'a layer_core::Editor>) -> Result<(), String> {
+        self.admission.admit_sessions(editors).map_err(|reason| reason.message(&self.localization))
+    }
+
     pub fn read(
         &self,
         input: impl Read + Seek,

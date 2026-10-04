@@ -62,7 +62,7 @@ fn mac_manual_prediction_paints_ahead_of_pen_and_mouse_without_committing_the_ti
 #[test]
 fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
     for platform in [0, 1] {
-        for recovered in [false, true] {
+        {
             let app = App::new(platform);
             unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(
                 native_renderer(),
@@ -77,11 +77,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
             let project = ProjectJob::new(&app, true);
             assert_eq!(project.create([2048, 1536]), 0);
             let adopted = unsafe {
-                if recovered {
-                    capy_apple_project_recover(app.0, project.0)
-                } else {
-                    capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr())
-                }
+                capy_apple_project_adopt(app.0, project.0, c"Untitled".as_ptr(), c"".as_ptr())
             };
             assert_eq!(adopted, 0);
             assert_eq!(app.state()["settings"], settings);
@@ -139,7 +135,7 @@ fn project_adoption_preserves_native_prediction_and_manual_lookahead() {
             let live = app.pixels();
             let pixel = &live[offset..offset + 4];
             eprintln!(
-                "adopt platform={platform} recovered={recovered} saved=64ms: ahead={pixel:?}, native={}, engine={}",
+                "adopt platform={platform} saved=64ms: ahead={pixel:?}, native={}, engine={}",
                 metrics.platform_prediction_frames, metrics.engine_prediction_frames
             );
             assert_eq!(

@@ -343,12 +343,10 @@ export async function checkLookupTransport({call,evaluate,settle}) {
     const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-worker-${theme}.png`,Buffer.from(shot.data,'base64'));samples.push({theme,pixel:before});
   }
   await writeFile(`${directory}/lookup-worker.capy`,Buffer.from(await evaluate('Array.from(placementTest.saved)')));
-  await evaluate(`layerApp.app.save_recovery('lookup-worker-resource-test')`);await call('Page.reload',{ignoreCache:true});await new Promise(resolve=>setTimeout(resolve,1000));
-  await wait(`!![...document.querySelectorAll('dialog[open].document-dialog h2')].find(n=>n.textContent==='Recover drawing?')`);
-  const recoveryTabs=await evaluate('layerApp.app.document_tabs(0).tabs.length');
-  await evaluate(`[...document.querySelectorAll('dialog[open].document-dialog button')].find(n=>n.textContent==='Recover').click()`);
-  await wait(`layerApp.app.document_tabs(0).tabs.length===${recoveryTabs+1}&&layerApp.state().document_file.modified&&layerApp.app.brush_ready()`,true);await idle();
-  assert.equal(await evaluate('layerApp.state().document_file.modified'),true);assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
+  const beforeRestart=await evaluate("JSON.parse(JSON.stringify(layerApp.state().document_file,(_,value)=>typeof value==='bigint'?Number(value):value))");
+  await evaluate('layerApp.documents.autosave()');await call('Page.reload',{ignoreCache:true});await new Promise(resolve=>setTimeout(resolve,1000));
+  await wait('window.layerApp?.app.brush_ready()',true);await evaluate('layerApp.documents.startRecovery()');await idle();
+  assert.equal(await evaluate('layerApp.state().document_file.modified'),beforeRestart.location?true:beforeRestart.modified);assert.equal(await evaluate('layerApp.state().document_file.location?.name??null'),beforeRestart.location?.name??null);
   await install();await invoke('fit_canvas');await compare();const recoveredPixel=await pixel(),expectedPixel=samples.at(-1).pixel;assert.ok(recoveredPixel.every((value,i)=>Math.abs(value-expectedPixel[i])<=(i===3?0:1)),`IndexedDB recovery retains resolved LUT pixels within display quantization: ${recoveredPixel} versus ${expectedPixel}`);
   await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: native LUT selector/picker presets, cancel/error/stale-owner rejection and four layout/theme imports preserve source/history; worker save/open, GPU recreation and IndexedDB recovery retain resource payload and visible pixels');
 }

@@ -8,7 +8,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{CloseDecision, DocumentLocation, DocumentRequest, HostRequestKind, PixelClip, UiSession};
 use std::{
     fs::File,
-    io::{Cursor, Read, Write},
+    io::{Cursor, Read, Write, Seek, SeekFrom},
     mem::ManuallyDrop,
     os::fd::FromRawFd,
     sync::{
@@ -70,6 +70,8 @@ enum Payload {
 struct State {
     payload: Payload,
     error: Option<String>,
+    expectation: Option<layer_ui::DestinationExpectation>,
+    fingerprint: Option<layer_ui::DestinationFingerprint>,
 }
 pub struct CapyProjectTask {
     state: Mutex<State>,
@@ -86,6 +88,8 @@ impl CapyProjectTask {
             state: Mutex::new(State {
                 payload,
                 error: None,
+                expectation: None,
+                fingerprint: None,
             }),
             phase: AtomicU8::new(0),
             control: Default::default(),
@@ -170,11 +174,6 @@ pub unsafe extern "C" fn capy_apple_project_task(
                 )?),
                 project: None,
             }
-        } else if opening == 2 {
-            Payload::Save {
-                snapshot: Some(session.capture_project_recovery()?),
-                project: None,
-            }
         } else if opening == 4 {
             Payload::Color(Box::new(ColorTask::capture(session, None, DISPLAY_SPACE)?))
         } else if opening == 5 {
@@ -224,27 +223,19 @@ pub unsafe extern "C" fn capy_apple_project_task(
         } else {
             return Err("Unknown project task kind".into());
         };
-        Ok(CapyProjectTask::new(
+        let task = CapyProjectTask::new(
             payload,
             epoch,
             session.engine().document().revision,
             save_request,
             session.localization().clone(),
-        ))
+        );
+        if opening == 0 {
+            unsafe { &*task }.state.lock().unwrap_or_else(|e| e.into_inner()).expectation = session.save_destination_expectation();
+        }
+        Ok(task)
     })
     .unwrap_or(std::ptr::null_mut())
-}
-
-/// # Safety
-/// Serial owner only. Captures an inactive drawing without activating its renderer.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_document_recovery(app:*mut CapyApple,id:u64)->*mut CapyProjectTask {
-    let Some(app)=(unsafe {app.as_mut()}) else {return std::ptr::null_mut()};
-    app.perform(|a| {
-        let s=a.window.session(&a.host,id)?;
-        Ok(CapyProjectTask::new(Payload::Save {snapshot:Some(s.capture_project_recovery()?),project:None},
-            s.state().document_file.epoch,s.engine().document().revision,None,s.localization().clone()))
-    }).unwrap_or(std::ptr::null_mut())
 }
 
 /// # Safety
@@ -287,33 +278,12 @@ pub unsafe extern "C" fn capy_apple_prepare_recovery(app: *mut CapyApple, now: u
                 && !app.host.session.engine().has_pending_document_edits());
         Ok(i32::from(
             !renderer_ready || app.host.session.engine().has_pending_input()
-                || app.host.session.capture_project_recovery().is_err(),
+                || app.host.session.capture_artwork().is_err(),
         ))
     })
     .unwrap_or(-1)
 }
 
-/// # Safety
-/// Borrows NUL-terminated opaque state/event JSON; returns owned result/error
-/// JSON. Storage, timing and native scene ownership remain host observations.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_recovery_update(
-    state: *const c_char,
-    event: *const c_char,
-) -> *mut c_char {
-    let result = (|| -> Result<serde_json::Value, String> {
-        let event =
-            serde_json::from_str(unsafe { read_title(event) }?).map_err(|e| e.to_string())?;
-        layer_ui::recovery::recovery_update(unsafe { read_title(state) }?, event)
-    })();
-    CString::new(
-        result
-            .unwrap_or_else(|error| serde_json::json!({"error":error}))
-            .to_string(),
-    )
-    .unwrap()
-    .into_raw()
-}
 /// # Safety
 /// The task must remain alive. Compare the UI's approved document with the
 /// actual owner capture so intervening edits cannot bypass an unsaved prompt.
@@ -337,7 +307,8 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
     let Some(task) = (unsafe { task.as_ref() }) else {
         return -1;
     };
-    task.perform(|payload| {
+    let mut fingerprint = None;
+    let result = task.perform(|payload| {
         if fd < 0 {
             return Err("Missing project output".into());
         }
@@ -351,14 +322,39 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
                 }
                 let capture = project.as_ref().ok_or("Missing project snapshot")?;
                 let package = PreparedPackage::prepare(capture, None, task.control.cancellation_flag())?;
-                package.write(&mut {stream}, task.control.cancellation_flag())
+                let mut writer = layer_ui::FingerprintWriter::new(stream);
+                package.write(&mut writer, task.control.cancellation_flag())?;
+                fingerprint = Some(writer.finish());
+                Ok(())
             }
             Payload::Package(view) => view.copy_original(&mut {stream}, task.control.cancellation_flag()),
             Payload::Color(color) => color.write_copy(stream, task.control.is_cancelled()),
             Payload::Export(export) => export.write(stream, task.control.clone()).map_err(|reason| reason.message(localization)),
             _ => Err("Not a write task".into()),
         }
-    })
+    });
+    if result == 0 { task.state.lock().unwrap_or_else(|e| e.into_inner()).fingerprint = fingerprint; }
+    result
+}
+
+/// # Safety
+/// File worker immediately before atomic publication. The host retains a
+/// coordinated read descriptor for the current destination, or -1 if missing.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_project_destination_matches(task: *const CapyProjectTask, fd: i32, uri: *const c_char) -> i32 {
+    let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
+    let expectation = task.state.lock().unwrap_or_else(|e| e.into_inner()).expectation.clone();
+    let Some(expectation) = expectation else { return 0; };
+    let result = (|| -> Result<(),String> {
+        if expectation.location.uri != unsafe { read_title(uri) }? { return Ok(()); }
+        let observed = if fd < 0 { None } else { Some(layer_ui::DestinationFingerprint::read(&*host_file(fd))?) };
+        if expectation.matches(observed.as_ref()) { Ok(()) }
+        else { Err("The saved drawing changed outside Capy Canvas. Save a copy to keep both versions.".into()) }
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(error) => { task.state.lock().unwrap_or_else(|e| e.into_inner()).error = Some(error); -1 }
+    }
 }
 
 /// # Safety
@@ -391,9 +387,21 @@ pub extern "C" fn capy_photo_formats() -> *mut c_char {
 /// New defaults. Other fds remain caller-owned; name is NUL-terminated UTF-8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn capy_project_read(task: *const CapyProjectTask, fd: i32, name: *const c_char) -> i32 {
-    let input = match fd { -1 => Ok(Input::New(None)), n if n >= 0 => Ok(Input::File(n)),
-        _ => Err("Missing project input".into()) };
-    unsafe { prepare_project(task, input, read_title(name)) }
+    let fingerprint = if fd >= 0 {
+        let file = host_file(fd);
+        layer_ui::DestinationFingerprint::read(&*file).and_then(|fingerprint| {
+            (&*file).seek(SeekFrom::Start(0)).map_err(|e| e.to_string())?;
+            Ok(Some(fingerprint))
+        })
+    } else { Ok(None) };
+    let input = fingerprint.as_ref().map_err(Clone::clone).and_then(|_| match fd {
+        -1 => Ok(Input::New(None)), n if n >= 0 => Ok(Input::File(n)), _ => Err("Missing project input".into()),
+    });
+    let result = unsafe { prepare_project(task, input, read_title(name)) };
+    if result == 0 && let Some(task) = (unsafe { task.as_ref() }) {
+        task.state.lock().unwrap_or_else(|e| e.into_inner()).fingerprint = fingerprint.ok().flatten();
+    }
+    result
 }
 /// # Safety
 /// Worker only; bytes and UTF-8 name remain readable until this call returns.
@@ -549,27 +557,6 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
     title: *const c_char,
     uri: *const c_char,
 ) -> i32 {
-    unsafe { adopt_project(app, task, title, uri, false) }
-}
-
-/// # Safety
-/// Owner only after a successful worker read. Recovery retains unsaved status
-/// and never treats the private archive as the user's save destination.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn capy_apple_project_recover(
-    app: *mut CapyApple,
-    task: *const CapyProjectTask,
-) -> i32 {
-    unsafe { adopt_project(app, task, c"Untitled".as_ptr(), c"".as_ptr(), true) }
-}
-
-unsafe fn adopt_project(
-    app: *mut CapyApple,
-    task: *const CapyProjectTask,
-    title: *const c_char,
-    uri: *const c_char,
-    recovered: bool,
-) -> i32 {
     let (Some(app), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else {
         return -1;
     };
@@ -586,19 +573,15 @@ unsafe fn adopt_project(
             return Err(error.clone());
         }
         if let Payload::Color(color) = &mut state.payload {
-            if recovered { return Err("A color change is not a recovery drawing".into()); }
             return color.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
         }
         if let Payload::Source(source) = &mut state.payload {
-            if recovered { return Err("A source edit is not a recovery drawing".into()); }
             return source.adopt(&mut app.host, task.control.is_cancelled(), || unsafe { capy_project_begin_commit(task) } >= 0);
         }
         if let Payload::Clip { clip, request, .. } = &mut state.payload {
-            if recovered { return Err("A copy is not a recovery drawing".into()); }
             return clipboard::adopt_clip(app, task, clip, *request);
         }
         if let Payload::Placed { images, context, request, device } = &mut state.payload {
-            if recovered { return Err("An image import is not a recovery drawing".into()); }
             let session = &mut app.host.session;
             session.validate_image_placement(context)?;
             if session.renderer_mut().0.as_ref().map(|gpu| gpu.device()) != Some(device)
@@ -618,12 +601,15 @@ unsafe fn adopt_project(
         let Payload::Open { candidate, source, .. } = &mut state.payload else {
             return Err("Not an open task".into());
         };
-        if *source == layer_ui::ImportSource::Photo && recovered { return Err("Recovery requires a native drawing".into()); }
         let location = source.adoption_location(location);
-        let open = OpenAdoption { epoch: task.epoch, revision: task.revision, location, recovered };
+        let fingerprint_location = location.clone();
+        let open = OpenAdoption { epoch: task.epoch, revision: task.revision, location };
         let retired = app.window.adopt(&mut app.host, candidate, open,
             || unsafe { capy_project_begin_commit(task) } >= 0, Box::new)?;
         app.document_retired();
+        if let (Some(location), Some(fingerprint)) = (fingerprint_location, state.fingerprint.clone()) {
+            app.host.session.record_destination_fingerprint(&location, fingerprint)?;
+        }
         state.payload=Payload::Retired {_renderer:retired};
         Ok(())
     })
@@ -662,14 +648,13 @@ pub unsafe extern "C" fn capy_apple_project_saved(
             return Err("The save belongs to a different document".into());
         }
         let id = task.save_request.ok_or("Not a save task")?;
-        session.retarget_project_save(
-            id,
-            DocumentLocation {
+        let location = DocumentLocation {
                 uri: unsafe { read_title(uri) }?.into(),
                 name: unsafe { read_title(title) }?.into(),
-            },
-        )?;
+            };
+        session.retarget_project_save(id, location.clone())?;
         session.complete_document_request(id, Ok(true))?;
+        if let Some(fingerprint) = state.fingerprint.clone() { session.record_destination_fingerprint(&location, fingerprint)?; }
         Ok(())
     })
     .map_or(-1, |_| 0)

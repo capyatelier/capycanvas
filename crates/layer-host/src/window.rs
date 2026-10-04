@@ -111,7 +111,43 @@ pub struct OpenAdoption {
     pub epoch: u64,
     pub revision: u64,
     pub location: Option<DocumentLocation>,
-    pub recovered: bool,
+}
+
+pub type SessionIdentityMap = Vec<(u64, u64)>;
+
+pub struct PreparedClose {
+    suspended: bool,
+    options: RendererOptions,
+    selected: u64,
+    order: Vec<u64>,
+    source: CloseDocumentFence,
+    target: Option<(u64, CloseDocumentFence)>,
+}
+
+#[derive(PartialEq)]
+struct CloseDocumentFence {
+    owner: u64,
+    artwork: layer_core::authored::PortableId,
+    epoch: u64,
+    revision: u64,
+    working: u64,
+    checkpoint: u64,
+    saved_checkpoint: u64,
+    unpublished: bool,
+    location: Option<DocumentLocation>,
+    unsaved_name: Option<String>,
+    recovered: bool,
+    destination: Option<layer_ui::DestinationFingerprint>,
+    last_export: Option<layer_ui::session_recovery::SessionExport>,
+}
+impl CloseDocumentFence {
+    fn capture(session: &UiSession<Renderer>) -> Self {
+        let document = session.engine().document();
+        let layer_ui::SessionDocumentState {camera:_,location,unsaved_name,saved_checkpoint,unpublished,recovered,destination,last_export} = session.session_stamp().state;
+        Self {owner:document.owner,artwork:document.artwork.id,epoch:session.state().document_file.epoch,
+            revision:document.revision,working:document.working.generation,checkpoint:session.engine().checkpoint(),
+            saved_checkpoint,unpublished,location,unsaved_name,recovered,destination,last_export}
+    }
 }
 
 pub struct DocumentWindow<P> {
@@ -157,6 +193,10 @@ impl<P: Parked> DocumentWindow<P> {
                 || session.retained_document_tiles().try_blobs()?.is_some()))
     }
 
+    pub fn adoption_ready(&self, host: &NativeHost) -> Result<bool, String> {
+        Ok(!host.document_close_prepared && host.session.retained_document_tiles().try_blobs()?.is_some())
+    }
+
     /// Takes the active renderer and retains its device for later activations.
     pub fn retire_gpu(&mut self, host: &mut NativeHost) -> Option<Box<WgpuRasterizer>> {
         let renderer = host.session.renderer_mut().0.take();
@@ -183,10 +223,14 @@ impl<P: Parked> DocumentWindow<P> {
             "resident_bytes": documents.resident_bytes(),
             "storage_error": documents.storage_error(),
             "parked_renderers": documents.parked().filter(|(_, p)| p.owner.session().engine().backend().0.is_some()).count(),
+            "session_stamps": documents.order().iter().filter_map(|id| self.session(host, *id).ok().map(|session| json!({"id": id, "stamp": session.session_stamp()}))).collect::<Vec<_>>(),
         })
     }
 
     pub fn request(&mut self, host: &mut NativeHost, request: TabRequest) -> Result<Value, String> {
+        if !matches!(&request, TabRequest::View { .. } | TabRequest::Ready | TabRequest::Recovery { .. } | TabRequest::Storage { .. }) {
+            host.require_document_owner()?;
+        }
         Ok(match request {
             TabRequest::View { width } => self.view(host, width),
             TabRequest::Ready => json!({
@@ -201,7 +245,7 @@ impl<P: Parked> DocumentWindow<P> {
                 if !s.state().requests.is_empty()
                     && s.state().requests.iter().all(|r| opening(&r.kind))
                 {
-                    document.busy = s.capture_project_recovery().is_err();
+                    document.busy = s.capture_artwork().is_err();
                 }
                 json!(document)
             }
@@ -277,18 +321,16 @@ impl<P: Parked> DocumentWindow<P> {
         options: RendererOptions,
         exchange: impl FnOnce(&mut P),
     ) -> Result<Option<(Activation, Option<P>)>, String> {
-        if closing && !host.session.state().document_file.close_ready {
-            return Err("Confirm closing the drawing first".into());
+        host.require_document_owner()?;
+        if closing {
+            let prepared = self.prepare_close(host, options)?;
+            return Ok(Some(self.commit_close(host, prepared, exchange)));
         }
-        let target = if closing {
-            self.documents.after_close().unwrap_or(0)
-        } else {
-            id
-        };
-        if !closing && target == self.documents.selected() {
+        let target = id;
+        if target == self.documents.selected() {
             return Ok(None);
         }
-        if !closing && !self.documents.contains_parked(target) {
+        if !self.documents.contains_parked(target) {
             return Err(layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()));
         }
         if !host.session.can_park_document() {
@@ -306,19 +348,10 @@ impl<P: Parked> DocumentWindow<P> {
         }
         let tiles = host.session.park_document()?;
         let retired = self.retire_gpu(host);
-        let mut closed = None;
-        if closing {
-            if let Some(mut next) = self.documents.close_selected() {
-                std::mem::swap(&mut host.session, next.session_mut());
-                exchange(&mut next);
-                closed = Some(next);
-            }
-        } else {
-            self.documents.exchange_with(target, tiles, |next| {
-                std::mem::swap(&mut host.session, next.session_mut());
-                exchange(next);
-            }).map_err(|reason| reason.message(host.session.localization()))?;
-        }
+        self.documents.exchange_with(target, tiles, |next| {
+            std::mem::swap(&mut host.session, next.session_mut());
+            exchange(next);
+        }).map_err(|reason| reason.message(host.session.localization()))?;
         self.changed(host);
         host.startup = Default::default();
         let activation = Activation {
@@ -330,7 +363,78 @@ impl<P: Parked> DocumentWindow<P> {
             retired,
             renderer: None,
         };
-        Ok(Some((activation, closed)))
+        Ok(Some((activation, None)))
+    }
+
+    pub fn prepare_close(&mut self, host: &mut NativeHost, options: RendererOptions) -> Result<PreparedClose, String> {
+        host.require_document_owner()?;
+        if !host.session.state().document_file.close_ready {
+            return Err("Confirm closing the drawing first".into());
+        }
+        if !host.session.can_park_document() || !self.park_ready(host)? {
+            return Err(layer_ui::DocumentTransportRefusal::CloseOperation.message(host.session.localization()).to_string());
+        }
+        if let Some(target) = self.documents.after_close() {
+            self.documents.parked_owner_mut(target)
+                .ok_or_else(|| layer_ui::DocumentSessionError::TabClosed.message(host.session.localization()))?
+                .session_mut().inherit_window_state(&host.session)?;
+        }
+        let suspended = host.session.rendering_suspended();
+        host.session.park_document()?;
+        host.document_close_prepared = true;
+        host.invalidate_snapshot();
+        let target = self.documents.after_close().map(|id| (id, CloseDocumentFence::capture(self.session(host, id).unwrap())));
+        Ok(PreparedClose {suspended,options,selected:self.documents.selected(),order:self.documents.order().to_vec(),
+            source:CloseDocumentFence::capture(&host.session),target})
+    }
+
+    fn close_is_current(&self, host: &NativeHost, prepared: &PreparedClose) -> bool {
+        host.document_close_prepared && host.session.rendering_suspended() && host.session.state().document_file.close_ready
+            && self.documents.selected() == prepared.selected && self.documents.order() == prepared.order
+            && CloseDocumentFence::capture(&host.session) == prepared.source
+            && prepared.target.as_ref().is_none_or(|(id, fence)| self.session(host, *id).is_ok_and(|session| CloseDocumentFence::capture(session) == *fence))
+    }
+
+    pub fn validate_close(&self, host: &NativeHost, prepared: &PreparedClose) -> Result<(), String> {
+        if !self.close_is_current(host, prepared) {
+            return Err(layer_ui::DocumentTransportRefusal::SnapshotChanged.message(host.session.localization()).to_string());
+        }
+        Ok(())
+    }
+
+    pub fn cancel_close(&mut self, host: &mut NativeHost, prepared: PreparedClose) -> Result<(), String> {
+        if !host.document_close_prepared || self.documents.selected() != prepared.selected
+            || host.session.engine().document().owner != prepared.source.owner
+            || host.session.engine().document().artwork.id != prepared.source.artwork
+        {
+            return Err(layer_ui::DocumentTransportRefusal::SnapshotChanged.message(host.session.localization()).to_string());
+        }
+        host.document_close_prepared = false;
+        if !prepared.suspended {
+            let previous = host.session.state().revision;
+            let change = host.session.cancel_document_park()?;
+            host.apply_change(previous, change);
+        }
+        host.session.reset_document_close();
+        self.changed(host);
+        Ok(())
+    }
+
+    pub fn commit_close(&mut self, host: &mut NativeHost, prepared: PreparedClose, exchange: impl FnOnce(&mut P)) -> (Activation, Option<P>) {
+        assert!(self.close_is_current(host, &prepared), "Prepared close no longer targets this window");
+        let retired = self.retire_gpu(host);
+        let closed = self.documents.close_selected().map(|mut next| {
+            next.session_mut().inherit_parked_viewport(&host.session);
+            std::mem::swap(&mut host.session, next.session_mut());
+            exchange(&mut next);
+            next
+        });
+        host.document_close_prepared = false;
+        self.changed(host);
+        host.startup = Default::default();
+        (Activation {selected:self.documents.selected(),epoch:host.session.state().document_file.epoch,
+            gpu:self.gpu.clone(),color:host.session.engine().document().composition().color,
+            options:prepared.options,retired,renderer:None}, closed)
     }
 
     /// Checks that the activation still targets the selected drawing, its
@@ -368,6 +472,196 @@ impl<P: Parked> DocumentWindow<P> {
         begin_commit: impl FnOnce() -> bool,
         park: impl FnOnce(UiSession<Renderer>) -> P,
     ) -> Result<Option<Box<WgpuRasterizer>>, String> {
+        self.adopt_prepared(host, candidate, open, false, begin_commit, park)
+    }
+
+    pub fn adopt_session(
+        &mut self,
+        host: &mut NativeHost,
+        candidate: &mut Option<Box<UiSession<Renderer>>>,
+        open: OpenAdoption,
+        begin_commit: impl FnOnce() -> bool,
+        park: impl FnOnce(UiSession<Renderer>) -> P,
+    ) -> Result<Option<Box<WgpuRasterizer>>, String> {
+        self.adopt_prepared(host, candidate, open, true, begin_commit, park)
+    }
+
+    pub fn restore_sessions(
+        &mut self,
+        host: &mut NativeHost,
+        candidates: &mut Vec<(u64, Box<UiSession<Renderer>>)>,
+        selected: u64,
+        stamp: layer_ui::SessionStamp,
+        mut park: impl FnMut(UiSession<Renderer>) -> P,
+    ) -> Result<Vec<Box<WgpuRasterizer>>, String> {
+        host.require_document_owner()?;
+        if self.documents.order().len() != 1 || !host.session.can_replace_startup_session(&stamp) {
+            return Err(layer_ui::DocumentTransportRefusal::SnapshotChanged.message(host.session.localization()).to_string());
+        }
+        let order: Vec<_> = candidates.iter().map(|(id, _)| *id).collect();
+        let unique: std::collections::BTreeSet<_> = order.iter().copied().collect();
+        if order.is_empty() || unique.len() != order.len() || unique.contains(&0)
+            || unique.contains(&u64::MAX) || !unique.contains(&selected)
+        {
+            return Err("The restored drawing membership is invalid".into());
+        }
+        let mut identities = DocumentSessions::<()>::localized(host.session.localization());
+        for id in &order { identities.restore_identity(*id)?; }
+        let mut metadata = 0usize;
+        for (id, candidate) in candidates.iter() {
+            if candidate.engine().backend().0.is_some() {
+                if device(candidate) != device(&host.session) {
+                    return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
+                }
+            } else if *id == selected || !candidate.rendering_suspended() {
+                return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
+            }
+            let tiles = candidate.retained_document_tiles();
+            if !candidate.can_park_document() || tiles.try_blobs()?.is_none() {
+                return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+            }
+            metadata = metadata.saturating_add(tiles.metadata_bytes);
+        }
+        if metadata > self.documents.budget.metadata {
+            return Err(layer_ui::DocumentSessionError::MetadataBudgetExceeded.message(host.session.localization()));
+        }
+        for (id, candidate) in candidates.iter_mut() {
+            candidate.set_document_replacement(false);
+            if *id != selected { candidate.park_document()?; }
+            candidate.inherit_window_state(&host.session)?;
+        }
+        let active = candidates.iter().position(|(id, _)| *id == selected).unwrap();
+        let selected_candidate = candidates.remove(active);
+        candidates.push(selected_candidate);
+        let mut restored = DocumentSessions::localized(host.session.localization());
+        restored.budget = self.documents.budget;
+        let mut retired = Vec::new();
+        let mut iter = candidates.drain(..);
+        let (id, mut current) = iter.next().unwrap();
+        restored.restore_identity(id).expect("validated restored identity");
+        for (id, incoming) in iter {
+            let tiles = current.retained_document_tiles();
+            if let Some(renderer) = current.renderer_mut().0.take() { retired.push(renderer); }
+            restored.append(park(*current), tiles, host.session.localization());
+            restored.restore_identity(id).expect("validated restored identity");
+            current = incoming;
+        }
+        restored.restore_order(&order, selected).expect("validated restored membership");
+        if let Some(renderer) = self.retire_gpu(host) { retired.push(renderer); }
+        let outgoing = std::mem::replace(&mut host.session, *current);
+        self.documents = restored;
+        self.changed(host);
+        drop(outgoing);
+        Ok(retired)
+    }
+
+    pub fn append_restored_sessions(
+        &mut self,
+        host: &mut NativeHost,
+        candidates: &mut Vec<(u64, Box<UiSession<Renderer>>)>,
+        mut park: impl FnMut(UiSession<Renderer>) -> P,
+    ) -> Result<(SessionIdentityMap, Vec<Box<WgpuRasterizer>>), String> {
+        host.require_document_owner()?;
+        if !host.session.can_park_document() || self.documents.selected() == 0 {
+            return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+        }
+        let mut metadata = host.session.retained_document_tiles().metadata_bytes;
+        for (_, existing) in self.documents.parked() { metadata = metadata.saturating_add(existing.tiles.metadata_bytes); }
+        let mut identities = DocumentSessions::<()>::localized(host.session.localization());
+        let mut unique = std::collections::BTreeSet::new();
+        for (id, candidate) in candidates.iter() {
+            identities.restore_identity(*id)?;
+            if !unique.insert(*id) { return Err("The restored drawing membership is invalid".into()); }
+            if device(candidate) != device(&host.session) {
+                return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
+            }
+            let tiles = candidate.retained_document_tiles();
+            if !candidate.can_park_document() || tiles.try_blobs()?.is_none() {
+                return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+            }
+            self.documents.admit(&host.session.retained_document_tiles(), candidate.engine().document())
+                .map_err(|reason| reason.message(host.session.localization()))?;
+            metadata = metadata.saturating_add(tiles.metadata_bytes);
+        }
+        if metadata > self.documents.budget.metadata {
+            return Err(layer_ui::DocumentSessionError::MetadataBudgetExceeded.message(host.session.localization()));
+        }
+        for (_, candidate) in candidates.iter_mut() {
+            candidate.set_document_replacement(false);
+            candidate.park_document()?;
+            candidate.inherit_window_state(&host.session)?;
+        }
+        let mut mapping = Vec::with_capacity(candidates.len());
+        let mut retired = Vec::with_capacity(candidates.len());
+        for (old, mut candidate) in candidates.drain(..) {
+            let tiles = candidate.retained_document_tiles();
+            if let Some(renderer) = candidate.renderer_mut().0.take() { retired.push(renderer); }
+            let id = self.documents.append_parked(park(*candidate), tiles, host.session.localization());
+            mapping.push((old, id));
+        }
+        self.changed(host);
+        Ok((mapping, retired))
+    }
+
+    pub fn hydrate_restored(
+        &mut self,
+        host: &mut NativeHost,
+        candidate: &mut Option<Box<UiSession<Renderer>>>,
+        id: u64,
+        park: impl FnOnce(UiSession<Renderer>) -> P,
+    ) -> Result<(u64, Option<Box<WgpuRasterizer>>), String> {
+        host.require_document_owner()?;
+        let next = candidate.as_mut().ok_or("Project preparation is incomplete")?;
+        let mut identities = DocumentSessions::<()>::localized(host.session.localization());
+        identities.restore_identity(id)?;
+        if self.documents.selected() == 0 {
+            return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+        }
+        if next.engine().backend().0.is_some() {
+            if device(next) != device(&host.session) {
+                return Err(layer_ui::DocumentTransportRefusal::RecoveryGpuChanged.message(host.session.localization()).to_string());
+            }
+        } else if !next.rendering_suspended() {
+            return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+        }
+        let tiles = next.retained_document_tiles();
+        if !next.can_park_document() || tiles.try_blobs()?.is_none() {
+            return Err(layer_ui::DocumentTransportRefusal::RestoreOperation.message(host.session.localization()).to_string());
+        }
+        self.documents.admit(&host.session.retained_document_tiles(), next.engine().document())
+            .map_err(|reason| reason.message(host.session.localization()))?;
+        let metadata = self.documents.parked().fold(host.session.retained_document_tiles().metadata_bytes, |n, (_, parked)| n.saturating_add(parked.tiles.metadata_bytes));
+        if metadata.saturating_add(tiles.metadata_bytes) > self.documents.budget.metadata {
+            return Err(layer_ui::DocumentSessionError::MetadataBudgetExceeded.message(host.session.localization()));
+        }
+        next.set_document_replacement(false);
+        next.park_document()?;
+        next.inherit_window_state(&host.session)?;
+        let mut next = candidate.take().unwrap();
+        let retired = next.renderer_mut().0.take();
+        let id = if self.documents.order().contains(&id) {
+            self.documents.append_parked(park(*next), tiles, host.session.localization())
+        } else {
+            self.documents.append_parked_with_id(id, park(*next), tiles, host.session.localization())
+                .unwrap_or_else(|_| unreachable!("validated restored identity"));
+            id
+        };
+        host.document_count = self.documents.order().len();
+        host.invalidate_snapshot();
+        host.dirty = true;
+        Ok((id, retired))
+    }
+
+    fn adopt_prepared(
+        &mut self,
+        host: &mut NativeHost,
+        candidate: &mut Option<Box<UiSession<Renderer>>>,
+        open: OpenAdoption,
+        restored: bool,
+        begin_commit: impl FnOnce() -> bool,
+        park: impl FnOnce(UiSession<Renderer>) -> P,
+    ) -> Result<Option<Box<WgpuRasterizer>>, String> {
+        host.require_document_owner()?;
         let next = candidate
             .as_mut()
             .ok_or("Project preparation is incomplete")?;
@@ -385,13 +679,14 @@ impl<P: Parked> DocumentWindow<P> {
         }
         self.documents
             .admit(&tiles, next.engine().document()).map_err(|reason| reason.message(host.session.localization()))?;
-        next.initialize_document_location(open.location)?;
-        if open.recovered {
-            next.mark_recovered();
+        if !restored {
+            next.initialize_document_location(open.location)?;
         }
         next.set_document_replacement(false);
         next.inherit_window_state(&host.session)?;
-        next.inherit_initial_drawing_tools(&host.session)?;
+        if !restored {
+            next.inherit_initial_drawing_tools(&host.session)?;
+        }
         if !begin_commit() {
             return Err("Document operation cancelled".into());
         }
@@ -431,7 +726,7 @@ fn opening(kind: &HostRequestKind) -> bool {
 mod tests {
     use super::*;
     use crate::open::OpenEnvironment;
-    use layer_ui::{LayerAction, UiAction};
+    use layer_ui::{LayerAction, UiAction, UiInput};
     use std::time::{Duration, Instant};
 
     type Window = DocumentWindow<UiSession<Renderer>>;
@@ -486,7 +781,6 @@ mod tests {
             epoch: host.session.state().document_file.epoch,
             revision: host.session.engine().document().revision,
             location: None,
-            recovered: false,
         }
     }
 
@@ -498,6 +792,17 @@ mod tests {
             OpenEnvironment::capture(&host.session, admission, Default::default()).unwrap();
         let project = layer_ui::NewDocumentOptions::default().project(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         Some(environment.prepare(project, || false).unwrap())
+    }
+
+    fn settle_candidate(candidate: &mut UiSession<Renderer>) {
+        let deadline = Instant::now() + Duration::from_secs(60);
+        loop {
+            candidate.frame(0, 0).unwrap();
+            candidate.engine().backend().0.as_ref().unwrap().device().poll(wgpu::PollType::Poll).unwrap();
+            if candidate.can_park_document() && candidate.retained_document_tiles().try_blobs().unwrap().is_some() { return; }
+            assert!(Instant::now() < deadline, "restored drawing did not settle");
+            std::thread::sleep(Duration::from_millis(2));
+        }
     }
 
     fn open(window: &mut Window, host: &mut NativeHost) {
@@ -635,6 +940,275 @@ mod tests {
             host.session.engine().configured_brush().color_rgba_linear,
             brush
         );
+        finish(host, window);
+    }
+
+    #[test]
+    fn session_adoption_preserves_destination_camera_and_edit_history() {
+        let mut host = host();
+        let mut window = Window::default();
+        let mut next = candidate(&window, &host);
+        let session = next.as_mut().unwrap();
+        let location = DocumentLocation { uri: "private:test-drawing".into(), name: "Drawing.capy".into() };
+        session.initialize_document_location(Some(location.clone())).unwrap();
+        let count = session.engine().document().scene().order().len();
+        session.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+        session.dispatch(UiAction::SetZoom { zoom: 1.25 }).unwrap();
+        session.dispatch(UiAction::SetRotation { rotation: 0.4 }).unwrap();
+        let rotation = session.state().camera.rotation;
+        let brush = session.engine().configured_brush().clone();
+        let checkpoint = session.engine().checkpoint();
+        let open = opened(&host);
+        drop(window.adopt_session(&mut host, &mut next, open, || true, |s| s).unwrap());
+        assert!(next.is_none());
+        assert_eq!(host.session.state().document_file.location, Some(location));
+        assert!(host.session.state().document_file.modified);
+        assert_eq!(host.session.state().camera.zoom, 1.25);
+        assert_eq!(host.session.state().camera.rotation, rotation);
+        assert_eq!(host.session.engine().configured_brush(), &brush);
+        assert_eq!(host.session.engine().checkpoint(), checkpoint);
+        settle(&mut host);
+        invoke(&mut host, CommandId::Undo);
+        assert_eq!(host.session.engine().document().scene().order().len(), count);
+        assert!(!host.session.state().document_file.modified);
+        finish(host, window);
+    }
+
+    #[test]
+    fn batch_restore_preserves_identity_order_and_rejects_changed_startup() {
+        let mut host = host();
+        let mut window = Window::default();
+        host.session.set_document_replacement(true);
+        let stamp = host.session.session_stamp();
+        let mut first = candidate(&window, &host).unwrap();
+        let mut second = candidate(&window, &host).unwrap();
+        first.dispatch(UiAction::SetZoom { zoom: 1.25 }).unwrap();
+        second.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+        for candidate in [&mut first, &mut second] {
+            settle_candidate(candidate);
+        }
+        let mut candidates = vec![(9, first), (3, second)];
+        host.dispatch(UiAction::SetZoom { zoom: 1.5 }).unwrap();
+        assert!(window.restore_sessions(&mut host, &mut candidates, 9, stamp, |s| s).is_err());
+        assert_eq!(candidates.len(), 2);
+        assert_eq!(window.documents.order(), [1]);
+        assert_eq!(host.session.state().camera.zoom, 1.5);
+        settle(&mut host);
+        let stamp = host.session.session_stamp();
+        let retired = window.restore_sessions(&mut host, &mut candidates, 9, stamp, |s| s).unwrap();
+        assert!(candidates.is_empty());
+        assert_eq!(window.documents.order(), [9, 3]);
+        assert_eq!(window.documents.selected(), 9);
+        assert_eq!(host.session.state().camera.zoom, 1.25);
+        let parked = window.documents.parked_owner_mut(3).unwrap();
+        assert!(parked.rendering_suspended());
+        assert!(parked.engine().backend().0.is_none());
+        assert!(parked.state().document_file.modified);
+        assert!(parked.engine().can_undo());
+        assert_eq!(retired.len(), 2);
+        drop(retired);
+        finish(host, window);
+    }
+
+    #[test]
+    fn restored_append_preserves_live_edits_selection_and_renderer() {
+        let mut host = host();
+        let mut window = Window::default();
+        host.dispatch(UiAction::Invoke { command: CommandId::AddLayer }).unwrap();
+        host.dispatch(UiAction::SetZoom { zoom: 1.5 }).unwrap();
+        settle(&mut host);
+        let stamp = host.session.session_stamp();
+        let document = host.session.engine().document().clone();
+        let renderer = std::ptr::from_ref(host.session.engine().backend().0.as_ref().unwrap().as_ref());
+        let mut next = candidate(&window, &host).unwrap();
+        settle_candidate(&mut next);
+        let mut candidates = vec![(1, next)];
+        window.documents.budget.metadata = 1;
+        assert!(window.append_restored_sessions(&mut host, &mut candidates, |s| s).is_err());
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(window.documents.order(), [1]);
+        window.documents.budget = Default::default();
+        let (mapping, retired) = window.append_restored_sessions(&mut host, &mut candidates, |s| s).unwrap();
+        assert_eq!(mapping, [(1, 2)]);
+        assert_eq!(window.documents.order(), [1, 2]);
+        assert_eq!(window.documents.selected(), 1);
+        assert_eq!(host.session.session_stamp(), stamp);
+        assert_eq!(host.session.engine().document(), &document);
+        assert_eq!(std::ptr::from_ref(host.session.engine().backend().0.as_ref().unwrap().as_ref()), renderer);
+        assert!(window.documents.parked_owner_mut(2).unwrap().rendering_suspended());
+        assert_eq!(retired.len(), 1);
+        drop(retired);
+        finish(host, window);
+    }
+
+    #[test]
+    fn parked_hydration_preserves_queued_input_and_reserved_identities() {
+        let mut host = host();
+        let mut window = Window::default();
+        window.documents.reserve_identities(&[1, 3]).unwrap();
+        let mut next = candidate(&window, &host).unwrap();
+        settle_candidate(&mut next);
+        next.park_document().unwrap();
+        drop(next.renderer_mut().0.take());
+        let mut next = Some(next);
+        host.session.pen(layer_engine::PenEvent {
+            device_id:1,sequence:1,timestamp_ns:1,view_revision:host.session.state().camera.revision,
+            surface_position:layer_core::Point {x:16.,y:16.},pressure:1.,tilt_radians:[0.;2],twist_radians:0.,distance:0.,
+            phase:layer_engine::PenPhase::Down,tool:layer_engine::ToolKind::Pen,flags:layer_engine::SampleFlags::NONE,
+        }).unwrap();
+        assert!(host.session.engine().has_pending_input());
+        let (id, retired) = window.hydrate_restored(&mut host, &mut next, 1, |s| s).unwrap();
+        assert_eq!(id, 2);
+        assert!(retired.is_none());
+        assert!(next.is_none());
+        assert_eq!(window.documents.selected(), 1);
+        assert_eq!(window.documents.order(), [1, 2]);
+        assert!(host.session.engine().has_pending_input());
+        finish(host, window);
+    }
+
+    #[test]
+    fn prepared_close_cancel_restores_input_and_commit_changes_membership() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        let before = host.session.engine().document().clone();
+        assert!(window.prepare_close(&mut host, Default::default()).is_err());
+        assert_eq!(window.documents.order(), [1, 2]);
+        assert!(!host.document_close_prepared());
+        invoke(&mut host, CommandId::CloseDocument);
+        assert!(host.session.state().document_file.close_ready);
+        let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+        assert_eq!(window.documents.order(), [1, 2]);
+        assert_eq!(window.documents.selected(), 2);
+        assert!(host.document_close_prepared());
+        assert!(host.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).is_err());
+        assert!(window.switch(&mut host, 1, false, Default::default(), |_| {}).is_err());
+        window.cancel_close(&mut host, prepared).unwrap();
+        assert!(!host.document_close_prepared());
+        assert!(!host.session.rendering_suspended());
+        assert!(!host.session.state().document_file.close_ready);
+        assert_eq!(host.session.engine().document(), &before);
+        invoke(&mut host, CommandId::CloseDocument);
+        let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+        let (mut activation, closed) = window.commit_close(&mut host, prepared, |_| {});
+        assert_eq!(window.documents.order(), [1]);
+        assert_eq!(window.documents.selected(), 1);
+        assert!(!host.document_close_prepared());
+        assert_eq!(closed.as_ref().unwrap().engine().document(), &before);
+        drop(closed);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        invoke(&mut host, CommandId::AddLayer);
+        finish(host, window);
+    }
+
+    #[test]
+    fn close_validation_rejects_another_owner_and_changed_file_state() {
+        let mut source = host();
+        let mut other = host();
+        let mut window = Window::default();
+        invoke(&mut source, CommandId::CloseDocument);
+        let prepared = window.prepare_close(&mut source, Default::default()).unwrap();
+        assert!(window.validate_close(&source, &prepared).is_ok());
+        assert!(window.validate_close(&other, &prepared).is_err());
+        source.session.initialize_document_location(Some(DocumentLocation {uri:"private:changed.capy".into(),name:"Changed.capy".into()})).unwrap();
+        assert!(window.validate_close(&source, &prepared).is_err());
+        window.cancel_close(&mut source, prepared).unwrap();
+        assert!(!source.document_close_prepared());
+        assert!(!source.session.rendering_suspended());
+        assert_eq!(source.session.state().document_file.location.as_ref().unwrap().name,"Changed.capy");
+        assert_eq!(window.documents.order(), [1]);
+        drop(other.session.renderer_mut().0.take());
+        drop(other);
+        finish(source, window);
+    }
+
+    #[test]
+    fn prepared_close_adopts_resize_received_during_storage_publication() {
+        let mut host = host();
+        let mut window = Window::default();
+        host.resize(800, 600, 1.).unwrap();
+        host.dispatch(UiAction::SetZoom {zoom:1.5}).unwrap();
+        settle(&mut host);
+        open(&mut window, &mut host);
+        invoke(&mut host, CommandId::CloseDocument);
+        let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+        let target = window.documents.parked_owner_mut(1).unwrap().session_stamp();
+        host.resize(1200, 800, 2.).unwrap();
+        let source_view = host.session.state().camera.revision;
+        window.validate_close(&host, &prepared).unwrap();
+        let (mut activation, closed) = window.commit_close(&mut host, prepared, |_| {});
+        assert!(host.session.session_stamp().same_editor(&target));
+        assert_eq!(host.session.state().camera.viewport, [1200, 800]);
+        assert_eq!(host.session.state().camera.zoom, 1.5);
+        assert_eq!(host.logical, [600.,400.]);
+        assert!(host.session.state().camera.revision > source_view);
+        assert!(!host.accepts_pointer_input(source_view));
+        let work_area = host.session.layout(host.logical).work_area;
+        assert_eq!(host.session.state().camera.work_area,
+            [work_area.x*2.,work_area.y*2.,work_area.width*2.,work_area.height*2.]);
+        let camera = host.session.state().camera.clone();
+        host.resize(1200, 800, 2.).unwrap();
+        assert_eq!(host.session.state().camera, camera);
+        let view = host.session.engine().view();
+        assert_eq!([view.width_px, view.height_px], [1200, 800]);
+        drop(closed);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        assert_eq!(host.session.state().camera.viewport, [1200, 800]);
+        finish(host, window);
+    }
+
+    #[test]
+    fn prepared_close_ignores_late_native_input_without_invalidating_commit_or_cancel() {
+        let mut host = host();
+        let mut window = Window::default();
+        open(&mut window, &mut host);
+        invoke(&mut host, CommandId::CloseDocument);
+        let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+        let stamp = host.session.session_stamp();
+        let revision = host.session.state().revision;
+        let document = host.session.engine().document().clone();
+        let chrome = (host.chrome_hidden, host.keep_zen_button, host.pan_cursor);
+        let dirty = host.dirty;
+        host.take_service_changes();
+        for input in [
+            UiInput::Chrome {event:layer_ui::ChromeEvent::Refresh,facts:Default::default(),viewport:[64.,48.]},
+            UiInput::Blur,
+            UiInput::Key {key:"Space".into(),pressed:false,repeat:false,modifiers:Default::default(),editing:false,divider:None},
+            UiInput::Axes {pan:[8.,4.],zoom:2.},
+        ] {
+            let reply = host.input(input).unwrap();
+            assert!(reply.handled);
+            assert!(!reply.paint && !reply.cancel_paint && !reply.change.canvas_wake);
+            assert_eq!(reply.change.regions, 0);
+            assert_eq!(reply.change.revision, revision);
+            assert_eq!((reply.chrome_hidden, reply.keep_zen_button, reply.pan_cursor), chrome);
+        }
+        host.scroll([32.,24.], [8.,4.], 1., true, false).unwrap();
+        host.gesture([32.,24.], 2., 0.5).unwrap();
+        assert_eq!(host.session.session_stamp(), stamp);
+        assert_eq!(host.session.engine().document(), &document);
+        assert_eq!(host.dirty, dirty);
+        assert_eq!(host.take_service_changes(), 0);
+        assert!(host.dispatch(UiAction::Invoke {command:CommandId::AddLayer}).is_err());
+        window.validate_close(&host, &prepared).unwrap();
+        window.cancel_close(&mut host, prepared).unwrap();
+        invoke(&mut host, CommandId::AddLayer);
+        settle(&mut host);
+        assert_ne!(host.session.engine().document(), &document);
+        invoke(&mut host, CommandId::Undo);
+        settle(&mut host);
+        invoke(&mut host, CommandId::CloseDocument);
+        let prepared = window.prepare_close(&mut host, Default::default()).unwrap();
+        host.input(UiInput::Chrome {event:layer_ui::ChromeEvent::Refresh,facts:Default::default(),viewport:[64.,48.]}).unwrap();
+        let (mut activation, closed) = window.commit_close(&mut host, prepared, |_| {});
+        assert!(closed.is_some());
+        drop(closed);
+        activation.work().unwrap();
+        resume(&mut window, &mut host, &mut activation);
+        invoke(&mut host, CommandId::AddLayer);
         finish(host, window);
     }
 

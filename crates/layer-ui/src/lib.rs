@@ -50,6 +50,9 @@ mod import_policy;
 pub use import_policy::{ImageImportBatch, ImportIntent, ImportSource, ImportOutcome, ImportedDocument, photo_document_names, read_import};
 
 pub mod recovery;
+pub use session::session_recovery;
+pub use session::session_destination::{DestinationExpectation,FingerprintWriter};
+pub use session_recovery::{SessionCapture,SessionRestore,SessionDocumentState,SessionStamp,SessionCamera,SessionManifest,SessionDrawing,SessionRestoreAttempt,SessionManifestEvent,DestinationFingerprint,session_manifest_update,CHECKPOINT_INTERVAL_MS,MAX_SESSION_DRAWING_ID};
 mod workspace_update;
 pub use workspace_update::*;
 mod eyedropper;

@@ -1,7 +1,7 @@
 use super::*;
 use super::fixtures::tempfile;
 use layer_core::color::{DocumentColor, RgbSpace, SampleDepth};
-use std::{io::Seek, os::fd::AsRawFd};
+use std::io::{Read, Seek};
 fn new_drawing(app: &App, depth: SampleDepth) {
     app.invoke("new_document");
     let job = ProjectJob::new(app, true);
@@ -43,6 +43,7 @@ fn switch(app: &App, id: u64, closing: bool) {
     }
     let task = unsafe { capy_apple_document_switch(app.0, id, closing) };
     assert!(!task.is_null(), "{:?}", unsafe { &*app.0 }.error);
+    if closing { assert_eq!(unsafe { capy_apple_document_close_commit(app.0, task, true) }, 0); }
     assert_eq!(
         unsafe { capy_document_prepare(task, c"/tmp/capy-apple-tabs-test-spill".as_ptr()) },
         0
@@ -57,7 +58,31 @@ fn switch(app: &App, id: u64, closing: bool) {
     app.draw_until_idle();
 }
 #[test]
-fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
+fn apple_tab_close_preparation_can_cancel_without_retiring_source() {
+    for platform in [0, 1] {
+        let app = App::new(platform);
+        unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
+        app.draw_until_idle();
+        new_drawing(&app, SampleDepth::U8);
+        let source = unsafe { &*app.0 }.host.session.engine().document().clone();
+        assert_eq!(unsafe { capy_apple_document_close(app.0, 0, 0) }, 0);
+        super::fixtures::until(&app, "Close preparation", || unsafe { capy_apple_document_prepare_switch(app.0, 2_000_000_000) } == 0);
+        let task = unsafe { capy_apple_document_switch(app.0, 0, true) };
+        assert!(!task.is_null(), "{:?}", unsafe { &*app.0 }.error);
+        assert_eq!(unsafe { &*app.0 }.window.documents.selected(), 2);
+        assert_eq!(unsafe { &*app.0 }.window.documents.order().len(), 2);
+        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &source);
+        assert_eq!(unsafe { capy_apple_document_close_commit(app.0, task, false) }, 0);
+        unsafe { capy_document_free(task) };
+        app.draw_until_idle();
+        assert_eq!(tabs(&app)["selected"], 2);
+        assert_eq!(tabs(&app)["tabs"].as_array().unwrap().len(), 2);
+        assert!(!app.state()["document_file"]["close_ready"].as_bool().unwrap());
+        assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &source);
+    }
+}
+#[test]
+fn apple_tabs_preserve_history_pixels_and_disk_parking() {
     for platform in [0, 1] {
         let app = App::new(platform);
         unsafe { &mut *app.0 }.host.session.renderer_mut().0 = Some(native_renderer());
@@ -92,19 +117,18 @@ fn apple_tabs_preserve_history_pixels_recovery_and_disk_parking() {
         app.draw_until_idle();
         assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &first);
         assert_eq!(unsafe { &*app.0 }.host.session.engine().document().working, first.working);
-        // Recovery of an inactive drawing uses its own document and history.
-        let job = ProjectJob(unsafe { capy_apple_document_recovery(app.0, 2) });
-        assert!(!job.0.is_null());
+        let cancel = std::sync::atomic::AtomicBool::new(false);
+        let capture = unsafe { &*app.0 }.window.session(&unsafe { &*app.0 }.host, 2).unwrap().capture_session().unwrap();
+        let prepared = capture.prepare(&cancel).unwrap();
         let mut file = tempfile();
-        assert_eq!(
-            unsafe { capy_project_write(job.0, file.as_raw_fd()) },
-            0,
-            "{:?}",
-            job.error()
-        );
+        prepared.write(&mut file, &cancel).unwrap();
         file.rewind().unwrap();
-        let restored = read_document(&mut file);
-        assert_saved_document(&restored, &second);
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        let bytes: std::sync::Arc<[u8]> = bytes.into();
+        let backing = layer_core::package::ImmutableBacking::new(std::sync::Arc::new(bytes)).unwrap();
+        let restored = layer_core::package::session::open(backing, Default::default(), &cancel).unwrap();
+        assert_project_document(restored.editor.document(), &second);
         app.request(
             2,
             json!({"type":"document_tabs","op":"reorder","id":2,"before":1}),

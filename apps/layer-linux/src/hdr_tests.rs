@@ -134,7 +134,7 @@ fn native_hdr_open_edit_rendition_save_and_deliver() {
     let w = Workspace::with_project(&app, Some((new_drawing(256, 256, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let opened = Rc::new(RefCell::new(None));
     let result = opened.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |p, l, _| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |p, l| {
         result.replace(Some((p, l)));
     }));
     w.window.present();
@@ -836,7 +836,7 @@ fn native_float32_new_open_edit_save_and_exr_export() {
     std::fs::create_dir_all(&directory).unwrap();
     let w = Workspace::with_project(&app, Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
     let opened = Rc::new(RefCell::new(None)); let result = opened.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |p,l,_| { result.replace(Some((p,l))); }));
+    *w.open_document.borrow_mut() = Some(Rc::new(move |p,l| { result.replace(Some((p,l))); }));
     w.window.present(); ready(&w);
     invoke(&w, CommandId::NewDocument);
     combo(&w,"new-document-depth").set_selected(3);

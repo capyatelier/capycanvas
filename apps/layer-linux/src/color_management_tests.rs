@@ -425,7 +425,7 @@ fn native_sdr_document_modes() {
             });
             sdr_ready(&w);
             assert_eq!(pixels(&w, 9103), painted, "{color:?} redo");
-            let capture = ui_session(&w).capture_project_recovery().unwrap();
+            let capture = ui_session(&w).capture_artwork().unwrap();
             let project = capture_document(&capture);
             assert!(Arc::ptr_eq(
                 paint_at(&project, 0).original.as_ref().unwrap(),

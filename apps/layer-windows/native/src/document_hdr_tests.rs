@@ -79,7 +79,7 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
         .unwrap()
         .snapshot_gpu()
         .capture(
-            s.capture_project_recovery().unwrap(),
+            s.capture_artwork().unwrap(),
             Default::default(),
         )
         .unwrap();
@@ -370,7 +370,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_authored_eq(host.session.engine().document(),&layers);
         assert_eq!(hdr_linear(&host), master);
         let file = directory.join(format!("HDR 日本語 {depth:?}.capy"));
-        let saved = host.session.capture_project_recovery().unwrap();
+        let saved = host.session.capture_artwork().unwrap();
         crate::document_io::atomic_write(&file, &Default::default(), |f| write_capture(&saved,f)).unwrap();
         let reopened =
             read_document(std::fs::File::open(&file).unwrap(), Default::default()).unwrap();
@@ -378,7 +378,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
         assert_eq!(reopened.composition().color, color);
         assert_eq!(reopened.output().sdr, recipe);
         let environment = crate::documents::recovery_environment(&host.session).unwrap();
-        let crate::documents::RecoveryPrepared::Editable(restored)=crate::documents::prepare_recovery(environment, file, &Default::default()).unwrap() else{panic!("HDR package must admit an editable session")};
+        let restored=crate::documents::prepare_package(environment, file, &Default::default()).unwrap();
         assert_authored_eq(restored.engine().document(),&layers);
         assert!(!restored.state().soft_proof);
         drop(restored);

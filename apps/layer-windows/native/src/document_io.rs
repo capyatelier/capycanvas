@@ -49,13 +49,21 @@ impl Drop for Temporary {
 pub(crate) trait WriteSeek: Write + std::io::Seek {}
 impl<T: Write + std::io::Seek> WriteSeek for T {}
 pub(crate) fn atomic_write(path: &Path, cancel: &AtomicBool, write: impl FnOnce(&mut dyn Write) -> Result<(), String>) -> Result<(), String> {
-    atomic_write_seek(path, cancel, |stream| write(stream))
+    atomic_write_checked(path, cancel, write, || Ok(()))
 }
+pub(crate) fn atomic_write_checked(
+    path:&Path,cancel:&AtomicBool,write:impl FnOnce(&mut dyn Write)->Result<(),String>,ready:impl Fn()->Result<(),String>,
+)->Result<(),String>{atomic_write_seek_ready(path,cancel,|stream|write(stream),ready)}
 pub(crate) fn atomic_write_seek(
     path: &Path,
     cancel: &AtomicBool,
     write: impl FnOnce(&mut dyn WriteSeek) -> Result<(), String>,
 ) -> Result<(), String> {
+    atomic_write_seek_ready(path,cancel,write,||Ok(()))
+}
+fn atomic_write_seek_ready(
+    path:&Path,cancel:&AtomicBool,write:impl FnOnce(&mut dyn WriteSeek)->Result<(),String>,ready:impl Fn()->Result<(),String>,
+)->Result<(),String>{
     check_cancelled(cancel)?;
     let parent = fs::canonicalize(path.parent().ok_or("Choose a destination folder")?)
         .map_err(|e| io_error("locate the destination for", e))?;
@@ -92,13 +100,14 @@ pub(crate) fn atomic_write_seek(
     // Close before replacement on Windows, including all error and unwind paths.
     drop(stream);
     check_cancelled(cancel)?;
-    replace_when_available(&temporary.0, &destination, cancel)
+    replace_when_available(&temporary.0, &destination, cancel,ready)
 }
 
 fn replace_when_available(
     source: &Path,
     destination: &Path,
     cancel: &AtomicBool,
+    ready:impl Fn()->Result<(),String>,
 ) -> Result<(), String> {
     // Windows can briefly deny rename after a picker creates its placeholder,
     // or while a scanner opens the new file. Retry only on the file worker,
@@ -106,6 +115,7 @@ fn replace_when_available(
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1);
     loop {
         check_cancelled(cancel)?;
+        ready()?;
         match crate::settings::replace(source, destination) {
             Ok(()) => return Ok(()),
             Err(error) => {
@@ -157,6 +167,15 @@ mod tests {
         let next = layer_ui::new_drawing(40, 30, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
         atomic_write(&path, &cancel, |f| write_document(&next,f)).unwrap();
         assert_authored_eq(&read_document(File::open(&path).unwrap(), Default::default()).unwrap(),&next);
+    }
+    #[test]
+    fn publication_guard_checks_after_encoding_and_preserves_external_changes() {
+        let directory=TempDir::new();let path=directory.path.join("drawing.capy");let cancel=AtomicBool::new(false);
+        fs::write(&path,b"original drawing").unwrap();let expected=layer_ui::DestinationFingerprint::read_path(&path).unwrap();
+        let result=atomic_write_checked(&path,&cancel,|output|{output.write_all(b"new saved drawing").map_err(|error|error.to_string())?;fs::write(&path,b"external drawing").map_err(|error|error.to_string())},||{
+            if layer_ui::DestinationFingerprint::read_path(&path)?==expected {Ok(())}else{Err("Drawing changed externally".into())}
+        });
+        assert_eq!(result.unwrap_err(),"Drawing changed externally");assert_eq!(fs::read(&path).unwrap(),b"external drawing");assert_eq!(fs::read_dir(&directory.path).unwrap().count(),1);
     }
     #[test]
     fn failed_replacement_and_unwind_remove_only_the_reserved_temporary() {

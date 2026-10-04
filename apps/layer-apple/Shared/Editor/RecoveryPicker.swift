@@ -1,47 +1,9 @@
 import SwiftUI
 
-struct RecoveryPicker: View {
-    @ObservedObject var recovery: ArtworkRecovery
-    @State private var discarding: RecoveryRecord?
-    @Environment(\.capyCommonCopy) private var common
-    var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
-            HStack {
-                Text("Recovered Drawings").font(.title2).bold()
-                Spacer()
-                Button(common["done"].string) { recovery.presented = false }.keyboardShortcut(.cancelAction)
-            }
-            Text("Open a recovery copy to continue editing, then save it to keep your changes.")
-            if recovery.records.isEmpty { Text("No recovered drawings.").foregroundStyle(.secondary) }
-            List(recovery.records) { record in
-                HStack {
-                    VStack(alignment: .leading) {
-                        Text(record.title).bold()
-                        Text(record.modified, format: .dateTime.year().month().day().hour().minute())
-                            .environment(\.locale, Locale.current)
-                    }
-                    Spacer()
-                    Button(recovery.copy["open"].string) { recovery.choose(record) }.buttonStyle(.borderless)
-                        .disabled(!recovery.canOpen)
-                        .accessibilityIdentifier("open-recovery-\(record.id)")
-                    Button(recovery.copy["discard"].string, role: .destructive) { discarding = record }.buttonStyle(.borderless)
-                }.padding(.vertical, 4).background(NativePenScroll().frame(width: 0, height: 0))
-            }.frame(minHeight: 160)
-            if let error = recovery.error { Text(error).foregroundStyle(.red) }
-        }.padding(24).frame(minWidth: 320, idealWidth: 600, minHeight: 300, idealHeight: 420)
-            .confirmationDialog("Discard this recovered drawing?", isPresented: Binding(
-                get: { discarding != nil }, set: { if !$0 { discarding = nil } })) {
-                Button(recovery.copy["discard"].string, role: .destructive) {
-                    if let record = discarding { recovery.discard(record) }; discarding = nil
-                }
-            }
-    }
-}
-
 struct RecoveryPresentation: ViewModifier {
     @ObservedObject var recovery: ArtworkRecovery
     func body(content: Content) -> some View {
-        content.sheet(isPresented: $recovery.presented, onDismiss: recovery.dismissed) { RecoveryPicker(recovery: recovery).modifier(EditorPopupPresentation()) }
+        content.disabled(recovery.restoring).allowsHitTesting(!recovery.restoring)
             #if DEBUG
             .overlay(alignment: .topLeading) {
                 if ProcessInfo.processInfo.environment["CAPY_PERSISTENCE_PROBE"] == "1" {
@@ -55,8 +17,7 @@ struct RecoveryPresentation: ViewModifier {
                 if let error = recovery.error {
                     HStack {
                         Text(error)
-                        Button(recovery.copy["retry"].string) { recovery.refresh(); recovery.flush { _ in } }
-                        Button("Recovered Drawings…") { recovery.refresh(); recovery.presented = true }
+                        Button(recovery.copy["retry"].string) { recovery.retry() }
                     }.padding(12).modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 8))).padding()
                 }
             }

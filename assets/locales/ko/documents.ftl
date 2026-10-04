@@ -176,3 +176,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name } (복구됨)
+documents-destination-changed = 저장된 그림이 변경되었거나 사용할 수 없습니다. 두 사본을 모두 보관하려면 다른 이름으로 저장하세요.

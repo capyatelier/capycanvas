@@ -1137,11 +1137,19 @@ void CanvasWindow::Finish() {
     CapyLifecycle("join_renderer");
     if(renderer.joinable()) renderer.join();
     CapyLifecycle("detach_surface");
-    // The worker no longer owns any acquired image; detach on the XAML thread.
     panel.as<ISwapChainPanelNative>()->SetSwapChain(nullptr);
-    CapyLifecycle("destroy_host");
-    capy_destroy(host);host=nullptr;
-    CapyLifecycle("host_destroyed");
+    auto retired=host;host=nullptr;
+    renderer=std::jthread([lifetime,retired]{
+        init_apartment(apartment_type::multi_threaded);
+        CapyLifecycle("destroy_host");
+        capy_destroy(retired);
+        CapyLifecycle("host_destroyed");
+        uninit_apartment();
+        lifetime->dispatcher.TryEnqueue([lifetime]{lifetime->CloseViews();});
+    });
+}
+void CanvasWindow::CloseViews() {
+    if(renderer.joinable())renderer.join();
     // XAML controls and their retained bindings must be released while this
     // window still owns a live XAML context, not later from App destruction.
     settings.reset();documents.reset();workspaceDialogs.reset();canvasSize.reset();imageSize.reset();workspaceStorage.reset();workspaceManager.reset();header.reset();workspace.reset();

@@ -22,7 +22,8 @@ M1's concrete ownership and wire contracts are in [authored model](../reference/
 and [package grammar](../reference/capy-package.md). Their boundary fixtures live in
 `crates/layer-core/tests/fixtures/capy/`. The integrated application uses typed
 `Artwork`/`WorkingState`, source targets and the shared package codec. This does
-not complete M3 qualification or start M4 or automatic recovery work.
+not complete M3 qualification or start M4. Private editing history and restart
+behavior are specified by [session restoration](../internals/session-recovery.md).
 
 ## Scope and commitments
 
@@ -362,7 +363,7 @@ One shared edit transaction must still change authored and working state
 atomically where necessary. Do not introduce host-specific selection histories
 or serialize the entire editor just to preserve the current undo API. Durable
 session/history restoration belongs to the separate
-[automatic recovery plan](autorecovery.md).
+[session recovery](../internals/session-recovery.md).
 
 Deletion is a typed edit, not garbage collection from rendered outputs. Removing
 an occurrence cannot delete shared content still used elsewhere; removing its
@@ -526,10 +527,9 @@ all its shaders.
 
 ### Recovery extension boundary
 
-The [automatic recovery revamp](autorecovery.md) follows qualified M3. Preserve
-current recovery checkpoints during the cutover and make these boundaries reusable
-without implementing restart restoration, persisted undo or an incremental store
-as part of the format work:
+The separate [session recovery](../internals/session-recovery.md) implementation
+uses these reusable boundaries. Restart restoration, persisted undo and the
+incremental private store remain outside the portable artwork format:
 
 | Boundary | Contract established by the format work |
 | --- | --- |
@@ -639,8 +639,8 @@ model paths in the same change. Keep current architecture, document, format and
 host guides accurate while qualification is pending. Freeze the baseline and
 record M3 completion only after those gates pass; maintain lossless support for
 that qualified baseline thereafter.
-The [automatic recovery plan](autorecovery.md) can resume after this milestone;
-its session-restoration features are not part of this cutover.
+[Session recovery](../internals/session-recovery.md) is a separate implementation;
+its private session records are not part of the portable format cutover.
 
 ### M4: Qualify optional runtime improvements without another format change
 

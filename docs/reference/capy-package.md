@@ -145,9 +145,9 @@ references. Relationship semantics and field ownership are specified with the
 
 Built-in definitions contain only `{"builtin":"exposure","version":1}`. The
 version describes parameter data, not shader code. Gradient Map and Gradient Fill
-use data version 2: version 1 stop arrays load with Classic interpolation, and
-Reverse is applied to the stops. The reader converts these values once; saves
-write the current data version. Opening resolves the current bundled
+use data version 2, including explicit interpolation and stops. Only the current
+data version is supported; there are no pre-release conversion readers.
+Opening resolves the current bundled
 implementation and editor schema once. Labels, ranges used by sliders,
 shader ABI, modules, passes, GPU preparation and fusion policy are app code;
 they are not saved for built-ins. Slight rendering changes from shader fixes
@@ -160,11 +160,10 @@ unchanged. A UI range uses `soft_bounds`; it must not narrow accepted saved data
 Unknown IDs, data versions, parameter keys or choices preserve the package as
 unsupported, without guessing, dropping values or substituting defaults.
 
-When a concrete parameter change requires conversion, add a small explicit
-converter for that filter and old data version, with a fixed-file test. Do not
-add historical shaders, shader generations, generic schema rebinding or a
-migration framework. If a setting cannot be converted faithfully, keep supporting
-its meaning in the current implementation. New fields must represent authored
+Keep fixed-file tests for the supported parameter data. Before launch, replace
+superseded representations without adding conversion readers. Historical shaders,
+shader generations, generic schema rebinding and migration machinery are outside
+the format. New fields must represent authored
 intent; runtime layouts, caches, preview settings and editor organization stay
 outside the file.
 
@@ -510,12 +509,32 @@ The retention visitor accepts authored-document, history, parked-tab, snapshot
 and accepted-job roots and accounts shared bytes once per immutable owner. The
 portable writer selects artwork roots only. Pending and failed publication owners
 survive until their last dependent owner is released, including after Save As,
-atomic replacement, tab close and renderer loss. Current recovery can write an
-ordinary package, but future private recovery can enumerate and reuse resources
-without constructing, reopening or unpacking an archive. Session selection,
-targets, camera, tab order and bounded history remain outside the portable
-manifest; their shared owners/generations remain available for later coherent
-capture under the [recovery boundary](../development/autorecovery.md).
+atomic replacement, tab close and renderer loss. The private
+[`session` codec](../../crates/layer-core/src/package/session.rs) reuses these
+resource identities, encodings and record adapters with complete checkpoint
+metadata. Selection, targets, camera, tab order and bounded history remain
+outside the portable manifest. Historical record versions and payload owners
+are shared across checkpoints. Sparse raster indexes reuse 64-entry metadata
+chunks and original-image descriptors are interned across paint revisions; the
+private wrapper expands back into the ordinary artwork records before validation.
+Manual-save identity stays separate from recovery
+publication. Private sessions preserve all retained ancillary data, including
+records excluded by portable edited-save filtering.
+
+`PreparedSession::metadata` and `resources` expose the private checkpoint without
+archive assembly. `open_parts` independently checks resource integrity, complete
+artwork/working state, history transitions and budgets; it returns an error for
+invalid or unsupported state and never omits history to make restoration succeed.
+`SessionMetadata` separates lightweight host JSON from immutable color profiles.
+Private `metadata_profiles` bindings retain ICC resource identities through disk
+checkpoints and trusted worker transfer. Readers validate the same profile-size,
+resource-kind and integrity limits as artwork profiles; returned metadata keeps
+its profile owners attached. Camera changes reuse the existing ICC payload.
+Native storage publishes immutable payloads before their metadata, retains the
+previous complete generation and pins resources held by readers. Durable close
+membership and host lifecycle behavior belong to shared session policy.
+Ownership locks explicitly unlock when their final owner is dropped; duplicated
+or inherited file handles cannot extend the editing session's ownership.
 
 ## Worker transport
 
@@ -535,6 +554,15 @@ Unchanged encoding receipts and copy-safe ancillary payloads retain their exact
 bytes and resource identities.
 
 The Web host sends bounded transferable buffers and yields between chunks.
+`PreparedSessionTransfer` extends the trusted transport with working targets,
+bounded inverse edits, next edit/stroke identities and host session metadata.
+History uses the same per-record adapters; the UI owner does not replay complete
+historical drawings to send a captured editor to its worker. Resource receipts
+remain transient and are admitted only after independently validating storage
+bytes in the worker. The private codec's exhaustive field/variant boundaries and
+headless restart/Undo/Redo fixtures require new editor features to classify their
+persistence behavior.
+
 Its worker streams package writes into private browser storage, returning a file
 handle for publication. Preserved packages keep the original browser `Blob`;
 showing their summary or preview does not reconstruct an editable document.
@@ -584,13 +612,13 @@ Fixtures distinguish malformed content from unsupported content and preservation
 | Interrupted/stale write, provider pipe, browser bounded ranges, ZIP64 size/offset/count threshold | Preserve original publication and newer work; no imprecise bridge integers or unbounded whole-package copy. |
 | Save after rate change; renderer recreation; retained analysis/bake during later painting | Saved/reopened output uses captured roots and integrated phase; old resources live through accepted jobs. |
 
-The checked-in `codec/fixtures/authored-v1.capy` covers all 52 built-ins, exact
-raster samples, watercolor state, LUT samples and SDR rendition. Its occurrence/1
-records make it preserved content. `authored-filters-v1-occurrences-v2.capy` changes
-only those record types to occurrence/2, keeping the same filter data and resources
-for opening, editing, saving, reopening and compiling current filters. Keep both
-inputs fixed. `parameter-bounds-v1.json` protects accepted numeric data independently
-of sliders. Add fixtures for each concrete conversion.
+The checked-in `codec/fixtures/authored-filters.capy` covers all 52 built-ins, exact
+raster samples, watercolor state, LUT samples and SDR rendition using the current
+occurrence and filter data versions. Its fixed values exercise opening, editing,
+saving, reopening and compiling current filters. `parameter-bounds.json` protects
+accepted numeric data independently of sliders. Keep these inputs fixed while
+their data versions remain supported; superseded pre-release formats have no
+conversion readers.
 
 Retain exact-byte/source/material/profile/LUT/selection assertions from the existing
 codec tests when replacing their envelope fixtures. Retain the integrated-phase

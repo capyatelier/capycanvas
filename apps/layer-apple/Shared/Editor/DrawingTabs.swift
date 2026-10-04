@@ -85,17 +85,16 @@ import UniformTypeIdentifiers
         if rows.count <= 1 { store.projectFiles.closeWindow?(); return }
         busy = true
         let id = selected, recovery = store.recovery
-        recovery.close { [weak self] saved in
-            guard let self else { return }
-            guard saved else { busy = false; store.projectFiles.error = "Could not retire this drawing's recovery copy"; return }
-            store.native?.switchDocument(0, closing: true) { [weak self] error in DispatchQueue.main.async {
+        store.native?.switchDocument(0, closing: true, removing: { done in DispatchQueue.main.async {
+            recovery.removeDrawing(id) { done($0) }
+        } }) { [weak self] error in DispatchQueue.main.async {
                 guard let self else { return }
                 self.busy = false
-                if let error { store.projectFiles.error = error; recovery.resume() }
-                else { store.forgetRecovery(id) }
+                if let error { store.projectFiles.error = error }
+                else { store.projectFiles.forgetDocument(id) }
+                recovery.flush { _ in }
                 store.wake?()
-            } }
-        }
+        } }
     }
     func confirmWindowClose(_ completion: @escaping (Bool) -> Void) {
         guard !busy, !confirmingWindow, let store else { completion(false); return }

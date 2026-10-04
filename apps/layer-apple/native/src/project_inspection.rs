@@ -10,7 +10,7 @@ impl Task {
     pub(super) fn capture(session: &UiSession<Renderer>) -> Result<Self, String> {
         session.require_document_snapshot_idle()?;
         Ok(Self {
-            project: Some(session.capture_project_recovery()?),
+            project: Some(session.capture_artwork()?),
             gpu: session.engine().backend().0.as_ref().ok_or("Canvas unavailable")?.snapshot_gpu(),
         })
     }

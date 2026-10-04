@@ -176,3 +176,6 @@ documents-package-copy-original = Copy Original File…
 
 documents-package-export-preview = Export Preview Image…
 documents-package-choose-different = Choose a different file.
+
+documents-recovered-name = { $name }（復元済み）
+documents-destination-changed = 保存先の絵が変更されたか、利用できません。両方のコピーを残すには「名前を付けて保存」を使ってください。

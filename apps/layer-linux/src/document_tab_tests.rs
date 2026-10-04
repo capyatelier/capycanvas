@@ -135,7 +135,7 @@ fn native_canvas_background_during_startup_and_tab_switch() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
     capture("new-tab-wait", [51; 3]);
@@ -217,7 +217,7 @@ fn native_document_tabs_history_storage_and_close() {
         .into(),
         ..Default::default()
     });
-    crate::open_workspace(&app, &windows, Some((project.clone(), None)), None);
+    crate::open_workspace(&app, &windows, Some((project.clone(), None)));
     until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "new document window mapped");
     let w = windows.borrow()[0].clone();
     new_photo::ready(&w);
@@ -273,15 +273,9 @@ fn native_document_tabs_history_storage_and_close() {
     new_photo::invoke(&w, CommandId::AddLayer);
     w.recovery().capture(&w);
     glib::MainContext::default().block_on(w.recovery().drain());
-    let recovery_dir = std::env::var_os("CAPY_RECOVERY_DIR").unwrap();
-    let mut widths: Vec<_> = std::fs::read_dir(recovery_dir)
-        .unwrap()
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|s| s == "capy"))
-        .map(|e| {
-            open_native_document(std::fs::File::open(e.path()).unwrap()).composition().size[0]
-        })
-        .collect();
+    let mut owners=w.documents.model.borrow().parked().map(|(_,p)|p.owner.recovery.clone()).collect::<Vec<_>>();
+    owners.push(w.recovery());
+    let mut widths=owners.iter().map(|owner|glib::MainContext::default().block_on(owner.read_snapshot()).unwrap().document().composition().size[0]).collect::<Vec<_>>();
     widths.sort();
     assert_eq!(
         widths,
@@ -324,7 +318,7 @@ fn native_document_tabs_history_storage_and_close() {
     );
     // A native save traverses disk-backed tiles, including exact historical data.
     let captured = ui_session(&w)
-        .capture_project_recovery()
+        .capture_artwork()
         .unwrap();
     let mut bytes = Vec::new();
     write_capture(&captured, &mut bytes).unwrap();
@@ -352,7 +346,7 @@ fn native_document_tabs_history_storage_and_close() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -409,16 +403,6 @@ fn native_document_tabs_history_storage_and_close() {
     pump(200);
     assert_eq!(w.documents.len(), 2);
     assert!(state(&w).document_file.modified);
-    // Cancel window close leaves all remaining drawings and the window alive.
-    w.window.close();
-    until(
-        || w.window.visible_dialog().is_some(),
-        "window close decision",
-    );
-    new_photo::response(&w, "cancel");
-    pump(100);
-    assert!(w.window.is_visible());
-    assert_eq!(w.documents.len(), 2);
     // A clean background tab can close without affecting the dirty neighbor.
     w.documents.select(&w, second, true);
     until(
@@ -441,7 +425,7 @@ fn native_document_tabs_history_storage_and_close() {
     );
     assert_eq!(w.documents.root.width(), single_title_width);
     crate::capture(&w, "/tmp/capy-single-drawing-title.png");
-    w.window.close();
+    w.documents.select(&w,w.documents.selected(),true);
     until(|| w.window.visible_dialog().is_some(), "final dirty close");
     new_photo::response(&w, "discard");
     until(|| !w.window.is_visible(), "last tab closes window");
@@ -474,7 +458,7 @@ fn native_document_tab_input() {
         glib::MainContext::default()
             .block_on(
                 w.documents
-                    .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                    .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
             )
             .unwrap();
         new_photo::ready(&w);
@@ -698,7 +682,7 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(128, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -738,78 +722,108 @@ fn native_document_tabs_failed_renderer_remains_navigable() {
 }
 
 #[test]
-#[ignore = "isolated Wayland and recovery directory"]
-fn native_document_tabs_multiple_recovery_offers() {
-    let (app, windows) = crate::application("art.capycanvas.TabRecovery");
-    let app = NativeTestApp(app);
-    app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    crate::open_workspace(
-        &app,
-        &windows,
-        Some((new_drawing(64, 64, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
-        None,
-    );
-    until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "new document window mapped");
-    let w = windows.borrow()[0].clone();
+#[ignore = "isolated Wayland and private session directory"]
+fn native_session_restart() {
+    let (app,windows)=crate::application("art.capycanvas.SessionRestart");
+    let app=NativeTestApp(app);app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    crate::open_workspace(&app,&windows,Some((new_drawing(256,256,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+    until(||windows.borrow().first().is_some_and(|w|w.window.is_mapped()),"initial window mapped");
+    let w=windows.borrow()[0].clone();new_photo::ready(&w);apply_fixture_theme(&w);
+    new_photo::invoke(&w,CommandId::AddLayer);
+    new_photo::invoke(&w,CommandId::ZoomIn);
+    let camera=state(&w).camera;
+    let layers=ui_session(&w).engine().document().scene().order().len();
+    glib::MainContext::default().block_on(w.documents.open(&w,(new_drawing(128,96,&w.localization()).unwrap(),None))).unwrap();
     new_photo::ready(&w);
-    apply_fixture_theme(&w);
-    new_photo::ready(&w);
-    let dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
-    std::fs::create_dir_all(&dir).unwrap();
-    let paths: Vec<_> = [96, 144]
-        .into_iter()
-        .enumerate()
-        .map(|(i, width)| {
-            let path = dir.join(format!("999999999-tab-{i}.capy"));
-            let document = new_drawing(width, width, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
-            write_document(&document, &mut std::fs::File::create(&path).unwrap()).unwrap();
-            path
-        })
-        .collect();
-    crate::recovery::offer_stale(&w);
-    for (i, width) in [96, 144].into_iter().enumerate() {
-        until(|| w.window.visible_dialog().is_some(), "recovery offered");
-        new_photo::response(&w, "recover");
-        until(
-            || w.documents.len() == i + 2 && !w.documents.changing.get(),
-            "recovery opens a tab before next offer",
-        );
-        assert_eq!(
-            ui_session(&w)
-                .engine()
-                .document().composition().size[0],
-            width
-        );
-        assert!(state(&w).document_file.modified);
-        assert!(
-            paths[i].exists(),
-            "keep original until explicit save/discard"
-        );
-    }
-    assert_eq!(app.windows().len(), 1);
-    assert_eq!(windows.borrow().len(), 1);
-    for _ in 0..2 {
-        w.documents.select(&w, w.documents.selected(), true);
-        until(
-            || w.window.visible_dialog().is_some(),
-            "recovered drawing close decision",
-        );
-        let count = w.documents.len();
-        new_photo::response(&w, "discard");
-        until(
-            || w.documents.len() == count - 1 && !w.documents.changing.get(),
-            "recovered tab discarded",
-        );
-        new_photo::ready(&w);
-    }
-    until(
-        || paths.iter().all(|p| !p.exists()),
-        "discard retires recovery copies",
-    );
-    assert_eq!(w.documents.selected(), 1);
+    w.documents.model.borrow_mut().reorder(2,Some(1));
+    switch(&w,1);
+    w.window.close();
+    until(||!w.window.is_visible(),"quit flushed both drawings");
+    assert!(w.window.visible_dialog().is_none());
+    assert!(windows.borrow().is_empty());
+    drop(w);pump(100);
+    crate::open_workspace(&app,&windows,None);
+    until(||windows.borrow().first().is_some_and(|w|!w.restart.is_restoring()&&!w.documents.changing.get()),"session restored automatically");
+    let w=windows.borrow()[0].clone();new_photo::ready(&w);
+    assert_eq!(w.documents.len(),2);
+    assert!(w.window.visible_dialog().is_none());
+    assert_eq!(w.documents.model.borrow().order(),&[2,1]);
+    assert_eq!(w.documents.selected(),1);
+    assert!(state(&w).document_file.modified);
+    assert!(!state(&w).document_file.recovered);
+    assert_eq!(state(&w).camera.zoom,camera.zoom);
+    assert_eq!(ui_session(&w).engine().document().scene().order().len(),layers);
+    new_photo::invoke(&w,CommandId::Undo);
+    assert_eq!(ui_session(&w).engine().document().scene().order().len(),layers-1);
+    new_photo::invoke(&w,CommandId::Redo);
+    assert_eq!(ui_session(&w).engine().document().scene().order().len(),layers);
+    w.documents.select(&w,1,true);
+    until(||w.window.visible_dialog().is_some(),"explicit dirty close asks");
+    new_photo::response(&w,"cancel");until(||!w.servicing.get(),"cancel close acknowledged");
+    assert_eq!(w.documents.len(),2);
+    w.documents.select(&w,1,true);
+    until(||w.window.visible_dialog().is_some(),"explicit dirty close asks again");
+    new_photo::response(&w,"discard");
+    until(||w.documents.len()==1&&!w.documents.changing.get(),"discarded drawing removed");
+    assert_eq!(w.documents.selected(),2);
     assert!(!state(&w).document_file.modified);
-    w.window.destroy();
-    pump(100);
+    w.documents.select(&w,2,true);
+    until(||!w.window.is_visible(),"last explicitly closed drawing exits");
+}
+
+#[test]
+#[ignore = "isolated Wayland and private session directory"]
+fn native_session_restart_saved_origins() {
+    let (app,windows)=crate::application("art.capycanvas.SessionSavedOrigins");
+    let app=NativeTestApp(app);app.register(None::<&gtk::gio::Cancellable>).unwrap();
+    let root=std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap()).parent().unwrap().join("originals");
+    std::fs::create_dir_all(&root).unwrap();
+    let paths=[root.join("intact.capy"),root.join("missing.capy"),root.join("changed.capy")];
+    crate::open_workspace(&app,&windows,Some((new_drawing(128,96,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+    until(||windows.borrow().first().is_some_and(|w|w.window.is_mapped()),"saved-origin window mapped");
+    let w=windows.borrow()[0].clone();new_photo::ready(&w);apply_fixture_theme(&w);
+    for (i,path) in paths.iter().enumerate() {
+        if i>0 {glib::MainContext::default().block_on(w.documents.open(&w,(new_drawing(128,96,&w.localization()).unwrap(),None))).unwrap();new_photo::ready(&w);}
+        new_photo::invoke(&w,CommandId::AddLayer);
+        crate::files::choose_next_save(path.clone());
+        new_photo::invoke(&w,CommandId::SaveDocument);
+        until(||state(&w).document_file.location.is_some()&&!state(&w).document_file.busy&&!w.servicing.get(),"saved origin acknowledged");
+        assert!(!state(&w).document_file.modified,"{:?}",state(&w).host_error);
+    }
+    switch(&w,1);w.window.close();
+    until(||!w.window.is_visible()&&windows.borrow().is_empty(),"saved drawings quit without prompting");
+    assert!(w.window.visible_dialog().is_none());drop(w);pump(100);
+    let original=open_native_document(std::fs::File::open(&paths[1]).unwrap());
+    std::fs::remove_file(&paths[1]).unwrap();
+    let mut external=std::fs::read(&paths[2]).unwrap();external[0]^=1;std::fs::write(&paths[2],&external).unwrap();
+    crate::open_workspace(&app,&windows,None);
+    until(||windows.borrow().first().is_some_and(|w|!w.restart.is_restoring()&&!w.documents.changing.get()),"saved origins automatically restored");
+    let w=windows.borrow()[0].clone();new_photo::ready(&w);
+    assert_eq!(w.documents.len(),3);
+    assert_eq!(w.documents.selected(),1);assert!(w.window.visible_dialog().is_none());
+    assert!(!state(&w).document_file.modified);assert!(!state(&w).document_file.recovered);
+    w.documents.select(&w,1,true);
+    until(||w.documents.len()==2&&!w.documents.changing.get(),"intact saved original closes cleanly");
+    assert!(w.window.visible_dialog().is_none());
+    switch(&w,3);assert!(state(&w).document_file.modified);assert!(!state(&w).document_file.recovered);
+    w.documents.select(&w,3,true);until(||w.window.visible_dialog().is_some(),"changed saved original close asks");
+    new_photo::response(&w,"cancel");until(||!w.servicing.get(),"changed-origin cancel acknowledged");
+    assert_eq!(w.documents.len(),2);assert!(w.recovery().published_path().join("head.json").exists());
+    assert_eq!(std::fs::read(&paths[2]).unwrap(),external);
+    w.documents.select(&w,3,true);until(||w.window.visible_dialog().is_some(),"changed saved original close asks again");
+    new_photo::response(&w,"discard");until(||w.documents.len()==1&&!w.documents.changing.get(),"explicit discard retires changed-origin session");
+    assert_eq!(std::fs::read(&paths[2]).unwrap(),external);
+    assert_eq!(w.documents.selected(),2);assert!(state(&w).document_file.modified);
+    w.documents.select(&w,2,true);until(||w.window.visible_dialog().is_some(),"missing saved original close asks");
+    new_photo::response(&w,"cancel");until(||!w.servicing.get(),"missing-origin cancel acknowledged");
+    assert_eq!(w.documents.len(),1);assert!(!paths[1].exists());
+    let copy=root.join("missing-saved-copy.capy");crate::files::choose_next_save(copy.clone());
+    w.documents.select(&w,2,true);until(||w.window.visible_dialog().is_some(),"missing saved original close offers save");
+    new_photo::response(&w,"save");until(||!w.window.is_visible(),"Save As protects missing original before close");
+    assert!(copy.exists());assert!(!paths[1].exists());assert_eq!(std::fs::read(&paths[2]).unwrap(),external);
+    let mut saved=open_native_document(std::fs::File::open(copy).unwrap());
+    saved.artwork.outputs.get_mut(saved.artwork.default_output).unwrap().context.elapsed=original.output().context.elapsed;
+    assert_live_artwork_eq(&saved,&original);
 }
 
 #[test]
@@ -825,7 +839,7 @@ fn native_document_tabs_immediate_stroke_and_undo() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -937,7 +951,7 @@ fn native_document_tabs_disk_failure_keeps_data() {
     glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(96, 96, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap();
     new_photo::ready(&w);
@@ -950,14 +964,14 @@ fn native_document_tabs_disk_failure_keeps_data() {
     let error = glib::MainContext::default()
         .block_on(
             w.documents
-                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None, None)),
+                .open(&w, (new_drawing(80, 80, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)),
         )
         .unwrap_err();
     assert!(error.contains("Free disk space"));
     assert_eq!(w.documents.len(), 2);
     switch(&w, 1);
     let captured = ui_session(&w)
-        .capture_project_recovery()
+        .capture_artwork()
         .unwrap();
     let mut saved = Vec::new();
     write_capture(&captured, &mut saved).unwrap();
@@ -977,7 +991,7 @@ fn begin_preserved_import(w: &Rc<Workspace>, imported: layer_ui::ImportedDocumen
     let file = gtk::gio::File::for_path(source);
     let location = layer_ui::DocumentLocation {uri:file.uri().to_string(),name:"Original.capy".into()};
     glib::spawn_future_local(glib::clone!(#[strong] w, #[strong] completed, async move {
-        *completed.borrow_mut() = Some(w.documents.open_imported(&w, imported, Some(location), None).await);
+        *completed.borrow_mut() = Some(w.documents.open_imported(&w, imported, Some(location)).await);
     }));
     until(|| w.window.visible_dialog().is_some_and(|dialog|Some(&dialog)!=previous.as_ref()
         && dialog.widget_name()=="preserved-package-preview" && dialog.is_mapped()
@@ -1095,7 +1109,7 @@ fn native_import_admission_failure_preserves_package_and_current_drawing() {
         }
     }
     w.documents.cancel_open.set(true);
-    assert!(glib::MainContext::default().block_on(w.documents.open_imported(&w,imported,None,None)).is_err());
+    assert!(glib::MainContext::default().block_on(w.documents.open_imported(&w,imported,None)).is_err());
     assert!(w.window.visible_dialog().is_none());
     assert_eq!(ui_session(&w).engine().document(),&original);
     assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);

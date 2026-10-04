@@ -22,7 +22,7 @@ extension UTType {
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
 /// Its final release can destroy a large retired document, so use the I/O queue.
 final class NativeProjectTask: @unchecked Sendable {
-    enum Kind: UInt32 { case save, open, recovery, place, color, properties, source, histogram, clip }
+    enum Kind: UInt32 { case save = 0, open = 1, place = 3, color, properties, source, histogram, clip }
     static let io = DispatchQueue(label: "art.capycanvas.project-files", qos: .userInitiated)
     let handle: OpaquePointer
     init(_ handle: OpaquePointer) { self.handle = handle }
@@ -42,6 +42,9 @@ final class NativeProjectTask: @unchecked Sendable {
                 if ProjectFileIO.sameFile(original, destination) { throw HostFailure(message: destinationError) }
             }
             try ProjectFileIO.atomicWrite(to: destination, beforeCommit: { [self] in
+                let existing = try? FileHandle(forReadingFrom: destination)
+                defer { try? existing?.close() }
+                try url.absoluteString.withCString { try self.check(capy_project_destination_matches(self.handle, existing?.fileDescriptor ?? -1, $0)) }
                 guard capy_project_begin_commit(self.handle) == 0 else { throw HostFailure(message: "Document operation cancelled") }
             }) { [self] descriptor in try self.check(previewOnly ? capy_project_export_preview(self.handle, descriptor) : capy_project_write(self.handle, descriptor)) }
         }

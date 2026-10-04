@@ -61,21 +61,14 @@ extension XCTestCase {
         app.terminate()
         app.launchEnvironment.removeValue(forKey: "CAPY_INITIAL_ACTIONS")
         app.launch()
-        let open = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "open-recovery-")).firstMatch
-        XCTAssertTrue(open.waitForExistence(timeout: 20), "An unclosed drawing must be offered after process restart")
-        expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: open)
-        waitForExpectations(timeout: 30)
-        attachEditor(in: app, name: "recovered-drawings-picker")
         #if os(macOS)
-        open.click()
         let rows = app.groups.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         #else
-        open.tap()
         let rows = app.otherElements.matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-"))
         #endif
+        XCTAssertFalse(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "open-recovery-")).firstMatch.exists)
         expectation(for: NSPredicate { _, _ in rows.count == 3 }, evaluatedWith: app)
         waitForExpectations(timeout: 30)
-        XCTAssertTrue(open.waitForNonExistence(timeout: 5))
         editorMenu(in: app, menu: "View", id: "fit_canvas", label: "Fit canvas")
         expectation(for: NSPredicate { _, _ in self.editorPixels(in: app) == painted }, evaluatedWith: app)
         waitForExpectations(timeout: 15)

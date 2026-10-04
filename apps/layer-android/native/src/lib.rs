@@ -14,6 +14,8 @@ mod workspaces;
 #[cfg(target_os = "android")]
 mod documents;
 #[cfg(target_os = "android")]
+mod session_recovery;
+#[cfg(target_os = "android")]
 mod document_tabs;
 
 #[cfg(target_os = "android")]

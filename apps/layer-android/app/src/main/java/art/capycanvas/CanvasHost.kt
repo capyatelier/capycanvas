@@ -127,7 +127,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
             activity.finish()
         }
     }
-    internal fun closeWorkspaceWindow() = post {
+    internal fun closeWorkspaceWindow(failed: () -> Unit = {}) = post {
         if (closingWorkspaceWindow) return@post
         closingWorkspaceWindow = true
         updateWorkspaceManager(obj("type" to "suspend"))
@@ -142,7 +142,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                     if (view == null || (view.isNull("error") && !view.optBoolean("dirty"))) main.post {
                         finishWindowPending = true
                         finishAttachedWindow()
-                    }
+                    } else main.post(failed)
                 }
             }
         }
@@ -939,8 +939,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         proof.pause()
         hdr.pause()
         documents.images.cancel()
-        recovery.close()
-        worker.post {
+        recovery.close {worker.post {
             disposed = true
             languageWorker.shutdown()
             worker.removeCallbacks(workspaceTick)
@@ -963,6 +962,6 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
                 }
             }
             worker.post(drain)
-        }
+        }}
     }
 }

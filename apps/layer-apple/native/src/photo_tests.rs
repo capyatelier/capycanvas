@@ -256,7 +256,7 @@ fn photo_open_and_place_retain_source_depth_profile_samples_and_save_safety() {
             app.invoke("undo"); app.draw_until_idle(); assert_eq!(app.pixels(), before);
             app.invoke("redo"); app.draw_until_idle();
             assert_eq!(app.pixels(), painted_pixels);
-            let saved = unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap();
+            let saved = unsafe { &*app.0 }.host.session.capture_artwork().unwrap();
             let mut archive = Vec::new(); write_capture(&saved, &mut archive);
             let reopened = read_document(std::io::Cursor::new(archive));
             assert_saved_document(&reopened, &painted);
@@ -370,7 +370,7 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
             adopt(&app, &job, false);
             let session = &unsafe { &*app.0 }.host.session;
             assert!(!session.engine().can_undo(), "Provisional placement has no artwork history");
-            assert!(session.capture_project_recovery().is_err(), "Pending placement cannot enter recovery");
+            assert!(session.capture_artwork().is_err(), "Pending placement cannot enter recovery");
             let document = session.engine().document();
             let placed: Vec<_> = imported_occurrences(document).collect();
             assert_eq!(placed.len(), 2);
@@ -403,7 +403,7 @@ fn photo_batch_placement_is_provisional_atomic_and_keeps_original_samples() {
                 assert_project_document(unsafe { &*app.0 }.host.session.engine().document(), &committed);
                 assert_eq!(app.pixels(), pixels);
                 let mut archive = Vec::new();
-                write_capture(&unsafe { &*app.0 }.host.session.capture_project_recovery().unwrap(), &mut archive);
+                write_capture(&unsafe { &*app.0 }.host.session.capture_artwork().unwrap(), &mut archive);
                 let opened = ProjectJob::new(&app, true); read_bytes(&opened, "Batch.capy", &archive); adopt(&app, &opened, false);
                 assert_eq!(app.pixels(), pixels);
                 assert_saved_document(unsafe { &*app.0 }.host.session.engine().document(), &committed);

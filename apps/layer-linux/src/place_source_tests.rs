@@ -109,7 +109,7 @@ fn native_raster_open_import_and_paste(cases: &[(&str, &str)]) {
     let w = Workspace::with_project(&app, Some((new_drawing(256, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(), None)));
     let opened = Rc::new(RefCell::new(None));
     let result = opened.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
         result.replace(Some((project, location)));
     }));
     w.window.present();

@@ -683,7 +683,7 @@ fn native_document_files() {
     apply_fixture_theme(&w);
     let created = Rc::new(RefCell::new(None));
     let result = created.clone();
-    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location, _recovered| {
+    *w.open_document.borrow_mut() = Some(Rc::new(move |project, location| {
         *result.borrow_mut() = Some((project, location))
     }));
     w.window.present();
@@ -717,22 +717,10 @@ fn native_document_files() {
     ready(&w);
     assert!(state(&w).document_file.modified);
     // Autosave publishes a separate durable copy without acknowledging Save.
-    let recovery_dir = std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap());
     w.recovery().capture(&w);
-    let deadline = Instant::now() + Duration::from_secs(10);
-    let recovery_path = loop {
-        pump(20);
-        if let Ok(entries) = std::fs::read_dir(&recovery_dir)
-            && let Some(path) = entries
-                .flatten()
-                .map(|e| e.path())
-                .find(|p| p.extension().is_some_and(|e| e == "capy"))
-        {
-            break path;
-        }
-        assert!(Instant::now() < deadline, "autosave did not publish");
-    };
-    let recovery = open_native_document(std::fs::File::open(&recovery_path).unwrap());
+    glib::MainContext::default().block_on(w.recovery().drain());
+    let recovery_path=w.recovery().published_path();
+    let recovery=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap().document().clone();
     let sources = |p: &layer_core::Document| p.artwork.paint.iter().filter(|(_, _, source)| source.original.is_some()).count();
     assert_eq!(sources(&recovery), 1);
     assert!(state(&w).document_file.modified);
@@ -750,10 +738,10 @@ fn native_document_files() {
         state(&w).host_error
     );
     w.recovery().capture(&w);
-    until(
-        || !recovery_path.exists(),
-        "saved recovery copy was not removed",
-    );
+    glib::MainContext::default().block_on(w.recovery().drain());
+    assert!(recovery_path.join("head.json").exists());
+    let saved_session=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap();
+    assert_eq!(saved_session.state.saved_checkpoint,saved_session.editor.checkpoint());
     let project =
         open_native_document(std::fs::File::open(&path).unwrap());
     assert_eq!(sources(&project), 1);
@@ -1139,8 +1127,9 @@ fn native_document_files() {
     assert!(state(&w).document_file.modified);
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        w.window.close();
-        pump(220);
+        until(||!w.servicing.get()&&w.window.visible_dialog().is_none(),"close dialog ready");
+        w.documents.select(&w,w.documents.selected(),true);
+        until(||w.window.visible_dialog().is_some(),"dirty tab close asks");
         assert!(w.window.is_visible());
         capture_reference(
             &w,
@@ -1150,19 +1139,22 @@ fn native_document_files() {
                 .unwrap(),
             1.,
         );
-        click(&find_button(w.window.upcast_ref(), &layer_ui::new_document_spec(&w.localization()).cancel).unwrap());
-        pump(180);
+        let dialog=w.window.visible_dialog().unwrap();
+        click(&find_button(dialog.upcast_ref(), &layer_ui::new_document_spec(&w.localization()).cancel).unwrap());
+        until(||!w.servicing.get()&&w.window.visible_dialog().is_none(),"tab close cancelled");
         assert!(w.window.is_visible());
         assert!(state(&w).document_file.modified);
     }
-    w.window.close();
-    pump(220);
-    click(&find_button(w.window.upcast_ref(), "Save").unwrap());
+    until(||!w.servicing.get()&&w.window.visible_dialog().is_none(),"previous dialog closed");
+    w.documents.select(&w,w.documents.selected(),true);
+    until(||w.window.visible_dialog().is_some_and(|dialog|dialog.is_mapped()),"explicit close asks to save");
+    let dialog=w.window.visible_dialog().unwrap();
+    click(&find_button(dialog.upcast_ref(), "Save").unwrap());
     let deadline = Instant::now() + Duration::from_secs(10);
     while w.window.is_visible() && Instant::now() < deadline {
         pump(20);
     }
-    assert!(!w.window.is_visible());
+    assert!(!w.window.is_visible(),"{:?}; {:?}",state(&w).document_file,state(&w).host_error);
     let saved =
         open_native_document(std::fs::File::open(save_path).unwrap());
     assert_eq!(saved.scene().order().len(), 4);
@@ -8720,7 +8712,7 @@ fn native_backdrop_blur_capture() {
     let (app, windows) = crate::application("art.capycanvas.BackdropBlur");
     let app = NativeTestApp(app);
     app.register(None::<&gtk::gio::Cancellable>).unwrap();
-    crate::open_workspace(&app, &windows, None, None);
+    crate::open_workspace(&app, &windows, None);
     until(|| windows.borrow().first().is_some_and(|workspace| workspace.window.is_mapped()), "backdrop window mapped");
     let w = windows.borrow()[0].clone();
     w.window.maximize();

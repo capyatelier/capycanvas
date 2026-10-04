@@ -1,4 +1,6 @@
 import init, * as wasm from "./pkg/layer_web.js";
+import {createRestartStore,verifyRestartCheckpoint} from "./restart-store.js";
+const restart=createRestartStore();
 let ready;
 let pending = Promise.resolve();
 self.onmessage = ({data}) => { pending = pending.then(() => execute(data)); };
@@ -8,10 +10,37 @@ async function execute({id,request}) {
   try {
     // These operations only touch IndexedDB. Recovery discovery must not
     // download/instantiate the image codec before listing a few keys.
-    if (!['recover-list','recover-get','recover-delete'].includes(request.operation))
+    if (!request.operation.startsWith('restart-store-'))
       instance=await (ready ??= init());
     let result;
     switch(request.operation) {
+      case "fingerprint": {
+        const fingerprint=new wasm.WebFileFingerprint(),reader=request.file.stream().getReader();
+        try {for(;;){const {done,value}=await reader.read();if(done)break;fingerprint.update(value);}result=fingerprint.finish();}
+        finally {fingerprint.free();reader.releaseLock();}
+        break;
+      }
+      case "restart-store-list": result=await restart.windows();break;
+      case "restart-store-manifest": result=await restart.manifest(request.metadata);break;
+      case "restart-store-publish-manifest": {const {key,manifest,closed}=JSON.parse(request.metadata);result=await restart.publishManifest(key,manifest,closed);break;}
+      case "restart-store-transfer-manifest": {const {source,sourceManifest,destination,destinationManifest,key,sourceGeneration,destinationGeneration}=JSON.parse(request.metadata);result=await restart.transferManifest(source,sourceManifest,destination,destinationManifest,key,sourceGeneration,destinationGeneration);break;}
+      case "restart-store-remove-manifest": result=await restart.removeManifest(request.metadata);break;
+      case "restart-store-read": result=await restart.read(request.metadata);break;
+      case "restart-store-resources": {const {key,ids}=JSON.parse(request.metadata);result={buffers:await restart.resources(key,ids)};break;}
+      case "restart-store-publish": {const {key,checkpoint,ids,base_generation}=JSON.parse(request.metadata);result=await restart.publish(key,checkpoint,ids.map((id,index)=>({id,bytes:request.buffers[index]})),request.handles,base_generation);break;}
+      case "restart-store-remove": result=await restart.remove(request.metadata);break;
+      case "restart-begin": result=wasm.raster_worker_restart_begin(request.metadata);break;
+      case "restart-retain": wasm.raster_worker_restart_retain(request.metadata);result=true;break;
+      case "restart-open": {
+        await verifyRestartCheckpoint(JSON.parse(request.metadata));
+        result=await wasm.raster_worker_restart_open(request.metadata,request.buffers);break;
+      }
+      case "restart-write": {
+        const prepared=await wasm.raster_worker_restart_write(request.metadata,request.buffers);
+        const {key,checkpoint,ids,base_generation}=JSON.parse(prepared.metadata);
+        result=await restart.publish(key,checkpoint,ids.map((id,index)=>({id,bytes:prepared.buffers[index]})),request.handles,base_generation);
+        break;
+      }
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
       case "lookup": result = wasm.raster_worker_lookup(request.metadata,request.buffers[0]); break;
@@ -61,16 +90,6 @@ async function execute({id,request}) {
         await navigator.locks.request(`capy-output:${request.metadata}`,()=>root.removeEntry(request.metadata,{recursive:true}).catch(e=>{if(e.name!=="NotFoundError")throw e;}));result=true;break;
       }
       case "output-close": await closeOutput(request.metadata); result=true;break;
-      case "recover-list": result = await recovery("readonly", store=>store.getAllKeys()); break;
-      case "recover-get": result = await recovery("readonly", store=>store.get(request.metadata)); break;
-      case "recover-delete": await recovery("readwrite", store=>store.delete(request.metadata)); result=true; break;
-      case "recover-write": {
-        const {key,project}=JSON.parse(request.metadata);
-        const output=await writePackage(project,request.buffers);
-        try { await recovery("readwrite",store=>store.put(output.blob,key)); result=true; }
-        finally { await closeOutput(output.token); }
-        break;
-      }
       case "write": { const output=await writePackage(request.metadata,request.buffers); result=output; break; }
       default: throw new Error("Unknown raster worker operation");
     }
@@ -104,34 +123,16 @@ async function beginOutput() {
 async function writePackage(metadata,buffers) {
   const token=await beginOutput(),job=outputJob(token);
   try {
-    await wasm.raster_worker_write(metadata,buffers,(offset,bytes)=>job.raw.write(bytes,{at:offset}));
+    const fingerprint=await wasm.raster_worker_write(metadata,buffers,(offset,bytes)=>job.raw.write(bytes,{at:offset}));
     job.raw.flush();job.raw.close();job.raw=null;
     const handle=await job.directory.getFileHandle("capture");
-    return {token,blob:await handle.getFile()};
+    return {token,blob:await handle.getFile(),fingerprint};
   } catch(error) { await closeOutput(token);throw error; }
 }
 function outputJob(token) { const job=outputs.get(token);if(!job)throw new Error("Output job is no longer available");return job; }
 async function closeOutput(token) {
   const job=outputs.get(token);if(!job)return;
   outputs.delete(token);try{job.raw?.close();await job.root.removeEntry(token,{recursive:true});}finally{job.release();}
-}
-
-// One transaction replaces the previous complete checkpoint. Quota, worker or
-// tab failure before commit leaves that checkpoint intact. No file handles or
-// undo history are persisted; recovery remains an unsaved document.
-async function recovery(mode, operation) {
-  const database=await new Promise((resolve,reject)=>{
-    const request=indexedDB.open("capy-raster-recovery",1);
-    request.onupgradeneeded=()=>request.result.createObjectStore("projects");
-    request.onsuccess=()=>resolve(request.result);request.onerror=()=>reject(request.error);
-  });
-  try { return await new Promise((resolve,reject)=>{
-    const transaction=database.transaction("projects",mode,{durability:"strict"});
-    const request=operation(transaction.objectStore("projects"));
-    transaction.oncomplete=()=>resolve(request.result);
-    transaction.onabort=()=>reject(transaction.error || request.error || new Error("Recovery transaction aborted"));
-    transaction.onerror=()=>{};
-  }); } finally { database.close(); }
 }
 
 async function colorPreferences(mode,operation,storeName="values") {

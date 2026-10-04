@@ -478,11 +478,11 @@ fn live_sdr_panel_gesture_commits_once_and_cancels_without_losing_redo() {
     for exposure in [0.2,0.8,1.5]{s.edit_sdr_rendition(ContactPhase::Move,SdrRendition{exposure,..changed}).unwrap();}
     assert_eq!(s.engine.document().output().sdr,changed);
     assert_eq!(s.engine.checkpoint(),checkpoint);
-    assert!(s.capture_project_recovery().is_err(),"Recovery must not capture an unfinished contact");
+    assert!(s.capture_artwork().is_err(),"Recovery must not capture an unfinished contact");
     assert!(!s.command(CommandId::ExportDocument).enabled);
     s.edit_sdr_rendition(ContactPhase::Up,changed).unwrap();
     assert!(s.state.document_file.modified);
-    assert_eq!(s.capture_project_recovery().unwrap().output().sdr,changed);
+    assert_eq!(s.capture_artwork().unwrap().output().sdr,changed);
     s.dispatch(UiAction::Invoke{command:CommandId::Undo}).unwrap();
     assert_eq!(s.engine.document().output().sdr,original);
     s.edit_sdr_rendition(ContactPhase::Down,original).unwrap();
@@ -601,7 +601,7 @@ fn float32_bundled_effect_ranges_preserve_history_and_embedded_programs() {
         assert_live_artwork_eq(s.engine.document(), &before);
         invoke(&mut s, CommandId::Redo);
         assert_live_artwork_eq(s.engine.document(), &edited);
-        Document::from_artwork((*s.capture_project_recovery().unwrap().artwork).clone()).unwrap().validate(Default::default()).unwrap();
+        Document::from_artwork((*s.capture_artwork().unwrap().artwork).clone()).unwrap().validate(Default::default()).unwrap();
     }
 }
 
@@ -649,7 +649,7 @@ fn proof_dial_and_queued_numeric_edits_share_cancellation_and_one_step_history()
     let g=crate::parameter_pad::ParameterDialGeometry::new(256.).unwrap();let origin=g.arcs[0].point(0.5);let point=g.arcs[0].point(0.25);
     let action=|phase,point|ProofAction::Dial{phase,size:256.,origin,point};
     apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();
-    assert!(s.capture_project_recovery().is_err());
+    assert!(s.capture_artwork().is_err());
     apply(&mut s,action(ContactPhase::Cancel,point)).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert_eq!(s.engine.document().output().sdr,original);
     apply(&mut s,action(ContactPhase::Down,origin)).unwrap();apply(&mut s,action(ContactPhase::Move,point)).unwrap();apply(&mut s,action(ContactPhase::Up,point)).unwrap();
     let dial=s.engine.document().output().sdr;assert!((dial.exposure+1.).abs()<1e-6);assert_eq!(dial.headroom,original.headroom);

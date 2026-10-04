@@ -25,11 +25,11 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   const deliveryFailure=(type,values)=>({document_host_error:{type:"delivery",reason:{type,...values}}});
   const transportFailure=reason=>({document_host_error:{type:"transport",reason}});
   const active=new Set(),handles=new Map();
-  let nextHandle=0,closing=false,changing=false,batching=false;
+  let closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
   const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
-  const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
+  const location=(name,handle)=>{const uri=`browser:${crypto.randomUUID()}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
   const dialog=(title,build)=>new Promise(resolve=>{
     const root=element("dialog","document-dialog"),form=element("form");
@@ -193,13 +193,19 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   }
   async function destination(request,recipe) {
     const old=request.location && handles.get(request.location.uri);
-    if(old) {
+    if(old&&request.type==='save'&&(!old.queryPermission||await old.queryPermission({mode:'readwrite'})==='granted')) {
+      let observed=null;
+      try{if(old.getFile)observed=await rasterWorker({operation:'fingerprint',file:await old.getFile(),buffers:[]});}catch{}
+      if(app.session_destination_matches(observed))return{location:request.location,handle:old,reused:true};
+      message(()=>delivery.destination_changed);
+    } else if(old&&request.type!=='save') {
       if(!request.repeat)return{location:request.location,handle:old};
       try {
-        let permission=await old.queryPermission?.({mode:"readwrite"})??"granted";
-        if(permission==="prompt")permission=await old.requestPermission({mode:"readwrite"});
-        if(permission==="granted"){await old.getFile();return{location:request.location,handle:old};}
-      } catch(error) { if(error?.name==="AbortError")throw error; }
+        let permission=await old.queryPermission?.({mode:'readwrite'})??'granted';
+        if(permission==='prompt')permission=await old.requestPermission({mode:'readwrite'});
+        if(permission==='granted'){await old.getFile();return{location:request.location,handle:old};}
+      } catch(error) {if(error?.name==='AbortError')throw error;}
+
     }
     if(window.showSaveFilePicker) {
       const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream"];
@@ -213,7 +219,6 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   }
   async function handle(request) {
     if(active.has(request.id))return;active.add(request.id);
-    const ownerId=app.document_tabs(0).selected;
     let candidate;
     try {
       if(request.kind.type==='drawings'){dispatch({type:'complete_request',id:request.id});tabs.showSelector();return;}
@@ -322,14 +327,21 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
 
           let success;
           if(target.handle) {
+            if(target.reused) {
+              const observed=target.handle.getFile?await rasterWorker({operation:'fingerprint',file:await target.handle.getFile(),buffers:[]}):null;
+              if(!app.session_destination_matches(observed))throw deliveryFailure('destination_changed');
+            }
             const stream=await target.handle.createWritable();
             try {await stream.write(bytes);await stream.close();success=true;}
             catch(error){try{await stream.abort();}catch{}throw error;}
           } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
-          if(success&&recipe&&!r.repeat)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:"export_preferences",reason:error.color_feature_error}}:deliveryFailure("export_preferences",{detail:String(error)}));}
+          if(success&&r.type==='save'&&output.fingerprint&&app.state().document_file.location?.uri===target.location.uri)
+            app.session_record_destination(target.location,output.fingerprint);
+          if(success&&recipe&&!r.repeat)try{await app.export_presets({type:'remember',index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:'export_preferences',reason:error.color_feature_error}}:deliveryFailure('export_preferences',{detail:String(error)}));}
+
           if(success && r.type==="save" && !app.state().document_file.modified) {
-            await recovery.retire(ownerId);
+            await recovery.capture();
           }
         } catch(error) {
           const wasCancelled=control?.cancelled();control?.cancel();
@@ -362,13 +374,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     };
     spilling=run().finally(()=>spilling=null);return spilling;
   }
-  async function transition(action,capture=true){
+  async function transition(action){
     if(changing)throw transportFailure("change_in_progress");
     changing=true;tabs.cancel();
     const blocker=element('div','document-transition');blocker.setAttribute('role','status');blocker.append(element('span','',()=>delivery.switching_drawing));document.body.append(blocker);
     try{
       await proof.pause();await readyToPark();
-      if(capture)await recovery.capture().catch(error=>{const detail=String(error);message(()=>app.document_recovery_unavailable(detail));});
       await action();
       await trim();
       await recovery.ensure();
@@ -391,9 +402,9 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(String(id)!==String(app.document_tabs(0).selected))throw transportFailure("selected_changed");
     dispatch({type:'invoke',command:'close_document'});
   }
-  async function openDrawing({request=null,file=null,options,recovered=false,bytes}){
+  async function openDrawing({request=null,file=null,options,bytes}){
     await trim();
-    if(request===null&&!recovered){
+    if(request===null){
       const change=app.dispatch({type:'invoke',command:file?'open_document':'new_document'});
       const pending=app.state().requests.find(r=>r.kind.type==='document'&&['new','open'].includes(r.kind.request.type));
       if(!pending)throw transportFailure("open_operation");
@@ -407,7 +418,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       const original=file?.file??(bytes instanceof Blob?bytes:new Blob([bytes]));
       if(file)bytes=new Uint8Array(await file.file.arrayBuffer());
       else if(bytes instanceof Blob)bytes=new Uint8Array(await bytes.arrayBuffer());
-      candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,recovered,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
+      candidate=await gpuOperation(()=>app.prepare_document(id,bytes,0,0,fileState.epoch,fileState.revision,target?.name,options,()=>chooseSourceProfile({app,dialog,element,button}),()=>cancelled));
       if(cancelled)throw new DOMException('Opening cancelled','AbortError');
       if(app.package_view(candidate)){
         progress.remove();
@@ -417,6 +428,10 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
       }
       if(request!==null)applyChange(app.finish_document(request,true));
       await transition(()=>{const prepared=candidate;candidate=null;applyChange(app.adopt_document(prepared,target));});
+      if(target&&app.state().document_file.location?.uri===target.uri) {
+        const fingerprint=await rasterWorker({operation:'fingerprint',file:original,buffers:[]});
+        if(app.state().document_file.location?.uri===target.uri)app.session_record_destination(target,fingerprint);
+      }
       return true;
     }catch(error){
       if(request!==null&&app.state().requests.some(r=>r.id===request))applyChange(app.finish_document(request,false,error?.name==='AbortError'?undefined:error));
@@ -460,18 +475,39 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(active.size||batching||changing||closing||document.querySelector('dialog[open]'))throw transportFailure("open_drawings_operation");
     await openBatch(files.map(value=>value.file?value:{file:value}));
   }
-  const recovery=createDocumentRecovery({app,call:rasterWorker,dialog,element,button,message,restore:bytes=>openDrawing({recovered:true,bytes}),settled:trim,
+  async function restoreSession(checkpoint,buffers,recovered,initial,storedHandles,activate,identity) {
+    const observe=async location=>{
+      const handle=storedHandles.find(saved=>saved.uri===location?.uri)?.handle;
+      if(!handle)return null;
+      try {
+        if(await handle.queryPermission({mode:'read'})!=='granted')return null;
+        return await rasterWorker({operation:'fingerprint',file:await handle.getFile(),buffers:[]});
+      } catch {return null;}
+    };
+    let candidate=await app.prepare_session_restart(checkpoint,buffers,recovered,observe);
+    try {
+      const replace=activate&&app.session_can_replace_startup(initial);
+      let adopted;
+      const publish=()=>{const prepared=candidate;candidate=null;adopted=app.adopt_session_restart(prepared,initial,BigInt(identity),activate);applyChange(adopted.change);};
+      if(replace)await transition(publish);else publish();
+      for(const {uri,handle} of storedHandles){if(handle)handles.set(uri,handle);}
+      return adopted.id;
+    } finally {candidate?.free();}
+  }
+  const recovery=createDocumentRecovery({app,call:rasterWorker,message,restore:restoreSession,settled:trim,
+    reserve:ids=>app.reserve_session_ids(ids.map(BigInt)),failed:()=>dialog(()=>bootstrap.recovery.attention,(form,finish)=>{form.append(element('p','',()=>bootstrap.recovery.explanation));const footer=element('footer');footer.append(button(()=>bootstrap.recovery.later,()=>finish('later')),button(()=>bootstrap.recovery.discard,()=>finish('discard')),button(()=>bootstrap.recovery.retry,()=>finish('retry'),'suggested-action'));form.append(footer);}),
+    handles:id=>{const state=app.session_stamp_for(BigInt(id)).state;return [...new Set([state.location?.uri,state.last_export?.location.uri])].flatMap(uri=>{const handle=handles.get(uri);return typeof FileSystemFileHandle!=='undefined'&&handle instanceof FileSystemFileHandle?[{uri,handle}]:[];});},order:order=>applyChange(app.restore_session_order(order)),
     canOffer:()=>app.gpu_ready()&&!document.hidden&&!active.size&&!batching&&!changing&&!closing&&!document.querySelector('dialog[open]')&&app.document_park_ready()});
   const tabs=createDrawingTabs({app,element,button,icon,applyChange,select,close,openFiles,message,busy:()=>changing||batching||closing});
-  return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching,showSelector:tabs.showSelector,
+  return {title:tabs.root,key:tabs.key,select,close,openFiles,busy:()=>changing||batching||closing||active.size>0,showSelector:tabs.showSelector,
     mountProof:proof.mount,localize(){for(const form of openDialogs)form.localize?.();proof.sync();tabs.refresh(true);},handle,autosave:recovery.autosave,startRecovery:recovery.start,refresh(){
     proof.sync();tabs.refresh();
     const published=state();
     if(closing||changing||!published.document_file.close_ready)return;
     closing=true;
     const id=app.document_tabs(0).selected;
-    transition(async()=>{await recovery.retire(id,true);applyChange(app.close_document_tab());},false)
-      .catch(error=>{app.reset_document_close();message(error);})
+    transition(async()=>{let prepared=app.prepare_document_close();try{await recovery.retire(id,true);const close=prepared;prepared=null;applyChange(app.commit_document_close(close));}finally{prepared?.free();}})
+      .catch(error=>{applyChange(app.cancel_document_close());message(error);})
       .finally(()=>{closing=false;tabs.refresh(true);pruneHandles();});
   }};
 }

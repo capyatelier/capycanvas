@@ -245,10 +245,8 @@ class AndroidHostTest {
             assertTrue(tagged.getJSONArray("rgba").getDouble(0)>1.0)
             assertEquals(.4,tagged.getJSONArray("rgba").getDouble(3),1e-6)
             val committed=definition();val expectedPixels=gradientOutput()
-            val selected=native {JSONObject(Native.documentTabs(it,obj("op" to "view").toString())).getLong("selected")}
-            var task=0L;compose.waitUntil(10_000) {task=native {Native.projectRecoveryFor(it,selected)};task!=0L}
             val archive=File(device.root,"p30-gradient-$theme.capy")
-            try {Native.projectPublish(task,archive.absolutePath)} finally {Native.projectFree(task)}
+            host.writeDrawingCopy(archive)
             compose.runOnUiThread {assertTrue(host.documents.openUris(listOf(android.net.Uri.fromFile(archive))))}
             compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true&&state().getJSONObject("document_file").optString("location").contains(archive.name)}
             fun publishedGradient(phase:String) {
@@ -1062,14 +1060,8 @@ class AndroidHostTest {
             button.assert(hasText(item.getString("label")) or hasContentDescription(item.getString("label"))).performClick()
         }
         fun archive(name: String): Pair<JSONObject, ByteArray> {
-            val selected = native { JSONObject(Native.documentTabs(it, obj("op" to "view").toString())).getLong("selected") }
-            var task = 0L
-            compose.waitUntil(10_000) {
-                task = native { Native.projectRecoveryFor(it, selected) }
-                task != 0L
-            }
             val file = File(device.root, "precision-$themeArchive-$name.capy")
-            try { Native.projectPublish(task, file.absolutePath) } finally { Native.projectFree(task) }
+            host.writeDrawingCopy(file)
             val bytes = file.readBytes()
             return packageManifest(bytes) to bytes
         }

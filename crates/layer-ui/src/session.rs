@@ -107,6 +107,10 @@ mod command_catalog;
 pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 #[path = "document_files.rs"]
 mod document_files;
+#[path = "session_recovery.rs"]
+pub mod session_recovery;
+#[path = "session_destination.rs"]
+pub mod session_destination;
 #[path = "workspace_session.rs"]
 mod workspace_session;
 pub use application_menu::{ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS};
@@ -246,6 +250,7 @@ pub struct UiSession<R: CanvasRenderer> {
     platform_prediction_available: Option<bool>,
     logical_viewport: Option<[f32; 2]>,
     initial_fit: bool,
+    automatic_camera_revision: u64,
     divider_drag: Option<(u32, ResizeDrag)>,
     floating_resize: Option<FloatingResize>,
     workspace_drag: Option<WorkspaceDrag>,
@@ -424,6 +429,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             platform_prediction_available: None,
             logical_viewport: None,
             initial_fit: true,
+            automatic_camera_revision: 0,
             divider_drag: None,
             floating_resize: None,
             workspace_drag: None,
@@ -4101,6 +4107,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         logical: [f32; 2],
         physical: [u32; 2],
     ) -> Result<UiChange, String> {
+        let navigation=self.camera_navigation_revision();
         valid_viewport(logical)?;
         if physical.contains(&0) {
             return Err("Canvas viewport must be nonzero".into());
@@ -4138,6 +4145,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if resized || fit {
             self.sync_camera();
         }
+        self.automatic_camera_revision=self.state.camera.revision.checked_sub(navigation).ok_or("Camera revision moved backwards")?;
         Ok(self.changed(
             if resized || fit || bounds_changed {
                 regions::CAMERA
@@ -7433,12 +7441,12 @@ mod tests {
         .unwrap();
         assert!(!reopened.state.document_file.modified);
         assert_eq!(retained(&reopened.engine.document().artwork), retained(&project.artwork));
-        let reopened_stream = package_bytes(&reopened.capture_project_recovery().unwrap());
+        let reopened_stream = package_bytes(&reopened.capture_artwork().unwrap());
         assert_eq!(reopened_stream, stream);
     }
 
     #[test]
-    fn prepared_drawings_take_their_location_or_recovery_protection() {
+    fn prepared_drawings_validate_their_location_and_reject_edited_relocation() {
         let project = crate::new_drawing(64, 48, &Localizer::shared(UiLanguage::English)).unwrap();
         let mut s = UiSession::from_project(Recorder::default(), project, None, [800, 600], Platform::Gtk).unwrap();
         let location = |uri: &str, name: &str| DocumentLocation { uri: uri.into(), name: name.into() };
@@ -7448,8 +7456,6 @@ mod tests {
         s.initialize_document_location(Some(location("file:///a.capy", "a.capy"))).unwrap();
         assert_eq!(s.state.document_file.title(), "a.capy");
         assert!(!s.state.document_file.modified);
-        s.mark_recovered();
-        assert!(s.state.document_file.location.is_none() && s.state.document_file.modified);
         invoke(&mut s, CommandId::AddLayer);
         assert!(s.initialize_document_location(None).is_err());
     }
@@ -7559,7 +7565,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(snapshot.artwork.paint.get(paint).unwrap().raster.identity(), initial);
-        let recovery = s.capture_project_recovery().unwrap();
+        let recovery = s.capture_artwork().unwrap();
         let worker = std::thread::spawn(move || {
             reopen_capture(&recovery)
         });

@@ -33,12 +33,16 @@ pub(super) fn call(
     js_sys::Reflect::set(&request, &js("operation"), &js(operation))?;
     js_sys::Reflect::set(&request, &js("metadata"), &js(metadata))?;
     js_sys::Reflect::set(&request, &js("buffers"), buffers)?;
+    self::request(&request)
+}
+
+pub(super) fn request(request:&JsValue)->Result<js_sys::Promise,JsValue> {
     WORKER
         .with(|slot| {
             slot.borrow()
                 .as_ref()
                 .ok_or_else(|| js("Raster worker unavailable"))?
-                .call1(&JsValue::NULL, &request)
+                .call1(&JsValue::NULL, request)
         })?
         .dyn_into()
 }

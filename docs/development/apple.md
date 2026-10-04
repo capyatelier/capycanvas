@@ -198,7 +198,7 @@ and `DrawingWorkloadPlan.swift`). Other runners in `scripts/` and `tests/`:
 | `scripts/test-persistence.sh` | Atomic settings files and the settings owner |
 | `scripts/test-color-input.sh` | AppKit color text entry in all RGB spaces |
 | `scripts/test-project-access.py` | Project writes through a file-only App Sandbox grant |
-| `scripts/test-recovery-interruption.py` | Recovery publication when a writer is killed |
+| `cargo test -p layer-apple tests::session` | Session restart, history and durable removal on both policies |
 | `tests/background-expiration.py` | iPad background-task lease ordering |
 | `scripts/test-native-rows.py` | UIKit row scrolling and contacts on one booted iPad simulator (`--fixture scenes` for per-scene cancellation) |
 | `scripts/test-workspace-scrolling.py` | Long workspace list on an iPad simulator |

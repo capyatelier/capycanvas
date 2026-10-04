@@ -246,7 +246,6 @@ import SwiftUI
                 if editing { header.selected = action["id"].uint; focused = true }
                 else { activateHeaderItem(store, entry: entries.first { $0["id"].uint == action["id"].uint } ?? JSON()) }
             case "apple_workspace_switch": store.workspaces?.switchTo(action["id"].string)
-            case "apple_recovery": store.recovery.refresh(); store.recovery.presented = true
             default: store.dispatch(action)
             }
         }

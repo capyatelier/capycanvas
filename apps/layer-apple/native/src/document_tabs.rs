@@ -3,7 +3,7 @@
 use super::*;
 use layer_host::{
     Renderer,
-    window::{Activation, DocumentWindow},
+    window::{Activation, DocumentWindow, PreparedClose},
 };
 use layer_ui::UiSession;
 use serde_json::{Value, json};
@@ -12,6 +12,8 @@ use std::sync::Mutex;
 pub(crate) type Window = DocumentWindow<Box<UiSession<Renderer>>>;
 struct Job {
     activation: Option<Activation>,
+    close: Option<PreparedClose>,
+    retired: Option<Box<UiSession<Renderer>>>,
     tiles: Vec<layer_core::raster_storage::RetainedTiles>,
     budget: usize,
     error: Option<CString>,
@@ -46,6 +48,8 @@ impl CapyApple {
     fn document_job(&self, activation: Option<Activation>) -> *mut CapyDocumentTask {
         Box::into_raw(Box::new(CapyDocumentTask(Mutex::new(Job {
             activation,
+            close: None,
+            retired: None,
             tiles: self
                 .window
                 .documents
@@ -86,6 +90,12 @@ pub unsafe extern "C" fn capy_apple_document_switch(
     };
     a.perform(|a| {
         let options = a.host.renderer_options(a.metal.cache.clone());
+        if closing {
+            let close = a.window.prepare_close(&mut a.host, options)?;
+            let task = a.document_job(None);
+            unsafe { &*task }.0.lock().unwrap_or_else(|e| e.into_inner()).close = Some(close);
+            return Ok(task);
+        }
         let Some((activation, _)) = a.window.switch(&mut a.host, id, closing, options, |_| {})?
         else {
             return Ok(a.document_job(None));
@@ -94,6 +104,33 @@ pub unsafe extern "C" fn capy_apple_document_switch(
         Ok(a.document_job(Some(activation)))
     })
     .unwrap_or(std::ptr::null_mut())
+}
+/// # Safety
+/// Serial owner; every prepared close must be committed or cancelled before free.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_close_commit(app: *mut CapyApple, task: *mut CapyDocumentTask, accept: bool) -> i32 {
+    let (Some(a), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else { return -1; };
+    a.perform(|a| {
+        let mut job = task.0.lock().unwrap_or_else(|e| e.into_inner());
+        let close = job.close.take().ok_or("The drawing close is unavailable")?;
+        if accept {
+            let (activation, retired) = a.window.commit_close(&mut a.host, close, |_| {});
+            job.activation = Some(activation);
+            job.retired = retired;
+            a.document_retired();
+        } else { a.window.cancel_close(&mut a.host, close)?; }
+        Ok(())
+    }).map_or(-1, |_| 0)
+}
+/// # Safety
+/// Serial owner before publishing the session membership removal.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn capy_apple_document_close_validate(app: *mut CapyApple, task: *const CapyDocumentTask) -> i32 {
+    let (Some(a), Some(task)) = (unsafe { app.as_mut() }, unsafe { task.as_ref() }) else { return -1; };
+    a.perform(|a| {
+        let job = task.0.lock().unwrap_or_else(|e| e.into_inner());
+        a.window.validate_close(&a.host, job.close.as_ref().ok_or("The drawing close is unavailable")?)
+    }).map_or(-1, |_| 0)
 }
 /// # Safety
 /// Serial owner only; schedules inactive backing I/O without changing selection.
