@@ -168,6 +168,14 @@ class AndroidTitleBarTest {
         return checkNotNull(result)
     }
     private fun variantRows(anchor: JSONObject) = variantMenu(anchor).array("sections").values().flatMap { (it as JSONArray).objects() }
+    private fun openToolContext(tag: String) {
+        button = if (tool == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY
+        down(tag)
+        if (tool != MotionEvent.TOOL_TYPE_MOUSE) SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
+        event(MotionEvent.ACTION_UP)
+        button = MotionEvent.BUTTON_PRIMARY
+        waitFor("tool context opens") { node("workspace-menu") != null }
+    }
 
     private fun startEditor() {
         action(obj("type" to "invoke", "command" to "customize_workspace_ui"))
@@ -780,8 +788,7 @@ class AndroidTitleBarTest {
         }
         fun choose(anchor: JSONObject, tag: String, row: JSONObject, capture: String? = null) {
             assertTrue(row.optBoolean("enabled", true))
-            tap(tag)
-            waitFor("group menu opens") { node("workspace-menu") != null }
+            openToolContext(tag)
             capture?.let { idle(); shot(it) }
             tapMenuRow(row.getString("label"))
             waitFor("group menu closes") { node("workspace-menu") == null }
@@ -947,7 +954,12 @@ class AndroidTitleBarTest {
             assertEquals(stable, tile().getJSONObject("control").toString())
             assertEquals(tile().getString("tooltip"), header().getString("label"))
             instrumentation.runOnMainSync {
-                assertTrue(node("header-variants-$headerId")!!.second.config[SemanticsProperties.ContentDescription].contains(header().getString("label")))
+                for (tag in listOf("header-variants-$headerId", "tile-variants-toolbar-$tileId")) {
+                    val marker = node(tag)!!.second.config
+                    assertNull(marker.getOrNull(SemanticsActions.OnClick))
+                    assertNull(marker.getOrNull(SemanticsActions.OnLongClick))
+                    assertNull(marker.getOrNull(SemanticsProperties.ContentDescription))
+                }
             }
             assertEquals(tile().getString("icon"), header().getString("icon"))
             assertEquals(tile().getJSONObject("resolved_control").toString(), header().getJSONObject("resolved_control").toString())
@@ -981,14 +993,22 @@ class AndroidTitleBarTest {
             assertTrue("$size marker stays within its click target", painted.all(target::contains))
             assertTrue("$size marker stays within the header squircle", painted.all {
                 body.contains(it) && region.contains((it.x - body.left).toInt(), (it.y - body.top).toInt()) })
-            shot("tool-marker-$size-$theme")
             tool = MotionEvent.TOOL_TYPE_FINGER
-            instrumentation.runOnMainSync { pressed = node("header-variants-$headerId")!!.first }
-            event(MotionEvent.ACTION_DOWN, Offset(painted.map { it.x }.average().toFloat(), painted.map { it.y }.average().toFloat()))
-            event(MotionEvent.ACTION_UP); idle()
-            waitFor("$size painted marker chooser opens") { node("workspace-menu") != null }
-            tapMenuRow(rows(headerAnchor).first { it.optBoolean("selected") }.getString("label"))
-            waitFor("$size marker chooser closes") { node("workspace-menu") == null }
+            fun tapPaintedMarker() {
+                instrumentation.runOnMainSync { pressed = node("header-variants-$headerId")!!.first }
+                event(MotionEvent.ACTION_DOWN, Offset(painted.map { it.x }.average().toFloat(), painted.map { it.y }.average().toFloat()))
+                event(MotionEvent.ACTION_UP); idle()
+                assertNull("Marker tap has no context menu", node("workspace-menu"))
+            }
+            action(obj("type" to "invoke", "command" to "eraser"))
+            tapPaintedMarker()
+            waitFor("$size marker selects its owner") { header().getBoolean("selected") && state().getJSONObject("customization").isNull("drawer") }
+            shot("tool-marker-$size-$theme")
+            tapPaintedMarker()
+            waitFor("$size marker opens its owner drawer") { node("tool-drawer") != null &&
+                state().getJSONObject("customization").objectOrNull("drawer")?.getJSONObject("anchor")?.toString() == headerAnchor.toString() }
+            tapPaintedMarker()
+            waitFor("$size marker closes its owner drawer") { node("tool-drawer") == null }
         }
         edit(obj("type" to "set_size", "size" to "medium")); idle()
         for (theme in listOf("light", "dark")) {
@@ -996,26 +1016,26 @@ class AndroidTitleBarTest {
             for ((index, nativeTool) in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS).withIndex()) {
                 tool = nativeTool
                 for ((anchor, tag) in listOf(ribbonAnchor to "tile-variants-toolbar-$tileId", headerAnchor to "header-variants-$headerId")) {
-                    assertTrue("Corner has a native hit region", bounds(tag).width >= 14 * density && bounds(tag).height >= 14 * density)
+                    assertTrue("Marker remains inside the owner", bounds(tag).width >= 14 * density && bounds(tag).height >= 14 * density)
                     val choices = rows(anchor)
                     assertTrue(choices.size > 1)
                     val alternatives = choices.filter { it.optBoolean("enabled", true) && !it.optBoolean("selected") }
                     val choice = alternatives[index % alternatives.size]
-                    tap(tag)
-                    waitFor("variant popup") { node("workspace-menu") != null }
+                    openToolContext(tag)
                     tapMenuRow(choice.getString("label"))
                     waitFor("variant popup closes") { node("workspace-menu") == null }
                     idle(); sameChoice()
                     assertEquals(choice.getString("label"), rows(anchor).first { it.optBoolean("selected") }.getString("label"))
                     action(obj("type" to "invoke", "command" to "eraser"))
-                    tap(if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId")
+                    tap(tag)
+                    assertNull("Corner activates the owner without a menu", node("workspace-menu"))
                     host.awaitMain("remembered body choice activates", 15_000, {
                         shot("failure-remembered-body-choice")
                         "tile=${tile()}; header=${header()}; brush=${state().getJSONObject("brush")}; layer_tools=${state().objectOrNull("layer_tools")}"
                     }) { tile().getBoolean("selected") && header().getBoolean("selected") }
                     sameChoice()
-                    val body = if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId"
-                    tap(body)
+                    tap(tag)
+                    assertNull("Corner reclick opens the drawer without a menu", node("workspace-menu"))
                     fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
                     waitFor("full grouped drawer") { node("tool-drawer") != null && drawer()?.objectOrNull("tool_set") != null }
                     assertEquals("[[\"brushes\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
@@ -1038,15 +1058,10 @@ class AndroidTitleBarTest {
                             drawer()?.getJSONObject("tool_set")?.array("groups")?.objects()?.any { it.optBoolean("selected") && it.getString("label") == sibling.getString("label") } == true
                     }
                     idle(); sameChoice()
-                    tap(body)
+                    tap(tag)
                     waitFor("grouped drawer closes") { node("tool-drawer") == null }
                 }
-                button = if (nativeTool == MotionEvent.TOOL_TYPE_MOUSE) MotionEvent.BUTTON_SECONDARY else MotionEvent.BUTTON_PRIMARY
-                down("header-control-$headerId")
-                if (nativeTool != MotionEvent.TOOL_TYPE_MOUSE) SystemClock.sleep(android.view.ViewConfiguration.getLongPressTimeout().toLong() + 150)
-                event(MotionEvent.ACTION_UP)
-                waitFor("full tool context") { node("workspace-menu") != null }
-                button = MotionEvent.BUTTON_PRIMARY
+                openToolContext("header-control-$headerId")
                 val selected = rows(headerAnchor).first { it.optBoolean("selected") }
                 tapMenuRow(selected.getString("label"))
                 waitFor("full context closes") { node("workspace-menu") == null }
@@ -1055,6 +1070,38 @@ class AndroidTitleBarTest {
             }
             shot("tool-variants-$theme")
         }
+        val crowded = mutableListOf<Int>()
+        while (node("header-item-$headerId") != null) {
+            edit(obj("type" to "edit", "editing" to true))
+            repeat(4) {
+                assertTrue("Grouped item can overflow", crowded.size < 30)
+                crowded.add(model().getInt("next_id"))
+                edit(obj("type" to "add", "zone" to "left", "before" to headerId,
+                    "item" to obj("kind" to "tool", "control" to obj("kind" to "command", "command" to "pen"))))
+            }
+            edit(obj("type" to "edit", "editing" to false)); idle()
+        }
+        waitFor("runtime grouped item overflow") { node("header-overflow-0") != null && node("header-item-$headerId") == null }
+        for ((theme, nativeTool) in listOf("light" to MotionEvent.TOOL_TYPE_MOUSE, "dark" to MotionEvent.TOOL_TYPE_STYLUS)) {
+            action(obj("type" to "set_theme", "theme" to theme)); action(obj("type" to "invoke", "command" to "eraser"))
+            tool = nativeTool
+            tap("header-overflow-0")
+            waitFor("overflow group marker") { node("header-overflow-variants-$headerId") != null }
+            tap("header-overflow-item-$headerId")
+            waitFor("overflow body activates its row") { header().getBoolean("selected") && node("header-overflow-list") == null }
+            action(obj("type" to "invoke", "command" to "eraser"))
+            tap("header-overflow-0")
+            waitFor("overflow group marker returns") { node("header-overflow-variants-$headerId") != null }
+            val marker = node("header-overflow-variants-$headerId")!!.second.config
+            assertNull(marker.getOrNull(SemanticsActions.OnClick)); assertNull(marker.getOrNull(SemanticsActions.OnLongClick))
+            tap("header-overflow-variants-$headerId")
+            waitFor("overflow corner activates its row") { header().getBoolean("selected") && node("header-overflow-list") == null }
+            assertNull("Overflow corner has no context menu", node("workspace-menu"))
+            shot("tool-marker-overflow-$theme")
+        }
+        edit(obj("type" to "edit", "editing" to true))
+        crowded.forEach { edit(obj("type" to "remove", "id" to it)) }
+        edit(obj("type" to "edit", "editing" to false)); idle()
         val remembered = tile().getString("label")
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
         send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))

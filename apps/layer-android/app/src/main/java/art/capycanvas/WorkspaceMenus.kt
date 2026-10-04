@@ -119,17 +119,7 @@ internal fun Modifier.opensWindowlessMenu(button: WindowlessMenuButton, label: S
     button.menu?.let { WorkspaceMenu(host, current ?: it, focusable = false, command = command, copy = if (current == null) button.copy else null) { button.menu = null; button.closedAt = android.os.SystemClock.uptimeMillis() } }
 }
 
-@Composable internal fun ToolVariantsButton(host: CanvasHost, anchor: JSONObject, label: String, modifier: Modifier = Modifier) {
-    val button = remember(anchor.toString()) { WindowlessMenuButton() }
-    button.copy = { host.menuCopy(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) }
-    Box(modifier.size(16.dp).semantics { contentDescription = label }
-        .opensWindowlessMenu(button, label) { open ->
-            host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) { open(it as? JSONObject) }
-        }) {
-        SharedIcon("tool-group", null, Modifier.align(Alignment.BottomEnd))
-        WindowlessMenuHost(host, button)
-    }
-}
+@Composable internal fun ToolGroupIndicator(modifier: Modifier = Modifier) = SharedIcon("tool-group", null, modifier)
 
 @Composable internal fun WorkspaceMenuItems(host: CanvasHost, sections: JSONArray,
     dismiss: () -> Unit = {}, title: String? = null, command: ((JSONObject) -> Unit)? = null) {

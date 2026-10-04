@@ -25,10 +25,7 @@ impl TileWidget {
         }
         let button = customization::tile_button(w, config, tile, style, choice);
         if tile.control.has_variants() {
-            customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Tile {
-                panel: config.id,
-                tile: tile.id,
-            });
+            customization::tool_group_marker(&button);
         }
         let root = gtk::Box::new(gtk::Orientation::Horizontal, 0);
         button.add_css_class("tile-button");

@@ -132,10 +132,9 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     context.querySelector("button:not(:disabled)")?.focus({preventScroll:true});
     return context;
   }
-  function variationButton(anchor) {
-    const node = button("", () => openMenu(node), "tool-variations");
-    node.append(icon("tool-group")); node.setAttribute("aria-haspopup", "menu");
-    target(node, { kind: "tool_variants", anchor });
+  function variationMarker() {
+    const node = element("span", "tool-variations");
+    node.setAttribute("aria-hidden", "true"); node.append(icon("tool-group"));
     return node;
   }
   function positionPopup(node) {
@@ -158,6 +157,12 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const node = contextTarget(e.target);
     if (!node) return;
     e.preventDefault(); showContext(node, [e.clientX, e.clientY]);
+  });
+  workspace.addEventListener("keydown", e => {
+    if (e.defaultPrevented || composingKey(e) || !(e.key === "ContextMenu" || e.key === "F10" && e.shiftKey)) return;
+    const node = contextTarget(e.target); if (!node) return;
+    const r = e.target.getBoundingClientRect();
+    e.preventDefault(); e.stopPropagation(); openMenu(node, [r.left, r.bottom, r.top], e.target);
   });
   // Every device holds to arm tile reordering; only touch/pen holds open menus.
   // Scrolling, dragging or cancelling retires the hold; editing keeps ownership.
@@ -286,7 +291,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
       node.append(icon(tile.icon,(tile.resolved_control??tile.control).kind==='color'));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
-      root.append(node, variationButton({ kind: "tile", panel, tile: tile.id }));
+      node.append(variationMarker()); root.append(node);
     }
     target(root, item); draggable(root, item); refreshTile(root, tile); return root;
   }
@@ -301,8 +306,7 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
     const glyph = node.querySelector('svg'), pair=(tile.resolved_control??tile.control).kind==='color';
     if (glyph?.dataset.asset !== tile.icon || glyph?.hasAttribute('data-paint-pair') !== pair) glyph?.replaceWith(icon(tile.icon,pair));
     const variants = root.querySelector('.tool-variations');
-    variants.hidden = !tile.has_variants; variants.title = tile.tooltip;
-    variants.setAttribute('aria-label', tile.label);
+    variants.hidden = !tile.has_variants;
   }
   function layoutTile(tile, bounds, axis, style) {
     tile.hidden = !bounds || bounds.width <= 0 || bounds.height <= 0;
@@ -606,6 +610,6 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
       return list;
     }));
   }
-  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, variationButton, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
+  return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, variationMarker, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
 }

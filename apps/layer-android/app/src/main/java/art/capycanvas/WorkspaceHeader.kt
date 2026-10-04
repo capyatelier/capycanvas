@@ -109,6 +109,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
         else if (input.overflow != null) input.overflow = null
         else host.headerEdit(obj("type" to "cancel"))
     }
+    CompositionLocalProvider(LocalWorkspaceZ provides 300) {
     BoxWithConstraints(Modifier.fillMaxSize().zIndex(300f)) {
         // The canvas extends behind the title bar. Empty chrome owns input,
         // but must not paint an opaque strip over the drawing.
@@ -195,7 +196,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                             }.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                             if (editing) Box(Modifier.width(20.dp).fillMaxHeight()) { HeaderGrip(spec.getString("label")) }
                             Text(spec.getString("label"), Modifier.weight(1f), maxLines = 1)
-                            if (!editing && spec.optBoolean("has_variants")) ToolVariantsButton(host, obj("kind" to "header", "id" to id), spec.getString("label"),
+                            if (!editing && spec.optBoolean("has_variants")) ToolGroupIndicator(
                                 Modifier.testTag("header-overflow-variants-$id"))
                         }
                     }
@@ -226,6 +227,7 @@ private fun CanvasHost.primaryMenu(open: (JSONObject?) -> Unit) =
                 else WorkspaceMenu(host, menu, copy = { host.menuCopy(obj("type" to "application_menu", "menu" to "primary")) }) { overflowMenu = null }
             }
         }
+    }
     }
 }
 
@@ -323,7 +325,7 @@ private fun activateHeader(host: CanvasHost, entry: JSONObject) {
                     else SharedIcon(icon, label, Modifier.size(iconSize.dp))
                 }
             }
-            if (!editing && spec.optBoolean("has_variants")) ToolVariantsButton(host, anchor, label,
+            if (!editing && spec.optBoolean("has_variants")) ToolGroupIndicator(
                 Modifier.align(Alignment.BottomEnd).testTag("header-variants-$id"))
             menu?.let { opened ->
                 val anchor = if (!compact) menuLabel?.let { menuAnchors[it] } ?: menuBounds else menuBounds

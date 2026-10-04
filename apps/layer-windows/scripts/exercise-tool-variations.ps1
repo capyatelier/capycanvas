@@ -13,6 +13,14 @@ function Point([string]$Id){$box=(Control $Id -Arranged).Current.BoundingRectang
 function Tap([string]$Id,[string]$Device='mouse'){
     $at=Point $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 45;[CapyRowPointer]::Up()
 }
+function MarkerPoint([string]$Id){
+    $box=(Control $Id -Arranged).Current.BoundingRectangle;$inset=6*[CapyRowPointer]::GetDpiForWindow($review.MainWindowHandle)/96.
+    @{x=[int]($box.Right-$inset);y=[int]($box.Bottom-$inset)}
+}
+function TapMarker([string]$Id,[string]$Device){
+    $at=MarkerPoint $Id;[CapyRowPointer]::Down($Device,$at.x,$at.y);Start-Sleep -Milliseconds 45;[CapyRowPointer]::Up()
+}
+function Context([string]$Id){$at=MarkerPoint $Id;[CapyRowPointer]::RightClick($at.x,$at.y)}
 function Menus{
     $condition=[System.Windows.Automation.AndCondition]::new(
         [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::ProcessIdProperty,$review.Id),
@@ -20,8 +28,17 @@ function Menus{
     @([System.Windows.Automation.AutomationElement]::RootElement.FindAll([System.Windows.Automation.TreeScope]::Descendants,$condition)|Where-Object {!$_.Current.IsOffscreen})
 }
 function Choose([string]$Id,[scriptblock]$View,[string]$Device){
-    $before=& $View;$layout=(Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
-    Tap $Id $Device
+    $before=& $View
+    TapMarker $Id $Device
+    Wait-Until {(& $View).selected} 'Marker click did not activate the tool'
+    if(@(Menus).Count){throw 'Primary marker click opened a context menu'}
+    if(!$before.selected){TapMarker $Id $Device}
+    Wait-Until {$anchor=(Model).state.customization.drawer.anchor;if($Id.StartsWith('tile-')){$anchor.tile -eq $before.id}else{$anchor.id -eq $before.id}} 'Active marker click did not open the tool drawer'
+    if(@(Menus).Count){throw 'Active marker click opened a context menu'}
+    TapMarker $Id $Device
+    Wait-Until {!(Model).state.customization.drawer} 'Marker click did not toggle the tool drawer closed'
+    $layout=(Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress
+    Context $Id
     Wait-Until {@(Menus).Count -ge 2} 'Tool variations did not open'
     $options=@(Menus);$names=@($options|ForEach-Object {$_.Current.Name});$choice=$null
     foreach($option in $options){
@@ -35,8 +52,8 @@ function Choose([string]$Id,[scriptblock]$View,[string]$Device){
     Wait-Until {$current=& $View;($current.label -eq $name -or $current.label.StartsWith($name+' ')) -and $current.selected -and $current.icon -ne $before.icon} 'Chosen variation did not reach the projected tool'
     Wait-Until {@(Menus).Count -eq 0} 'Variation menu did not close'
     if(((Model).state.workspace.layout|ConvertTo-Json -Depth 80 -Compress) -ne $layout){throw 'Choosing a variation changed workspace layout'}
-    if((Control $Id).Current.Name -ne (& $View).label){throw 'Variation button retained its earlier accessibility label'}
-    Tap $Id $Device
+    if((Control $Id).Current.Name -ne (& $View).label){throw 'Tool retained its earlier accessibility label'}
+    Context $Id
     Wait-Until {@(Menus).Count -ge 2} 'Tool variations did not reopen'
     $selected=@(Menus|Where-Object {$_.Current.Name -eq $name})[0]
     if($selected.GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::On){throw 'Remembered variation is not checked'}
@@ -70,7 +87,7 @@ try{
         if(!@($slots).Count){throw 'Built-in workspace has no grouped tools'}
         $slot=@($slots|Where-Object {$_.control.slot -in @('manual_selection','marquee')})[0]
         if(!$slot){throw 'Workspace has no grouped selection tool'}
-        foreach($device in @('mouse','pen','touch')){$results+=Choose "tile-variants-toolbar-$($slot.id)" {Tile $slot.id} $device}
+        foreach($device in @('mouse','pen','touch')){$results+=Choose "tile-toolbar-$($slot.id)" {Tile $slot.id} $device}
         Tap "tile-toolbar-$($slot.id)"
         Wait-Until {(Model).state.customization.drawer.anchor.tile -eq $slot.id -and (Model).state.customization.drawer.tool_set.groups.Count -ge 2} 'Grouped tool did not open its scoped drawer'
         $drawer=Control 'tool-drawer' -Arranged
@@ -112,7 +129,7 @@ try{
     $entry=@((Model).header.model.zones|ForEach-Object {$_}|Where-Object {$_.item.control.kind -eq 'tool_slot' -and $_.item.control.slot -eq 'drawing'})[0]
     if(!$entry){throw 'Header tool slot was not inserted'}
     Invoke 'header-edit-done';Wait-Until {!(Model).header.editing} 'Header customization did not finish'
-    foreach($device in @('mouse','pen','touch')){$results+=Choose "header-variants-$($entry.id)" {@((Model).header.items|Where-Object id -eq $entry.id)[0]} $device}
+    foreach($device in @('mouse','pen','touch')){$results+=Choose "header-item-$($entry.id)" {@((Model).header.items|Where-Object id -eq $entry.id)[0]} $device}
     Capture 'header-variations' -WithModel -Composed
     $results|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run 'results.json')
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved

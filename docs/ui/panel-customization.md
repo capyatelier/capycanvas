@@ -18,12 +18,13 @@ not wait for a double-click timer. With a tool drawer already open, selecting
 another group switches the drawer. Eyedropper and Color Picker keep their existing
 return-to-paint behavior.
 
-Secondary click opens variations above the existing customization actions. The
-corner button opens only variations. Keyboard context-menu actions and touch or
-pen holds use the same shared choices. Mouse holds only arm reordering; a drag
-closes a held menu and suppresses the following click. Menus show icons, checked
-choices, availability and shortcut hints. An unavailable remembered tool keeps
-its variations reachable.
+The triangle is a decorative group indicator. Clicking anywhere on the button,
+including the triangle, performs the same tool selection or drawer action.
+Secondary click opens variations above the existing customization actions.
+Keyboard context-menu actions and touch or pen holds use the same shared choices.
+Mouse holds only arm reordering; a drag closes a held menu and suppresses the
+following click. Menus show icons, checked choices, availability and shortcut
+hints. An unavailable remembered tool keeps its variations reachable.
 
 Every tool group uses the same softly rounded bottom-right triangle in Paint,
 Photo and Sketch, in both toolbars and the title bar. GTK, Web, Android and
@@ -31,9 +32,9 @@ Windows render the shared `tool-group` icon. Brush categories remain groups even
 when they contain only one preset; pinned brush presets and individual leaf
 tools have no group marker. The triangle's painted edges have at least 6px of
 right and bottom clearance, including Small, Medium and Large title-bar tools;
-the full corner remains clickable.
-Title-bar overflow keeps group corners reachable in scrolling lists; see
-[the window bar](window-bar.md).
+the corner stays part of the tool button's primary target, without a separate
+focus stop or menu action. Title-bar overflow preserves these interactions in
+scrolling lists; see [the window bar](window-bar.md).
 
 The tile icon follows the remembered variation, including brush media such as
 Marker, Pastel, Watercolor, Oil and Spray. Brush category tooltips also name the

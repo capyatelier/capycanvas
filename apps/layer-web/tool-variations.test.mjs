@@ -12,7 +12,10 @@ export async function checkToolVariations({call,evaluate,settle}) {
     if(device==='touch')await call('Input.dispatchTouchEvent',{type:{down:'touchStart',move:'touchMove',up:'touchEnd'}[type],touchPoints:type==='up'?[]:[{id:1,...point}]});
     else await call('Input.dispatchMouseEvent',{type:{down:'mousePressed',move:'mouseMoved',up:'mouseReleased'}[type],...point,button:'left',buttons:type==='up'?0:1,clickCount:1,pointerType:device});
   };
-  const click=async selector=>{await pointer('down',await rect(selector));await pointer('up');await settle();await pause(180);};
+  const clickPoint=async p=>{await pointer('down',p);await pointer('up');await settle();await pause(180);};
+  const click=async selector=>clickPoint(await rect(selector));
+  const key=async(key,modifiers=0)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key,code:key,windowsVirtualKeyCode:{F10:121,ArrowDown:40,Enter:13,Escape:27}[key],modifiers,...(type==='keyDown'&&key==='Enter'?{text:'\r'}:{})});await settle();};
+  const resize=async width=>{await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});await settle();await pause(180);};
   const settleDrawer=()=>wait(`(()=>{const root=document.querySelector('.content-drawer[data-drawer="tool"]');if(!root||root.inert)return false;const viewport=document.querySelector('#workspace'),heights=[...root.querySelectorAll(':scope > .drawer-column')].map(column=>column.scrollHeight),target=layerApp.app.drawer({viewport:[viewport.clientWidth,viewport.clientHeight],column:null,heights,progress:1,from:null,closing:false})?.placement.bounds;if(!target)return false;const actual=root.getBoundingClientRect(),offset=viewport.getBoundingClientRect();return Math.abs(actual.x-offset.x-target.x)<.5&&Math.abs(actual.y-offset.y-target.y)<.5&&Math.abs(actual.width-target.width)<.5&&Math.abs(actual.height-target.height)<.5})()`);
   const menuOpen=()=>evaluate("!!document.querySelector('.panel-context-menu:popover-open')");
   const closeMenu=()=>evaluate("document.querySelector('.panel-context-menu').hidePopover()");
@@ -22,23 +25,36 @@ export async function checkToolVariations({call,evaluate,settle}) {
     await click('[data-variation-choice]');
   };
   const groupView=anchor=>anchor.kind==='header'?`layerApp.app.header_view().items.find(i=>i.id===${anchor.id})`:`layerApp.app.panel_view('${anchor.panel}').tiles.find(t=>t.id===${anchor.tile})`;
-  const groupBody=(anchor,selector)=>anchor.kind==='header'?`${selector} .header-tool`:`${selector} > button:first-child`;
+  const groupBody=(anchor,selector)=>selector.includes('data-header-overflow-item')?selector:anchor.kind==='header'?`${selector} .header-tool`:`${selector} > button:first-child`;
   const markerPoint=async(anchor,selector)=>{
-    const geometry=await evaluate(`(()=>{const hit=document.querySelector(${JSON.stringify(selector+' .tool-variations')}),owner=document.querySelector(${JSON.stringify(groupBody(anchor,selector))}),shape=hit.querySelector('svg path'),box=shape.getBBox(),matrix=shape.getScreenCTM(),stroke=getComputedStyle(shape).stroke==='none'?0:parseFloat(getComputedStyle(shape).strokeWidth)/2,transform=(x,y)=>new DOMPoint(x,y).matrixTransform(matrix),corners=[[box.x-stroke,box.y-stroke],[box.x+box.width+stroke,box.y-stroke],[box.x-stroke,box.y+box.height+stroke],[box.x+box.width+stroke,box.y+box.height+stroke]].map(([x,y])=>transform(x,y)),ink={left:Math.min(...corners.map(p=>p.x)),right:Math.max(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),bottom:Math.max(...corners.map(p=>p.y))},bounds=owner.getBoundingClientRect(),target=hit.getBoundingClientRect(),style=getComputedStyle(owner),radii=style.borderBottomRightRadius.split(' '),radius=(value,length)=>Math.min(length/2,parseFloat(value)*(value.endsWith('%')?length/100:1)),rx=radius(radii[0],bounds.width),ry=radius(radii[1]||radii[0],bounds.height),corner=style.getPropertyValue('corner-bottom-right-shape')||style.getPropertyValue('corner-shape'),power=corner==='squircle'||corner==='superellipse(2)'?4:2,insideCorner=corners.every(p=>p.x<=bounds.right-rx||p.y<=bounds.bottom-ry||((p.x-(bounds.right-rx))/rx)**power+((p.y-(bounds.bottom-ry))/ry)**power<=1);let point;for(let y=1;y<8&&!point;y++)for(let x=1;x<8&&!point;x++){const p=new DOMPoint(box.x+box.width*x/8,box.y+box.height*y/8);if(shape.isPointInFill(p))point=transform(p.x,p.y);}if(!point)throw Error('Marker has no painted interior');return {clearance:[ink.left-bounds.left,bounds.right-ink.right,ink.top-bounds.top,bounds.bottom-ink.bottom],insideTarget:ink.left>=target.left&&ink.right<=target.right&&ink.top>=target.top&&ink.bottom<=target.bottom,insideCorner,paintedHit:hit.contains(document.elementFromPoint(point.x,point.y)),point:{x:point.x,y:point.y}}})()`);
+    const geometry=await evaluate(`(()=>{const hit=document.querySelector(${JSON.stringify(selector+' .tool-variations')}),owner=document.querySelector(${JSON.stringify(groupBody(anchor,selector))}),shape=hit.querySelector('svg path'),box=shape.getBBox(),matrix=shape.getScreenCTM(),stroke=getComputedStyle(shape).stroke==='none'?0:parseFloat(getComputedStyle(shape).strokeWidth)/2,transform=(x,y)=>new DOMPoint(x,y).matrixTransform(matrix),corners=[[box.x-stroke,box.y-stroke],[box.x+box.width+stroke,box.y-stroke],[box.x-stroke,box.y+box.height+stroke],[box.x+box.width+stroke,box.y+box.height+stroke]].map(([x,y])=>transform(x,y)),ink={left:Math.min(...corners.map(p=>p.x)),right:Math.max(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),bottom:Math.max(...corners.map(p=>p.y))},bounds=owner.getBoundingClientRect(),target=owner.getBoundingClientRect(),style=getComputedStyle(owner),radii=style.borderBottomRightRadius.split(' '),radius=(value,length)=>Math.min(length/2,parseFloat(value)*(value.endsWith('%')?length/100:1)),rx=radius(radii[0],bounds.width),ry=radius(radii[1]||radii[0],bounds.height),corner=style.getPropertyValue('corner-bottom-right-shape')||style.getPropertyValue('corner-shape'),power=corner==='squircle'||corner==='superellipse(2)'?4:2,insideCorner=corners.every(p=>p.x<=bounds.right-rx||p.y<=bounds.bottom-ry||((p.x-(bounds.right-rx))/rx)**power+((p.y-(bounds.bottom-ry))/ry)**power<=1);let point;for(let y=1;y<8&&!point;y++)for(let x=1;x<8&&!point;x++){const p=new DOMPoint(box.x+box.width*x/8,box.y+box.height*y/8);if(shape.isPointInFill(p))point=transform(p.x,p.y);}if(!point)throw Error('Marker has no painted interior');return {clearance:[ink.left-bounds.left,bounds.right-ink.right,ink.top-bounds.top,bounds.bottom-ink.bottom],insideTarget:ink.left>=target.left&&ink.right<=target.right&&ink.top>=target.top&&ink.bottom<=target.bottom,insideCorner,paintedHit:owner.contains(document.elementFromPoint(point.x,point.y)),labelClear:!owner.matches('[data-header-overflow-item]')||owner.querySelector('.header-overflow-label').getBoundingClientRect().right<=ink.left,decorative:hit.tagName==='SPAN'&&hit.getAttribute('aria-hidden')==='true'&&!hit.hasAttribute('tabindex')&&!hit.hasAttribute('aria-haspopup')&&!hit.hasAttribute('data-context'),point:{x:point.x,y:point.y}}})()`);
     assert.ok(geometry.clearance.every(gap=>gap>=6-.01),`marker ink including stroke clears owning button by 6px: ${JSON.stringify(geometry)}`);
-    assert.ok(geometry.insideTarget,'painted marker stays inside its native hit target');assert.ok(geometry.insideCorner,`painted marker stays inside rendered button corner: ${JSON.stringify(geometry)}`);assert.ok(geometry.paintedHit,'painted marker receives native corner input');
+    assert.ok(geometry.insideTarget,'painted marker stays inside its native hit target');assert.ok(geometry.insideCorner,`painted marker stays inside rendered button corner: ${JSON.stringify(geometry)}`);assert.ok(geometry.paintedHit,'painted marker input belongs to its tool button');assert.ok(geometry.decorative,'marker has no independent focus, accessibility or context target');assert.ok(geometry.labelClear,'overflow label leaves room for marker ink');
     return geometry.point;
+  };
+  const markerActivation=async(anchor,selector)=>{
+    const view=groupView(anchor);await send({type:'customize',action:{type:'close_expanded'}});await send({type:'invoke',command:'hand'});await wait(`!${view}.selected`);
+    await clickPoint(await markerPoint(anchor,selector));await wait(`${view}.selected`);
+    assert.equal(await menuOpen(),false,`${device}: inactive marker click selects without a context menu`);assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true,'inactive marker click does not open drawer');
+    await clickPoint(await markerPoint(anchor,selector));assert.equal(await menuOpen(),false,'active marker click opens full drawer without context menu');assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor);
+    await clickPoint(await markerPoint(anchor,selector));assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true,'active marker click closes full drawer');
+  };
+  const openChoices=async(anchor,selector)=>{
+    const p=await markerPoint(anchor,selector),drawer=await evaluate('layerApp.state().customization.drawer?.anchor??null');
+    if(device==='mouse')for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});
+    else {await pointer('down',p);await pause(620);assert.ok(await menuOpen(),`${device}: marker hold opens context menu`);await pointer('up');}
+    await settle();assert.ok(await menuOpen(),`${device}: context menu from tool button`);assert.deepEqual(await evaluate('layerApp.state().customization.drawer?.anchor??null'),drawer,'context gesture does not activate tool');
+    const rows=(await model(anchor)).sections.flat();assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));
   };
   const checkCommandGroup=async(anchor,selector,icons=[])=>{
     const view=groupView(anchor),body=groupBody(anchor,selector),rows=(await model({kind:'tool_variants',anchor})).sections.flat();
     assert.ok(rows.length,'existing command group has choices');assert.equal(await evaluate(`${view}.has_variants`),true);
-    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),false,'command group exposes its corner menu');
-    await markerPoint(anchor,selector);
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),false,'command group exposes its decorative corner');
+    await markerActivation(anchor,selector);
     await evaluate(`window.retainedCommandGroup=document.querySelector(${JSON.stringify(selector)})`);
     for(const icon of icons.length?icons:[rows.find(r=>!r.selected)?.icon??rows[0].icon]) {
       const choice=rows.find(row=>row.icon===icon);assert.ok(choice,`group exposes ${icon}`);
-      await click(`${selector} .tool-variations`);assert.ok(await menuOpen());
-      assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));
+      await openChoices(anchor,selector);
       await choose(choice.label);await wait(`${view}.selected`);
       assert.equal(await evaluate(`${view}.icon`),icon);
       assert.equal(await evaluate(`document.querySelector(${JSON.stringify(body+' > svg')}).dataset.asset`),icon,'native group icon follows chosen medium');
@@ -69,8 +85,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       assert.deepEqual(full.sections[0].map(r=>r.label),rows.map(r=>r.label));assert.ok(full.sections.length>1,'secondary menu keeps customization');
       for(device of ['mouse','touch','pen']) {
         await evaluate(`window.retainedVariationTile=document.querySelector(${JSON.stringify(selector)})`);
-        await click(`${selector} > .tool-variations`);assert.ok(await menuOpen(),`${device}: corner menu`);
-        assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(r=>r.label));
+        await markerActivation(anchor,selector);await openChoices(anchor,selector);
         const alternate=(await model({kind:'tool_variants',anchor})).sections.flat().find(r=>!r.selected);await choose(alternate.label);
         assert.equal(await menuOpen(),false);
         const view=await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id})`);
@@ -109,6 +124,12 @@ export async function checkToolVariations({call,evaluate,settle}) {
       device='mouse';const p=await rect(`${selector} > button:first-child`);
       for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});await settle();
       assert.ok(await menuOpen());assert.ok(await evaluate("document.querySelectorAll('.panel-context-menu .menu-label').length")>rows.length);await closeMenu();
+      await evaluate(`document.querySelector(${JSON.stringify(groupBody(anchor,selector))}).focus()`);
+      await key('F10',8);assert.ok(await menuOpen(),'keyboard context action keeps tool choices available');
+      assert.equal(await evaluate("!!document.activeElement.closest('.panel-context-menu')"),true,'keyboard menu owns focus');
+      await key('ArrowDown');const choice=await evaluate('document.activeElement.menuItem');assert.ok(rows.some(row=>row.label===choice.label),'arrow key reaches a tool variant');
+      await key('Enter');assert.equal(await menuOpen(),false,'Enter activates focused variant');assert.equal(await evaluate(`${groupView(anchor)}.icon`),choice.icon);
+      await evaluate(`document.querySelector(${JSON.stringify(groupBody(anchor,selector))}).focus()`);await key('F10',8);await key('Escape');assert.equal(await menuOpen(),false);assert.equal(await evaluate(`document.activeElement===document.querySelector(${JSON.stringify(groupBody(anchor,selector))})`),true,'Escape returns focus to tool button');
       await shot(`${workspace}-${theme}`);
       await send({type:'restore_workspace',workspace:fixture});
     }
@@ -132,7 +153,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         const anchor={kind:'tile',panel:'toolbar',tile:tile.id},selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,view=groupView(anchor);
         const rows=(await model({kind:'tool_variants',anchor})).sections.flat();
         assert.ok(rows.some(row=>row.icon===(slot==='manual_selection'?'lasso':'auto-select')));
-        await click(`${selector} .tool-variations`);await choose(rows[0].label);await wait(`${view}.selected`);
+        await openChoices(anchor,selector);await choose(rows[0].label);await wait(`${view}.selected`);
         const dock='.dock-group .brushes-control .tool-subtools';
         const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
         assert.deepEqual([...dockLabels].sort(),rows.map(row=>row.label).sort(),'docked Tool Set uses the same scoped choices as the menu');
@@ -168,15 +189,32 @@ export async function checkToolVariations({call,evaluate,settle}) {
       fixture.layout.header.size=size;
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
       const anchor={kind:'header',id:entry.id},rows=(await model({kind:'tool_variants',anchor})).sections.flat();
-      const selector=`[data-header-item="${entry.id}"]`,painted=await markerPoint(anchor,selector);
-      await pointer('down',painted);await pointer('up');await settle();assert.ok(await menuOpen(),`${theme}/${size}: painted corner opens menu`);
-      assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));await choose(rows.find(r=>!r.selected).label);
+      const selector=`[data-header-item="${entry.id}"]`;
+      for(device of ['mouse','touch','pen']){await markerActivation(anchor,selector);await openChoices(anchor,selector);await choose(rows.find(r=>!r.selected).label);}
       const view=await evaluate(`layerApp.app.header_view().items.find(i=>i.id===${entry.id})`);
       assert.equal(await evaluate(`document.querySelector('[data-header-item="${entry.id}"] .header-tool > svg').dataset.asset`),view.icon);
       assert.equal(await evaluate(`document.querySelector('[data-header-item="${entry.id}"] .header-tool').getAttribute('aria-label')`),view.label);
       await markerPoint(anchor,selector);await shot(`header-marker-${size}-${theme}`);
+      const zone=fixture.layout.header.zones.findIndex(items=>items.some(item=>item.id===entry.id)),overflow=`#header-overflow-${zone}`,row=`[data-header-overflow-item="${entry.id}"]`,openOverflow=async()=>{if(!await evaluate(`document.querySelector('${overflow}').open`))await click(`${overflow} > summary`);};
+      await resize(200);await wait(`document.querySelector('${selector}').hidden`);
+      for(device of ['mouse','touch','pen']) {
+        await send({type:'invoke',command:'hand'});await wait(`!${groupView(anchor)}.selected`);await openOverflow();if(device==='mouse')await shot(`header-overflow-marker-${size}-${theme}`);await clickPoint(await markerPoint(anchor,row));await wait(`${groupView(anchor)}.selected`);
+        assert.equal(await menuOpen(),false,'overflow marker selects through its tool row');assert.equal(await evaluate('layerApp.state().customization.drawer==null'),true);
+        await openOverflow();await clickPoint(await markerPoint(anchor,row));assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'active overflow marker opens full drawer');await send({type:'customize',action:{type:'close_expanded'}});
+        await openOverflow();await openChoices(anchor,row);await choose(rows.find(r=>!r.selected).label);
+      }
+      await resize(1400);
+    }
+    for(const theme of ['light','dark']) {
+      fixture.layout.header.size='medium';entry.item.control={kind:'tool_slot',slot:'figure'};await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});await send({type:'invoke',command:'hand'});await send({type:'invoke',command:'quick_mask'});
+      const anchor={kind:'header',id:entry.id},selector=`[data-header-item="${entry.id}"]`,view=groupView(anchor),zone=fixture.layout.header.zones.findIndex(items=>items.some(item=>item.id===entry.id)),overflow=`#header-overflow-${zone}`,row=`[data-header-overflow-item="${entry.id}"]`;
+      await wait(`!${view}.enabled`);assert.equal(await evaluate(`document.querySelector('${selector} .header-tool').disabled`),true);
+      for(device of ['mouse','touch','pen']){await clickPoint(await markerPoint(anchor,selector));assert.equal(await evaluate(`${view}.selected`),false,'disabled marker cannot activate its tool');assert.equal(await menuOpen(),false);await openChoices(anchor,selector);await closeMenu();}
+      await resize(200);await wait(`document.querySelector('${selector}').hidden`);await click(`${overflow} > summary`);assert.equal(await evaluate(`document.querySelector('${row}').disabled`),true);
+      for(device of ['mouse','touch','pen']){await clickPoint(await markerPoint(anchor,row));assert.equal(await evaluate(`${view}.selected`),false,'disabled overflow marker cannot activate its tool');assert.equal(await menuOpen(),false);await openChoices(anchor,row);await closeMenu();}
+      await resize(1400);await send({type:'invoke',command:'return_to_artwork'});
     }
     await send({type:'restore_workspace',workspace:saved});
-    console.log('PASS: Photo 15/Paint 17 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder, inset toolbar/header marker ink and Small/Medium/Large painted-corner menus in both themes');
-  } finally {device='mouse';await closeMenu();await click(`.workspace-switcher button[data-workspace-id="${original}"]`);}
+    console.log('PASS: Photo 15/Paint 17 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder, inset decorative toolbar/header/overflow markers, Small/Medium/Large painted-corner selection/drawers, disabled group rightclick/holds and keyboard menu focus/navigation/activation/Escape in both themes');
+  } finally {device='mouse';await closeMenu();await resize(1400);await click(`.workspace-switcher button[data-workspace-id="${original}"]`);}
 }

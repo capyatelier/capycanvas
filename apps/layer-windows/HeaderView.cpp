@@ -49,7 +49,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
     std::unique_ptr<HeaderInput> input;
     std::unique_ptr<HeaderStatus> systemStatus;
     struct Item{
-        Border frame,outline;Grid content;Button editor{nullptr},variants{nullptr};FrameworkElement view{nullptr};
+        Border frame,outline;Grid content;Button editor{nullptr};Image variants{nullptr};FrameworkElement view{nullptr};
         Image grip{nullptr};J entry;hstring key,iconKey;std::shared_ptr<CapyUi::ColorPair> colors;
     };
     std::map<uint32_t,Item> items;std::vector<Border> bars;
@@ -392,7 +392,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 ColumnDefinition body;body.Width({1,GridUnitType::Star});native.content.ColumnDefinitions().Append(body);
                 native.grip=panelGrip(data->theme());native.content.Children().Append(native.grip);Grid::SetColumn(native.view,1);native.content.Children().Append(native.view);
                 Grid layers;layers.Children().Append(native.content);
-                if(kind==L"tool"){native.variants=ToolVariantsButton(data,O({{L"kind",S(L"header")},{L"id",N(id)}}),L"header-variants-"+to_hstring(id));layers.Children().Append(native.variants);}
+                if(kind==L"tool"){native.variants=ToolGroupMarker(data);layers.Children().Append(native.variants);}
                 native.editor=button(data,L"",[weak=weak_from_this(),id]{if(auto self=weak.lock())self->input->Select(id);});
                 native.editor.Background(clear());native.editor.HorizontalAlignment(HorizontalAlignment::Stretch);native.editor.VerticalAlignment(VerticalAlignment::Stretch);
                 layers.Children().Append(native.editor);
@@ -402,7 +402,7 @@ struct HeaderView::Impl:std::enable_shared_from_this<Impl>{
                 canvas.Children().Append(native.frame);Canvas::SetZIndex(native.frame,5);
             }
             native.entry=entry;auto spec=findId(array(view,L"items"),id);auto label=str(spec,L"label");
-            if(native.variants){native.variants.Visibility(!editing&&flag(spec,L"has_variants")?Visibility::Visible:Visibility::Collapsed);AutomationProperties::SetName(native.variants,label);tooltip(native.variants,label);}
+            if(native.variants)native.variants.Visibility(!editing&&flag(spec,L"has_variants")?Visibility::Visible:Visibility::Collapsed);
             input->Source(native.frame,O({{L"kind",S(L"item")},{L"value",N(id)}}),label);
             AutomationProperties::SetName(native.editor,label);
             tooltip(native.frame,kind==L"tool"&&pickerControl(object(item,L"control"))&&!editing?pickerTooltip(label):label);

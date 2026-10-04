@@ -106,12 +106,14 @@ export function createHeader({app, state, paintPair, workspace, element, button,
           });
           const grip=element('span','header-item-grip');grip.setAttribute('aria-hidden','true');grip.append(icon('grip'));
           row.append(grip,element('span','header-overflow-label'));row.dataset.headerOverflowItem=id;
+          if(entries().find(e=>e.id===id)?.item.kind==='tool')row.append(customization.variationMarker());
           customization.target(row,{kind:'header',id});
           if(entries().find(e=>e.id===id)?.item.kind==='workspaces')workspaceOptions(row);
           rows.set(id,row);
         }
         row.querySelector('.header-overflow-label').textContent=spec.label;
         row.querySelector('.header-item-grip').hidden=!editing;row.disabled=!editing&&!spec.enabled;
+        const variants=row.querySelector('.tool-variations');if(variants)variants.hidden=editing||!spec.has_variants;
         if(contents.children[order]!==row)contents.insertBefore(row,contents.children[order]||null);
       }
       // Nested application menus replace this container outside editing.
@@ -138,7 +140,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
       const command={capy:'zen_mode',settings:'settings',fullscreen:'fullscreen'}[kind];
       if(command)b.dataset.command=command;
       content.append(b);
-      if(kind==='tool'){r.variants=customization.variationButton({kind:'header',id:entry.id});content.append(r.variants);}
+      if(kind==='tool'){r.variants=customization.variationMarker();b.append(r.variants);}
     } else if(kind==='menu') content.append(menu(primary,()=>copy.main_menu,'menu','header-menu-overflow'));
     else if(kind==='menu_labels') {
       const labels=element('div','header-menu-labels');
@@ -226,13 +228,13 @@ export function createHeader({app, state, paintPair, workspace, element, button,
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
         const glyph=command?.icon||spec.icon;
         const pair=(spec.resolved_control??r.entry.item.control)?.kind==='color';
-        if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==pair))r.button.replaceChildren(icon(glyph,pair));
+        if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==pair))r.button.replaceChildren(icon(glyph,pair),...(r.variants?[r.variants]:[]));
         r.button.title=command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));
         r.button.classList.toggle('brush-color',(spec.resolved_control??r.entry.item.control)?.kind==='color');
       }
-      if(r.variants){r.variants.hidden=editing||!spec.has_variants;r.variants.title=spec.label;r.variants.setAttribute('aria-label',spec.label);}
+      if(r.variants)r.variants.hidden=editing||!spec.has_variants;
       if(r.full)for(const menu of r.full.querySelectorAll('[data-menu]')) {
         const label=menuModels.find(m=>m.id===menu.dataset.menu)?.label;
         if(label){const summary=menu.querySelector('summary');summary.textContent=label;summary.setAttribute('aria-label',label);}

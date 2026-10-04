@@ -87,24 +87,42 @@ fn painted_group_point(d: &Driver, button: &gtk::Widget) -> [f32; 2] {
          center[1] / painted.len() as f32 / height as f32])
 }
 
+fn secondary_group_click(d: &mut Driver, widget: &gtk::Widget) {
+    let point = d.point(widget);
+    d.input.perform(serde_json::json!([
+        {"point":point},{"button":273,"down":true},{"button":273,"down":false}
+    ]));
+}
+fn assert_triangle_activation(d: &mut Driver, button: &gtk::Widget, anchor: DrawerAnchor) {
+    let corner = painted_group_point(d, button);
+    d.input.click(corner);
+    assert!(!variant_context(d).is_visible(), "decorative marker follows button activation");
+    assert!(state(&d.w).customization.drawer.is_none(), "first click selects the inactive group");
+    d.input.click(corner);
+    assert!(!variant_context(d).is_visible());
+    assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+    d.input.click(corner);
+    assert!(state(&d.w).customization.drawer.is_none());
+}
 fn header_group_variations(d: &mut Driver, theme: Theme) {
     for size in [HeaderSize::Small, HeaderSize::Medium, HeaderSize::Large] {
         d.w.dispatch(HeaderAction::SetSize { size }.action());
-        d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
         pump(200);
         let control = ToolbarControl::Command { command: CommandId::DrawingBrush };
         let widget = d.named(&d.header_tool(control));
         let button = descendant::<gtk::Button>(&widget).unwrap().upcast::<gtk::Widget>();
         assert_group_marker(&button, true);
-        let corner = painted_group_point(d, &button);
+        let id = state(&d.w).workspace.layout.header.entries().find(|entry|
+            entry.item == HeaderItem::Tool { control }).unwrap().id;
+        let anchor = DrawerAnchor::Header { id };
+        assert_triangle_activation(d, &button, anchor);
+        assert!(ui_session(&d.w).command(CommandId::DrawingBrush).selected);
         d.capture_canvas(&format!("header-group-{size:?}-{theme:?}.png"));
         d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
         pump(150);
         let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
-        let id = state(&d.w).workspace.layout.header.entries().find(|entry|
-            entry.item == HeaderItem::Tool { control }).unwrap().id;
-        let anchor = DrawerAnchor::Header { id };
-        d.input.click(corner);
+        secondary_group_click(d, &button);
         assert!(variant_context(d).is_mapped());
         assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
         capture_popover(&variant_context(d), d.input.dir.join(
@@ -122,7 +140,7 @@ fn header_group_variations(d: &mut Driver, theme: Theme) {
 fn choose_group(d: &mut Driver, anchor: DrawerAnchor, group: layer_ui::ToolGroup) {
     let widget = anchor_widget(d, anchor);
     let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
-    d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+    secondary_group_click(d, &widget);
     assert!(variant_context(d).is_visible());
     assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before,
         "opening an inactive group's chooser does not activate it");
@@ -165,7 +183,7 @@ fn paint_category_variations(d: &mut Driver, theme: Theme) {
         let anchor = control_anchor(d, ToolbarControl::Command { command });
         let widget = anchor_widget(d, anchor);
         assert_group_marker(&widget, true);
-        d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+        secondary_group_click(d, &widget);
         assert!(variant_context(d).is_visible());
         let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
         assert!(!menu.sections[0].is_empty());
@@ -196,7 +214,7 @@ fn paint_selection_variations(d: &mut Driver, theme: Theme) {
     ] {
         let anchor = slot_anchor(d, slot);
         let widget = anchor_widget(d, anchor);
-        d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+        secondary_group_click(d, &widget);
         choose_variant(d, anchor, 0);
         let view = state(&d.w).tool_set;
         let actual = view.subtools.iter().filter_map(|item| match item.action {
@@ -257,7 +275,7 @@ fn sketch_group_variations(d: &mut Driver, theme: Theme) {
     let widget = anchor_widget(d, anchor);
     assert_group_marker(&widget, true);
     let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
-    d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+    secondary_group_click(d, &widget);
     assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
     let index = menu.sections[0].iter().position(|item| matches!(item.action,
@@ -290,6 +308,8 @@ fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
     let hidden = model.entries().find(|entry|
         matches!(entry.item, HeaderItem::Tool { control } if control.has_variants())
             && !d.named(&format!("header-item-{}", entry.id)).is_mapped()).unwrap();
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+    pump(150);
     let zone = model.location(hidden.id).unwrap().0;
     d.click_name(&format!("header-overflow-{}", zone.index()));
     let row = d.named(&format!("header-overflow-item-{}", hidden.id));
@@ -301,13 +321,28 @@ fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
     assert!(top_left[0] >= 0. && top_left[1] >= 0.
         && bottom_right[0] <= d.w.window.width() as f32
         && bottom_right[1] <= d.w.window.height() as f32);
-    let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
     let marker = find_named(&row, "layer-tool-group-symbolic").unwrap();
     let label = descendant::<gtk::Label>(&row).unwrap();
     let label_bounds = label.compute_bounds(&row).unwrap();
     assert!(label_bounds.x() + label_bounds.width() <= marker.compute_bounds(&row).unwrap().x());
-    let corner = painted_group_point(d, &row);
-    d.input.click(corner);
+    d.input.click(painted_group_point(d, &row));
+    assert!(!variant_context(d).is_visible());
+    assert!(!overflow.is_mapped());
+    assert!(ui_session(&d.w).command(CommandId::DrawingBrush).selected);
+    assert!(state(&d.w).customization.drawer.is_none());
+    d.click_name(&format!("header-overflow-{}", zone.index()));
+    let row = d.named(&format!("header-overflow-item-{}", hidden.id));
+    d.input.click(painted_group_point(d, &row));
+    assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor,
+        DrawerAnchor::Header { id: hidden.id });
+    assert!(!variant_context(d).is_visible());
+    d.input.key(0xff1b);
+    assert!(state(&d.w).customization.drawer.is_none());
+    d.click_name(&format!("header-overflow-{}", zone.index()));
+    let row = d.named(&format!("header-overflow-item-{}", hidden.id));
+    let overflow = d.named("header-overflow-popup").downcast::<gtk::Popover>().unwrap();
+    let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+    secondary_group_click(d, &row);
     let context = variant_context(d);
     assert!(context.is_mapped());
     assert!(!overflow.is_mapped());
@@ -371,8 +406,12 @@ fn native_toolbar_variations_input() {
             let panels = state(&d.w).workspace.layout.panels;
             let history = ui_session_mut(&d.w).capture_workspace().unwrap().history.generation;
             let revision = ui_session(&d.w).engine().document().revision;
-            let corner = screen_point(&button, &d.w.window, [0.9, 0.9]);
-            d.input.click(corner);
+            d.w.dispatch(UiAction::Invoke { command: if slot == ToolSlotId::Drawing {
+                CommandId::Lasso
+            } else { CommandId::Brush } });
+            pump(150);
+            assert_triangle_activation(&mut d, &button, anchor);
+            secondary_group_click(&mut d, &button);
             assert!(variant_context(&d).is_visible());
             let icons = descendants::<gtk::Image>(variant_context(&d).upcast_ref())
                 .into_iter().filter(|image| crate::icons::name(image).is_some_and(|name| name.starts_with("layer-")))
@@ -399,7 +438,7 @@ fn native_toolbar_variations_input() {
             let sibling = mapped_label(&drawer, &menu.sections[0][0].label).unwrap();
             d.click(&sibling);
             assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
-            d.input.click(corner);
+            secondary_group_click(&mut d, &button);
             choose_variant(&mut d, anchor, 0);
             assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
             d.click(&button);
@@ -437,7 +476,7 @@ fn native_toolbar_variations_input() {
             });
             pump(350);
             let floating = d.named(&name);
-            d.input.click(screen_point(&floating, &d.w.window, [0.95, 0.9]));
+            secondary_group_click(&mut d, &floating);
             assert!(variant_context(&d).is_visible(), "labeled floating variation menu");
             choose_variant(&mut d, anchor, 1);
             d.capture_canvas(&format!("tool-variations-floating-{preset:?}-{theme:?}.png"));
@@ -453,7 +492,7 @@ fn native_toolbar_variations_input() {
                 let id = state(&d.w).workspace.layout.header.entries()
                     .find(|entry| entry.item == HeaderItem::Tool { control }).unwrap().id;
                 let anchor = DrawerAnchor::Header { id };
-                d.input.click(screen_point(&header, &d.w.window, [0.9, 0.9]));
+                secondary_group_click(&mut d, &header);
                 assert!(variant_context(&d).is_visible());
                 choose_variant(&mut d, anchor, 2);
                 let view = ui_session(&d.w).header_view_with(false);

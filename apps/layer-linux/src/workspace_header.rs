@@ -683,7 +683,7 @@ impl Header {
                 }
                 let id = entry.id;
                 if matches!(entry.item, HeaderItem::Tool { control } if control.has_variants()) {
-                    customization::tool_variations_button(w, &b, layer_ui::DrawerAnchor::Header { id });
+                    customization::tool_group_marker(&b);
                 }
                 let command = match entry.item {
                     HeaderItem::Capy => Some(CommandId::ZenMode),
@@ -1196,7 +1196,7 @@ impl Header {
                 }
                 let id = *id;
                 if matches!(entry.item, HeaderItem::Tool { control } if control.has_variants()) {
-                    customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Header { id });
+                    customization::tool_group_marker(&button);
                 }
                 button.connect_clicked(glib::clone!(
                     #[weak]

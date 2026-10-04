@@ -103,9 +103,8 @@ set's last tool. **Sculpt** opens **Sculpting → Tools → Tool** with Blend,
 Liquify, Clone, Heal and Spot Heal, and Eraser has a two-panel **Tools → Tool** drawer. Brush and Sculpt
 each remember their own selection across workspace switches and restarts.
 Brush, Sculpt, Eraser and Select use the same corner triangle and subgroup icons
-as Paint and Photo. Their corner buttons, secondary clicks and touch or pen
-holds open the compact variation menu; clicking the selected main button still
-opens the full drawer.
+as Paint and Photo, with the same
+[tool selection and menu interactions](panel-customization.md#tool-variations).
 Brushes, Sculpting and Tools are ordinary panels: Brushes starts 160 logical
 pixels wide, shrinks to 104, and uses rows at least 44 pixels tall (48 dp on
 Android). **Select** remembers the last selection tool and opens a two-panel

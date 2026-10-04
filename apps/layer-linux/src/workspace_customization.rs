@@ -30,11 +30,7 @@ pub(super) fn tool_button_content(button: &gtk::Button) -> Option<gtk::Widget> {
     })
 }
 
-pub(super) fn tool_variations_button(
-    w: &Rc<Workspace>,
-    button: &gtk::Button,
-    anchor: layer_ui::DrawerAnchor,
-) {
+pub(super) fn tool_group_marker(button: &gtk::Button) {
     let overlay = gtk::Overlay::new();
     let content = button.child();
     button.set_child(gtk::Widget::NONE);
@@ -49,25 +45,6 @@ pub(super) fn tool_variations_button(
     overlay.add_overlay(&indicator);
     button.set_child(Some(&overlay));
     button.update_property(&[gtk::accessible::Property::HasPopup(true)]);
-    let click = gtk::GestureClick::new();
-    click.set_name(Some("tool-variations-click"));
-    click.set_button(1);
-    click.set_propagation_phase(gtk::PropagationPhase::Capture);
-    click.connect_pressed(glib::clone!(#[weak] w, move |gesture, _, x, y| {
-        let Some(widget) = gesture.widget() else { return; };
-        if !w.header.is_editing()
-            && x >= (widget.width() - 14) as f64
-            && y >= (widget.height() - 14) as f64
-        {
-            let pending = w.workspace_drag.borrow().clone();
-            if let Some(pending) = pending {
-                w.workspace_drag_input(ContactPhase::Cancel, pending.point, pending.sequence);
-            }
-            gesture.set_state(gtk::EventSequenceState::Claimed);
-            w.show_context(&widget, ContextTarget::ToolVariants { anchor }, x, y);
-        }
-    }));
-    button.add_controller(click);
 }
 
 pub(super) fn tile_button(

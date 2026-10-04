@@ -69,22 +69,10 @@ inline void TrackPopup(Primitives::FlyoutBase const& popup,std::shared_ptr<Works
     popup.Opened([data,open](auto&&,auto&&){if(!std::exchange(*open,true))data->popup(true);});
     popup.Closed([data,open](auto&&,auto&&){if(std::exchange(*open,false))data->popup(false);});
 }
-inline Button ToolVariantsButton(std::shared_ptr<WorkspaceData> const& data,J const& anchor,hstring const& identifier){
-    auto popup=std::make_shared<MenuFlyout>(nullptr);
-    auto pick=button(data,L"",[]{});pick.Width(16);pick.Height(16);pick.Padding({0});pick.Background(clear());
-    pick.HorizontalAlignment(HorizontalAlignment::Right);pick.VerticalAlignment(VerticalAlignment::Bottom);
-    pick.Content(icon(L"tool-group",data->theme(),16));AutomationProperties::SetAutomationId(pick,identifier);
-    pick.Click([data,anchor,popup,owner=make_weak(pick)](auto&&,auto&&){
-        QueryWorkspace(data->query,O({{L"type",S(L"context")},{L"target",O({{L"kind",S(L"tool_variants")},{L"anchor",anchor}})}}),
-            [data,popup,owner](J reply){
-                auto target=owner.get();auto model=object(reply,L"result");
-                if(!target||!target.IsLoaded()||target.Visibility()!=Visibility::Visible||!array(model,L"sections").Size())return;
-                if(*popup)(*popup).Hide();*popup=MenuFlyout();TrackPopup(*popup,data);
-                NativeMenuItems((*popup).Items(),array(model,L"sections"),data,[data](J action){data->dispatch(action);});
-                (*popup).ShowAt(target);
-            });
-    });
-    return pick;
+inline Image ToolGroupMarker(std::shared_ptr<WorkspaceData> const& data){
+    auto marker=icon(L"tool-group",data->theme(),16);
+    marker.HorizontalAlignment(HorizontalAlignment::Right);marker.VerticalAlignment(VerticalAlignment::Bottom);
+    return marker;
 }
 
 }

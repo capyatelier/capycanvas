@@ -74,7 +74,7 @@ import kotlin.math.roundToInt
                         fontWeight = if (geometry.getBoolean("tile_label_bold")) FontWeight.Bold else FontWeight.Normal,
                         maxLines = labelLines, overflow = TextOverflow.Ellipsis)
                 }
-                if (tile.optBoolean("has_variants")) ToolVariantsButton(host, anchor, tile.getString("tooltip"),
+                if (tile.optBoolean("has_variants")) ToolGroupIndicator(
                     Modifier.align(Alignment.BottomEnd).testTag("tile-variants-${panel.getString("id")}-${tile.getInt("id")}"))
                 }
                 }

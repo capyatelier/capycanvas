@@ -37,8 +37,8 @@ marks keep their own square viewBoxes.
 The `tool-group` corner marker uses 1px rounded corners and 60% opacity within
 its 16px box, keeping the triangle quieter than the tool icon. Its painted
 right and bottom edges sit 6px inside that box so the marker clears the tile's
-squircle border at every title-bar size. Hosts align the box to the corner and
-keep the full corner hit target.
+squircle border at every title-bar size. Hosts align the box to the corner as a
+decorative overlay; input passes through to the tool button.
 The shared `more-small` and `grip` icons use 2px dots centered at y=3, 8 and 13,
 for 12px-tall artwork within their 16px boxes. Their integer coordinates align
 the dots' bounds to pixels: one column at x=8 for `more-small`, two at x=5 and 11

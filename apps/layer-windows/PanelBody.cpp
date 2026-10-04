@@ -116,9 +116,8 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                 // A disabled command remains disabled and accessible as such;
                 // its surrounding tile still accepts customization gestures.
                 Border slot;slot.Background(clear());Grid tileContent;tileContent.Children().Append(pick);
-                auto variants=ToolVariantsButton(data,item,L"tile-variants-"+panelId+L"-"+to_hstring(uint32_t(id)));
+                auto variants=ToolGroupMarker(data);
                 tileContent.Children().Append(variants);slot.Child(tileContent);attach(slot);
-                if(gestures)gestures->Source(variants,J{},O({{L"kind",S(L"tool_variants")},{L"anchor",item}}));
                 tileControls.emplace(uint32_t(id),pick);
                 pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.VerticalAlignment(VerticalAlignment::Stretch);
                 double radius=num(tileGeometry,L"tile_corner_radius",SurfaceRadius);
@@ -153,7 +152,6 @@ PanelBody::PanelBody(std::shared_ptr<WorkspaceData> source,J const& panel,J cons
                         *tileIconName=name;tileIcon.Source(icon(name,data->theme()).Source());
                     }
                     variants.Visibility(flag(current,L"has_variants")?Visibility::Visible:Visibility::Collapsed);
-                    AutomationProperties::SetName(variants,str(current,L"label"));tooltip(variants,str(current,L"tooltip"));
                     AutomationProperties::SetName(pick,str(current,L"label"));
                     bool enabled=flag(current,L"enabled");
                     pick.IsEnabled(enabled);pick.Opacity(enabled?1.:.36);
