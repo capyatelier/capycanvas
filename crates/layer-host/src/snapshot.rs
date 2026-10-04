@@ -280,6 +280,11 @@ impl NativeHost {
         map.serialize_entry("color_preview", &self.color_preview())?;
         let colors = state.display_colors();
         map.serialize_entry("color_panel", &self.color_view(colors))?;
+        let (display, rendition) = match self.ui_color {
+            crate::UiColor::Mapped => (layer_core::color::RgbSpace::Srgb, Some(self.session.effective_sdr_rendition())),
+            crate::UiColor::Tagged(space) => (space, None),
+        };
+        map.serialize_entry("paint_pair", &colors.paint_pair(display, rendition))?;
         map.serialize_entry(
             "palette_panel",
             &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
@@ -400,6 +405,34 @@ mod tests {
             }
             let snapshot = host.take_value().unwrap();
             assert_eq!(snapshot["color_preview"]["view"], snapshot["color_panel"], "{platform:?}");
+        }
+    }
+    #[test]
+    fn paint_pair_publishes_selection_only_and_mask_changes() {
+        use layer_ui::{ColorAction, ColorSlot};
+        for platform in [Platform::Android, Platform::Windows] {
+            let mut host = host(platform);
+            let initial = host.take_value().unwrap()["paint_pair"].clone();
+            host.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Background } }).unwrap();
+            let selected = host.take_value().unwrap()["paint_pair"].clone();
+            assert_eq!(selected["front_swatch"], "background");
+            assert_eq!(selected["swatches"], initial["swatches"]);
+            host.dispatch(UiAction::Color { action: ColorAction::ToggleTransparent }).unwrap();
+            assert_eq!(host.take_value().unwrap()["paint_pair"], selected);
+            host.dispatch(UiAction::Color { action: ColorAction::QuickColor { white: false } }).unwrap();
+            let temporary = host.take_value().unwrap()["paint_pair"].clone();
+            assert_eq!(temporary["front_swatch"], "foreground");
+            assert_eq!(temporary["rgba"], serde_json::json!([0., 0., 0., 1.]));
+            assert_eq!(temporary["swatches"], initial["swatches"]);
+            host.dispatch(UiAction::Invoke { command: CommandId::QuickMask }).unwrap();
+            let mask = host.take_value().unwrap();
+            assert_eq!(mask["paint_pair"]["definition"], mask["color_panel"]["definition"]);
+            host.dispatch(UiAction::Color { action: ColorAction::Select { slot: ColorSlot::Background } }).unwrap();
+            let mask = host.take_value().unwrap();
+            assert_eq!(mask["paint_pair"]["front_swatch"], "background");
+            assert_eq!(mask["paint_pair"]["definition"], mask["color_panel"]["definition"]);
+            host.dispatch(UiAction::Invoke { command: CommandId::QuickMask }).unwrap();
+            assert_eq!(host.take_value().unwrap()["paint_pair"], temporary);
         }
     }
     fn decoded(bytes: Option<Vec<u8>>) -> Option<Value> {

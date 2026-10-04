@@ -10,6 +10,8 @@ mod okhsv;
 mod editor;
 mod hdr_picker;
 mod quick_colors;
+mod paint_pair;
+pub use paint_pair::{PaintPairView, PaintSwatchView};
 pub use quick_colors::QuickColorView;
 use hdr_picker::HdrPaint;
 mod hdr_arc;

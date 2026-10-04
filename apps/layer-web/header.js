@@ -1,9 +1,9 @@
 import {liveCopy,bindCopy} from './localization.js';
 // Retained DOM projection of Rust's title bar. DOM measurements are inputs;
 // allocation, overflow, drag slots, validation and publication stay in Rust.
-import { pickerButtonAction } from './color-controls.js';
+import { pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
 
-export function createHeader({app, state, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
+export function createHeader({app, state, paintPair, workspace, element, button, icon, place, dispatch, customization, systemStatus, updateZen, documents}) {
   const copy=liveCopy(app,"catalog").native_copy.header,common=liveCopy(app,"bootstrap_view").common,labels=liveCopy(app,"header_view");
   const root = document.querySelector('#header');
   const retained = element('div'); retained.hidden = true; workspace.append(retained);
@@ -225,7 +225,8 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       if(r.button) {
         const kind=r.entry.item.kind, command=state().commands.find(c=>c.id===r.button.dataset.command);
         const glyph=command?.icon||spec.icon;
-        if(glyph && r.button.firstChild?.dataset.asset!==glyph)r.button.replaceChildren(icon(glyph));
+        const pair=(spec.resolved_control??r.entry.item.control)?.kind==='color';
+        if(glyph && (r.button.firstChild?.dataset.asset!==glyph || r.button.firstChild?.hasAttribute('data-paint-pair')!==pair))r.button.replaceChildren(icon(glyph,pair));
         r.button.title=command?.tooltip||spec.label; r.button.setAttribute('aria-label',command?.label||spec.label);
         r.button.disabled=!editing&&(!spec.enabled||(kind==='fullscreen'&&!document.fullscreenEnabled));
         r.button.setAttribute('aria-pressed',String(spec.selected));
@@ -365,6 +366,7 @@ export function createHeader({app, state, workspace, element, button, icon, plac
       contact.active=true;customization.dismissContext();suppressed=contact.id;
       ghost=contact.node.cloneNode(true);ghost.removeAttribute('id');
       for(const n of ghost.querySelectorAll('[id]'))n.removeAttribute('id');
+      for(const svg of ghost.querySelectorAll('svg[data-paint-pair]'))updatePaintPairIcon(svg,paintPair());
       ghost.classList.add('header-drag-preview');ghost.inert=true;ghost.hidden=false;
       if(contact.node.matches('[data-header-overflow-item]'))ghost.classList.add('header-overflow-preview');
       ghost.style.setProperty('--header-tile',`${size.tile}px`);ghost.style.setProperty('--header-icon',`${size.icon}px`);

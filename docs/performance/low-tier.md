@@ -65,7 +65,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
 | Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 59.02–59.52 Hz, maximum p99 33.31 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
-| Colour wheel or picker drag | 60 | | |
+| Colour wheel or picker drag | 60 | **Unqualified.** Committed-wheel diagnostic: mouse 48.24–51.16 UI Hz, touch 52.80–54.39; maximum p99 49.98 ms (2048 × 1536) | [Live paint icon diagnostic](#live-paint-icon-diagnostic) below |
 | Slider scrub: size, opacity, flow | 60 | | |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
 | Tool Options or panel content change | 60 | **Not met.** UI frame p50/p95 25.4/35.3 ms | Canvas-bar `ui-panel-change`, 2026-09-27 |
@@ -102,6 +102,33 @@ App APK SHA-256:
 `8a695ee0e8ad77209f06ad685e88aa012d647e003ca482f75d6577d8fbde70f2`.
 Raw gestures, thermal records, fixture, exact hashes and the reproducible report
 are retained in `artifacts/tool-variations-evidence/android-grouped-drawer-low-tier/`.
+
+## Live paint icon diagnostic
+
+Measured on the TCL reference tablet on 2026-10-03, thermal status 0 and default
+glass, with a blank 2048 × 1536 drawing. Three warmed five-second committed-wheel
+gestures per input update the visible paint icon. Both APKs use the same release
+Rust library, including the shared paint-pair view; the comparison changes the
+Android icon and compact-control presentation.
+
+| Input | Baseline UI Hz range / median | Updated UI Hz range / median | Maximum interval p99, baseline → updated |
+| --- | --- | --- | --- |
+| Mouse | 49.01–50.23 / 49.60 | 48.24–51.16 / 51.03 | 49.97 → 49.98 ms |
+| Touch | 53.34–55.07 / 54.17 | 52.80–54.39 / 53.66 | 33.35 → 33.38 ms |
+
+Both builds miss the 57 Hz floor in this diagnostic. These are distinct intended
+UI vsyncs observed through FrameMetrics, with changing paint values checked during
+draws. They do not establish actual presentation or qualify the 12 MP photo
+workload. Reference-canvas qualification remains outstanding.
+
+The APKs precede the unrelated About dedication integration onto `f38ebc4f1`.
+Baseline APK SHA-256 is
+`eb5fde3d8cfc839478575a131dc589e2e6df94a9e6d5609de75f1fcc23ced566`;
+updated APK SHA-256 is
+`9a797e40e91e000da15aa2c610b375c55fdf7fceff564ea43d14a6bd117078a9`.
+Raw samples, thermal records, APKs and provenance are in
+`artifacts/paint-pair-android/{baseline,final-pre-rebase}/` and the adjacent
+`baseline-motion.txt` and `candidate-motion-pre-rebase.txt` logs.
 
 ## Workspace switcher scrolling
 

@@ -1,9 +1,9 @@
 import { composingKey } from "./text-input.js";
 import { createToolbarComponent } from "./toolbar-components.js";
-import { colorButton, pickerButtonAction } from './color-controls.js';
+import { colorButton, pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
 // DOM presentation of the shared Rust customization models. This module owns
 // widgets and animation, not catalogs, validation, selection or docking policy.
-export function createCustomization({ app, catalog, state, workspace, panels, groups,
+export function createCustomization({ app, catalog, state, paintPair, workspace, panels, groups,
   element, button, icon, numberField, panelFrame,
   dispatch, draggable, grip, place, updateZen, editor }) {
   const send = (action) => dispatch({ type: "customize", action });
@@ -16,7 +16,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     }
   });
   const displayColors=()=>state().layer_tools.mask_editing?.colors??state().colors;
-  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, paintKey, menuCommand = null;
+  let anchor = [320, 120], expanded = null, animation = 0, popupControl = null, menuCommand = null;
   const reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
   const context = element("div", "panel-context-menu");
   // A context menu opens during a press/hold, before release. Automatic
@@ -213,10 +213,10 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         range(() => state().layers.find((l) => l.selected).opacity,
           (opacity) => ({ type: "set_layer_opacity", opacity })); break;
       case "brush_color": {
-        const selectedSlot=()=>displayColors().slot==="background"?"background":"foreground";
-        const picker=colorButton({app,label:"Edit Color…",element,button,current:selectedSlot,
-          change:color=>dispatch({type:"color",action:{op:"set_slot",slot:selectedSlot(),color}})});
-        input=picker.node;sync=()=>picker.update(displayColors()[selectedSlot()]);row.append(input);break;
+        const context=()=>JSON.stringify([state().document_file.epoch,state().layer_tools.mask_editing?['mask',state().layer_tools.mask_editing.layer]:['artwork'],displayColors().paint_slot],(_,value)=>typeof value==='bigint'?String(value):value);
+        const picker=colorButton({app,label:"Edit Color…",element,button,current:context,
+          change:color=>dispatch({type:"color",action:{op:"definition",color}})});
+        input=picker.node;sync=()=>{const pair=paintPair();picker.update(pair.definition,{rgba:pair.rgba,in_gamut:pair.in_gamut});};row.append(input);break;
       }
       case "brushes":
       case "layers": {
@@ -284,7 +284,7 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
       };
       const node = button("", pickerButtonAction(() => root.tileView.resolved_control ?? tile.control,{kind:'tile',panel,tile:tile.id},dispatch,activate));
       if (tile.control.kind === "command") { node.dataset.command = tile.control.command; node.dataset.icon = "true"; }
-      node.append(icon(tile.icon));
+      node.append(icon(tile.icon,(tile.resolved_control??tile.control).kind==='color'));
       if (view.tile_label_lines > 0) node.append(element("span", "tile-label", tile.label));
       root.append(node, variationButton({ kind: "tile", panel, tile: tile.id }));
     }
@@ -298,7 +298,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
     node.disabled = !tile.enabled; node.title = tile.tooltip;
     node.setAttribute('aria-label', tile.label); node.setAttribute('aria-pressed', tile.selected);
     const label = node.querySelector('.tile-label');if(label)label.textContent=tile.label;
-    const glyph = node.querySelector('svg'); if (glyph?.dataset.asset !== tile.icon) glyph?.replaceWith(icon(tile.icon));
+    const glyph = node.querySelector('svg'), pair=(tile.resolved_control??tile.control).kind==='color';
+    if (glyph?.dataset.asset !== tile.icon || glyph?.hasAttribute('data-paint-pair') !== pair) glyph?.replaceWith(icon(tile.icon,pair));
     const variants = root.querySelector('.tool-variations');
     variants.hidden = !tile.has_variants; variants.title = tile.tooltip;
     variants.setAttribute('aria-label', tile.label);
@@ -583,13 +584,8 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
         popup.append(content); popup.showPopover(); positionPopup(popup);
       } else if (popup.matches(":popover-open")) popup.hidePopover();
     }
-    const paints = JSON.stringify([displayColors().foreground, displayColors().background]);
-    if (paints !== paintKey) {
-      paintKey = paints;
-      const [foreground, background] = app.color_ui({ type: "preview", colors: JSON.parse(paints) }).map(p => cssColor(p.rgba));
-      workspace.style.setProperty("--paint-foreground", foreground);
-      workspace.style.setProperty("--paint-background", background);
-    }
+    const pair=paintPair();
+    for(const svg of workspace.querySelectorAll('svg[data-paint-pair]'))updatePaintPairIcon(svg,pair);
   }
   function renderToolbarOptions(container, sections) {
     const key = JSON.stringify(sections);
@@ -612,8 +608,4 @@ export function createCustomization({ app, catalog, state, workspace, panels, gr
   }
   return { refresh, arrange, target, renderMenu, refreshMenu, refreshContextMenu, dismissContext, openMenu, variationButton, field, discardFields, tileWidget, refreshTile, layoutTile, present, view: (id) => views.get(id), layoutTiles,
     placement: () => expanded?.placement ?? null };
-}
-
-function cssColor(rgba) {
-  return `rgb(${rgba.slice(0, 3).map((v) => Math.round(v * 255)).join(" ")} / ${rgba[3]})`;
 }

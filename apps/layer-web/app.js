@@ -1,5 +1,6 @@
 import init, { WebApp, WebGpu, configure_raster_worker, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
+import { createPaintPairIcon } from './color-controls.js';
 import { createDocumentStorage } from "./document-storage.js";
 import { workspaceStore, modulePromise, setWorkspaceWake } from "./workspace-preload.js";
 import { createWorkspaceManager } from "./workspace-manager.js";
@@ -65,7 +66,7 @@ let app,
   statusError = null,
   shownHostError = null;
 let refreshPreferences, customization, layerPanel, effectPanels, palettes, editor, selectionUi, frequencySeparationUi, canvasSizeUi, imageSizeUi, workspaceChrome, glass, documents, systemStatus, header, canvasBar, notice, zoomReadout, screenStatus;
-let commandBar;
+let commandBar, paintPairView;
 const fullscreenRequests = new Set();
 let gpuStarting = false;
 let gpuReady = false;
@@ -212,8 +213,9 @@ async function loadIcons() {
     icons.set(svg.dataset.asset, svg);
   }
 }
-function icon(name) {
-  return icons.get(name).cloneNode(true);
+function icon(name, paintPair = false) {
+  const svg = icons.get(name).cloneNode(true);
+  return paintPair && name === 'colors' ? createPaintPairIcon(svg, paintPairView) : svg;
 }
 function iconButton(id) {
   const node = commandButton(id, "");
@@ -874,6 +876,7 @@ function contentPanel(id, splitPicker=false, readToolSet=null) {
 }
 function update(regions) {
   commandBar?.refresh(state.command_search);
+  if (regions & (1 | 2 | 4 | 8 | 16 | 128)) paintPairView = app.paint_pair();
   // Canvas-based controls read these colors while refreshing their pixels.
   if (regions & 16) applyTheme(state.theme, state.palette);
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) customization.refresh();
@@ -1830,14 +1833,15 @@ try {
     dismissContext: () => customization?.dismissContext(), contentChanged: panelContentChanged });
   buildHeader();
   buildPanels();
-  customization = createCustomization({ app, catalog, state: () => state, workspace, panels, groups,
+  paintPairView = app.paint_pair();
+  customization = createCustomization({ app, catalog, state: () => state, paintPair: () => paintPairView, workspace, panels, groups,
     element, button, icon, numberField, panelFrame,
     dispatch, draggable, grip, place, updateZen, editor });
   workspaceChrome = createWorkspaceChrome({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,editor,panelFrame,panels,draggable,grip,contentPanel,tabLabel,automaticTabs,releaseTabs});
   glass = createGlass({app,canvas,workspace,connections:()=>workspaceChrome.connections(),enabled:()=>state.palette?.glass.transparency!=="off",wake});
   documents = createDocuments({app,bootstrap,delivery,state:()=>state,canvas,dispatch,applyChange,wake,element,button,icon,numberField,message,gpuOperation,rasterWorker,resumeCanvas:resumeDocumentCanvas,contentChanged:panelContentChanged});
   documents.mountProof(panels.get("proof"));
-  header = createHeader({app,state:()=>state,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
+  header = createHeader({app,state:()=>state,paintPair:()=>paintPairView,workspace,element,button,icon,place,dispatch,customization,systemStatus,updateZen,documents});
   const capy = iconButton("zen_mode");
   capy.id = "zen-capy"; capy.hidden = true;
   customization.target(capy, {kind:"zen_mode"});

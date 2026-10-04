@@ -29,7 +29,9 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 internal fun displayColor(preview: JSONObject): Color {
-    val v = preview.getJSONArray("rgba")
+    return displayColor(preview.getJSONArray("rgba"))
+}
+internal fun displayColor(v: JSONArray): Color {
     return Color(v.getDouble(0).toFloat(), v.getDouble(1).toFloat(), v.getDouble(2).toFloat(), v.getDouble(3).toFloat())
 }
 internal fun documentRgbSpace(host: CanvasHost): String =
@@ -37,9 +39,9 @@ internal fun documentRgbSpace(host: CanvasHost): String =
 private fun colorEpoch(host: CanvasHost): Long =
     host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
 
-@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
+@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, renderedPreview: JSONObject? = null, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
-    val preview = remember(value.toString()) {
+    val preview = renderedPreview ?: remember(value.toString()) {
         JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString(), host.languageTag)).getJSONObject(0)
     }
     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {

@@ -31,6 +31,20 @@ swatch with the color panel view.
 The visible circular rim belongs to the button's hit area, and the selection or
 hover border covers the paint fill.
 
+GTK, Web and Android live paint icons in the toolbar and window bar use the same
+front swatch as the panel. Each circle has an opaque transparency checker beneath
+its paint, so the rear circle cannot show through it. Selecting a paint updates
+retained icons even when neither paint color changes. HDR rendition changes update
+their displayed colors too. Panel-category icons remain static symbols.
+
+Compact color fields show and edit the remembered paint while transparency is
+selected, including independent temporary black or white. Mask editing uses the
+mask's own paints and depth, so HDR artwork rendition does not tone-map mask
+controls or add HDR intensity to their editor. Shared `PaintPairView` supplies the
+active definition, front swatch, display previews and linear-light checker
+composites; hosts present these values and submit the shared color-definition
+action. Picker hover previews stay in the Color panel until accepted.
+
 The HDR intensity arc uses the shared round-cap geometry at both ends. Android
 receives its pointer contact through the color panel so an empty corner of the
 wheel's rectangular view does not hide either cap; occupied wheel and swatch

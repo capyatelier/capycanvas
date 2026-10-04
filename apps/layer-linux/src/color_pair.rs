@@ -2,6 +2,7 @@
 use super::{ViewColor, append_checker};
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
 use layer_core::color::RgbColor;
+use layer_ui::ColorSlot;
 use std::cell::{Cell, RefCell};
 
 mod imp {
@@ -10,6 +11,7 @@ mod imp {
     pub struct Pair {
         pub size: Cell<i32>,
         pub key: Cell<Option<([RgbColor; 2], ViewColor, f32)>>,
+        pub front: Cell<ColorSlot>,
         pub textures: RefCell<Option<[[gdk::Texture; 2]; 2]>>,
     }
     #[glib::object_subclass]
@@ -35,8 +37,9 @@ mod imp {
                 (obj.height() as f32 - size) * 0.5,
             ));
             round.scale(size / 16., size / 16.);
-            // Exact viewBox coordinates from layer-colors-symbolic.svg.
-            for (i, center, radius) in [(1, 11., 4.25), (0, 6.75, 6.)] {
+            let front = usize::from(self.front.get() == ColorSlot::Background);
+            for i in [1 - front, front] {
+                let (center, radius) = [(6.75, 6.), (11., 4.25)][i];
                 let square =
                     |r: f32| gtk::graphene::Rect::new(center - r, center - r, 2. * r, 2. * r);
                 append_checker(&round, square(radius), radius, &textures[i]);
@@ -62,12 +65,12 @@ impl ColorPair {
         obj.set_widget_name("layer-colors-symbolic");
         obj
     }
-    pub fn set_colors(&self, colors: [RgbColor; 2], view: ViewColor, headroom: f32) {
-        if self.imp().key.replace(Some((colors, view, headroom))) == Some((colors, view, headroom)) {
-            return;
+    pub fn set_colors(&self, colors: [RgbColor; 2], front: ColorSlot, view: ViewColor, headroom: f32) {
+        let changed = self.imp().key.replace(Some((colors, view, headroom))) != Some((colors, view, headroom));
+        if changed {
+            *self.imp().textures.borrow_mut() =
+                Some(colors.map(|color| super::checker_textures(color, view, headroom)));
         }
-        *self.imp().textures.borrow_mut() =
-            Some(colors.map(|color| super::checker_textures(color, view, headroom)));
-        self.queue_draw();
+        if self.imp().front.replace(front) != front || changed { self.queue_draw(); }
     }
 }

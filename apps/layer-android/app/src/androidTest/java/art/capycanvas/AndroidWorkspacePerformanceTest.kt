@@ -39,6 +39,8 @@ class AndroidWorkspacePerformanceTest {
 
     @Test fun colorPanelOverlapFrameTiming() = frameTiming(false, colorOverlap = true)
 
+    @Test fun colorWheelFrameTiming() = frameTiming(false, colorWheel = true)
+
     @Test fun workspaceSwitcherScrollFrameTiming() = scrollFrameTiming(false)
 
     @Test fun groupedDrawerScrollFrameTiming() = scrollFrameTiming(true)
@@ -221,9 +223,10 @@ class AndroidWorkspacePerformanceTest {
         }
     }
 
-    private fun frameTiming(resize: Boolean, colorOverlap: Boolean = false) {
+    private fun frameTiming(resize: Boolean, colorOverlap: Boolean = false, colorWheel: Boolean = false) {
         assumeTrue(InstrumentationRegistry.getArguments().getString("workspaceBenchmark") == "true")
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            if (colorWheel) device.landscape(scenario)
             lateinit var host: CanvasHost
             lateinit var owner: ViewRootForTest
             lateinit var window: Window
@@ -259,11 +262,11 @@ class AndroidWorkspacePerformanceTest {
             val fixture = JSONObject(saved.toString())
             fixture.getJSONObject("layout").apply {
                 put("bands", JSONArray(listOf(
-                    obj("id" to 40, "edge" to "left", "extent" to 252, "root" to tabs(41, "brushes", "sizes", "tool_settings")),
+                    obj("id" to 40, "edge" to "left", "extent" to 252, "root" to if (colorWheel) tabs(41, "toolbar") else tabs(41, "brushes", "sizes", "tool_settings")),
                     obj("id" to 42, "edge" to "right", "extent" to 252, "root" to tabs(43, "layers", "properties")))))
                 put("floating", JSONArray()); put("collapsed", JSONArray()); put("column_scroll", JSONArray()); put("fit_tab_groups", JSONArray()); put("fit_height_groups", JSONArray()); put("column_stacks", JSONArray())
                 put("next_id", maxOf(49, getInt("next_id")))
-                if (colorOverlap) put("floating", JSONArray(listOf(obj("root" to tabs(48, "color"),
+                if (colorOverlap || colorWheel) put("floating", JSONArray(listOf(obj("root" to tabs(48, "color"),
                     "position" to JSONArray(listOf(360, 120)), "width" to 360, "default_width" to 360, "height" to 400, "toolbar_layout" to "compact"))))
             }
             fixture.put("zen_mode", false)
@@ -271,6 +274,7 @@ class AndroidWorkspacePerformanceTest {
             data class Frame(val duration: Long, val deadline: Long, val vsync: Long, val layout: Long, val draw: Long)
             val durations = mutableListOf<Frame>()
             val drawnRevisions = mutableSetOf<Long>()
+            val drawnPaints = mutableSetOf<String>()
             var resizeNode: SemanticsNode? = null
             var lastDrawnBounds: androidx.compose.ui.geometry.Rect? = null
             var changedBounds = 0
@@ -287,6 +291,7 @@ class AndroidWorkspacePerformanceTest {
             val drawListener = android.view.ViewTreeObserver.OnDrawListener {
                 if (measuring.get()) {
                     host.workspaceGeometry?.revision?.let { drawnRevisions.add(it) }
+                    if (colorWheel) host.snapshot?.objectOrNull("paint_pair")?.array("rgba")?.toString()?.let { drawnPaints.add(it) }
                     // Read the retained LayoutNode's actual allocation. A newly
                     // received revision may still be awaiting recomposition.
                     resizeNode?.boundsInRoot?.let { bounds ->
@@ -299,7 +304,7 @@ class AndroidWorkspacePerformanceTest {
             window.addOnFrameMetricsAvailableListener(listener, Handler(frames.looper))
             try {
                 action(obj("type" to "preferences", "action" to obj("type" to "edit", "id" to "transparency", "value" to transparency)))
-                for (mouse in listOf(true, false)) for (mode in if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")) {
+                for (mouse in listOf(true, false)) for (mode in if (colorWheel) listOf("color-wheel") else if (colorOverlap) listOf("color-overlap") else if (resize) listOf("brushes", "properties", "navigator", "toolbar") else listOf("attached", "floating", "destination")) {
                     if (resize) fixture.getJSONObject("layout").getJSONArray("bands").apply {
                         getJSONObject(0).put("root", tabs(41, mode))
                         getJSONObject(1).put("root", tabs(43, "layers"))
@@ -307,19 +312,23 @@ class AndroidWorkspacePerformanceTest {
                     action(obj("type" to "restore_workspace", "workspace" to fixture))
                     waitFor { !resize || host.snapshot!!.getJSONObject("layout").array("groups").objects().any { it.getInt("id") == 41 && it.getString("active") == mode } }
                     SystemClock.sleep(300)
+                    if (colorWheel) {
+                        action(obj("type" to "color", "action" to obj("op" to "shape", "shape" to "circle")))
+                        action(obj("type" to "color", "action" to obj("op" to "select", "slot" to "foreground")))
+                    }
                     val workspace = bounds("workspace")
                     if (colorOverlap) {
                         action(obj("type" to "move_group", "group" to 43, "target" to obj("kind" to "float", "position" to JSONArray(listOf(500, 180))),
                             "viewport" to JSONArray(listOf(workspace.width / owner.view.resources.displayMetrics.density, workspace.height / owner.view.resources.displayMetrics.density))))
                         SystemClock.sleep(300)
                     }
-                    val source = bounds(if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
+                    val source = bounds(if (colorWheel) "color-wheel" else if (colorOverlap) "group-grip-43" else if (resize) "divider-40" else when (mode) {
                         "attached" -> "tab-tool_settings"
                         "floating" -> "group-grip-41"
                         else -> "tab-layers"
                     }).center
-                    val first = if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x - it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
-                    val last = if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x + it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
+                    val first = if (colorWheel) source - Offset(bounds("color-wheel").width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x - it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(60f, 0f) else bounds("tab-brushes").center
+                    val last = if (colorWheel) source + Offset(bounds("color-wheel").width * .15f, 0f) else if (colorOverlap) bounds("color-wheel").let { Offset(it.center.x + it.width * .15f, it.top + it.height * .25f) } else if (resize) source + Offset(220f, 0f) else bounds("tab-sizes").center
                     val down = SystemClock.uptimeMillis()
                     fun eventOnMain(action: Int, point: Offset) {
                         val properties = arrayOf(MotionEvent.PointerProperties().apply {
@@ -334,12 +343,12 @@ class AndroidWorkspacePerformanceTest {
                     fun event(action: Int, point: Offset) = scenario.onActivity { eventOnMain(action, point) }
                     event(MotionEvent.ACTION_DOWN, source)
                     try {
-                        event(MotionEvent.ACTION_MOVE, if (resize || colorOverlap || mode == "attached") first else workspace.center)
+                        event(MotionEvent.ACTION_MOVE, if (resize || colorOverlap || colorWheel || mode == "attached") first else workspace.center)
                         SystemClock.sleep(750)
                         host.measurementReport(true)
                         synchronized(durations) { durations.clear(); lostMetrics = 0 }
                         scenario.onActivity {
-                            drawnRevisions.clear(); changedBounds = 0
+                            drawnRevisions.clear(); drawnPaints.clear(); changedBounds = 0
                             resizeNode = if (resize) owner.find(hasTag("group-41")) else null
                             lastDrawnBounds = resizeNode?.boundsInRoot
                         }
@@ -392,9 +401,10 @@ class AndroidWorkspacePerformanceTest {
                         assertTrue("Android must render while dragging", timings.isNotEmpty())
                         fun percentile(values: List<Long>, fraction: Double) = values[((values.size - 1) * fraction).toInt()] / 1_000_000.0
                         val metrics = host.measurementReport()
-                        val expectRetained = !resize || InstrumentationRegistry.getArguments().getString("expectRetainedResize") != "false"
+                        val expectRetained = !colorWheel && (!resize || InstrumentationRegistry.getArguments().getString("expectRetainedResize") != "false")
                         if (expectRetained) assertEquals("Steady motion retains the full UI models", 0L, metrics.getLong("snapshots_published"))
                         scenario.onActivity {
+                            if (colorWheel) assertTrue("Committed wheel colors change during motion", drawnPaints.size > 30)
                             if (expectRetained) assertEquals("Steady motion retains panel content", 0L, metrics.getLong("panel_content_changes"))
                             val geometry = host.workspaceGeometry!!
                             if (geometry.group != null) {
@@ -420,7 +430,9 @@ class AndroidWorkspacePerformanceTest {
                             "layout_p95_ms" to percentile(rows.map { it.layout }.sorted(), .95),
                             "draw_p50_ms" to percentile(rows.map { it.draw }.sorted(), .5),
                             "draw_p95_ms" to percentile(rows.map { it.draw }.sorted(), .95),
+                            "drawn_paints" to drawnPaints.size,
                             "vsync_interval_p50_ms" to percentile(intervals, .5), "vsync_interval_p95_ms" to percentile(intervals, .95),
+                            "vsync_interval_p99_ms" to percentile(intervals, .99),
                             "deadline_misses" to rows.count { it.deadline > 0 && it.duration > it.deadline }, "lost_metrics" to lostMetrics,
                             "snapshot_attempts" to metrics.getLong("snapshot_attempts"), "snapshots" to metrics.getLong("snapshots_published"),
                             "workspace_updates" to metrics.getLong("workspace_updates_published"))
@@ -437,8 +449,8 @@ class AndroidWorkspacePerformanceTest {
                         event(MotionEvent.ACTION_CANCEL, source)
                     }
                     action(obj("type" to "close_settings"))
-                    if (colorOverlap) action(obj("type" to "restore_workspace", "workspace" to fixture))
-                    waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").array("floating").length() == (if (colorOverlap) 1 else 0) }
+                    if (colorOverlap || colorWheel) action(obj("type" to "restore_workspace", "workspace" to fixture))
+                    waitFor { host.snapshot!!.getJSONObject("state").getJSONObject("workspace").getJSONObject("layout").array("floating").length() == (if (colorOverlap || colorWheel) 1 else 0) }
                 }
             } finally {
                 measuring.set(false)

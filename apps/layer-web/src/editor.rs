@@ -61,6 +61,9 @@ impl WebApp {
     pub fn color_panel(&self) -> Result<JsValue, JsValue> {
         serialize(&self.session.state().preview_colors().view_mapped(self.session.effective_sdr_rendition(), self.session.localization()))
     }
+    pub fn paint_pair(&self) -> Result<JsValue, JsValue> {
+        serialize(&self.session.state().display_colors().paint_pair(layer_core::color::RgbSpace::Srgb, Some(self.session.effective_sdr_rendition())))
+    }
     pub fn palette_panel(&self) -> Result<JsValue, JsValue> {
         let state = self.session.state();
         let colors = state.display_colors();

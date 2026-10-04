@@ -67,7 +67,7 @@ import kotlin.math.roundToInt
                     verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.Center) {
                     Box(if (labelLines > 0) Modifier.width(36.dp) else Modifier, contentAlignment = Alignment.Center) {
                         val glyph = Modifier.size(geometry.getInt("tile_icon_size").dp).testTag("tile-icon-${panel.getString("id")}-${tile.getInt("id")}")
-                        if (kind == "color") PaintPairIcon(host.snapshot?.getJSONObject("state"), tile.getString("label"), glyph)
+                        if (kind == "color") PaintPairIcon(host.snapshot!!.getJSONObject("paint_pair"), tile.getString("label"), glyph)
                         else SharedIcon(icon, tile.getString("label"), glyph)
                     }
                     if (labelLines > 0) Text(tile.getString("label"), Modifier.weight(1f).padding(end = if (tile.optBoolean("has_variants")) 16.dp else 4.dp).testTag("tile-label-${panel.getString("id")}-${tile.getInt("id")}"),
@@ -206,10 +206,10 @@ import kotlin.math.roundToInt
     }
 }
 @Composable internal fun ColorControls(host: CanvasHost) {
-    val state = host.snapshot?.objectOrNull("state")?.displayColors() ?: return
-    val slot = if (state.optString("slot") == "background") "background" else "foreground"
-    ManagedColorButton(host, "Edit Color…", state.getJSONObject(slot), true) { color ->
-        host.dispatch(obj("type" to "color", "action" to obj("op" to "set_slot", "slot" to slot, "color" to color)))
+    val view = host.snapshot?.getJSONObject("paint_pair") ?: return
+    ManagedColorButton(host, host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit"),
+        view.getJSONObject("definition"), true, renderedPreview = view) { color ->
+        host.dispatch(obj("type" to "color", "action" to obj("op" to "definition", "color" to color)))
     }
 
 }

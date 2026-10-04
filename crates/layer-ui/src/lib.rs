@@ -76,7 +76,7 @@ pub use color::{
     PaletteChoiceView, PaletteCommand, PaletteExport, PaletteFileRequest, PaletteFormat, palette_file, PaletteMenuItem, PaletteMenuTarget, PalettePanelView,
     PaletteTileView, selected_swatch,
     HdrIntensityArc, ColorAction, ColorComponentView, ColorHueStop, ColorPanelLayout, ColorPanelView, ColorReadout, ColorShape, ColorSlot, ColorSpace, ColorState,
-    ColorSwatchView, ColorWheelGeometry, ColorWheelPart, render_color_field, render_hue_guide_in,
+    ColorSwatchView, PaintPairView, PaintSwatchView, ColorWheelGeometry, ColorWheelPart, render_color_field, render_hue_guide_in,
 };
 pub use tool_settings::{ToolActionGroup, ToolSetting, ToolSettingAction};
 pub use tools::{

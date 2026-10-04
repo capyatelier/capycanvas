@@ -179,6 +179,12 @@ Preserve user names and document contents across language changes. Follow the
 - **Icons.** `node apps/layer-web/test.mjs --icons`, `workspace-motion.sh gtk
   --icons` at scale 1 and with `LAYER_MOTION_SCALE=2`, Android `AndroidIconTest`,
   and `python3 apps/layer-apple/tests/test_icon_assets.py`.
+  Live paint pairs also need `native_color_pair_updates` on GTK and Web
+  `--color-panel`: these inspect retained toolbar/header overlap pixels after
+  selection-only changes, temporary paint, mask editing, alpha and HDR rendition
+  changes. Static asset captures do not exercise these updates.
+  Android uses `AndroidColorPanelTest#retainedPaintIconsAndCompactControlFollowCommittedContext`
+  and `#retainedPaintIconsUseMappedRenditionAndIgnorePickerHover` on a reserved tablet.
 - **Popups on GTK.** Run popup and menu checks without `--tablet`: the tablet
   proxy's synthetic serials cannot take compositor popup grabs.
 - **Real pens.** Injected input checks logic, not the OS driver. Input changes

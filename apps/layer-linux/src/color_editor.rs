@@ -93,7 +93,7 @@ impl Form {
 
 /// Capability changes refresh live drafts without publishing a color edit.
 pub(crate) fn refresh_display(workspace: &Workspace) {
-    let view = workspace.view_color();
+    let view = workspace.paint_view_color();
     let headroom = workspace.picker_headroom();
     workspace.color_editors.borrow_mut().retain(|weak| {
         let Some(form) = weak.upgrade() else { return false; };
@@ -146,7 +146,7 @@ fn choose_with_intensity(
         (
             g.session.state().display_colors().rgb_space(),
             g.session.state().document_file.epoch,
-            g.session.engine().document().color.depth,
+            g.session.state().display_colors().hdr_depth(),
         )
     }) else {
         return;
@@ -257,7 +257,7 @@ fn choose_with_intensity(
         validation,
         preview,
         base_preview,
-        view: Cell::new(workspace.view_color()),
+        view: Cell::new(workspace.paint_view_color()),
         headroom: Cell::new(workspace.picker_headroom()),
         space,
         hdr,

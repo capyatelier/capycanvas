@@ -8,6 +8,20 @@ fn capture_widget(window: &adw::ApplicationWindow, widget: &impl IsA<gtk::Widget
     if let Ok(expected) = std::env::var("LAYER_MOTION_SCALE") {
         assert_eq!(widget.scale_factor(), expected.parse::<i32>().unwrap());
     }
+    let clock = widget.frame_clock().unwrap();
+    let painted = Rc::new(Cell::new(false));
+    let signal = clock.connect_after_paint(glib::clone!(
+        #[strong]
+        painted,
+        move |_| painted.set(true)
+    ));
+    clock.request_phase(gdk::FrameClockPhase::LAYOUT | gdk::FrameClockPhase::PAINT);
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while !painted.get() {
+        assert!(Instant::now() < deadline, "mapped icon fixture paints");
+        pump(1);
+    }
+    clock.disconnect(signal);
     let scale = widget.scale_factor() as f32;
     let snapshot = gtk::Snapshot::new();
     snapshot.scale(scale, scale);
@@ -29,6 +43,211 @@ fn capture_widget(window: &adw::ApplicationWindow, widget: &impl IsA<gtk::Widget
             bounds.height() * scale,
         )),
     )
+}
+
+fn pair_textures(pair: &crate::display_color::ColorPair) -> [[gdk::Texture; 2]; 2] {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    pair.imp().textures.borrow().clone().unwrap()
+}
+
+fn check_pair(w: &Workspace, pair: &crate::display_color::ColorPair, front: layer_ui::ColorSlot, output: &Path) {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    let colors = state(w);
+    let colors = colors.display_colors();
+    assert_eq!(pair.imp().key.get(), Some(([colors.foreground, colors.background], w.paint_view_color(), w.picker_headroom())));
+    let texture = capture_widget(&w.window, pair);
+    texture.save_to_png(output).unwrap();
+    let mut download = gdk::TextureDownloader::new(&texture);
+    download.set_format(gdk::MemoryFormat::R8g8b8a8);
+    download.set_color_state(&gdk::ColorState::srgb());
+    let (pixels, stride) = download.download_bytes();
+    let size = pair.imp().size.get() as usize * pair.scale_factor() as usize;
+    let x = (texture.width() as usize - size) / 2 + size * 19 / 32;
+    let y = (texture.height() as usize - size) / 2 + size * 19 / 32;
+    let actual = &pixels[y * stride + x * 4..y * stride + x * 4 + 3];
+    let expected = pair_textures(pair)[usize::from(front == layer_ui::ColorSlot::Background)].each_ref().map(|paint| {
+        let mut download = gdk::TextureDownloader::new(paint);
+        download.set_format(gdk::MemoryFormat::R8g8b8a8);
+        download.set_color_state(&gdk::ColorState::srgb());
+        let (bytes, _) = download.download_bytes();
+        [bytes[0], bytes[1], bytes[2]]
+    });
+    assert!(expected.iter().any(|expected| actual.iter().zip(expected).all(|(a, e)| a.abs_diff(*e) <= 3)),
+        "{front:?} covers the overlap in {}: actual={actual:?} expected={expected:?}", output.display());
+}
+
+fn configuration_color(w: &Workspace) -> crate::display_color::ColorPatch {
+    let field = find_named(w.window.upcast_ref(), "configure-Sizes-BrushColor").unwrap();
+    descendant(&field).unwrap()
+}
+
+fn check_configuration_color(w: &Workspace) {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    assert_eq!(configuration_color(w).imp().key.get(),
+        Some((state(w).display_colors().definition(), w.paint_view_color(), w.picker_headroom())));
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU: retained color-pair updates"]
+fn native_color_pair_updates() {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    use layer_ui::{ColorAction, ColorSlot::{Foreground, Background, Transparent}};
+    let app = native_test_app("art.capycanvas.ColorPairUpdates");
+    let mut input = RemoteInput::new();
+    let output = PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap());
+    std::fs::create_dir_all(&output).unwrap();
+    let w = Workspace::with_project(&app, Some((new_drawing_at(256, 256, layer_core::color::SampleDepth::F16), None)));
+    w.window.maximize();
+    w.window.present();
+    pump(1400);
+    wait_workspaces(&w);
+    until(|| w.gpu.borrow().as_ref().is_some_and(|g| g.session.engine().backend().startup.brush_ready), "native brush startup");
+    let mut workspace = state(&w).workspace;
+    workspace.layout.header.zones = Default::default();
+    workspace.layout.header.add(HeaderZone::Left, None, &[HeaderItem::Menu, HeaderItem::Tool { control: ToolbarControl::Color }]).unwrap();
+    workspace.layout.set_panel_visible(Panel::Sizes, true).unwrap();
+    workspace.layout.set_panel_visible(Panel::Color, true).unwrap();
+    workspace.layout.move_panel([w.surface.width() as f32, w.surface.height() as f32], Panel::Color,
+        DockTarget::Float { position: [600., 120.] }).unwrap();
+    w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+    show(&w, Panel::Sizes);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        for style in [TileStyle::Small, TileStyle::Medium, TileStyle::Large] {
+            w.customize(CustomizationAction::CloseExpanded);
+            w.customize(CustomizationAction::SetTileStyle { panel: Panel::Toolbar, style });
+            for (slot, rgba) in [(Foreground, [0.8, 0.12, 0.04, 0.55]), (Background, [0.04, 0.65, 0.12, 1.])] {
+                w.dispatch(UiAction::Color { action: ColorAction::Select { slot } });
+                w.dispatch(UiAction::SetColor { rgba });
+            }
+            pump(100);
+            for slot in [Foreground, Background] {
+                let button = find_named(w.color_panel.root.upcast_ref(), &format!("color-{slot:?}")).unwrap();
+                let point = screen_point(&button, &w.window, [0.5, if slot == Foreground { 0.25 } else { 0.75 }]);
+                let picked = w.window.pick(point[0] as f64, point[1] as f64, gtk::PickFlags::DEFAULT).unwrap();
+                assert!(picked == button || picked.is_ancestor(&button));
+                input.click(point);
+                assert!(w.window.visible_dialog().is_none());
+                assert_eq!(state(&w).display_colors().slot, slot);
+            }
+            w.customize(CustomizationAction::ShowAllControls { panel: Panel::Sizes });
+            pump(80);
+            let header = find_named(w.header.root.upcast_ref(), "layer-colors-symbolic").unwrap().downcast::<crate::display_color::ColorPair>().unwrap();
+            let toolbar = find_named(&w.panel_widget(Panel::Toolbar), "layer-colors-symbolic").unwrap().downcast::<crate::display_color::ColorPair>().unwrap();
+            assert_eq!(toolbar.imp().size.get(), style.icon_size() as i32);
+            let pairs = [header, toolbar];
+            let textures = pairs.each_ref().map(pair_textures);
+            for (slot, front) in [(Foreground, Foreground), (Background, Background), (Transparent, Background), (Foreground, Foreground), (Transparent, Foreground)] {
+                w.dispatch(UiAction::Color { action: ColorAction::Select { slot } });
+                assert_eq!(state(&w).display_colors().slot, slot);
+                pump(60);
+                for (i, pair) in pairs.iter().enumerate() {
+                    assert_eq!(pair_textures(pair), textures[i], "selection reuses managed paint textures");
+                    check_pair(&w, pair, front, &output.join(format!("{theme:?}-{style:?}-{slot:?}-{front:?}-{i}.png")));
+                }
+                check_configuration_color(&w);
+            }
+            w.dispatch(UiAction::Color { action: ColorAction::QuickColor { white: false } });
+            assert_eq!(state(&w).display_colors().slot, layer_ui::ColorSlot::Temporary);
+            pump(60);
+            for (i, pair) in pairs.iter().enumerate() {
+                assert_eq!(pair_textures(pair), textures[i], "temporary paint preserves the paint pair");
+                check_pair(&w, pair, Foreground, &output.join(format!("{theme:?}-{style:?}-Temporary-{i}.png")));
+            }
+            check_configuration_color(&w);
+            let artwork = state(&w).colors;
+            w.dispatch(UiAction::Invoke { command: CommandId::QuickMask });
+            for (slot, rgba) in [(Foreground, [0.2, 0.2, 0.2, 0.4]), (Background, [0.85, 0.85, 0.85, 1.])] {
+                w.dispatch(UiAction::Color { action: ColorAction::Select { slot } });
+                w.dispatch(UiAction::SetColor { rgba });
+            }
+            pump(80);
+            assert_eq!(state(&w).colors, artwork, "mask paint leaves artwork colors intact");
+            let mask_textures = pairs.each_ref().map(pair_textures);
+            assert_ne!(mask_textures, textures, "mask definitions replace artwork paint textures");
+            for (slot, front) in [(Background, Background), (Transparent, Background), (Foreground, Foreground)] {
+                w.dispatch(UiAction::Color { action: ColorAction::Select { slot } });
+                pump(60);
+                check_configuration_color(&w);
+                if slot == Background {
+                    let patch = configuration_color(&w);
+                    scroll_to(&patch);
+                    capture_widget(&w.window, &patch).save_to_png(output.join(format!("{theme:?}-{style:?}-Mask-Configuration.png"))).unwrap();
+                }
+                for (i, pair) in pairs.iter().enumerate() {
+                    assert_eq!(pair_textures(pair), mask_textures[i]);
+                    check_pair(&w, pair, front, &output.join(format!("{theme:?}-{style:?}-Mask-{slot:?}-{i}.png")));
+                }
+            }
+            assert_eq!(state(&w).display_colors().hdr_depth(), layer_core::color::SampleDepth::U8);
+            let base = ui_session(&w).engine().backend().view_color;
+            assert_eq!(w.paint_view_color(), base);
+            if style == TileStyle::Small {
+                let before = pairs.each_ref().map(pair_textures);
+                let recipe = layer_core::color::hdr::SdrRendition { exposure: if theme == Theme::Light { 1. } else { -1. }, ..Default::default() };
+                let change = ui_session_mut(&w).set_sdr_rendition(recipe).unwrap();
+                w.changed(Ok(change));
+                pump(100);
+                assert_ne!(w.view_color(), base, "the HDR artwork retains its rendition");
+                assert_eq!(w.paint_view_color(), base, "mask paint stays in its SDR color space");
+                assert_eq!(pairs.each_ref().map(pair_textures), before, "artwork rendition leaves mask paint textures intact");
+                check_configuration_color(&w);
+                let button = named::<gtk::Button>(w.color_panel.root.upcast_ref(), "color-Foreground");
+                let patch = button.child().unwrap().downcast::<crate::display_color::ColorPatch>().unwrap();
+                assert_eq!(patch.imp().key.get(), Some((state(&w).display_colors().foreground, base, w.picker_headroom())));
+                crate::color_editor::show(&w, Foreground);
+                pump(220);
+                let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+                assert_eq!(dialog.widget_name(), "edit-color-dialog");
+                assert!(!find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible(), "mask color editing has no HDR intensity");
+                let preview = named::<crate::display_color::ColorPatch>(dialog.upcast_ref(), "edit-color-preview");
+                assert_eq!(preview.imp().key.get().unwrap().1, base);
+                capture_reference(&w, output.join(format!("{theme:?}-Mask-Editor.png")).to_str().unwrap(), 1.);
+                dialog.close();
+                pump(220);
+                assert_eq!(state(&w).colors, artwork);
+            }
+            w.dispatch(UiAction::Invoke { command: CommandId::QuickMask });
+            pump(80);
+            for (i, pair) in pairs.iter().enumerate() {
+                check_pair(&w, pair, Foreground, &output.join(format!("{theme:?}-{style:?}-Artwork-{i}.png")));
+            }
+            assert_eq!(&find_named(w.header.root.upcast_ref(), "layer-colors-symbolic").unwrap(), pairs[0].upcast_ref::<gtk::Widget>());
+            assert_eq!(&find_named(&w.panel_widget(Panel::Toolbar), "layer-colors-symbolic").unwrap(), pairs[1].upcast_ref::<gtk::Widget>());
+        }
+        let pair = find_named(&w.panel_widget(Panel::Toolbar), "layer-colors-symbolic").unwrap().downcast::<crate::display_color::ColorPair>().unwrap();
+        let before = pair_textures(&pair);
+        let recipe = layer_core::color::hdr::SdrRendition { exposure: if theme == Theme::Light { -1. } else { 1. }, ..Default::default() };
+        let change = ui_session_mut(&w).set_sdr_rendition(recipe).unwrap();
+        w.changed(Ok(change));
+        pump(100);
+        assert_ne!(pair_textures(&pair), before, "rendition changes rebuild managed paint");
+        check_pair(&w, &pair, Foreground, &output.join(format!("{theme:?}-Rendition.png")));
+        check_configuration_color(&w);
+        ui_session_mut(&w).renderer_mut().display_headroom = 4.;
+        w.changed(Ok(layer_ui::UiChange { regions: layer_ui::regions::SETTINGS, ..Default::default() }));
+        pump(80);
+        assert_eq!(w.picker_headroom(), 4.);
+        check_configuration_color(&w);
+        for textures in pair_textures(&pair) {
+            for texture in textures { assert_eq!(texture.color_state(), gdk::ColorState::rec2100_linear()); }
+        }
+        ui_session_mut(&w).renderer_mut().display_headroom = 1.;
+        w.changed(Ok(layer_ui::UiChange { regions: layer_ui::regions::SETTINGS, ..Default::default() }));
+        pump(80);
+        check_configuration_color(&w);
+        capture_reference(&w, output.join(format!("{theme:?}-workspace.png")).to_str().unwrap(), 1.);
+        crate::color_editor::show(&w, Foreground);
+        pump(220);
+        let dialog = w.window.visible_dialog().unwrap().downcast::<adw::AlertDialog>().unwrap();
+        assert!(find_named(dialog.upcast_ref(), "edit-color-ev").unwrap().is_visible(), "HDR artwork keeps its intensity editor");
+        dialog.close();
+        pump(220);
+    }
+    input.finish();
+    w.window.destroy();
+    pump(100);
 }
 
 fn artwork(app: &adw::Application, output: &Path) {

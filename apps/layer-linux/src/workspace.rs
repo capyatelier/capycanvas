@@ -2079,6 +2079,13 @@ impl Workspace {
             g.session.engine().backend().view_color.with_rendition(document.color, g.session.effective_sdr_rendition())
         })
     }
+    pub(crate) fn paint_view_color(&self) -> crate::display_color::ViewColor {
+        self.gpu.borrow().as_ref().map_or(Default::default(), |g| {
+            let colors = g.session.state().display_colors();
+            let color = layer_core::color::DocumentColor { space: colors.rgb_space(), depth: colors.hdr_depth() };
+            g.session.engine().backend().view_color.with_rendition(color, g.session.effective_sdr_rendition())
+        })
+    }
     pub(crate) fn snapshot_gpu(&self) -> Result<layer_render_wgpu::snapshot::SnapshotGpu, String> {
         self.gpu.borrow().as_ref().ok_or("Canvas unavailable")?.session.engine().backend().snapshot_gpu()
     }
@@ -2653,7 +2660,7 @@ impl Workspace {
             (state.preview_colors().into_owned(), state.color_picker.preview.is_some())
         });
         if let Some((colors, preview)) = colors {
-            let view = self.view_color();
+            let view = self.paint_view_color();
             let headroom = self.picker_headroom();
             if self.color_panel.root.is_mapped() {
                 if preview { self.color_panel.refresh_preview(&colors, view, headroom); }
@@ -2758,15 +2765,15 @@ impl Workspace {
             self.image_size.refresh(self, &state);
         }
         if regions & (regions::COLOR_PREVIEW | regions::BRUSH | regions::DOCUMENT | regions::SETTINGS | regions::COMMANDS) != 0 {
-            self.color_panel.refresh(&state.preview_colors(), self.view_color(), self.picker_headroom());
+            self.color_panel.refresh(&state.preview_colors(), self.paint_view_color(), self.picker_headroom());
             self.palette_panel
-                .refresh(&state, self.view_color(), self.picker_headroom());
+                .refresh(&state, self.paint_view_color(), self.picker_headroom());
             crate::color_editor::refresh_display(self);
         }
         if regions & (regions::BRUSH | regions::DOCUMENT) != 0 {
             self.size_number.set_value(state.brush.diameter as f64);
             self.opacity.set_value(state.brush.opacity as f64);
-            self.color.set_display_color(state.display_colors().definition(), self.view_color(), self.picker_headroom());
+            self.color.set_display_color(state.display_colors().definition(), self.paint_view_color(), self.picker_headroom());
             self.toolbar.queue_draw();
             for (value, button) in self.size_buttons.borrow().iter() {
                 selected(button, *value == state.brush.diameter);

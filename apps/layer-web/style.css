@@ -378,8 +378,6 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel .layer-reference[aria-pressed="true"] { background: color-mix(in srgb,var(--text) 12%,transparent); }
 .layer-footer { margin-top: auto; }
 .layer-more { margin-left: auto; }
-:is(.toolbar-controls, .header-tool.brush-color) .success { fill: var(--paint-foreground); }
-:is(.toolbar-controls, .header-tool.brush-color) .warning { fill: var(--paint-background); }
 .layer-rows { display: flex; flex-direction: column; overflow-y: auto; min-height: 0; flex: 1; }
 .layer-row { display: flex; align-items: center; gap: 2px; min-height: 40px; padding: 2px 6px; flex: none; border-radius: 0; }
 .layer-row.selected { background: var(--selection); }

@@ -289,6 +289,108 @@ export async function checkColorPanel({call,evaluate,settle}) {
   const cancelled=await read();await call('Emulation.setTouchEmulationEnabled',{enabled:false});
   const hover=await point(`${root} .color-wheel`,.9,.5);
   await call('Input.dispatchMouseEvent',{type:'mouseMoved',...hover,buttons:0,pointerType:'pen'});await settle();assert.deepEqual(await read(),cancelled,'Cancellation releases color contact');
+  await send({type:'customize',action:{type:'set_panel_visible',panel:'toolbar',visible:true}});
+  await send({type:'move_panel',panel:'toolbar',target:{kind:'edge',edge:'bottom',outer:true}});
+  await evaluate(`(()=>{const workspace=layerApp.app.workspace_persistence(),header=workspace.layout.header;if(!header.zones.flat().some(e=>e.item.control?.kind==='color'))header.zones[0].push({id:header.next_id++,item:{kind:'tool',control:{kind:'color'}}});layerApp.dispatch({type:'restore_workspace',workspace});})()`);await settle();
+  const pairView=()=>evaluate('layerApp.app.paint_pair()');
+  const checkPair=async(name,expected)=>{
+    const pair=await pairView();assert.equal(pair.front_swatch,expected,name);
+    const shot=await call('Page.captureScreenshot',{format:'png',fromSurface:false});
+    await writeFile(`${output}/${name}.png`,Buffer.from(shot.data,'base64'));
+    const icons=await evaluate(`(async()=>{
+      const image=new Image();image.src=${JSON.stringify('data:image/png;base64,'+shot.data)};await image.decode();
+      const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const ctx=canvas.getContext('2d',{willReadFrequently:true});ctx.drawImage(image,0,0);
+      return [...document.querySelectorAll('svg[data-paint-pair]')].filter(svg=>{const r=svg.getBoundingClientRect();return r.width&&r.height;}).map(svg=>{
+        const r=svg.getBoundingClientRect(),front=svg.lastElementChild.dataset.paintSlot,pattern=svg.querySelector('pattern[data-paint-slot="'+front+'"]');
+        return {header:!!svg.closest('.header-tool'),front,size:pattern.getAttribute('width'),pixel:[...ctx.getImageData(Math.floor((r.x+r.width*9.25/16)*canvas.width/innerWidth),Math.floor((r.y+r.height*9.25/16)*canvas.height/innerHeight),1,1).data]};
+      });
+    })()`);
+    assert.ok(icons.some(i=>i.header)&&icons.some(i=>!i.header),`${name}: actual toolbar and title-bar icons: ${JSON.stringify(icons)}`);
+    const paint=pair.swatches.find(s=>s.slot===expected);
+    for(const icon of icons){
+      assert.equal(icon.front,expected,`${name}: selected circle drawn last`);
+      assert.equal(Number(icon.size),2*pair.checker_cell,`${name}: canonical checker size`);
+      assert.equal(icon.pixel[3],255,`${name}: opaque overlap`);
+      assert.ok(paint.checker[0].slice(0,3).every((v,i)=>Math.abs(v*255-icon.pixel[i])<=8),`${name}: opaque light checker at the canonical overlap belongs to ${expected}: ${JSON.stringify({icon,paint})}`);
+    }
+    assert.ok(await evaluate(`!window.retainedPairIcons||retainedPairIcons.every(({svg,groups})=>svg.isConnected&&groups.every(g=>g.parentNode===svg))`),`${name}: retained SVG and circles`);
+  };
+  const editCompact=async(hex,slot)=>{
+    await send({type:'customize',action:{type:'open_control',control:'brush_color'}});
+    const definition=(await pairView()).definition;
+    await gesture('mouse',await point('.tile-popover:popover-open .property-color'));
+    const draft=await evaluate(`(()=>{const model=document.querySelector('.color-dialog select');model.value='srgb_hex';model.dispatchEvent(new Event('change'));return document.querySelector('.color-dialog [data-color-field="0"]').value;})()`);
+    assert.equal(draft,(await evaluate(`layerApp.app.color_ui({type:'form',request:{color:${JSON.stringify(definition)},document_space:'Srgb',model:'srgb_hex'}})`)).draft.fields[0],'Compact editor opens the active definition');
+    await evaluate(`(()=>{const field=document.querySelector('.color-dialog [data-color-field="0"]');field.value=${JSON.stringify(hex)};field.dispatchEvent(new Event('input'));})()`);
+    const before=await read();await gesture('mouse',await point('.color-dialog .suggested-action'));
+    assert.notDeepEqual((await read())[slot],before[slot],`Compact editing changes ${slot}`);
+    for(const other of ['foreground','background','temporary'].filter(s=>s!==slot))assert.deepEqual((await read())[other],before[other],`Compact editing preserves ${other}`);
+    await send({type:'customize',action:{type:'close_control'}});
+  };
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    for(const [slot,rgba] of [['foreground',[.9,.08,.18,.45]],['background',[.04,.25,.9,.7]]])await send({type:'color',action:{op:'set_slot',slot,color:{space:'Srgb',rgba}}});
+    await evaluate(`window.retainedPairIcons=[...document.querySelectorAll('svg[data-paint-pair]')].map(svg=>({svg,groups:[...svg.querySelectorAll(':scope > g')]}))`);
+    for(const device of ['mouse','touch','pen'])for(const selected of ['background','foreground']) {
+      await gesture(device,await point(swatch(selected)));await checkPair(`${theme}-${device}-${selected}-pair`,selected);
+      await gesture(device,await point(swatch('transparent')));await checkPair(`${theme}-${device}-${selected}-transparent-pair`,selected);
+    }
+    await gesture('mouse',await point(swatch('background')));await gesture('mouse',await point(swatch('transparent')));
+    await editCompact('#336699','background');await checkPair(`${theme}-compact-background-pair`,'background');
+    const remembered=await read();await gesture('mouse',await point(swatch('transparent')));await gesture('mouse',await point(`${root} [data-quick-color="white"]`));
+    assert.equal((await read()).slot,'temporary');
+    await editCompact('#cc9933','temporary');assert.deepEqual([(await read()).foreground,(await read()).background],[remembered.foreground,remembered.background]);
+    await checkPair(`${theme}-temporary-pair`,'foreground');
+    const artwork=await read();await send({type:'invoke',command:'quick_mask'});
+    assert.ok(await evaluate('!!layerApp.state().layer_tools.mask_editing'));
+    await send({type:'color',action:{op:'set_slot',slot:'background',color:{space:'Srgb',rgba:[.15,.8,.3,.35]}}});
+    await checkPair(`${theme}-mask-background-pair`,'background');
+    await send({type:'invoke',command:'quick_mask'});assert.deepEqual(await read(),artwork);await checkPair(`${theme}-artwork-pair`,'foreground');
+    await send({type:'customize',action:{type:'header',action:{type:'edit',editing:true}}});
+    const source=await evaluate(`(()=>{const n=document.querySelector('#header svg[data-paint-pair]').closest('.header-item'),r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+    if(native)await performNative([{point:[source.x,source.y]},{down:true},{point:[source.x+50,source.y+45]}]);
+    else {await call('Input.dispatchMouseEvent',{type:'mousePressed',...source,button:'left',buttons:1,clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseMoved',x:source.x+50,y:source.y+45,button:'left',buttons:1});}
+    await settle();assert.ok(await evaluate(`!!document.querySelector('.header-drag-preview svg[data-paint-pair]')`),'Header drag retains a live pair icon');
+    assert.ok(await evaluate(`(()=>{const ids=[...document.querySelectorAll('svg[data-paint-pair] pattern[id]')].map(n=>n.id);return new Set(ids).size===ids.length;})()`),'Drag copies keep independent SVG paint references');
+    await checkPair(`${theme}-header-drag-pair`,'foreground');
+    if(native)await performNative([{down:false}]);else await call('Input.dispatchMouseEvent',{type:'mouseReleased',x:source.x+50,y:source.y+45,button:'left',buttons:0,clickCount:1});
+    await send({type:'customize',action:{type:'header',action:{type:'cancel'}}});
+    await evaluate('delete window.retainedPairIcons');
+  }
+  console.log('Paint pair: native icons, compact editors, masks and drag copies passed in both themes; opening HDR fixture');
+  await send({type:'invoke',command:'new_document'});
+  console.log('Paint pair: HDR creation requested');
+  await evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+30000;function poll(){if(document.querySelector('[data-document-field="depth"]'))resolve();else if(performance.now()>end)reject(Error('HDR creation dialog'));else setTimeout(poll,30);}poll();})`);
+  console.log('Paint pair: HDR creation dialog ready');
+  await evaluate(`(()=>{for(const name of ['width','height']){const n=document.querySelector('[data-document-field="'+name+'"]');n.value='256';n.dispatchEvent(new Event('input',{bubbles:true}));}const field=document.querySelector('[data-document-field="depth"]');field.value='F16';field.dispatchEvent(new Event('change'));})()`);
+  console.log('Paint pair: HDR Create bounds',await bounds('[data-document-action="create"]'),await evaluate('({width:innerWidth,height:innerHeight})'));
+  await evaluate(`document.querySelector('[data-document-action="create"]').scrollIntoView({block:'center'})`);await settle();
+  await gesture('mouse',await point('[data-document-action="create"]'));
+  assert.equal(await evaluate(`!!document.querySelector('.document-dialog[open] [data-document-action="create"]')`),false,'Native Create closes the drawing dialog');
+  console.log('Paint pair: HDR creation accepted');
+  const hdrDeadline=Date.now()+60000;let hdrState;
+  do {
+    hdrState=await evaluate(`({depth:layerApp.app.document_color().depth,ready:layerApp.app.brush_ready(),progress:document.querySelector('.file-progress')?.textContent,dialogs:[...document.querySelectorAll('dialog[open]')].map(n=>n.textContent),errors:[...document.querySelectorAll('#gpu-notice,.message,.toast')].map(n=>n.textContent)})`);
+    await writeFile(`${output}/hdr-startup.json`,JSON.stringify(hdrState,null,2));
+    assert.ok(Date.now()<hdrDeadline,`HDR document ready: ${JSON.stringify(hdrState)}`);
+    if(hdrState.depth!=='F16'||!hdrState.ready)await new Promise(resolve=>setTimeout(resolve,100));
+  }while(hdrState.depth!=='F16'||!hdrState.ready);
+  assert.equal(await evaluate('layerApp.app.color_panel().hdr'),true);
+  for(const theme of ['light','dark']) {
+    console.log('Paint pair: HDR rendition theme',theme);
+    await send({type:'set_theme',theme});
+    await send({type:'color',action:{op:'set_slot',slot:'background',color:{space:'Srgb',rgba:[.7,.2,.05,1]}}});
+    await send({type:'color',action:{op:'hdr_intensity',stops:2}});
+    await evaluate(`window.retainedPairIcons=[...document.querySelectorAll('svg[data-paint-pair]')].map(svg=>({svg,groups:[...svg.querySelectorAll(':scope > g')]}))`);
+    await send({type:'invoke',command:'sdr_rendition'});
+    await evaluate(`document.querySelector('.proof-dial-accessibility [aria-label="Brightness"]').focus()`);
+    const original=await pairView();
+    if(native)await performNative(Array.from({length:10},()=>[{key:65364,down:true},{key:65364,down:false}]).flat());
+    else for(let i=0;i<10;i++)for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:'ArrowDown',code:'ArrowDown',windowsVirtualKeyCode:40});
+    await settle();const changed=await pairView();assert.deepEqual(changed.definition,original.definition,'Rendition edit preserves portable paint');assert.notDeepEqual(changed.swatches,original.swatches,'Rendition changes the icon preview');
+    await checkPair(`${theme}-rendition-pair`,'background');
+    await send({type:'invoke',command:'undo'});await evaluate('delete window.retainedPairIcons');
+  }
   if(native)await writeFile(`${inputDir}/finished`,'done');
   console.log(`Color panel: ${reports.length} layouts and both-resolution captures; ${native?'native mouse/touch + CDP pen':'CDP mouse/touch/pen'}; selected swatch overlap and rims, shape/readout buttons, swap, black position, keyboard, and cancellation passed`);
 }

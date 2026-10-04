@@ -12,6 +12,8 @@ import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.runBlocking
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
 import org.json.JSONArray
@@ -23,6 +25,8 @@ import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlin.math.*
 
 /** Production Compose, shared Rust and typed tablet input, with isolated workspace storage. */
@@ -141,6 +145,183 @@ class AndroidColorPanelTest {
     private fun fullCapture(name:String) {
         val image=instrumentation.uiAutomation.takeScreenshot()
         File(output,"$name.png").outputStream().use { image.compress(Bitmap.CompressFormat.PNG,100,it) };image.recycle()
+    }
+    private fun paintPair() = host.snapshot!!.getJSONObject("paint_pair")
+    private fun paintPairFixture() {
+        val workspace = JSONObject(fixture.toString())
+        val layout = workspace.getJSONObject("layout")
+        layout.array("panels").objects().first { it.getString("id") == "toolbar" }.apply {
+            put("tile_style", "large")
+            getJSONObject("content").put("tiles", JSONArray().put(obj("id" to 900, "control" to obj("kind" to "color"))))
+        }
+        layout.put("next_tile_id", 901)
+        layout.put("header", obj("size" to "small", "next_id" to 903, "zones" to JSONArray(listOf(
+            JSONArray().put(obj("id" to 902, "item" to obj("kind" to "tool", "control" to obj("kind" to "color")))), JSONArray(), JSONArray()))))
+        action(obj("type" to "restore_workspace", "workspace" to workspace))
+        action(obj("type" to "move_panel", "panel" to "toolbar", "target" to obj("kind" to "float", "position" to JSONArray(listOf(120, 120))),
+            "viewport" to JSONArray(listOf(bounds("workspace").width / density, bounds("workspace").height / density))))
+        waitFor("live paint icons") { find("tile-icon-toolbar-900") != null && find("header-control-902") != null }
+    }
+    private fun assertPaintIcons(name: String) {
+        settle()
+        val committed = CountDownLatch(1)
+        instrumentation.runOnMainSync {
+            owner.view.viewTreeObserver.registerFrameCommitCallback { committed.countDown() }
+            owner.view.invalidate()
+        }
+        assertTrue("Live icons commit a frame", committed.await(5, TimeUnit.SECONDS))
+        val pair = paintPair()
+        File(output, "$name-pair.json").writeText(pair.toString())
+        val screenshot = instrumentation.uiAutomation.takeScreenshot()
+        val origin = IntArray(2)
+        instrumentation.runOnMainSync { owner.view.getLocationOnScreen(origin) }
+        val header = host.snapshot!!.getJSONObject("header")
+        val iconSize = header.array("sizes").objects().first { it.getString("id") == header.getJSONObject("model").getString("size") }.number("icon") * density
+        val headerCenter = bounds("header-control-902").center
+        val regions = listOf(bounds("tile-icon-toolbar-900"), androidx.compose.ui.geometry.Rect(headerCenter - Offset(iconSize / 2, iconSize / 2), androidx.compose.ui.geometry.Size(iconSize, iconSize)))
+        for ((index, region) in regions.withIndex()) {
+            val crop = Bitmap.createBitmap(screenshot, (region.left + origin[0]).roundToInt(), (region.top + origin[1]).roundToInt(), region.width.roundToInt(), region.height.roundToInt())
+            File(output, "$name-icon-$index.png").outputStream().use { crop.compress(Bitmap.CompressFormat.PNG, 100, it) }
+            val slots = pair.array("swatches").objects().associateBy { it.getString("slot") }
+            val front = pair.getString("front_swatch")
+            fun geometry(slot: String) = if (slot == "foreground") Offset(6.75f, 6.75f) to 6f else Offset(11f, 11f) to 4.25f
+            for (probe in listOf(Offset(4f, 4f), Offset(8f, 4f), Offset(12.8f, 12.8f), Offset(14f, 10.5f), Offset(9.5f, 9.5f))) {
+                val x = (probe.x / 16 * crop.width).toInt().coerceIn(0, crop.width - 1)
+                val y = (probe.y / 16 * crop.height).toInt().coerceIn(0, crop.height - 1)
+                val actualPoint = Offset((x + .5f) / crop.width * 16, (y + .5f) / crop.height * 16)
+                val slot = listOf(front, if (front == "foreground") "background" else "foreground").first { candidate ->
+                    val (center, radius) = geometry(candidate); (actualPoint - center).getDistance() < radius - .6f
+                }
+                val (center, radius) = geometry(slot)
+                val cell = pair.number("checker_cell")
+                val phase = (floor((actualPoint.x - center.x + radius) / cell).toInt() + floor((actualPoint.y - center.y + radius) / cell).toInt()) % 2
+                val expected = slots.getValue(slot).array("checker").getJSONArray(phase)
+                val pixel = crop.getPixel(x, y)
+                for ((channel, shift) in listOf(16, 8, 0).withIndex()) assertEquals("$name/$index/$slot/$probe channel $channel", (expected.getDouble(channel) * 255).roundToInt().toDouble(), (pixel shr shift and 255).toDouble(), 8.0)
+                assertEquals(255, pixel ushr 24)
+            }
+            val (center, radius) = geometry(front)
+            val rear = geometry(if (front == "foreground") "background" else "foreground")
+            val rim = (0 until crop.height).flatMap { y -> (0 until crop.width).map { x -> x to y } }.filter { (x, y) ->
+                val p = Offset((x + .5f) / crop.width * 16, (y + .5f) / crop.height * 16)
+                abs((p - center).getDistance() - radius) < .12f && (p - rear.first).getDistance() < rear.second - .8f
+            }
+            assertTrue("Canonical overlapping rim exists", rim.isNotEmpty())
+            val ink = android.graphics.Color.parseColor(state().getJSONObject("palette").getString("text"))
+            for ((x, y) in rim) for (shift in listOf(16, 8, 0)) assertEquals("$name/$index front rim", (ink shr shift and 255).toDouble(), (crop.getPixel(x, y) shr shift and 255).toDouble(), 8.0)
+            crop.recycle()
+        }
+        screenshot.recycle()
+    }
+    private fun editActivePaint(channel: String) {
+        action(obj("type" to "customize", "action" to obj("type" to "open_control", "control" to "brush_color")))
+        val label = host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("edit")
+        waitFor("compact active color") { findTag("property-color-$label", owner) != null }
+        instrumentation.runOnMainSync { assertTrue(findTag("property-color-$label", owner)!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        waitFor("active color editor") { findTag("color-input-0") != null }
+        val form = JSONObject(Native.colorUi(obj("type" to "form", "request" to obj("color" to paintPair().getJSONObject("definition"), "document_space" to documentRgbSpace(host), "model" to "document_rgb")).toString(), host.languageTag))
+        instrumentation.runOnMainSync {
+            for (i in 0..3) assertEquals("active definition channel $i", form.getJSONObject("draft").array("fields").getString(i), findTag("color-input-$i")!!.second.config[SemanticsProperties.EditableText].text)
+            assertTrue(findTag("color-input-0")!!.second.config[SemanticsActions.SetText].action!!.invoke(AnnotatedString(channel)))
+        }
+        settle()
+        instrumentation.runOnMainSync { assertTrue(findTag("color-form-use")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+        waitFor("color editor closed") { findTag("color-form-use") == null }; settle()
+        action(obj("type" to "customize", "action" to obj("type" to "close_control")))
+    }
+    @Test fun retainedPaintIconsAndCompactControlFollowCommittedContext() {
+        paintPairFixture()
+        val ids = listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id)
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((slot, rgba) in listOf("foreground" to listOf(.85, .12, .18, 1), "background" to listOf(.08, .28, .9, 1)))
+                color(obj("op" to "set_slot", "slot" to slot, "color" to obj("space" to "Srgb", "rgba" to JSONArray(rgba))))
+            for (slot in listOf("foreground", "background")) {
+                val definitions = paintPair().array("swatches").toString()
+                color(obj("op" to "select", "slot" to slot))
+                assertEquals(definitions, paintPair().array("swatches").toString())
+                assertPaintIcons("$theme-selected-$slot")
+            }
+            color(obj("op" to "toggle_transparent"))
+            assertEquals("background", paintPair().getString("front_swatch"))
+            assertPaintIcons("$theme-transparent")
+            val foreground = colors().getJSONObject("foreground").toString()
+            editActivePaint("0.25")
+            assertEquals("transparent edit preserves foreground", foreground, colors().getJSONObject("foreground").toString())
+            assertEquals("background", paintPair().getString("front_swatch"))
+            assertPaintIcons("$theme-transparent-edited")
+            val swatches = paintPair().array("swatches").toString()
+            color(obj("op" to "select", "slot" to "transparent"))
+            color(obj("op" to "quick_color", "white" to true))
+            assertEquals(1.0, paintPair().getJSONObject("definition").array("rgba").getDouble(0), 0.0)
+            editActivePaint("0.4")
+            assertEquals("temporary edit preserves both stored paints", swatches, paintPair().array("swatches").toString())
+            assertEquals(.4, paintPair().getJSONObject("definition").array("rgba").getDouble(0), .001)
+            assertPaintIcons("$theme-temporary")
+            color(obj("op" to "select", "slot" to "foreground"))
+            for (slot in listOf("foreground", "background")) color(obj("op" to "set_slot", "slot" to slot,
+                "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(.05, .3, .7, if (slot == "foreground") .35 else .6)))))
+            assertPaintIcons("$theme-alpha")
+            val artwork = colors().toString()
+            action(obj("type" to "invoke", "command" to "quick_mask"))
+            assertNotNull("Mask painting is active", state().getJSONObject("layer_tools").objectOrNull("mask_editing"))
+            color(obj("op" to "select", "slot" to "background"))
+            editActivePaint("0.25")
+            assertEquals("mask edit preserves artwork", artwork, colors().toString())
+            val maskColors = state().getJSONObject("layer_tools").getJSONObject("mask_editing").getJSONObject("colors")
+            for (swatch in paintPair().array("swatches").objects()) assertEquals("Mask icon uses mask paint", jsonValue(maskColors.getJSONObject(swatch.getString("slot"))), jsonValue(swatch.getJSONObject("definition")))
+            assertPaintIcons("$theme-mask")
+            action(obj("type" to "invoke", "command" to "quick_mask"))
+            assertPaintIcons("$theme-artwork-restored")
+            assertEquals(ids, listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id))
+        }
+    }
+    @Test fun retainedPaintIconsUseMappedRenditionAndIgnorePickerHover() {
+        paintPairFixture()
+        fun <T> native(block: (Long) -> T): T = runBlocking { host.withNative(block) }
+        val task = native { handle ->
+            val (id, file) = documentRequest(handle, "new_document")
+            Native.projectTask(handle, id, "null", file.getLong("epoch"), file.getLong("revision"))
+        }
+        try {
+            Native.projectOptions(task, obj("extent" to JSONArray(listOf(320, 240)), "color" to obj("space" to "Srgb", "depth" to "F16"), "background" to "White").toString())
+            Native.projectWork(task, -1, 320, 240)
+            native { Native.projectAdopt(it, task, "null") }
+        } finally { Native.projectFree(task) }
+        instrumentation.runOnMainSync { host.documentChanged() }
+        waitFor("HDR document ready", 60_000) { view().optBoolean("hdr") && host.snapshot?.optBoolean("brush_ready") == true }
+        val ids = listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id)
+        val form = JSONObject(Native.colorUi(obj("type" to "form", "request" to obj("color" to paintPair().getJSONObject("definition"),
+            "document_depth" to "F16", "document_space" to "Srgb", "model" to "linear_rgb", "fields" to JSONArray(listOf("4", "1", "0.25", "50")))).toString(), host.languageTag))
+        color(obj("op" to "definition", "color" to form.getJSONObject("value")))
+        val definition = paintPair().getJSONObject("definition").toString()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            val initial = paintPair().array("swatches").toString()
+            assertPaintIcons("$theme-hdr-initial")
+            val recipe = native { JSONObject(Native.query(it, obj("type" to "proof_form").toString())).getJSONObject("rendition") }
+            val changed = JSONObject(recipe.toString()).put("exposure", recipe.getDouble("exposure") - 2)
+            native { handle ->
+                for ((phase, value) in listOf("down" to recipe, "up" to changed)) Native.proofControl(handle, obj("type" to "rendition", "phase" to phase, "recipe" to value).toString())
+            }
+            instrumentation.runOnMainSync { host.documentChanged() }
+            waitFor("committed rendition updates live icons") { paintPair().array("swatches").toString() != initial }
+            assertEquals("Rendition retains authored paint", definition, paintPair().getJSONObject("definition").toString())
+            assertPaintIcons("$theme-hdr-mapped")
+            assertEquals(ids, listOf(node("tile-icon-toolbar-900").id, node("header-control-902").id))
+            val committed = paintPair().toString()
+            action(obj("type" to "invoke", "command" to "fit_canvas"))
+            action(obj("type" to "invoke", "command" to "eyedropper"))
+            tool = MotionEvent.TOOL_TYPE_MOUSE
+            event(MotionEvent.ACTION_HOVER_ENTER, canvasPoint())
+            event(MotionEvent.ACTION_HOVER_MOVE, canvasPoint() + Offset(1f, 0f))
+            waitFor("picker previews white canvas") { picker().objectOrNull("preview") != null }
+            assertEquals("Picker hover preserves committed paint icons", committed, paintPair().toString())
+            assertPaintIcons("$theme-hdr-picker-hover")
+            event(MotionEvent.ACTION_HOVER_EXIT)
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+            waitFor("picker cancelled") { state().getJSONObject("layer_tools").getString("tool") == "paint" }
+        }
     }
     @Test fun glassPickerInputAndSettings() {
         assumeTrue("Requires -e systemInput true", systemInput)

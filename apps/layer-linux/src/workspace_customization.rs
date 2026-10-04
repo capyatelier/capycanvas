@@ -335,7 +335,7 @@ impl ToolbarManagerUi {
 pub(super) struct Customization {
     pub toolbars: RefCell<Vec<ToolbarView>>,
     color_patches: RefCell<Vec<glib::WeakRef<crate::display_color::ColorPair>>>,
-    palette_colors: Cell<Option<([layer_core::color::RgbColor; 2], crate::display_color::ViewColor, f32)>>,
+    palette_colors: Cell<Option<([layer_core::color::RgbColor; 2], layer_ui::ColorSlot, crate::display_color::ViewColor, f32)>>,
     context: gtk::PopoverMenu,
     context_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
     popup: gtk::Popover,
@@ -975,7 +975,7 @@ impl Customization {
         let pair = crate::display_color::ColorPair::new(size);
         if let Some(g) = w.gpu.borrow().as_ref() {
             let colors = g.session.state().display_colors();
-            pair.set_colors([colors.foreground, colors.background], w.view_color(), w.picker_headroom());
+            pair.set_colors([colors.foreground, colors.background], colors.front_swatch(), w.paint_view_color(), w.picker_headroom());
         }
         let mut retained = self.color_patches.borrow_mut();
         retained.retain(|pair| pair.upgrade().is_some());
@@ -983,11 +983,11 @@ impl Customization {
         pair.upcast()
     }
     fn refresh_color_palette(&self, colors: &layer_ui::ColorState, view: crate::display_color::ViewColor, headroom: f32) {
-        let next = ([colors.foreground, colors.background], view, headroom);
+        let next = ([colors.foreground, colors.background], colors.front_swatch(), view, headroom);
         if self.palette_colors.replace(Some(next)) == Some(next) { return; }
         self.color_patches.borrow_mut().retain(|pair| {
             let Some(pair) = pair.upgrade() else { return false; };
-            pair.set_colors([colors.foreground, colors.background], view, headroom);
+            pair.set_colors([colors.foreground, colors.background], colors.front_swatch(), view, headroom);
             true
         });
     }
@@ -995,7 +995,7 @@ impl Customization {
     pub fn refresh(&self, w: &Rc<Workspace>) {
         self.updating.set(true);
         let Some((views, picker, control, prompt, manager)) = w.gpu.borrow().as_ref().map(|g| {
-            self.refresh_color_palette(g.session.state().display_colors(), w.view_color(), w.picker_headroom());
+            self.refresh_color_palette(g.session.state().display_colors(), w.paint_view_color(), w.picker_headroom());
             (
                 g.session
                     .state()
@@ -1049,8 +1049,8 @@ impl Customization {
                 Some(FieldValue::Size(input)) => input.set_value(brush.diameter as f64),
                 Some(FieldValue::Opacity(input)) => input.set_value(brush.opacity as f64),
                 Some(FieldValue::Color(input)) => {
-                    let definition = w.gpu.borrow().as_ref().unwrap().session.state().colors.definition();
-                    input.set_color(definition, w.view_color());
+                    let definition = w.gpu.borrow().as_ref().unwrap().session.state().display_colors().definition();
+                    input.set_display_color(definition, w.paint_view_color(), w.picker_headroom());
                 }
                 None => (),
                 Some(FieldValue::Brush(input)) => {

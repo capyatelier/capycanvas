@@ -394,7 +394,7 @@ impl PalettePanel {
                     .as_ref()
                     .map(|g| g.session.state().clone());
                 if let Some(state) = state {
-                    panel.refresh(&state, workspace.view_color(), workspace.picker_headroom());
+                    panel.refresh(&state, workspace.paint_view_color(), workspace.picker_headroom());
                 }
             }
         ));
