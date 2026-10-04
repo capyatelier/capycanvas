@@ -29,7 +29,9 @@ Every tool group uses the same softly rounded bottom-right triangle in Paint,
 Photo and Sketch, in both toolbars and the title bar. GTK, Web, Android and
 Windows render the shared `tool-group` icon. Brush categories remain groups even
 when they contain only one preset; pinned brush presets and individual leaf
-tools have no group marker.
+tools have no group marker. The triangle's painted edges have at least 6px of
+right and bottom clearance, including Small, Medium and Large title-bar tools;
+the full corner remains clickable.
 Title-bar overflow keeps group corners reachable in scrolling lists; see
 [the window bar](window-bar.md).
 
@@ -63,8 +65,10 @@ there is no separate group editor. Opening an existing workspace preserves its
 layout. Fresh workspaces and Restore Starting Layout use the current defaults.
 
 GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations_input`;
-Web uses `workspace-motion.sh web --tool-variations`. Run the native popup journey
-without `--tablet`, whose synthetic pen serials cannot authorize popup grabs.
+`--native-test=native_toolbar_variations_overflow_input` focuses on title-bar
+sizes and overflow. Web uses `workspace-motion.sh web --tool-variations`. Run
+native popup journeys without `--tablet`, whose synthetic pen serials cannot
+authorize popup grabs.
 
 ## Interaction contract
 

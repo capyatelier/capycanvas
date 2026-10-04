@@ -23,10 +23,17 @@ export async function checkToolVariations({call,evaluate,settle}) {
   };
   const groupView=anchor=>anchor.kind==='header'?`layerApp.app.header_view().items.find(i=>i.id===${anchor.id})`:`layerApp.app.panel_view('${anchor.panel}').tiles.find(t=>t.id===${anchor.tile})`;
   const groupBody=(anchor,selector)=>anchor.kind==='header'?`${selector} .header-tool`:`${selector} > button:first-child`;
+  const markerPoint=async(anchor,selector)=>{
+    const geometry=await evaluate(`(()=>{const hit=document.querySelector(${JSON.stringify(selector+' .tool-variations')}),owner=document.querySelector(${JSON.stringify(groupBody(anchor,selector))}),shape=hit.querySelector('svg path'),box=shape.getBBox(),matrix=shape.getScreenCTM(),stroke=getComputedStyle(shape).stroke==='none'?0:parseFloat(getComputedStyle(shape).strokeWidth)/2,transform=(x,y)=>new DOMPoint(x,y).matrixTransform(matrix),corners=[[box.x-stroke,box.y-stroke],[box.x+box.width+stroke,box.y-stroke],[box.x-stroke,box.y+box.height+stroke],[box.x+box.width+stroke,box.y+box.height+stroke]].map(([x,y])=>transform(x,y)),ink={left:Math.min(...corners.map(p=>p.x)),right:Math.max(...corners.map(p=>p.x)),top:Math.min(...corners.map(p=>p.y)),bottom:Math.max(...corners.map(p=>p.y))},bounds=owner.getBoundingClientRect(),target=hit.getBoundingClientRect(),style=getComputedStyle(owner),radii=style.borderBottomRightRadius.split(' '),radius=(value,length)=>Math.min(length/2,parseFloat(value)*(value.endsWith('%')?length/100:1)),rx=radius(radii[0],bounds.width),ry=radius(radii[1]||radii[0],bounds.height),corner=style.getPropertyValue('corner-bottom-right-shape')||style.getPropertyValue('corner-shape'),power=corner==='squircle'||corner==='superellipse(2)'?4:2,insideCorner=corners.every(p=>p.x<=bounds.right-rx||p.y<=bounds.bottom-ry||((p.x-(bounds.right-rx))/rx)**power+((p.y-(bounds.bottom-ry))/ry)**power<=1);let point;for(let y=1;y<8&&!point;y++)for(let x=1;x<8&&!point;x++){const p=new DOMPoint(box.x+box.width*x/8,box.y+box.height*y/8);if(shape.isPointInFill(p))point=transform(p.x,p.y);}if(!point)throw Error('Marker has no painted interior');return {clearance:[ink.left-bounds.left,bounds.right-ink.right,ink.top-bounds.top,bounds.bottom-ink.bottom],insideTarget:ink.left>=target.left&&ink.right<=target.right&&ink.top>=target.top&&ink.bottom<=target.bottom,insideCorner,paintedHit:hit.contains(document.elementFromPoint(point.x,point.y)),point:{x:point.x,y:point.y}}})()`);
+    assert.ok(geometry.clearance.every(gap=>gap>=6-.01),`marker ink including stroke clears owning button by 6px: ${JSON.stringify(geometry)}`);
+    assert.ok(geometry.insideTarget,'painted marker stays inside its native hit target');assert.ok(geometry.insideCorner,`painted marker stays inside rendered button corner: ${JSON.stringify(geometry)}`);assert.ok(geometry.paintedHit,'painted marker receives native corner input');
+    return geometry.point;
+  };
   const checkCommandGroup=async(anchor,selector,icons=[])=>{
     const view=groupView(anchor),body=groupBody(anchor,selector),rows=(await model({kind:'tool_variants',anchor})).sections.flat();
     assert.ok(rows.length,'existing command group has choices');assert.equal(await evaluate(`${view}.has_variants`),true);
     assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),false,'command group exposes its corner menu');
+    await markerPoint(anchor,selector);
     await evaluate(`window.retainedCommandGroup=document.querySelector(${JSON.stringify(selector)})`);
     for(const icon of icons.length?icons:[rows.find(r=>!r.selected)?.icon??rows[0].icon]) {
       const choice=rows.find(row=>row.icon===icon);assert.ok(choice,`group exposes ${icon}`);
@@ -56,6 +63,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const tile=tiles.find(t=>t.control.slot===slot);assert.ok(tile,slot);
       const selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,anchor={kind:'tile',panel:'toolbar',tile:tile.id};
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
+      await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
       const target={kind:'tile',panel:'toolbar',tile:tile.id},full=await model(target);
       assert.deepEqual(full.sections[0].map(r=>r.label),rows.map(r=>r.label));assert.ok(full.sections.length>1,'secondary menu keeps customization');
@@ -156,15 +164,19 @@ export async function checkToolVariations({call,evaluate,settle}) {
     const saved=await evaluate('layerApp.state().workspace'),fixture=structuredClone(saved);
     const entry=fixture.layout.header.zones.flat().find(e=>e.item.control?.command==='drawing_brush');assert.ok(entry);
     entry.item.control={kind:'tool_slot',slot:'drawing'};
-    for(const theme of ['light','dark']) {
+    for(const theme of ['light','dark'])for(const size of ['small','medium','large']) {
+      fixture.layout.header.size=size;
       await send({type:'restore_workspace',workspace:fixture});await send({type:'set_theme',theme});
       const anchor={kind:'header',id:entry.id},rows=(await model({kind:'tool_variants',anchor})).sections.flat();
-      await click(`[data-header-item="${entry.id}"] .tool-variations`);await choose(rows.find(r=>!r.selected).label);
+      const selector=`[data-header-item="${entry.id}"]`,painted=await markerPoint(anchor,selector);
+      await pointer('down',painted);await pointer('up');await settle();assert.ok(await menuOpen(),`${theme}/${size}: painted corner opens menu`);
+      assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));await choose(rows.find(r=>!r.selected).label);
       const view=await evaluate(`layerApp.app.header_view().items.find(i=>i.id===${entry.id})`);
       assert.equal(await evaluate(`document.querySelector('[data-header-item="${entry.id}"] .header-tool > svg').dataset.asset`),view.icon);
       assert.equal(await evaluate(`document.querySelector('[data-header-item="${entry.id}"] .header-tool').getAttribute('aria-label')`),view.label);
+      await markerPoint(anchor,selector);await shot(`header-marker-${size}-${theme}`);
     }
     await send({type:'restore_workspace',workspace:saved});
-    console.log('PASS: Photo 15/Paint 17 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder and header variants in both themes');
+    console.log('PASS: Photo 15/Paint 17 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder, inset toolbar/header marker ink and Small/Medium/Large painted-corner menus in both themes');
   } finally {device='mouse';await closeMenu();await click(`.workspace-switcher button[data-workspace-id="${original}"]`);}
 }

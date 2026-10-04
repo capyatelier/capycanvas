@@ -5,6 +5,7 @@ import android.view.KeyEvent
 import android.view.MotionEvent
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
+import androidx.compose.ui.graphics.asAndroidPath
 import androidx.compose.ui.platform.ViewRootForTest
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsNode
@@ -953,6 +954,43 @@ class AndroidTitleBarTest {
             assertEquals(1, rows(ribbonAnchor).count { it.optBoolean("selected") })
             assertEquals(1, rows(headerAnchor).count { it.optBoolean("selected") })
         }
+        val raster = android.graphics.Bitmap.createBitmap(256, 256, android.graphics.Bitmap.Config.ARGB_8888)
+        val pixels = try {
+            val source = instrumentation.targetContext.assets.open("layer-tool-group-symbolic.svg").bufferedReader().use { it.readText() }
+            val picture = com.caverock.androidsvg.SVG.getFromString(source.replace("currentColor", "#000000")).renderToPicture()
+            android.graphics.Canvas(raster).drawPicture(picture, android.graphics.RectF(0f, 0f, 256f, 256f))
+            (0 until raster.height).flatMap { y -> (0 until raster.width).filter { x -> android.graphics.Color.alpha(raster.getPixel(x, y)) > 0 }
+                .map { x -> Offset((x + .5f) / raster.width, (y + .5f) / raster.height) } }.also { painted ->
+                assertTrue("Group marker paints pixels", painted.isNotEmpty())
+                assertTrue("Painted right inset is at least six SVG pixels", (1f - painted.maxOf { it.x } - .5f / raster.width) * 16 >= 6)
+                assertTrue("Painted bottom inset is at least six SVG pixels", (1f - painted.maxOf { it.y } - .5f / raster.height) * 16 >= 6)
+            }
+        } finally { raster.recycle() }
+        for (theme in listOf("light", "dark")) for (size in listOf("small", "medium", "large")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            edit(obj("type" to "set_size", "size" to size)); idle()
+            waitFor("$size marker header published") { model().getString("size") == size && node("header-variants-$headerId") != null }
+            val target = bounds("header-variants-$headerId")
+            val body = bounds("header-control-$headerId")
+            val outline = TileShape.createOutline(androidx.compose.ui.geometry.Size(body.width, body.height),
+                androidx.compose.ui.unit.LayoutDirection.Ltr, androidx.compose.ui.unit.Density(density)) as androidx.compose.ui.graphics.Outline.Generic
+            val region = android.graphics.Region().apply {
+                setPath(outline.path.asAndroidPath(), android.graphics.Region(0, 0, kotlin.math.ceil(body.width).toInt(), kotlin.math.ceil(body.height).toInt()))
+            }
+            val painted = pixels.map { target.topLeft + Offset(it.x * target.width, it.y * target.height) }
+            assertTrue("$size marker stays within its click target", painted.all(target::contains))
+            assertTrue("$size marker stays within the header squircle", painted.all {
+                body.contains(it) && region.contains((it.x - body.left).toInt(), (it.y - body.top).toInt()) })
+            shot("tool-marker-$size-$theme")
+            tool = MotionEvent.TOOL_TYPE_FINGER
+            instrumentation.runOnMainSync { pressed = node("header-variants-$headerId")!!.first }
+            event(MotionEvent.ACTION_DOWN, Offset(painted.map { it.x }.average().toFloat(), painted.map { it.y }.average().toFloat()))
+            event(MotionEvent.ACTION_UP); idle()
+            waitFor("$size painted marker chooser opens") { node("workspace-menu") != null }
+            tapMenuRow(rows(headerAnchor).first { it.optBoolean("selected") }.getString("label"))
+            waitFor("$size marker chooser closes") { node("workspace-menu") == null }
+        }
+        edit(obj("type" to "set_size", "size" to "medium")); idle()
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             for ((index, nativeTool) in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS).withIndex()) {

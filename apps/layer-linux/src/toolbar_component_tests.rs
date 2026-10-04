@@ -57,6 +57,68 @@ fn assert_toolbar_markers(d: &Driver) {
         }
     }
 }
+fn painted_group_point(d: &Driver, button: &gtk::Widget) -> [f32; 2] {
+    let marker = find_named(button, "layer-tool-group-symbolic").unwrap();
+    let parent = marker.parent().unwrap();
+    let bounds = marker.compute_bounds(&parent).unwrap();
+    let snapshot = gtk::Snapshot::new();
+    parent.snapshot_child(&marker, &snapshot);
+    let texture = marker.native().unwrap().renderer().unwrap()
+        .render_texture(snapshot.to_node().unwrap(), Some(&bounds));
+    let width = texture.width() as usize;
+    let height = texture.height() as usize;
+    let mut pixels = vec![0; width * height * 4];
+    texture.download(&mut pixels, width * 4);
+    let painted = pixels.chunks_exact(4).enumerate().filter(|(_, pixel)| pixel[3] > 8)
+        .map(|(i, _)| [i % width, i / width]).collect::<Vec<_>>();
+    assert!(!painted.is_empty());
+    let right = painted.iter().map(|point| point[0]).max().unwrap() + 1;
+    let bottom = painted.iter().map(|point| point[1]).max().unwrap() + 1;
+    assert!(width - right >= 6 && height - bottom >= 6,
+        "painted marker clearance: right {}, bottom {}", width - right, height - bottom);
+    let marker_bounds = marker.compute_bounds(button).unwrap();
+    let button_bounds = button.compute_bounds(button).unwrap();
+    assert!(button_bounds.x() + button_bounds.width() - marker_bounds.x() - right as f32 >= 6.
+        && button_bounds.y() + button_bounds.height() - marker_bounds.y() - bottom as f32 >= 6.);
+    let center = painted.iter().fold([0., 0.], |sum, point|
+        [sum[0] + point[0] as f32 + 0.5, sum[1] + point[1] as f32 + 0.5]);
+    screen_point(&marker, &d.w.window,
+        [center[0] / painted.len() as f32 / width as f32,
+         center[1] / painted.len() as f32 / height as f32])
+}
+
+fn header_group_variations(d: &mut Driver, theme: Theme) {
+    for size in [HeaderSize::Small, HeaderSize::Medium, HeaderSize::Large] {
+        d.w.dispatch(HeaderAction::SetSize { size }.action());
+        d.w.dispatch(UiAction::Invoke { command: CommandId::DrawingBrush });
+        pump(200);
+        let control = ToolbarControl::Command { command: CommandId::DrawingBrush };
+        let widget = d.named(&d.header_tool(control));
+        let button = descendant::<gtk::Button>(&widget).unwrap().upcast::<gtk::Widget>();
+        assert_group_marker(&button, true);
+        let corner = painted_group_point(d, &button);
+        d.capture_canvas(&format!("header-group-{size:?}-{theme:?}.png"));
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+        pump(150);
+        let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+        let id = state(&d.w).workspace.layout.header.entries().find(|entry|
+            entry.item == HeaderItem::Tool { control }).unwrap().id;
+        let anchor = DrawerAnchor::Header { id };
+        d.input.click(corner);
+        assert!(variant_context(d).is_mapped());
+        assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
+        capture_popover(&variant_context(d), d.input.dir.join(
+            format!("header-group-menu-{size:?}-{theme:?}.png")).to_str().unwrap());
+        let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+        let index = menu.sections[0].iter().position(|item| matches!(item.action,
+            Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Marker }, .. }))).unwrap();
+        choose_variant(d, anchor, index);
+        assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Marker.tool());
+        assert!(find_named(&widget, "layer-marker-symbolic").is_some());
+        assert!(state(&d.w).customization.drawer.is_none());
+        assert!(!variant_context(d).is_mapped());
+    }
+}
 fn choose_group(d: &mut Driver, anchor: DrawerAnchor, group: layer_ui::ToolGroup) {
     let widget = anchor_widget(d, anchor);
     let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
@@ -244,7 +306,7 @@ fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
     let label = descendant::<gtk::Label>(&row).unwrap();
     let label_bounds = label.compute_bounds(&row).unwrap();
     assert!(label_bounds.x() + label_bounds.width() <= marker.compute_bounds(&row).unwrap().x());
-    let corner = screen_point(&marker, &d.w.window, [0.75, 0.75]);
+    let corner = painted_group_point(d, &row);
     d.input.click(corner);
     let context = variant_context(d);
     assert!(context.is_mapped());
@@ -270,6 +332,7 @@ fn native_toolbar_variations_overflow_input() {
     for theme in [Theme::Light, Theme::Dark] {
         d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         restore(&d, WorkspacePreset::Painter);
+        header_group_variations(&mut d, theme);
         sketch_overflow_variations(&mut d, theme);
     }
     d.finish();
