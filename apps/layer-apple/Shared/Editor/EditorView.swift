@@ -54,7 +54,6 @@ struct EditorView<Canvas: View>: View {
                         .offset(x: store.headerLeadingInset + 6, y: 6).accessibilityIdentifier("zen-button")
                 }
             }
-            HistogramPresentation(model: store.histogram, palette: palette)
             HStack {
                 ToneStatusLabel(store: store, palette: palette)
                 ProofIndicator(model: store.proof, palette: palette)

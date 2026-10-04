@@ -63,7 +63,7 @@ fn simple_adjustments_publish_existing_typed_controls_and_roundtrip_complete_eff
 #[test]
 fn threshold_properties_use_depth_bounds_and_soft_slider_limits_on_each_host() {
     use layer_core::color::SampleDepth;
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F16,SampleDepth::F32] {
         let mut document=session(platform).engine.document().clone();let composition=document.artwork.compositions.get_mut(document.artwork.root).unwrap();composition.color.depth=depth;composition.blend=layer_core::BlendSpace::Linear;
         let renderer=Recorder {color:document.composition().color,..Recorder::default()};
         let mut s=UiSession::new(renderer,document,[800,800],platform).unwrap();
@@ -77,7 +77,7 @@ fn threshold_properties_use_depth_bounds_and_soft_slider_limits_on_each_host() {
 #[test]
 fn selective_color_page_choice_is_transient_and_continuous_ink_edit_has_one_undo() {
     use layer_core::EffectValue;
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
         let mut s=color_adjustment_session_on("selective_color",platform);let layer=s.engine.document().working.occurrence.unwrap();
         assert_eq!(s.state.layer_properties.pages.len(),9);let before=s.engine.document().clone();let checkpoint=s.engine.checkpoint();
         s.dispatch(UiAction::Effect {action:EffectAction::SelectPage {layer:occurrence_token(layer),page:"blacks".into()}}).unwrap();
@@ -96,7 +96,7 @@ fn selective_color_page_choice_is_transient_and_continuous_ink_edit_has_one_undo
 #[test]
 fn channel_mixer_monochrome_projects_gray_page_and_retains_all_hidden_rows() {
     use layer_core::EffectValue;
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
         let mut s=color_adjustment_session_on("channel_mixer",platform);let layer=s.engine.document().working.occurrence.unwrap();
         assert_eq!(s.state.layer_properties.pages.iter().map(|page|page.id.as_str()).collect::<Vec<_>>(),["red","green","blue"]);
         color_adjustment_set(&mut s,"red_green",EffectValue::Number(-123.));color_adjustment_set(&mut s,"blue_constant",EffectValue::Number(31.));

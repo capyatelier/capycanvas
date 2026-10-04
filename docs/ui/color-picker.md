@@ -186,7 +186,7 @@ preserve the saturation of arbitrary contrasting colors.
 
 ## White Balance
 
-GTK, Web and Android Properties offer an eyedropper button, **Pick neutral point**, for White Balance. The canvas bar
+GTK, Web, Android, macOS and iPadOS Properties offer an eyedropper button, **Pick neutral point**, for White Balance. The canvas bar
 keeps Sample size and Cancel available; calibration starts at 5 pixels. A mouse
 or pen release samples the input before that adjustment, including its actual
 group and clipping scope. Touch uses the lifted contact point. Its glass shows
@@ -208,7 +208,7 @@ stays in the host; source selection, validation and the correction live in Rust.
 
 ## Levels and Curves
 
-GTK, Web and Android Properties group black, neutral and white point calibration in one
+GTK, Web, Android, macOS and iPadOS Properties group black, neutral and white point calibration in one
 eyedropper menu beside the channel selector. These actions
 use the same sample sizes, contact ownership and exact pre-adjustment input as
 White Balance. The RGB page corrects the three channels together while preserving
@@ -269,9 +269,9 @@ tools/windows-vm/windows-vm.py fixtures compact-color:dark compact-color:light
   both themes, overlap pixels and contacts, circular clipping and hover transfer.
   Android also runs `AndroidColorPanelTest#glassPickerInputAndSettings`,
   `#pickerWheelPreviewPerformance` and `#pickerRetiresRestingContactsAndPendingHolds`
-  with `-e systemInput true`. Apple runs the `picker` and `inspection` tests in
+  with `-e systemInput true`. Apple runs the `picker` tests in
   `cargo test --locked -p layer-apple --target aarch64-apple-darwin --lib` and the
-  `testColorPicker` journey.
+  `testColorPicker` journey; `testPhotoScopes` covers the calibration menu.
 - Web pen timing uses `tools/performance/web-pen.mjs --os-input --picker`
   (`LAYER_PICKER_SAMPLE_SIZE=101` for the largest sample); see
   [measuring](../performance/measuring.md). Large-area averaging still costs

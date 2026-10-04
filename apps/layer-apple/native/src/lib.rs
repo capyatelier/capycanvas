@@ -14,7 +14,9 @@ const DISPLAY_SPACE: layer_core::color::RgbSpace = layer_core::color::RgbSpace::
 mod project;
 pub use project::*;
 mod previews;
+mod scopes;
 pub use previews::*;
+pub use scopes::*;
 mod workspaces;
 mod stroke_recording;
 pub use stroke_recording::*;
@@ -36,6 +38,7 @@ pub struct CapyApple {
     workspaces: Option<layer_workspace::WorkspaceController<layer_workspace::StoreWorker>>,
     language: layer_ui::LanguageTransition,
     published_language: Option<u64>,
+    scopes: scopes::Cache,
 }
 impl CapyApple {
     fn perform<T>(&mut self, work: impl FnOnce(&mut Self) -> Result<T, String>) -> Option<T> {
@@ -146,6 +149,7 @@ fn apple_launch_on_stack(platform: u32, saved: &str, localization: std::sync::Ar
         Some(Box::into_raw(Box::new(CapyApple {
             language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
             published_language: None,
+            scopes: Default::default(),
             host,
             window,
             session_disk: None,

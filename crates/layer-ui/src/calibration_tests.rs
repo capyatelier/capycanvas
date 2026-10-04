@@ -295,7 +295,7 @@ fn calibration_touch_width_change_cancels_old_preview_and_resamples_latest_conta
 
 #[test]
 fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editing() {
-    for platform in [Platform::Mac,Platform::Ios,Platform::Windows] {
+    for platform in [Platform::Windows] {
         let mut s = session(platform);
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "white_balance".into() } }).unwrap();
         s.frame(1, 1).unwrap();

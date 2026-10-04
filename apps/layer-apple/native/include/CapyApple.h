@@ -148,6 +148,19 @@ typedef struct {
 CapyFilterPreviews *capy_apple_take_filter_previews(CapyApple *app);
 void capy_filter_previews_read(const CapyFilterPreviews *previews, CapyFilterPreviewInfo *output);
 void capy_filter_previews_free(CapyFilterPreviews *previews);
+/* Owner poll after a publication; NULL when no plot changed. plots JSON is
+   {plots:{histogram|waveform|tonal_histogram:{plot,extent?}},colors}; plot holds
+   [channel, normalized bins] and colors index sRGB channels. Waveform pixels are
+   premultiplied sRGB RGBA8 rows of extent[0] width. Borrowed until scopes_free. */
+typedef struct CapyScopes CapyScopes;
+typedef struct {
+    const char *plots;
+    const uint8_t *pixels;
+    size_t count;
+} CapyScopeInfo;
+CapyScopes *capy_apple_take_scopes(CapyApple *app);
+void capy_scopes_read(const CapyScopes *scopes, CapyScopeInfo *output);
+void capy_scopes_free(CapyScopes *scopes);
 /* Logical editor bounds/clip/order records. Owner-only, maximum 32 slots.
    The live overview is drawn in the existing Metal canvas presentation pass. */
 int32_t capy_apple_navigator_placements(CapyApple *app, const char *json);

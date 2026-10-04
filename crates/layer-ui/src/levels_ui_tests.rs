@@ -31,7 +31,7 @@ fn stale_property_actions(layer:u64,epoch:u64)->Vec<EffectAction> {
 
 #[test]
 fn levels_auto_uses_current_page_source_and_commits_one_undo_preserving_other_values() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {for page in ["rgb","red","green","blue"] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {for page in ["rgb","red","green","blue"] {
         let mut s=levels_session_on(platform);let layer=s.engine.document().working.occurrence.unwrap();
         for (key,value) in [("output_black",0.1),("output_white",0.9),("red_output_white",0.8),("green_gamma",1.7)] {
             s.dispatch(UiAction::Effect {action:EffectAction::Set {layer:occurrence_token(layer),key:key.into(),value:layer_core::EffectValue::Number(value)}}).unwrap();

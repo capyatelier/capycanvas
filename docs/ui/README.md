@@ -54,7 +54,7 @@ while file dialogs, focus and accessibility follow the platform.
 
 ## Histogram and Waveform
 
-GTK, Web and Android Photo open Histogram above Properties and Layers, with Waveform in the
+Photo opens Histogram above Properties and Layers on every host except Windows, with Waveform in the
 adjacent tab. Both are ordinary dockable panels, shown or hidden through Window.
 Their command-search actions reveal the existing panel wherever it was placed. Both panels share the inspected source:
 Visible, Selected layer, Reference or Selection. Their channel menus independently

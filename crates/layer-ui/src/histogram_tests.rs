@@ -6,7 +6,7 @@ fn histogram_open(s: &mut UiSession<Recorder>) {
 
 #[test]
 fn histogram_controls_have_captions_before_the_first_frame() {
-    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android, Platform::Mac, Platform::Ios] {
         let s = session(platform);
         for view in [&s.state.histogram, &s.state.waveform, &s.state.tonal_histogram] {
             assert_eq!(view.sources.len(), 4);
@@ -127,7 +127,7 @@ fn histogram_retained_panel_configurations_publish_only_supported_host_controls(
             let actual:Vec<_>=view.controls.iter().map(|control|control.control).collect();
             let expected=if config.id.available_on(platform) {PanelControl::available(config.id)} else {&[]};
             assert_eq!(actual,expected,"{platform:?} {:?}",config.id);
-            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!matches!(platform,Platform::Gtk|Platform::Web|Platform::Android));}
+            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!Panel::Histogram.available_on(platform));}
         }
         assert_eq!(serde_json::to_vec(&s.state.workspace).unwrap(),serialized);
     }
@@ -616,7 +616,7 @@ fn waveform_dedicated_command_is_localized_and_queries_only_supported_hosts() {
         let mut s=session(platform);s.set_localization(Localizer::shared(language));
         assert_eq!(CommandId::Waveform.localized_label(s.localization()),s.localization().text(MessageId::COMMAND_WAVEFORM));
         let config=s.state.workspace.layout.panel(Panel::Waveform).unwrap();assert_eq!(crate::customization::PanelCopy::new(&s.state,config).title,s.localization().text(MessageId::RESOURCES_WAVEFORM));
-        if matches!(platform,Platform::Gtk|Platform::Web|Platform::Android) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
+        if Panel::Histogram.available_on(platform) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
         else {let requests=s.engine.backend().snapshot_requests.len();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert!(s.state.waveform.data.is_none());assert!(!Panel::Waveform.available_on(platform));}
     }}
 }
@@ -671,7 +671,7 @@ fn photo_monitors_share_default_tabs_and_remain_accessible_through_window_items(
 fn window_menu_routes_monitor_panels_and_preserves_legacy_histogram_on_other_hosts() {
     for platform in Platform::ALL {
         let s=session(platform);let menu=s.application_menu(ApplicationMenu::Window);let items=menu.sections.iter().flatten().collect::<Vec<_>>();
-        if matches!(platform,Platform::Gtk|Platform::Web|Platform::Android) {
+        if Panel::Histogram.available_on(platform) {
             for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
         } else {
             assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
@@ -719,7 +719,7 @@ fn waveform_straight_rgba_preserves_palette_chroma_and_transparent_background() 
 
 #[test]
 fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
-    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android,Platform::Mac,Platform::Ios] {
         let mut s=session(platform);s.set_viewport([640.,800.],[640,800]).unwrap();
         s.state.workspace.layout=crate::WorkspacePreset::Photographer.layout(platform);
         let document=s.engine.document().clone();

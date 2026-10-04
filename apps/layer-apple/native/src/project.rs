@@ -24,8 +24,6 @@ pub use clipboard::*;
 #[path = "project_color.rs"]
 mod color;
 pub use color::*;
-#[path = "project_inspection.rs"]
-mod inspection;
 #[path = "project_preferences.rs"]
 mod preferences;
 pub use preferences::*;
@@ -38,7 +36,10 @@ enum Payload {
     Color(Box<ColorTask>),
     Source(Box<SourceTask>),
     Info(layer_color::DocumentInfo),
-    Inspection(Box<inspection::Task>),
+    Lookup {
+        resource: Option<std::sync::Arc<layer_core::Lut3d>>,
+        request: u32,
+    },
     Proof(Box<proof::Task>),
     Save {
         snapshot: Option<ArtworkCapture>,
@@ -183,7 +184,10 @@ pub unsafe extern "C" fn capy_apple_project_task(
         } else if opening == 6 {
             Payload::Source(Box::new(SourceTask::capture(session, None, DISPLAY_SPACE)?))
         } else if opening == 7 {
-            Payload::Inspection(Box::new(inspection::Task::capture(session)?))
+            let request = session.state().requests.iter().find(|r| matches!(r.kind,
+                HostRequestKind::Document { request: DocumentRequest::ImportLookup { .. } }))
+                .ok_or("No color lookup import is pending")?.id;
+            Payload::Lookup { resource: None, request }
         } else if opening == 8 {
             let request = session.state().requests.iter().find(|r| matches!(r.kind,
                 HostRequestKind::Document { request: DocumentRequest::Copy { .. } }))
@@ -473,6 +477,17 @@ pub unsafe extern "C" fn capy_project_assume_profile(task: *const CapyProjectTas
 unsafe fn prepare_project(task: *const CapyProjectTask, input: Result<Input<'_>, String>, name: Result<&str, String>) -> i32 {
     let Some(task) = (unsafe { task.as_ref() }) else { return -1; };
     task.perform(|payload| {
+        if let Payload::Lookup { resource, .. } = payload {
+            let mut bytes = Vec::new();
+            match input? {
+                Input::File(fd) => { (&*host_file(fd)).take(layer_core::Lut3d::MAX_TEXT_BYTES as u64 + 1).read_to_end(&mut bytes).map_err(|e| e.to_string())?; }
+                Input::Bytes(data) => bytes.extend_from_slice(&data[..data.len().min(layer_core::Lut3d::MAX_TEXT_BYTES + 1)]),
+                _ => return Err("Choose a color lookup table".into()),
+            }
+            task.check_cancelled()?;
+            *resource = Some(std::sync::Arc::new(layer_core::Lut3d::parse_cube_named(&bytes, name?)?));
+            return Ok(());
+        }
         if let Payload::Placed { images, .. } = payload {
             let interpreting = matches!(&input, Ok(Input::Assume(_)));
             let result = (|| {
@@ -583,6 +598,14 @@ pub unsafe extern "C" fn capy_apple_project_adopt(
         }
         if let Payload::Clip { clip, request, .. } = &mut state.payload {
             return clipboard::adopt_clip(app, task, clip, *request);
+        }
+        if let Payload::Lookup { resource, request } = &mut state.payload {
+            let session = &mut app.host.session;
+            let previous = session.state().revision;
+            let result = session.apply_lookup(*request, resource.take().ok_or("The color lookup table is not prepared")?);
+            let change = session.complete_document_request(*request, result)?;
+            app.host.apply_change(previous, change);
+            return Ok(());
         }
         if let Payload::Placed { images, context, request, device } = &mut state.payload {
             let session = &mut app.host.session;

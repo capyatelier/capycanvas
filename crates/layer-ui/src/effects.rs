@@ -910,7 +910,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.layer_edit(edit)?;
             }
             EffectAction::ImportLookup {layer,epoch} => {
-                if !matches!(self.state.platform,Platform::Gtk|Platform::Web|Platform::Android) { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
+                if self.state.platform==Platform::Windows { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
                 if !self.property_editor.accepts(layer,epoch) {return Ok(());}
                 self.cancel_effect_gesture()?;
                 let Some(effect) = self.engine.document().scene().effect(occurrence_handle(layer)?) else {return Ok(());};

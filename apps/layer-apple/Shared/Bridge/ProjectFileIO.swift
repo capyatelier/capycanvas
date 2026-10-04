@@ -22,7 +22,7 @@ extension UTType {
 /// A job owns immutable Rust data and GPU preparation, never a NativeOwner.
 /// Its final release can destroy a large retired document, so use the I/O queue.
 final class NativeProjectTask: @unchecked Sendable {
-    enum Kind: UInt32 { case save = 0, open = 1, place = 3, color, properties, source, histogram, clip }
+    enum Kind: UInt32 { case save = 0, open = 1, place = 3, color, properties, source, lookup, clip }
     static let io = DispatchQueue(label: "art.capycanvas.project-files", qos: .userInitiated)
     let handle: OpaquePointer
     init(_ handle: OpaquePointer) { self.handle = handle }

@@ -8,15 +8,24 @@ struct LayerPropertiesPanel: View {
     private var controls: [JSON] { view["controls"].array }
     var body: some View {
         let epoch = store.state["document_file"]["epoch"].uint, layer = view["layer"].uint, pages = view["pages"].array
+        let actions = view["actions"].array, palette = EditorPalette(source: store.state["palette"])
+        let tools = actions.filter { !["lookup_preset", "import_lookup"].contains($0["action"]["op"].string) }
         VStack(alignment: .leading, spacing: 6) {
             Text(view["title"].string).fontWeight(.bold).help(view["description"].string)
-            if pages.count > 1 {
-                EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
-                    selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
-                    background: EditorPalette(source: store.state["palette"])["input"]) {
-                    store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
+            if !view["resource_label"].isNull { lookup(actions, palette: palette) }
+            if pages.count > 1 || !tools.isEmpty {
+                HStack(spacing: 4) {
+                    if pages.count > 1 {
+                        EditorChoice(label: view["title"].string, options: pages.map { $0["label"].string },
+                            selected: pages.firstIndex { $0["id"].string == view["page"].string } ?? 0, identifier: "properties-page",
+                            background: palette["input"]) {
+                            store.dispatch(["type": "effect", "action": ["op": "select_page", "layer": layer, "page": pages[$0]["id"].string]])
+                        }
+                    }
+                    ForEach(groups(tools), id: \.id) { group in action(group.id, group.items, palette: palette) }
                 }
             }
+            if view["histogram"].bool { ScopeControl(store: store, kind: "tonal_histogram", tonal: true) }
             ForEach(controls.indices, id: \.self) { index in
                 let control = controls[index]
                 if index == 0 || control["section_id"].stableKey != controls[index - 1]["section_id"].stableKey {
@@ -33,6 +42,47 @@ struct LayerPropertiesPanel: View {
             }
         }.disabled(!view["enabled"].bool).opacity(view["enabled"].bool ? 1 : 0.4)
             .accessibilityElement(children: .contain).accessibilityIdentifier("layer-properties")
+    }
+    private func effect(_ action: JSON) { store.dispatch(["type": "effect", "action": action.raw]) }
+    private func groups(_ actions: [JSON]) -> [(id: String, items: [JSON])] {
+        actions.reduce(into: []) { groups, action in
+            let id = action["group"].isNull ? action["action"]["op"].string : action["group"]["id"].string
+            if let index = groups.firstIndex(where: { $0.id == id }) { groups[index].items.append(action) }
+            else { groups.append((id, [action])) }
+        }
+    }
+    @ViewBuilder private func action(_ id: String, _ choices: [JSON], palette: EditorPalette) -> some View {
+        let first = choices[0], group = first["group"], label = group.isNull ? first["label"].string : group["label"].string
+        let face = Group {
+            if first["icon"].isNull { Text(label).lineLimit(1).padding(.horizontal, 6).frame(height: 32) }
+            else { SharedIcon(name: first["icon"].string).frame(width: 32, height: 32) }
+        }.contentShape(Rectangle()).help(label).accessibilityLabel(label)
+        if group.isNull {
+            Button { effect(first["action"]) } label: { face }.buttonStyle(EditorControlButtonStyle())
+                .accessibilityIdentifier("property-action-" + id)
+        } else {
+            EditorMenuButton(menu: {
+                AppleContextMenu(JSON(["sections": [choices.map { ["label": $0["label"].raw, "enabled": true, "action": $0["action"].raw,
+                    "identifier": "property-\($0["action"]["op"].string)-\($0["action"]["role"].string)"] }]])) { effect($0) }
+            }, identifier: "property-action-menu-" + id) { face }.buttonStyle(EditorControlButtonStyle())
+                .accessibilityIdentifier("property-action-group-" + id)
+        }
+    }
+    private func lookup(_ actions: [JSON], palette: EditorPalette) -> some View {
+        let indices = actions.indices.filter { actions[$0]["action"]["op"].string == "lookup_preset" }, presets = indices.map { actions[$0] }
+        let selected = view["resource_selection"].isNull ? nil : indices.firstIndex(of: Int(view["resource_selection"].uint))
+        let labels = presets.map { $0["label"].string } + (selected == nil ? [view["resource_name"].string] : [])
+        let importer = actions.first { $0["action"]["op"].string == "import_lookup" }
+        return HStack(spacing: 6) {
+            EditorChoice(label: view["resource_label"].string, options: labels, selected: selected ?? presets.count,
+                identifier: "property-resource-choice", background: palette["input"]) { index in
+                if presets.indices.contains(index) { effect(presets[index]["action"]) }
+            }.help(view["resource_name"].string)
+            if let importer {
+                IconTile(icon: importer["icon"].string, label: importer["label"].string) { effect(importer["action"]) }
+                    .frame(width: 40, height: 36).accessibilityIdentifier("import-lookup")
+            }
+        }
     }
 }
 
@@ -186,19 +236,25 @@ private struct CurveProperty: View {
                     }.font(.caption).foregroundStyle(palette["text"].opacity(0.7))
                 }
             }
-            ForEach(["input", "output"].indices, id: \.self) { index in
-                let axis = index == 0 ? "input" : "output", coordinate = curve[axis]
-                HStack(spacing: 6) {
-                    NumberControl(store: store, label: axes[index]["label"].string, value: coordinate["value"].number,
-                        control: curve["numeric"], identifier: "curve-" + axis, presentedText: coordinate.isNull ? "" : coordinate["text"].string,
-                        gestureChange: { phase, value, completion in number(axis, phase: phase, value: value); completion(nil) }) { value, completion in
-                        number(axis, phase: nil, value: value); completion(nil)
-                    }.disabled(coordinate.isNull || coordinate["read_only"].bool)
-                    if curve["domain"]["kind"].string == "log_hdr" {
-                        Text(coordinate["ev"].string).font(.caption).monospacedDigit().foregroundStyle(palette["text"].opacity(0.7))
-                    }
+            HStack(alignment: .top, spacing: 6) {
+                ForEach(["input", "output"].indices, id: \.self) { index in
+                    let axis = index == 0 ? "input" : "output", coordinate = curve[axis]
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(axes[index]["label"].string).lineLimit(1)
+                        NumberControl(store: store, label: axes[index]["label"].string, value: coordinate["value"].number,
+                            control: curve["numeric"], identifier: "curve-" + axis, presentedText: coordinate.isNull ? "" : coordinate["text"].string,
+                            valueOnly: true,
+                            gestureChange: { phase, value, completion in number(axis, phase: phase, value: value); completion(nil) }) { value, completion in
+                            number(axis, phase: nil, value: value); completion(nil)
+                        }.disabled(coordinate.isNull || coordinate["read_only"].bool)
+                        if curve["domain"]["kind"].string == "log_hdr" {
+                            Text(coordinate["ev"].string).font(.caption).monospacedDigit().foregroundStyle(palette["text"].opacity(0.7))
+                                .frame(maxWidth: .infinity, alignment: .trailing)
+                        }
+                    }.frame(maxWidth: .infinity, alignment: .leading)
                 }
             }
+            ScopeFooter(store: store, kind: "tonal_histogram")
         }.help(curve["help"].string)
             .onChange(of: focused) { _, now in if !now { cancel() } }
             .onDisappear(perform: cancel)
@@ -236,7 +292,7 @@ private struct CurveProperty: View {
                     if selected == index { context.stroke(dot, with: .color(palette["text"]), lineWidth: 1.5) }
                     else { context.fill(dot, with: .color(palette["text"])) }
                 }
-            }.background(palette["text"].opacity(0.12))
+            }.background { ZStack { palette["text"].opacity(0.12); ScopeGraph(store: store, scopes: store.scopes, kind: "tonal_histogram") } }
                 .contentShape(Rectangle())
                 .gesture(DragGesture(minimumDistance: 0).updating($touching) { _, active, _ in active = true }.onChanged { event in
                     let size = geometry.size

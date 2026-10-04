@@ -53,7 +53,7 @@ import SwiftUI
     lazy var windowPresentation = WindowPresentation(store: self)
     lazy var drawingTabs = DrawingTabsController(store: self)
     lazy var recovery = ArtworkRecovery(store: self)
-    lazy var histogram = HistogramController(store: self)
+    let scopes = ScopePlots()
     lazy var proof = ProofController(store: self)
     lazy var palettes = PaletteController(store: self)
     lazy var strokeRecording = StrokeRecording(store: self)
@@ -94,6 +94,7 @@ import SwiftUI
                 DispatchQueue.main.async { self?.receive(snapshot, failure) }
             }
             native?.languageInputBusy = { [weak self] in self?.workspace.languageInputBusy == true }
+            native?.scopesReceived = { [weak self] update in DispatchQueue.main.async { self?.scopes.receive(update) } }
             native?.submit(2, JSON(["type": "catalog"])) { [weak self] result in
                 DispatchQueue.main.async {
                     self?.catalog = result ?? JSON()
@@ -127,7 +128,7 @@ import SwiftUI
                 }
                 languageGeneration = next["language_generation"].uint
                 if !next["workspace_view"].isNull { workspaces?.receiveLanguage(next["workspace_view"]) }
-                palettes.refreshLanguage(); histogram.refreshLanguage()
+                palettes.refreshLanguage()
                 bootstrapChanged?()
                 if next["state"].isNull { wake?(); return }
             }
@@ -158,7 +159,6 @@ import SwiftUI
                 }
                 filterPreviews.refresh()
                 if !SnapshotProjection.equal(camera.value.raw, state["camera"].raw) { camera.value = state["camera"] }
-                histogram.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 proof.receive(state.json, gpuReady: snapshot["gpu_ready"].bool)
                 drawingTabs.receive()
                 projectFiles.receive(state.json)

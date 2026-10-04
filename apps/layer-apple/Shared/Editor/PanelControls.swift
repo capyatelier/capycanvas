@@ -31,7 +31,7 @@ struct PanelControls: View {
     }
     private var padding: CGFloat {
         if !measureForWorkspace && store.state["customization"]["drawer"]["compact"].bool { return 12 }
-        return panel["id"].string == "properties" || panel["id"].string == "stats" ? 6 : 8
+        return ["properties", "stats", "histogram", "waveform"].contains(panel["id"].string) ? 6 : 8
     }
     var body: some View {
         contents.environment(\.measuresWorkspacePanel, measureForWorkspace)
@@ -79,7 +79,7 @@ struct PanelControls: View {
         }.padding(padding)
             .frame(maxWidth: .infinity, alignment: .topLeading)
             .modifier(PanelBodyMeasurement(panel: panel["id"].string,
-                kind: scrollable && panel["id"].string != "color" ? .scroll : .fixed,
+                kind: scrollable && !["color", "histogram", "waveform"].contains(panel["id"].string) ? .scroll : .fixed,
                 naturalHeight: fitsColorWheel ? { [padding, ratio = ColorPanel.aspect(hdr: store.snapshot["color_panel"]["hdr"].bool)] width in
                     max(128, width - padding * 2) * ratio + padding * 2 } : nil))
     }
@@ -95,6 +95,7 @@ struct PanelControls: View {
                 ColorPanel(store: store)
             }.frame(maxHeight: maximumHeight)
         case "properties": LayerPropertiesPanel(store: store)
+        case "histogram", "waveform": ScopeControl(store: store, kind: item["control"].string)
         case "stats": RendererStatsPanel(store: store, stats: store.rendererStats)
         case "brush_size": number("Brush size", key: "diameter", spec: "brush_size", action: "set_brush_size")
         case "brush_opacity": number("Brush opacity", key: "opacity", spec: "opacity", action: "set_brush_opacity")

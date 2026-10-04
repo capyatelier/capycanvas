@@ -9,10 +9,6 @@ extension EditorLaunchTests {
         try checkNativePhotoCorrections(in: editorCaptureApplication())
     }
 
-    @MainActor func testNativeHistogram() throws {
-        try checkNativeHistogram(in: editorCaptureApplication())
-    }
-
     @MainActor func testNativeSourceEditing() throws {
         try checkNativeSourceEditing(in: editorCaptureApplication())
     }

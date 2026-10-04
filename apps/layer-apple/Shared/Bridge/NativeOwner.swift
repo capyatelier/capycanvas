@@ -63,6 +63,7 @@ final class NativeOwner: @unchecked Sendable {
     private var requestedLanguagePreference: String?
     private var currentLanguagePreference = ""
     var languageInputBusy: (@MainActor @Sendable () -> Bool)?
+    var scopesReceived: (@Sendable (ScopeUpdate) -> Void)?
     private var handle: OpaquePointer?
     private var layer: CAMetalLayer?
     private var surfaceSize: (width: UInt32, height: UInt32, scale: Float)?
@@ -213,8 +214,17 @@ final class NativeOwner: @unchecked Sendable {
             if !snapshot["shaders_ready"].isNull { shadersReady = snapshot["shaders_ready"].bool }
             try persist(snapshot)
             receive(snapshot, nil)
+            takeScopes()
         }
         try prepareLanguage()
+    }
+    private func takeScopes() {
+        guard let scopes = capy_apple_take_scopes(handle) else { return }
+        defer { capy_scopes_free(scopes) }
+        var info = CapyScopeInfo()
+        capy_scopes_read(scopes, &info)
+        guard let plots = info.plots, let header = try? JSON.decode(String(cString: plots)) else { return }
+        scopesReceived?(ScopeUpdate(header: header, pixels: info.pixels.map { Data(bytes: $0, count: info.count) } ?? Data()))
     }
     private func prepareLanguage() throws {
         let preference = currentLanguagePreference
@@ -353,7 +363,7 @@ final class NativeOwner: @unchecked Sendable {
         @Sendable func poll() {
             // Inspection validates a committed snapshot in Rust; it does not
             // wait for unrelated filter-library compilation or block drawing.
-            let ready = kind == .histogram || kind == .clip ? 0 : kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
+            let ready = kind == .lookup || kind == .clip ? 0 : kind == .save ? capy_apple_prepare_recovery(handle, FrameTrace.now()) : capy_apple_project_ready(handle)
             if ready == 1 {
                 if DispatchTime.now() < deadline { queue.asyncAfter(deadline: .now() + .milliseconds(16), execute: poll) }
                 else { completion(nil, "Document preparation timed out") }

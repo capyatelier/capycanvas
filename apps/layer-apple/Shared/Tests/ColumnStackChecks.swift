@@ -33,19 +33,18 @@ extension XCTestCase {
             }
             XCTAssertEqual(properties.frame.minX, layers.frame.minX, accuracy: 1)
             XCTAssertLessThan(properties.frame.maxY, layers.frame.minY)
-            for panel in ["color", "palettes", "properties", "adjustments", "layers"] + (photo ? [] : ["stats", "proof"]) {
+            for panel in (photo ? ["histogram", "waveform"] : ["color", "palettes", "stats", "proof"]) + ["properties", "adjustments", "layers"] {
                 XCTAssertTrue(app.buttons["panel-tab-" + panel].firstMatch.exists)
             }
-            // Photo has a short Color group; Paint puts Color below Tools.
-            // The wheel and corner controls must fit without scrolling, as on Web.
-            let wheel = element("color-wheel")
-            XCTAssertTrue(wheel.waitForExistence(timeout: 10))
-            XCTAssertEqual(wheel.frame.width, wheel.frame.height, accuracy: 1)
-            for id in ["color-wheel", "color-readout", "color-foreground", "color-background",
-                       "color-transparent", "color-swap", "color-shape-square", "color-shape-triangle"] {
+            let controls = photo ? ["scope-histogram-chart", "scope-histogram-channel", "scope-histogram-highlights"]
+                : ["color-wheel", "color-readout", "color-foreground", "color-background",
+                   "color-transparent", "color-swap", "color-shape-square", "color-shape-triangle"]
+            XCTAssertTrue(element(controls[0]).waitForExistence(timeout: 10))
+            if !photo { XCTAssertEqual(element("color-wheel").frame.width, element("color-wheel").frame.height, accuracy: 1) }
+            for id in controls {
                 let control = element(id)
                 XCTAssertTrue(control.exists, id)
-                XCTAssertTrue(color.frame.insetBy(dx: -1, dy: -1).contains(control.frame), "Clipped Color control: \(id)")
+                XCTAssertTrue(color.frame.insetBy(dx: -1, dy: -1).contains(control.frame), "Clipped control: \(id)")
             }
             if photo {
                 let brushes = app.buttons["column-icon-brushes"], tool = app.buttons["column-icon-tool_settings"], navigator = app.buttons["column-icon-navigator"]

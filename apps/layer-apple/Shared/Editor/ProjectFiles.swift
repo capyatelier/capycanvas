@@ -138,6 +138,7 @@ import UIKit
                 self?.colorEditor = nil; self?.finish(result)
             }
             colorEditor = editor; editor.load()
+        case "import_lookup": importLookup()
         case "confirm_close": confirming = true
         default: fail("This document service is not available yet")
         }
@@ -588,6 +589,35 @@ import UIKit
                 if !cancelled { submitQueuedOpen() }
             }
         }
+    }
+    private func importLookup() {
+        let types = [UTType(filenameExtension: "cube", conformingTo: .data) ?? .data]
+        let chosen: ([URL]) -> Void = { [weak self] urls in
+            guard let self else { return }
+            guard let url = urls.first else { finish(); return }
+            task(.lookup) { [weak self] task in
+                NativeProjectTask.io.async { [weak self] in
+                    do {
+                        try task.read(from: url)
+                        DispatchQueue.main.async {
+                            self?.store?.native?.finishProject(task, opening: true, title: url.lastPathComponent, url: nil) { [weak self] error in
+                                DispatchQueue.main.async {
+                                    if let error { self?.report(error) }
+                                    self?.finish(error == nil)
+                                }
+                            }
+                        }
+                    } catch { DispatchQueue.main.async { self?.fail(error.localizedDescription) } }
+                }
+            }
+        }
+        #if os(macOS)
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = types; panel.allowsMultipleSelection = false; panel.canChooseDirectories = false
+        present(panel) { response in chosen(response == .OK ? panel.urls : []) }
+        #else
+        pickerCompletion = chosen; picker = Picker(export: nil, types: types)
+        #endif
     }
     private func chooseOpen(photosOnly: Bool = false, _ completion: @escaping ([URL]) -> Void) {
         if let dialogs { dialogs.open(photosOnly, completion); return }

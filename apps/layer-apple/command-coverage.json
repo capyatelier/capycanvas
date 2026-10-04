@@ -27,6 +27,8 @@
     "properties": "Shared/Editor/PropertyControls.swift",
     "navigator": "Shared/Editor/NavigatorPanel.swift",
     "stats": "Shared/Bridge/RendererStats.swift",
+    "histogram": "Shared/Editor/ScopeControls.swift",
+    "waveform": "Shared/Editor/ScopeControls.swift",
     "brush_sets": "Shared/Editor/ToolControls.swift",
     "sculpt_sets": "Shared/Editor/ToolControls.swift",
     "tools": "Shared/Editor/ToolControls.swift",

@@ -67,7 +67,6 @@ extension XCTestCase {
             ("Levels", "levels", "gamma", "0.9", nil), ("Curves", "curves", "", "", nil),
             ("Hue", "hue_saturation", "hue", "10", nil),
             ("Color Balance", "color_balance", "midtones_red", "12", 1)]
-        var ids: [String] = []
         for (index, (name, filterID, key, amount, page)) in corrections.enumerated() {
             let before = pixels()
             workspaceActivate(app.buttons["panel-tab-adjustments"])
@@ -80,8 +79,8 @@ extension XCTestCase {
             waitForExpectations(timeout: 20); workspaceActivate(filter)
             expectation(for: NSPredicate(format: "count == %d", initialCount + index + 1), evaluatedWith: rows)
             waitForExpectations(timeout: 10)
-            let row = rows.element(boundBy: 0), id = row.identifier
-            ids.append(id); expectPixels(before, in: app)
+            let row = rows.element(boundBy: 0)
+            expectPixels(before, in: app)
             if key.isEmpty {
                 let curve = app.descendants(matching: .any)["effect-curve"].firstMatch
                 curve.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.25)).click()
@@ -130,9 +129,9 @@ extension XCTestCase {
         waitForExpectations(timeout: 15)
         open(project); expectPixels(corrected, in: app)
         XCTAssertEqual(rows.count, initialCount + 6)
-        for (index, id) in ids.enumerated() {
-            let row = app.groups[id].firstMatch
-            let scroll = app.scrollViews.containing(.any, identifier: id).firstMatch
+        for index in corrections.indices {
+            let row = rows.element(boundBy: corrections.count - 1 - index)
+            let scroll = app.scrollViews.containing(.any, identifier: row.identifier).firstMatch
             // The first row sits flush against the scroll boundary. Reveal the
             // inset thumbnail hit target, not the entire row plus scroll inset.
             let content = row.buttons["Edit layer content"]

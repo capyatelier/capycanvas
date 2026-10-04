@@ -25,8 +25,8 @@ struct App(*mut CapyApple);
 mod color;
 #[path = "source_tests.rs"]
 mod source;
-#[path = "inspection_tests.rs"]
-mod inspection;
+#[path = "lookup_tests.rs"]
+mod lookup;
 #[path = "correction_tests.rs"]
 mod correction;
 #[path = "proof_tests.rs"]
