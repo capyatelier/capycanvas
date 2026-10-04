@@ -167,10 +167,11 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
             }
             let mut required = Vec::with_capacity(TRANSFORM_SLOTS + 1);
             if self.original { required.extend(page_coordinates(region).filter(|c| (self.contains)(*c))); }
-            if let Some([x0, y0, x1, y1]) = self.map.footprint_rect(layer_core::Rect {
+            let query = layer_core::Rect {
                 min:layer_core::Point {x:region.min_x() as f32-self.offset[0] as f32,y:region.min_y() as f32-self.offset[1] as f32},
                 max:layer_core::Point {x:region.max_x() as f32-self.offset[0] as f32,y:region.max_y() as f32-self.offset[1] as f32},
-            }) {
+            };
+            self.map.footprints_rect(query, |[x0,y0,x1,y1]| {
                 let support = self.map.support;
                 let footprint = PixelRect::new(
                     (x0 - support).floor().max(0.) as u32,
@@ -189,7 +190,8 @@ impl<F: Fn([u32; 2]) -> bool> Splitter<F> {
                         }
                     }
                 }
-            }
+                required.len() <= self.map.slots
+            });
             if required.len() <= self.map.slots {
                 if jobs.len() == 65_536 {
                     return Err(GpuRasterError::InvalidTransform(
@@ -283,6 +285,20 @@ enum SourceKind {
     Mesh(std::sync::Arc<super::mesh::MeshGeometry>, Option<Box<SourceMap>>),
 }
 impl SourceMap {
+    fn footprints_rect(&self, region: layer_core::Rect, mut visit: impl FnMut([f64; 4]) -> bool) {
+        match &self.kind {
+            SourceKind::Mesh(geometry, adapter) => geometry.footprints_rect(region, |bounds| {
+                Self::mesh_bounds(bounds,adapter.as_deref()).is_none_or(&mut visit)
+            }),
+            _ => if let Some(bounds) = self.footprint_rect(region) { visit(bounds); },
+        }
+    }
+    fn mesh_bounds([x0,y0,x1,y1]:[f64;4],adapter:Option<&Self>) -> Option<[f64;4]> {
+        let bounds = layer_core::Rect {min:layer_core::Point {x:x0 as f32,y:y0 as f32},
+            max:layer_core::Point {x:x1 as f32,y:y1 as f32}};
+        adapter.map_or(Some([x0,y0,x1,y1]),|map|map.footprint_rect(bounds))
+            .map(|[x0,y0,x1,y1]|[x0-1.,y0-1.,x1+1.,y1+1.])
+    }
     fn new(
         transform: &layer_core::ImageTransform,
         bounds: PixelRect,
@@ -353,12 +369,8 @@ impl SourceMap {
             f64::from(region.max.x)-self.inset, f64::from(region.max.y)-self.inset];
         match &self.kind {
             SourceKind::Identity => Some(centers),
-            SourceKind::Mesh(geometry, adapter) => geometry.footprint_rect(region).and_then(|[x0,y0,x1,y1]| {
-                let bounds = layer_core::Rect { min: layer_core::Point { x:x0 as f32, y:y0 as f32 },
-                    max: layer_core::Point { x:x1 as f32, y:y1 as f32 } };
-                adapter.as_ref().map_or(Some([x0,y0,x1,y1]), |map| map.footprint_rect(bounds))
-                    .map(|[x0,y0,x1,y1]| [x0-1.,y0-1.,x1+1.,y1+1.])
-            }),
+            SourceKind::Mesh(geometry, adapter) => geometry.footprint_rect(region)
+                .and_then(|bounds|Self::mesh_bounds(bounds,adapter.as_deref())),
             SourceKind::Affine(inverse) => {
                 let mut low = [f64::INFINITY; 2];
                 let mut high = [f64::NEG_INFINITY; 2];
@@ -598,6 +610,39 @@ mod tests {
         assert_eq!(split_point(0, 200, 8), 96);
         assert_eq!(split_point(4, 12, 4), 8);
         assert_eq!(split_point(300, 1300, 4), 768);
+    }
+
+    #[test]
+    fn folded_warp_jobs_fit_the_source_view_limit() {
+        for extent in [[2048; 2], [2048,1536], [6000,4000]] {
+            let bounds = PixelRect::full(extent);
+            for cells in [[3,3],[4,4]] {
+                let node = u32::from(cells[0])+2;
+                let identity = layer_core::MeshMap::identity(bounds.to_rect(), cells).unwrap();
+                for delta in [[-0.2,-0.2],[-0.4,-0.4],[0.4,0.4],[0.8,0.]] {
+                    let delta = layer_core::Point {x:delta[0]*extent[0] as f32,y:delta[1]*extent[1] as f32};
+                    for tangent in [false,true] {
+                        let mesh = if tangent {
+                            let p = identity.tangent(node,1).unwrap();
+                            identity.move_tangent(node,1,layer_core::Point {x:p.x+delta.x,y:p.y+delta.y}).unwrap()
+                        } else {identity.move_node(node,delta).unwrap()};
+                        let geometry = std::sync::Arc::new(super::super::mesh::MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None));
+                        let transform = layer_core::ImageTransform { placement:layer_core::LayerPlacement {
+                            mesh:Some(std::sync::Arc::new(mesh)), ..Default::default() }, ..Default::default() };
+                        let splitter = Splitter::new(bounds,&transform,Some(geometry),|_|true).unwrap();
+                        let mut jobs = Vec::new();
+                        for y in (0..extent[1]).step_by(512) {
+                            for x in (0..extent[0]).step_by(512) {
+                                splitter.split(PixelRect::new(x,y,x+512,y+512).intersect(bounds),&mut jobs)
+                                    .unwrap_or_else(|error|panic!("{extent:?}, {cells:?}, {delta:?}, tangent {tangent}: {error}"));
+                            }
+                        }
+                        assert_eq!(jobs.iter().map(|job|job.region.area()).sum::<u64>(),bounds.area());
+                        assert!(jobs.iter().all(|job|job.sources.len()<TRANSFORM_SLOTS));
+                    }
+                }
+            }
+        }
     }
 
 }

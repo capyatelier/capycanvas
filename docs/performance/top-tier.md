@@ -51,6 +51,7 @@ current-source results.
 | Retained wet-photo Transform body drag (61 MP) | 120 | **Not met.** 36.3–37.0 renderer updates/s; presentation unmeasured | [Material transforms](#retained-wet-photo-transforms), 2026-10-02 |
 | Retained wet-photo Distort corner drag (61 MP) | 120 | **Not met.** 29.37 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
 | Retained wet-photo Warp node drag (61 MP) | 120 | **Not met.** 15.97 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
+| Imported dry-photo Warp, three visible layers, snapping on (61 MP) | 120 | **Not met.** 19.15–19.47 renderer submissions/s; completed-update interval p99 87.88–90.37 ms; presentation unmeasured | [Folded warp source planning](#folded-warp-source-planning), 2026-10-04 |
 | Pixel transform handle drag: Free, Uniform, Skew or Rotate | 120 | | |
 | Pixel transform: Distort or Perspective | 120 | | |
 | Pixel transform: Warp | 120 | | |
@@ -1153,6 +1154,31 @@ Records: `artifacts/testing/material/{android-box-hdr-final,android-box-reductio
 `android-watercolor-calibration`, `android-area-calibration`,
 `android-reduce-calibration` and `android-compose-calibration` directories
 in the photo-editing worktree. Low and mid reference tiers remain unmeasured.
+
+## Folded warp source planning
+
+Measured on 2026-10-04 on the reference Wacom MovinkPad Pro 14, using the
+original 9504 × 6336 Sony photo, Fit, default workspace and glass, and a private
+nondebuggable APK with release Rust. The canvas-bar fixture imports the photo,
+adds its empty paint layer and a painted snapping neighbor: three visible
+layers, with snapping enabled. Each build runs a priming Warp gesture, then
+three six-second grid-point drags. Thermal status is zero before and after
+each measured run.
+
+| Build | Renderer submissions/s, three gestures | Completed-update interval p99 | Render-owner CPU p99 |
+| --- | --- | --- | --- |
+| `e90ae51a1`, aggregate source rectangle | 19.805 / 19.480 / 19.148 | 89.365 / 88.206 / 89.658 ms | 70.583 / 71.245 / 72.317 ms |
+| Same base, per-triangle source pages | 19.809 / 19.494 / 19.303 | 89.215 / 88.612 / 88.637 ms | 72.112 / 70.143 / 71.128 ms |
+| Rebased onto `00b2d6e73`, per-triangle source pages | 19.473 / 19.147 / 19.320 | 90.369 / 90.278 / 87.881 ms | 71.340 / 72.481 / 71.559 ms |
+
+The median submission rate changes by +0.07%; this comparison shows no
+responsiveness regression in the measured workload. The rebased build's median
+is 19.320 submissions/s, within the matched builds' observed range. Submission and completion
+rates do not establish presented frames or input-to-photon latency, and the
+120 fps target remains unmet. Low and mid reference tiers are unmeasured for
+this change. Raw input windows, reports, APK hashes and thermal observations
+are in `artifacts/warp/performance-summary.json` and its `baseline/` and
+`final/` and `rebased/` report directories.
 
 ## Retained Distort and Warp
 

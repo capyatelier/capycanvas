@@ -494,8 +494,9 @@ fn bicubic_and_lanczos_mask_transforms_keep_scalar_coverage_within_the_unit_inte
 /// sampling and the minification grid allow either side of a boundary.
 fn mesh_positions(
     geometry: &crate::paint_transform::mesh::MeshGeometry,
+    extent: [u32; 2],
 ) -> ([Vec<Option<[f64; 2]>>; 2], usize) {
-    let size = (EXTENT[0] * EXTENT[1]) as usize;
+    let size = (extent[0] * extent[1]) as usize;
     let mut maps = [vec![None; size], vec![None; size]];
     let mut hits = vec![0u32; size];
     let vertex = |i: u32| geometry.vertices[i as usize].map(f64::from);
@@ -510,7 +511,7 @@ fn mesh_positions(
             continue;
         }
         let low = [0, 1].map(|k| a[k].min(b[k]).min(c[k]).floor().max(0.) as u32);
-        let high = [0, 1].map(|k| (a[k].max(b[k]).max(c[k]).ceil().max(0.) as u32).min(EXTENT[k]));
+        let high = [0, 1].map(|k| (a[k].max(b[k]).max(c[k]).ceil().max(0.) as u32).min(extent[k]));
         for y in low[1]..high[1] {
             for x in low[0]..high[0] {
                 let p = [x as f64 + 0.5, y as f64 + 0.5];
@@ -523,7 +524,7 @@ fn mesh_positions(
                     .map(|i| l[i] * area.abs() / edges[i])
                     .fold(f64::INFINITY, f64::min);
                 let source = [2, 3].map(|k| l[0] * a[k] + l[1] * b[k] + l[2] * c[k]);
-                let index = (y * EXTENT[0] + x) as usize;
+                let index = (y * extent[0] + x) as usize;
                 if nearest_edge > 0.02 {
                     maps[0][index] = Some(source);
                     hits[index] += 1;
@@ -601,6 +602,49 @@ impl Oracle {
 }
 
 #[test]
+fn folded_warp_jobs_bind_the_filtered_samples_between_branches() {
+    let extent = [2048; 2];
+    let bounds = PixelRect::full(extent);
+    let mesh = layer_core::MeshMap::identity(bounds.to_rect(), [3,3]).unwrap()
+        .move_node(5, Point {x:-800.,y:-800.}).unwrap();
+    let geometry = Arc::new(crate::paint_transform::mesh::MeshGeometry::new(&mesh, Projective::IDENTITY, None));
+    let transform = ImageTransform { placement: LayerPlacement { mesh:Some(Arc::new(mesh)), interpolation:Interpolation::Linear,
+        ..Default::default() }, ..Default::default() };
+    let splitter = crate::paint_transform::snapshot::Splitter::new(bounds,&transform,Some(geometry.clone()),|_|true).unwrap();
+    let mut jobs = Vec::new();
+    splitter.split(bounds,&mut jobs).unwrap();
+    let (positions,_) = mesh_positions(&geometry,extent);
+    let at = |x:i32,y:i32|positions[0][(y.clamp(0,2047) as u32*2048+x.clamp(0,2047) as u32) as usize];
+    for job in jobs {
+        let rect = job.region;
+        for y in (rect.min_y()..rect.max_y()).step_by(if rect.area()<=256 {1} else {(rect.height()/8).max(1) as usize}) {
+            for x in (rect.min_x()..rect.max_x()).step_by(if rect.area()<=256 {1} else {(rect.width()/8).max(1) as usize}) {
+                let Some(s) = at(x as i32,y as i32) else { continue; };
+                let step = |dx,dy|match (at(x as i32+dx,y as i32+dy),at(x as i32-dx,y as i32-dy)) {
+                    (Some(a),Some(b)) => [(a[0]-b[0])*0.5,(a[1]-b[1])*0.5],
+                    (Some(a),None) => [a[0]-s[0],a[1]-s[1]],
+                    (None,Some(b)) => [s[0]-b[0],s[1]-b[1]],
+                    _ => [0.;2],
+                };
+                let [dx,dy] = [step(1,0),step(0,1)];
+                let counts = [dx,dy].map(|d|((d[0].hypot(d[1])+0.5).floor() as u32).clamp(1,EXACT_TAPS));
+                for j in 0..counts[1] { for i in 0..counts[0] {
+                    let offset = [(i as f64+0.5)/counts[0] as f64-0.5,(j as f64+0.5)/counts[1] as f64-0.5];
+                    let sample = [s[0]+dx[0]*offset[0]+dy[0]*offset[1],s[1]+dx[1]*offset[0]+dy[1]*offset[1]];
+                    let base = sample.map(|v|(v-0.5).floor() as i32);
+                    for oy in 0..2 { for ox in 0..2 {
+                        let pixel = [base[0]+ox,base[1]+oy];
+                        if pixel.iter().any(|v|*v<0 || *v>=2048) { continue; }
+                        let page = pixel.map(|v|v as u32/PAGE_SIZE);
+                        assert!(job.sources.contains(&page),"{x},{y}: {sample:?} reads {page:?}, bound {:?}",job.sources);
+                    }}
+                }}
+            }
+        }
+    }
+}
+
+#[test]
 fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     use crate::paint_transform::mesh::MeshGeometry;
     use layer_core::MeshMap;
@@ -643,7 +687,7 @@ fn native_mesh_transforms_match_the_cpu_tessellation_including_folds() {
     let mut transaction = 100;
     for (mesh, folds) in [(warped, false), (folded, true), (shrunk, false)] {
         let geometry = MeshGeometry::new(&mesh, layer_core::Projective::IDENTITY, None);
-        let (positions, stacked) = mesh_positions(&geometry);
+        let (positions, stacked) = mesh_positions(&geometry, EXTENT);
         let covered = positions[0].iter().filter(|p| p.is_some()).count();
         assert!(covered > 1000, "the mesh covers the layer");
         assert_eq!(

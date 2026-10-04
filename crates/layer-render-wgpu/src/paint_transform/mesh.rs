@@ -197,13 +197,22 @@ impl MeshGeometry {
     pub fn footprint_rect(&self, region: layer_core::Rect) -> Option<[f64; 4]> {
         if let Some((query,result))=self.footprint.get() && *query==region {return *result;}
         let _span=crate::performance_trace::Span::new(c"Capy mesh footprint");
-        let near = [region.min.x - 1., region.min.y - 1., region.max.x + 1., region.max.y + 1.];
         let mut found = [
-            f32::INFINITY,
-            f32::INFINITY,
-            f32::NEG_INFINITY,
-            f32::NEG_INFINITY,
+            f64::INFINITY,
+            f64::INFINITY,
+            f64::NEG_INFINITY,
+            f64::NEG_INFINITY,
         ];
+        self.footprints_rect(region, |bounds| {
+            found = [found[0].min(bounds[0]),found[1].min(bounds[1]),found[2].max(bounds[2]),found[3].max(bounds[3])];
+            true
+        });
+        let result=(found[0]<=found[2]).then_some(found);
+        let _=self.footprint.set((region,result));
+        result
+    }
+    pub fn footprints_rect(&self, region: layer_core::Rect, mut visit: impl FnMut([f64; 4]) -> bool) {
+        let near = [region.min.x - 1., region.min.y - 1., region.max.x + 1., region.max.y + 1.];
         for quad in self.pages.reaching(near) {
             let dest = self.destination[quad as usize];
             if dest[0] > near[2] || dest[2] < near[0] || dest[1] > near[3] || dest[3] < near[1] {
@@ -215,6 +224,7 @@ impl MeshGeometry {
                     let weight = self.weights[v as usize].recip();
                     [x,y,u*weight,s*weight,weight]
                 }), near);
+                let mut found = [f32::INFINITY,f32::INFINITY,f32::NEG_INFINITY,f32::NEG_INFINITY];
                 for v in &corners[..count] {
                     found = [
                         found[0].min(v[2]/v[4]),
@@ -223,11 +233,9 @@ impl MeshGeometry {
                         found[3].max(v[3]/v[4]),
                     ];
                 }
+                if found[0]<=found[2] && !visit(found.map(f64::from)) { return; }
             }
         }
-        let result=(found[0]<=found[2]).then(||found.map(f64::from));
-        let _=self.footprint.set((region,result));
-        result
     }
     pub fn forward_bounds(&self, source: layer_core::Rect, source_from_owner: Option<layer_core::Projective>) -> layer_core::Rect {
         let _span=crate::performance_trace::Span::new(c"Capy mesh material bounds");

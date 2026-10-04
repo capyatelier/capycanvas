@@ -572,6 +572,46 @@ fn live_warps_match_replay_cancel_exactly_and_commit_without_jump() {
 }
 
 #[test]
+fn default_canvas_folded_warp_survives_motion_cancel_commit_and_replay() {
+    use layer_core::color::{RgbSpace,SampleDepth};
+    let extent = [2048; 2];
+    let mut layer = paint_document(extent,"folded warp");
+    set_source(&mut layer,crate::test_support::depth_source(extent,SampleDepth::U8,RgbSpace::Srgb,64*1024*1024,
+        |x,y|[x as f32/2048.,y as f32/2048.,0.5,1.]));
+    let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut r,layer.scene(),extent,&[],&[],true);
+    let original = r.readback_srgb_rgba8().unwrap();
+    let mesh = layer_core::MeshMap::identity(Rect::from_extent(extent),[3,3]).unwrap()
+        .move_node(5,Point {x:-800.,y:-800.}).unwrap();
+    let mut preview = layer_render::TransformPreview {transaction:1,moving:true,target:target(&layer),selection:None,
+        transform:ImageTransform {placement:LayerPlacement {mesh:Some(Arc::new(mesh)),interpolation:Interpolation::Bicubic,
+            ..Default::default()},..Default::default()}};
+    for moving in [true,false] {
+        preview.moving = moving;
+        r.set_transform_preview(Some(&preview)).unwrap();
+        frame(&mut r,layer.scene(),extent,&[],&[],false);
+        assert_ne!(r.readback_srgb_rgba8().unwrap(),original);
+    }
+    r.set_transform_preview(None).unwrap();
+    frame(&mut r,layer.scene(),extent,&[],&[],false);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(),original);
+    preview.transaction += 1;
+    r.set_transform_preview(Some(&preview)).unwrap();
+    frame(&mut r,layer.scene(),extent,&[],&[],false);
+    let warped = r.readback_srgb_rgba8().unwrap();
+    let mut op = operation(extent,Affine::IDENTITY,None);
+    op.kind = RasterOperationKind::Transform(preview.transform);
+    let batch = DabBatch {damage:op.bounds(extent),..op_batch(target(&layer),0,&op)};
+    Arc::make_mut(&mut paint_mut(&mut layer).operations).push(op);
+    r.set_transform_preview(None).unwrap();
+    frame(&mut r,layer.scene(),extent,&[],std::slice::from_ref(&batch),false);
+    assert_eq!(r.readback_srgb_rgba8().unwrap(),warped);
+    let mut replay = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+    frame(&mut replay,layer.scene(),extent,&[],&[batch],true);
+    assert_eq!(replay.readback_srgb_rgba8().unwrap(),warped);
+}
+
+#[test]
 fn mask_warps_commit_and_replay_as_previewed() {
     let extent = [384, 256];
     let frame = |r: &mut WgpuRasterizer, layer: &Document, batches: &[DabBatch], reset| {

@@ -465,9 +465,12 @@ time: the mesh, tessellated within half a pixel and extended by a skirt past
 its edges, is first rasterized into a texture of the source position at each
 destination pixel, and the transform pass samples the original there,
 averaging a pixel's footprint from its neighbors' positions where the mesh
-shrinks it. A region job binds only the source under the part of each
-tessellated triangle it covers, so the large flat triangles of an unbent patch
-still split into jobs within the pass's texture bindings. Paint, masks and a selection's moved pixels draw this way in the
+shrinks it. A region job unions the source pages reached by each clipped
+triangle independently, including neighboring positions and interpolation
+support. Folds retain separate source neighborhoods; pages in the rectangle
+between unrelated branches consume no bindings. Traversal stops when the
+portable view limit requires another destination split. Large flat triangles
+still split into jobs within that limit. Paint, masks and a selection's moved pixels draw this way in the
 preview and when applied. A drag rasterizes the mesh at the display level's
 texels instead, tessellated within half a texel, and resamples the reduced copy
 at those positions. A pixel selection moved by a warp is resampled on the GPU

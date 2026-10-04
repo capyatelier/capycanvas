@@ -463,6 +463,34 @@ fn native_canvas_bar_warps_a_selection() {
     until(|| !transforming(&w), "Apply ends the warp");
     let document = ui_session(&w).engine().document().revision;
     assert!(document > revision, "Apply commits the warped pixels");
+    w.dispatch(UiAction::Invoke { command: CommandId::RectangleSelect });
+    w.dispatch(UiAction::Invoke { command: CommandId::SelectAll });
+    w.dispatch(UiAction::Layer { action: LayerAction::FillSelection });
+    pump(300);
+    w.dispatch(UiAction::Invoke { command: CommandId::ScaleRotate });
+    until(|| kind(&w)==Some(layer_ui::CanvasBarKind::Transform) && shown(&w),"the full-canvas transform opens");
+    w.dispatch(UiAction::Invoke { command: CommandId::TransformWarp });
+    until(|| state(&w).commands.iter().any(|c|c.id==CommandId::TransformWarp && c.selected)
+        && shown(&w),"the full canvas is ready to warp");
+    let from = node(&w,5);
+    let destination = mesh(&w).node(5).unwrap();
+    let to = canvas_point(&w,[destination.x-800.,destination.y-800.]);
+    native.perform(json!([
+        {"point":from},{"down":true},{"wait_ms":40},
+        {"point":[(from[0]+to[0])*0.5,(from[1]+to[1])*0.5]},{"wait_ms":100},
+        {"point":to},{"wait_ms":100},{"down":false}
+    ]));
+    until(|| {
+        let now = node(&w,5);
+        (now[0]-to[0]).hypot(now[1]-to[1])<3.
+    },"the full-canvas node crosses the neighboring patches");
+    until(|| shown(&w), "the folded warp survives the drag");
+    click(&mut native,&bar_widget(&w,"canvas-bar-ApplyTransform"));
+    until(|| !transforming(&w), "the folded full-canvas warp applies");
+    assert!(ui_session(&w).engine().document().revision>document);
+    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+    w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+    pump(300);
 }
 
 #[test]
