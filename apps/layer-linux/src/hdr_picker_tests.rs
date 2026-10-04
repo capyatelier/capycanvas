@@ -5,6 +5,7 @@ use layer_core::color::{RgbColor, RgbSpace, SampleDepth};
 use layer_ui::{ColorAction, ColorShape, ColorSlot};
 
 fn field(wheel: &crate::tool_panels::ColorWheel) -> gdk::Texture {
+    super::color_panel::settled_wheel(wheel);
     wheel.imp().disc.borrow().as_ref().unwrap().7.clone()
 }
 fn peak(texture: &gdk::Texture) -> f32 {

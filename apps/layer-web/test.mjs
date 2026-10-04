@@ -326,6 +326,7 @@ try {
     [process.argv.includes("--tab-styles"), () => checkTabStyles({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--settings-audit"), () => checkSettingsParity({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace-resize"), () => checkWorkspaceResize({call,evaluate,settle}), checkErrors],
+    [process.argv.includes("--color-wheel-resize"), () => checkWorkspaceResize({call,evaluate,settle,scenarios:['color','color-float']}), checkErrors],
     [process.argv.includes("--columns"), () => checkColumnSizing({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--workspace"), () => checkWorkspace({ call, evaluate, settle }), checkErrors],
     [process.argv.includes("--tool-picker"), () => checkToolPicker({ call, evaluate, settle }), checkErrors],

@@ -1,9 +1,26 @@
 //! Compact color controls with real input on the private Mutter display.
 use super::*;
 
+pub(super) fn settled_wheel(wheel: &crate::tool_panels::ColorWheel) {
+    use gtk::subclass::prelude::ObjectSubclassIsExt;
+    until(|| {
+        let imp = wheel.imp();
+        let color = imp.color.borrow();
+        let side = (wheel.drawing_bounds().0 * wheel.scale_factor() as f32).ceil() as u32;
+        let view = imp.view.get();
+        imp.ring.borrow().as_ref().is_some_and(|r|
+            (r.0, r.1, r.2, r.3) == (side, color.shape, color.rgb_space(), view))
+            && imp.disc.borrow().as_ref().is_some_and(|d|
+                (d.0, d.1, d.2, d.3, d.4, d.5, d.6) ==
+                (side, color.wheel_components()[0], color.shape, color.rgb_space(), view,
+                    color.hdr_intensity(), imp.headroom.get()))
+    }, "native picker raster finishes at current color and display resolution");
+}
+
 pub(super) fn hue_guide(w: &Workspace) -> gtk::gdk::Texture {
     use gtk::subclass::prelude::ObjectSubclassIsExt;
     let wheel = named::<crate::tool_panels::ColorWheel>(w.color_panel.root.upcast_ref(), "color-wheel");
+    settled_wheel(&wheel);
     let cache = wheel.imp().ring.borrow();
     let (side, shape, space, view, texture) = cache.as_ref().expect("visible wheel caches its hue guide");
     assert_eq!(*shape, state(w).colors.shape);

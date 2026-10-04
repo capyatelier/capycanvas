@@ -203,35 +203,38 @@ pub(super) fn hue_preview(hue: f32) -> [f32; 3] {
 
 /// Adaptive encoded-sRGB stops follow the smooth interior hue guide.
 pub(super) fn hue_stops() -> Vec<super::ColorHueStop> {
+    hue_stops_in(hue_preview)
+}
+pub(super) fn hue_stops_in(color: impl Fn(f32) -> [f32; 3]) -> Vec<super::ColorHueStop> {
     use super::ColorHueStop;
-    fn stop(hue: f32) -> ColorHueStop {
+    fn stop(hue: f32, color: &impl Fn(f32) -> [f32; 3]) -> ColorHueStop {
         ColorHueStop {
             offset: hue / 360.,
-            color: hue_preview(hue),
+            color: color(hue),
         }
     }
-    fn split(a: ColorHueStop, b: ColorHueStop, depth: u8, output: &mut Vec<ColorHueStop>) {
+    fn split(a: ColorHueStop, b: ColorHueStop, depth: u8, color: &impl Fn(f32) -> [f32; 3], output: &mut Vec<ColorHueStop>) {
         let error = [0.25, 0.5, 0.75]
             .into_iter()
             .map(|t| {
                 let hue = (a.offset + (b.offset - a.offset) * t) * 360.;
-                let actual = hue_preview(hue);
+                let actual = color(hue);
                 (0..3)
                     .map(|i| (actual[i] - (a.color[i] + (b.color[i] - a.color[i]) * t)).abs())
                     .fold(0., f32::max)
             })
             .fold(0., f32::max);
-        let mid = stop((a.offset + b.offset) * 180.);
+        let mid = stop((a.offset + b.offset) * 180., color);
         if error > 0.25 / 255. && depth < 12 && mid.offset > a.offset && mid.offset < b.offset {
-            split(a, mid, depth + 1, output);
-            split(mid, b, depth + 1, output);
+            split(a, mid, depth + 1, color, output);
+            split(mid, b, depth + 1, color, output);
         } else {
             output.push(b);
         }
     }
-    let mut output = vec![stop(0.)];
+    let mut output = vec![stop(0., &color)];
     for h in 0..360 {
-        split(stop(h as f32), stop(h as f32 + 1.), 0, &mut output);
+        split(stop(h as f32, &color), stop(h as f32 + 1., &color), 0, &color, &mut output);
     }
     output
 }

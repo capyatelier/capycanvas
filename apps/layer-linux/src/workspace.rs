@@ -1941,6 +1941,7 @@ impl Workspace {
             }
         }
         if matches!(input, UiInput::Blur) {
+            self.color_panel.set_resizing(false);
             if let Some(mut drag) = self.workspace_drag.borrow_mut().take() {
                 self.reset_drag_recognizers(&drag);
                 if drag.context {
@@ -3593,6 +3594,9 @@ impl Workspace {
     fn dispatch_drag(self: &Rc<Self>, target: DragTarget, phase: ContactPhase, position: [f32; 2]) {
         #[cfg(test)]
         let start = std::time::Instant::now();
+        if matches!(target, DragTarget::Divider(_) | DragTarget::Resize(_, _)) {
+            self.color_panel.set_resizing(matches!(phase, ContactPhase::Down | ContactPhase::Move));
+        }
         let tabs = if matches!(target, DragTarget::Dock(_)) {
             if phase != ContactPhase::Move || self.publication.hits.borrow().is_none() {
                 *self.publication.hits.borrow_mut() = Some(self.tab_hits());

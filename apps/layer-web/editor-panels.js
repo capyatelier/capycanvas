@@ -203,7 +203,10 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       const job=fieldPending;fieldPending=null;fieldJob=job;
       try {
         const bytes=await fieldWorker({operation:'color-field',metadata:job.metadata,buffers:[]});
-        if(!disposed&&job.epoch===fieldEpoch){installField(bytes,job.side,job.key);paintKey='';queuePaint();}
+        if(!disposed&&job.epoch===fieldEpoch){
+          if(fieldPending?.key===job.key)fieldPending=null;
+          installField(bytes,job.side,job.key);paintKey='';queuePaint();
+        }
       } catch(error) { if(!disposed)console.error('Color field preview',error); }
       finally {fieldJob=null;renderField();}
     }
@@ -255,18 +258,15 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       ctx.setTransform(1,0,0,1,0,0);ctx.clearRect(0,0,pixels,pixels);ctx.scale(pixels/side,pixels/side);
       const g=view.geometry,[cx,cy]=g.center.map(v=>v*side),inner=g.inner*side,outer=g.outer*side;
       const fieldPixels=view.shape==="circle"?Math.ceil(side):pixels;
-      const fieldLayout=JSON.stringify([view.rgb_space,view.shape,view.rendition,fieldPixels]);
+      const fieldLayout=JSON.stringify([view.rgb_space,view.shape,view.rendition]);
       if(fieldLayout!==fieldGeometry){fieldGeometry=fieldLayout;fieldEpoch++;fieldPending=null;}
       const key=JSON.stringify([view.rgb_space,view.shape,view.wheel_components[0],view.intensity,view.rendition,fieldPixels]);
       if(key!==fieldKey) {
-        if(previewing){
-          if(fieldJob?.key!==key||fieldJob.epoch!==fieldEpoch){
-            fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
-          }
-        } else {
-          fieldPending=null;fieldEpoch++;installField(app.color_field_pixels(fieldPixels),fieldPixels,key);
+        if(fieldJob?.key===key&&fieldJob.epoch===fieldEpoch)fieldPending=null;
+        else if(fieldPending?.key!==key||fieldPending.epoch!==fieldEpoch){
+          fieldPending={key,side:fieldPixels,metadata:app.color_field_request(fieldPixels),epoch:fieldEpoch};renderField();
         }
-      }
+      } else if(fieldJob||fieldPending){fieldPending=null;fieldEpoch++;}
       ctx.save();
       if(view.shape==="circle"){ctx.beginPath();ctx.arc(cx,cy,g.disc_radius*side,0,2*Math.PI);ctx.clip();}
       else if(view.shape==="square"){const [x,y,w]=g.square.map(v=>v*side);ctx.beginPath();ctx.roundRect(x,y,w,w,Math.min(6,side*.02));ctx.clip();}

@@ -923,38 +923,54 @@ pub fn render_hue_guide_in(side: u32, shape: ColorShape, space: RgbSpace, displa
     if side == 0 || raster_len(side) != Some(rgba.len()) {
         return false;
     }
+    for (pixel, color) in rgba.as_chunks_mut::<4>().0.iter_mut().zip(hue_guide_pixels(side, shape, space, display, false)) {
+        *pixel = color.map(|v| (v * 255.).round().clamp(0., 255.) as u8);
+    }
+    true
+}
+
+/// Antialiased display-encoded RGBA16F ring with straight alpha.
+pub fn render_hue_ring_f16_in(side: u32, shape: ColorShape, space: RgbSpace, display: RgbSpace, rgba: &mut [u8]) -> bool {
+    if side == 0 || raster_len(side).and_then(|n| n.checked_mul(2)) != Some(rgba.len()) {
+        return false;
+    }
+    for (pixel, color) in rgba.as_chunks_mut::<8>().0.iter_mut().zip(hue_guide_pixels(side, shape, space, display, true)) {
+        for (channel, value) in pixel.as_chunks_mut::<2>().0.iter_mut().zip(color) {
+            *channel = layer_core::color::f16::from_f32(value).to_bits().to_ne_bytes();
+        }
+    }
+    true
+}
+
+fn hue_guide_pixels(side: u32, shape: ColorShape, space: RgbSpace, display: RgbSpace, ring: bool) -> impl Iterator<Item = [f32; 4]> {
     let geometry = ColorWheelGeometry::new(side as f32).unwrap();
     let mut state = ColorState::default();
     state.set_rgb_space(space).unwrap();
     state.apply(ColorAction::Shape { shape }).unwrap();
-    let mut stops = std::borrow::Cow::Borrowed(state.wheel_hue_stops());
-    if display != RgbSpace::Srgb {
-        // Re-evaluate in the destination gamut, before any sRGB clipping.
-        for stop in stops.to_mut() {
-            stop.color = state.wheel_hue_color_in(stop.offset * 360., display);
-        }
-    }
-    for (index, pixel) in rgba.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+    let stops = if display == RgbSpace::Srgb {
+        std::borrow::Cow::Borrowed(state.wheel_hue_stops())
+    } else {
+        std::borrow::Cow::Owned(okhsv::hue_stops_in(|hue| state.wheel_hue_color_in(hue, display)))
+    };
+    (0..side as usize * side as usize).map(move |index| {
         let point = [
             (index % side as usize) as f32 + 0.5,
             (index / side as usize) as f32 + 0.5,
         ];
-        // Interpolate encoded display gradient stops. Evaluating
-        // the perceptual hue conversion at every pixel stalls panel resizing.
+        let alpha = if ring {
+            let radius = (point[0] - geometry.center[0]).hypot(point[1] - geometry.center[1]);
+            (radius - geometry.inner + 0.5).clamp(0., 1.) * (geometry.outer - radius + 0.5).clamp(0., 1.)
+        } else { 1. };
+        if alpha == 0. { return [0.; 4]; }
         let offset = state.wheel_hue_at(&geometry, point) / 360.;
         let upper = stops
             .partition_point(|stop| stop.offset < offset)
             .clamp(1, stops.len() - 1);
         let (a, b) = (stops[upper - 1], stops[upper]);
         let t = (offset - a.offset) / (b.offset - a.offset);
-        for (c, channel) in pixel[..3].iter_mut().enumerate() {
-            *channel = ((a.color[c] + t * (b.color[c] - a.color[c])) * 255.)
-                .round()
-                .clamp(0., 255.) as u8;
-        }
-        pixel[3] = 255;
-    }
-    true
+        let [r, g, b] = std::array::from_fn(|c| a.color[c] + t * (b.color[c] - a.color[c]));
+        [r, g, b, alpha]
+    })
 }
 
 /// Opaque display field for a wheel shape. Hosts retain it by hue/size and clip
@@ -1909,6 +1925,37 @@ mod tests {
         }
     }
     #[test]
+    fn half_precision_hue_guides_match_picker_colors_in_every_display_space() {
+        let side = 101u32;
+        let geometry = ColorWheelGeometry::new(side as f32).unwrap();
+        let mut bytes = vec![0; side as usize * side as usize * 8];
+        for space in RgbSpace::ALL {
+            for display in RgbSpace::ALL {
+                for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
+                    assert!(render_hue_ring_f16_in(side, shape, space, display, &mut bytes));
+                    let mut state = ColorState::default();
+                    state.set_rgb_space(space).unwrap();
+                    state.apply(ColorAction::Shape { shape }).unwrap();
+                    for (i, pixel) in bytes.as_chunks::<8>().0.iter().enumerate() {
+                        let point = [(i % side as usize) as f32 + 0.5, (i / side as usize) as f32 + 0.5];
+                        let radius = (point[0] - geometry.center[0]).hypot(point[1] - geometry.center[1]);
+                        if radius < geometry.inner - 1. || radius > geometry.outer + 1. {
+                            assert_eq!(*pixel, [0; 8], "transparent ring pixels have no color residue");
+                        }
+                        if radius < geometry.inner + 1. || radius > geometry.outer - 1. { continue; }
+                        let hue = state.wheel_hue_at(&geometry, point);
+                        let expected = state.wheel_hue_color_in(hue, display).into_iter().chain([1.]);
+                        for (channel, expected) in pixel.as_chunks::<2>().0.iter().zip(expected) {
+                            let actual = layer_core::color::f16::from_bits(u16::from_ne_bytes(*channel)).to_f32();
+                            assert!((actual - expected).abs() <= 1. / 255.,
+                                "{space:?}->{display:?} {shape:?} hue={hue}: {actual} != {expected}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+    #[test]
     fn invalid_raster_requests_preserve_caller_buffers() {
         for shape in [ColorShape::Circle, ColorShape::Square, ColorShape::Triangle] {
             for (side, hue) in [
@@ -1926,6 +1973,8 @@ mod tests {
             for side in [0, 3] {
                 let mut bytes = [19; 16];
                 assert!(!render_hue_guide_in(side, shape, RgbSpace::Srgb, RgbSpace::Srgb, &mut bytes));
+                assert_eq!(bytes, [19; 16]);
+                assert!(!render_hue_ring_f16_in(side, shape, RgbSpace::Srgb, RgbSpace::Srgb, &mut bytes));
                 assert_eq!(bytes, [19; 16]);
             }
         }

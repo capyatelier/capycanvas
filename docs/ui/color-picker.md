@@ -23,6 +23,23 @@ are kept per paint, so neutral colors keep their hue. Hit testing, conversions,
 component values and the selected swatch live in Rust
 ([`color.rs`](../../crates/layer-ui/src/color.rs)).
 
+GTK prepares the field and managed hue ring on one worker with one replaceable
+pending request. Panel resizing scales the retained wheel drawing each frame;
+release and cancellation redraw its controls and prepare the final physical
+rasters. The ring texture includes its antialiased silhouette; the circle
+field uses GTK's rounded clip. Shared adaptive hue stops retain display precision
+without evaluating the hue conversion at every pixel.
+`native_color_wheel_resize_input` exercises sustained mouse and touch resizing,
+retained controls, final raster sizes and workspace undo/redo on the private
+display. Run it in both themes and at 1× and 2× scale.
+
+Web also prepares committed and preview fields on its existing Wasm worker,
+retaining and scaling compatible completed fields while newer sizes are pending.
+Its hue ring uses a native conic gradient. `test.mjs --color-wheel-resize` checks
+column and floating-panel resize in both themes with mouse and touch, including
+the absence of synchronous field raster calls. Android already uses background
+field rendering and retains its bitmap across size changes.
+
 GTK, Web, Android and Windows place the selected paint circle above the other
 circle, including its border and pointer target. Hover leaves that order
 unchanged. Transparent paint keeps the remembered paint circle in front;
@@ -135,8 +152,10 @@ Web and Android publish preview colors separately from retained workspace and
 panel models. Web sends field raster requests to a dedicated Wasm worker;
 Android uses a conflated coroutine channel and pure JNI raster functions on a
 background dispatcher. Both keep one raster in flight and the latest pending
-request. A finished older hue may appear during movement, but results for a
-previous size, shape or rendition, or arriving after cancellation, are rejected.
+request. A finished older hue may appear during movement. GTK and Web also accept
+compatible older sizes and scale them while the latest request finishes; Android
+retains its last bitmap and rejects older sizes. Results for a previous shape or
+rendition, or arriving after cancellation, are rejected.
 Apple stages motion-published previews into their own snapshot field, so only the
 color panel re-evaluates, and rasterizes preview wheel fields on a serial worker with
 the same one-running, one-pending policy. The Mac and iPad hosts send `cursor_leave`
