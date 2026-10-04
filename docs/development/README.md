@@ -58,6 +58,9 @@ and how parity is checked.
 
 ## Work in progress
 
+- [Layer clipping and effect attachment](layer-clipping-and-effects.md) defines
+  common-base clipping, effects attached to individual layers and isolated groups,
+  compact relationship visuals, and the implementation and validation plan.
 - [Automatic recovery](autorecovery.md) is deferred until the qualified application
   cutover lands, then revisits session restoration and checkpoint storage through
   the [authored capture boundary](../reference/authored-model.md#capture-phases-and-recovery-extension).
