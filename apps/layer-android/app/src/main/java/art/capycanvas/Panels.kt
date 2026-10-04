@@ -180,26 +180,32 @@ import kotlin.math.roundToInt
 }
 @Composable private fun SizePresets(host: CanvasHost, current: Float) {
     val colors = LocalPalette.current
-    BoxWithConstraints {
-      val columns = if (maxWidth < 130.dp) 2 else if (maxWidth < 174.dp) 3 else 4
-      Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-        host.catalog.array("brush_sizes").values().chunked(columns).forEach { sizes ->
-          Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-           sizes.forEach { size ->
-            val value = (size as Number).toFloat()
-            ActionTip(host, "${value.roundToInt()} px", obj("type" to "set_brush_size", "value" to value), Modifier.weight(1f).testTag("size-preset-${value.roundToInt()}")) {
-            Column(Modifier.fillMaxWidth().padding(3.dp).clip(ControlShape)
-                .background(if (current == value) colors.active else Color.Transparent)
-                .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }.padding(2.dp),
-                horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                Canvas(Modifier.fillMaxWidth().height(28.dp)) {
-                    drawCircle(colors.text, minOf(27f, 2f + kotlin.math.sqrt(value) * 1.2f).dp.toPx() / 2)
+    val view = host.catalog.getJSONObject("brush_size_grid")
+    val side = view.number("tile_size")
+    val gap = view.number("gap")
+    val presets = remember(view) { view.array("presets").objects() }
+    BoxWithConstraints(Modifier.fillMaxWidth()) {
+      val columns = ((maxWidth.value + gap) / (side + gap)).toInt().coerceIn(1, view.getInt("max_columns"))
+      Column(verticalArrangement = Arrangement.spacedBy(gap.dp)) {
+        presets.chunked(columns).forEach { sizes ->
+          Row(horizontalArrangement = Arrangement.spacedBy(gap.dp)) {
+           sizes.forEach { preset ->
+            val value = preset.number("value")
+            val label = preset.getString("label")
+            val fill = if (current == value) colors.active else colors.panelFill
+            ActionTip(host, "$label px", obj("type" to "set_brush_size", "value" to value), Modifier.size(side.dp).testTag("size-preset-$label")) {
+              Box(Modifier.fillMaxWidth().height(side.dp).clip(ControlShape).background(fill)
+                .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }) {
+                Canvas(Modifier.fillMaxSize()) {
+                    drawCircle(colors.text, preset.number("preview_diameter").dp.toPx() / 2)
+                    drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, fill),
+                        startY = size.height - view.number("fade_height").dp.toPx(), endY = size.height))
                 }
-                Text(value.roundToInt().toString())
-            }
+                Text(label, Modifier.align(Alignment.BottomCenter).padding(bottom = 1.dp),
+                    fontSize = LocalTextStyle.current.fontSize * .8f, maxLines = 1)
+              }
             }
            }
-           repeat(columns - sizes.size) { Spacer(Modifier.weight(1f)) }
           }
         }
       }
@@ -270,12 +276,7 @@ import kotlin.math.roundToInt
                 }
             }
         }
-        "size_presets" -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            host.catalog.array("brush_sizes").values().forEach { value ->
-                Box(Modifier.widthIn(min = 52.dp).height(34.dp).clip(ControlShape).background(LocalPalette.current.button)
-                    .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }, contentAlignment = Alignment.Center) { Text(value.toString(), fontWeight = FontWeight.Bold) }
-            }
-        }
+        "size_presets" -> SizePresets(host, brush.number("diameter"))
         "layer_actions" -> FlowRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
             host.catalog.array("layer_commands").values().forEach { id ->
                 state.array("commands").objects().find { it.getString("id") == id }?.let { command ->

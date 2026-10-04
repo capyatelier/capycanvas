@@ -276,7 +276,7 @@ impl PanelControl {
     fn defaults(panel: Panel) -> &'static [Self] {
         match panel {
             Panel::Brushes => &[Self::Brushes],
-            Panel::Sizes => &[Self::BrushSize, Self::SizePresets],
+            Panel::Sizes => &[Self::SizePresets],
             Panel::Layers
             | Panel::Adjustments
             | Panel::Properties
@@ -475,8 +475,8 @@ impl ToolbarControl {
             Self::ColorPicker => UiAction::ColorPicker { action: crate::ColorPickerAction::Toggle },
             Self::Command { command } => UiAction::Invoke { command },
             Self::Brush { id } => UiAction::SelectBrush { id },
-            Self::Size { pixels } => UiAction::SetBrushSize {
-                value: pixels as f32,
+            Self::Size { tenths } => UiAction::SetBrushSize {
+                value: tenths as f32 / 10.,
             },
             Self::Color | Self::Opacity | Self::Panel { .. } | Self::Divider
             | Self::BrushSizeSlider | Self::BrushOpacitySlider | Self::ToolOptions { .. } => return None,
@@ -490,8 +490,8 @@ impl ToolbarControl {
             Self::Brush { id } => {
                 preset(id)?;
             }
-            Self::Size { pixels } => {
-                NumericControl::brush_size().validate(pixels as f32, MessageId::TOOL_SETTING_SIZE)?;
+            Self::Size { tenths } => {
+                NumericControl::brush_size().validate(tenths as f32 / 10., MessageId::TOOL_SETTING_SIZE)?;
             }
             Self::Panel { panel } if panel.kind() != PanelKind::Content => {
                 return Err("Choose a built-in panel".into());
@@ -1296,8 +1296,8 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 control.icon(),
             )
         }
-        ToolbarControl::Size { pixels } => (
-            { let mut args = FluentArgs::new(); args.set("pixels", pixels); localization.format(MessageId::WORKSPACE_TOOL_BRUSH_SIZE, &args) },
+        ToolbarControl::Size { tenths } => (
+            { let mut args = FluentArgs::new(); args.set("pixels", tenths as f64 / 10.); localization.format(MessageId::WORKSPACE_TOOL_BRUSH_SIZE, &args) },
             localization.text(MessageId::WORKSPACE_TOOL_SIZE_DESCRIPTION).to_string(),
             control.icon(),
         ),
@@ -1348,7 +1348,7 @@ fn tool_available(control: ToolbarControl, platform: Platform) -> bool {
     match control {
         ToolbarControl::Command { command } => command.available_on(platform),
         ToolbarControl::Brush { id } => preset(id).is_ok(),
-        ToolbarControl::Size { pixels } => BRUSH_SIZES.iter().any(|size| *size as u16 == pixels),
+        ToolbarControl::Size { tenths } => BRUSH_SIZES.iter().any(|size| (*size * 10.).round() as u16 == tenths),
         ToolbarControl::Panel { panel } => panel.available_on(platform) && Panel::ALL.contains(&panel) && panel.kind() == PanelKind::Content,
         _ => true,
     }
@@ -1378,7 +1378,7 @@ pub(crate) fn tool_catalog_localized(platform: Platform, localization: &Localize
         .chain(
             BRUSH_SIZES
                 .iter()
-                .map(|s| ToolbarControl::Size { pixels: *s as u16 }),
+                .map(|s| ToolbarControl::Size { tenths: (*s * 10.).round() as u16 }),
         )
         .map(|control| tool_choice_localized(control, localization))
         .collect()
@@ -1561,8 +1561,8 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 ToolbarControl::Brush { id } => {
                     state.brush.preset == id && state.layer_tools.tool == LayerCanvasTool::Paint
                 }
-                ToolbarControl::Size { pixels } => {
-                    (state.brush.diameter - pixels as f32).abs() < 0.01
+                ToolbarControl::Size { tenths } => {
+                    (state.brush.diameter - tenths as f32 / 10.).abs() < 0.01
                 }
                 _ => false,
             };
@@ -2655,12 +2655,22 @@ mod tests {
 
     #[test]
     fn toolbar_admission_preserves_numeric_size_reason_and_cold_diagnostic() {
-        let panel = PanelConfig { id: Panel::Toolbar, hide_tab: false, tile_style: Default::default(), content: PanelContent::Toolbar { name: Some("literal {name} 🖌".into()), tiles: vec![ToolbarTile { id: 1, control: ToolbarControl::Size { pixels: 0 } }] } };
+        let panel = PanelConfig { id: Panel::Toolbar, hide_tab: false, tile_style: Default::default(), content: PanelContent::Toolbar { name: Some("literal {name} 🖌".into()), tiles: vec![ToolbarTile { id: 1, control: ToolbarControl::Size { tenths: 0 } }] } };
         let expected = crate::NumericError::Range { label: MessageId::TOOL_SETTING_SIZE.into(), min: 0.5, max: 2048.0 };
         assert_eq!(panel.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected.clone())));
         assert_eq!(panel.validate().unwrap_err(), expected.code());
-        assert_eq!(ToolbarControl::Size { pixels: 0 }.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected)));
-        assert!(ToolbarControl::Size { pixels: 12 }.validate_admission().is_ok());
+        assert_eq!(ToolbarControl::Size { tenths: 0 }.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected)));
+        let sizes = PanelConfig::defaults().into_iter().find(|panel| panel.id == Panel::Sizes).unwrap();
+        assert!(sizes.shows(PanelControl::SizePresets) && !sizes.shows(PanelControl::BrushSize));
+        let grid = BrushSizeGrid::default();
+        assert_eq!((grid.presets.len(), grid.max_columns, grid.tile_size), (40, 6, TileStyle::Small.size()[0]));
+        for preset in grid.presets {
+            let control = ToolbarControl::Size { tenths: (preset.value * 10.).round() as u16 };
+            assert!(tool_available(control, Platform::Gtk));
+            assert!(control.validate_admission().is_ok());
+            assert!(matches!(control.action(), Some(UiAction::SetBrushSize { value }) if value == preset.value));
+            assert!(preset.preview_diameter <= grid.tile_size);
+        }
         assert_eq!(panel.custom_name(), Some("literal {name} 🖌"));
         let mut named = panel.clone();
         named.content = PanelContent::Toolbar { name: Some("a".repeat(65)), tiles: vec![] };

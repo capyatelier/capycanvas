@@ -1279,14 +1279,14 @@ fn cold_storage_lists_preserve_known_refusal_identity() {
 #[test]
 fn browser_cold_list_retains_toolbar_size_range_payload() {
     let f = Fixture::new();
-    let entity = Entity::toolbar(ToolbarDefinition { name: "literal toolbar 🖌".into(), tiles: vec![layer_ui::ToolbarTile { id: 1, control: layer_ui::ToolbarControl::Size { pixels: 12 } }], tile_style: Default::default(), hide_tab: false }, 1);
+    let entity = Entity::toolbar(ToolbarDefinition { name: "literal toolbar 🖌".into(), tiles: vec![layer_ui::ToolbarTile { id: 1, control: layer_ui::ToolbarControl::Size { tenths: 120 } }], tile_style: Default::default(), hide_tab: false }, 1);
     let id = entity.id.clone();
     let mut browser = BrowserDatabase::default();
     let batch = CommitBatch::prepare(f.owner.clone(), vec![create(entity)]).unwrap();
     browser.prepare_delivery(&batch).unwrap();
     browser.execute(StoreRequest::Commit { batch }, 1_000_000).unwrap();
     let mut snapshot: serde_json::Value = serde_json::from_str(&browser.encoded().unwrap()).unwrap();
-    snapshot["items"][&id]["entity"]["content"]["definition"]["tiles"][0]["control"]["pixels"] = serde_json::json!(0);
+    snapshot["items"][&id]["entity"]["content"]["definition"]["tiles"][0]["control"]["tenths"] = serde_json::json!(0);
     let mut browser = BrowserDatabase::decode(&snapshot.to_string()).unwrap();
     let StoreResponse::List(items) = browser.execute(StoreRequest::List, 1_000_000).unwrap() else { panic!() };
     let reason = items.into_iter().find(|i| i.id == id).unwrap().error.unwrap();

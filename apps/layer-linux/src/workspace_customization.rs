@@ -132,6 +132,7 @@ pub(super) struct ToolbarView {
 
 enum FieldValue {
     Size(crate::number_control::NumberControl),
+    SizePresets(Vec<(f32, gtk::Button)>),
     Opacity(crate::number_control::NumberControl),
     Color(Rc<crate::color_editor::ColorButton>),
     Brush(gtk::DropDown),
@@ -1027,6 +1028,7 @@ impl Customization {
             field.widget.set_visible(field.configuration || shown);
             match &field.value {
                 Some(FieldValue::Size(input)) => input.set_value(brush.diameter as f64),
+                Some(FieldValue::SizePresets(buttons)) => { for (value, button) in buttons { selected(button, *value == brush.diameter); } },
                 Some(FieldValue::Opacity(input)) => input.set_value(brush.opacity as f64),
                 Some(FieldValue::Color(input)) => {
                     let definition = w.gpu.borrow().as_ref().unwrap().session.state().display_colors().definition();
@@ -1379,7 +1381,12 @@ impl Workspace {
                 group.append(&input);
                 FieldValue::LayerOpacity(input)
             }
-            PanelControl::SizePresets | PanelControl::LayerActions => {
+            PanelControl::SizePresets => {
+                let (grid, buttons) = crate::tool_panels::size_grid(self);
+                group.append(&grid);
+                FieldValue::SizePresets(buttons)
+            }
+            PanelControl::LayerActions => {
                 let grid = gtk::FlowBox::builder()
                     .selection_mode(gtk::SelectionMode::None)
                     .min_children_per_line(2)
@@ -1387,29 +1394,13 @@ impl Workspace {
                     .column_spacing(2)
                     .row_spacing(2)
                     .build();
-                if control == PanelControl::SizePresets {
-                    for &value in BRUSH_SIZES {
-                        grid.insert(
-                            &self.action_button(
-                                &value.to_string(),
-                                UiAction::SetBrushSize { value },
-                            ),
-                            -1,
-                        );
-                    }
-                } else {
-                    let mut buttons = Vec::new();
-                    for command in CommandId::LAYERS {
-                        let button =
-                            self.action_button(&command.localized_label(&self.localization()), UiAction::Invoke { command });
-                        grid.insert(&button, -1);
-                        buttons.push((command, button));
-                    }
-                    group.append(&grid);
-                    return Some(FieldValue::Commands(buttons));
-                }
+                let buttons = CommandId::LAYERS.into_iter().map(|command| {
+                    let button = self.action_button(&command.localized_label(&self.localization()), UiAction::Invoke { command });
+                    grid.insert(&button, -1);
+                    (command, button)
+                }).collect();
                 group.append(&grid);
-                return None;
+                FieldValue::Commands(buttons)
             }
         })
     }

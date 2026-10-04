@@ -180,7 +180,7 @@ const legacyLayout = workspace => {
   const fixture = structuredClone(workspace);
   const tabs = (id, panels) => ({ kind: "tabs", id, panels, active: panels[0], tab_style: "automatic" });
   Object.assign(fixture.layout, { bands: [
-    { id: 3, edge: "left", extent: 232, root: { kind: "split", id: 4, axis: "vertical", fraction: .68, first: tabs(5, ["brushes"]), second: tabs(6, ["sizes"]) } },
+    { id: 3, edge: "left", extent: 248, root: { kind: "split", id: 4, axis: "vertical", fraction: .68, first: tabs(5, ["brushes"]), second: tabs(6, ["sizes"]) } },
     { id: 7, edge: "right", extent: 232, root: tabs(8, ["layers", "adjustments", "properties"]) },
     { id: 1, edge: "top", extent: 42, root: tabs(2, ["toolbar"]) },
   ], floating: [], collapsed: [], column_stacks: [], fit_tab_groups: [], fit_height_groups: [], next_id: Math.max(9, workspace.layout.next_id) });
@@ -538,7 +538,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   const wait = () => evaluate("new Promise(resolve => setTimeout(resolve, 260))");
   const send = (action) => evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);
   const customize = (action) => send({ type: "customize", action });
-  const rect = (selector) => evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
+  const rect = (selector) => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});n.scrollIntoView({block:"nearest"});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2};})()`);
   const clickAt = async ({ x, y }) => {
     await call("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
     await call("Input.dispatchMouseEvent", { type: "mousePressed", button: "left", clickCount: 1, x, y });
@@ -559,7 +559,7 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await settle();
     assert.equal(await evaluate("document.querySelector('.panel-context-menu').matches(':popover-open')"), true,
       await evaluate(`JSON.stringify({hit:document.elementFromPoint(${x},${y})?.outerHTML,menu:document.querySelector('.panel-context-menu').outerHTML})`));
-    return evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].map(n=>n.textContent)`);
+    return evaluate(`[...document.querySelectorAll('.panel-context-menu:popover-open button')].map(n=>(n.querySelector('.menu-label')?.textContent||n.textContent).trim())`);
   };
   const shot = async (name) => { await wait(); const image = await call("Page.captureScreenshot", { format: "png" }); await writeFile(`${dir}/${name}.png`, Buffer.from(image.data, "base64")); };
   const tab = (panel) => `.dock-tab[data-panel="${panel}"]`;
@@ -575,6 +575,10 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
   for (const theme of ["dark", "light"]) {
     await send({ type: "restore_workspace", workspace: initial });
     await send({ type: "set_theme", theme }); await wait();
+    assert.equal(await evaluate("document.querySelector('.sizes-panel [data-control=brush_size]').hidden"), true);
+    const tiles = await evaluate("[...document.querySelectorAll('.sizes-panel .size-button')].map(n=>{const b=n.getBoundingClientRect(),l=n.querySelector('.size-label').getBoundingClientRect();return{value:Number(n.dataset.size),height:b.height,top:b.top,overlap:l.top>=b.top&&l.bottom<=b.bottom+.1,fade:getComputedStyle(n.querySelector('.size-label')).backgroundImage}})");
+    assert.equal(tiles.length, 40); assert.ok(tiles.every(t=>t.height===36&&t.overlap&&t.fade.includes('linear-gradient'))); assert.ok(tiles.slice(0,6).every(t=>t.top===tiles[0].top)&&tiles[6].top>tiles[0].top);
+    for (const value of [.7, 1.5, 2.5, 2000]) { await click(`.sizes-panel [data-size="${value}"]`); assert.ok(Math.abs(await evaluate('layerApp.state().brush.diameter')-value)<.001); }
     await shot(`initial-${theme}`);
     assert.deepEqual(await context(tab("sizes")), ["Show tab bar", "Collapse column", "Configure Brush size panel…", "Hide Brush size panel"]);
     await shot(`panel-menu-${theme}`);
@@ -587,12 +591,15 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
       "one stronger shadow must wrap both columns, never their seam");
     await evaluate("window.originalPanel=document.querySelector('.sizes-panel');window.originalParent=originalPanel.parentElement;");
     await shot(`expanded-sizes-${theme}`);
-    await click('.panel-configuration [data-visible="brush_opacity"]');
-    assert.equal(await evaluate("document.querySelector('.sizes-panel [data-control=brush_opacity]').hidden"), false);
-    await click('.panel-configuration [data-control=brush_opacity] .number-value');
-    await evaluate(`{const input=document.querySelector('.panel-configuration [data-control=brush_opacity] .number-entry');input.value='42';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
-    assert.ok(Math.abs(await evaluate("layerApp.state().brush.opacity") - .42) < .001);
-    assert.equal(await evaluate("document.querySelector('.sizes-panel [data-control=brush_opacity] .number-entry').value"), "42.0");
+    for (const [control, text, value, key] of [["brush_size", "23.5", 23.5, "diameter"], ["brush_opacity", "42", .42, "opacity"]]) {
+      await click(`.panel-configuration [data-visible="${control}"]`);
+      assert.equal(await evaluate(`document.querySelector('.sizes-panel [data-control=${control}]').hidden`), false);
+      await click(`.panel-configuration [data-control=${control}] .number-value`);
+      await evaluate(`{const input=document.querySelector('.panel-configuration [data-control=${control}] .number-entry');input.value='${text}';input.dispatchEvent(new Event('input',{bubbles:true}));input.dispatchEvent(new KeyboardEvent('keydown',{key:'Enter',bubbles:true}));}`);
+      const actual = await evaluate(`layerApp.state().brush.${key}`);
+      assert.ok(Math.abs(actual - value) < .001, `${control}: ${actual} expected ${value}`);
+      assert.equal(await evaluate(`document.querySelector('.sizes-panel [data-control=${control}] .number-entry').value`), Number(text).toFixed(1));
+    }
     await click(tab("sizes")); assert.equal(await expanded(), null);
     assert.equal(await evaluate("originalPanel.parentElement===originalParent"), true);
     await send({ type: "move_panel", panel: "sizes", target: { kind: "tab", group: 8, index: null } }); await wait();
@@ -625,9 +632,9 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await click('#confirm-tools');
     assert.equal(await evaluate("document.querySelector('#tool-picker').open"), false);
     const custom = await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.content.name==='Illustration ${theme}').id`);
-    assert.deepEqual(await context(`[data-panel="${custom}"] [data-tile]`), ["Remove Tool", "Insert Tools…"]);
+    assert.deepEqual(await context(`[data-panel="${custom}"] [data-tile]`), [...await evaluate('layerApp.state().tool_panels.brush_sets.groups.map(g=>g.label)'), 'Remove Tool', 'Insert Tools…']);
     await shot(`tile-menu-${theme}`);
-    await click('.panel-context-menu button:first-child');
+    await menuItem('Remove Tool');
     assert.equal(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='${custom}').content.tiles.length`), 0);
     assert.ok((await context(`[data-panel="${custom}"] .toolbar-controls`)).includes("Add Tools…"));
     await menuItem("Add Tools…");

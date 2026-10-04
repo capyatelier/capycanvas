@@ -32,7 +32,7 @@ fn main() {
         ToolbarControl::Brush { id: 1 },
         ToolbarControl::Color,
         ToolbarControl::Opacity,
-        ToolbarControl::Size { pixels: 64 },
+        ToolbarControl::Size { tenths: 640 },
         ToolbarControl::Command {
             command: CommandId::KeyboardShortcuts,
         },

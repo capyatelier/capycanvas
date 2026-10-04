@@ -1269,10 +1269,10 @@ mod tests {
     #[test]
     fn nested_context_menus_preserve_hints_and_keys() {
         let mut settings = Settings::default();
-        let action = UiAction::SetBrushSize { value: 48. };
+        let action = UiAction::SetBrushSize { value: 1.5 };
         settings
             .shortcuts
-            .insert("size.48".into(), vec![key("i", true, true)]);
+            .insert("size.1.5".into(), vec![key("i", true, true)]);
         let item = ContextMenuItem {
             label: "Translated size".into(),
             icon: None,

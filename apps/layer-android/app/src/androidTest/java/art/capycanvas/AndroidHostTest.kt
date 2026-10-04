@@ -1449,10 +1449,10 @@ class AndroidHostTest {
     }
     @Test fun layersReferencesMasksAndTools() {
         action(obj("type" to "select_panel_tab", "group" to group("sizes").getInt("id"), "panel" to "sizes"))
-        val presets = listOf(2,4,6,8).map { compose.onNodeWithTag("size-preset-$it").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot() }
+        val presets = listOf("0.7","1","1.5","2","2.5","3").map { compose.onNodeWithTag("size-preset-$it").fetchSemanticsNode().layoutInfo.coordinates.boundsInRoot() }
         presets.zipWithNext().forEach { (left,right) ->
             assertEquals(left.top,right.top,1f)
-            assertTrue("Tooltip wrappers must preserve the four-column grid",left.right<=right.left+1f)
+            assertTrue("Tooltip wrappers must preserve the six-column grid",left.right<=right.left+1f)
         }
         fun layer(action: JSONObject) = action(obj("type" to "layer","action" to action))
         layer(obj("op" to "rename","id" to 1,"name" to "Linework"))
@@ -1469,7 +1469,7 @@ class AndroidHostTest {
         action(obj("type" to "set_color","rgba" to JSONArray(listOf(.8,.2,.12,1))))
         layer(obj("op" to "tool","tool" to "lasso_fill"))
         penStroke(30)
-        compose.onNodeWithContentDescription("Add layer mask").performClick()
+        compose.onNodeWithContentDescription(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("add_mask")).performClick()
         waitState { it.getJSONObject("layer_tools").getJSONObject("editing_layer").getBoolean("has_mask") }
         SystemClock.sleep(800)
         capture("layers-paint-mask-light")

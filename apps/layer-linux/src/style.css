@@ -205,7 +205,10 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .choice-grid button { min-width: 0; min-height: 0; padding: 0; border: 0; box-shadow: none; background: transparent; border-radius: var(--control-radius); }
 .choice-grid button image { opacity: .45; }
 .choice-grid button:checked image { opacity: 1; }
-.dock-panel .size-preset { padding: 2px; min-width: 32px; min-height: 44px; }
+.size-grid flowboxchild { padding: 0; margin: 0; }
+.dock-panel .size-preset { padding: 0; min-width: 0; min-height: 0; border: 0; }
+.size-label { font-size: .8em; background-image: linear-gradient(to top, var(--panel-bg), transparent); }
+.size-preset.selected-tool .size-label { background-image: linear-gradient(to top, var(--selection-bg), transparent); }
 .toolbar-controls button.tile-button { min-width: 0; min-height: 0; padding: 0; margin: 0; }
 .dock-panel.expanded-panel { background: transparent; box-shadow: none; }
 .panel-preview, .panel-configuration { background: var(--panel-bg); border-radius: var(--surface-radius); }

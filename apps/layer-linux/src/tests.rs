@@ -378,15 +378,8 @@ fn native_default_workspace() {
             Panel::Stats,
             Panel::Navigator,
         ] {
-            let tab = w
-                .groups
-                .borrow()
-                .iter()
-                .flat_map(|g| &g.tabs)
-                .find(|(p, _)| *p == panel)
-                .unwrap()
-                .1
-                .clone();
+            let tab = w.groups.borrow().iter().flat_map(|g| &g.tabs)
+                .find(|(p, _)| *p == panel).unwrap().1.clone();
             click(&tab);
             pump(150);
             assert!(w.panel_widget(panel).is_mapped());
@@ -400,6 +393,18 @@ fn native_default_workspace() {
             assert!(state(&w).customization.drawer.is_none());
             verify();
             if panel == Panel::Sizes {
+                assert!(!w.size_number.is_mapped());
+                let buttons = w.size_buttons.borrow();
+                assert_eq!(buttons.len(), 40);
+                let first = buttons[0].1.compute_bounds(&w.panel_widget(panel)).unwrap();
+                for (_, button) in &buttons[..6] {
+                    let bounds = button.compute_bounds(&w.panel_widget(panel)).unwrap();
+                    assert_eq!(bounds.y(), first.y());
+                    assert_eq!(bounds.height(), layer_ui::TILE_SIZE);
+                }
+                for (value, button) in buttons.iter().filter(|(value, _)| [0.7, 1.5, 2.5, 2000.].contains(value)) {
+                    click(button); assert_eq!(state(&w).brush.diameter, *value);
+                }
                 capture_reference(&w, &format!("{output}/brush-size-tab-{theme:?}.png"), 1.);
             }
             if panel == Panel::Stats {
@@ -6578,13 +6583,13 @@ fn native_panel_customization() {
         pump(200);
         send(CustomizationAction::PickerSearch { query: "".into() });
         send(CustomizationAction::PickerSelect {
-            control: ToolbarControl::Size { pixels: 64 },
+            control: ToolbarControl::Size { tenths: 600 },
             selected: true,
         });
         send(CustomizationAction::ConfirmTools);
         assert_eq!(
             state(&w).workspace.layout.panel(panel).unwrap().tiles()[0].control,
-            ToolbarControl::Size { pixels: 64 }
+            ToolbarControl::Size { tenths: 600 }
         );
         let moved = state(&w).workspace.layout.panel(panel).unwrap().tiles()[0].id;
         let group = w

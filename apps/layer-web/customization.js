@@ -1,3 +1,4 @@
+import { brushSizeGrid } from "./brush-sizes.js";
 import { composingKey } from "./text-input.js";
 import { createToolbarComponent } from "./toolbar-components.js";
 import { colorButton, pickerButtonAction, updatePaintPairIcon } from './color-controls.js';
@@ -244,8 +245,8 @@ export function createCustomization({ app, catalog, state, paintPair, workspace,
         }; row.append(input); break;
       }
       case "size_presets":
-        row.classList.add("configuration-presets");
-        for (const value of catalog.brush_sizes) row.append(button(String(value), () => dispatch({ type: "set_brush_size", value })));
+        input = brushSizeGrid({ app, catalog, state, dispatch, element, button });
+        row.append(input); sync = input.refresh;
         break;
       case "layer_actions":
         row.classList.add("configuration-presets");

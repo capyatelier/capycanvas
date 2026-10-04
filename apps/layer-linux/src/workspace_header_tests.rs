@@ -1726,7 +1726,7 @@ fn native_header_drawer_controls_input() {
             ToolbarControl::Brush {
                 id: layer_core::DefaultBrushPreset::GPen as u32,
             },
-            ToolbarControl::Size { pixels: 32 },
+            ToolbarControl::Size { tenths: 300 },
         ]);
     for control in controls {
         let mut workspace = WorkspaceState {
@@ -1754,6 +1754,10 @@ fn native_header_drawer_controls_input() {
                 d.click_name(&name);
             }
             assert!(d.named("tool-drawer").is_mapped(), "{control:?}");
+            if control == (ToolbarControl::Panel { panel: Panel::Sizes }) {
+                assert!(!d.named("drawer-control-brush-size").is_mapped());
+                d.click_name("size-preset-1.5"); assert_eq!(state(&d.w).brush.diameter, 1.5);
+            }
             let bounds = d.named("tool-drawer").compute_bounds(&d.w.surface).unwrap();
             assert!(bounds.y() >= d.w.header.height() && bounds.x() >= 0.);
             d.click_name(&name);
@@ -1761,8 +1765,8 @@ fn native_header_drawer_controls_input() {
                 state(&d.w).customization.drawer.is_none(),
                 "repeat click closes {control:?}"
             );
-        } else if let ToolbarControl::Size { pixels } = control {
-            assert_eq!(state(&d.w).brush.diameter, pixels as f32);
+        } else if let ToolbarControl::Size { tenths } = control {
+            assert_eq!(state(&d.w).brush.diameter, tenths as f32 / 10.);
         }
     }
     d.finish();

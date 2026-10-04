@@ -327,7 +327,6 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-measure { position: fixed; left: -10000px; top: 0; visibility: hidden; pointer-events: none; contain: layout style; }
 .toolbar-controls[data-axis="vertical"] > .panel-grip svg { transform: translateY(-2px) rotate(90deg); }
 .brush-preview { width: 100%; height: 40px; object-fit: fill; border-radius: 3px; }
-.sizes-panel { container-type: inline-size; }
 .size-controls { display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
 .number-control { width: 100%; min-width: 0; font-size: var(--ui-text-size); }
 .number-header { display: flex; align-items: center; gap: 6px; }
@@ -357,13 +356,11 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .number-spin { background: var(--input); border-radius: var(--control-radius); overflow: hidden; }
 .number-spin .number-entry { width: 60px; height: 32px; }
 .panel select { background: var(--input); }
-.size-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 4px 2px; }
-@container (width < 174px) { .size-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
-@container (width < 130px) { .size-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-.size-cell { padding: 3px; }
-.panel .size-button { width: 100%; height: calc(36px + 1.42em); display: flex; flex-direction: column; align-items: stretch; gap: 4px; padding: 2px; font-size: inherit; font-weight: 400; line-height: 1.42; }
-.size-glyph { display: grid; place-items: center; height: 28px; flex: none; }
-.size-dot { display: block; border-radius: 50%; background: var(--text); margin: auto; }
+.size-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, var(--size-tile)), var(--size-tile))); gap: var(--size-gap); width: 100%; max-width: calc(var(--size-columns) * (var(--size-tile) + var(--size-gap)) - var(--size-gap)); }
+.panel .size-button { position: relative; width: 100%; height: var(--size-tile); min-height: 0; display: grid; place-items: center; padding: 0; font-size: .8em; font-weight: 400; }
+.size-dot { display: block; border-radius: 50%; background: var(--text); }
+.size-label { position: absolute; bottom: 0; left: 0; right: 0; height: var(--size-fade); display: grid; align-items: end; text-align: center; padding-bottom: 1px; background: linear-gradient(to top, var(--panel), transparent); pointer-events: none; }
+.size-button[aria-pressed=true] .size-label { background: linear-gradient(to top, var(--selection), transparent); }
 .layers-panel { padding: 0; display: flex; flex-direction: column; }
 .layer-header,.layer-footer { padding: 4px 6px; flex: none; }
 .layer-header { display: flex; flex-direction: column; gap: 2px; }

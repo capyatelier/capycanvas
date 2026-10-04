@@ -356,8 +356,8 @@ class AndroidInteractionTest {
 
     @Test fun columnResizeRetainsControlsAndReflowsAtNativeSize() {
         waitFor("resources ready", 60_000) { snapshot().optBoolean("shaders_ready") && !state().getJSONObject("filter_load").optBoolean("pending") }
-        for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER)) {
-            tool = pointer
+        for (theme in listOf("light", "dark")) for (pointer in listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER)) {
+            action(obj("type" to "set_theme", "theme" to theme)); tool = pointer
             for (panel in listOf("sizes", "toolbar", "navigator")) {
                 val configured = JSONObject(fixture.toString())
                 val bands = configured.getJSONObject("layout").getJSONArray("bands")
@@ -372,6 +372,11 @@ class AndroidInteractionTest {
                 action(obj("type" to "restore_workspace", "workspace" to configured))
                 assertNull(host.actionError)
                 val before = workspace()
+                if (panel == "sizes") {
+                    assertEquals(bounds("size-preset-0.7").top, bounds("size-preset-3").top, 1.1f)
+                    assertEquals(36 * density, bounds("size-preset-0.7").height, 1.1f)
+                    tap(bounds("size-preset-1.5").center); settle(); assertEquals(1.5f, state().getJSONObject("brush").number("diameter"), .001f)
+                }
                 val press = bounds("divider-40").center
                 val origin = bounds("workspace").left
                 val first = Offset(origin + (if (panel == "navigator") 220 else 120) * density, press.y)
@@ -390,9 +395,9 @@ class AndroidInteractionTest {
                     assertEquals(allocation.number("height") * density, shown.height, 1.1f)
                     positions.add(shown)
                     if (panel == "sizes") {
-                        val presets = host.catalog.array("brush_sizes").values()
-                        val firstPreset = bounds("size-preset-${(presets[0] as Number).toInt()}")
-                        val thirdPreset = bounds("size-preset-${(presets[2] as Number).toInt()}")
+                        val presets = host.catalog.getJSONObject("brush_size_grid").array("presets").objects()
+                        val firstPreset = bounds("size-preset-${presets[0].getString("label")}")
+                        val thirdPreset = bounds("size-preset-${presets[2].getString("label")}")
                         if (index == 0) assertTrue("Narrow presets wrap live", thirdPreset.top > firstPreset.top)
                         else assertEquals("Wide presets share a row", firstPreset.top, thirdPreset.top, 1.1f)
                     }
@@ -411,7 +416,7 @@ class AndroidInteractionTest {
                         assertEquals(shown.width - 16 * density, overview.width, 1.1f)
                     }
                     if (pointer == MotionEvent.TOOL_TYPE_MOUSE) {
-                        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/resize-$panel-$index.png")
+                        val file = File(instrumentation.targetContext.getExternalFilesDir(null), "validation/resize-$panel-$index-$theme.png")
                         file.parentFile!!.mkdirs()
                         instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
                             file.outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) }

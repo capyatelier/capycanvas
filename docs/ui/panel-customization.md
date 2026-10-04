@@ -299,6 +299,11 @@ no third-party code or assets are imported.
 
 ## Model
 
+Brush Sizes starts with Small tiles, six across in the standard column, and no
+slider. Its 40 presets span 0.7–2000 px. The number overlaps each circular preview
+over a fade from the bottom. Narrow columns wrap the tiles. Enable Brush Size in
+the panel configuration to show its slider; the drawer uses the same controls.
+
 - Built-in panel identities remain stable. Custom toolbar identities are allocated
   independently of their editable display names and can be docked/tabbed exactly
   like built-in panels. There is no fixed toolbar count.

@@ -952,8 +952,8 @@ pub fn tool_state(state: &UiState, control: ToolbarControl) -> (bool, bool) {
             true,
             state.brush.preset == id && state.layer_tools.tool == LayerCanvasTool::Paint,
         ),
-        ToolbarControl::Size { pixels } => {
-            (true, (state.brush.diameter - pixels as f32).abs() < 0.01)
+        ToolbarControl::Size { tenths } => {
+            (true, (state.brush.diameter - tenths as f32 / 10.).abs() < 0.01)
         }
         _ => (true, false),
     }

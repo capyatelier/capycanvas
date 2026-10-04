@@ -159,7 +159,7 @@ impl Body {
             Self::Settings(v) => v.refresh(w, state),
             Self::Color(v) => v.refresh(&state.preview_colors(), w.paint_view_color(), w.picker_headroom()),
             Self::Palettes(v) => v.refresh(state, w.paint_view_color(), w.picker_headroom()),
-            Self::Sizes(v) => v.refresh(w, &state.brush),
+            Self::Sizes(v) => v.refresh(w, state),
             Self::Layers(v) => v.refresh(state),
             Self::Navigator(v) => v.refresh(state),
             Self::Proof(v) => v.refresh(w, state),

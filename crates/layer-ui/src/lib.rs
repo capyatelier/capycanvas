@@ -196,8 +196,38 @@ pub const UI_TEXT_PT: u8 = 11;
 use serde::{Deserialize, Serialize};
 
 pub const BRUSH_SIZES: &[f32] = &[
-    2.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 32.0, 48.0, 64.0, 96.0, 128.0, 192.0, 256.0, 384.0, 512.0,
+    0.7, 1., 1.5, 2., 2.5, 3., 4., 5., 6., 7., 8., 10., 12., 15., 17., 20., 25.,
+    30., 40., 50., 60., 70., 80., 100., 120., 150., 170., 200., 250., 300., 400.,
+    500., 600., 700., 800., 1000., 1200., 1500., 1700., 2000.,
 ];
+
+#[derive(Clone, Debug, Serialize)]
+pub struct BrushSizePreset {
+    pub value: f32,
+    pub label: String,
+    pub preview_diameter: f32,
+}
+#[derive(Clone, Debug, Serialize)]
+pub struct BrushSizeGrid {
+    pub tile_size: f32,
+    pub gap: f32,
+    pub max_columns: u32,
+    pub fade_height: f32,
+    pub presets: Vec<BrushSizePreset>,
+}
+impl Default for BrushSizeGrid {
+    fn default() -> Self {
+        Self {
+            tile_size: TILE_SIZE,
+            gap: TILE_GAP,
+            max_columns: 6,
+            fade_height: TILE_SIZE / 2.,
+            presets: BRUSH_SIZES.iter().map(|&value| BrushSizePreset {
+                value, label: value.to_string(), preview_diameter: value.clamp(1., TILE_SIZE - 4.),
+            }).collect(),
+        }
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 pub struct BrushChoice {
@@ -214,7 +244,7 @@ pub enum ToolbarControl {
     ToolSlot { slot: ToolSlotId },
     Command { command: CommandId },
     Brush { id: u32 },
-    Size { pixels: u16 },
+    Size { tenths: u16 },
     Color,
     ColorPicker,
     Opacity,
@@ -319,6 +349,7 @@ pub struct UiCatalog {
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
     pub brush_sizes: &'static [f32],
+    pub brush_size_grid: BrushSizeGrid,
     pub brush_size: NumericControl,
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
@@ -356,6 +387,7 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
         tool_commands: &CommandId::TOOLS,
         brush_categories: tools::brush_categories_localized(localization).collect(),
         brush_sizes: BRUSH_SIZES,
+        brush_size_grid: BrushSizeGrid::default(),
         brush_size: NumericControl::brush_size(),
         opacity: NumericControl::percent(),
         layer_opacity: NumericControl::layer_opacity(),

@@ -1,3 +1,4 @@
+import { brushSizeGrid } from "./brush-sizes.js";
 import init, { WebApp, WebGpu, configure_raster_worker, automatic_tab_names } from "./pkg/layer_web.js";
 import { createRasterWorker } from "./raster-worker-client.js";
 import { createPaintPairIcon } from './color-controls.js';
@@ -50,7 +51,8 @@ const workspace = $("workspace"),
 // Workspace extent changes only with its viewport, not with panel content.
 // Retain it so chrome notifications do not force style/layout after DOM writes.
 let workspaceViewport = [workspace.clientWidth, workspace.clientHeight];
-const commands = new Map(), sizeButtons = new Map();
+const commands = new Map();
+let sizePresets;
 let app,
   catalog,
   bootstrap,
@@ -825,28 +827,9 @@ function buildPanels() {
   controls.dataset.control = "brush_size";
   const size = numberField(catalog.brush_size, catalog.native_copy.color.brush_size, value => dispatch({ type: "set_brush_size", value }));
   size.id = "size-number"; controls.append(size);
-  const grid = element("div", "size-grid");
+  const grid = brushSizeGrid({ app, catalog, state: () => state, dispatch, element, button });
   grid.dataset.control = "size_presets";
-  for (const value of catalog.brush_sizes) {
-    const choice = button(
-      "",
-      () => dispatch({ type: "set_brush_size", value }),
-      "size-button",
-    );
-    choice.title = `${value} px`;
-    choice.onpointerenter = () => { choice.title = app.action_tooltip(`${value} px`, { type: "set_brush_size", value }); };
-    choice.dataset.size = value;
-    const dot = element("span", "size-dot");
-    dot.style.width =
-      dot.style.height = `${Math.min(27, 2 + Math.sqrt(value) * 1.2)}px`;
-    const glyph = element("span", "size-glyph");
-    glyph.append(dot);
-    choice.append(glyph, element("span", "", String(value)));
-    const cell = element("div", "size-cell");
-    cell.append(choice);
-    grid.append(cell);
-    sizeButtons.set(value, choice);
-  }
+  sizePresets = grid;
   panels.get("sizes").append(controls, grid);
   palettes.mount(panels.get("palettes"));
   layerPanel = createLayerPanel({ app, catalog, state: () => state, panel: panels.get("layers"), element, button, icon, dispatch, applyChange, message, numberField, wake, dismissContext: () => customization.dismissContext(), openMenu: node => customization.openMenu(node), contentChanged: panelContentChanged });
@@ -881,10 +864,7 @@ function update(regions) {
   if (regions & 16) applyTheme(state.theme, state.palette);
   if (regions & (1 | 2 | 4 | 8 | 16 | 128)) customization.refresh();
   if (regions & 2) {
-    for (const [size, button] of sizeButtons) {
-      const pressed = String(size === state.brush.diameter);
-      if (button.getAttribute("aria-pressed") !== pressed) button.setAttribute("aria-pressed", pressed);
-    }
+    sizePresets.refresh();
     $("size-number").update(state.brush.diameter);
   }
   if (regions & 4) {

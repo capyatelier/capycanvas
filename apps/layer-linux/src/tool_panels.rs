@@ -496,55 +496,50 @@ impl ToolSettings {
 }
 
 pub fn size_grid(workspace: &Rc<Workspace>) -> (gtk::FlowBox, Vec<(f32, gtk::Button)>) {
-    let mut buttons = Vec::new();
+    let view = layer_ui::BrushSizeGrid::default();
     let grid = gtk::FlowBox::builder()
         .homogeneous(true)
         .min_children_per_line(2)
-        .max_children_per_line(4)
+        .max_children_per_line(view.max_columns)
         .selection_mode(gtk::SelectionMode::None)
-        .column_spacing(2)
-        .row_spacing(4)
+        .column_spacing(view.gap as u32)
+        .row_spacing(view.gap as u32)
         .build();
-    for &value in layer_ui::BRUSH_SIZES {
-        let button = workspace.action_button("", UiAction::SetBrushSize { value });
+    grid.add_css_class("size-grid");
+    grid.set_halign(gtk::Align::Start);
+    let buttons = view.presets.into_iter().map(|preset| {
+        let button = workspace.action_button("", UiAction::SetBrushSize { value: preset.value });
         button.add_css_class("flat");
         button.add_css_class("size-preset");
-        button.set_tooltip_text(Some(&format!("{value} px")));
-        let labels = gtk::Box::new(gtk::Orientation::Vertical, 4);
-        // A fixed-height native UI glyph, not a canvas/brush raster path.
-        // Font-size-dependent glyph ascent otherwise inflates every row.
-        let dot = gtk::DrawingArea::builder().height_request(28).build();
+        button.set_widget_name(&format!("size-preset-{}", preset.label));
+        button.set_tooltip_text(Some(&format!("{} px", preset.label)));
+        button.update_property(&[gtk::accessible::Property::Label(&format!("{} px", preset.label))]);
+        let preview = gtk::Overlay::new();
+        let dot = gtk::DrawingArea::builder().width_request(view.tile_size as i32).height_request(view.tile_size as i32).build();
         dot.set_draw_func(move |area, cr, width, height| {
             let color = area.color();
-            cr.set_source_rgba(
-                color.red() as f64,
-                color.green() as f64,
-                color.blue() as f64,
-                color.alpha() as f64,
-            );
-            cr.arc(
-                width as f64 * 0.5,
-                height as f64 * 0.5,
-                (2.0 + value.sqrt() * 1.2).min(27.0) as f64 * 0.5,
-                0.0,
-                std::f64::consts::TAU,
-            );
+            cr.set_source_rgba(color.red() as f64, color.green() as f64, color.blue() as f64, color.alpha() as f64);
+            cr.arc(width as f64 * 0.5, height as f64 * 0.5, preset.preview_diameter as f64 * 0.5, 0., std::f64::consts::TAU);
             let _ = cr.fill();
         });
-        labels.append(&dot);
-        let label = gtk::Label::new(Some(&value.to_string()));
-        label.add_css_class("caption");
-        labels.append(&label);
-        button.set_child(Some(&labels));
+        preview.set_child(Some(&dot));
+        let label = gtk::Label::new(Some(&preset.label));
+        label.add_css_class("size-label");
+        label.set_height_request(view.fade_height as i32);
+        label.set_valign(gtk::Align::End);
+        label.set_can_target(false);
+        preview.add_overlay(&label);
+        button.set_child(Some(&preview));
         grid.insert(&button, -1);
-        buttons.push((value, button));
-    }
+        (preset.value, button)
+    }).collect();
     (grid, buttons)
 }
 
 pub struct SizePanel {
     pub root: gtk::Box,
     number: NumberControl,
+    grid: gtk::FlowBox,
     buttons: Vec<(f32, gtk::Button)>,
 }
 impl SizePanel {
@@ -568,10 +563,15 @@ impl SizePanel {
         Self {
             root,
             number,
+            grid,
             buttons,
         }
     }
-    pub fn refresh(&self, workspace: &Workspace, brush: &layer_ui::BrushState) {
+    pub fn refresh(&self, workspace: &Workspace, state: &layer_ui::UiState) {
+        let brush = &state.brush;
+        let config = state.workspace.layout.panel(layer_ui::Panel::Sizes).unwrap();
+        self.number.set_visible(config.shows(layer_ui::PanelControl::BrushSize));
+        self.grid.set_visible(config.shows(layer_ui::PanelControl::SizePresets));
         self.number.set_caption(&workspace.localization().text(layer_ui::MessageId::WORKSPACE_CONTROL_BRUSH_SIZE), "", workspace.localization().clone());
         self.number.set_value(brush.diameter as f64);
         for (value, button) in &self.buttons {

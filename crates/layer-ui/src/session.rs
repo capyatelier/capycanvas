@@ -5878,15 +5878,15 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let old = s.panel_copy.iter().find(|(id, _)| *id == Panel::Toolbar).unwrap().1.clone();
         customize(&mut s, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
-        customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
+        customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { tenths: 600 }, selected: true });
         customize(&mut s, CustomizationAction::ConfirmTools);
         assert_eq!(customization::panel_view(s.state(), Panel::Toolbar, &old).unwrap_err(), "The tool no longer exists");
-        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().choice.control, ToolbarControl::Size { pixels: 64 });
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().choice.control, ToolbarControl::Size { tenths: 600 });
         let mut workspace = s.state.workspace.clone();
-        workspace.layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()[0].control = ToolbarControl::Size { pixels: 32 };
+        workspace.layout.panel_mut(Panel::Toolbar).unwrap().tiles_mut().unwrap()[0].control = ToolbarControl::Size { tenths: 300 };
         s.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) }).unwrap();
         assert_eq!(customization::panel_view(s.state(), Panel::Toolbar, &old).unwrap_err(), "The tool no longer exists");
-        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles[0].choice.control, ToolbarControl::Size { pixels: 32 });
+        assert_eq!(s.panel_view(Panel::Toolbar).unwrap().tiles[0].choice.control, ToolbarControl::Size { tenths: 300 });
     }
 
     #[test]
@@ -5913,7 +5913,7 @@ mod tests {
                 assert_panels(&s);
             }
             customize(&mut s, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
-            customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
+            customize(&mut s, CustomizationAction::PickerSelect { control: ToolbarControl::Size { tenths: 600 }, selected: true });
             customize(&mut s, CustomizationAction::ConfirmTools);
             assert_panels(&s);
             invoke(&mut s, CommandId::UndoWorkspace);
@@ -5921,7 +5921,7 @@ mod tests {
             invoke(&mut s, CommandId::RedoWorkspace);
             assert_panels(&s);
             let mut settings = s.state.settings.clone();
-            settings.shortcuts.insert("size.64".into(), vec![KeyChord::new("k", Modifiers::default())]);
+            settings.shortcuts.insert("size.60".into(), vec![KeyChord::new("k", Modifiers::default())]);
             s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
             assert_panels(&s);
             assert!(s.panel_view(Panel::Toolbar).unwrap().tiles.last().unwrap().tooltip.contains("K"));
@@ -5937,7 +5937,7 @@ mod tests {
         if !s.state.workspace.layout.header.entries().any(|entry| entry.item == HeaderItem::Settings) {
             s.dispatch(HeaderAction::Add { zone: HeaderZone::Right, before: None, item: HeaderItem::Settings }.action()).unwrap();
         }
-        for control in [ToolbarControl::Brush { id: s.state.brush.preset }, ToolbarControl::Size { pixels: 8 }, ToolbarControl::Panel { panel: Panel::Brushes }] {
+        for control in [ToolbarControl::Brush { id: s.state.brush.preset }, ToolbarControl::Size { tenths: 80 }, ToolbarControl::Panel { panel: Panel::Brushes }] {
             s.dispatch(HeaderAction::Add { zone: HeaderZone::Right, before: None, item: HeaderItem::Tool { control } }.action()).unwrap();
         }
         let view = s.header_view_with(false);
@@ -5979,7 +5979,7 @@ mod tests {
             name: None,
             tiles: vec![
                 customization::ToolbarTile { id: 901, control: ToolbarControl::Brush { id: brush } },
-                customization::ToolbarTile { id: 902, control: ToolbarControl::Size { pixels: 8 } },
+                customization::ToolbarTile { id: 902, control: ToolbarControl::Size { tenths: 80 } },
                 customization::ToolbarTile { id: 903, control: ToolbarControl::Panel { panel: Panel::Brushes } },
             ],
         };
@@ -6033,7 +6033,7 @@ mod tests {
         customize(&mut s, CustomizationAction::DeleteToolbar { panel: Panel::Toolbar });
         s.state.customization.picker = Some(customization::ToolPicker {
             destination: customization::ToolDestination::Insert { panel: Panel::Toolbar, before: None },
-            query: String::new(), selected: vec![ToolbarControl::Size { pixels: 8 }], error: None,
+            query: String::new(), selected: vec![ToolbarControl::Size { tenths: 80 }], error: None,
         });
         s.tool_picker(); s.toolbar_prompt(); s.toolbar_manager();
         let retained = {
@@ -7071,7 +7071,7 @@ mod tests {
         let mut library = source.clone();
         if let PanelContent::Toolbar { name, tiles } = &mut library.content {
             *name = Some("Library Tools".into());
-            tiles[0].control = ToolbarControl::Size { pixels: 20 };
+            tiles[0].control = ToolbarControl::Size { tenths: 200 };
         }
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
         invoke(&mut s, CommandId::ZenMode);
@@ -7084,7 +7084,7 @@ mod tests {
         let installed = s.state.workspace.layout.panel(copy).unwrap();
         assert_eq!(
             installed.tiles()[0].control,
-            ToolbarControl::Size { pixels: 20 }
+            ToolbarControl::Size { tenths: 200 }
         );
         assert!(
             installed
@@ -7093,7 +7093,7 @@ mod tests {
                 .all(|tile| source.tiles().iter().all(|old| old.id != tile.id))
         );
         if let PanelContent::Toolbar { tiles, .. } = &mut library.content {
-            tiles[0].control = ToolbarControl::Size { pixels: 30 };
+            tiles[0].control = ToolbarControl::Size { tenths: 300 };
         }
         let placement = s.state.workspace.layout.panel_group(copy);
         s.install_workspace_toolbar(library, Some(copy), None, false)
@@ -15838,49 +15838,19 @@ mod tests {
     fn tile_activation_uses_live_core_commands_and_stale_drag_ids_are_rejected() {
         let mut app = session(Platform::Gtk);
         customize(&mut app, CustomizationAction::InsertTools { panel: Panel::Toolbar, before: None });
-        customize(&mut app, CustomizationAction::PickerSelect { control: ToolbarControl::Size { pixels: 64 }, selected: true });
-        customize(&mut app, CustomizationAction::PickerSelect { control: ToolbarControl::Command { command: CommandId::ToggleTheme }, selected: true });
+        for control in [ToolbarControl::Size { tenths: 15 }, ToolbarControl::Command { command: CommandId::ToggleTheme }] {
+            customize(&mut app, CustomizationAction::PickerSelect { control, selected: true });
+        }
         customize(&mut app, CustomizationAction::ConfirmTools);
-        let tiles = app
-            .state
-            .workspace
-            .layout
-            .panel(Panel::Toolbar)
-            .unwrap()
-            .tiles()
-            .to_vec();
-        app.dispatch(UiAction::ActivateTile {
-            panel: Panel::Toolbar,
-            tile: tiles[TOOLBAR_CONTROLS.len()].id,
-        })
-        .unwrap();
-        assert_eq!(app.state.brush.diameter, 64.0);
-        assert!(
-            app.panel_view(Panel::Toolbar).unwrap().tiles[TOOLBAR_CONTROLS.len()]
-                .choice
-                .selected
-        );
-        app.dispatch(UiAction::ActivateTile {
-            panel: Panel::Toolbar,
-            tile: tiles[TOOLBAR_CONTROLS.len() + 1].id,
-        })
-        .unwrap();
-        assert!(
-            app.panel_view(Panel::Toolbar).unwrap().tiles[TOOLBAR_CONTROLS.len() + 1]
-                .choice
-                .selected
-        );
-        customize(&mut app, CustomizationAction::RemoveTool {
-            panel: Panel::Toolbar,
-            tile: tiles[TOOLBAR_CONTROLS.len()].id,
-        });
-        assert!(
-            app.dispatch(UiAction::ActivateTile {
-                panel: Panel::Toolbar,
-                tile: tiles[TOOLBAR_CONTROLS.len()].id
-            })
-            .is_err()
-        );
+        let tiles = app.state.workspace.layout.panel(Panel::Toolbar).unwrap().tiles().to_vec();
+        for index in TOOLBAR_CONTROLS.len()..tiles.len() {
+            app.dispatch(UiAction::ActivateTile { panel: Panel::Toolbar, tile: tiles[index].id }).unwrap();
+            assert!(app.panel_view(Panel::Toolbar).unwrap().tiles[index].choice.selected);
+        }
+        assert_eq!(app.state.brush.diameter, 1.5);
+        let tile = tiles[TOOLBAR_CONTROLS.len()].id;
+        customize(&mut app, CustomizationAction::RemoveTool { panel: Panel::Toolbar, tile });
+        assert!(app.dispatch(UiAction::ActivateTile { panel: Panel::Toolbar, tile }).is_err());
     }
     #[test]
     fn tiles_toggle_drawers_and_explicit_color_open_is_idempotent() {
@@ -16951,7 +16921,7 @@ mod tests {
     fn size_shortcuts_and_momentary_pan_use_the_same_keymap() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::KeyboardShortcuts);
-        record_shortcut(&mut s, "size.48", "k", false);
+        record_shortcut(&mut s, "size.1.5", "k", false);
         preference(&mut s, PreferenceAction::ConfirmShortcut { replace: false });
         let shift = KeyChord::new("shift", Modifiers::default());
         preference(&mut s, PreferenceAction::AddModifierKey);
@@ -16967,7 +16937,7 @@ mod tests {
         );
         key(&mut s, "k", false, false, true);
         assert!(key(&mut s, "k", true, false, false).handled);
-        assert_eq!(s.state.brush.diameter, 48.0);
+        assert_eq!(s.state.brush.diameter, 1.5);
         assert!(key(&mut s, " ", true, false, false).pan_cursor);
         key(&mut s, " ", false, false, false);
         assert!(key(&mut s, "shift_l", true, false, false).pan_cursor);
