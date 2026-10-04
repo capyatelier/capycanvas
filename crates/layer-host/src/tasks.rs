@@ -24,18 +24,17 @@ pub struct Preview {
 
 pub fn compare(
     gpu: &SnapshotGpu,
-    projects: [(&Project, [f32; 4]); 2],
+    projects: [&Project; 2],
     time: f32,
     space: RgbSpace,
     control: CaptureControl,
 ) -> Result<Vec<Preview>, String> {
     projects
         .into_iter()
-        .map(|(project, background)| {
+        .map(|project| {
             let mut snapshot = gpu
                 .capture(
                     project.clone(),
-                    background,
                     time,
                     control.clone(),
                 )
@@ -144,7 +143,6 @@ impl ColorTask {
                 self.gpu
                     .capture(
                         self.workflow.original.clone(),
-                        self.view.background_rgba_linear,
                         self.time,
                         control.clone(),
                     )
@@ -167,20 +165,19 @@ impl ColorTask {
             .candidate
             .as_ref()
             .ok_or("Color candidate is missing")?;
-        let mut view = self.view;
+        let view = self.view;
         let mut brush = self.brush.clone();
         layer_render::remap_document_colors(
             self.workflow.original.document.color.space,
             project.document.color.space,
             &mut brush,
-            &mut view,
         );
         if !self.workflow.is_history() {
             self.previews = compare(
                 &self.gpu,
                 [
-                    (&self.workflow.original, self.view.background_rgba_linear),
-                    (project, view.background_rgba_linear),
+                    &self.workflow.original,
+                    project,
                 ],
                 self.time,
                 self.space,
@@ -261,7 +258,6 @@ pub struct SourceTask {
     converted: Option<Arc<SourceImage>>,
     gpu: SnapshotGpu,
     device: wgpu::Device,
-    background: [f32; 4],
     time: f32,
     space: RgbSpace,
     clipped: u64,
@@ -296,7 +292,6 @@ impl SourceTask {
             converted: None,
             gpu: gpu.snapshot_gpu(),
             device: gpu.device().clone(),
-            background: session.engine().view().background_rgba_linear,
             time: session.engine().animation_time(),
             space,
             clipped: 0,
@@ -346,8 +341,8 @@ impl SourceTask {
         self.previews = compare(
             &self.gpu,
             [
-                (&self.workflow.project, self.background),
-                (candidate, self.background),
+                &self.workflow.project,
+                candidate,
             ],
             self.time,
             self.space,

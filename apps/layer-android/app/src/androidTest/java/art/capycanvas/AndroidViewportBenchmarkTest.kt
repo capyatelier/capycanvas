@@ -63,7 +63,7 @@ class AndroidViewportBenchmarkTest {
             } else host.newDocument(args.getString("width")?.toInt() ?: size, args.getString("height")?.toInt() ?: size)
             if (levelsStatistics) {
                 host.drain()
-                val photo = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getBoolean("can_rename") && !it.getBoolean("selected") }.getLong("id")
+                val photo = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getLong("id") == 1L }.getLong("id")
                 host.drain(obj("type" to "select_layer", "id" to photo))
                 host.drain(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "levels")))
             }
@@ -79,7 +79,7 @@ class AndroidViewportBenchmarkTest {
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") == "placement" }
                 scenario.onActivity { host.invoke("apply_transform") }
                 waitFor { host.snapshot?.getJSONObject("state")?.optJSONObject("canvas_bar")?.optJSONObject("context")?.optString("kind") != "placement" }
-                val ink = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getBoolean("can_rename") && !it.getBoolean("selected") }.getLong("id")
+                val ink = host.snapshot!!.getJSONObject("state").array("layers").objects().single { it.getLong("id") == 1L }.getLong("id")
                 scenario.onActivity { host.dispatch(obj("type" to "select_layer", "id" to ink)); host.invoke("raise_layer") }
             }
             scenario.onActivity { blending?.let { host.invoke("blend_$it") }; host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }

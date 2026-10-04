@@ -49,7 +49,6 @@ fn view(matrix: [f32; 6]) -> ViewState {
         width_px: 320,
         height_px: 240,
         document_to_surface: matrix,
-        background_rgba_linear: [1.; 4],
     }
 }
 

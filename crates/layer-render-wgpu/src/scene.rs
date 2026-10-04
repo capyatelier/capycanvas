@@ -468,7 +468,11 @@ impl Scene {
             .ok_or(GpuRasterError::MissingPaintLayer(id))?;
         let geometry = layer_core::target_geometry(layers,id);
         let extent = layer.local_extent(r.document_extent);
-        let page = if layer.id == id {
+        let page = if layer.id == id && let Some(color) = layer.effect.as_ref().and_then(|effect| effect.constant_color()) {
+            let [red, green, blue, alpha] = color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?;
+            self.alloc(r, wgpu::Color { r: (red * alpha) as f64, g: (green * alpha) as f64,
+                b: (blue * alpha) as f64, a: alpha as f64 })
+        } else if layer.id == id {
             self.placed_raw_plane(r, layer, geometry, coordinate, layer_core::raster::RasterPlane::Color, extent)?
         } else {
             let mask = layer.mask.as_ref().unwrap();
@@ -966,6 +970,8 @@ impl Scene {
         let layer = &packet.layers[index];
         let out = if layer.kind == LayerKind::Group {
             self.group(r, packet, Some(layer.id), tile)?
+        } else if let Some(color) = layer.effect.as_ref().and_then(|effect| effect.constant_color()) {
+            self.alloc(r, composite_color(r, packet, color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?))
         } else if layer.kind == LayerKind::Effect {
             let input = self.alloc(r, wgpu::Color::TRANSPARENT);
             // Generator coverage is applied below with ordinary layer masks.
@@ -1053,6 +1059,20 @@ impl Scene {
         target: usize,
     ) -> Result<bool, GpuRasterError> {
         let layer = &packet.layers[index];
+        if layer.properties.blend == layer_core::LayerBlend::Normal
+            && !layer.mask.as_ref().is_some_and(|mask| mask.enabled)
+            && let Some(color) = layer.effect.as_ref().and_then(|effect| effect.constant_color())
+            && let Some(Job::Clear(view, back)) = self.jobs.last_mut()
+            && *view == self.pool[target].view
+        {
+            let mut color = color.linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?;
+            color[3] *= layer.opacity;
+            let front = composite_color(r, packet, color);
+            let weight = 1. - front.a;
+            *back = wgpu::Color { r: front.r + back.r * weight, g: front.g + back.g * weight,
+                b: front.b + back.b * weight, a: front.a + back.a * weight };
+            return Ok(true);
+        }
         if layer.kind != LayerKind::Paint
             || layer.properties.blend != layer_core::LayerBlend::Normal
         {
@@ -2114,7 +2134,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effec
         if !layer.visible {
             continue;
         }
-        if let Some(effect) = &layer.effect {
+        if let Some(effect) = layer.effect.as_ref().filter(|effect| effect.constant_color().is_none()) {
             if effect.program.image_boundary() {
                 for pass in 0..effect.program.passes.len().max(1) {
                     result.push((vec![layer], effects::Execution::Image(pass)));
@@ -2128,7 +2148,7 @@ pub(super) fn startup_effect_chains(layers: &[Layer]) -> Vec<(Vec<&Layer>, effec
         let mut siblings = layers
             .iter()
             .rev()
-            .filter(|l| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
+            .filter(|l| l.properties.parent == parent && l.is_artwork())
             .peekable();
         while let Some(layer) = siblings.next() {
             if !layer.visible || !direct_effect_mask(layers, layer) || !fusable_adjustment(layer) {

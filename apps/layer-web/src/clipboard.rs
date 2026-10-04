@@ -47,7 +47,7 @@ async fn copy(
     };
     let mut snapshot = task
         .gpu
-        .capture(capture.project.clone(), capture.background, capture.time, control.clone())
+        .capture(capture.project.clone(), capture.time, control.clone())
         .map_err(js)?;
     let buffers = js_sys::Array::new();
     let guide = if rendition.is_some() {

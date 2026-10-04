@@ -422,7 +422,7 @@ impl Document {
     fn shifted_roots(&self, origin: [i32; 2]) -> Vec<Layer> {
         let origin = Point { x: origin[0] as f32, y: origin[1] as f32 };
         let mut layers = self.layers.clone();
-        for layer in layers.iter_mut().filter(|l| l.properties.parent.is_none() && l.kind != LayerKind::Background) {
+        for layer in layers.iter_mut().filter(|l| l.properties.parent.is_none()) {
             layer.properties.offset = shift(layer.properties.offset, origin);
             if let Some(mask) = &mut layer.mask {
                 mask.offset = shift(mask.offset, origin);
@@ -508,7 +508,7 @@ impl Document {
             }
             let paint = (layer.kind == LayerKind::Paint).then_some(layer.id);
             let paint_targets: Vec<_> = paint.into_iter().chain(layer.mask.as_ref().map(|m| m.id)).collect();
-            if paint_targets.is_empty() || matches!(layer.kind, LayerKind::Background | LayerKind::Selection) {
+            if paint_targets.is_empty() || matches!(layer.kind, LayerKind::Selection) {
                 changes.push(None);
                 continue;
             }
@@ -545,9 +545,6 @@ impl Document {
         let mut operations = Vec::new();
         let mut predicted = BTreeMap::new();
         for (index, old) in self.layers.iter().enumerate() {
-            if old.kind == LayerKind::Background {
-                continue;
-            }
             let parents = shift(target_offset(&layers, old.id), layers[index].properties.offset);
             if old.kind == LayerKind::Selection {
                 if let Some(selection) = &old.selection {

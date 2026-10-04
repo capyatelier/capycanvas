@@ -1188,7 +1188,6 @@ pub struct LayerState {
     pub quick_mask: bool,
     pub can_rename: bool,
     pub content_icon: Option<String>,
-    pub content_icon_color: Option<HexColor>,
     pub label: String,
     pub description: String,
     pub can_delete: bool,
@@ -1211,7 +1210,6 @@ pub struct LayerState {
     pub clipped: bool,
     pub reference: bool,
     pub group: bool,
-    /// Paper is the bottom anchor; dropping there always inserts above it.
     pub can_drop_below: bool,
     pub depth: u32,
     pub collapsed: bool,

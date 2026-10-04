@@ -32,7 +32,6 @@ fn samples(app: &App) -> Vec<[f32; 4]> {
         .snapshot_gpu()
         .capture(
             project,
-            s.engine().view().background_rgba_linear,
             0.,
             Default::default(),
         )

@@ -133,21 +133,20 @@ impl<B: CanvasRenderer> UiSession<B> {
         let doc = self.engine.document();
         let replacing = self.filter_drawer_open() && doc.layer(doc.active_layer).is_some_and(|l| l.effect.is_some());
         let Some(current) = doc.layer(doc.active_layer) else { return Ok(false); };
-        let target = if replacing {
-            doc.layers.iter().skip_while(|l| l.id != current.id).skip(1)
-                .find(|l| l.properties.parent == current.properties.parent).map(|l| l.id)
-        } else if self.filter_drawer_open() {
-            Some(current.id)
-        } else { doc.clipping_stack_top(current.id) }.ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?;
+        let source = if replacing {
+            layer_render::FilterPreviewSource::EffectInput(current.id)
+        } else {
+            layer_render::FilterPreviewSource::LayerStack(if self.filter_drawer_open() { current.id }
+                else { doc.clipping_stack_top(current.id).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())? })
+        };
         let request = layer_render::FilterPreviewRequest {
             request_id,
-            target,
+            source,
             size,
             extent: [doc.width, doc.height],
             view: self.engine.view(),
             blend_space: doc.blend_space,
-            layers: doc.layers.iter().filter(|l| !replacing || l.id != current.id)
-                .map(Layer::composite_snapshot).collect(),
+            layers: doc.layers.iter().map(Layer::composite_snapshot).collect(),
             filters: filters
                 .into_iter()
                 .take(8)
@@ -564,16 +563,6 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
             });
         }
         resource_label(&effect.program.label, l).to_string()
-    } else if layer.kind == LayerKind::Background {
-        let paper = layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE);
-        controls.push(PropertyControl {
-            color_action: Some(UiAction::Effect { action: EffectAction::UseCurrentColor {
-                layer: layer.id.0, key: "paper_color".into(),
-            } }),
-            ..PropertyControl::new("paper_color", &l.text(MessageId::RESOURCES_PAPER_COLOR), PropertyKind::Color,
-                EffectValue::Color(paper), EffectValue::Color(layer_core::color::RgbColor::WHITE))
-        });
-        String::new()
     } else {
         let mut numeric = NumericControl::percent();
         numeric.default_value = Some(1.);
@@ -1099,22 +1088,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .is_some_and(|l| l.effect.is_none())
                 {
                     return match (key.as_str(), value) {
-                        ("paper_color", EffectValue::Color(color)) => {
-                            color.validate_working_spaces()?;
-                            let doc = self.engine.document();
-                            let mut layer = doc.layer(LayerId(id)).unwrap().clone();
-                            if layer.kind != LayerKind::Background || doc.is_locked(layer.id) {
-                                return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PAPER_LOCKED).to_string());
-                            }
-                            layer.properties.paper_color = Some(color);
-                            let edit = Edit::ReplaceLayer(Box::new(layer));
-                            if self.effect_gesture.is_some() {
-                                self.engine.preview_edit(edit).map_err(error)?;
-                            } else {
-                                self.layer_edit(edit)?;
-                            }
-                            Ok(())
-                        }
                         ("opacity", EffectValue::Number(opacity)) => {
                             self.set_layer_opacity(Some(id), opacity)
                         }

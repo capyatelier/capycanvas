@@ -41,18 +41,9 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.require_color_idle()?;
         let old = self.document().color;
         let target = prepared.document().color;
-        // Tool colors and the canvas background keep their color appearance;
-        // the document operation only changes artwork interpretation/backing.
         let mut brush = self.settings.brush.clone();
-        let mut view = self.view;
-        layer_render::remap_document_colors(old.space, target.space, &mut brush, &mut view);
+        layer_render::remap_document_colors(old.space, target.space, &mut brush);
         brush.validate().map_err(DocumentError::InvalidBrush)?;
-        if !view.background_rgba_linear.iter().all(|v| v.is_finite()) {
-            return Err(DocumentError::InvalidLayerOperation(
-                "Canvas background exceeds finite color precision",
-            )
-            .into());
-        }
         self.editor.commit_color_transition(prepared, |document| {
             if !self
                 .backend
@@ -66,7 +57,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             Ok(())
         })?;
         self.settings.brush = brush;
-        self.view = view;
         self.dab_generator.set_space(target.space);
         self.dab_generator.reset();
         self.completed_stroke = None;

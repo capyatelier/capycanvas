@@ -871,7 +871,7 @@ fn a_zone_plate_reduced_to_an_eighth_matches_an_area_reduction() {
     document.layers[1].visible = false;
     document.layers[0].source = Some(zone_plate());
     document.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(EIGHTH);
-    let mut capture = r.snapshot_gpu().capture(layer_core::Project { document }, [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = r.snapshot_gpu().capture(layer_core::Project { document }, 0., Default::default()).unwrap();
     let exported = capture.read_region([0, 0, size, size]).unwrap();
     let placed = largest_difference(exported.iter().map(|p| p[0]), &expected);
     assert!(placed < 1e-3, "exact capture of a photo placed at an eighth: {placed} from the area reduction");

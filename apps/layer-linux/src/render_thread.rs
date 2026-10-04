@@ -972,7 +972,7 @@ impl CanvasRenderer for RenderWorker {
 }
 
 struct Worker {
-    paper_submitted: bool,
+    backdrop_submitted: bool,
     paper_ready: Arc<AtomicBool>,
     // Drop Vulkan's surface before the wl_surface (field declaration order).
     surface: wgpu::Surface<'static>,
@@ -1426,7 +1426,7 @@ impl Worker {
                         self.inject_validation_failure();
                     }
                     if !self.renderer.can_submit() || !pending_frames.is_empty()
-                        || !self.renderer.raster_dependencies_ready(frame.packet()) || self.paper_submitted
+                        || !self.renderer.raster_dependencies_ready(frame.packet()) || self.backdrop_submitted
                         && (!startup_progress.canvas_ready
                             || (!frame.dabs.is_empty() && !startup_progress.brush_ready))
                     {
@@ -1435,15 +1435,15 @@ impl Worker {
                     }
                     #[cfg(test)]
                     timing.begin(frame.queued_ns);
-                    let paper = !self.paper_submitted;
+                    let backdrop = !self.backdrop_submitted;
                     self.draw(
                         &mut frame,
-                        paper,
+                        backdrop,
                         #[cfg(test)]
                         &mut timing,
                     )?;
                     last_canvas_frame = std::time::Instant::now();
-                    if paper {
+                    if backdrop {
                         pending_frames.push_back(frame);
                     } else {
                         document_drawn = true;
@@ -1578,7 +1578,7 @@ impl Worker {
         presenter.prepare_overviews(&renderer);
         Ok(Self {
             view_color,
-            paper_submitted: false,
+            backdrop_submitted: false,
             paper_ready: Arc::new(AtomicBool::new(false)),
             surface,
             instance,
@@ -1675,7 +1675,7 @@ impl Worker {
     fn draw(
         &mut self,
         frame: &mut Frame,
-        paper: bool,
+        backdrop: bool,
         #[cfg(test)] timing: &mut crate::timing::Timing,
     ) -> Result<(), String> {
         let draw_start = std::time::Instant::now();
@@ -1693,17 +1693,12 @@ impl Worker {
             .map_err(error)?;
         let _presentation = self.renderer.prioritize_raster_presentation();
         #[cfg(test)]
-        if !paper && frame.layers.iter().any(|layer| layer.raster.try_data().is_none()
+        if !backdrop && frame.layers.iter().any(|layer| layer.raster.try_data().is_none()
             || layer.masks().any(|mask| mask.raster.try_data().is_none())) {
             timing.raster_commit();
         }
-        if paper {
-            let layers: Vec<_> = frame
-                .layers
-                .iter()
-                .filter(|l| l.kind == layer_core::LayerKind::Background)
-                .cloned()
-                .collect();
+        if backdrop {
+            let layers = layer_core::constant_backdrop(&frame.layers);
             self.renderer
                 .submit(FramePacket {
                     layers: &layers,
@@ -1715,7 +1710,7 @@ impl Worker {
                     ..frame.packet()
                 })
                 .map_err(error)?;
-            self.paper_submitted = true;
+            self.backdrop_submitted = true;
         } else {
             self.renderer.submit(frame.packet()).map_err(error)?;
             if self.renderer.has_pending_submission() { frame.pending_rasters.clear(); }
@@ -1750,7 +1745,7 @@ impl Worker {
         if let Some(target) = target {
             self.publish(
                 target,
-                frame.stroke_target.filter(|_| !paper),
+                frame.stroke_target.filter(|_| !backdrop),
                 #[cfg(test)]
                 Some(timing),
             )?;

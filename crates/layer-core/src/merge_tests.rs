@@ -95,9 +95,9 @@ fn merge_down_refuses_with_a_reason() {
         doc.merge_refusal(MergeKind::Down)
     };
     assert_eq!(refusal(&|_| {}), None);
-    assert_eq!(refusal(&|d| drop(d.layers.remove(1))), Some(R::PaperBelow));
-    assert_eq!(refusal(&|d| activate(d, "Lower")), Some(R::PaperBelow));
-    assert_eq!(refusal(&|d| d.active_layer = PAPER), Some(R::Paper));
+    assert_eq!(refusal(&|d| drop(d.layers.remove(1))), None);
+    assert_eq!(refusal(&|d| activate(d, "Lower")), None);
+    assert_eq!(refusal(&|d| d.active_layer = PAPER), Some(R::NoLayerBelow));
     assert_eq!(refusal(&|d| d.active_layer = LayerId(99)), Some(R::NoLayer));
     assert_eq!(refusal(&|d| layer_mut(d, "Upper").visible = false), Some(R::Hidden));
     assert_eq!(refusal(&|d| layer_mut(d, "Upper").properties.blend = LayerBlend::Multiply), Some(R::NotNormal));
@@ -240,15 +240,16 @@ fn merge_visible_keeps_hidden_layers_and_releases_their_clipping() {
         layer_mut(&mut doc, name).visible = false;
     }
     layer_mut(&mut doc, "Top").properties.blend = LayerBlend::Multiply;
-    assert_eq!(baked(&doc, MergeKind::Visible), ["Top", "Base", "Bottom"]);
+    assert_eq!(baked(&doc, MergeKind::Visible), ["Top", "Base", "Bottom", "Paper"]);
     merged(&mut doc, MergeKind::Visible);
-    assert_eq!(names(&doc), ["Hidden clip", "Hidden", "Bottom", "Paper"]);
+    assert_eq!(names(&doc), ["Hidden clip", "Hidden", "Paper"]);
     assert!(!doc.layer(id(&doc, "Hidden clip")).unwrap().properties.clipped);
-    assert_eq!(doc.layer(LayerId(100)).unwrap().name.as_ref(), "Bottom");
+    assert_eq!(doc.layer(LayerId(100)).unwrap().name.as_ref(), "Paper");
 
     let mut doc = document(&["Clip", "Base"]);
     layer_mut(&mut doc, "Clip").properties.clipped = true;
     layer_mut(&mut doc, "Base").visible = false;
+    layer_mut(&mut doc, "Paper").visible = false;
     assert_eq!(doc.merge_refusal(MergeKind::Visible), Some(MergeRefusal::NothingVisible), "a hidden base hides its clips");
     layer_mut(&mut doc, "Base").visible = true;
     layer_mut(&mut doc, "Clip").properties.locked = true;
@@ -257,7 +258,7 @@ fn merge_visible_keeps_hidden_layers_and_releases_their_clipping() {
 }
 
 #[test]
-fn flatten_discards_hidden_layers_and_keeps_paper_and_selection_layers() {
+fn flatten_bakes_fill_layers_and_keeps_selection_layers() {
     let mut doc = document(&["Visible", "Hidden", "Group", "Hidden child", "Shown child", "Saved"]);
     nest(&mut doc, "Group", &["Hidden child", "Shown child"]);
     layer_mut(&mut doc, "Group").visible = false;
@@ -273,7 +274,7 @@ fn flatten_discards_hidden_layers_and_keeps_paper_and_selection_layers() {
     assert_eq!(doc.flatten_discards(), 2, "a hidden group counts once");
     let before = doc.clone();
     let undo = merged(&mut doc, MergeKind::Flatten);
-    assert_eq!(names(&doc), ["Visible", "Saved", "Paper"]);
+    assert_eq!(names(&doc), ["Saved", "Paper"]);
     assert_eq!(doc.layer(LayerId(100)).unwrap().properties.extent, None);
     doc.apply(undo).unwrap();
     assert_eq!(doc.layers, before.layers);
@@ -281,6 +282,7 @@ fn flatten_discards_hidden_layers_and_keeps_paper_and_selection_layers() {
     assert_eq!(doc.merge_refusal(MergeKind::Flatten), Some(MergeRefusal::Locked), "discarding needs unlocked layers");
     let mut empty = document(&["Hidden"]);
     layer_mut(&mut empty, "Hidden").visible = false;
+    layer_mut(&mut empty, "Paper").visible = false;
     assert_eq!(empty.merge_refusal(MergeKind::Flatten), Some(MergeRefusal::NothingVisible));
 }
 
@@ -291,7 +293,7 @@ fn stamp_visible_adds_a_top_layer_and_keeps_every_member() {
     layer_mut(&mut doc, "Bottom").properties.locked = true;
     doc.reference_layers = [id(&doc, "Top")].into();
     activate(&mut doc, "Bottom");
-    assert_eq!(baked(&doc, MergeKind::Stamp), ["Top", "Bottom"]);
+    assert_eq!(baked(&doc, MergeKind::Stamp), ["Top", "Bottom", "Paper"]);
     merged(&mut doc, MergeKind::Stamp);
     assert_eq!(names(&doc), ["Visible", "Top", "Hidden", "Bottom", "Paper"]);
     assert_eq!(doc.active_layer, LayerId(100));

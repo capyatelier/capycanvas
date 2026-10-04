@@ -1,7 +1,7 @@
 use super::{Handle, PortableId, Store};
 use crate::{BlendSpace, EffectProgram, EffectValue, ImageResolution, LayerBlend, LayerPlacement,
     PhotoMetadata, Point, Projective, RulerGeometry, Selection, SelectionMaskProperties,
-    color::{DocumentColor, ProofRecipe, RgbColor, hdr::SdrRendition, source::SourceImage}, raster::RasterRevision};
+    color::{DocumentColor, ProofRecipe, hdr::SdrRendition, source::SourceImage}, raster::RasterRevision};
 use std::{collections::BTreeMap, sync::Arc};
 
 pub type CompositionHandle = Handle<Composition>;
@@ -45,7 +45,7 @@ pub struct Composition {
 pub struct Stack { pub entries: Vec<OccurrenceHandle> }
 #[derive(Clone, Debug, PartialEq)]
 pub enum OccurrenceContent {
-    Paint(PaintHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle), Paper(RgbColor),
+    Paint(PaintHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Occurrence {
@@ -182,7 +182,6 @@ impl Artwork {
                 OccurrenceContent::Stack(handle)=>Content::Group(id(&self.stacks,handle)?),
                 OccurrenceContent::Effect(handle)=>Content::Effect(id(&self.effects,handle)?),
                 OccurrenceContent::Selection(handle)=>Content::Selection(id(&self.selections,handle)?),
-                OccurrenceContent::Paper(_)=>Content::Paper,
             };
             insert(identity,Shape::Occurrence {content,mask:occurrence.mask.as_ref().map(|mask|id(&self.coverage,mask.source)).transpose()?})?;
         }

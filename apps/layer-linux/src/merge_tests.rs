@@ -77,7 +77,7 @@ fn native_flatten_image_confirms_discarding_hidden_layers() {
     assert_eq!(button.label().as_deref(), Some("Flatten"));
     input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
     until(
-        || document(&w).layers.iter().filter(|l| l.kind != layer_core::LayerKind::Background).count() == 1,
+        || document(&w).layers.iter().filter(|l| l.id != layer_core::LayerId(2)).count() == 1,
         "Flatten leaves one layer over the paper",
     );
     assert!(document(&w).layer(hidden).is_none(), "the hidden layer is discarded");
@@ -100,7 +100,7 @@ fn native_stamp_visible_adds_the_visible_image_on_top() {
     until(|| document(&w).layers.len() == before.layers.len() + 1, "Stamp Visible adds a layer");
     let doc = document(&w);
     assert_eq!((doc.layers[0].id, doc.layers[0].name.as_ref()), (doc.active_layer, "Visible"));
-    for layer in before.layers.iter().filter(|l| l.kind != layer_core::LayerKind::Background) {
+    for layer in before.layers.iter().filter(|l| l.id != layer_core::LayerId(2)) {
         w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: layer.id.0, value: false } });
     }
     pump(300);
@@ -116,7 +116,7 @@ fn native_stamp_visible_adds_the_visible_image_on_top() {
 fn native_merge_timing() {
     let app = native_test_app("art.capycanvas.MergeTiming");
     let mut project = native_navigation::photo([6000, 4000]);
-    project.document.layers.retain(|layer| layer.source.is_some() || layer.kind == layer_core::LayerKind::Background);
+    project.document.layers.retain(|layer| layer.source.is_some() || layer.id == layer_core::LayerId(2));
     let w = Workspace::with_project(&app, Some((project, None)));
     w.window.maximize();
     w.window.present();

@@ -40,7 +40,7 @@ fn raster(plane: RasterPlane, color: DocumentColor, coverage: impl Fn(u32, u32) 
 fn document(color: DocumentColor) -> Document {
     let mut document = Document::new("bounds", 128, 128, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = color;
-    document.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    document.layers.retain(|layer| layer.id != layer_core::LayerId(2));
     document
 }
 
@@ -216,13 +216,15 @@ fn transparent_offcanvas_photo_does_not_expand_paper_coverage() {
     document.layers[0].properties.offset = Point { x: -80., y: -70. };
     assert_eq!(bounds(&renderer, &document, ContentScope::All), rect(0., 0., 128., 96.));
     assert_eq!(bounds(&renderer, &document, ContentScope::Visible), rect(0., 0., 128., 96.));
-    let paper = document.layers.iter_mut().find(|layer| layer.kind == layer_core::LayerKind::Background).unwrap();
-    paper.properties.paper_color = Some(layer_core::color::RgbColor { rgba: [1., 1., 1., 0.], ..layer_core::color::RgbColor::WHITE });
+    let paper = document.layers.iter_mut().find(|layer| layer.id == layer_core::LayerId(2)).unwrap();
+    Arc::make_mut(paper.effect.as_mut().unwrap()).set("color", layer_core::EffectValue::Color(
+        layer_core::color::RgbColor { rgba: [1., 1., 1., 0.], ..layer_core::color::RgbColor::WHITE })).unwrap();
     for scope in [ContentScope::Canvas, ContentScope::Visible, ContentScope::All] {
         assert!(bounds(&renderer, &document, scope).is_empty());
     }
-    let paper = document.layers.iter_mut().find(|layer| layer.kind == layer_core::LayerKind::Background).unwrap();
-    paper.properties.paper_color.as_mut().unwrap().rgba[3] = 0.001;
+    let paper = document.layers.iter_mut().find(|layer| layer.id == layer_core::LayerId(2)).unwrap();
+    Arc::make_mut(paper.effect.as_mut().unwrap()).set("color", layer_core::EffectValue::Color(
+        layer_core::color::RgbColor { rgba: [1., 1., 1., 0.001], ..layer_core::color::RgbColor::WHITE })).unwrap();
     for scope in [ContentScope::Canvas, ContentScope::Visible, ContentScope::All] {
         assert_eq!(bounds(&renderer, &document, scope), rect(0., 0., 128., 96.));
     }

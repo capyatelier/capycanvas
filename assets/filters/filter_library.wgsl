@@ -226,9 +226,6 @@ fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let warp=vec2<f32>(fx_fbm(q+bend*1.4,octaves,71u),fx_fbm(q+bend*1.4+7.9,octaves,113u));
     return fx_sample(p+warp*fx_parameter(b,0u).x);
 }
-fn capy_solid_color(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let color=fx_parameter(b,0u);return fx_rgba(color.rgb,color.a);
-}
 fn capy_gradient_fill(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     let extent=fx_extent();let delta=p-extent*vec2<f32>(fx_parameter(b,69u).x,fx_parameter(b,70u).x)/100.;
     let scale=fx_parameter(b,68u).x/100.;var t=length(delta)/(.5*length(extent)*scale);

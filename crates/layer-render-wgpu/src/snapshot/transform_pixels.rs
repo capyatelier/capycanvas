@@ -6,7 +6,7 @@ impl SnapshotGpu {
         let mut output = plan.output;
         let scalar = plan.scope == layer_core::TransformPixelsScope::Mask;
         let linked_mask = matches!(plan.scope, layer_core::TransformPixelsScope::Paint { linked_mask: true });
-        let mut snapshot = self.capture(plan.input, [0.; 4], 0., control.clone()).map_err(|e| e.to_string())?;
+        let mut snapshot = self.capture(plan.input, 0., control.clone()).map_err(|e| e.to_string())?;
         let extent = snapshot.extent;
         let mut color = RasterData { watercolor: snapshot.backing[&output.id].watercolor, ..Default::default() };
         let mut mask = RasterData::default();

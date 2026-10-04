@@ -13,6 +13,16 @@ fn filters() -> (UiSession<Recorder>, u32) {
     (s, id)
 }
 #[test]
+fn replacing_the_bottom_fill_previews_its_empty_input() {
+    let (mut s, _) = filters();
+    s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+    s.frame(0, 0).unwrap();
+    assert!(s.request_filter_previews(1, vec!["exposure".into()], [120, 40]).unwrap());
+    let request = s.engine.backend().filter_preview.as_ref().unwrap();
+    assert_eq!(request.source, layer_render::FilterPreviewSource::EffectInput(LayerId(2)));
+    assert_eq!(request.layers.len(), 2);
+}
+#[test]
 fn filter_drawer_replaces_the_selected_layer_after_reopening_and_cancel_is_undoable() {
     let (mut s, opener) = filters();
     assert_eq!(s.state.customization.drawer.as_ref().unwrap().columns,
@@ -117,7 +127,7 @@ fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
     base.kind = LayerKind::Group;
     base.mask = Some(layer_core::LayerMask::reveal_all(LayerId(23), Point::default()));
     assert_eq!(doc.drawing_target(), None, "a group and its mask are not drawing fallbacks");
-    doc.layers.iter_mut().find(|l| l.id == LayerId(1)).unwrap().kind = LayerKind::Background;
+    *doc.layers.iter_mut().find(|l| l.id == LayerId(1)).unwrap() = layer_core::Layer::solid_color(LayerId(1), "Fill", layer_core::color::RgbColor::WHITE);
     assert_eq!(doc.drawing_target(), None);
     assert!(s.state.layers.iter().any(|l| l.id == 1 && l.drawing && l.selection_icon == "layer-brush-symbolic"));
     assert!(s.state.layers.iter().any(|l| l.id == first.0 && l.editing && !l.drawing));
@@ -155,24 +165,27 @@ fn strokes_through_a_selected_filter_keep_selection_and_undo_on_the_drawing_targ
 }
 
 #[test]
-fn paper_color_lock_history_and_blocked_cursor_share_document_policy() {
+fn fill_color_lock_history_and_blocked_cursor_share_document_policy() {
     let mut s = session(Platform::Gtk);
     s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
     let controls = s.state.layer_tools.controls;
     assert!(controls.edit_lock);
-    assert!(!controls.opacity && !controls.blend && !controls.mask && !controls.clip && !controls.alpha_lock);
+    assert!(controls.opacity && controls.blend && controls.mask && !controls.alpha_lock);
     assert_eq!(s.state.layer_properties.controls.len(), 1);
+    let revision = s.state.layers.iter().find(|layer| layer.id == 2).unwrap().paint_revision;
     s.dispatch(UiAction::SetColor { rgba: [0.08, 0.1, 0.15, 1.] }).unwrap();
     let color = s.state.colors.definition();
     let action = s.state.layer_properties.controls[0].color_action.clone().unwrap();
     s.dispatch(action.clone()).unwrap();
-    assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().properties.paper_color, Some(color));
-    assert_eq!(s.engine.view().background_rgba_linear, color.linear_in(s.engine.document().color.space).unwrap());
+    let changed = s.state.layers.iter().find(|layer| layer.id == 2).unwrap().paint_revision;
+    assert_ne!(changed, revision);
+    assert!(changed < 1u64 << 53);
+    assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(color));
     let serialized = serde_json::to_string(s.engine.document()).unwrap();
     let loaded: Document = serde_json::from_str(&serialized).unwrap();
-    assert_eq!(loaded.layer(LayerId(2)).unwrap().properties.paper_color, Some(color));
+    assert_eq!(loaded.layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(color));
     invoke(&mut s, CommandId::Undo);
-    assert_eq!(s.engine.view().background_rgba_linear, [1.; 4]);
+    assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().effect.as_ref().unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
     invoke(&mut s, CommandId::Redo);
     s.dispatch(UiAction::Layer { action: LayerAction::Lock { id: 2, value: true } }).unwrap();
     assert!(s.dispatch(action).is_err());
@@ -189,7 +202,6 @@ fn empty_layer_stack_roundtrips_and_accepts_a_new_layer_with_undo() {
         s.dispatch(UiAction::Layer { action: LayerAction::Delete { id } }).unwrap();
     }
     assert!(s.state.layers.is_empty());
-    assert_eq!(s.engine.view().background_rgba_linear, [0.; 4]);
     let project = s.capture_project_recovery().unwrap();
     let mut bytes = Vec::new();
     project.write(&mut bytes).unwrap();

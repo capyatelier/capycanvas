@@ -121,7 +121,7 @@ internal class LayerSwipe {
             val visible = list.layoutInfo.visibleItemsInfo.map { it.key }.toSet()
             val requests = currentLayers.filter { it.getLong("id") in visible }.flatMap { layer ->
                 listOf(false, true).mapNotNull { mask ->
-                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || (!layer.optBoolean("selection_layer") && !layer.isNull("content_icon") && layer.isNull("content_icon_color"))) return@mapNotNull null
+                    if (if (mask) !layer.getBoolean("has_mask") else layer.getBoolean("group") || (!layer.optBoolean("selection_layer") && !layer.isNull("content_icon"))) return@mapNotNull null
                     val key = "${layer.getLong("id")}:$mask"
                     val revision = layer.getLong(if (mask) "mask_revision" else "paint_revision")
                     if (revisions[key] == revision || pending.values.any { it.key == key }) null
@@ -171,7 +171,7 @@ internal class LayerSwipe {
                         }
                         blendMenu?.let { WorkspaceMenu(host,it, copy = { blendRequest?.let { host.menuCopy(it) } }) { blendGeneration++; blendMenu=null; blendRequest=null } }
                     }
-                    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f),
+                    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString("opacity"),active?.number("opacity") ?: 1f,host.catalog.getJSONObject("layer_opacity"),Modifier.weight(1f).testTag("layer-opacity"),
                         enabled=controls.getBoolean("opacity"),inline=true) { host.dispatch(obj("type" to "set_layer_opacity","opacity" to it)) }
                 }
                 Row(horizontalArrangement=Arrangement.spacedBy(2.dp)) {
@@ -404,8 +404,8 @@ internal class LayerSwipe {
                 },contentAlignment=Alignment.Center) {
                 if(group) SharedIcon(if(layer.getBoolean("collapsed"))"folder" else "folder-open",host.catalog.getJSONObject("native_copy").getJSONObject("layers").getString(if(layer.getBoolean("collapsed")) "expand" else "collapse"),Modifier.size(28.dp))
                 else {
-                if(mask || layer.optBoolean("selection_layer") || layer.isNull("content_icon") || !layer.isNull("content_icon_color")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
-                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=if(layer.isNull("content_icon_color")) colors.text else Color(android.graphics.Color.parseColor(layer.getString("content_icon_color"))))
+                if(mask || layer.optBoolean("selection_layer") || layer.isNull("content_icon")) images["$id:$mask"]?.let { Image(it,null,Modifier.size(28.dp).testTag("layer-thumbnail-$id-$mask").alpha(if(mask && !layer.getBoolean("mask_enabled")) .4f else 1f)) }
+                if(!mask && !layer.optBoolean("selection_layer") && !layer.isNull("content_icon")) SharedIcon(iconName(layer.getString("content_icon")),null,Modifier.size(24.dp),tint=colors.text)
                 }
             }
             }

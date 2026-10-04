@@ -150,7 +150,7 @@ fn native_crop_fit_content_from_the_bar() {
     let (_app, w, mut input) = crop_ready("art.capycanvas.FitContent");
     let before = document(&w);
     let [width, height] = [before.width as f32, before.height as f32];
-    let paper = before.layers.iter().find(|l| l.kind == layer_core::LayerKind::Background).expect("paper").id;
+    let paper = before.layers.iter().find(|l| l.id == layer_core::LayerId(2)).expect("paper").id;
     w.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: paper.0, value: false } });
     until(|| !document(&w).layer(paper).unwrap().visible, "the paper hides");
     tap(&mut input, Device::Mouse, center(&w, &bar_widget(&w, "canvas-bar-CropFitContent")));
@@ -178,7 +178,7 @@ fn native_trim_to_the_visible_pixels() {
     fill_rect(&w, [0.2, 0.25, 0.7, 0.8]);
     let before = document(&w);
     let [width, height] = [before.width as f32, before.height as f32];
-    let paper = before.layers.iter().find(|l| l.kind == layer_core::LayerKind::Background).expect("paper").id;
+    let paper = before.layers.iter().find(|l| l.id == layer_core::LayerId(2)).expect("paper").id;
     choose(&w, &mut input, "Edit", &["Image", "Trim"]);
     until(|| state(&w).notice.is_some(), "with the paper showing, Trim explains that nothing changes");
     assert_eq!(document(&w).width, before.width);
@@ -215,7 +215,7 @@ fn painted_24_mp() -> layer_core::Project {
         space: layer_core::color::RgbSpace::ProPhoto,
         depth: layer_core::color::SampleDepth::U16,
     };
-    doc.layers.retain(|l| l.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|l| l.id != layer_core::LayerId(2));
     let descriptor = RasterPlane::Color.descriptor(doc.color);
     let tiles = (0..extent[1].div_ceil(TILE_SIZE))
         .flat_map(|ty| (0..extent[0].div_ceil(TILE_SIZE)).map(move |tx| [tx, ty]))
@@ -272,7 +272,7 @@ fn time_image_size(w: &Rc<Workspace>, size: [u32; 2], label: &str) {
 fn native_image_size_timing_on_a_24_mp_photo() {
     let app = native_test_app("dev.layer.ImageSizeTiming");
     let mut photo = native_navigation::photo([6000, 4000]);
-    photo.document.layers.retain(|layer| layer.source.is_some() || layer.kind == layer_core::LayerKind::Background);
+    photo.document.layers.retain(|layer| layer.source.is_some() || layer.id == layer_core::LayerId(2));
     for (project, name) in [(photo, "placed photo"), (painted_24_mp(), "16-bit paint layer")] {
         let w = Workspace::with_project(&app, Some((project, None)));
         w.window.maximize();

@@ -3382,8 +3382,7 @@ impl WgpuRasterizer {
             && native_commit.is_none() && self.transform_preview.is_none()
             && self.moving_layer.is_none() && self.moving_pixels.is_none()
             && self.artwork_frame.as_ref().is_some_and(|frame|
-                frame.view == layer_render::ViewState { background_rgba_linear: frame.view.background_rgba_linear, ..packet.view }
-                    && frame.same_artwork(packet, packet.view.background_rgba_linear))
+                frame.view == packet.view && frame.same_artwork(packet))
         { return Ok(()); }
         let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");
@@ -3435,28 +3434,6 @@ impl WgpuRasterizer {
             scene.effect_passes = 0;
         }
         let requested_view = packet.view;
-        let mut view = packet.view;
-        self.thumbnails.paper = packet
-            .layers
-            .iter()
-            .find(|l| l.kind == LayerKind::Background)
-            .map(|l| {
-                let mut color = view.background_rgba_linear;
-                color[3] *= l.opacity;
-                (l.id, color)
-            });
-        if let Some(background) = packet
-            .layers
-            .iter()
-            .find(|l| l.kind == LayerKind::Background)
-        {
-            view.background_rgba_linear[3] *= if background.visible {
-                background.opacity
-            } else {
-                0.
-            };
-        }
-        let packet = FramePacket { view, ..packet };
         if let Some(scene) = &mut self.scene {
             scene.begin_frame();
         }
@@ -3487,7 +3464,7 @@ impl WgpuRasterizer {
         self.validate_and_prepare_brush_resources(packet.dab_batches)?;
         let blending_changed = std::mem::replace(&mut self.blend_space, packet.blend_space) != packet.blend_space;
         let unchanged = self.artwork_frame.as_ref().is_some_and(|frame|
-            frame.same_artwork(packet, requested_view.background_rgba_linear));
+            frame.same_artwork(packet));
         let resized = self.ensure_document_metadata(packet.document_extent, packet.layers)?;
         let display_rebuilt = if packet.commit_rasters {
             let previous = self.scale_display.take();
@@ -3892,7 +3869,7 @@ impl WgpuRasterizer {
                 let cooperative = !packet.reset_layers && packet.dab_batches[index + 1..].iter().all(|b| b.kind == DabBatchKind::Preview);
                 self.encode_heal(batch, &mut encoder, cooperative)?;
                 if cooperative && self.retouch.as_ref().is_some_and(|s| s.heal_pending()) {
-                    self.settling = Some(artwork::PendingFrame { frame: Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear)), view: requested_view, capture: None });
+                    self.settling = Some(artwork::PendingFrame { frame: Arc::new(artwork::Frame::new(packet)), view: requested_view, capture: None });
                 }
             }
         }
@@ -4287,7 +4264,7 @@ impl WgpuRasterizer {
             && self.scale_display.as_ref().is_some_and(|cache| cache.has_pending_work(self))
             && self.artwork_frame.as_ref().is_some_and(|old|
                 old.view.document_to_surface == packet.view.document_to_surface
-                    && old.same_artwork(packet, requested_view.background_rgba_linear))
+                    && old.same_artwork(packet))
         {
             let mut scene = self.scene.take().unwrap_or_else(|| scene::Scene::new(self));
             let result = scene.refine_display(self, packet, &mut encoder);
@@ -4309,11 +4286,11 @@ impl WgpuRasterizer {
             self.transforms = Some(transforms);
             result?;
         }
-        let frame = Arc::new(artwork::Frame::new(packet, requested_view.background_rgba_linear));
+        let frame = Arc::new(artwork::Frame::new(packet));
         let moving = !original_batches.is_empty()
             || animated
             || self.transform_preview.is_some()
-            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear));
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet));
         self.prefetch_retouch(&frame, moving, &mut encoder);
         self.uploads.finish(&encoder);
         if let Some(started) = started { cpu_phases[4] = started.elapsed().as_secs_f64() * 1000.; }
@@ -4332,7 +4309,7 @@ impl WgpuRasterizer {
         }
         if animated || reset || !packet.dabs.is_empty() || !packet.restore_rasters.is_empty()
             || self.transform_damage.iter().any(|(_, bounds)| !bounds.is_empty()) || !self.document_damage.is_empty()
-            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet, requested_view.background_rgba_linear)) {
+            || self.artwork_frame.as_ref().is_none_or(|old| !old.same_artwork(packet)) {
             self.artwork_revision = self.artwork_revision.wrapping_add(1);
             if let Some(regions) = &mut self.regions { regions.raw.invalidate_tonal(); }
         }
@@ -5763,7 +5740,6 @@ mod tests {
             width_px: 128,
             height_px: 128,
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            background_rgba_linear: [1.0, 1.0, 1.0, 1.0],
         }
     }
 
@@ -5809,8 +5785,7 @@ mod tests {
     #[test]
     fn thumbnails_frame_nontransparent_pixels_and_show_paper_and_checkerboard() {
         let mut r = WgpuRasterizer::new_native_headless(Default::default()).expect("physical GPU required");
-        let mut paper = Layer::paint(LayerId(2), "Paper");
-        paper.kind = LayerKind::Background;
+        let paper = Layer::solid_color(LayerId(2), "Paper", layer_core::color::RgbColor::WHITE);
         let paint = Layer::paint(LayerId(1), "Small mark");
         let mut layers = vec![paint, paper];
         let mut dab = test_dab([40., 100.], [1., 0., 0., 1.], 1.);
@@ -5871,7 +5846,13 @@ mod tests {
                 .chunks_exact(4)
                 .all(|p| p[..3] == [255; 3])
         );
-        layers[1].opacity = 0.;
+        Arc::make_mut(layers[1].effect.as_mut().unwrap()).set("color", layer_core::EffectValue::Color(
+            layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [1., 0., 0., 1.]).unwrap())).unwrap();
+        layers[1].opacity = 0.25;
+        frame(&mut r, &layers, &[], &[]);
+        assert!(preview(&mut r, 2).chunks_exact(4).all(|p| p == [255, 0, 0, 255]), "thumbnail shows the fill content without its layer opacity");
+        Arc::make_mut(layers[1].effect.as_mut().unwrap()).set("color", layer_core::EffectValue::Color(
+            layer_core::color::RgbColor { rgba: [1., 1., 1., 0.], ..layer_core::color::RgbColor::WHITE })).unwrap();
         frame(&mut r, &layers, &[], &[]);
         let transparent_paper = preview(&mut r, 2);
         assert_ne!(transparent_paper[0], transparent_paper[4 * 4]);
@@ -5916,7 +5897,7 @@ mod tests {
             .collect::<Vec<_>>();
         renderer
             .submit(FramePacket {
-                view: ViewState { width_px: 4096, height_px: 4096, document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], background_rgba_linear: [1.0, 1.0, 1.0, 1.0] },
+                view: ViewState { width_px: 4096, height_px: 4096, document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0], },
                 reset_layers: true,
                 ..packet(&layers, [4096, 4096])
             })

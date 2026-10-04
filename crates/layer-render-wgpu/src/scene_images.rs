@@ -131,7 +131,6 @@ pub(super) struct ImageStages {
     clips: Vec<Option<ClipInput>>,
     backdrops: std::collections::HashMap<LayerId, Backdrop>,
     preview_layer: Option<LayerId>,
-    background: [f32; 4],
     blend_space: layer_core::BlendSpace,
     pub input_updates: u64,
     pub pass_updates: u64,
@@ -577,7 +576,6 @@ impl Scene {
                 });
         let reset = packet.reset_layers
             || structure
-            || self.images.background != packet.view.background_rgba_linear
             || self.images.blend_space != packet.blend_space;
         if structure
             || self.images.inputs.len() != packet.layers.len()
@@ -882,7 +880,6 @@ impl Scene {
             self.images.backdrops.clear();
         }
         self.images.metadata = packet.layers.iter().map(Metadata::new).collect();
-        self.images.background = packet.view.background_rgba_linear;
         self.images.blend_space = packet.blend_space;
         self.images.preview_layer = r.preview_layer_id;
         Ok(damage)

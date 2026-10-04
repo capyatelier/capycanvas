@@ -49,7 +49,6 @@ fn paint_at(
             width_px: extent[0],
             height_px: extent[1],
             document_to_surface: [scale, 0., 0., scale, 0., 0.],
-            background_rgba_linear: [1.; 4],
         },
         ViewTransform::IDENTITY,
     )

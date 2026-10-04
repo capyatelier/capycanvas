@@ -21,10 +21,10 @@ impl SourceProfileHint {
 pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let localization = w.localization().clone();
-    let (workflow, background, time) = {
+    let (workflow, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or("Canvas unavailable")?.session;
-        (SourceWorkflow::begin(session, id)?, session.engine().view().background_rgba_linear, session.engine().animation_time())
+        (SourceWorkflow::begin(session, id)?, session.engine().animation_time())
     };
     let original = workflow.original.clone();
     let project = workflow.project.clone();
@@ -146,7 +146,7 @@ pub(super) async fn repair(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 Ok(project) => {
                     hint_state.borrow_mut().take();
                     hint.set_visible(false);
-                    comparison.request(project, background, time);
+                    comparison.request(project, time);
                 }
                 Err(reason) => {
                     hint.set_label(&reason.message(&w.localization()));

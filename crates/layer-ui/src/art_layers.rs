@@ -103,13 +103,13 @@ pub(super) fn apply_mask_refusal(kind: LayerKind, l: &Localizer) -> Option<std::
         LayerKind::Paint => None,
         LayerKind::Group => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_A_GROUP_S_MASK_CAN_T_BE_APPLIED_ON_ITS_OWN_MERGE_GROUP_APPLIES_IT)),
         LayerKind::Effect => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_AN_EFFECT_LAYER_S_MASK_SETS_WHERE_THE_EFFECT_SHOWS_IT_CAN_T_BE_APPLIED)),
-        LayerKind::Background | LayerKind::Selection => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_ONLY_A_PAINT_LAYER_S_MASK_CAN_BE_APPLIED)),
+        LayerKind::Selection => Some(l.text(MessageId::COMMANDS_REFUSAL_ART_LAYERS_ONLY_A_PAINT_LAYER_S_MASK_CAN_BE_APPLIED)),
     }
 }
 impl LayerControls {
     pub(super) fn for_layer(doc: &Document, l: &Layer) -> Self {
         let unlocked = !doc.is_locked(l.id);
-        let editable = l.kind != LayerKind::Background && l.kind != LayerKind::Selection;
+        let editable = l.kind != LayerKind::Selection;
         Self {
             opacity: editable && unlocked,
             blend: editable && unlocked,
@@ -408,11 +408,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let doc = self.engine.document();
         let row = doc.layer(LayerId(target)).ok_or("Unknown destination")?;
-        let fraction = if row.kind == LayerKind::Background {
-            0.0
-        } else {
-            fraction
-        };
         let into = row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction);
         let position = if into {
             LayerDropPosition::Into
@@ -483,9 +478,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.operation.active() || !self.engine.backend().supports_tiled_sources()
         { return None; }
         let row = self.engine.document().layer(LayerId(target))?;
-        let position = if row.kind == LayerKind::Background {
-            LayerDropPosition::Above
-        } else if row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction) {
+        let position = if row.kind == LayerKind::Group && (0.25..0.75).contains(&fraction) {
             LayerDropPosition::Into
         } else if fraction < 0.5 { LayerDropPosition::Above } else { LayerDropPosition::Below };
         self.image_layer_destination(Some(ImageLayerDestination { target: row.id, position })).ok()?;
@@ -504,7 +497,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerDropPosition::Into if row.kind == LayerKind::Group => (row_index + 1, Some(row.id)),
             LayerDropPosition::Into => return Err("Images can be inserted into a group".into()),
             LayerDropPosition::Above => (row_index, row.properties.parent),
-            LayerDropPosition::Below if row.kind == LayerKind::Background => return Err("Place images above the paper layer".into()),
             LayerDropPosition::Below => {
                 let subtree = doc.layer_subtrees(&[row.id]);
                 let end = doc.layers.iter().rposition(|l| subtree.contains(&l.id)).unwrap() + 1;
@@ -666,8 +658,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if previous.is_some() && self.engine.document().selection.is_none() { self.selection_masks.reselect = previous; }
         Ok(())
     }
-    /// Layer headers and generic Properties fields share the same edit policy.
-    /// Paper may change opacity; direct and inherited locks still prevent edits.
     pub(super) fn set_layer_opacity(
         &mut self,
         id: Option<u64>,
@@ -702,9 +692,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .ok_or("Unknown layer")?;
         if self.engine.document().is_locked(layer.id) {
             return Err("This layer is locked".into());
-        }
-        if layer.kind == LayerKind::Background {
-            return Err("The background is not editable".into());
         }
         Ok(layer.clone())
     }
@@ -781,14 +768,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::CancelRename => self.state.layer_tools.rename_layer = None,
             LayerAction::SelectAllLayers { selected } => {
-                self.layer_interaction.selected = self
-                    .engine
-                    .document()
-                    .layers
-                    .iter()
-                    .filter(|l| selected && l.kind != LayerKind::Background)
-                    .map(|l| l.id)
-                    .collect();
+                self.layer_interaction.selected = if selected {
+                    self.engine.document().layers.iter().map(|l| l.id).collect()
+                } else { Default::default() };
             }
             LayerAction::GroupSelected => {
                 let roots = self
@@ -1058,7 +1040,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .map(|l| {
                             (
                                 l.id,
-                                keep.contains(&l.id) || l.kind == LayerKind::Background,
+                                keep.contains(&l.id),
                             )
                         })
                         .collect()
@@ -1078,11 +1060,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 if roots.is_empty() {
                     return Err("Select layers first".into());
-                }
-                for &id in &roots {
-                    if doc.layer(id).ok_or("Unknown layer")?.kind == LayerKind::Background {
-                        return Err("The background cannot be duplicated".into());
-                    }
                 }
                 let index = doc
                     .layers
@@ -1361,7 +1338,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         if l.kind == LayerKind::Selection { return self.selection_layer_menu(l.id).map(|menu| menu.sections); }
         let locked = doc.is_locked(l.id);
         let paint = l.kind == LayerKind::Paint;
-        let editable = l.kind != LayerKind::Background;
         let controls = LayerControls::for_layer(doc, l);
         let roots = doc.layer_roots(&self.layer_interaction.selected);
         let multiple = roots.len() > 1;
@@ -1380,14 +1356,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::DuplicateSelected => {
                     !roots.is_empty()
                         && roots.iter().all(|id| {
-                            doc.layer(*id)
-                                .is_some_and(|l| l.kind != LayerKind::Background)
+                            doc.layer(*id).is_some()
                         })
                 }
-                A::Duplicate { .. } | A::Select { .. } | A::ShowMask { .. } => editable,
+                A::Duplicate { .. } | A::Select { .. } | A::ShowMask { .. } => true,
                 A::CopyMask { .. } => l.mask.is_some(),
                 A::PasteMask { .. } => {
-                    editable && !locked && self.layer_interaction.clipboard_mask.is_some()
+                    !locked && self.layer_interaction.clipboard_mask.is_some()
                 }
                 A::New { clipped, .. } => {
                     !parent.is_some_and(|p| doc.is_locked(p))
@@ -1399,7 +1374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::Lock { .. } => controls.edit_lock,
                 A::AlphaLock { .. } | A::Clear { .. } => controls.alpha_lock,
                 A::Clip { .. } => controls.clip,
-                A::MaskSelection { .. } => editable && !locked && doc.selection.is_some(),
+                A::MaskSelection { .. } => !locked && doc.selection.is_some(),
                 A::ApplyMask { .. } => {
                     paint && !locked && l.mask.as_ref().is_some_and(|m| m.enabled)
                 }
@@ -1416,7 +1391,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 | A::ShowAll
                 | A::SelectAllLayers { .. } => true,
                 A::SoloSelected => !roots.is_empty() || self.layer_interaction.solo.is_some(),
-                _ => editable && !locked,
+                _ => !locked,
             };
             let mut item = ContextMenuItem::command(label, UiAction::Layer { action });
             item.enabled = enabled;
@@ -1450,44 +1425,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 ),
             ]
         };
-        let mut sections = if !editable {
-            vec![
-                vec![
-                    item(
-                        self.localization().text(MessageId::COMMAND_ADD_LAYER).as_ref(),
-                        A::New {
-                            group: false,
-                            clipped: false,
-                        },
-                    ),
-                    item(
-                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_NEW_GROUP).as_ref(),
-                        A::New {
-                            group: true,
-                            clipped: false,
-                        },
-                    ),
-                ],
-                self.merge_menu_items(l),
-                vec![
-                    check(
-                        self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_PAPER).as_ref(),
-                        A::Visibility {
-                            id,
-                            value: !l.visible,
-                        },
-                        l.visible,
-                    ),
-                    item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_SHOW_ALL_LAYERS).as_ref(), A::ShowAll),
-                    item(
-                        self.localization().text(MessageId::COMMAND_LASSO).as_ref(),
-                        A::Tool {
-                            tool: LayerCanvasTool::Select,
-                        },
-                    ),
-                ],
-            ]
-        } else if mask {
+        let mut sections = if mask {
             let m = l.mask.as_ref().ok_or("No mask")?;
             vec![
                 vec![
@@ -1720,9 +1658,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 destructive,
             ]
         };
-        if !editable && l.id == doc.active_layer {
-            sections[0].extend(self.fill_layer_items());
-        }
         if mask { sections.push(vec![ContextMenuItem::submenu(self.localization().text(MessageId::RESOURCES_LAYER_MENU_PIXEL_SELECTION).as_ref(),vec![self.coverage_menu_items(id,true)])]); }
         if l.kind == LayerKind::Group {
             sections.insert(0, vec![

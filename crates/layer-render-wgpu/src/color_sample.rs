@@ -51,23 +51,8 @@ impl WgpuRasterizer {
         let [x, y] = request.position;
         let extent = self.document_extent;
         let inside = x < extent[0] && y < extent[1];
-        let paper = match request.source {
-            ColorSampleSource::Layer(id) => self
-                .thumbnails
-                .paper
-                .filter(|(paper, _)| *paper == id)
-                .map(|(_, color)| color),
-            ColorSampleSource::Composite => None,
-        };
-        if !inside || paper.is_some() {
-            let _ = self.color_sampler.tx.send(Ok(ColorSample {
-                request_id,
-                rgba: if inside {
-                    paper.unwrap_or([0.; 4])
-                } else {
-                    [0.; 4]
-                },
-            }));
+        if !inside {
+            let _ = self.color_sampler.tx.send(Ok(ColorSample { request_id, rgba: [0.; 4] }));
             self.color_sampler.pending = true;
             return Ok(true);
         }

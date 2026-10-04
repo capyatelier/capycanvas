@@ -156,7 +156,6 @@ fn navigate(
                     width_px: 1024,
                     height_px: 768,
                     document_to_surface: [scale, 0., 0., scale, x, y],
-                    background_rgba_linear: [0.; 4],
                 },
                 ViewTransform {
                     revision: 0,
@@ -275,7 +274,6 @@ fn concurrent(
         let mut renderer = export_gpu
             .capture(
                 export_snapshot,
-                [0.; 4],
                 0.,
                 export_control,
             )
@@ -525,7 +523,6 @@ pub(super) fn run(
         let start = Instant::now();
         let mut capture = canvas.engine.backend().snapshot_gpu().capture(
             canvas.snapshot()?,
-            [0.; 4],
             0.,
             control.clone(),
         )?;

@@ -2,7 +2,7 @@
 //! crops and pipelines, and small asynchronous image readbacks.
 use super::metadata::PreviewMetadata;
 use super::*;
-use layer_render::{FilterPreviewImage, FilterPreviewRequest};
+use layer_render::{FilterPreviewImage, FilterPreviewRequest, FilterPreviewSource};
 use std::{collections::HashMap, sync::Arc};
 use wgpu::util::DeviceExt;
 
@@ -12,16 +12,13 @@ enum Ready {
     ProbeNext(Result<u32, GpuRasterError>),
     Pixels(Result<ReadbackImage, GpuRasterError>),
 }
-/// What a captured filter source depends on: the source epoch, the target,
-/// the extent, the paper and the blend space.
-type SourceKey = (u64, LayerId, [u32; 2], [f32; 4], layer_core::BlendSpace);
+type SourceKey = (u64, FilterPreviewSource, [u32; 2], layer_core::BlendSpace);
 pub(crate) struct FilterPreviews {
     scene: Scene,
     source_scene: Scene,
     probe_next: u32,
     probe_winner: Option<wgpu::Buffer>,
     cancelled: bool,
-    capture_background: [f32; 4],
     programs: HashMap<Arc<str>, Layer>,
     probe: Deferred<wgpu::ComputePipeline>,
     mask: Image,
@@ -97,7 +94,6 @@ impl FilterPreviews {
             probe_next: 0,
             probe_winner: None,
             cancelled: false,
-            capture_background: [0.; 4],
             programs: HashMap::new(),
             probe,
             mask,
@@ -120,9 +116,8 @@ impl FilterPreviews {
         if let Some(request) = &self.request {
             self.cancelled |= self
                 .key
-                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent || key.4 != packet.blend_space)
-                || self.capture_background != packet.view.background_rgba_linear
-                || source_scope(packet.layers, request.target).is_none_or(|(_, mut scope)| {
+                .is_none_or(|key| key.0 != epoch || key.2 != packet.document_extent || key.3 != packet.blend_space)
+                || source_scope(packet.layers, request.source).is_none_or(|(_, mut scope)| {
                     let mut old = self.source_layers.iter();
                     !scope.all(|(layer, _)| {
                         old.next()
@@ -134,7 +129,7 @@ impl FilterPreviews {
     fn start(
         &mut self,
         r: &mut WgpuRasterizer,
-        mut request: FilterPreviewRequest,
+        request: FilterPreviewRequest,
     ) -> Result<bool, GpuRasterError> {
         if self.request.is_some() {
             return Ok(false);
@@ -169,7 +164,7 @@ impl FilterPreviews {
             for effect in &request.filters {
                 self.scene.effects.prepare(r, &[&self.programs[&effect.program.id]], effects::Execution::Preview, 0., 0, preview_space(effect, request.blend_space))?;
             }
-            let source_layers = source_scope(&request.layers, request.target)
+            let source_layers = source_scope(&request.layers, request.source)
                 .map_or_else(Vec::new, |(_, layers)| layers.map(|(l, _)| l.clone()).collect());
             for (layers, execution) in scene::startup_effect_chains(&source_layers) {
                 self.source_scene.effects.prepare(r, &layers, execution, 0., 0, request.blend_space)?;
@@ -183,23 +178,10 @@ impl FilterPreviews {
             if !ready { return Ok(false); }
         }
         self.cancelled = false;
-        self.capture_background = request.view.background_rgba_linear;
-        if let Some(paper) = request
-            .layers
-            .iter()
-            .find(|l| l.kind == LayerKind::Background)
-        {
-            request.view.background_rgba_linear[3] *=
-                if paper.visible { paper.opacity } else { 0. };
-        }
-        if source_scope(&request.layers, request.target).is_some_and(|(scope, _)| scope.is_some()) {
-            request.view.background_rgba_linear = [0.; 4];
-        }
         let key = (
             r.filter_source_epoch,
-            request.target,
+            request.source,
             request.extent,
-            request.view.background_rgba_linear,
             request.blend_space,
         );
         let resized = self.size != request.size;
@@ -208,7 +190,7 @@ impl FilterPreviews {
             self.size = request.size;
         }
         let source_layers: Vec<_> =
-            source_scope(&request.layers, request.target).map_or_else(Vec::new, |(_, scope)| {
+            source_scope(&request.layers, request.source).map_or_else(Vec::new, |(_, scope)| {
                 scope
                     .map(|(layer, _)| PreviewMetadata::new(layer))
                     .collect()
@@ -247,7 +229,7 @@ impl FilterPreviews {
     }
     fn queue_analyses(&mut self, r: &WgpuRasterizer) -> Result<(), GpuRasterError> {
         let request = self.request.as_ref().unwrap();
-        let (parent, layers) = source_layers(&request.layers, request.target)
+        let (parent, layers) = source_layers(&request.layers, request.source)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
         let mut document = layer_core::Document::new("", request.extent[0], request.extent[1],
             layer_core::DocumentNames {paint:"".into(), paper:"".into()});
@@ -290,11 +272,8 @@ impl FilterPreviews {
                 self.analyses.push(Arc::new(crate::effect_analysis::Prepared {query,kind,resource}));continue;
             }
             let document = &query.document;
-            let background = document.layers.iter().find(|layer| layer.kind == LayerKind::Background)
-                .map(|layer| layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE).linear_in(document.color.space))
-                .transpose().map_err(GpuRasterError::Color)?.unwrap_or([0.;4]);
             let input = crate::effect_analysis::BakeInput {members:document.layers.clone().into(), offset:Default::default(),
-                extent:[document.width,document.height],color:document.color,blend:document.blend_space,background,time:query.time};
+                extent:[document.width,document.height],color:document.color,blend:document.blend_space,time:query.time};
             self.analysis = Some(self.with_analyses(r, |_,r| crate::effect_analysis::Job::frame(r.snapshot_gpu(), input))
                 .map_err(GpuRasterError::Effect)?);
             return Ok(());
@@ -331,6 +310,18 @@ impl FilterPreviews {
         if self.probe_next == 0 {
             encoder.clear_buffer(winner, 0, None);
         }
+        let mut backdrop = [0.; 4];
+        let (parent, layers) = source_layers(&request.layers, request.source)
+            .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
+        if parent.is_none() {
+            for layer in layer_core::constant_backdrop(&layers).iter().rev().filter(|l| l.visible) {
+                let [red, green, blue, alpha] = layer.effect.as_ref().unwrap().constant_color().unwrap()
+                    .linear_in(r.device.working_space()).map_err(GpuRasterError::Color)?;
+                let alpha = alpha * layer.opacity;
+                let color = request.blend_space.composite(r.device.working_space(), [red * alpha, green * alpha, blue * alpha, alpha]);
+                backdrop = std::array::from_fn(|c| color[c] + backdrop[c] * (1. - alpha));
+            }
+        }
         for _ in 0..4 {
             if self.probe_next == count {
                 break;
@@ -351,9 +342,7 @@ impl FilterPreviews {
             self.source_scene
                 .capture_filter_source(r, request, texture, region, &mut encoder)?;
             let mut data = Vec::with_capacity(64);
-            for v in request.view.background_rgba_linear {
-                data.extend(v.to_le_bytes());
-            }
+            for v in backdrop { data.extend(v.to_le_bytes()); }
             for v in [
                 request.size[0],
                 request.size[1],
@@ -770,8 +759,12 @@ fn preview_space(effect: &layer_core::EffectInstance, blend: layer_core::BlendSp
 // global effect above the target must not force a full-document dependency.
 fn source_scope(
     layers: &[Layer],
-    target: LayerId,
+    source: FilterPreviewSource,
 ) -> Option<(Option<LayerId>, impl Iterator<Item = (&Layer, bool)>)> {
+    let (target, include) = match source {
+        FilterPreviewSource::LayerStack(id) => (id, true),
+        FilterPreviewSource::EffectInput(id) => (id, false),
+    };
     let index = layers.iter().position(|l| l.id == target)?;
     let parent = layers[index].properties.parent;
     let parent_of = |id: LayerId| {
@@ -788,12 +781,12 @@ fn source_scope(
         if std::iter::successors(parent, |&id| parent_of(id)).any(|id| id == layer.id) {
             return Some((layer, true));
         }
-        (i == index || below[i] || layer_core::descends_from(layers, layer, Some(target))).then_some((layer, false))
+        (below[i] || include && (i == index || layer_core::descends_from(layers, layer, Some(target)))).then_some((layer, false))
     });
     Some((layer_core::isolated_scope(layers, parent), scope))
 }
-fn source_layers(layers: &[Layer], target: LayerId) -> Option<(Option<LayerId>, Vec<Layer>)> {
-    let (parent, scope) = source_scope(layers, target)?;
+fn source_layers(layers: &[Layer], source: FilterPreviewSource) -> Option<(Option<LayerId>, Vec<Layer>)> {
+    let (parent, scope) = source_scope(layers, source)?;
     Some((parent, scope.map(|(layer, ancestor)| {
         let mut layer = layer.clone();
         if ancestor {
@@ -812,7 +805,7 @@ impl Scene {
         region: PixelRect,
         encoder: &mut crate::submission::CommandEncoder,
     ) -> Result<(), GpuRasterError> {
-        let (parent, layers) = source_layers(&request.layers, request.target)
+        let (parent, layers) = source_layers(&request.layers, request.source)
             .ok_or_else(|| GpuRasterError::Effect("Missing filter insertion layer".into()))?;
         self.jobs.clear();
         self.used.fill(false);
@@ -925,12 +918,27 @@ mod tests {
         pattern
     }
     #[test]
+    fn replacing_the_bottom_fill_captures_transparent_input() {
+        let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let layers = vec![Layer::solid_color(LayerId(1), "Fill", layer_core::color::RgbColor::WHITE)];
+        r.submit(crate::test_support::packet(&layers, [64; 2])).unwrap();
+        let source = FilterPreviewSource::EffectInput(LayerId(1));
+        assert!(source_layers(&layers, source).unwrap().1.is_empty());
+        r.request_filter_previews(FilterPreviewRequest {
+            request_id: 1, source, size: [120, 40], extent: [64; 2], view: crate::test_support::view([64; 2]),
+            blend_space: Default::default(), layers, filters: vec![Arc::new(fixture("exposure").preview().unwrap())],
+        }).unwrap();
+        let atlas = finish(&mut r);
+        assert_eq!(atlas.image.bytes.len(), 120 * 40 * 4);
+        assert!(atlas.image.bytes.chunks_exact(4).any(|p| p[3] != 0));
+        assert!(atlas.image.bytes.chunks_exact(4).any(|p| p[3] == 0));
+    }
+    #[test]
     fn a_filter_that_follows_the_documents_blending_previews_its_live_result() {
         let extent = [300, 200];
         let view = layer_render::ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            background_rgba_linear: [1.; 4],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
         let mut stripes = Layer::paint(LayerId(1), "stripes");
@@ -947,7 +955,7 @@ mod tests {
             let size = [120, 40];
             r.request_filter_previews(FilterPreviewRequest {
                 request_id: 1,
-                target: LayerId(7),
+                source: FilterPreviewSource::LayerStack(LayerId(7)),
                 size,
                 extent,
                 view,
@@ -988,7 +996,6 @@ mod tests {
         let view = layer_render::ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            background_rgba_linear: [0.; 4],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
         let mut group = Layer::paint(LayerId(5), "Pass Through");
@@ -1010,7 +1017,7 @@ mod tests {
             r.submit(FramePacket { view, ..crate::test_support::packet(layers, extent) }).unwrap();
             r.request_filter_previews(FilterPreviewRequest {
                 request_id,
-                target: LayerId(7),
+                source: FilterPreviewSource::LayerStack(LayerId(7)),
                 size: [120, 40],
                 extent,
                 view,
@@ -1055,14 +1062,13 @@ mod tests {
                 sampling: layer_core::EffectSampling::Document,
             }]
             .into();
-        let mut paper = Layer::paint(LayerId(4), "partial paper");
-        paper.kind = LayerKind::Background;
+        let mut paper = Layer::solid_color(LayerId(4), "partial paper",
+            layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb, [0.1, 0.2, 0.3, 1.]).unwrap());
         paper.opacity = 0.5;
         let mut layers = vec![upper, blur, pattern, paper];
         let view = layer_render::ViewState {
             width_px: extent[0],
             height_px: extent[1],
-            background_rgba_linear: [0.1, 0.2, 0.3, 1.],
             document_to_surface: [1., 0., 0., 1., 0., 0.],
         };
         let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {
@@ -1084,7 +1090,7 @@ mod tests {
         frame(&mut r, &layers);
         let request = |layers: &[Layer], id| FilterPreviewRequest {
             request_id: id,
-            target: LayerId(2),
+            source: FilterPreviewSource::LayerStack(LayerId(2)),
             size: [200, 40],
             extent,
             view,
@@ -1193,7 +1199,7 @@ mod tests {
         let frame = |r: &mut WgpuRasterizer, layers: &[Layer]| {r.submit(crate::test_support::packet(layers,extent)).unwrap();};
         frame(&mut r, &layers);
         let request = |layers: &[Layer], request_id, zero: bool| layer_render::FilterPreviewRequest {
-            request_id,target:LayerId(7),size:[120,40],extent,view:crate::test_support::packet(layers,extent).view,
+            request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view:crate::test_support::packet(layers,extent).view,
             blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
             filters:[("shadows_highlights","shadows"),("clarity","amount")].into_iter().map(|(id,key)| {
                 let mut effect=fixture(id).preview().unwrap();effect.set(key,layer_core::EffectValue::Number(if zero {0.} else {50.})).unwrap();Arc::new(effect)
@@ -1253,7 +1259,7 @@ mod tests {
             let mut preview = |layers: &[Layer], request_id| {
                 let packet = crate::test_support::packet(layers,extent); let view = packet.view;
                 r.submit(packet).unwrap();
-                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,target:LayerId(7),size:[120,40],extent,view,
+                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view,
                     blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
                     filters:vec![Arc::new(fixture(id).preview().unwrap())]}).unwrap());
                 finish(&mut r).image.bytes
@@ -1283,7 +1289,7 @@ mod tests {
             let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
             let mut preview = |layers: &[Layer], request_id| {
                 let packet = crate::test_support::packet(layers,extent);let view = packet.view;r.submit(packet).unwrap();
-                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,target:LayerId(7),size:[120,40],extent,view,
+                assert!(r.request_filter_previews(FilterPreviewRequest {request_id,source: FilterPreviewSource::LayerStack(LayerId(7)),size:[120,40],extent,view,
                     blend_space:Default::default(),layers:layers.iter().map(Layer::composite_snapshot).collect(),
                     filters:vec![Arc::new(fixture(id).preview().unwrap())]}).unwrap());
                 finish(&mut r).image.bytes

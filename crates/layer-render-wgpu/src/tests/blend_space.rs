@@ -29,6 +29,7 @@ fn representative(depth: SampleDepth) -> Document {
     let mut document = Document::new("Representative", EXTENT[0], EXTENT[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     document.color = DocumentColor { space: RgbSpace::Srgb, depth };
     let paper = document.layers.pop().unwrap();
+    let paper = Layer::solid_color(paper.id, paper.name, layer_core::color::RgbColor::from_linear(document.color.space, BACKGROUND).unwrap());
     document.layers.clear();
     let paint = |document: &mut Document, name: &str, image: Arc<SourceImage>| {
         let mut layer = Layer::paint(document.allocate_layer_id(), name);
@@ -153,7 +154,7 @@ fn composite(r: &WgpuRasterizer) -> Vec<u8> {
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<u8> {
     let mut capture = r
         .snapshot_gpu()
-        .capture(Project { document: document.clone() }, BACKGROUND, 0., Default::default())
+        .capture(Project { document: document.clone() }, 0., Default::default())
         .unwrap();
     capture
         .read_region([0, 0, EXTENT[0], EXTENT[1]])
@@ -186,7 +187,7 @@ fn export_and_readback_equal_the_live_composite_in_both_spaces() {
             let mut document = representative(depth);
             document.blend_space = space;
             let mut r = WgpuRasterizer::new_native_headless(document.color).expect("physical GPU required");
-            let view = ViewState { background_rgba_linear: BACKGROUND, ..crate::test_support::view(EXTENT) };
+            let view = crate::test_support::view(EXTENT) ;
             settle(&mut r, FramePacket { view, reset_layers: true, blend_space: space, ..packet(&document.layers, EXTENT) });
             let live = floats(&composite(&r));
             let export = floats(&exported(&r, &document));
@@ -224,12 +225,12 @@ fn black_at_half_opacity_over_white_is_middle_gray_only_when_blending_perceptual
             document.layers[0].source = Some(plain(depth, [0., 0., 0., 1.]));
             document.layers[0].opacity = 0.5;
             let mut r = WgpuRasterizer::new_native_headless(document.color).expect("physical GPU required");
-            let view = ViewState { background_rgba_linear: [1.; 4], ..crate::test_support::view(EXTENT) };
+            let view = crate::test_support::view(EXTENT) ;
             settle(&mut r, FramePacket { view, reset_layers: true, blend_space: space, ..packet(&document.layers, EXTENT) });
             let center = ((EXTENT[1] / 2 * EXTENT[0] + EXTENT[0] / 2) * 4) as usize;
             let live = floats(&composite(&r))[center];
             assert!((live - 0.5).abs() < 1e-6, "{depth:?} {space:?}: the composite holds {live}");
-            let mut capture = r.snapshot_gpu().capture(Project { document: document.clone() }, [1.; 4], 0., Default::default()).unwrap();
+            let mut capture = r.snapshot_gpu().capture(Project { document: document.clone() }, 0., Default::default()).unwrap();
             let export = capture.read_region([EXTENT[0] / 2, EXTENT[1] / 2, 1, 1]).unwrap()[0];
             let code = layer_core::color::srgb_encode(export[0]) * 255.;
             assert!((code - expected).abs() <= 1., "{depth:?} {space:?}: exported {code}, not {expected}");
@@ -257,6 +258,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
         document.color = DocumentColor { space: RgbSpace::Srgb, depth };
         document.blend_space = perceptual;
         let paper = document.layers.pop().unwrap();
+        let paper = Layer::solid_color(paper.id, paper.name, layer_core::color::RgbColor::from_linear(document.color.space, BACKGROUND).unwrap());
         let paint = |document: &mut Document, name: &str, image| {
             let mut layer = Layer::paint(document.allocate_layer_id(), name);
             layer.source = Some(image);
@@ -288,7 +290,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
         document.layers = vec![top, group, clipped, base, under, paper];
         document.active_layer = document.layers[0].id;
         let mut r = WgpuRasterizer::new_native_headless(document.color).expect("physical GPU required");
-        let view = |background| ViewState { background_rgba_linear: background, ..crate::test_support::view(EXTENT) };
+        let view = crate::test_support::view(EXTENT);
         let mut alone = |index: usize| {
             let mut layers = document.layers.clone();
             for (i, layer) in layers.iter_mut().enumerate() {
@@ -299,11 +301,11 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
                 layer.properties.clipped = false;
                 layer.properties.blend = LayerBlend::Normal;
             }
-            settle(&mut r, FramePacket { view: view([0.; 4]), reset_layers: true, ..packet(&layers, EXTENT) });
+            settle(&mut r, FramePacket { view, reset_layers: true, ..packet(&layers, EXTENT) });
             rgba(&composite(&r))
         };
         let [top, clipped, base, under] = [0, 2, 3, 4].map(&mut alone);
-        settle(&mut r, FramePacket { view: view(BACKGROUND), reset_layers: true, blend_space: perceptual, ..packet(&document.layers, EXTENT) });
+        settle(&mut r, FramePacket { view, reset_layers: true, blend_space: perceptual, ..packet(&document.layers, EXTENT) });
         let live = rgba(&composite(&r));
         let export = rgba(&exported(&r, &document));
         let encode = |p: Rgba| {

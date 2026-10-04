@@ -116,6 +116,8 @@ pub struct EffectProgram {
     pub id: Arc<str>,
     pub label: ResourceLabel,
     pub kind: EffectKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub constant_color: Option<Arc<str>>,
     #[serde(default)]
     pub alpha: EffectAlpha,
     #[serde(default, skip_serializing_if = "EffectSpace::is_linear")]
@@ -340,6 +342,12 @@ impl EffectClock {
     }
 }
 impl EffectInstance {
+    pub fn constant_color(&self) -> Option<RgbColor> {
+        match self.value(self.program.constant_color.as_deref()?) {
+            Some(EffectValue::Color(color)) => Some(*color),
+            _ => None,
+        }
+    }
     pub fn lut3d(&self) -> Option<&Arc<crate::Lut3d>> {
         let EffectAuxiliary::Lut3d { resource, .. } = self.program.auxiliary.as_ref()? else { return None; };
         match self.value(resource) { Some(EffectValue::Lut3d(resource)) => resource.as_ref(), _ => None }
@@ -445,6 +453,14 @@ impl EffectInstance {
         Ok(next)
     }
     pub fn validate(&self) -> Result<(), &'static str> {
+        if let Some(key) = &self.program.constant_color
+            && (self.program.kind != EffectKind::Generator || self.program.time
+                || !self.program.passes.is_empty() || !self.program.lookups.is_empty()
+                || self.program.auxiliary.is_some()
+                || !self.program.parameters.iter().any(|p| p.key == *key && p.kind == EffectParameterKind::Color))
+        {
+            return Err("Invalid constant color generator");
+        }
         let source_len: usize = self.program.wgsl.sources()?.iter().map(|s| s.len()).sum();
         if source_len == 0 || source_len > 1024 * 1024 {
             return Err("Empty or oversized effect shader");
@@ -886,6 +902,23 @@ pub fn gradient_value(stops: &[GradientStop], x: f32, space: RgbSpace) -> Result
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn constant_color_contract_rejects_nonconstant_definitions() {
+        let fill = EffectInstance::new(fixture("solid_color").program());
+        assert!(fill.constant_color().is_some());
+        assert!(fill.validate().is_ok());
+        for change in 0..4 {
+            let mut invalid = fill.clone();
+            let program = Arc::make_mut(&mut invalid.program);
+            match change {
+                0 => program.kind = EffectKind::Adjustment,
+                1 => program.time = true,
+                2 => program.constant_color = Some("missing".into()),
+                _ => program.passes = vec![EffectPass { entry: program.entry.clone(), sampling: EffectSampling::Document }].into(),
+            }
+            assert_eq!(invalid.validate(), Err("Invalid constant color generator"));
+        }
+    }
     #[test]
     fn display_resolution_requires_an_explicit_program_declaration() {
         let program = fixture("exposure").program();

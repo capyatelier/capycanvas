@@ -140,14 +140,13 @@ fn only_root_offsets_carry_the_canvas_origin() {
     for (old, new) in doc.layers.iter().zip(&result.layers) {
         if old.properties.parent.is_some() {
             assert_eq!(new.properties.offset, old.properties.offset, "{}", old.name);
-        } else if old.kind != LayerKind::Background {
+        } else {
             assert_eq!(new.properties.offset, Point { x: old.properties.offset.x - 40., y: old.properties.offset.y - 30. });
         }
         let world = |d: &Document| d.layer_offset(old.id);
-        assert_eq!(world(result).x, world(&doc).x - if old.kind == LayerKind::Background { 0. } else { 40. });
+        assert_eq!(world(result).x, world(&doc).x - 40.);
         assert!(new.raster == old.raster, "a crop never rebases");
     }
-    assert_eq!(result.layers.last().unwrap(), doc.layers.last().unwrap(), "paper does not move");
 }
 
 #[test]

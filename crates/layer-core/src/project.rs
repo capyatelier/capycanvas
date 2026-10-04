@@ -291,7 +291,7 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
             return Err("Invalid reference layer".into());
         }
     }
-    for (i, l) in doc.layers.iter().enumerate() {
+    for l in &doc.layers {
         let mut parent = l.properties.parent;
         for _ in 0..32 {
             parent = match parent {
@@ -308,9 +308,6 @@ pub(super) fn validate_document(doc: &Document, limits: ProjectLimits) -> Result
             return Err("Layer groups are too deeply nested or cyclic".into());
         }
         doc.validate_layer(l).map_err(|e| e.to_string())?;
-        if l.kind == LayerKind::Background && i + 1 != doc.layers.len() {
-            return Err("Paper must be the bottom layer".into());
-        }
     }
     Ok(())
 }

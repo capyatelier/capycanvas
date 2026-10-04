@@ -291,15 +291,6 @@ impl RawRegions {
                     .ok_or(GpuRasterError::InvalidExtent)?)
                 .clone();
                 frame.layers = layers.clone();
-                frame.view.background_rgba_linear = layers
-                    .iter()
-                    .find(|l| l.kind == LayerKind::Background && l.visible)
-                    .map(|paper| {
-                        let mut color = frame.background;
-                        color[3] *= paper.opacity;
-                        color
-                    })
-                    .unwrap_or([0.; 4]);
                 Some(Arc::new(frame))
             }
             layer_render::RegionSource::Layer(_) | layer_render::RegionSource::Coverage(_) => None,
@@ -471,11 +462,11 @@ impl RawRegions {
         let fallback = if let Some(mask) = &stored_mask {
             [mask.default_coverage; 4]
         } else {
-            r.thumbnails
-                .paper
-                .filter(|(id, _)| Some(*id) == layer)
-                .map_or([0.; 4], |(_, c)| {
-                    [c[0] * c[3], c[1] * c[3], c[2] * c[3], c[3]]
+            layer.and_then(|id| r.artwork_frame.as_ref()?.layers.iter().find(|owner| owner.id == id))
+                .and_then(|owner| owner.effect.as_ref()).and_then(|effect| effect.constant_color())
+                .map_or([0.; 4], |color| {
+                    let [red, green, blue, alpha] = color.linear_in(r.device.working_space()).expect("validated fill color");
+                    [red * alpha, green * alpha, blue * alpha, alpha]
                 })
         };
         let seed_tile = request.position.map(|v| v / PAGE_SIZE);
@@ -719,7 +710,7 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
     let mut layers = frame
         .layers
         .iter()
-        .filter(|l| l.visible && !matches!(l.kind, LayerKind::Background | LayerKind::Selection));
+        .filter(|l| l.visible && !matches!(l.kind, LayerKind::Selection));
     let layer = layers.next()?;
     let source = layer.source.as_ref()?;
     if layers.next().is_some()

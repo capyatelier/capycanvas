@@ -183,6 +183,7 @@ pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWrit
     if program.space!=EffectSpace::Linear {data["space"]=json!("blending");}
     if program.resolution!=EffectResolution::Native {data["resolution"]=json!("display");}
     if program.time {data["time"]=json!(true);}
+    if let Some(key)=&program.constant_color {data["constant_color"]=json!(key);}
     if !program.passes.is_empty() {data["passes"]=Value::Array(program.passes.iter().map(|pass| json!({"entry":pass.entry,"sampling":match &pass.sampling {
         EffectSampling::Neighborhood {radius}=>json!({"kind":"neighborhood","radius":radius}),
         EffectSampling::Parameter {key,scale,padding}=>json!({"kind":"parameter","key":key,"scale":scale,"padding":padding}),
@@ -234,7 +235,7 @@ fn decode_auxiliary(value: &Value) -> DecodeResult<EffectAuxiliary> {
 }
 
 pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> DecodeResult<Definition> {
-    let fields=object(value,&["key","contract","abi","label","kind","code","entry","parameters","slots","alpha","space",
+    let fields=object(value,&["key","contract","abi","label","kind","constant_color","code","entry","parameters","slots","alpha","space",
         "resolution","time","passes","lookups","auxiliary","pages","constraints"])?;
     if string(required(fields,"contract")?)? != "capy.filter/1" {return Err(unsupported("evaluation contract"));}
     let abi=u32_value(required(fields,"abi")?)?;
@@ -299,6 +300,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
     let program=Arc::new(EffectProgram {abi,id:text(required(fields,"key")?)?,label:label(required(fields,"label")?)?,kind,alpha,space,resolution,
         wgsl:decode_code(required(fields,"code")?,reader)?,entry:text(required(fields,"entry")?)?,passes:passes.into(),
         time:fields.get("time").map(boolean).transpose()?.unwrap_or(false),lookups:lookups.into(),
+        constant_color:fields.get("constant_color").map(text).transpose()?,
         auxiliary:fields.get("auxiliary").map(decode_auxiliary).transpose()?,pages:pages.into(),parameters:parameters.into(),constraints:constraints.into()});
     EffectInstance::new(program.clone()).validate()?;
     Ok(Definition {program,dimensions})

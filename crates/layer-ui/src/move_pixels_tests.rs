@@ -156,7 +156,7 @@ mod move_pixels_checks {
         refused(&mut s, "The active layer is locked");
         layer(&mut s, LayerAction::Lock { id: 1, value: false });
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        refused(&mut s, "The paper can't be moved");
+        refused(&mut s, "Choose a paint layer or a mask to move selected pixels");
         layer(&mut s, LayerAction::New { group: true, clipped: false });
         refused(&mut s, "Choose a paint layer or a mask to move selected pixels");
         layer(&mut s, LayerAction::New { group: false, clipped: false });

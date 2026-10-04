@@ -98,10 +98,8 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
         .present(
             &r,
             &target.create_view(&Default::default()),
-            ViewState {
-                background_rgba_linear: [1.; 4],
-                ..view()
-            },
+            view()
+            ,
             [1.; 4],
         )
         .unwrap();
@@ -116,10 +114,8 @@ fn selection_paint_overlay_is_coverage_scaled_and_excluded_from_artwork() {
         .present(
             &r,
             &target.create_view(&Default::default()),
-            ViewState {
-                background_rgba_linear: [1.; 4],
-                ..view()
-            },
+            view()
+            ,
             [1.; 4],
         )
         .unwrap();

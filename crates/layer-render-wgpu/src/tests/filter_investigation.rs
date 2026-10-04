@@ -279,7 +279,7 @@ fn photo_filter_frame_time() {
     });
     let extent = project.as_ref().map_or([5184, 3456], |p| [p.document.width, p.document.height]);
     let mut view = ViewState { width_px: extent[0], height_px: extent[1],
-        background_rgba_linear: [0.; 4], ..test_view() };
+        ..test_view() };
     if project.is_some() {
         // A 61 MP document is not a 61 MP monitor. Keep the real filter extent,
         // but fit its presentation within the ordinary bounded display cache.

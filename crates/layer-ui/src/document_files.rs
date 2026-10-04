@@ -285,7 +285,6 @@ pub fn new_drawing(width: u32, height: u32, localization: &Localizer) -> Result<
 #[derive(Clone)]
 pub struct DocumentExport {
     pub project: Project,
-    pub background: [f32; 4],
     pub time: f32,
 }
 
@@ -567,7 +566,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.require_document_idle()?;
         Ok(DocumentExport {
             project: self.capture_project_recovery()?,
-            background: self.engine.view().background_rgba_linear,
             time: self.engine.animation_time(),
         })
     }

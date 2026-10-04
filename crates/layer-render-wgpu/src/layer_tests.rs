@@ -35,7 +35,6 @@ fn view() -> ViewState {
         width_px: 128,
         height_px: 128,
         document_to_surface: [1., 0., 0., 1., 0., 0.],
-        background_rgba_linear: [0.; 4],
     }
 }
 pub(super) fn dab(color: [f32; 4]) -> Dab {
@@ -87,7 +86,7 @@ fn retained_scene_viewport_preserves_pixels_outside_local_paint_and_preview_dama
     layer.mask = Some(LayerMask::reveal_all(LayerId(9), Point::default()));
     let layers = [layer];
     let camera = ViewState { width_px: 512, height_px: 512,
-        background_rgba_linear: [0.2, 0.3, 0.4, 1.], ..view() };
+        ..view() };
     let mut retained = crate::ViewportPresenter::for_surface(&r, format, crate::SdrSurfaceColor::Srgb).unwrap();
     retained.set_target_retention(true);
     for (i, (x, y, preview)) in [(85., 90., false), (365., 330., true),

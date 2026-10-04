@@ -1,6 +1,7 @@
 param([Parameter(Mandatory)][string]$Executable,[ValidateSet('Pointer','Automation')][string]$InputMode='Pointer')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
+$CapyCacheModel=$true
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 $Executable=(Resolve-Path -LiteralPath $Executable).Path
@@ -141,13 +142,20 @@ try {
     Tap $filters;Drawer @('filter_types','adjustments','properties');if((Model).state.layer_properties.layer -ne $filterId){throw 'Filter selection lost on reopen'}
     Capture 'filters-dark' -WithModel;Set-Theme 'Light';Tap $filters;Drawer @('filter_types','adjustments','properties');Capture 'filters-light' -WithModel
     Tap 'cancel-filter' 'pen';Wait-Until {!(Model).state.customization.drawer -and @((Model).state.layers).Count -eq $count} 'Cancel did not delete filter and close'
-    Tap $layers;$paper=@((Model).state.layers|Where-Object label -eq 'Paper')[0];Tap ('layer-'+$paper.id+'-name')
-    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'paper-color-bucket' 'touch';Capture 'paper-properties' -WithModel
+    Tap $layers;Drawer @('layers')
+    $paper=@((Model).state.layers|Where-Object label -eq 'Paper')[0];Tap ('layer-'+$paper.id+'-name')
+    Tap $filters;Drawer @('filter_types','adjustments','properties');Tap 'color-bucket' 'touch';Capture 'paper-properties' -WithModel
     if(!(Model).state.layer_properties.controls){throw 'Paper properties missing'}
+    $fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0]
+    if($fill.has_mask -or $fill.content_icon -or !(Model).state.layer_tools.controls.opacity){throw 'Paper is not an ordinary maskless fill'}
     Write-Output 'PASS: Filter replacement/reopen/cancel, drawing target, paper color'
     Tap $layers;Drawer @('layers')
     Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Paper thumbnail did not finish' 30
-    Capture 'paper-layer' -WithModel
+    foreach($theme in @('Light','Dark')){
+        Set-Theme $theme;if(!(Model).state.customization.drawer){Tap $layers};Drawer @('layers')
+        Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Fill thumbnail did not finish' 30
+        Capture ('fill-thumbnail-'+$theme.ToLowerInvariant()) -WithModel
+    }
     if($InputMode -eq 'Pointer'){
         foreach($device in @('pen','touch')){
             $id=@((Model).state.layers)[0].id;Swipe $id -90 $device

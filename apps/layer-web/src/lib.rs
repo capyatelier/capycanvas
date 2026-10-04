@@ -1096,7 +1096,7 @@ impl WebApp {
         let first = !self.surface.as_ref().is_some_and(|s| s.blank_presented);
         let mut change = layer_ui::UiChange::default();
         if first {
-            self.session.submit_paper_frame().map_err(js)?;
+            self.session.submit_backdrop_frame().map_err(js)?;
         } else {
             self.prepare_startup()?;
             self.startup = self.rasterizer()?.poll_startup().map_err(js)?;

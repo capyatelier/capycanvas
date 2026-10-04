@@ -251,7 +251,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
         for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
             if full { r.scale_display = None; }
             r.submit(FramePacket {
-                view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                 reset_layers: step == 0,
                 ..packet(&layers, canvas)
             }).unwrap();
@@ -288,7 +288,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
                 if full { r.scale_display = None; }
                 let before = r.metrics.composited_pixels;
                 r.submit(FramePacket {
-                    view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                     dabs: if prediction { std::slice::from_ref(&ink) } else { &[] },
                     dab_batches: if prediction { std::slice::from_ref(&stroke) } else { &[] },
                     composite_all: full || baseline.is_none(),
@@ -315,7 +315,7 @@ fn placed_photo_incremental_composition_matches_rebuild_with_alpha_and_affine_ed
             for (r, full) in [(&mut r, false), (&mut rebuilt, true)] {
                 if full { r.scale_display = None; }
                 r.submit(FramePacket {
-                    view: ViewState { width_px: canvas[0], height_px: canvas[1], background_rgba_linear: [0.12, 0.25, 0.37, 0.5], ..view() },
+                    view: ViewState { width_px: canvas[0], height_px: canvas[1], ..view() },
                     dabs: std::slice::from_ref(&ink),
                     dab_batches: std::slice::from_ref(&stroke),
                     composite_all: full,

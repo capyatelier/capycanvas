@@ -490,8 +490,6 @@ resources-animated-tooltip = { $name } · Beranimasi
 
 resources-invalid-message = Sumber daya ini menggunakan label tampilan yang tidak dikenal atau tidak didukung.
 
-resources-paper-color = Warna kertas
-
 resources-opacity = Opasitas
 
 resources-blend-mode = Mode baur
@@ -519,8 +517,6 @@ resources-error-artwork-required = Kembali ke karya sebelum menerapkan filter
 resources-error-select-layer = Pilih lapisan terlebih dahulu
 
 resources-error-select-property-layer = Pilih lapisan ini sebelum mengedit propertinya
-
-resources-error-paper-locked = Pilih kertas yang tidak dikunci untuk mengubah warnanya
 
 resources-error-device-busy = GPU tidak tersedia atau sibuk memvalidasi filter
 
@@ -783,8 +779,6 @@ resources-layer-menu-show-layer = Tampilkan lapisan
 resources-layer-menu-show-layer-and-parent-groups = Tampilkan lapisan dan grup induk
 
 resources-layer-menu-show-mask-area = Tampilkan area mask
-
-resources-layer-menu-show-paper = Tampilkan kertas
 
 resources-layer-menu-ungroup = Pisahkan grup
 

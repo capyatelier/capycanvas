@@ -160,8 +160,6 @@ pub struct ViewState {
     pub height_px: u32,
     /// Affine document-to-surface transform `[a, b, c, d, tx, ty]`.
     pub document_to_surface: [f32; 6],
-    /// Straight linear document RGB and coverage for the canvas background.
-    pub background_rgba_linear: [f32; 4],
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -318,11 +316,16 @@ pub struct ReadbackImage {
     pub bytes: Vec<u8>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FilterPreviewSource {
+    LayerStack(LayerId),
+    EffectInput(LayerId),
+}
 /// Small idle-time picker request; paint stays in renderer-owned GPU storage.
 #[derive(Clone, Debug)]
 pub struct FilterPreviewRequest {
     pub request_id: u64,
-    pub target: LayerId,
+    pub source: FilterPreviewSource,
     pub size: [u32; 2],
     pub extent: [u32; 2],
     pub view: ViewState,
@@ -648,20 +651,18 @@ impl TransformPreview {
     }
 }
 
-/// Preserve tool and background appearance when the document RGB coordinates
+/// Preserve tool color appearance when the document RGB coordinates
 /// change. Candidate preparation and the eventual history commit use this same
 /// mapping; alpha and retained image interpretations are unchanged.
 pub fn remap_document_colors(
     source: layer_core::color::RgbSpace,
     destination: layer_core::color::RgbSpace,
     brush: &mut layer_core::BrushSnapshot,
-    view: &mut ViewState,
 ) {
     let matrix = source.linear_transform(destination);
     for color in [
         &mut brush.color_rgba_linear,
         &mut brush.color_dynamics.secondary_color_rgba_linear,
-        &mut view.background_rgba_linear,
     ] {
         let rgb = layer_core::color::rgb::apply(matrix, [color[0], color[1], color[2]].map(f64::from));
         color[..3].copy_from_slice(&rgb.map(|v| v as f32));

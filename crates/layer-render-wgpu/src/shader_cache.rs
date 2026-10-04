@@ -348,7 +348,7 @@ mod tests {
             layer_core::Rect { min: layer_core::Point { x: 16., y: 16. }, max: layer_core::Point { x: 48., y: 48. } },
         )];
         let packet = layer_render::FramePacket {
-            view: layer_render::ViewState { background_rgba_linear: [1.; 4], ..crate::test_support::view([64; 2]) },
+            view: crate::test_support::view([64; 2]),
             dabs: &dabs,
             dab_batches: &batches,
             reset_layers: true,

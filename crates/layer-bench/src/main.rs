@@ -290,18 +290,18 @@ impl Canvas {
         Self::configured([WIDTH, HEIGHT], [0.93, 0.92, 0.88, 1.0])
     }
 
-    fn configured(extent: [u32; 2], background_rgba_linear: [f32; 4]) -> Result<Self, String> {
+    fn configured(extent: [u32; 2], backdrop: [f32; 4]) -> Result<Self, String> {
         let color = document_color();
         let mut document = Document::new("untitled", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
         document.color = color;
+        document.layers[1] = layer_core::Layer::solid_color(document.layers[1].id, "Paper", layer_core::color::RgbColor::from_linear(color.space, backdrop).unwrap());
         document.blend_space = document_blending();
         let (producer, consumer) = input_queue(16_384);
         let view = ViewState {
             width_px: extent[0],
             height_px: extent[1],
             document_to_surface: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            background_rgba_linear,
-        };
+            };
         let backend = WgpuRasterizer::new_native_headless(color).map_err(|e| e.to_string())?;
         let mut engine =
             CanvasEngine::new(backend, document, consumer, view, ViewTransform::IDENTITY)

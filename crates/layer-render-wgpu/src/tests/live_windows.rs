@@ -7,7 +7,7 @@ use layer_core::{LayerMask, Selection};
 
 fn packet(layers: &[Layer], extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
-        view: ViewState { width_px: extent[0], height_px: extent[1], background_rgba_linear: [0.; 4], ..test_view() },
+        view: ViewState { width_px: extent[0], height_px: extent[1], ..test_view() },
         ..crate::test_support::packet(layers, extent)
     }
 }

@@ -60,7 +60,7 @@ fn codes(engine: &mut Engine, maximum: f64) -> Vec<f64> {
     let mut capture = engine
         .backend()
         .snapshot_gpu()
-        .capture(Project { document: engine.document().clone() }, [0.; 4], 0., Default::default())
+        .capture(Project { document: engine.document().clone() }, 0., Default::default())
         .unwrap();
     capture
         .read_region([0, 0, SIZE[0], SIZE[1]])
@@ -233,7 +233,7 @@ fn frequency_separation_dodge_burn_and_a_filter_merge_on_a_24_megapixel_photo() 
     let photo = doc.layers[0].id;
     let gpu = layer_render_wgpu::WgpuRasterizer::new_native_headless(doc.color).expect("physical GPU required");
     let (_producer, consumer) = input_queue(64);
-    let view = layer_render::ViewState { width_px: 1600, height_px: 1000, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.], background_rgba_linear: [0.; 4] };
+    let view = layer_render::ViewState { width_px: 1600, height_px: 1000, document_to_surface: [0.25, 0., 0., 0.25, 0., 0.], };
     let mut engine = CanvasEngine::new(gpu, doc, consumer, view, ViewTransform::IDENTITY).unwrap();
     let settle = |engine: &mut Engine| {
         let start = std::time::Instant::now();

@@ -275,7 +275,18 @@ and Gradient Fill (`gradient_fill`: Linear or Radial, Angle counterclockwise fro
 the x axis, Scale, Center and Reverse, with stops evaluated as in Gradient Map)
 are generators. Layer › New inserts them with a reveal-all mask, or the
 selection as the mask, so painting edits the mask; Solid Color starts from the
-current color. The Filter menu and the selection bar's Adjust menu list
+current color. New documents use a white Solid Color fill named Paper on the
+bottom, without a mask. It has no special layer role or restrictions.
+
+A static pointwise generator can declare `"constant_color":"color"`, naming a
+Color parameter whose tagged RGB and alpha define its entire output. It must
+have no time input, passes, lookups or auxiliary resources. The renderer uses
+that value directly for composition, queries and thumbnails, avoiding a filter
+pass. The declaration is an execution contract; its shader must produce the
+same color. Thumbnails show raw fill color over the transparency checker,
+independent of layer opacity or masks.
+
+The Filter menu and the selection bar's Adjust menu list
 adjustments only; the effect browser lists both. The Filter menu ends with
 Frequency Separation…, which bakes Gaussian Blur and High Pass into new layers
 ([documents](../internals/documents.md#retouching-layers)).

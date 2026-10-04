@@ -3815,7 +3815,7 @@ class AndroidInteractionTest {
         val fill = listOf(.2, .2, .6, .8)
         fun panel() = state().getJSONObject("layer_tools").optJSONObject("image_size")
         fun notice() = state().optJSONObject("notice")?.getString("text")
-        fun paperLayer() = layerStates().first { it.optString("content_icon") == "layer-paper-symbolic" }
+        fun paperLayer() = layerStates().first { it.getLong("id") == 2L }
         fun showPaper(shown: Boolean) {
             layerAction(obj("op" to "visibility", "id" to paperLayer().getLong("id"), "value" to shown))
             waitFor("the paper is ${if (shown) "shown" else "hidden"}", 5_000) { paperLayer().getBoolean("visible") == shown }

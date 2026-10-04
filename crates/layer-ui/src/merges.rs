@@ -20,13 +20,11 @@ fn refusal_text(refusal: MergeRefusal, l: &Localizer) -> std::sync::Arc<str> {
     use MergeRefusal as R;
     match refusal {
         R::NoLayer => l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_A_LAYER_FIRST),
-        R::Paper => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_PAPER_CAN_T_BE_MERGED),
         R::SelectionLayer => l.text(MessageId::COMMANDS_REFUSAL_MERGES_A_SELECTION_LAYER_HOLDS_A_SELECTION_NOT_ARTWORK),
         R::Hidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SHOW_THE_LAYER_BEFORE_MERGING_IT),
         R::NotNormal => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SET_THE_LAYER_TO_NORMAL_BEFORE_MERGING_IT_DOWN),
         R::Locked => l.text(MessageId::COMMANDS_REFUSAL_MERGES_UNLOCK_THE_LAYERS_TO_MERGE_FIRST),
         R::NoLayerBelow => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THERE_S_NO_LAYER_BELOW_TO_MERGE_INTO),
-        R::PaperBelow => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_PAPER_CAN_T_RECEIVE_MERGED_PIXELS),
         R::BelowHidden => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SHOW_THE_LAYER_BELOW_FIRST),
         R::BelowLocked => l.text(MessageId::COMMANDS_REFUSAL_MERGES_THE_LAYER_BELOW_IS_LOCKED),
         R::BelowNotNormal => l.text(MessageId::COMMANDS_REFUSAL_MERGES_SET_THE_LAYER_BELOW_TO_NORMAL_BEFORE_MERGING),
@@ -97,7 +95,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// group, on the active layer, then the whole-image merges.
     pub(super) fn merge_menu_items(&self, layer: &layer_core::Layer) -> Vec<ContextMenuItem> {
         let active = [if layer.kind == LayerKind::Group { CommandId::MergeGroup } else { CommandId::MergeDown }];
-        let own = layer.id == self.engine.document().active_layer && layer.kind != LayerKind::Background;
+        let own = layer.id == self.engine.document().active_layer;
         let active = if own { &active[..] } else { &[] };
         active
             .iter()

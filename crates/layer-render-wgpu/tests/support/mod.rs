@@ -57,8 +57,7 @@ pub fn engine(document: Document) -> (Engine, InputProducer<PenEvent>) {
         width_px: 1024,
         height_px: 768,
         document_to_surface: Affine::IDENTITY.0,
-        background_rgba_linear: [0.; 4],
-    };
+        };
     let mut engine = CanvasEngine::new(gpu, document, consumer, view, ViewTransform::IDENTITY).unwrap();
     engine.render_frame_at(0).unwrap();
     (engine, producer)

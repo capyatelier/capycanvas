@@ -50,18 +50,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(tiles)
     }
 
-    /// Present paper before restoring the document's committed raster.
-    pub fn submit_paper_frame(&mut self) -> Result<(), String> {
+    /// Present constant fills before restoring the document's committed raster.
+    pub fn submit_backdrop_frame(&mut self) -> Result<(), String> {
         let view = self.state.camera.view();
         let document = self.engine.document();
         let extent = [document.width, document.height];
         let blend_space = document.blend_space;
-        let layers: Vec<_> = document
-            .layers
-            .iter()
-            .filter(|l| l.kind == layer_core::LayerKind::Background)
-            .cloned()
-            .collect();
+        let layers = layer_core::constant_backdrop(&document.layers).to_vec();
         self.engine
             .backend_mut()
             .submit(layer_render::FramePacket {

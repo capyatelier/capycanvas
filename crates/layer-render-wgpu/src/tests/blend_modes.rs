@@ -225,7 +225,6 @@ const OPACITY: f32 = 0.8;
 
 struct Case {
     document: Document,
-    background: [f32; 4],
     /// The layer whose blend varies.
     blended: usize,
 }
@@ -281,20 +280,19 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
         Path::Folded | Path::ImageComposition => 1,
     };
     document.layers = layers;
-    let mut paper = paper;
+    let mut paper = Layer::solid_color(paper.id, paper.name, layer_core::color::RgbColor::from_linear(document.color.space, background).unwrap());
     paper.visible = background[3] > 0.;
     document.layers.push(paper);
     document.active_layer = document.layers[0].id;
-    Case { document, background, blended }
+    Case { document, blended }
 }
 
-fn live(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], blend_space: BlendSpace) -> Vec<Rgba> {
-    live_at(r, layers, background, 0, blend_space, true)
+fn live(r: &mut WgpuRasterizer, layers: &[Layer], blend_space: BlendSpace) -> Vec<Rgba> {
+    live_at(r, layers, 0, blend_space, true)
 }
-fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
+fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], level: u32, blend_space: BlendSpace, settled: bool) -> Vec<Rgba> {
     let scale = 1. / (1 << level) as f32;
     let view = ViewState {
-        background_rgba_linear: background,
         document_to_surface: [scale, 0., 0., scale, 0., 0.],
         ..crate::test_support::view(EXTENT)
     };
@@ -318,10 +316,10 @@ fn live_at(r: &mut WgpuRasterizer, layers: &[Layer], background: [f32; 4], level
         .map(|p| std::array::from_fn(|c| f64::from(f32::from_le_bytes(p[c * 4..c * 4 + 4].try_into().unwrap()))))
         .collect()
 }
-fn exported(r: &WgpuRasterizer, document: &Document, background: [f32; 4]) -> Vec<Rgba> {
+fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<Rgba> {
     let mut capture = r
         .snapshot_gpu()
-        .capture(Project { document: document.clone() }, background, 0., Default::default())
+        .capture(Project { document: document.clone() }, 0., Default::default())
         .unwrap();
     capture
         .read_region([0, 0, EXTENT[0], EXTENT[1]])
@@ -340,7 +338,7 @@ fn alone(r: &mut WgpuRasterizer, document: &Document, index: usize) -> Vec<Rgba>
         layer.properties.blend = LayerBlend::Normal;
         layer.properties.clipped = false;
     }
-    live(r, &layers, [0.; 4], document.blend_space)
+    live(r, &layers, document.blend_space)
 }
 
 #[test]
@@ -358,7 +356,7 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
             .expect("physical GPU required");
         let float = depth.is_float();
         for path in [Path::Layer, Path::Clip, Path::Effect, Path::Folded, Path::ImageComposition] {
-            let Case { mut document, background, blended } = case(depth, path, space);
+            let Case { mut document, blended } = case(depth, path, space);
             let inputs: Vec<_> = (0..document.layers.len() - 1).map(|i| alone(&mut r, &document, i)).collect();
             let a = f64::from(BACKDROP[3]);
             let backdrop = held([BACKDROP[0], BACKDROP[1], BACKDROP[2]].map(f64::from), space);
@@ -367,8 +365,8 @@ fn every_blend_mode_matches_the_reference_on_every_path_and_depth() {
             let probe = |xy| held(probe(depth, xy), space);
             for mode in LayerBlend::ALL.into_iter().filter(|m| *m != LayerBlend::PassThrough) {
                 document.layers[blended].properties.blend = mode;
-                let composite = live(&mut r, &document.layers, background, space);
-                let export = exported(&r, &document, background);
+                let composite = live(&mut r, &document.layers, space);
+                let export = exported(&r, &document);
                 for (i, (actual, export)) in composite.iter().zip(&export).enumerate() {
                     let xy = [i as u32 % EXTENT[0], i as u32 / EXTENT[0]];
                     let [low, high] = match path {
@@ -420,7 +418,7 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
         let weights = if space == BlendSpace::Perceptual { [0.3, 0.59, 0.11] } else { RgbSpace::Srgb.to_xyz()[1] };
         let mut r = WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth }).unwrap();
         for path in [Path::Layer, Path::Clip] {
-            let Case { mut document, background, blended } = case(depth, path, space);
+            let Case { mut document, blended } = case(depth, path, space);
             let inputs = [alone(&mut r, &document, 0), alone(&mut r, &document, 1)];
             for level in [1, 3] {
                 let step = 1 << level;
@@ -443,7 +441,7 @@ fn reduced_blend_modes_match_the_reference_at_every_depth() {
                     let native_low: Vec<_> = native.iter().map(|range| range[0]).collect();
                     let native_high: Vec<_> = native.iter().map(|range| range[1]).collect();
                     for settled in [false, true] {
-                        let actual = live_at(&mut r, &document.layers, background, level, document.blend_space, settled);
+                        let actual = live_at(&mut r, &document.layers, level, document.blend_space, settled);
                         assert_eq!(actual.len(), (extent[0] * extent[1]) as usize);
                         for (i, actual) in actual.iter().enumerate() {
                             let (x, y) = (i as u32 % extent[0], i as u32 / extent[0]);

@@ -244,7 +244,6 @@ resources-no-matching-filters = 沒有相符的濾鏡
 resources-all-filters = 所有濾鏡
 resources-animated-tooltip = { $name } · 動畫
 resources-invalid-message = 此資源使用未知或不支援的顯示標籤。
-resources-paper-color = 紙張色彩
 resources-opacity = 不透明度
 resources-blend-mode = 混合模式
 resources-error-package-pending = 已有濾鏡套件正在驗證
@@ -259,7 +258,6 @@ resources-error-effect-layer-required = 這不是效果圖層
 resources-error-artwork-required = 套用濾鏡前請先返回畫作
 resources-error-select-layer = 請先選擇圖層
 resources-error-select-property-layer = 編輯屬性前請先選擇此圖層
-resources-error-paper-locked = 請選擇未鎖定的紙張以變更色彩
 resources-error-device-busy = GPU 無法使用或正在驗證濾鏡
 resources-error-layer-locked = 此圖層已鎖定
 resources-error-unknown-curve-point = 未知的曲線點
@@ -469,8 +467,6 @@ resources-layer-menu-show-layer = 顯示圖層
 resources-layer-menu-show-layer-and-parent-groups = 顯示圖層及其上層群組
 
 resources-layer-menu-show-mask-area = 顯示遮罩區域
-
-resources-layer-menu-show-paper = 顯示紙張
 
 resources-layer-menu-ungroup = 解散群組
 

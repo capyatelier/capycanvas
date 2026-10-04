@@ -1005,11 +1005,7 @@ commands-refusal-selection-pixels-masks-aren-t-cleared-this-way-return-to-the-la
 
 commands-refusal-selection-pixels-select-layers-first = Pilih lapisan terlebih dahulu
 
-commands-refusal-selection-pixels-the-paper-can-t-be-duplicated = Kertas tidak dapat diduplikat
-
 commands-refusal-selection-pixels-select-a-layer-first = Pilih lapisan terlebih dahulu
-
-commands-refusal-selection-pixels-the-paper-can-t-be-copied-to-a-layer = Kertas tidak dapat disalin ke lapisan
 
 commands-refusal-selection-pixels-an-effect-layer-has-no-pixels-of-its-own = Lapisan efek tidak memiliki piksel sendiri
 
@@ -1041,8 +1037,6 @@ commands-refusal-clipboard-make-a-selection-to-paste-into = Buat seleksi sebagai
 
 commands-refusal-clipboard-quick-mask-edits-the-selection-leave-it-to-copy-artwork = Mask Cepat mengedit seleksi; keluar untuk menyalin karya
 
-commands-refusal-clipboard-the-paper-has-no-pixels-to-copy = Kertas tidak memiliki piksel untuk disalin
-
 commands-refusal-notices-no-visible-photo-or-paint-layer-below = Tidak ada lapisan foto atau cat terlihat di bawah
 
 commands-refusal-notices-select-a-layer-to-draw-on = Pilih lapisan untuk menggambar
@@ -1051,7 +1045,7 @@ commands-refusal-notices-the-layer-below-this-effect-is-locked = Lapisan di bawa
 
 commands-refusal-notices-a-group-has-no-pixels-of-its-own-select-a-layer-inside-it = Grup tidak memiliki piksel sendiri. Pilih lapisan di dalamnya.
 
-commands-refusal-notices-the-paper-can-t-be-drawn-on-add-a-layer-above-it = Kertas tidak dapat dilukis. Tambah lapisan di atasnya.
+commands-refusal-notices-add-a-mask-to-paint-on-this-fill-layer = Tambahkan masker untuk melukis pada lapisan isian ini.
 
 commands-refusal-notices-a-selection-layer-holds-a-selection-not-paint = Lapisan seleksi menyimpan seleksi, bukan cat
 
@@ -1073,8 +1067,6 @@ commands-refusal-notices-this-layer-is-scaled-or-rotated-so-it-can-t-be-retouche
 
 commands-refusal-notices-the-layer-below-is-already-a-reference = Lapisan di bawah sudah menjadi acuan
 
-commands-refusal-merges-the-paper-can-t-be-merged = Kertas tidak dapat digabungkan
-
 commands-refusal-merges-a-selection-layer-holds-a-selection-not-artwork = Lapisan seleksi menyimpan seleksi, bukan karya
 
 commands-refusal-merges-show-the-layer-before-merging-it = Tampilkan lapisan sebelum menggabungkannya
@@ -1084,8 +1076,6 @@ commands-refusal-merges-set-the-layer-to-normal-before-merging-it-down = Atur la
 commands-refusal-merges-unlock-the-layers-to-merge-first = Buka kunci lapisan yang akan digabungkan terlebih dahulu
 
 commands-refusal-merges-there-s-no-layer-below-to-merge-into = Tidak ada lapisan di bawah untuk digabungkan
-
-commands-refusal-merges-the-paper-can-t-receive-merged-pixels = Kertas tidak dapat menerima piksel gabungan
 
 commands-refusal-merges-show-the-layer-below-first = Tampilkan lapisan di bawah terlebih dahulu
 

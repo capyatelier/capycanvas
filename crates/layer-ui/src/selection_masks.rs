@@ -384,7 +384,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     .iter()
                     .position(|l| {
                         l.properties.parent == layer.properties.parent
-                            && l.kind != LayerKind::Background
                     })
                     .map(|i| position + 1 + i)
             };

@@ -94,13 +94,10 @@ impl SnapshotGpu {
             let effect = Arc::make_mut(layer.effect.as_mut().unwrap());
             let program = Arc::make_mut(&mut effect.program); program.entry = format!("{}_channels", program.entry).into();
         }
-        let background = document.layers.iter().find(|layer| layer.kind == LayerKind::Background)
-            .map(|layer| layer.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE).linear_in(document.color.space))
-            .transpose()?.unwrap_or([0.; 4]);
         discard_hidden_backing(&mut document);
         #[cfg(target_arch = "wasm32")]
         if let Some(waiter) = &self.analysis_backing_waiter { waiter(Arc::new(document.clone()), control.clone()).await?; }
-        let mut snapshot = self.capture(Project { document }, background, request.time, control.clone()).map_err(|e| e.to_string())?;
+        let mut snapshot = self.capture(Project { document }, request.time, control.clone()).map_err(|e| e.to_string())?;
         snapshot.document = identity;
         snapshot.planned_pixel_bytes = 256 * 1024 * 1024;
         for (id, phase) in request.effect_times.iter().copied() {

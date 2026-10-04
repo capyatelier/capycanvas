@@ -67,7 +67,7 @@ pub(super) fn drawing_refusal_text(refusal: DrawingRefusal, l: &Localizer) -> st
         DrawingRefusal::Locked => l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED),
         DrawingRefusal::BaseLocked => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_LAYER_BELOW_THIS_EFFECT_IS_LOCKED),
         DrawingRefusal::Group => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_A_GROUP_HAS_NO_PIXELS_OF_ITS_OWN_SELECT_A_LAYER_INSIDE_IT),
-        DrawingRefusal::Paper => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THE_PAPER_CAN_T_BE_DRAWN_ON_ADD_A_LAYER_ABOVE_IT),
+        DrawingRefusal::Fill => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_ADD_A_MASK_TO_PAINT_ON_THIS_FILL_LAYER),
         DrawingRefusal::SelectionLayer => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_A_SELECTION_LAYER_HOLDS_A_SELECTION_NOT_PAINT),
         DrawingRefusal::EffectWithoutBase => l.text(MessageId::COMMANDS_REFUSAL_NOTICES_THIS_EFFECT_LAYER_HAS_NO_LAYER_BELOW_IT_TO_DRAW_ON),
         DrawingRefusal::Mask => l.text(MessageId::COMMANDS_RETURN_TO_THE_LAYER_S_ARTWORK_FIRST),

@@ -60,6 +60,7 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
     for space in layer_core::BlendSpace::ALL {
     for (selected, opacity) in [(false, 1.), (true, 0.71)] {
         let mut doc = document();
+        doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::WHITE));
         if patterned { doc.layers[0].source = Some(layer_core::color::source::rgba8_source(extent, |x, y|
             [if (x / 5 + y / 7) % 2 == 0 { 40 } else { 220 },
              if (x / 13 + y / 17) % 2 == 0 { 40 } else { 220 },
@@ -70,7 +71,6 @@ fn deferred_transforms_present_rotated_views_and_navigators_without_intermediate
         exact.test.reference = true;
         let mut frame = packet(&doc.layers, extent);
         frame.blend_space = space;
-        frame.view.background_rgba_linear = [1.; 4];
         frame.view.width_px = 160; frame.view.height_px = 100;
         frame.view.document_to_surface = [0.19, 0., 0., 0.19, 8.25, 7.5];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();

@@ -4,7 +4,7 @@ type Checkpoint<I> = (usize, I, Option<(I, usize)>);
 
 pub(super) trait Compositor {
     type Image;
-    fn clear(&mut self, paper: bool) -> Self::Image;
+    fn clear(&mut self) -> Self::Image;
     fn discard(&mut self, image: Self::Image);
     fn duplicate(&mut self, image: &Self::Image) -> Self::Image;
     fn fade(&mut self, front: Self::Image, back: Self::Image, index: usize) -> Result<Self::Image, GpuRasterError>;
@@ -29,7 +29,7 @@ pub(super) fn compose<C: Compositor>(
     let checkpoint = c.checkpoint(parent);
     let cut = checkpoint.as_ref().map(|(index, ..)| *index);
     let (output, stack) = checkpoint.map_or_else(
-        || (c.clear(parent.is_none()), None), |(_, output, stack)| (output, stack),
+        || (c.clear(), None), |(_, output, stack)| (output, stack),
     );
     let (Flow::Done(output) | Flow::Stopped(output)) =
         group_into(c, layers, parent, stop_before, cut, output, stack)?;
@@ -54,13 +54,13 @@ fn group_into<C: Compositor>(
 ) -> Result<Flow<C::Image>, GpuRasterError> {
     let stop = stop_root(layers, parent, stop_before);
     let mut siblings = layers.iter().enumerate().rev()
-        .filter(|(_, l)| l.properties.parent == parent && l.kind != LayerKind::Background && l.is_artwork())
+        .filter(|(_, l)| l.properties.parent == parent && l.is_artwork())
         .filter(|(i, _)| cut.is_none_or(|cut| *i < cut)).peekable();
     while let Some((i, layer)) = siblings.next() {
         if let Some((stop, clipped)) = stop_before && stop == i {
             if clipped {
                 c.discard(output);
-                return Ok(Flow::Stopped(stack.map_or_else(|| c.clear(false), |(pixels, _)| pixels)));
+                return Ok(Flow::Stopped(stack.map_or_else(|| c.clear(), |(pixels, _)| pixels)));
             }
             if let Some((pixels, base)) = stack { output = c.blend(pixels, output, base, false)?; }
             return Ok(Flow::Stopped(output));
@@ -127,25 +127,7 @@ struct Tile<'a> {
 }
 impl Compositor for Tile<'_> {
     type Image = usize;
-    fn clear(&mut self, paper: bool) -> usize {
-        let c = if paper { self.packet.view.background_rgba_linear } else { [0.; 4] };
-        let color = composite_color(self.r, self.packet, c);
-        if c[3] > 0. && let Some((origin, extent)) = self.r.capture_frame {
-            let start = std::array::from_fn::<_, 2, _>(|i| -origin[i] - (self.coordinate[i] * PAGE_SIZE) as f32);
-            let min = start.map(|v| v.max(0.));
-            let max = std::array::from_fn::<_, 2, _>(|i| (start[i] + extent[i] as f32).min(PAGE_SIZE as f32));
-            let out = self.scene.alloc(self.r, wgpu::Color::TRANSPARENT);
-            if min[0] < max[0] && min[1] < max[1] {
-                let mut data = [0.; 32];
-                data[..6].copy_from_slice(&[min[0], min[1], max[0] - min[0], max[1] - min[1], PAGE_SIZE as f32, PAGE_SIZE as f32]);
-                data[12..16].copy_from_slice(&[color.r as f32, color.g as f32, color.b as f32, color.a as f32]);
-                self.scene.jobs.push(Job::Draw { target: self.scene.pool[out].view.clone(),
-                    sources: std::array::from_fn(|_| self.r.empty_view.clone()), data, over: false, clip: None });
-            }
-            return out;
-        }
-        self.scene.alloc(self.r, color)
-    }
+    fn clear(&mut self) -> usize { self.scene.alloc(self.r, wgpu::Color::TRANSPARENT) }
     fn discard(&mut self, image: usize) { self.scene.free(image); }
     fn duplicate(&mut self, image: &usize) -> usize {
         let output = self.scene.reserve(self.r);

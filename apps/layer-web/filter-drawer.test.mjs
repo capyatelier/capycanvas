@@ -52,12 +52,18 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   assert.equal(await evaluate('layerApp.state().layers.length'),count);
   assert.equal(await evaluate('layerApp.state().customization.drawer'),undefined);
   await contact(filters);await send({type:'layer',action:{op:'select',id:2,mask:false}});await wait('Number(layerApp.state().layer_properties.layer)===2');
-  await send({type:'set_color',rgba:[.06,.08,.12,1]});await contact('.content-drawer [data-action="paper-color-bucket"]','touch');
-  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-paper-symbolic');
-  assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),false);await capture('paper-properties');
+  await send({type:'set_color',rgba:[1,0,0,1]});await contact('.content-drawer [data-action="color-bucket"]','touch');
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),undefined);
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).has_mask'),false);
+  assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);await capture('paper-properties');
   console.log('PASS: filter replacement, cancellation, reopening and paper properties');
   await contact(layers);
   const row=id=>`.content-drawer .layer-row[data-layer="${id}"]`;
+  for(const theme of ['light','dark']) {
+    await send({type:'set_theme',theme});
+    await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const p=c.getContext('2d').getImageData(16,16,1,1).data;return p[0]>240&&p[1]<10&&p[2]<10&&p[3]===255;})()`);
+    await capture(`fill-thumbnail-${theme}`);
+  }
   await swipe(row(1),-90,0,'mouse');
   assert.equal(await evaluate(`document.querySelector(${JSON.stringify(row(1))}).parentElement.style.getPropertyValue('--swipe')`),'0px');
   for(const [id,device] of [[1,'pen'],[2,'touch']]) {

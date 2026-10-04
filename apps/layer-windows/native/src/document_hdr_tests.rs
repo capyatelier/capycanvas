@@ -80,7 +80,6 @@ fn hdr_linear(host: &NativeHost) -> Vec<[f32; 4]> {
         .snapshot_gpu()
         .capture(
             s.capture_project_recovery().unwrap(),
-            s.engine().view().background_rgba_linear,
             0.,
             Default::default(),
         )

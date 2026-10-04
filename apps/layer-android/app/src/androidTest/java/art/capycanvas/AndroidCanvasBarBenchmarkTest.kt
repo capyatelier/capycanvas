@@ -11,6 +11,7 @@ import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
 import androidx.compose.ui.semantics.SemanticsActions
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
 import androidx.test.core.app.ActivityScenario
 import androidx.test.platform.app.InstrumentationRegistry
@@ -164,7 +165,7 @@ class AndroidCanvasBarBenchmarkTest {
                     state().array("tabs").objects().any { it.optBoolean("active") && it.optInt("width") == width && it.optInt("height") == height } }
                 documentExtent = "${width}x$height"
                 blending?.let { invoke("blend_$it") }
-                val photoLayer = adoptedPhoto
+                val photoLayer = state().array("layers").objects().single { it.optBoolean("editing") }.getLong("id")
                 for (layer in state().array("layers").objects().filter { it.getLong("id") != photoLayer })
                     action(obj("type" to "set_layer_visibility", "id" to layer.getLong("id"), "visible" to false))
                 invoke("add_layer")
@@ -616,6 +617,7 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
                     Scrub("unsharp_mask", "amount", "Amount", "effect-unsharp-amount-drag", .3, span = .4, radius = args.getString("effectRadius")?.toDouble() ?: 85.0),
                 ) else listOf(
+                    Scrub("solid_color", "opacity", "Opacity", "fill-opacity-drag", .35, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
                     Scrub("hue_saturation", "hue", "Hue", "effect-master-hue-drag", .55),
                     Scrub("hue_saturation", "greens_hue", "Hue", "effect-range-hue-drag", .55, page = "greens"),
@@ -655,6 +657,7 @@ class AndroidCanvasBarBenchmarkTest {
                     else action(obj("type" to "select_layer", "id" to lookup.second))
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
                     scrub.radius?.let { radius -> effect(obj("op" to "set", "layer" to effectLayer, "key" to "sigma", "value" to obj("kind" to "number", "value" to radius))) }
+                    if (scrub.id == "solid_color") action(obj("type" to "layer", "action" to obj("op" to "delete_mask", "id" to effectLayer)))
                     val hasGuide = scrub.id in listOf("shadows_highlights", "clarity")
                     if (hasGuide) {
                         waitGuide("local guide published")
@@ -662,39 +665,44 @@ class AndroidCanvasBarBenchmarkTest {
                     val guideReady = SystemClock.elapsedRealtimeNanos()
                     scrub.page?.let { effect(obj("op" to "select_page", "layer" to effectLayer, "page" to it)) }
                     if (scrub.colorize) effect(obj("op" to "set", "layer" to effectLayer, "key" to "colorize", "value" to obj("kind" to "toggle", "value" to true)))
-                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
-                    val group = host.panelGroup("properties")
+                    val panel = if (scrub.id == "solid_color") "layers" else "properties"
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
+                    val group = host.panelGroup(panel)
                     action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
-                    if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                    if (group.optString("active") != panel) action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to panel))
                     action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
                     waitFor("panel configuration closed") { state().getJSONObject("customization").isNull("expanded") }
-                    waitFor("${scrub.title} control") { findTag("number-slider-${scrub.title}") != null }
+                    fun slider() = if (scrub.id == "solid_color") findTag("layer-opacity")?.let { (root, panel) ->
+                        panel.find { it.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo) != null }?.let { root to it }
+                    } else findTag("number-slider-${scrub.title}")
+                    waitFor("${scrub.title} control") { slider() != null }
                     invoke("fit_canvas")
                     effectZoom?.let { action(obj("type" to "set_zoom", "zoom" to it)) }
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     runBlocking { kotlinx.coroutines.withContext(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
-                        val node = findTag("number-slider-${scrub.title}")!!.second
+                        val node = slider()!!.second
                         if (node.boundsInRoot.height < node.size.height * .9f) {
                             val scroll = generateSequence(node.parent) { it.parent }.first { it.config.getOrNull(SemanticsActions.ScrollByOffset) != null }
                             scroll.config[SemanticsActions.ScrollByOffset].invoke(androidx.compose.ui.geometry.Offset(0f, node.positionInRoot.y + node.size.height * .5f - scroll.boundsInRoot.center.y))
                         }
                     } }
-                    waitFor("${scrub.title} slider visible") { findTag("number-slider-${scrub.title}")!!.second.let { it.boundsInRoot.height >= it.size.height * .9f } }
+                    waitFor("${scrub.title} slider visible") { slider()!!.second.let { it.boundsInRoot.height >= it.size.height * .9f } }
                     var track = android.graphics.RectF()
                     instrumentation.runOnMainSync {
-                        val (root, node) = findTag("number-slider-${scrub.title}")!!
+                        val (root, node) = slider()!!
                         val origin = IntArray(2); root.view.getLocationOnScreen(origin)
                         node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
                     }
                     check(track.width() > 40 && track.height() > 0)
-                    fun value() = state().getJSONObject("layer_properties").array("controls").objects()
-                        .first { it.getString("key") == scrub.key }.getJSONObject("value").getDouble("value")
+                    fun value() = if (scrub.id == "solid_color") state().array("layers").objects().first { it.getLong("id") == effectLayer }.getDouble("opacity") * 100
+                        else state().getJSONObject("layer_properties").array("controls").objects()
+                            .first { it.getString("key") == scrub.key }.getJSONObject("value").getDouble("value")
                     val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
                     val before = value()
                     drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
                     val warmupDownInjectionMs = lastDownInjectionNs / 1e6
                     host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
-                    if (wanted("spatial-effects")) invoke("undo")
+                    invoke("undo")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     if (wanted("spatial-effects")) waitGuide("spatial filter warmup settled")
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6

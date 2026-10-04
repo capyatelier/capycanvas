@@ -26,13 +26,11 @@ pub enum MergeDown {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeRefusal {
     NoLayer,
-    Paper,
     SelectionLayer,
     Hidden,
     NotNormal,
     Locked,
     NoLayerBelow,
-    PaperBelow,
     BelowHidden,
     BelowLocked,
     BelowNotNormal,
@@ -264,7 +262,7 @@ impl Document {
                     .layers
                     .iter()
                     .filter(|l| {
-                        l.properties.parent.is_none() && l.is_artwork() && l.kind != LayerKind::Background
+                        l.properties.parent.is_none() && l.is_artwork()
                     })
                     .collect();
                 let visible: Vec<_> = roots
@@ -304,11 +302,7 @@ impl Document {
             .position(|l| l.id == self.active_layer)
             .ok_or(MergeRefusal::NoLayer)?;
         let upper = &self.layers[index];
-        match upper.kind {
-            LayerKind::Background => return Err(MergeRefusal::Paper),
-            LayerKind::Selection => return Err(MergeRefusal::SelectionLayer),
-            _ => {}
-        }
+        if upper.kind == LayerKind::Selection { return Err(MergeRefusal::SelectionLayer); }
         if !upper.visible {
             return Err(MergeRefusal::Hidden);
         }
@@ -341,9 +335,6 @@ impl Document {
             return Ok(Merge { members, anchor: Some(base), ..merge });
         }
         let below = self.sibling_below(index).ok_or(MergeRefusal::NoLayerBelow)?;
-        if below.kind == LayerKind::Background {
-            return Err(MergeRefusal::PaperBelow);
-        }
         if adjustment(below) {
             return Err(MergeRefusal::BelowEffect);
         }

@@ -130,12 +130,11 @@ impl SnapshotGpu {
     pub fn capture(
         &self,
         project: Project,
-        background: [f32; 4],
         time: f32,
         control: CaptureControl,
     ) -> Result<SnapshotRenderer, GpuRasterError> {
         project.validate(ProjectLimits::default()).map_err(GpuRasterError::Color)?;
-        SnapshotRenderer::construct(project, background, time, control, self)
+        SnapshotRenderer::construct(project, time, control, self)
     }
 }
 
@@ -161,7 +160,6 @@ pub struct SnapshotRenderer {
     output_extent: [u32; 2],
     #[cfg(not(target_arch = "wasm32"))]
     output_metadata: layer_color::photo::DeliveryMetadata,
-    background: [f32; 4],
     blend_space: layer_core::BlendSpace,
     time: f32,
     planned_pixel_bytes: u64,
@@ -170,16 +168,12 @@ pub struct SnapshotRenderer {
 impl SnapshotRenderer {
     fn construct(
         project: Project,
-        background: [f32; 4],
         time: f32,
         control: CaptureControl,
         gpu: &SnapshotGpu,
     ) -> Result<Self, GpuRasterError> {
         control.check()?;
-        if background.iter().any(|v| !v.is_finite())
-            || !(0.0..=1.).contains(&background[3])
-            || !time.is_finite()
-        {
+        if !time.is_finite() {
             return Err(GpuRasterError::Color(
                 "Invalid snapshot viewing state".into(),
             ));
@@ -220,10 +214,6 @@ impl SnapshotRenderer {
         renderer.effect_clocks = gpu.effect_clocks.clone();
         renderer.effect_analyses = gpu.analyses.clone();
         renderer.ensure_document_metadata(extent, &layers)?;
-        let mut background = background;
-        if let Some(paper) = layers.iter().find(|l| l.kind == LayerKind::Background) {
-            background[3] *= if paper.visible { paper.opacity } else { 0. };
-        }
         Ok(Self {
             document: Arc::new(project.document.clone()),
             analysis_ready: Default::default(),
@@ -248,7 +238,6 @@ impl SnapshotRenderer {
                 photo: project.document.metadata.clone(),
                 policy: Default::default(),
             },
-            background,
             blend_space: project.document.blend_space,
             time,
             planned_pixel_bytes: PLANNED_PIXEL_BYTES,
@@ -275,13 +264,10 @@ impl SnapshotRenderer {
         &self,
         target: &SourceInterpretation,
     ) -> Option<Arc<layer_core::color::source::SourceImage>> {
-        if self.background[3] != 0. {
-            return None;
-        }
         let mut visible = self
             .layers
             .iter()
-            .filter(|l| l.visible && l.opacity > 0. && l.kind != LayerKind::Background);
+            .filter(|l| l.visible && l.opacity > 0.);
         let layer = visible.next()?;
         if visible.next().is_some()
             || layer.kind != LayerKind::Paint
@@ -594,7 +580,6 @@ impl SnapshotRenderer {
                 width_px: width,
                 height_px: height,
                 document_to_surface: [1., 0., 0., 1., 0., 0.],
-                background_rgba_linear: self.background,
             },
             document_extent: self.extent,
             layers: &self.layers,

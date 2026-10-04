@@ -286,14 +286,14 @@ private struct LayerRow: View {
             ZStack {
                 if !mask && layer["group"].bool { SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28) }
                 else {
-                    if mask || layer["content_icon"].isNull || layer["selection_layer"].bool || !layer["content_icon_color"].isNull,
+                    if mask || layer["content_icon"].isNull || layer["selection_layer"].bool,
                        let image = previews.images[LayerThumbnails.key(id, mask)] {
                         Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
                             .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
                     }
                     if !mask && !layer["content_icon"].isNull && !layer["selection_layer"].bool {
                         SharedIcon(name: layer["content_icon"].string, size: 28)
-                            .foregroundStyle(layer["content_icon_color"].isNull ? palette["text"] : Color(hex: layer["content_icon_color"].string))
+                            .foregroundStyle(palette["text"])
                     }
                 }
             }.frame(width: 30, height: 30)

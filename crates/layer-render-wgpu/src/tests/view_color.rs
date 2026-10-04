@@ -30,7 +30,6 @@ fn view() -> ViewState {
     ViewState {
         width_px: 256,
         height_px: 256,
-        background_rgba_linear: [0.; 4],
         ..test_view()
     }
 }
@@ -257,7 +256,7 @@ fn native_export_thumbnails_and_raw_samples_keep_their_declared_color_coordinate
                     if codes[3] == 65535 {
                         r.request_filter_previews(layer_render::FilterPreviewRequest {
                             request_id: 9,
-                            target: layer.id,
+                            source: layer_render::FilterPreviewSource::LayerStack(layer.id),
                             size: [200, 40],
                             extent: [256; 2],
                             view: view(),

@@ -158,7 +158,6 @@ impl ExportTask {
                 .gpu
                 .capture(
                     self.original.project.clone(),
-                    self.original.background,
                     self.original.time,
                     control,
                 )
@@ -348,7 +347,7 @@ mod tests {
         ]
         .concat();
         document.metadata.exif = Some(artist_and_gps.into());
-        for paper in document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
+        for paper in document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
             paper.visible = false;
         }
         let gpu = WgpuRasterizer::new_native_headless(document.color).unwrap();

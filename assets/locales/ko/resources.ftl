@@ -244,7 +244,6 @@ resources-no-matching-filters = 일치하는 필터 없음
 resources-all-filters = 모든 필터
 resources-animated-tooltip = { $name } · 애니메이션
 resources-invalid-message = 이 리소스는 알 수 없거나 지원되지 않는 표시 이름을 사용합니다.
-resources-paper-color = 종이 색상
 resources-opacity = 불투명도
 resources-blend-mode = 혼합 모드
 resources-error-package-pending = 이미 필터 패키지를 검증 중입니다.
@@ -259,7 +258,6 @@ resources-error-effect-layer-required = 효과 레이어가 아닙니다.
 resources-error-artwork-required = 필터를 적용하기 전에 그림으로 돌아가세요.
 resources-error-select-layer = 먼저 레이어를 선택하세요.
 resources-error-select-property-layer = 속성을 편집하기 전에 이 레이어를 선택하세요.
-resources-error-paper-locked = 색상을 변경하려면 잠겨 있지 않은 종이를 선택하세요.
 resources-error-device-busy = GPU를 사용할 수 없거나 필터를 검증 중입니다.
 resources-error-layer-locked = 이 레이어는 잠겨 있습니다.
 resources-error-unknown-curve-point = 알 수 없는 곡선의 점입니다.
@@ -469,8 +467,6 @@ resources-layer-menu-show-layer = 레이어 표시
 resources-layer-menu-show-layer-and-parent-groups = 레이어와 상위 그룹 표시
 
 resources-layer-menu-show-mask-area = 마스크 영역 표시
-
-resources-layer-menu-show-paper = 종이 표시
 
 resources-layer-menu-ungroup = 그룹 해제
 

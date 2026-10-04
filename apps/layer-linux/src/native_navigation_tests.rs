@@ -261,7 +261,6 @@ fn native_large_photo_navigation() {
             let g = w.gpu.borrow();
             let session = &g.as_ref().unwrap().session;
             DocumentExport { project: session.capture_project_recovery().unwrap(),
-                background: session.engine().view().background_rgba_linear,
                 time: session.engine().animation_time() }
         };
         let prefix = std::path::PathBuf::from(std::env::var("LAYER_PACING_REPORT").unwrap());

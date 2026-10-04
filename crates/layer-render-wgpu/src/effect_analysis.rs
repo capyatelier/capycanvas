@@ -31,13 +31,12 @@ pub(crate) struct BakeInput {
     pub extent: [u32; 2],
     pub color: layer_core::color::DocumentColor,
     pub blend: layer_core::BlendSpace,
-    pub background: [f32; 4],
     pub time: f32,
 }
 impl BakeInput {
     fn matches(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.members, &other.members) && self.offset == other.offset && self.extent == other.extent
-            && self.color == other.color && self.blend == other.blend && self.background == other.background
+            && self.color == other.color && self.blend == other.blend
             && (self.time == other.time || !self.members.iter().any(|layer| layer.effect.as_ref().is_some_and(|effect| effect.animated())))
     }
 }
@@ -117,7 +116,7 @@ impl WgpuRasterizer {
                 };
                 if !members.iter().any(|layer| layer.effect.as_ref().is_some_and(|effect| effect.program.analysis().is_some())) { continue; }
                 let input = BakeInput {members: members.clone(), offset, extent: layer.local_extent(packet.document_extent),
-                    color: self.document_color, blend: packet.blend_space, background: [0.;4], time: packet.time_seconds};
+                    color: self.document_color, blend: packet.blend_space, time: packet.time_seconds};
                 if !inputs.iter().any(|old: &BakeInput| old.matches(&input)) { inputs.push(input); }
             }
         }

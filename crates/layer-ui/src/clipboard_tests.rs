@@ -81,7 +81,7 @@ mod clipboard_checks {
         assert_eq!(capture.crop, [30, 40, 100, 51]);
         assert!(capture.coverage.is_some());
         assert!(capture.original.is_none());
-        assert_eq!((capture.background, capture.name.as_str(), capture.large), ([0.; 4], "Current ink", false));
+        assert_eq!((capture.name.as_str(), capture.large), ("Current ink", false));
         let document = &capture.project.document;
         assert_eq!(document.layers.len(), 1);
         let copied = &document.layers[0];
@@ -99,7 +99,6 @@ mod clipboard_checks {
         assert!(matches!(request, DocumentRequest::Copy { merged: true, cut: false }));
         let merged = s.capture_clipboard(id).unwrap();
         assert_eq!(merged.project.document.layers.len(), s.engine.document().layers.len());
-        assert_eq!(merged.background, s.engine.view().background_rgba_linear);
         assert_eq!(merged.name, "Merged copy");
         s.complete_document_request(id, Ok(true)).unwrap();
 
@@ -148,9 +147,9 @@ mod clipboard_checks {
         assert!(s.state.requests.is_empty());
         select(&mut s, Some(rectangle([10., 10., 60., 60.])));
         assert!(s.command(CommandId::Cut).enabled && s.command(CommandId::PasteInto).enabled);
-        let paper = s.engine.document().layers.iter().find(|l| l.kind == LayerKind::Background).unwrap().id;
+        let paper = s.engine.document().layers.iter().find(|l| l.id == layer_core::LayerId(2)).unwrap().id;
         s.layer_edit(Edit::SetActiveLayer { id: paper }).unwrap();
-        assert_eq!(reason(&s, CommandId::Copy).as_deref(), Some("The paper has no pixels to copy"));
+        assert_eq!(reason(&s, CommandId::Copy).as_deref(), Some("An effect layer has no pixels of its own"));
         assert!(s.command(CommandId::CopyMerged).enabled, "Copy Merged ignores the active layer");
         let paint = s.engine.document().layers[0].id;
         s.layer_edit(Edit::SetActiveLayer { id: paint }).unwrap();

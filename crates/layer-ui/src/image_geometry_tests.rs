@@ -1,6 +1,6 @@
 fn content_session(size: [u32; 2]) -> UiSession<Recorder> {
     let mut doc = Document::new("content", size[0], size[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|l| l.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|l| l.id != layer_core::LayerId(2));
     let mut s = UiSession::new(Recorder { tiled_sources: true, ..Default::default() }, doc, [1600, 1000], Platform::Gtk).unwrap();
     s.set_viewport([1600., 1000.], [1600, 1000]).unwrap();
     invoke(&mut s, CommandId::FitCanvas);
@@ -258,7 +258,7 @@ fn snapping_failed_completion_is_quiet_and_cached_for_the_current_revision() {
 #[test]
 fn held_transform_nudge_defers_background_snapping_preparation_until_release() {
     let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
     let mut other = doc.layers[0].clone();
     other.id = doc.allocate_layer_id();
     let target = other.id;
@@ -284,7 +284,7 @@ fn held_transform_nudge_defers_background_snapping_preparation_until_release() {
 #[test]
 fn failed_background_query_does_not_refuse_snapping_toggle() {
     let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
     let mut other = doc.layers[0].clone();
     other.id = doc.allocate_layer_id();
     doc.layers.push(other);
@@ -308,7 +308,7 @@ fn failed_background_query_does_not_refuse_snapping_toggle() {
 #[test]
 fn blurring_held_transform_nudge_publishes_document_and_command_changes() {
     let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
     let mut other = doc.layers[0].clone();
     other.id = doc.allocate_layer_id();
     doc.layers.push(other);
@@ -330,7 +330,7 @@ fn blurring_held_transform_nudge_publishes_document_and_command_changes() {
 #[test]
 fn enabled_snapping_prepares_after_pending_input_drains_without_idle_resubmission() {
     let mut doc = Document::new("snap nudge", 1000, 800, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    doc.layers.retain(|layer| layer.kind != layer_core::LayerKind::Background);
+    doc.layers.retain(|layer| layer.id != layer_core::LayerId(2));
     let mut other = doc.layers[0].clone();
     other.id = doc.allocate_layer_id();
     doc.layers.push(other);

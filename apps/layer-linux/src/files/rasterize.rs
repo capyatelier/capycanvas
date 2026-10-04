@@ -6,10 +6,10 @@ use std::cell::RefCell;
 pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
     let copy = std::rc::Rc::new(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()));
     let localization = w.localization().clone();
-    let (workflow, background, time) = {
+    let (workflow, time) = {
         let gpu = w.gpu.borrow();
         let session = &gpu.as_ref().ok_or_else(|| layer_ui::NewDocumentError::CanvasUnavailable.message(&w.localization()))?.session;
-        (SourceWorkflow::begin(session, id)?, session.engine().view().background_rgba_linear, session.engine().animation_time())
+        (SourceWorkflow::begin(session, id)?, session.engine().animation_time())
     };
     let color = workflow.project.document.color;
     let project = workflow.project.clone();
@@ -83,7 +83,7 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32) -> Result<bool, String> {
                 explanation.set_label(if clipped > 0 {
                     copy.source_clipped.as_ref()
                 } else { copy.rasterize_compare.as_ref() });
-                comparison.request(preview, background, time);
+                comparison.request(preview, time);
                 Ok(())
             });
             if let Err(error) = result {

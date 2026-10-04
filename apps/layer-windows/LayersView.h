@@ -28,7 +28,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
     Border indent,clip,dropMark;
     Grid contentTile,maskTile;
-    Image contentImage,contentGlyph,maskImage,lockImage;
+    Image contentImage,maskImage,lockImage;
     Canvas contentCorners,maskCorners;
     TextBlock title{nullptr},meta{nullptr};
     TextBox rename;

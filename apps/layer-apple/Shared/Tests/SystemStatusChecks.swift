@@ -65,7 +65,7 @@ extension XCTestCase {
         XCTAssertEqual(app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "layer-row-")).count, 2)
         workspaceActivate(app.buttons["layer-thumbnail-2-content"])
         workspaceActivate(app.buttons["Filters panel"])
-        let bucket = app.buttons["paper-color-bucket"]
+        let bucket = app.buttons["property-color-bucket"]
         XCTAssertTrue(bucket.waitForExistence(timeout: 10))
         let paperPoint = CGPoint(x: 0.5, y: 0.65) // Exposed paper below the drawer.
         let beforePaper = editorPixels(in: app, at: paperPoint)

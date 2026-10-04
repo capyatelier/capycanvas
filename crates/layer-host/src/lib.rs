@@ -221,7 +221,7 @@ impl NativeHost {
         self.dirty = true;
         Ok(())
     }
-    /// Shared staged GPU lifecycle. Presenters submit the first paper frame
+    /// Shared staged GPU lifecycle. Presenters submit the first constant-fill frame
     /// before passing `has_presented = true`; it must not consume document replay.
     pub fn prepare_canvas_frame(
         &mut self,
@@ -266,7 +266,7 @@ impl NativeHost {
                 self.apply_change(previous, change);
             }
         } else {
-            self.session.submit_paper_frame()?;
+            self.session.submit_backdrop_frame()?;
         }
         self.dirty |= !self.startup.complete || !self.deferred_contacts.is_empty();
         Ok(())
@@ -1215,6 +1215,27 @@ mod tests {
         std::thread::sleep(std::time::Duration::from_millis(2));
     }
 
+    #[test]
+    fn a_maskless_fill_thumbnail_is_admitted_and_tracks_color() {
+        let (_reference, mut host) = gpu_host(layer_ui::Platform::Android, [64; 2]);
+        let clock = std::cell::Cell::new(0);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while !host.startup.brush_ready { frame_step(&mut host, &clock, deadline); }
+        for action in [
+            json!({"type":"select_layer","id":2}),
+            json!({"type":"effect","action":{"op":"set","layer":2,"key":"color","value":{"kind":"color","value":{"space":"Srgb","rgba":[1.,0.,0.,1.]}}}}),
+        ] { host.dispatch(serde_json::from_value(action).unwrap()).unwrap(); }
+        frame_step(&mut host, &clock, deadline);
+        assert!(host.session.background_readback_idle());
+        loop {
+            let (_, images) = host.layer_thumbnails([(1, 2)]).unwrap();
+            if let Some(image) = images.first() {
+                assert!(image.bytes.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
+                break;
+            }
+            frame_step(&mut host, &clock, deadline);
+        }
+    }
     fn pointer(host: &mut NativeHost, id: u64, tool: u8, button: u8, records: &[f64], predicted: bool) -> Result<(), String> {
         host.pointer_batch(PointerBatch {
             id, tool, button, records, predicted,

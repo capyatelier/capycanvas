@@ -194,7 +194,6 @@ impl Camera {
             width_px: self.viewport[0],
             height_px: self.viewport[1],
             document_to_surface: self.document_to_surface(),
-            background_rgba_linear: [1.0; 4],
         }
     }
 }

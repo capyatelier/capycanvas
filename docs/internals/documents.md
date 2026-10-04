@@ -22,9 +22,14 @@ control visibility, opacity, blending, clipping and related composition behavior
 selection coverage.
 
 With a filter selected, a stroke paints the first artwork layer below it in the
-same group, or its clipping base; groups, paper, locked bases and selection
-layers refuse with a reason (`Document::try_drawing_target`). Paper and the last
-layer can be deleted; an empty stack stays valid.
+same group, or its clipping base. Groups, maskless generators, locked bases and
+selection layers refuse with a reason (`Document::try_drawing_target`). An empty
+stack stays valid.
+
+New documents contain an empty paint layer above a white Solid Color fill named
+Paper. The fill starts without a mask and follows ordinary layer rules: it can
+be renamed, moved, grouped, duplicated, hidden, deleted or merged. Add a mask to
+paint on it. Its thumbnail shows its color and alpha over the checkerboard.
 
 Paint and photo layers retain a `LayerPlacement`: one outer homography, an
 optional shared `MeshMap`, and interpolation. `Document::layer_geometry` returns
@@ -102,7 +107,7 @@ ordinary document pixels.
 
 - **Merge Down** merges the active layer into the artwork layer below it in its
   group. Both must be visible, unlocked and Normal, and the layer below must hold
-  pixels: not the paper or an adjustment. A clipped layer below takes only a
+  pixels or generated content, rather than an adjustment. A clipped layer below takes only a
   layer clipped to the same base. A clipping base instead merges its visible
   clipped layers into itself (Merge Clipped Layers), as does an adjustment
   clipped to a base. An unclipped adjustment applies to the layer below only
@@ -114,12 +119,11 @@ ordinary document pixels.
 - Every merge composites in the document's Blending, so the result looks as the
   layers did.
 - **Merge Visible** composites the visible layers over transparency. Hidden
-  layers stay; hidden layers clipped to a merged base are released. The paper
-  is not part of the composite, so a non-Normal layer can look different where
-  the paper shows through it.
+  layers stay; hidden layers clipped to a merged base are released. Visible
+  fills, including Paper, participate in the composite.
 - **Flatten Image** does the same, then discards hidden layers and pixels
   outside the canvas. When it would discard hidden layers, it asks first through
-  the canvas notice. The paper stays separate.
+  the canvas notice.
 - **Stamp Visible** adds the visible image as a new top layer and keeps every
   layer.
 

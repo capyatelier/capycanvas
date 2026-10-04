@@ -47,6 +47,7 @@ fn document() -> Document {
 }
 fn document_at(extent: [u32; 2]) -> Document {
     let mut doc = Document::new("display composition oracle", extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    doc.layers.truncate(1);
     doc.layers[0].source = Some(rgba8_source(extent, |x, y| [(x / 3) as u8, (y / 2) as u8, 80, 255]));
     doc
 }
@@ -129,6 +130,8 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         layer
     }).collect();
     doc.layers[0].properties.blend = layer_core::LayerBlend::SoftLight;
+    doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::from_linear(
+        doc.color.space, [0.17, 0.39, 0.81, 0.7]).unwrap()));
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut fresh = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
@@ -147,7 +150,6 @@ fn blend_space_changes_refresh_branches_and_source_representations() {
         let mut frame = packet(&doc.layers, extent);
         frame.blend_space = space;
         frame.composite_all = matches!(step, 3 | 4);
-        frame.view.background_rgba_linear = [0.17, 0.39, 0.81, 0.7];
         let scale = 1. / (1 << level) as f32;
         frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
         r.submit(frame).unwrap();
@@ -825,6 +827,7 @@ fn placement_crossing_identity_keeps_the_prepared_source() {
 #[test]
 fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
     let mut doc = document_at([1025, 513]);
+    doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::WHITE));
     let extent = [641, 385];
     doc.width = extent[0]; doc.height = extent[1];
     doc.layers[0].opacity = 0.71;
@@ -843,7 +846,6 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
         for camera in [[0.25, 0., 0., 0.25, 8.25, 7.5], [0.19, 0., 0., 0.19, 8.25, 7.5], [0.13, 0., 0., 0.13, 8.25, 7.5],
             [0.17, 0.075, -0.075, 0.17, 37.5, 6.25], [0.14, -0.06, 0.02, 0.24, 8.25, 42.5]] {
             let mut frame = packet(&doc.layers, extent);
-            frame.view.background_rgba_linear = [1.; 4];
             frame.view.width_px = 192; frame.view.height_px = 128;
             frame.view.document_to_surface = camera;
             let inverse = layer_core::Affine(camera).inverse().unwrap();
@@ -886,6 +888,7 @@ fn deferred_placement_samples_the_final_surface_without_a_canvas_image() {
 #[test]
 fn deferred_placement_navigator_preserves_coarse_artwork() {
     let mut doc = document_at([1025, 513]);
+    doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::WHITE));
     doc.width = 641; doc.height = 385;
     doc.layers[0].opacity = 0.71;
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
@@ -906,7 +909,6 @@ fn deferred_placement_navigator_preserves_coarse_artwork() {
         doc.layers[0].properties.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine(placement));
         let mut frame = packet(&doc.layers, [doc.width, doc.height]);
         frame.time_seconds = step as f32 * 0.1;
-        frame.view.background_rgba_linear = [1.; 4];
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 8.25, 7.5];
         r.submit(frame).unwrap(); exact.submit(frame).unwrap();
         assert!(r.scale_display.as_ref().unwrap().placed.is_some());
@@ -1134,12 +1136,14 @@ fn layer_edits_reuse_balanced_branches_across_the_stack() {
         let mut dab = crate::tests::test_dab([97., 97.], [0.9, 0.02, 0.1, 0.7], 1.);
         dab.radii = [21.; 2];
         for (space, paper) in layer_core::BlendSpace::ALL.into_iter().flat_map(|space| [0., 0.7].map(|paper| (space, paper))) {
+            doc.layers.retain(|layer| layer.id != LayerId(999));
+            doc.layers.push(Layer::solid_color(LayerId(999), "Fill", layer_core::color::RgbColor::from_linear(
+                doc.color.space, [0.17, 0.39, 0.81, paper]).unwrap()));
             let mut frame = packet(&doc.layers, extent);
             frame.blend_space = space;
             frame.composite_all = false;
             frame.reset_layers = true;
             frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
-            frame.view.background_rgba_linear = [0.17, 0.39, 0.81, paper];
             r.submit(frame).unwrap();
             exact.submit(frame).unwrap();
             frame.reset_layers = false;
@@ -1150,7 +1154,7 @@ fn layer_edits_reuse_balanced_branches_across_the_stack() {
                 r.submit(stroke).unwrap();
                 exact.submit(stroke).unwrap();
                 let cache = r.scale_display.as_ref().unwrap();
-                for layer in &doc.layers {
+                for layer in doc.layers.iter().filter(|layer| layer.id != LayerId(999)) {
                     let work = blends(cache.graph.root.as_ref().unwrap(), layer.id).unwrap();
                     assert!(work <= bound, "{count} static layers, {space:?}, paper={paper}, layer={:?}: {work} > {bound}", layer.id);
                 }
@@ -1507,7 +1511,6 @@ fn native_predictions_match_exact_composition_before_layer_opacity_and_blending(
             let mut frame = packet(&doc.layers, extent);
             frame.view.width_px = extent[0];
             frame.view.height_px = extent[1];
-            frame.view.background_rgba_linear = [0.; 4];
             r.submit(frame).unwrap();
             exact.submit(frame).unwrap();
             let original = display_pixels(&r);

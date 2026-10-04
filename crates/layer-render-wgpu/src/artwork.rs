@@ -8,7 +8,6 @@ use layer_render::ViewState;
 pub(super) struct Frame {
     pub layers: Vec<Layer>,
     pub view: ViewState,
-    pub background: [f32; 4],
     pub blend_space: layer_core::BlendSpace,
     pub time: f32,
     pub previews: Vec<DabBatch>,
@@ -29,10 +28,9 @@ impl Drop for PendingFrame {
 impl Frame {
     /// Selection overlays, navigation and layer labels do not alter raw artwork.
     /// Source identity and raster publication catch edits without scanning pixels.
-    pub fn same_artwork(&self, packet: FramePacket<'_>, background: [f32; 4]) -> bool {
+    pub fn same_artwork(&self, packet: FramePacket<'_>) -> bool {
         let artwork = |l: &&Layer| l.kind != LayerKind::Selection;
-        let same = self.background == background
-            && self.blend_space == packet.blend_space
+        let same = self.blend_space == packet.blend_space
             && (self.time == packet.time_seconds || !packet.layers.iter()
                 .any(|l| l.visible && l.effect.as_ref().is_some_and(|e| e.animated())))
             && self.previews.is_empty()
@@ -46,7 +44,7 @@ impl Frame {
         }
         same
     }
-    pub fn new(packet: FramePacket<'_>, background: [f32; 4]) -> Self {
+    pub fn new(packet: FramePacket<'_>) -> Self {
         let mut preview_dabs = Vec::new();
         let previews = packet.dab_batches.iter().filter(|b| b.kind == DabBatchKind::Preview)
             .map(|batch| {
@@ -62,7 +60,6 @@ impl Frame {
                 .map(Layer::composite_snapshot)
                 .collect(),
             view: packet.view,
-            background,
             blend_space: packet.blend_space,
             time: packet.time_seconds,
             previews,

@@ -67,7 +67,7 @@
             "label": {"message":"resources-parameter-curves-hdr-stops"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -107,7 +107,7 @@
           {"default":{"kind":"number","value":0},"key":"blue_output_black","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-black"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]},
           {"default":{"kind":"number","value":1},"key":"blue_output_white","page":"blue","kind":{"decimals":3,"kind":"number","max":1,"min":0,"step":0.01,"unit":""},"label":{"message":"resources-parameter-levels-output-white"},"section":{"message":"resources-section-levels-output"},"soft_bounds":[0,1]}
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -135,7 +135,7 @@
             "label": {"message":"resources-parameter-brightness-contrast-contrast"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -192,7 +192,7 @@
           {"key":"magentas_feather","label":{"message":"resources-parameter-hue-saturation-feather"},"kind":{"kind":"number","min":0,"max":90,"step":1,"decimals":0,"unit":"°"},"default":{"kind":"number","value":30},"page":"magentas","visible_when":{"key":"colorize","value":{"kind":"toggle","value":false}}},
           {"key":"colorize","label":{"message":"resources-parameter-hue-saturation-colorize"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":false}}
         ],
-        "wgsl": ["effects.wgsl"],
+        "wgsl": ["color.wgsl","effects.wgsl"],
         "pages": [{"id":"rgb","label":{"message":"resources-parameter-hue-saturation-master"}},{"id":"reds","label":{"message":"resources-parameter-black-white-reds"}},{"id":"yellows","label":{"message":"resources-parameter-black-white-yellows"}},{"id":"greens","label":{"message":"resources-parameter-black-white-greens"}},{"id":"cyans","label":{"message":"resources-parameter-black-white-cyans"}},{"id":"blues","label":{"message":"resources-parameter-black-white-blues"}},{"id":"magentas","label":{"message":"resources-parameter-black-white-magentas"}}],
         "resolution": "display"
       }
@@ -209,7 +209,7 @@
         "kind": "adjustment",
         "label": {"message":"resources-filter-invert"},
         "parameters": [],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -225,7 +225,7 @@
         "parameters": [
           {"key":"threshold","label":{"message":"resources-parameter-threshold-threshold"},"kind":{"kind":"number","min":0,"max":1,"step":0.01,"decimals":3,"unit":""},"default":{"kind":"number","value":0.5},"soft_bounds":[0,1]}
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -240,7 +240,7 @@
         "kind": "adjustment",
         "label": {"message":"resources-filter-desaturate"},
         "parameters": [],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -259,7 +259,7 @@
           {"key":"density","label":{"message":"resources-parameter-photo-filter-density"},"kind":{"kind":"number","min":0,"max":100,"step":1,"decimals":0,"unit":"%"},"default":{"kind":"number","value":25}},
           {"key":"preserve_luminance","label":{"message":"resources-parameter-color-balance-preserve-luminance"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":true}}
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -314,7 +314,7 @@
           {"key":"blacks_black","label":{"message":"creation-color-black"},"page":"blacks","kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":2,"unit":"%"},"default":{"kind":"number","value":0}},
           {"key":"mode","label":{"message":"resources-parameter-selective-color-mode"},"kind":{"kind":"choice","options":[{"value":"Relative","label":{"message":"resources-choice-selective-color-relative"}},{"value":"Absolute","label":{"message":"resources-choice-selective-color-absolute"}}]},"default":{"kind":"choice","value":0}}
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -348,7 +348,7 @@
           {"key":"gray_constant","label":{"message":"resources-parameter-channel-mixer-constant"},"page":"gray","kind":{"kind":"number","min":-100,"max":100,"step":1,"decimals":2,"unit":"%"},"default":{"kind":"number","value":0},"visible_when":{"key":"monochrome","value":{"kind":"toggle","value":true}}},
           {"key":"monochrome","label":{"message":"resources-parameter-channel-mixer-monochrome"},"kind":{"kind":"toggle"},"default":{"kind":"toggle","value":false}}
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -448,7 +448,7 @@
             "label": {"message":"resources-parameter-color-balance-preserve-luminance"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -482,7 +482,7 @@
             "label": {"message":"resources-parameter-exposure-gamma"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -516,7 +516,7 @@
             "label": {"message":"resources-parameter-vibrance-protect-skin"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -579,7 +579,7 @@
             "label": {"message":"resources-parameter-black-white-tint-color"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -615,7 +615,7 @@
             "label": {"message":"resources-parameter-gradient-map-amount"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -636,7 +636,7 @@
             "label": {"message":"resources-parameter-posterize-levels"}
           }
         ],
-        "wgsl": ["effects.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl"]
       }
     },
     {
@@ -681,7 +681,7 @@
           }
         ],
         "space": "blending",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -736,7 +736,7 @@
           }
         ],
         "space": "blending",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -785,7 +785,7 @@
           }
         ],
         "space": "blending",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -819,7 +819,7 @@
           }
         ],
         "space": "linear",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -852,7 +852,7 @@
           }
         ],
         "space": "blending",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -890,7 +890,7 @@
             "sampling": {"key":"radius","kind":"parameter","padding":1,"scale":1}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -926,7 +926,7 @@
             "label": {"message":"resources-parameter-white-balance-preserve-luminance"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -964,7 +964,7 @@
             "label": {"message":"resources-parameter-split-tone-strength"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1010,7 +1010,7 @@
           }
         ],
         "space": "linear",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1064,7 +1064,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1117,7 +1117,7 @@
           {"entry":"capy_bloom","sampling":{"key":"sigma","kind":"parameter","padding":0,"scale":3}}
         ],
         "space": "linear",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1166,7 +1166,7 @@
           }
         ],
         "space": "blending",
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1216,7 +1216,7 @@
             "sampling": {"key":"size","kind":"parameter","padding":1,"scale":2}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1260,7 +1260,7 @@
             "label": {"message":"resources-parameter-crosshatch-paper"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1298,7 +1298,7 @@
             "sampling": {"key":"radius","kind":"parameter","padding":1,"scale":1}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1325,7 +1325,7 @@
             "sampling": {"key":"size","kind":"parameter","padding":1,"scale":0.5}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1358,7 +1358,7 @@
             "sampling": {"key":"distance","kind":"parameter","padding":1,"scale":1}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1390,7 +1390,7 @@
             "sampling": {"key":"radius","kind":"parameter","padding":1,"scale":1}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1417,7 +1417,7 @@
             "label": {"message":"resources-parameter-solarize-strength"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1477,7 +1477,7 @@
             "sampling": {"key":"sigma","kind":"parameter","padding":0,"scale":3}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1518,7 +1518,7 @@
           }
         ],
         "passes": [{"entry":"capy_kaleidoscope","sampling":{"kind":"document"}}],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1559,7 +1559,7 @@
           }
         ],
         "passes": [{"entry":"capy_swirl","sampling":{"kind":"document"}}],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1627,7 +1627,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1666,7 +1666,7 @@
             "sampling": {"key":"distance","kind":"parameter","padding":1,"scale":1}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1727,7 +1727,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1788,7 +1788,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1844,7 +1844,7 @@
         ],
         "passes": [{"entry":"capy_crt","sampling":{"kind":"document"}}],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1905,7 +1905,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -1953,7 +1953,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -2014,7 +2014,7 @@
           }
         ],
         "time": true,
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     },
     {
@@ -2023,6 +2023,7 @@
       "program": {
         "abi": 4,
         "entry": "capy_solid_color",
+        "constant_color": "color",
         "id": "solid_color",
         "resolution": "display",
         "kind": "generator",
@@ -2035,7 +2036,7 @@
             "label": {"message":"resources-parameter-solid-color-color"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","solid_color.wgsl"]
       }
     },
     {
@@ -2096,7 +2097,7 @@
             "label": {"message":"resources-parameter-gradient-fill-center-y"}
           }
         ],
-        "wgsl": ["effects.wgsl","filter_library.wgsl"]
+        "wgsl": ["color.wgsl","effects.wgsl","filter_library.wgsl"]
       }
     }
   ],

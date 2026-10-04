@@ -388,7 +388,7 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
                     .document()
                     .layers
                     .iter()
-                    .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                    .find(|layer| layer.id == layer_core::LayerId(2))
                     .unwrap()
                     .id
                     .0;
@@ -400,7 +400,7 @@ fn property_edits_and_gestures_preserve_exact_metal_history_on_both_platforms() 
             let key = match target {
                 "gaussian_blur" => "sigma",
                 "split_tone" => "shadows",
-                "paper" => "paper_color",
+                "paper" => "color",
                 _ => "opacity",
             };
             let state = app.state();

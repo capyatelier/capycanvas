@@ -81,7 +81,7 @@ fn native_layer_blend_menu() {
 fn grouped_adjustment() -> layer_core::Project {
     let mut project = super::native_navigation::photo([1024, 768]);
     let document = &mut project.document;
-    document.layers.retain(|l| l.source.is_some() || l.kind == layer_core::LayerKind::Background);
+    document.layers.retain(|l| l.source.is_some() || l.id == layer_core::LayerId(2));
     let mut group = layer_core::Layer::paint(document.allocate_layer_id(), "Adjustments");
     group.kind = layer_core::LayerKind::Group;
     let mut adjustment = layer_core::Layer::paint(document.allocate_layer_id(), "Black & White");

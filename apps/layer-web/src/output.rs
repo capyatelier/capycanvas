@@ -166,7 +166,6 @@ pub(super) async fn render_output(
     let mut capture = gpu
         .capture(
             snapshot.project,
-            snapshot.background,
             snapshot.time,
             control.clone(),
         )

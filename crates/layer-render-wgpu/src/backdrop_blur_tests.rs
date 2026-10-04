@@ -15,7 +15,6 @@ fn view(size: [u32; 2], x: f32) -> ViewState {
         width_px: size[0],
         height_px: size[1],
         document_to_surface: [1., 0., 0., 1., x, 0.],
-        background_rgba_linear: [0.; 4],
     }
 }
 
@@ -293,8 +292,7 @@ fn backdrop_blur_cost() {
             width_px: extent[0],
             height_px: extent[1],
             document_to_surface: [0.8, 0.1, -0.1, 0.8, x, 100.],
-            background_rgba_linear: [0.5, 0.5, 0.5, 1.],
-        };
+            };
         r.submit(FramePacket {
             view: camera(200.),
             reset_layers: true,

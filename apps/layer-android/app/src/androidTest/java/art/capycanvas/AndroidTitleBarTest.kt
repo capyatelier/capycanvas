@@ -1320,6 +1320,9 @@ class AndroidTitleBarTest {
 
     @Test fun filterDrawerLayersAndPenScrolling() {
         send(obj("type" to "switch", "id" to "builtin:workspace:painter"))
+        instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form", "action" to obj("type" to "reset", "value" to "builtin:workspace:painter"))) }
+        waitFor("restore prompt") { !view().isNull("prompt") }
+        send(obj("type" to "submit"))
         fun header(panel: String) = "header-control-" + entries().first {
             it.getJSONObject("item").objectOrNull("control")?.optString("panel") == panel
         }.getInt("id")
@@ -1327,6 +1330,7 @@ class AndroidTitleBarTest {
         fun layer(op: String, id: Long) = action(obj("type" to "layer", "action" to obj("op" to op, "id" to id, "mask" to false)))
         val filters=header("adjustments")
         tap(filters)
+        waitFor("filter drawer") { drawer() != null }
         assertEquals("[[\"filter_types\"],[\"adjustments\"],[\"properties\"]]",drawer()!!.getJSONArray("columns").toString())
         val choices=state().array("adjustments").objects().take(2)
         val count=state().array("layers").length()
@@ -1349,14 +1353,25 @@ class AndroidTitleBarTest {
         tap("cancel-filter");assertNull(drawer());assertEquals(count,state().array("layers").length())
         tap(filters)
         layer("select",2)
-        action(obj("type" to "set_color","rgba" to JSONArray(listOf(.06,.08,.12,1.0))))
-        tap("paper-color-bucket")
+        action(obj("type" to "set_color","rgba" to JSONArray(listOf(1.0,0.0,0.0,1.0))))
+        tap("color-bucket")
         val paper=state().array("layers").objects().first { it.getLong("id")==2L }
-        assertEquals("layer-paper-symbolic",paper.getString("content_icon"))
+        assertTrue(paper.isNull("content_icon"))
+        assertFalse(paper.getBoolean("has_mask"))
         assertFalse(paper.getString("description").contains("Protected"))
-        assertFalse(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
+        assertTrue(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
         shot("paper-properties")
         tap(header("layers"))
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme","theme" to theme))
+            waitFor("Paper fill thumbnail") { node("layer-thumbnail-2-false") != null }
+            val center=screenBounds("layer-thumbnail-2-false").center
+            val image=instrumentation.uiAutomation.takeScreenshot()
+            val color=image.getPixel(center.x.toInt(),center.y.toInt())
+            image.recycle()
+            assertTrue("$theme: fill thumbnail is red: $color", android.graphics.Color.red(color)>240 && android.graphics.Color.green(color)<10 && android.graphics.Color.blue(color)<10)
+            shot("fill-thumbnail-$theme")
+        }
         fun swipe(id: Long, dx: Float) {
             down("layer-row-$id");val start=point
             for(i in 1..5)event(MotionEvent.ACTION_MOVE,start+Offset(dx*density*i/5,0f))

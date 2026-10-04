@@ -89,7 +89,7 @@ existing shared working/session or workspace owners.
 | --- | --- | --- |
 | `Layer.id` | Occurrence portable ID plus typed handle. Content has a distinct identity. | Rename/reorder preserves both; independent duplication changes both. |
 | `name` | Occurrence name; literal UTF-8, supplied at creation. | Preserve exactly without pixel invalidation. |
-| `kind` | Typed occurrence content: paint-source use, nested stack, effect, saved selection, or inline paper color. | No fake paint source for a group, adjustment, saved selection or paper. |
+| `kind` | Typed occurrence content: paint-source use, nested stack, effect or saved selection. | No fake paint source for a group, adjustment, saved selection. |
 | `visible` | Occurrence contribution visibility, initially true. | Hiding contribution cannot disable a source demanded by another explicit input. |
 | `opacity` | Occurrence contribution factor, initially 1, finite `[0,1]`. | Opacity affects this occurrence only and preserves pass-through interpolation. |
 | `raster` | Paint-source immutable sparse revision, initially empty. Color and material planes belong to that source. | Exact tile codes and unchanged compressed bytes survive capture; a missing override reveals the imported base. |
@@ -106,7 +106,6 @@ existing shared working/session or workspace owners.
 | `locked` | Occurrence editing lock, initially false; inherited group lock is derived. | Prevent current edits while permitting valid undo restoration. |
 | `clipped` | Occurrence clipping membership, initially false. | Clipping base follows stack position; no second saved base-ID edge. |
 | `blend` | Occurrence blend operation, initially Normal. | Preserve blend mode and the clipped pass-through rule. |
-| `paper_color` | Inline authored paper content, resolved to an explicit portable color when created/captured. | An existing unset value resolves the current paper color once; preview cannot subsequently depend on host background or theme. |
 | `selection_mask` | Saved-selection authored display color and opacity; defaults sRGB red `[1,0,0,1]` and `0.5`. | Preserve named selection overlay preferences; overlay stays out of output pixels. |
 | `extent` | Explicit source-local domain for paint and coverage; an effect/generator's local domain belongs to its application; selection geometry retains its own domain. Group frame is inherited from composition, never a new image. | Materialize the current effective local extent before removing the fallback field; shrinking canvas does not shrink sources or masks. |
 
@@ -177,6 +176,7 @@ remain separate from this ownership rule.
 | `EffectInstance.values` | Effect application values addressed by stable parameter keys. | Decode once to compact ABI slots; rename/reorder of controls never retargets values. |
 | `EffectProgram.abi`, `id` | Definition's execution ABI and program identity, distinct from its portable authored ID and semantic type version. | Validate ABI/slot layout before admission; unsupported definitions remain preserved. |
 | `label` | Definition presentation metadata. | Preserve literal/localized label representation independently of semantic identity. |
+| `constant_color` | Optional generator contract naming its color parameter. | Static pointwise fills evaluate directly from the tagged color, including its alpha; the definition and parameter survive save and undo. |
 | `kind` | Definition Adjustment or Generator. | Adjustment consumes a typed scoped backdrop; generator does not invent that dependency. |
 | `alpha`, `space`, `resolution` | Definition contracts; defaults Preserve, Linear, Native. | Freeze premultiplied evaluation, blend-domain conversion, support and exact/display resolution roles. |
 | `wgsl`, `entry` | Immutable code resources and stable entry point; module-local bindings contain no artwork IDs. | Preserve source bytes and resource sharing; remap bindings outside shader text. |
@@ -336,7 +336,7 @@ history at this same ordered boundary without extending the portable manifest.
 
 The output context pairs source roots, effect phases and source-analysis inputs
 from one committed boundary. It includes composition/output identity, framing,
-working/blend interpretation and delivery intent. Paper is authored; selection
+working/blend interpretation and delivery intent. Paper is an ordinary Solid Color effect occurrence; selection
 and mask-inspection overlays are excluded. Preview generation is optional and
 uses this exact context. Preview failure cannot discard successfully captured
 source, acknowledge a newer checkpoint or require converting source to a bitmap.

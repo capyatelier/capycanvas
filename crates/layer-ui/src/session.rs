@@ -2426,7 +2426,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !self.operation.active()
                     && !document.is_locked(document.active_layer)
                     && document.layer(document.active_layer).is_some_and(|l| {
-                        !matches!(l.kind, LayerKind::Background | LayerKind::Selection)
+                        l.kind != LayerKind::Selection
                     })
             }
             CommandId::SelectionVisible => idle && self.layer_interaction.tool.selection_tool().is_some(),
@@ -5669,21 +5669,15 @@ impl<R: CanvasRenderer> UiSession<R> {
             id: l.id.0,
             selection_layer: l.kind == LayerKind::Selection,
             quick_mask: false,
-            can_rename: l.kind != LayerKind::Background && !doc.is_locked(l.id),
-            content_icon: l.effect.as_ref().map(|fx| {
+            can_rename: !doc.is_locked(l.id),
+            content_icon: l.effect.as_ref().filter(|fx| fx.constant_color().is_none()).map(|fx| {
                 format!(
                     "layer-{}-symbolic",
                     self.effect_catalog
                         .get(&fx.program.id)
                         .map_or("adjustments", |e| e.icon.as_ref())
                 )
-            }).or_else(|| match l.kind { LayerKind::Background => Some("layer-paper-symbolic".into()), LayerKind::Selection => Some("layer-selection-brush-symbolic".into()), _ => None }),
-            content_icon_color: (l.kind == LayerKind::Background).then(|| {
-                let color = l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
-                    .linear_in(layer_core::color::RgbSpace::Srgb).unwrap_or([1.; 4]);
-                let luminance = 0.2126 * color[0] + 0.7152 * color[1] + 0.0722 * color[2];
-                self.state.settings.palette(if luminance < 0.35 { Theme::Dark } else { Theme::Light }, self.state.platform, None).text
-            }),
+            }).or_else(|| match l.kind { LayerKind::Selection => Some("layer-selection-brush-symbolic".into()), _ => None }),
             label: l.name.to_string(),
             description: {
                 let mut parts = Vec::new();
@@ -5720,7 +5714,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             clipped: l.properties.clipped,
             reference: doc.reference_layers.contains(&l.id),
             group: l.kind == LayerKind::Group,
-            can_drop_below: l.kind != LayerKind::Background,
+            can_drop_below: true,
             depth: self.layer_interaction.depth(doc, l),
             collapsed: self.layer_interaction.collapsed.contains(&l.id),
             blend: l.properties.blend.code(),
@@ -5735,13 +5729,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .wrapping_add(l.pending_operations.len() as u64 * 2)
                 .wrapping_add(self.source_preview_revisions.id(l.id).wrapping_mul(65537))
                 .wrapping_add(self.selection_masks.preview_revision(l.id).wrapping_mul(65539))
-                .wrapping_add(if l.kind == LayerKind::Background {
-                    l.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
-                        .linear_in(doc.color.space).expect("validated paper color").iter()
-                        .fold(u64::from(l.opacity.to_bits()), |h, c| h.wrapping_mul(4099).wrapping_add(u64::from(c.to_bits())))
-                } else {
-                    0
-                }),
+                .wrapping_add(l.effect.as_ref().and_then(|fx| fx.constant_color()).map_or(0, |color| {
+                    color.linear_in(doc.color.space).expect("validated fill color").iter()
+                        .fold(0u64, |h, c| h.wrapping_mul(4099).wrapping_add(u64::from(c.to_bits())))
+                })) & ((1u64 << 53) - 1),
             mask_revision: l.mask.as_ref().map_or(0, |m| {
                 m.id.0
                     .wrapping_mul(65537)
@@ -7674,7 +7665,6 @@ mod tests {
         let export = s.capture_project_export(id).unwrap();
         assert_eq!(export.project.document, *s.engine.document());
         assert_eq!(export.time, 1.5);
-        assert_eq!(export.background, s.state.camera.view().background_rgba_linear);
         s.complete_document_request(id, Ok(true)).unwrap();
         assert!(s.state.document_file.modified);
         assert_eq!(s.engine.checkpoint(), checkpoint);
@@ -9866,7 +9856,6 @@ mod tests {
             assert!(s.dispatch(property(target, opacity)).is_err());
             assert_eq!(s.engine.document().revision, revision);
         }
-        // Paper opacity remains supported despite its protected stack position.
         let mut s = UiSession::from_project(
             Recorder::default(),
             new_drawing(64, 64, &Localizer::shared(UiLanguage::English)).unwrap(),
@@ -9880,11 +9869,11 @@ mod tests {
             .document()
             .layers
             .iter()
-            .find(|l| l.kind == LayerKind::Background)
+            .find(|l| l.id == layer_core::LayerId(2))
             .unwrap()
             .id
             .0;
-        s.dispatch(property(paper, 0.4)).unwrap();
+        s.dispatch(UiAction::SetLayerOpacity { id: Some(paper), opacity: 0.4 }).unwrap();
         assert_eq!(
             s.engine.document().layer(LayerId(paper)).unwrap().opacity,
             0.4
@@ -9952,60 +9941,29 @@ mod tests {
     }
 
     #[test]
-    fn paper_can_be_selected_but_never_painted_or_moved_above_artwork() {
+    fn paper_is_a_maskless_fill_that_can_be_reordered_and_accept_a_mask() {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        assert!(
-            s.state
-                .layers
-                .iter()
-                .any(|l| l.id == 2 && l.selected && l.editing)
-        );
-        assert!(!s.state.layer_tools.controls.opacity);
-        assert!(s.state.layer_tools.controls.edit_lock);
-        assert!(!s.state.layer_tools.controls.mask);
-        assert!(!s.state.layer_tools.controls.blend);
-        for (seq, phase) in [(1, PenPhase::Down), (2, PenPhase::Move), (3, PenPhase::Up)] {
-            s.pen(event(&s, seq, phase, 1.)).unwrap();
-        }
-        s.frame(30_000_000, 38_000_000).unwrap();
-        assert!(
-            s.engine
-                .document()
-                .target_raster(s.engine.document().active_target())
-                .unwrap()
-                .is_empty()
-        );
-        assert!(s.state.host_error.is_none());
-        s.dispatch(UiAction::SetLayerOpacity {
-            id: None,
-            opacity: 0.5,
-        })
-        .unwrap();
-        assert_eq!(s.engine.document().layer(LayerId(2)).unwrap().opacity, 0.5);
-        assert!(
-            s.engine
-                .apply_edit(layer_core::Edit::MoveLayer {
-                    id: LayerId(2),
-                    to: 0
-                })
-                .is_err()
-        );
-        layer(&mut s, LayerAction::New { group: false, clipped: false, });
-        let id = s.engine.document().active_layer.0;
-        layer(&mut s, LayerAction::Drop { id, target: 2, fraction: 1., });
-        assert_eq!(s.state.layers.last().unwrap().id, 2);
-        assert_eq!(s.state.layers[s.state.layers.len() - 2].id, id);
-        s.engine
-            .apply_edit(layer_core::Edit::InsertLayer {
-                index: usize::MAX,
-                layer: Box::new(layer_core::Layer::paint(LayerId(99), "Bottom")),
-            })
-            .unwrap();
-        assert_eq!(
-            s.engine.document().ordered_layers().last().unwrap().id,
-            LayerId(2)
-        );
+        let paper = s.engine.document().layer(LayerId(2)).unwrap();
+        assert_eq!((paper.kind, paper.name.as_ref()), (LayerKind::Effect, "Paper"));
+        assert!(paper.mask.is_none());
+        assert_eq!(paper.effect.as_ref().unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
+        let controls = s.state.layer_tools.controls;
+        assert!(controls.opacity && controls.mask && controls.blend && controls.edit_lock);
+        assert!(s.state.layers.iter().find(|l| l.id == 2).unwrap().content_icon.is_none());
+        assert_eq!(s.engine.document().try_drawing_target(), Err(layer_core::DrawingRefusal::Fill));
+        layer(&mut s, LayerAction::Drop { id: 2, target: 1, fraction: 0. });
+        assert_eq!(s.state.layers[0].id, 2);
+        assert_eq!(s.engine.document().try_drawing_target(), Err(layer_core::DrawingRefusal::Fill));
+        layer(&mut s, LayerAction::Drop { id: 1, target: 2, fraction: 1. });
+        assert_eq!(s.state.layers.last().unwrap().id, 1);
+        s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
+        layer(&mut s, LayerAction::AddMask { id: 2, replace: false });
+        let mask = s.engine.document().layer(LayerId(2)).unwrap().mask.as_ref().unwrap().id;
+        assert_eq!(s.engine.document().drawing_target(), Some(mask));
+        s.engine.apply_edit(layer_core::Edit::InsertLayer { index: usize::MAX,
+            layer: Box::new(layer_core::Layer::paint(LayerId(99), "Bottom")) }).unwrap();
+        assert_eq!(s.engine.document().layers.last().unwrap().id, LayerId(99));
     }
 
     #[test]
@@ -14217,7 +14175,7 @@ mod tests {
                     .document()
                     .layers
                     .iter()
-                    .find(|layer| layer.kind == layer_core::LayerKind::Background)
+                    .find(|layer| layer.id == layer_core::LayerId(2))
                     .unwrap()
                     .id
                     .0;

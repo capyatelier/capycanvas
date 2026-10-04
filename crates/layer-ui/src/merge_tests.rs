@@ -54,7 +54,7 @@ mod merge_checks {
     #[test]
     fn merges_explain_why_they_are_unavailable() {
         let s = session(Platform::Gtk);
-        assert_eq!(s.command_disabled_reason(CommandId::MergeDown).as_deref(), Some("The paper can't receive merged pixels"));
+        assert_eq!(s.command_disabled_reason(CommandId::MergeDown).as_deref(), None);
         assert_eq!(s.command_disabled_reason(CommandId::MergeGroup).as_deref(), Some("Select a group to merge"));
         for command in [CommandId::MergeVisible, CommandId::FlattenImage, CommandId::StampVisible] {
             assert_eq!(s.command_disabled_reason(command), None, "{command:?}");
@@ -103,7 +103,7 @@ mod merge_checks {
         let mut s = stacked();
         let upper = s.engine.document().active_layer;
         invoke(&mut s, CommandId::FlattenImage);
-        assert_eq!(s.engine.document().layers.len(), 2, "nothing hidden: flattens at once");
+        assert_eq!(s.engine.document().layers.len(), 1, "nothing hidden: flattens at once");
         assert!(s.engine.undo().unwrap());
         s.dispatch(UiAction::Layer { action: LayerAction::Visibility { id: upper.0, value: false } }).unwrap();
         invoke(&mut s, CommandId::FlattenImage);
@@ -112,7 +112,7 @@ mod merge_checks {
         assert_eq!(notice.action.unwrap().label, "Flatten");
         assert_eq!(s.engine.document().layers.len(), 3, "nothing changes before it is accepted");
         s.dispatch(UiAction::Notice { id: notice.id, accept: true }).unwrap();
-        assert_eq!(named(&s).len(), 2);
+        assert_eq!(named(&s).len(), 1);
         assert!(s.engine.document().layer(upper).is_none(), "the hidden layer is discarded");
     }
 

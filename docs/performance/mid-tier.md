@@ -37,11 +37,11 @@ canvas is 6000 × 4000.
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 90, soft | | |
 | Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 90, soft | Gaussian at 50%: 7.2/s small, 4.6/s large fresh completed canvas updates; UI 58.7–59.3/s and 40.3–41.8/s. Fit: 38.9/s and 26.1/s fresh canvas updates | Spatial composition comparison below; target not met; other filters unmeasured |
 | Animated or warping filter: Domain Warp, Ripple | 90, soft | | |
-| Fill layer or gradient-fill edit | 90, soft | | |
+| Fill layer or gradient-fill edit | 90, soft | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Navigation with proof or tone guide shown | 90 | | |
 | Gradient drag | 90 | | |
 | Figure or ruler drag | 90 | | |
-| Layer opacity scrub | 90 | | |
+| Layer opacity scrub | 90 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 90 | | |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android 59.0–59.2 fps, interval p99 16.8 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |

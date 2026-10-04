@@ -2,16 +2,15 @@ use super::*;
 
 fn snapshot_pixels(w: &Workspace) -> Vec<[f32; 4]> {
     let gpu = w.snapshot_gpu().unwrap();
-    let (project, background, time) = {
+    let (project, time) = {
         let canvas = w.gpu.borrow();
         let session = &canvas.as_ref().unwrap().session;
         (session.capture_project_recovery().unwrap(),
-         session.engine().view().background_rgba_linear,
          session.engine().animation_time())
     };
     glib::MainContext::default().block_on(gtk::gio::spawn_blocking(move || {
         let extent = [project.document.width, project.document.height];
-        let mut renderer = gpu.capture(project, background, time, Default::default()).unwrap();
+        let mut renderer = gpu.capture(project, time, Default::default()).unwrap();
         renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
     })).unwrap()
 }

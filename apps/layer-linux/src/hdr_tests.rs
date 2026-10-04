@@ -20,7 +20,7 @@ fn pixels(w: &Rc<Workspace>) -> Vec<[f32; 4]> {
     glib::MainContext::default()
         .block_on(gtk::gio::spawn_blocking(move || {
             let mut renderer = gpu
-                .capture(project, [0.; 4], 0., Default::default())
+                .capture(project, 0., Default::default())
                 .unwrap();
             renderer.read_region([0, 0, extent[0], extent[1]]).unwrap()
         }))

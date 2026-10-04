@@ -22,8 +22,8 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
-| Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.43 presents/s, p99 ≤16.83 ms; viewport 59.83 fresh completed updates/s | Retained-Navigator navigation below |
-| Pinch zoom | 60 | Photo, Navigator open: screen 59.40 presents/s, p99 ≤16.83 ms; viewport 59.90 fresh completed updates/s | Retained-Navigator navigation below |
+| Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.31 presents/s, p99 ≤16.70 ms; renderer 59.71 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
+| Pinch zoom | 60 | Photo, Navigator open: screen 59.43 presents/s, p99 ≤16.86 ms; renderer 59.83 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Two-finger rotate | 60 | | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
@@ -52,11 +52,11 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 42.7 presents/s, p99 50.0 ms; renderer 15.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
-| Fill layer or gradient-fill edit | 60, soft | | |
+| Fill layer or gradient-fill edit | 60, soft | **Not met** for Solid Color opacity: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s. Gradient unmeasured | [Solid Color fills](#solid-color-fills) |
 | Navigation with proof or tone guide shown | 60 | | |
 | Gradient drag | 60 | | |
 | Figure or ruler drag | 60 | | |
-| Layer opacity scrub | 60 | | |
+| Layer opacity scrub | 60 | **Not met.** Maskless Solid Color over photo: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s | [Solid Color fills](#solid-color-fills); baseline also misses |
 | Layer reorder drag | 60 | | |
 | Navigation with 8 visible paint layers | 60 | | |
 | Drawing with 8 visible paint layers, G-Pen 1024 px | 60 | **Not met.** Navigator open, Fit: 50.12 fresh updates/s (48.65–51.65), completion gap p99 29.30–32.87 ms | Retained-Navigator painting below; seven photo layers and one drawing layer |
@@ -74,6 +74,51 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Solid Color fills
+
+Measured on 2026-10-03 on the TCL reference tablet, thermal status 0 before
+and after each scenario, default 60 Hz display settings and panel glass.
+The benchmark uses release Rust, the 4248 × 2832 Sony downscale at Fit,
+default Photo workspace and open Navigator. Each scenario has a priming gesture
+undone before three native input gestures: six seconds for opacity and five
+seconds for navigation and painting. Painting uses Perceptual blending,
+G-Pen 1024 px, default prediction and a 480 × 280 px stylus ellipse.
+
+| Motion | Fresh completed updates/s, median (range) | Completion gap p99, range | Screen presents/s, median (range) | Screen gap p99, range | Status |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Maskless Solid Color opacity over photo | 32.51 (31.54–36.56) | 58.96–103.79 ms | 47.44 (46.16–49.97) | 33.41–49.98 ms | **Not met** |
+| Two-finger pan | 59.71 (59.69–59.79) | 18.72–19.31 ms | 59.31 (59.29–59.40) | 16.67–16.70 ms | Met |
+| Pinch | 59.83 (59.74–59.91) | 19.21–20.43 ms | 59.43 (59.35–59.51) | 16.68–16.86 ms | Met |
+| G-Pen 1024 px | 95.77 (89.67–96.53) | 23.43–27.60 ms | 59.28 (58.46–59.39) | 16.72–17.03 ms | Meets measured stroke criteria |
+
+Navigation and painting place one empty paint layer above the photo and the
+new ordinary white fill named Paper. Opacity inserts a maskless Solid Color
+above the photo and scrubs its layer control; observed values span 22.1–71.8%.
+Screen rates come from distinct SurfaceFlinger display actual-present timestamps
+inside the moving windows. Android shared-demand presentation does not emit a
+canvas surface frame for every update, so these are screen rates rather than
+independently matched canvas presents. Renderer rates count nonempty GPU
+completions inside motion; painting additionally requires distinct consumed
+real input. This qualifies the measured motions, not every brush diameter or
+resumed-contact latency.
+
+The matched opacity baseline at `722eeca2d` uses the same measurement fixture
+and control locator. Its fresh rate is 28.38 updates/s (26.22–34.57), completion
+gap p99 66.92–80.68 ms, and screen rate 45.31 presents/s (42.72–49.61), screen
+gap p99 33.40–50.00 ms. Both revisions miss the opacity target. The higher
+candidate median does not establish a general improvement; its worst completion
+gap is longer. There is no soft-target waiver.
+
+Candidate APK SHA-256:
+`3f96c2549631b0f3c4f240a0ca332d0ff787a701c36118b77537f89225a61904`.
+Baseline APK SHA-256:
+`acaf4c0e93730a523908ae39a46d96698002a5e967a4a058e8487d5a59cab1936`.
+The candidate is `722eeca2d` plus the Paper-to-Solid-Color refactor.
+Raw traces, gestures, fixture data, thermal records and binary hashes are in
+`artifacts/android-fill-measured/` and `artifacts/android-fill-baseline/`;
+`artifacts/analyze-fill.py` and `artifacts/analyze-fill-baseline.py` reproduce
+the tables. Mid and top tiers were not measured for this renderer revision.
 
 ## Grouped tool drawer scrolling
 
@@ -725,7 +770,7 @@ Except for G-Pen, Pencil and Eraser, measured on 2026-09-27 at `be5a7c38` with t
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 1024 px | Pinned localization candidate: 66.27–67.26 fresh updates/s; fresh gap p99 ≤26.57 ms | Meets pinned stroke criteria; current successor unqualified |
+| G-Pen (1) | Simple | 1024 px | Solid Color revision: 95.77 fresh updates/s (89.67–96.53); fresh completion gap p99 ≤27.60 ms | Meets measured 1024 px stroke criteria; [Solid Color fills](#solid-color-fills) |
 | Rough G-Pen (28) | Simple | 1024 px | 25.6 updates/s (25.5–25.7); gap p99 69.5 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 1024 px | 91.0 updates/s (90.7–91.5); gap p99 37.1 ms | **Not met** |
 | Antique Pen (30) | Simple | 1024 px | 37.5 updates/s (37.1–38.0); gap p99 79.9 ms | **Not met** |

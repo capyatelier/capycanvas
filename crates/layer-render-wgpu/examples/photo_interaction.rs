@@ -22,7 +22,7 @@ fn camera(extent: [u32; 2], scale: f32, angle: f32) -> (ViewState, ViewTransform
     let tx = SIZE[0] as f32 * 0.5 - a*x + b*y;
     let ty = SIZE[1] as f32 * 0.5 - b*x - a*y;
     (ViewState { width_px: SIZE[0], height_px: SIZE[1],
-        document_to_surface: [a, b, -b, a, tx, ty], background_rgba_linear: [0.; 4] },
+        document_to_surface: [a, b, -b, a, tx, ty], },
      ViewTransform { revision: 0,
         surface_to_document: [a/(scale*scale), -b/(scale*scale), b/(scale*scale),
             a/(scale*scale), (-a*tx-b*ty)/(scale*scale), (b*tx-a*ty)/(scale*scale)] })

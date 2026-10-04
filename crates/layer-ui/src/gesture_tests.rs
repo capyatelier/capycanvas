@@ -368,7 +368,7 @@ fn refused_brush_strokes_raise_a_notice_and_paint_nothing() {
     layer(&mut s, LayerAction::Lock { id: 1, value: false });
     s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
     stroke(&mut s, 20);
-    assert_eq!(notice_text(&s), Some("The paper can't be drawn on. Add a layer above it."));
+    assert_eq!(notice_text(&s), Some("Add a mask to paint on this fill layer."));
     layer(&mut s, LayerAction::New { group: true, clipped: false });
     stroke(&mut s, 30);
     assert_eq!(notice_text(&s), Some("A group has no pixels of its own. Select a layer inside it."));
@@ -470,7 +470,7 @@ fn move_and_content_tools_explain_what_they_cannot_change() {
     assert!(s.layer_interaction.path.is_empty());
     s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
     stroke(&mut s, 10);
-    assert_eq!(notice_text(&s), Some("The paper can't be moved"));
+    assert_eq!(notice_text(&s), Some("The selected layers cannot be moved together"));
     s.dispatch(UiAction::SelectLayer { id: 1 }).unwrap();
     for (command, text) in [
         (CommandId::Gradient, "The active layer is locked"),

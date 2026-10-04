@@ -51,7 +51,6 @@ fn native_local_tone_sustained_qualification() {
         let snapshot = {
             let g = w.gpu.borrow(); let session = &g.as_ref().unwrap().session;
             DocumentExport { project: session.capture_project_recovery().unwrap(),
-                background: session.engine().view().background_rgba_linear,
                 time: session.engine().animation_time() }
         };
         let prefix = prefix.clone();
@@ -71,7 +70,7 @@ fn native_local_tone_sustained_qualification() {
                 recipe.format = format;
                 recipe.depth = SampleDepth::U16;
                 recipe.background = if name == "jpg" { layer_ui::ExportBackground::White } else { layer_ui::ExportBackground::Preserve };
-                let copy = DocumentExport { project: snapshot.project.clone(), background: snapshot.background, time: snapshot.time };
+                let copy = DocumentExport { project: snapshot.project.clone(), time: snapshot.time };
                 let clipped = crate::files::export::write_snapshot(gpu.clone(), copy, recipe, &destination, &Default::default()).unwrap();
                 let export_ms = started.elapsed().as_secs_f64() * 1000.;
                 let decoded = layer_color::photo::read_photo(std::io::BufReader::new(std::fs::File::open(&destination).unwrap()), Default::default()).unwrap();

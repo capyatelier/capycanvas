@@ -98,7 +98,6 @@ struct StrokePages {
 struct ReferenceKey {
     members: Arc<BTreeSet<LayerId>>,
     extent: [u32; 2],
-    background: [f32; 4],
     blend_space: layer_core::BlendSpace,
     layers: Vec<Layer>,
 }
@@ -110,7 +109,6 @@ impl ReferenceKey {
         Self {
             members: members.clone(),
             extent,
-            background: frame.background,
             blend_space: frame.blend_space,
             layers: Self::members(frame, members).cloned().collect(),
         }
@@ -118,7 +116,6 @@ impl ReferenceKey {
     fn matches(&self, frame: &artwork::Frame, members: &BTreeSet<LayerId>, extent: [u32; 2]) -> bool {
         *self.members == *members
             && self.extent == extent
-            && self.background == frame.background
             && self.blend_space == frame.blend_space
             && Self::members(frame, members).count() == self.layers.len()
             && Self::members(frame, members).zip(&self.layers).all(|(a, b)| a.same_artwork(b))
@@ -170,7 +167,7 @@ impl ReferenceCache {
             if let Some(result) = job.take() { self.analyses = Some(result); self.analysis_job = None; return self.analysis_ready(r); }
         } else {
             let input = crate::effect_analysis::BakeInput {members: frame.layers.clone().into(), offset: layer_core::Point::default(), extent: self.key.as_ref().unwrap().extent,
-                color: r.document_color, blend: frame.blend_space, background: frame.background, time: frame.time};
+                color: r.document_color, blend: frame.blend_space, time: frame.time};
             match crate::effect_analysis::Job::frame(r.snapshot_gpu(), input) {
                 Ok(job) => self.analysis_job = Some(job),
                 Err(error) => { self.analyses = Some(Err(error.clone())); return Err(GpuRasterError::Effect(error)); }
@@ -210,22 +207,13 @@ impl ReferenceCache {
 }
 
 /// The document frame with only `members` visible: references render without
-/// the target or anything above it, over the paper only when it is a member.
+/// the target or anything above it.
 fn reference_frame(frame: &artwork::Frame, members: &BTreeSet<LayerId>) -> artwork::Frame {
     let mut reference = frame.clone();
     reference.previews.clear();
     for layer in &mut reference.layers {
         layer.visible &= members.contains(&layer.id);
     }
-    reference.view.background_rgba_linear = reference
-        .layers
-        .iter()
-        .find(|l| l.kind == LayerKind::Background && l.visible)
-        .map_or([0.; 4], |paper| {
-            let mut color = reference.background;
-            color[3] *= paper.opacity;
-            color
-        });
     reference
 }
 
@@ -871,7 +859,7 @@ impl WgpuRasterizer {
         let mut sources = self.retouch_sources();
         let same_stroke = sources.stroke.as_ref().is_some_and(|stroke| stroke.id == batch.stroke_id);
         if !same_stroke {
-            let frame = artwork::Frame::new(packet, packet.view.background_rgba_linear);
+            let frame = artwork::Frame::new(packet);
             if sources.cache.frame.as_ref().is_some_and(|old| old.time != frame.time && old.layers.iter().any(|layer|
                 references.contains(&layer.id) && layer.effect.as_ref().is_some_and(|effect| effect.animated()))) { sources.cache.key = None; }
             sources.cache.validate(&frame, references, packet.document_extent);

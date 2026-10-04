@@ -57,7 +57,7 @@ impl WebApp {
             .snapshot_gpu();
         let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let mut brush = s.engine().configured_brush().clone();
-        let mut view = s.engine().view();
+        let view = s.engine().view();
         let time = s.engine().animation_time();
         let control = control.inner.clone();
         Ok(future_to_promise(async move {
@@ -75,7 +75,6 @@ impl WebApp {
                     gpu.clone(),
                     layer_ui::DocumentExport {
                         project: original.clone(),
-                        background: view.background_rgba_linear,
                         time,
                     },
                     recipe,
@@ -140,15 +139,14 @@ impl WebApp {
                 (project, clipped)
             };
             hdr::admit_document(&project.document)?;
-            let old_background = view.background_rgba_linear;
-            layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush, &mut view);
+            layer_render::remap_document_colors(original.document.color.space, project.document.color.space, &mut brush);
             let mut previews = Vec::new();
             if !history {
-                for (source, background) in [
-                    (original, old_background),
-                    (project.clone(), view.background_rgba_linear),
+                for source in [
+                    original,
+                    project.clone(),
                 ] {
-                    previews.push(hdr::preview_document(&gpu,source,background,time,control.clone()).await?);
+                    previews.push(hdr::preview_document(&gpu,source,time,control.clone()).await?);
                 }
             }
             let renderer = if copy {

@@ -500,7 +500,7 @@ fn apple_current_main_drawers_paper_and_zen_use_shared_actions() {
         assert_eq!(app.state()["layers"][0]["id"], selected);
         app.action(json!({"type":"layer","action":{"op":"select","id":2,"mask":false}}));
         let control = app.state()["layer_properties"]["controls"][0].clone();
-        assert_eq!(control["key"], "paper_color");
+        assert_eq!(control["key"], "color");
         assert!(app.state()["layer_tools"]["can_delete"].as_bool().unwrap());
         app.action(json!({"type":"set_color","rgba":[0.2,0.4,0.8,1]}));
         app.action(control["color_action"].clone());

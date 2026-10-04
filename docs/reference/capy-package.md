@@ -88,16 +88,17 @@ The initial registry is:
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference and pixel `domain`; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
-| `capy.effect-definition/1` | Required stable program `key`, evaluation `contract`, shader `abi`, `kind`, `code` resource references, `entry` and keyed `parameters`; ordered ABI `slots`, passes, lookups, constraints and presentation declarations. |
+| `capy.effect-definition/1` | Required stable program `key`, evaluation `contract`, shader `abi`, `kind`, `code` resource references, `entry` and keyed `parameters`; ordered ABI `slots`, optional `constant_color` parameter key, passes, lookups, constraints and presentation declarations. |
 | `capy.selection/1` | Required `shape`; placement/inversion and saved display `color`/`opacity`. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
 | `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and optional `representation`. |
 
 `content` is one of `{"paint":{"ref":"…"}}`,
 `{"stack":{"ref":"…"}}`, `{"effect":{"ref":"…"}}`,
-`{"selection":{"ref":"…"}}`, or `{"paper":{"color":…}}`.
-Exactly one alternative appears. Paper is an authored stack operation; it has no
-fake editable raster source. A mask is inline
+or `{"selection":{"ref":"…"}}`.
+Exactly one alternative appears. Paper is an ordinary Solid Color effect
+occurrence, with its color in the effect values. Files using the former inline
+Paper alternative fail admission. A mask is inline
 `{"source":{"ref":"…"},…}` with slot key `mask` fixed by the occurrence
 schema, and optional `enabled`, `linked`, `inverted` and `placement` values.
 The coverage source has its own paint-target identity.

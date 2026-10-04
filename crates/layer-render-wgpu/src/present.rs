@@ -804,7 +804,6 @@ impl ViewportPresenter {
                 width_px: extent[0],
                 height_px: extent[1],
                 document_to_surface: [1., 0., 0., 1., 0., 0.],
-                background_rgba_linear: [0.; 4],
             },
             [0.; 4],
             true,

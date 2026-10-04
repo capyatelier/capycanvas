@@ -90,9 +90,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut selected = self.layer_interaction.selected.iter().filter_map(|id| document.layer(*id));
             return match selected.next() {
                 None => Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_SELECT_LAYERS_FIRST)),
-                Some(first) if std::iter::once(first).chain(selected).any(|l| l.kind == LayerKind::Background) => {
-                    Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_PAPER_CAN_T_BE_DUPLICATED))
-                }
                 Some(_) => None,
             };
         }
@@ -101,7 +98,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         match layer.kind {
             LayerKind::Paint => {}
-            LayerKind::Background => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_THE_PAPER_CAN_T_BE_COPIED_TO_A_LAYER)),
             LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
             LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection => {

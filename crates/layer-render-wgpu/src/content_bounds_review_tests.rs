@@ -22,8 +22,7 @@ fn batched_bounds_preserve_source_reads_before_late_color_and_mask_restores() {
         |x, y| if x == 20 && y == 17 { 0.5 } else { 0. }));
     document.layers[0].mask = Some(mask);
     let captured_bounds = |document: &Document| {
-        let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() },
-            [0.; 4], 0., Default::default()).unwrap();
+        let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() }, 0., Default::default()).unwrap();
         capture.read_region([0, 0, 2048, 512]).unwrap().iter().enumerate()
             .filter(|(_, pixel)| pixel[3] > 0.).fold(Rect::EMPTY, |bounds, (i, _)| {
                 let x = (i % 2048) as f32;
@@ -107,8 +106,7 @@ fn bounded_bounds_batch_falls_back_for_regions_above_the_batch_share() {
         + window.area() * 32 + (document.layers.len() as u64 * 3 + 32) * 256 * 256 * 16 + 32;
     assert!(planned > 64 * 1024 * 1024 && planned < 512 * 1024 * 1024,
         "fixture requires the existing full capture allowance, planned={planned}");
-    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() },
-        [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() }, 0., Default::default()).unwrap();
     let pixels = capture.read_region([0, 0, 512, 256]).unwrap();
     let expected = pixels.iter().enumerate().filter(|(_, pixel)| pixel[3] > 0.)
         .fold(Rect::EMPTY, |bounds, (i, _)| {
@@ -162,8 +160,7 @@ fn paper_bounds_follow_alpha_filters_and_masked_pass_through_groups() {
         }
         document.layers.insert(0, effect);
         let expected = if grouped { rect(64., 0., 128., 96.) } else { rect(20., 30., 40., 50.) };
-        let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() },
-            [1.; 4], 0., Default::default()).unwrap();
+        let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() }, 0., Default::default()).unwrap();
         let pixels = capture.read_region([0, 0, 128, 96]).unwrap();
         for y in 0..96 {
             for x in 0..128 {
@@ -224,8 +221,7 @@ fn visible_alpha_filter_uses_the_canvas_domain_when_it_creates_alpha() {
     effect.kind = layer_core::LayerKind::Effect;
     effect.effect = Some(Arc::new(layer_core::EffectInstance::new(Arc::new(program))));
     document.layers.insert(0, effect);
-    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() },
-        [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: document.clone() }, 0., Default::default()).unwrap();
     let pixels = capture.read_region([0, 0, 128, 128]).unwrap();
     assert!(pixels.iter().all(|p| p[3] == 1.), "independent exact capture establishes full-canvas alpha");
     assert_eq!(bounds(&renderer, &document, ContentScope::Canvas), rect(0., 0., 128., 128.));
@@ -417,8 +413,7 @@ fn placed_target_bounds_match_masked_world_pixels_and_exclude_siblings() {
     document.layers.push(sibling);
     let mut reference = document.clone();
     reference.layers.pop();
-    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: reference },
-        [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = renderer.snapshot_gpu().capture(layer_core::Project { document: reference }, 0., Default::default()).unwrap();
     let expected = capture.read_region([0, 0, 128, 128]).unwrap().iter().enumerate()
         .filter(|(_, pixel)| pixel[3] > 0.).fold(Rect::EMPTY, |bounds, (i, _)| {
             let x = (i % 128) as f32; let y = (i / 128) as f32;

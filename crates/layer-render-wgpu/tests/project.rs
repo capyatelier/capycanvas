@@ -25,8 +25,7 @@ fn engine_at_scale(project: &Project, scale: f32) -> (Engine, InputProducer<PenE
         width_px: SIZE[0],
         height_px: SIZE[1],
         document_to_surface: [scale, 0., 0., scale, 0., 0.],
-        background_rgba_linear: [0.; 4],
-    };
+        };
     let mut engine = CanvasEngine::new(
         gpu,
         project.document.clone(),

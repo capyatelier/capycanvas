@@ -747,7 +747,6 @@ impl Cache {
         if previous != self.graph.root {
             let tiles = tiles.filter(|_| r.artwork_frame.as_ref().is_some_and(|old|
                 old.blend_space == packet.blend_space
-                    && old.view.background_rgba_linear == packet.view.background_rgba_linear
                     && old.layers.len() == packet.layers.len()
                     && old.layers.iter().zip(packet.layers).all(|(a, b)| metadata::Metadata::new(a) == metadata::Metadata::new(b))));
             if !self.unchanged && let Some(hierarchy) = &mut self.hierarchy {

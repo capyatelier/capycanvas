@@ -1,7 +1,7 @@
 // Find a real painted pixel near the center, not the center of an empty bounding
 // box. One global atomic per workgroup; only the winning coordinate is read back.
 @group(0) @binding(0) var source: texture_2d<f32>;
-struct Probe { background:vec4<f32>, crop:vec4<u32>, window:vec4<u32>, core:vec4<u32> }
+struct Probe { backdrop:vec4<f32>, crop:vec4<u32>, window:vec4<u32>, core:vec4<u32> }
 @group(0) @binding(1) var<uniform> probe: Probe;
 @group(0) @binding(2) var<storage,read_write> winner: array<atomic<u32>,2>;
 var<workgroup> local_winner: array<atomic<u32>,2>;
@@ -10,8 +10,7 @@ fn painted(p:vec2<i32>)->bool {
     if any(p<vec2<i32>(0)) || any(p>=extent) {return false;}
     let local=p-vec2<i32>(probe.window.xy);
     if any(local<vec2<i32>(0)) || any(local>=vec2<i32>(textureDimensions(source))) {return false;}
-    let paper=vec4<f32>(probe.background.rgb*probe.background.a,probe.background.a);
-    return any(abs(textureLoad(source,local,0)-paper)>vec4<f32>(2./255.));
+    return any(abs(textureLoad(source,local,0)-probe.backdrop)>vec4<f32>(2./255.));
 }
 @compute @workgroup_size(16,16)
 fn measure(@builtin(global_invocation_id) id:vec3<u32>, @builtin(local_invocation_index) local:u32) {

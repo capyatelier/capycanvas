@@ -107,11 +107,14 @@ rasterizing the artwork again. UI notifications separately identify affected sec
 the layer list or tool settings. These are not pixel rectangles: they tell hosts
 which controls need refreshing.
 
-Shader startup is staged. The host can show controls and paper while the renderer
-prepares the current document and brush, then the remaining catalog. Painting
+Shader startup is staged. The host can show controls and constant bottom fills
+while the renderer prepares the current document and brush, then the remaining
+catalog. Painting
 waits for the required resources; showing the first frame is not the same as being
 ready for a stroke. Native compilation workers and incremental web preparation
 implement the same dependency ordering.
+Requested thumbnail readback prepares before idle catalog warmup, after the
+document and current brush dependencies.
 
 Use the [testing and performance guide](development/testing.md) to measure frame
 cost and input-to-display latency on the target device.

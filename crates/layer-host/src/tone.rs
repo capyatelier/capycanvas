@@ -173,7 +173,6 @@ impl ToneService {
             let project = s.capture_project_recovery()?;
             let capture = gpu.snapshot_gpu();
             let key = self.wanted.clone().unwrap();
-            let background = key.tone.background();
             let control = CaptureControl::default();
             let cancel = control.clone();
             let wake = self.wake.clone();
@@ -184,7 +183,7 @@ impl ToneService {
                 .spawn(move || {
                     let result = catch_unwind(AssertUnwindSafe(|| {
                         capture
-                            .capture(project, background, time, cancel)
+                            .capture(project, time, cancel)
                             .map_err(|e| e.to_string())
                             .and_then(|mut snapshot| snapshot.gpu_local_tone_guide())
                     }))

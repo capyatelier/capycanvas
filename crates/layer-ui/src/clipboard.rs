@@ -62,7 +62,6 @@ impl PixelClip {
 pub struct ClipboardCapture {
     /// The active layer alone for Copy, the whole drawing for Copy Merged.
     pub project: Project,
-    pub background: [f32; 4],
     pub time: f32,
     /// `[x, y, width, height]` of the copied document pixels.
     pub crop: [u32; 4],
@@ -138,7 +137,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let layer = document.layer(document.active_layer)?;
         match layer.kind {
             LayerKind::Paint => {}
-            LayerKind::Background => return Some(l.text(MessageId::COMMANDS_REFUSAL_CLIPBOARD_THE_PAPER_HAS_NO_PIXELS_TO_COPY)),
             LayerKind::Group => return Some(notices::drawing_refusal_text(layer_core::DrawingRefusal::Group, l)),
             LayerKind::Effect => return Some(l.text(MessageId::COMMANDS_REFUSAL_SELECTION_PIXELS_AN_EFFECT_LAYER_HAS_NO_PIXELS_OF_ITS_OWN)),
             LayerKind::Selection => {
@@ -232,8 +230,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut project = self.capture_project_recovery()?;
         let document = &mut project.document;
         let active = document.active_layer;
-        let (background, name, original) = if merged {
-            (self.engine.view().background_rgba_linear, "Merged copy".to_string(), None)
+        let (name, original) = if merged {
+            ("Merged copy".to_string(), None)
         } else {
             let offset = document.layer_offset(active);
             let mut layer = document.layer(active).ok_or("Select a layer first")?.clone();
@@ -263,7 +261,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             document.selection = None;
             document.reference_layers.clear();
             document.rulers.clear();
-            ([0.; 4], name, original)
+            (name, original)
         };
         let pixels = u64::from(crop[2]) * u64::from(crop[3]);
         self.files.cut = cut.then(|| PendingCut {
@@ -273,7 +271,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         });
         Ok(ClipboardCapture {
             project,
-            background,
             time: self.engine.animation_time(),
             crop,
             coverage,

@@ -95,7 +95,6 @@ pub(crate) fn write_snapshot(
         let metadata = recipe.delivery_metadata(&snapshot.project.document)?;
         let mut renderer = gpu.capture(
             snapshot.project,
-            snapshot.background,
             snapshot.time,
             job.control.clone(),
         )

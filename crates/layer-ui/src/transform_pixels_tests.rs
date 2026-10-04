@@ -113,7 +113,7 @@ fn apply_transform_pixels_rejects_stale_target_and_renderer_results() {
             0 => { s.replace_renderer(Recorder { tiled_sources: true, ..Default::default() }).unwrap(); },
             1 => { s.engine.apply_edit(layer_core::Edit::SetMaskTarget(true)).unwrap(); },
             2 => {
-                let paper = s.engine.document().layers.iter().find(|layer| layer.kind == layer_core::LayerKind::Background).unwrap().id;
+                let paper = s.engine.document().layers.iter().find(|layer| layer.id == layer_core::LayerId(2)).unwrap().id;
                 s.engine.apply_edit(layer_core::Edit::SetActiveLayer { id: paper }).unwrap();
             },
             _ => { s.state.document_file.epoch += 1; },

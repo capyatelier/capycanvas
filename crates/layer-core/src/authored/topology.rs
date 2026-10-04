@@ -2,7 +2,7 @@ use super::PortableId;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Content { Paint(PortableId), Group(PortableId), Effect(PortableId), Selection(PortableId), Paper }
+pub enum Content { Paint(PortableId), Group(PortableId), Effect(PortableId), Selection(PortableId) }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -23,7 +23,7 @@ impl Shape {
         match self {
             Self::Composition { .. } | Self::Output { .. } => 1,
             Self::Stack { entries } => entries.len(),
-            Self::Occurrence { content, mask } => usize::from(!matches!(content, Content::Paper)) + usize::from(mask.is_some()),
+            Self::Occurrence { mask, .. } => 1 + usize::from(mask.is_some()),
             Self::Effect { inputs, .. } => inputs.len().saturating_add(1),
             Self::Definition { dependencies } => dependencies.len(),
             Self::Unknown { references, .. } => references.len(),
@@ -37,7 +37,6 @@ impl Shape {
             Self::Occurrence { content, mask } => match content {
                 Content::Paint(id) | Content::Group(id) | Content::Effect(id) | Content::Selection(id) =>
                     std::iter::once(*id).chain(*mask).collect(),
-                Content::Paper => mask.iter().copied().collect(),
             },
             Self::Effect { definition, inputs } => std::iter::once(*definition).chain(inputs.iter().copied()).collect(),
             Self::Definition { dependencies } => dependencies.clone(),
@@ -123,16 +122,15 @@ impl GraphShape {
                 }
                 Shape::Occurrence { content, mask } => {
                     let target = match content {
-                        Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint))?; Some(*id) },
-                        Content::Group(id) => { expect(*id, |s| matches!(s, Shape::Stack { .. }))?; Some(*id) },
-                        Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect { .. }))?; Some(*id) },
-                        Content::Selection(id) => { expect(*id, |s| matches!(s, Shape::Selection))?; Some(*id) },
-                        Content::Paper => None,
+                        Content::Paint(id) => { expect(*id, |s| matches!(s, Shape::Paint))?; *id },
+                        Content::Group(id) => { expect(*id, |s| matches!(s, Shape::Stack { .. }))?; *id },
+                        Content::Effect(id) => { expect(*id, |s| matches!(s, Shape::Effect { .. }))?; *id },
+                        Content::Selection(id) => { expect(*id, |s| matches!(s, Shape::Selection))?; *id },
                     };
                     if let Some(mask) = mask {
                         expect(*mask, |s| matches!(s, Shape::Coverage))?;
                     }
-                    for target in target.into_iter().chain(*mask) {
+                    for target in std::iter::once(target).chain(*mask) {
                         *uses.entry(target).or_default() += 1;
                         dependencies.push(target);
                     }

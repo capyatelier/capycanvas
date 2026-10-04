@@ -104,11 +104,11 @@ fn local_analysis_reuses_own_amount_lease_and_invalidates_upper_after_lower_edit
     let lower=resource(&reader,10);let upper=resource(&reader,20);let weak=Arc::downgrade(&upper);
     let inherited=reader.renderer.snapshot_gpu();
     set(&mut project.document,20,"shadows",25.);
-    let mut edited=inherited.capture(project.clone(),[0.;4],0.,Default::default()).unwrap();
+    let mut edited=inherited.capture(project.clone(),0.,Default::default()).unwrap();
     close(edited.read_region([0,0,1,1]).unwrap()[0],output(y,0.5,0.25),1.,true);
     assert!(Arc::ptr_eq(&lower,&resource(&edited,10)));assert!(Arc::ptr_eq(&upper,&resource(&edited,20)));
     set(&mut project.document,10,"shadows",25.);
-    let mut changed=edited.renderer.snapshot_gpu().capture(project,[0.;4],0.,Default::default()).unwrap();
+    let mut changed=edited.renderer.snapshot_gpu().capture(project,0.,Default::default()).unwrap();
     close(changed.read_region([0,0,1,1]).unwrap()[0],output(y,0.25,0.25),1.,true);
     assert!(Arc::ptr_eq(&lower,&resource(&changed,10)));assert!(!Arc::ptr_eq(&upper,&resource(&changed,20)));
     drop(changed);drop(edited);drop(reader);drop(inherited);drop(upper);assert!(weak.upgrade().is_none());
@@ -120,7 +120,7 @@ fn hidden_ancestor_local_adjustments_need_no_guide_and_cancelled_chain_cannot_pu
     let mut hidden=Layer::paint(LayerId(40),"Hidden root");hidden.kind=LayerKind::Group;hidden.visible=false;
     let mut effect=adjustment(41,"clarity","amount",100.);effect.properties.parent=Some(hidden.id);
     project.document.layers.insert(0,effect);project.document.layers.push(hidden);
-    let control=CaptureControl::default();let mut reader=gpu().capture(project,[0.;4],0.,control.clone()).unwrap();
+    let control=CaptureControl::default();let mut reader=gpu().capture(project,0.,control.clone()).unwrap();
     pollster::block_on(reader.prepare_effect_analysis_async(scene::Output::EffectInput(LayerId(20)))).unwrap();
     assert_eq!(reader.renderer.effect_analyses.len(),1);assert_eq!(reader.renderer.effect_analyses[0].layer(),LayerId(10));
     control.cancel();assert!(reader.read_region([0,0,1,1]).unwrap_err().to_string().contains("cancel"));

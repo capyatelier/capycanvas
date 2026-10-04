@@ -1398,7 +1398,7 @@ mod gpu_tests {
             .document()
             .layers
             .iter()
-            .find(|l| l.kind == layer_core::LayerKind::Background)
+            .find(|l| l.id == layer_core::LayerId(2))
             .unwrap()
             .id
             .0;

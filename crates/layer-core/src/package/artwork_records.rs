@@ -115,7 +115,7 @@ fn content_bounds(art:&Artwork,content:&OccurrenceContent,canvas:[u32;2])->Resul
     Ok(match content {OccurrenceContent::Paint(h)=>Rect::from_extent(art.paint.get(*h).ok_or("Missing paint source")?.domain),
         OccurrenceContent::Effect(h)=>Rect::from_extent(art.effects.get(*h).ok_or("Missing effect")?.domain),
         OccurrenceContent::Selection(h)=> {let bounds=art.selections.get(*h).ok_or("Missing selection")?.selection.bounds();if bounds.is_empty() {Rect::from_extent(canvas)} else {bounds}},
-        OccurrenceContent::Stack(_)|OccurrenceContent::Paper(_)=>Rect::from_extent(canvas)})
+        OccurrenceContent::Stack(_)=>Rect::from_extent(canvas)})
 }
 fn encode_guides(guides:&Guides)->Result<Value,String> {
     let mut seen=BTreeSet::new(); let mut rulers=Vec::new();
@@ -183,7 +183,7 @@ pub fn encode(art:&Artwork,cancel:&AtomicBool)->Result<(Vec<Value>,ResourceInven
     for (_,identity,occurrence) in art.occurrences.iter() {
         if !(0. ..=1.).contains(&occurrence.opacity) {return Err("Invalid occurrence opacity".into());}
         if occurrence.blend==LayerBlend::PassThrough && !matches!(occurrence.content,OccurrenceContent::Stack(_)) {return Err("Pass through requires a stack".into());}
-        let content=match &occurrence.content {OccurrenceContent::Paint(h)=>json!({"paint":reference(id(&art.paint,*h)?)}),OccurrenceContent::Stack(h)=>json!({"stack":reference(id(&art.stacks,*h)?)}),OccurrenceContent::Effect(h)=>json!({"effect":reference(id(&art.effects,*h)?)}),OccurrenceContent::Selection(h)=>json!({"selection":reference(id(&art.selections,*h)?)}),OccurrenceContent::Paper(color)=>json!({"paper":{"color":v::encode_rgb_color(*color)?}})};
+        let content=match &occurrence.content {OccurrenceContent::Paint(h)=>json!({"paint":reference(id(&art.paint,*h)?)}),OccurrenceContent::Stack(h)=>json!({"stack":reference(id(&art.stacks,*h)?)}),OccurrenceContent::Effect(h)=>json!({"effect":reference(id(&art.effects,*h)?)}),OccurrenceContent::Selection(h)=>json!({"selection":reference(id(&art.selections,*h)?)})};
         let mut data=json!({"content":content}).as_object().unwrap().clone(); set_name(&mut data,&occurrence.name);
         for (key,value,default) in [("visible",occurrence.visible,true),("locked",occurrence.locked,false),("alpha_locked",occurrence.alpha_locked,false),("reference",occurrence.reference,false),("clipped",occurrence.clipped,false)] {set_bool(&mut data,key,value,default);}
         set_float(&mut data,"opacity",occurrence.opacity,1.)?;
@@ -280,9 +280,9 @@ pub fn decode(manifest:&Manifest,reader:&mut ResourceReader<'_>)->DecodeResult<A
         "capy.stack/1"=> {let data=fields(value,&["entries"])?;let entries=data.get("entries").map(|v|list(v)?.iter().map(|value|handle(&art.occurrences,value)).collect::<DecodeResult<Vec<_>>>()).transpose()?.unwrap_or_default();art.stacks.install(art.stacks.allocated(*identity).unwrap(),Stack {entries})?;},
         "capy.occurrence/1"=> {
             let data=fields(value,&["content","name","visible","opacity","blend","locked","alpha_locked","reference","clipped","placement","mask"])?;
-            let content=fields(v::required(data,"content")?,&["paint","stack","effect","selection","paper"])?;
+            let content=fields(v::required(data,"content")?,&["paint","stack","effect","selection"])?;
             if content.len()!=1 {return Err("Occurrence requires one content alternative".into());}
-            let (kind,value)=content.iter().next().unwrap();let content=match kind.as_str() {"paint"=>OccurrenceContent::Paint(handle(&art.paint,value)?),"stack"=>OccurrenceContent::Stack(handle(&art.stacks,value)?),"effect"=>OccurrenceContent::Effect(handle(&art.effects,value)?),"selection"=>OccurrenceContent::Selection(handle(&art.selections,value)?),"paper"=>OccurrenceContent::Paper(v::parse_rgb_color(v::required(fields(value,&["color"])?,"color")?)?),_=>unreachable!()};
+            let (kind,value)=content.iter().next().unwrap();let content=match kind.as_str() {"paint"=>OccurrenceContent::Paint(handle(&art.paint,value)?),"stack"=>OccurrenceContent::Stack(handle(&art.stacks,value)?),"effect"=>OccurrenceContent::Effect(handle(&art.effects,value)?),"selection"=>OccurrenceContent::Selection(handle(&art.selections,value)?),_=>unreachable!()};
             let bounds=content_bounds(&art,&content,canvas.size)?;
             let (translation,placement)=data.get("placement").map(|v|v::parse_placement(v,bounds)).transpose()?.unwrap_or((Point::default(),LayerPlacement::IDENTITY));
             let blend=data.get("blend").map(v::parse_layer_blend).transpose()?.unwrap_or(LayerBlend::Normal);

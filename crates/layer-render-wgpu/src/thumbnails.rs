@@ -8,7 +8,6 @@ pub(super) struct Thumbnails {
     gpu: Option<PreviewPipeline>,
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) sources: Option<crate::source_thumbnails::SourceThumbnails>,
-    pub paper: Option<(LayerId, [f32; 4])>,
     pub source_placements: std::collections::BTreeMap<LayerId, layer_core::LayerPlacement>,
 }
 impl Thumbnails {
@@ -21,7 +20,6 @@ impl Thumbnails {
             gpu: None,
             #[cfg(not(target_arch = "wasm32"))]
             sources: None,
-            paper: None,
             source_placements: Default::default(),
         }
     }
@@ -42,7 +40,7 @@ impl Thumbnails {
 impl WgpuRasterizer {
     pub fn ui_readback_ready(&self) -> bool {
         if let Some(startup) = &self.startup {
-            startup.compiler.pipeline(&self.pipelines.export, startup::OTHER);
+            startup.compiler.pipeline(&self.pipelines.export, startup::VALIDATION);
             startup.compiler.start();
             return self.pipelines.export.ready();
         }
@@ -389,13 +387,11 @@ impl PreviewPipeline {
                 m.default_coverage
             }
         });
-        let paper = r
-            .thumbnails
-            .paper
-            .filter(|(target, _)| *target == id)
-            .map(|(_, color)| color);
-        let background = paper.unwrap_or([gray, gray, gray, f32::from(mask.is_some())]);
-        let full = paper.is_some() || gray > 0.;
+        let color = r.artwork_frame.as_ref().and_then(|frame| frame.layers.iter().find(|layer| layer.id == id))
+            .and_then(|layer| layer.effect.as_ref()).and_then(|effect| effect.constant_color())
+            .map(|color| color.linear_in(r.device.working_space()).expect("validated fill color"));
+        let background = color.unwrap_or([gray, gray, gray, f32::from(mask.is_some())]);
+        let full = color.is_some() || gray > 0.;
         let bounds = r
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {

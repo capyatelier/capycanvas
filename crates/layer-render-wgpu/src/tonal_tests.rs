@@ -580,8 +580,7 @@ fn tonal_hdr_masks_and_probes_match_luminance_reference() {
 #[test]
 fn tonal_sdr_native_painted_source_and_composite() {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let mut white = Layer::paint(LayerId(2), "Paper");
-    white.kind = layer_core::LayerKind::Background;
+    let white = Layer::solid_color(LayerId(2), "Paper", layer_core::color::RgbColor::WHITE);
     let gray = 0.007f32;
     let mut ink = dab([gray, gray, gray, 1.]);
     ink.center = Point { x: 300., y: 300. };

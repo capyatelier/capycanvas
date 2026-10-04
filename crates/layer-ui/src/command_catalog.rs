@@ -1329,11 +1329,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             {
                 Some(l.text(MessageId::COMMANDS_THE_ACTIVE_LAYER_IS_LOCKED).to_string())
             }
-            UiAction::Layer { .. } | UiAction::Effect { .. }
-                if document.layer(document.active_layer).is_some_and(|l| l.kind == LayerKind::Background) =>
-            {
-                Some(l.text(MessageId::COMMANDS_THE_BACKGROUND_CAN_T_BE_CHANGED_THIS_WAY).to_string())
-            }
             _ => None,
         };
         reason.unwrap_or_else(|| l.text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string())

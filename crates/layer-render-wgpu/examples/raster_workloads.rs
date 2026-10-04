@@ -115,7 +115,6 @@ impl Canvas {
                 width_px: 1024,
                 height_px: 768,
                 document_to_surface: [scale, 0., 0., scale, 0., 0.],
-                background_rgba_linear: [0.; 4],
             },
             ViewTransform {
                 revision: 0,

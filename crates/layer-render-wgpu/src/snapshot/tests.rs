@@ -13,7 +13,7 @@ fn gpu() -> SnapshotGpu {
     GPU.get_or_init(|| WgpuRasterizer::new_native_headless(Default::default()).unwrap().snapshot_gpu()).clone()
 }
 fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
-    gpu().capture(project, [0.; 4], 0., Default::default())
+    gpu().capture(project, 0., Default::default())
 }
 
 #[test]
@@ -51,9 +51,11 @@ fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
 
 #[test]
 fn read_only_capture_does_not_compile_paint_publication_pipelines() {
-    let document = Document::new("Read-only capture", 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-    let color = [0.25, 0.5, 0.75, 1.];
-    let mut capture = gpu().capture(Project { document }, color, 0., Default::default()).unwrap();
+    let mut document = Document::new("Read-only capture", 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
+    let fill = layer_core::color::RgbColor::from_linear(document.color.space, [0.25, 0.5, 0.75, 1.]).unwrap();
+    let color = fill.linear_in(document.color.space).unwrap();
+    document.layers[1] = Layer::solid_color(LayerId(2), "Fill", fill);
+    let mut capture = gpu().capture(Project { document }, 0., Default::default()).unwrap();
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
     assert!(capture.read_region([0, 0, 33, 17]).unwrap().iter().all(|p| *p == color));
     assert!(capture.renderer.native_edit.as_ref().unwrap().pipelines().all(|p| !p.ready()));
@@ -81,7 +83,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
     for (elapsed, speed, phase) in [(2.,1.,2.),(2.,2.,2.),(3.,2.,4.),(3.,0.,4.),(8.,0.,4.),(8.,2.,4.),(9.,2.,6.)] {
         Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).set("speed", layer_core::EffectValue::Number(speed)).unwrap();
         live.submit(FramePacket {
-            view: layer_render::ViewState { width_px:32, height_px:32, document_to_surface: [1.,0.,0.,1.,0.,0.], background_rgba_linear: [1.;4] },
+            view: layer_render::ViewState { width_px:32, height_px:32, document_to_surface: [1.,0.,0.,1.,0.,0.], },
             time_seconds: elapsed,
             reset_layers: before.is_none(),
             ..packet(&doc.layers, [32,32])
@@ -91,8 +93,7 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
             if *previous_time == elapsed || speed == 0. { assert_eq!(&pixels, previous_pixels, "rate changes do not seek"); }
             else { assert_ne!(&pixels, previous_pixels, "playback advances"); }
         }
-        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone() },
-            [1.;4], elapsed, Default::default()).unwrap();
+        let mut capture = live.snapshot_gpu().capture(Project { document: doc.clone() }, elapsed, Default::default()).unwrap();
         let exported = capture.renderer.effect_clocks.get(&LayerId(3)).unwrap().1.clone()
             .advance(doc.layers[0].effect.as_ref().unwrap(),elapsed);
         assert_eq!(exported, phase);
@@ -167,7 +168,7 @@ fn shared_float32_bands_and_exr_preserve_samples_across_column_boundaries() {
     let (live, rendered) = frame(&project);
     assert_eq!(rendered, expected);
     let mut capture = live.snapshot_gpu().capture(
-        project, [0.; 4], 0., Default::default(),
+        project, 0., Default::default(),
     ).unwrap();
     let (rows, pixels) = capture.read_band(0).unwrap();
     assert_eq!(rows, extent[1]);
@@ -549,7 +550,6 @@ fn shared_capture_keeps_private_pixels_during_live_frames_and_after_canvas_close
             .snapshot_gpu()
             .capture(
                 project.clone(),
-                [0.; 4],
                 0.,
                 Default::default(),
             )
@@ -612,7 +612,7 @@ fn snapshot_bands_preserve_masked_pixels_and_shrink_before_exceeding_budget() {
     let project = rich_project(color, 1);
     let control = CaptureControl::with_allocation_tracking();
     let mut reader =
-        gpu().capture(project, [0.; 4], 0., control.clone())
+        gpu().capture(project, 0., control.clone())
             .unwrap();
     let [width, height] = reader.extent();
     let mut reference = Vec::new();
@@ -682,7 +682,7 @@ fn shared_snapshot_chunks_preserve_masked_effect_pixels_across_column_boundaries
         if layer.kind == layer_core::LayerKind::Paint { layer.properties.placement.outer.0[2] += 800.; }
     }
     let (live, expected) = frame(&project);
-    let mut capture = live.snapshot_gpu().capture(project, [0.; 4], 0., Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture(project, 0., Default::default()).unwrap();
     let mut actual = Vec::new();
     let mut y = 0;
     while y < capture.extent()[1] {
@@ -708,7 +708,7 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let mut cpu = layer_core::color::hdr::LocalToneBuilder::new(extent,color.space).unwrap();
     for row in pixels.chunks_exact(extent[0] as usize) { cpu.push(row).unwrap(); }
     let expected = cpu.finish(||false).unwrap();
-    let mut capture = live.snapshot_gpu().capture(project,[0.;4],0.,Default::default()).unwrap();
+    let mut capture = live.snapshot_gpu().capture(project,0.,Default::default()).unwrap();
     let gpu = capture.gpu_local_tone_guide().unwrap();
     assert!(Arc::ptr_eq(&gpu,&capture.gpu_local_tone_guide().unwrap()));
     let actual = capture.local_tone_guide().unwrap();
@@ -892,7 +892,6 @@ fn cancelled_snapshot_does_not_initialize_a_device_or_resolve_backing() {
     control.cancel();
     let result = gpu().capture(
         source_project(DocumentColor::default(), [8, 8]),
-        [0.; 4],
         0.,
         control.clone(),
     );

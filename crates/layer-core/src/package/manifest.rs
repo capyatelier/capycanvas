@@ -91,15 +91,14 @@ fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static st
         "capy.stack/1" => Shape::Stack { entries: data.get("entries").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
         "capy.occurrence/1" => {
             let content = object(required(data, "content")?)?;
-            let recognized: Vec<_> = ["paint", "stack", "effect", "selection", "paper"].into_iter().filter(|key| content.contains_key(*key)).collect();
+            let recognized: Vec<_> = ["paint", "stack", "effect", "selection"].into_iter().filter(|key| content.contains_key(*key)).collect();
             if content.is_empty() || recognized.len() > 1 { return Err("Invalid occurrence content".into()); }
-            if extras(content, &["paint", "stack", "effect", "selection", "paper"]) { reasons.insert("Unknown occurrence content"); }
+            if extras(content, &["paint", "stack", "effect", "selection"]) { reasons.insert("Unknown occurrence content"); }
             let content = match recognized.first().copied() {
                 Some("paint") => Some(Content::Paint(reference(&content["paint"])?)),
                 Some("stack") => Some(Content::Group(reference(&content["stack"])?)),
                 Some("effect") => Some(Content::Effect(reference(&content["effect"])?)),
                 Some("selection") => Some(Content::Selection(reference(&content["selection"])?)),
-                Some("paper") => { object(&content["paper"])?; Some(Content::Paper) },
                 _ => None,
             };
             let mask = data.get("mask").map(|m| reference(required(object(m)?, "source")?)).transpose()?;

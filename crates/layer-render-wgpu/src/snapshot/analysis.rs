@@ -83,7 +83,7 @@ impl SnapshotGpu {
         discard_hidden_backing(&mut document);
         #[cfg(target_arch = "wasm32")]
         if let Some(waiter) = &self.analysis_backing_waiter { waiter(Arc::new(document.clone()), control.clone()).await?; }
-        let mut snapshot = SnapshotRenderer::construct(Project {document}, input.background, input.time, control.clone(), self).map_err(|e| e.to_string())?;
+        let mut snapshot = SnapshotRenderer::construct(Project {document}, input.time, control.clone(), self).map_err(|e| e.to_string())?;
         snapshot.document = identity;
         snapshot.prepare_effect_analysis_async(scene::Output::Artwork(None)).await?;
         control.check().map_err(|e| e.to_string())?;

@@ -823,7 +823,6 @@ fn native_proof_setup_compare_history_save_reopen_and_rgb_export() {
         let session = &gpu.as_ref().unwrap().session;
         DocumentExport {
             project: session.capture_project_recovery().unwrap(),
-            background: session.engine().view().background_rgba_linear,
             time: session.engine().animation_time(),
         }
     };

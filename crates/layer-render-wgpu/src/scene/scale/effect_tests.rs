@@ -55,7 +55,7 @@ fn finite_radius_default_tablet_view_admits_reduced_composition_with_reserved_sc
     let mut blur = effect(80, "gaussian_blur");
     Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma", EffectValue::Number(3.)).unwrap();
     doc.layers.insert(0, blur);
-    assert_eq!(doc.layers.len(), 4);
+    assert_eq!(doc.layers.len(), 3);
     let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
     let mut frame = packet(&doc.layers, [doc.width, doc.height]);
     frame.view.width_px = 2200;

@@ -14,7 +14,7 @@ fn fixture() -> Project {
     p.document
         .layers
         .iter_mut()
-        .find(|l| l.kind == layer_core::LayerKind::Background)
+        .find(|l| l.id == layer_core::LayerId(2))
         .unwrap()
         .visible = false;
     let mut source = SourceBuilder::new(

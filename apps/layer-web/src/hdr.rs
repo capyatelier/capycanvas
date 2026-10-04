@@ -115,7 +115,6 @@ impl WebApp {
             .ok_or_else(|| js("Canvas unavailable"))?
             .snapshot_gpu();
         let owner = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
-        let background = self.session.engine().view().background_rgba_linear;
         let time = self.session.engine().animation_time();
         let control = control.inner.clone();
         if let Some(previous) = self.tone.pending.replace(control.clone()) {
@@ -126,7 +125,6 @@ impl WebApp {
             let mut capture = gpu
                 .capture(
                     project,
-                    background,
                     time,
                     control.clone(),
                 )
@@ -181,7 +179,6 @@ pub fn proof_texture_build(edge: u32) -> Vec<u8> {
 pub(super) async fn preview_document(
     gpu: &layer_render_wgpu::snapshot::SnapshotGpu,
     project: layer_core::Project,
-    background: [f32; 4],
     time: f32,
     control: layer_render_wgpu::snapshot::CaptureControl,
 ) -> Result<layer_render_wgpu::snapshot::SnapshotPreview, JsValue> {
@@ -192,7 +189,6 @@ pub(super) async fn preview_document(
     let mut capture = gpu
         .capture(
             project,
-            background,
             time,
             control.clone(),
         )

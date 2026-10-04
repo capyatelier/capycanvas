@@ -570,8 +570,7 @@ fn boundary_material_bake_and_visible_bounds_match_independent_expanded_capture(
             shifted.properties.offset.x += 64.;
             shifted.properties.offset.y += 64.;
             expanded.layers = vec![shifted];
-            let mut snapshot = renderer.snapshot_gpu().capture(layer_core::Project { document: expanded },
-                [0.; 4], 0., Default::default()).unwrap();
+            let mut snapshot = renderer.snapshot_gpu().capture(layer_core::Project { document: expanded }, 0., Default::default()).unwrap();
             snapshot.read_region([0, 0, 640, 640]).unwrap()
         };
         let original = capture(&document.layers[0]);

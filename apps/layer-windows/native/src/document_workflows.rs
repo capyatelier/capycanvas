@@ -120,7 +120,6 @@ enum Payload {
     Histogram {
         project: Option<Box<Project>>,
         gpu: SnapshotGpu,
-        background: [f32; 4],
         time: f32,
     },
 }
@@ -300,7 +299,6 @@ impl Task {
                     Payload::Histogram {
                         project: Some(Box::new(session.capture_project_recovery()?)),
                         gpu: gpu.snapshot_gpu(),
-                        background: session.engine().view().background_rgba_linear,
                         time: session.engine().animation_time(),
                     },
                 )
@@ -407,7 +405,6 @@ impl Task {
             Payload::Histogram {
                 project,
                 gpu,
-                background,
                 time,
             } => {
                 let project = project.take().ok_or("Histogram was already captured")?;
@@ -415,7 +412,6 @@ impl Task {
                 let mut renderer = gpu
                     .capture(
                         *project,
-                        *background,
                         *time,
                         self.control.clone(),
                     )

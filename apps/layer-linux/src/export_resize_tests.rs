@@ -533,7 +533,7 @@ fn native_export_webp_to_a_prechosen_file() {
     let output = output.canonicalize().unwrap();
     let mut project = new_drawing(192, 128, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
     project.document.resolution = Some(layer_core::ImageResolution::ppi(144));
-    for paper in project.document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
+    for paper in project.document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
         paper.visible = false;
     }
     let pixel = |x: u32, y: u32| [(x * 5 % 256) as u8, (y * 7 % 256) as u8, 180, if x < 96 { 255 } else { 0 }];

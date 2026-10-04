@@ -71,7 +71,7 @@ fn transform_pixels_plan_refuses_identity_locked_and_nonpaint_targets() {
     doc.layers[0].properties.placement = LayerPlacement::from_affine(Affine([2., 0., 0., 2., 0., 0.]));
     doc.layers[0].properties.locked = true;
     assert!(doc.transform_pixels_plan(id, Interpolation::Linear, Default::default()).is_err());
-    let paper = doc.layers.iter().find(|layer| layer.kind == LayerKind::Background).unwrap();
+    let paper = doc.layers.iter().find(|layer| layer.id == LayerId(2)).unwrap();
     assert!(doc.transform_pixels_plan(paper.id, Interpolation::Linear, Default::default()).is_err());
 }
 

@@ -244,7 +244,6 @@ resources-no-matching-filters = 一致するフィルターがありません
 resources-all-filters = すべてのフィルター
 resources-animated-tooltip = { $name } · アニメーション
 resources-invalid-message = このリソースは、不明または非対応の表示ラベルを使っています。
-resources-paper-color = 用紙の色
 resources-opacity = 不透明度
 resources-blend-mode = 合成モード
 resources-error-package-pending = すでにフィルターパッケージを検証中です。
@@ -259,7 +258,6 @@ resources-error-effect-layer-required = 効果レイヤーではありません�
 resources-error-artwork-required = フィルターを適用する前に、作品に戻ってください。
 resources-error-select-layer = 先にレイヤーを選んでください。
 resources-error-select-property-layer = プロパティを編集する前に、このレイヤーを選んでください。
-resources-error-paper-locked = 用紙の色を変更するには、ロックされていない用紙を選んでください。
 resources-error-device-busy = GPUを使えないか、フィルターの検証中です。
 resources-error-layer-locked = このレイヤーはロックされています。
 resources-error-unknown-curve-point = 不明なカーブの点です。
@@ -469,8 +467,6 @@ resources-layer-menu-show-layer = レイヤーを表示
 resources-layer-menu-show-layer-and-parent-groups = レイヤーと親グループを表示
 
 resources-layer-menu-show-mask-area = マスク領域を表示
-
-resources-layer-menu-show-paper = 用紙を表示
 
 resources-layer-menu-ungroup = グループ解除
 

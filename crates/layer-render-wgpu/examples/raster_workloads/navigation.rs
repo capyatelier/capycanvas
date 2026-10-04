@@ -26,7 +26,6 @@ fn camera(
             width_px: SIZE[0],
             height_px: SIZE[1],
             document_to_surface: [a, b, c, d, tx, ty],
-            background_rgba_linear: [0.; 4],
         },
         ViewTransform {
             revision: 0,

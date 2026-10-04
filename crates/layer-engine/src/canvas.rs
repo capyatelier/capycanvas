@@ -296,19 +296,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
     }
 
     pub fn view(&self) -> ViewState {
-        let mut view = self.view;
-        if let Some(color) = self.document().layers.iter()
-            .find(|l| l.kind == layer_core::LayerKind::Background)
-            .and_then(|l| l.properties.paper_color)
-        {
-            view.background_rgba_linear = color.linear_in(self.document().color.space)
-                .expect("validated paper color");
-        } else if !self.document().layers.iter().any(|l| l.kind == layer_core::LayerKind::Background) {
-            view.background_rgba_linear = if self.document().color.paint_descriptor().alpha == layer_core::color::AlphaAssociation::None {
-                [1.; 4]
-            } else { [0.; 4] };
-        }
-        view
+        self.view
     }
 
     pub fn backend(&self) -> &B {
@@ -1102,7 +1090,6 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
 
     /// Both transforms must describe the same platform-view revision.
     pub fn set_view(&mut self, view: ViewState, input_transform: ViewTransform) {
-        self.composite_all |= self.view.background_rgba_linear != view.background_rgba_linear;
         self.view = view;
         if self.transforms.back().map(|item| item.revision) != Some(input_transform.revision) {
             while self.input.is_empty() && self.transforms.len() >= TRANSFORM_HISTORY {

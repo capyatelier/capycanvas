@@ -117,7 +117,7 @@ impl ColorCanvas {
             } else {
                 self.analysis = Some(crate::effect_analysis::Job::frame(renderer.snapshot_gpu(), crate::effect_analysis::BakeInput {
                     members: document.layers.clone().into(), offset: layer_core::Point::default(), extent: [document.width, document.height],
-                    color: document.color, blend: document.blend_space, background: self.view.background_rgba_linear, time: self.time,
+                    color: document.color, blend: document.blend_space, time: self.time,
                 }).map_err(GpuRasterError::Effect)?);
                 return Ok(false);
             }

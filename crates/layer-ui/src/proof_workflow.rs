@@ -13,12 +13,11 @@ pub struct ToneKey {
     epoch: u64,
     color: layer_core::color::DocumentColor,
     extent: [u32; 2],
-    background: [f32; 4],
     layers: Vec<layer_core::Layer>,
 }
 impl ToneKey {
     /// Stale illumination is a useful drawing preview only within the same
-    /// document geometry and color interpretation. Layer/background edits can
+    /// document geometry and color interpretation. Layer edits can
     /// retain it; replacing/resizing/converting a document must clear it.
     /// Hosts must additionally match their device/owner generation.
     pub fn can_preview(&self, next: &Self) -> bool {
@@ -31,13 +30,11 @@ impl ToneKey {
         !s.rendering_suspended() && self.epoch == s.state().document_file.epoch
             && self.color == d.color && self.extent == [d.width, d.height]
     }
-    pub fn background(&self) -> [f32;4] { self.background }
     pub fn current<R: CanvasRenderer>(s: &UiSession<R>) -> Option<Self> {
         let d = s.engine().document();
         (d.color.depth.is_float() && !s.rendering_suspended()).then(|| Self {
             epoch: s.state().document_file.epoch, color: d.color,
-            extent: [d.width, d.height], background: s.engine().view().background_rgba_linear,
-            layers: d.layers.iter().map(layer_core::Layer::composite_snapshot).collect(),
+            extent: [d.width, d.height], layers: d.layers.iter().map(layer_core::Layer::composite_snapshot).collect(),
         })
     }
 }

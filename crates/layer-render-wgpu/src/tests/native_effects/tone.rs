@@ -351,7 +351,7 @@ fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
         let mut r=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::Srgb,depth}).unwrap();
         let layers=[effect(2,"exposure",false),source([0.25,2.,-0.125],1.)];
         for extent in [[512,384],[513,385],[385,513]] {
-            r.submit(FramePacket{ commit_rasters: true,view:ViewState{width_px:extent[0],height_px:extent[1],background_rgba_linear:[0.;4],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
+            r.submit(FramePacket{ commit_rasters: true,view:ViewState{width_px:extent[0],height_px:extent[1],..test_view()},document_extent:extent,layers:&layers,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:true,composite_all:true,time_seconds:0.,blend_space:Default::default()}).unwrap();
             let pixels=crate::layer_tests::page_bytes(&r,crate::test_support::document_texture(&r));
             for (i,p) in pixels.chunks_exact(16).enumerate() {
                 let actual: [f32;4]=std::array::from_fn(|c| f32::from_le_bytes(p[c*4..c*4+4].try_into().unwrap()));

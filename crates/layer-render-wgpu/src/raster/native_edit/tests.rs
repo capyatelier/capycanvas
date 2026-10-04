@@ -11,7 +11,6 @@ fn view() -> ViewState {
         width_px: 256,
         height_px: 256,
         document_to_surface: [1., 0., 0., 1., 0., 0.],
-        background_rgba_linear: [0.; 4],
     }
 }
 fn flush(engine: &mut CanvasEngine<WgpuRasterizer>) {

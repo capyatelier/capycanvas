@@ -1403,7 +1403,7 @@ impl LayerPanel {
             for (mask, target, revision, picture) in [
                 (
                     false,
-                    (state.selection_layer || state.content_icon.is_none() || state.content_icon_color.is_some()).then_some(state.id),
+                    (state.selection_layer || state.content_icon.is_none()).then_some(state.id),
                     state.paint_revision,
                     &row.content_image,
                 ),
@@ -1487,8 +1487,8 @@ impl Row {
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.swipe.set_actions(s.can_delete, s.can_alpha_lock);
         self.effect_icon.set_visible(s.content_icon.is_some() && !s.selection_layer);
-        self.content_image.set_visible(s.selection_layer || s.content_icon.is_none() || s.content_icon_color.is_some());
-        crate::icons::set_colored(&self.effect_icon, s.content_icon.as_deref(), s.content_icon_color);
+        self.content_image.set_visible(s.selection_layer || s.content_icon.is_none());
+        crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
         self.load_selection.set_visible(s.selection_layer);
         caption(&self.load_selection, copy.load_selection.as_ref());
         self.load_selection.set_widget_name(&format!("selection-load-{}", s.id));

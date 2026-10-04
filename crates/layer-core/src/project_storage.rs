@@ -487,24 +487,30 @@ mod tests {
     }
 
     #[test]
-    fn published_version_15_choices_and_pixels_resave_unchanged() {
+    fn legacy_paper_documents_are_rejected() {
         let bytes = include_bytes!("../tests/fixtures/published-v15-choice.capy");
-        assert_eq!(&bytes[..12], MAGIC);
-        let project = Project::read(bytes.as_slice(), Default::default()).unwrap();
-        assert_eq!(project.document.layers[0].name.as_ref(), "  My curves { $name } 한글 🎨  ");
-        assert_eq!(project.document.layers[1].name.as_ref(), "  Current ink { $name } 漢字 🖌️\u{2068}literal\u{2069}  ");
-        let effect = project.document.layers[0].effect.as_ref().unwrap();
-        assert_eq!(effect.program.label, ResourceLabel::from("Curves"));
-        assert_eq!(effect.choice("domain"), Some("Log HDR"));
-        let parameter = effect.program.parameters.iter().find(|p| p.key.as_ref() == "domain").unwrap();
-        let EffectParameterKind::Choice { options } = &parameter.kind else { panic!() };
-        assert!(options.iter().all(|o| matches!(o, EffectOption::Literal(_))));
-        let mut rows = project.document.layers[1].source.as_ref().unwrap().rows();
-        let mut row = [0; 8];
-        for y in 0..2 { rows.read(y, &mut row).unwrap(); assert_eq!(row, [10,20+y as u8*60,30,255,60,20+y as u8*60,30,255]); }
+        assert!(Project::read(bytes.as_slice(), Default::default()).is_err());
+    }
+    #[test]
+    fn literal_choices_and_pixels_resave_unchanged() {
+        let mut project = fixture();
+        let mut program = (*crate::bundled_effect_catalog().get("curves").unwrap().program()).clone();
+        program.label = ResourceLabel::from("Curves");
+        let parameter = Arc::make_mut(&mut program.parameters).iter_mut().find(|p| p.key.as_ref() == "domain").unwrap();
+        if let EffectParameterKind::Choice { options } = &mut parameter.kind {
+            for option in Arc::make_mut(options) { *option = EffectOption::Literal(option.value().into()); }
+        }
+        let mut effect = EffectInstance::new(Arc::new(program));
+        effect.set("domain", EffectValue::Choice(1)).unwrap();
+        let layer = Layer { kind: LayerKind::Effect, effect: Some(Arc::new(effect)),
+            ..Layer::paint(project.document.allocate_layer_id(), "  My curves { $name } 한글 🎨  ") };
+        project.document.layers.insert(0, layer);
         let mut saved = Vec::new(); project.write(&mut saved).unwrap();
         assert_eq!(&saved[..12], MAGIC);
-        assert_eq!(Project::read(saved.as_slice(), Default::default()).unwrap(), project);
+        let reopened = Project::read(saved.as_slice(), Default::default()).unwrap();
+        let mut resaved = Vec::new(); reopened.write(&mut resaved).unwrap();
+        assert_eq!(resaved, saved);
+        assert_eq!(reopened.document.layers[0], project.document.layers[0]);
         let mut explicit = project.clone();
         let effect = Arc::make_mut(explicit.document.layers[0].effect.as_mut().unwrap());
         let program = Arc::make_mut(&mut effect.program);
@@ -516,9 +522,10 @@ mod tests {
         let values = effect.values.clone();
         saved.clear(); explicit.write(&mut saved).unwrap();
         let reopened = Project::read(saved.as_slice(), Default::default()).unwrap();
-        assert_eq!(reopened, explicit);
+        resaved.clear(); reopened.write(&mut resaved).unwrap();
+        assert_eq!(resaved, saved);
+        assert_eq!(reopened.document.layers[0], explicit.document.layers[0]);
         assert_eq!(reopened.document.layers[0].name, project.document.layers[0].name);
-        assert_eq!(reopened.document.layers[1], project.document.layers[1]);
         assert_eq!(reopened.document.layers[0].effect.as_ref().unwrap().values, values);
     }
 

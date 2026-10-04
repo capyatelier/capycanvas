@@ -1042,7 +1042,6 @@ body[data-theme="light"] #header { text-shadow:none; }
 .layer-swipe.swipe-animating > .layer-row { transition: transform 150ms ease-out; }
 .panel button.layer-swipe-delete { position: absolute; inset: 0 0 0 auto; width: 72px; height: 100%; border: 0; border-radius: 0; color: white; background: #c62828; clip-path: inset(0 0 0 calc(72px - var(--swipe))); }
 .layer-swipe.swipe-animating > .layer-swipe-delete { transition: clip-path 150ms ease-out; }
-.layer-thumbnail .paper-thumbnail-icon { position: absolute; inset: 3px; width: 24px; height: 24px; }
 
 .selection-layer-load[hidden] { display:none; }
 .selection-menu-button { min-height:44px; padding:6px 12px; display:flex; gap:6px; align-items:center; justify-content:center; }

@@ -49,7 +49,6 @@ fn all_effects_incremental_masks_groups_and_clipping_match_full_recomposition() 
     let mut view = test_view();
     view.width_px = 333;
     view.height_px = 291;
-    view.background_rgba_linear = [0.; 4];
     let mut dab = test_dab([255., 150.], [0.8, 0.2, 0.1, 0.65], 1.);
     dab.radii = [45.; 2];
     let batch = crate::test_support::dab_batch(

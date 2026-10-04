@@ -36,6 +36,5 @@ pub(crate) fn view(width_px: u32, height_px: u32) -> ViewState {
         width_px,
         height_px,
         document_to_surface: IDENTITY,
-        background_rgba_linear: [1.; 4],
     }
 }

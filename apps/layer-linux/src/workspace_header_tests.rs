@@ -1517,9 +1517,9 @@ fn native_filter_drawer_input() {
     assert!(state(&d.w).customization.drawer.is_none());
     d.click_name(&opener);
     d.w.dispatch(UiAction::SelectLayer { id: 2 });
-    d.w.dispatch(UiAction::SetColor { rgba: [0.08, 0.1, 0.15, 1.] });
+    d.w.dispatch(UiAction::SetColor { rgba: [0., 1., 0., 1.] });
     pump(100);
-    d.click_name("paper-color-bucket");
+    d.click_name("color-bucket");
     assert!(state(&d.w).layer_properties.controls[0].color_action.is_some());
     let _warm = crate::snapshot(&d.w); pump(120);
     crate::snapshot(&d.w).save_to_png(output.join("paper-properties.png")).unwrap();
@@ -1527,6 +1527,28 @@ fn native_filter_drawer_input() {
     d.click_name(&opener);
     d.input.perform(serde_json::json!([{"point":[600.,400.]}]));
     assert_eq!(ui_session_mut(&d.w).canvas_cursor().unwrap().segments[0].marker, 6.);
+    let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });
+    d.click_name(&layers);
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        super::place_source::wait_layer_thumbnail(&d.w, 2);
+        pump(250);
+        let _warm = crate::snapshot(&d.w); pump(120);
+        let shot = crate::snapshot(&d.w);
+        let row = d.named("art-layer-2");
+        let thumb = find_css(&row, "layer-thumbnail").unwrap();
+        let p = thumb.compute_bounds(&d.w.surface).unwrap();
+        let mut download = gdk::TextureDownloader::new(&shot);
+        download.set_format(gdk::MemoryFormat::R8g8b8a8);
+        let (bytes, stride) = download.download_bytes();
+        let scale = shot.width() as f32 / d.w.surface.width() as f32;
+        let x = ((p.x() + p.width() * 0.5) * scale) as usize;
+        let y = ((p.y() + p.height() * 0.5) * scale) as usize;
+        let pixel = &bytes[y * stride + x * 4..][..4];
+        assert!(pixel[1] > 240 && pixel[0] < 10 && pixel[2] < 10, "{theme:?}: fill thumbnail {pixel:?}");
+        shot.save_to_png(output.join(format!("fill-thumbnail-{theme:?}.png"))).unwrap();
+    }
+    d.click_name(&layers);
     d.w.dispatch(UiAction::Layer { action: layer_ui::LayerAction::New { group: false, clipped: false } });
     let removable = state(&d.w).layer_properties.layer.unwrap();
     let layers = d.header_tool(ToolbarControl::Panel { panel: Panel::Layers });

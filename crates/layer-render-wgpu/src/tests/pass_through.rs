@@ -8,7 +8,6 @@ use layer_core::{BlendSpace, Document, Edit, EffectInstance, LayerBlend, LayerMa
 
 const EXTENT: [u32; 2] = [300, 280];
 const COLOR: DocumentColor = DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::U16 };
-const PAPER: [f32; 4] = [0.9, 0.85, 0.8, 1.];
 
 fn source(seed: u32, alpha: impl Fn(u32, u32) -> u16) -> Arc<SourceImage> {
     let mut builder = SourceBuilder::new(
@@ -114,7 +113,7 @@ fn nested() -> (Document, LayerId) {
 
 /// The live composite of `document`, in its blend space.
 fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
-    let view = ViewState { background_rgba_linear: PAPER, ..crate::test_support::view(EXTENT) };
+    let view = crate::test_support::view(EXTENT) ;
     let frame = FramePacket { view, blend_space: document.blend_space, ..packet(&document.layers, EXTENT) };
     r.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
     for _ in 0..16 {
@@ -133,7 +132,7 @@ fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
 fn exported(r: &WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
     let mut capture = r
         .snapshot_gpu()
-        .capture(Project { document: document.clone() }, PAPER, 0., Default::default())
+        .capture(Project { document: document.clone() }, 0., Default::default())
         .unwrap();
     capture.read_region([0, 0, EXTENT[0], EXTENT[1]]).unwrap()
 }
@@ -222,7 +221,7 @@ fn coverage(r: &mut WgpuRasterizer, mask: &LayerMask) -> Vec<f32> {
     b.paint("Opaque", Some(probe), LayerBlend::Normal, 1, |_, _| 65535);
     let paper = b.0.layers.len() - 1;
     b.0.layers[paper].visible = false;
-    let view = ViewState { background_rgba_linear: [0.; 4], ..crate::test_support::view(EXTENT) };
+    let view = crate::test_support::view(EXTENT) ;
     r.submit(FramePacket { view, reset_layers: true, ..packet(&b.0.layers, EXTENT) }).unwrap();
     crate::layer_tests::page_bytes(r, crate::test_support::document_texture(r))
         .chunks_exact(16)

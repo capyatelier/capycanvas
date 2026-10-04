@@ -19,7 +19,6 @@ pub struct WebSourceCandidate {
     gpu: SnapshotGpu,
     control: CaptureControl,
     lost: Arc<std::sync::Mutex<Option<String>>>,
-    background: [f32; 4],
     time: f32,
     clipped: u64,
     profile: Option<String>,
@@ -73,7 +72,6 @@ impl WebApp {
             .snapshot_gpu();
         let lost = self.gpu_owner().ok_or_else(|| js("Canvas unavailable"))?;
         let control = control.inner.clone();
-        let background = s.engine().view().background_rgba_linear;
         let time = s.engine().animation_time();
         Ok(future_to_promise(async move {
             output::cancelled(&control)?;
@@ -143,7 +141,6 @@ impl WebApp {
                 gpu,
                 control,
                 lost,
-                background,
                 time,
                 clipped,
                 profile: name,
@@ -160,7 +157,7 @@ impl WebApp {
         let candidate = c.workflow.preview(&self.session, c.converted.clone(), c.control.is_cancelled(), true).map_err(js)?;
         Ok(future_to_promise(async move {
             for project in [&c.workflow.project, &candidate] {
-                c.previews.push(hdr::preview_document(&c.gpu,project.clone(),c.background,c.time,c.control.clone()).await?);
+                c.previews.push(hdr::preview_document(&c.gpu,project.clone(),c.time,c.control.clone()).await?);
             }
             output::cancelled(&c.control)?;
             c.workflow.comparison_completed().map_err(js)?;

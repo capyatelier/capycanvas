@@ -206,11 +206,7 @@ impl Builder<'_> {
 }
 impl stack::Compositor for Builder<'_> {
     type Image = Vec<Node>;
-    fn clear(&mut self, paper: bool) -> Self::Image {
-        let p = self.packet.view.background_rgba_linear;
-        if !paper || p[3] == 0. { return Vec::new(); }
-        vec![Expression::color(self.packet.blend_space.composite(self.space, [p[0] * p[3], p[1] * p[3], p[2] * p[3], p[3]]))]
-    }
+    fn clear(&mut self) -> Self::Image { Vec::new() }
     fn discard(&mut self, _: Self::Image) {}
     fn duplicate(&mut self, image: &Self::Image) -> Self::Image { image.clone() }
     fn fade(&mut self, front: Self::Image, back: Self::Image, index: usize) -> Result<Self::Image, GpuRasterError> {
@@ -228,6 +224,10 @@ impl stack::Compositor for Builder<'_> {
         let layer = &self.packet.layers[index];
         let output = if layer.kind == LayerKind::Group {
             stack::compose(self, self.packet.layers, Some(layer.id), None)?
+        } else if let Some(color) = layer.effect.as_ref().and_then(|effect| effect.constant_color()) {
+            let [r, g, b, a] = color.linear_in(self.space).map_err(GpuRasterError::Color)?;
+            if a == 0. { Vec::new() }
+            else { vec![Expression::color(self.packet.blend_space.composite(self.space, [r * a, g * a, b * a, a]))] }
         } else if layer.kind == LayerKind::Effect {
             self.effect(&[index], Vec::new())?
         } else { vec![self.source(layer, false)] };

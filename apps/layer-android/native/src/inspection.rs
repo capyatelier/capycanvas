@@ -62,7 +62,6 @@ pub extern "system" fn Java_art_capycanvas_Native_captureFree(_: JNIEnv, _: JCla
 struct Inspection {
     project: layer_core::Project,
     gpu: SnapshotGpu,
-    background: [f32; 4],
     time: f32,
     epoch: u64,
     control: CaptureControl,
@@ -142,7 +141,6 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionTask(
         Ok(Box::into_raw(Box::new(Inspection {
             project,
             gpu,
-            background: session.engine().view().background_rgba_linear,
             time: session.engine().animation_time(),
             epoch: session.state().document_file.epoch,
             control: control(cancel),
@@ -163,7 +161,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionHistogram(
         crate::inspection::on_worker("capy-inspection", "Histogram worker failed", move || {
             let revision = job.project.document.revision;
             let sampled_time = job.project.document.has_animated_effects().then_some(job.time);
-            let mut renderer = job.gpu.capture(job.project, job.background, job.time, job.control).map_err(error)?;
+            let mut renderer = job.gpu.capture(job.project, job.time, job.control).map_err(error)?;
             let histogram = renderer.histogram().map_err(error)?;
             serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":revision,"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})).map_err(error)
         })
@@ -211,7 +209,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionOutput(
         let recipe: layer_ui::ExportRecipe =
             serde_json::from_str(&crate::android::read(&mut env, &recipe)?).map_err(error)?;
         let (previews,stats)=crate::inspection::on_worker("capy-output-preview", "Output preview worker failed", move || {
-            let mut renderer=job.gpu.capture(job.project,job.background,job.time,job.control).map_err(error)?;
+            let mut renderer=job.gpu.capture(job.project,job.time,job.control).map_err(error)?;
             let before=renderer.preview_document([512,384],layer_core::color::RgbSpace::Srgb)?;
             let output=layer_host::export::preview_recipe(&mut renderer,[512,384],layer_core::color::RgbSpace::Srgb,1.,&recipe)?;
             let json=serde_json::json!({"extent":recipe.size.extent(renderer.extent())?,"clipped_channels":output.clipped,"range_blocked":output.range_blocked});

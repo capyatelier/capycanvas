@@ -91,9 +91,9 @@ export async function checkImageCommands({call,evaluate,settle,device=false}) {
   const blue=rgba=>!!rgba&&rgba.slice(0,3).every((v,i)=>Math.abs(v-BLUE[i])<.04);
   const white=rgba=>!!rgba&&rgba.slice(0,3).every(v=>v>.9);
   const paper=async shown=>{
-    const id=await evaluate(`Number(layerApp.state().layers.find(l=>l.content_icon==='layer-paper-symbolic').id)`);
+    const id=await evaluate(`Number(layerApp.state().layers.find(l=>Number(l.id)===2).id)`);
     await send({type:'layer',action:{op:'visibility',id,value:shown}});
-    await wait(`layerApp.state().layers.find(l=>l.content_icon==='layer-paper-symbolic').visible===${shown}`);
+    await wait(`layerApp.state().layers.find(l=>Number(l.id)===2).visible===${shown}`);
   };
   const capture=async(name,selector)=>{
     const r=await rect(selector);

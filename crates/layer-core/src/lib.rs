@@ -262,7 +262,6 @@ impl Rect {
 #[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum LayerKind {
     Paint,
-    Background,
     Group,
     Effect,
     /// Named reusable coverage; never participates in artwork composition.
@@ -295,6 +294,11 @@ pub struct Layer {
 }
 
 impl Layer {
+    pub fn solid_color(id: LayerId, name: impl Into<Arc<str>>, color: color::RgbColor) -> Self {
+        let mut effect = EffectInstance::new(bundled_effect_catalog().get("solid_color").unwrap().program());
+        effect.set("color", EffectValue::Color(color)).expect("valid fill color");
+        Self { kind: LayerKind::Effect, effect: Some(Arc::new(effect)), ..Self::paint(id, name) }
+    }
     pub fn resource_roots<'a>(&'a self, out: &mut Vec<&'a Arc<Lut3d>>) {
         out.extend(self.effect.iter().flat_map(|effect| effect.resources()));
         for operation in self.pending_operations.iter().chain(self.mask.iter().flat_map(|m| m.pending_operations.iter())) { operation.resource_roots(out); }
@@ -1415,10 +1419,7 @@ impl Document {
             sdr_rendition: Default::default(),
             layers: vec![
                 Layer::paint(paint_id, names.paint),
-                Layer {
-                    kind: LayerKind::Background,
-                    ..Layer::paint(LayerId(2), names.paper)
-                },
+                Layer::solid_color(LayerId(2), names.paper, color::RgbColor::WHITE),
             ],
             active_layer: paint_id,
             active_mask: false,
@@ -1607,12 +1608,7 @@ impl Document {
                 let id = layer.id;
                 self.validate_layer(&layer)?;
                 if self.layers.is_empty() { self.active_layer = id; self.active_mask = false; }
-                let bottom = self
-                    .layers
-                    .iter()
-                    .position(|l| l.kind == LayerKind::Background)
-                    .unwrap_or(self.layers.len());
-                self.layers.insert(index.min(bottom), *layer);
+                self.layers.insert(index.min(self.layers.len()), *layer);
                 Edit::RemoveLayer { id }
             }
             Edit::RemoveLayer { id } => {
@@ -1657,16 +1653,8 @@ impl Document {
                     .iter()
                     .position(|layer| layer.id == id)
                     .ok_or(DocumentError::MissingLayer(id))?;
-                if self.layers[from].kind == LayerKind::Background {
-                    return Err(DocumentError::ProtectedLayer(id));
-                }
                 let layer = self.layers.remove(from);
-                let bottom = self
-                    .layers
-                    .iter()
-                    .position(|l| l.kind == LayerKind::Background)
-                    .unwrap_or(self.layers.len());
-                self.layers.insert(to.min(bottom), layer);
+                self.layers.insert(to.min(self.layers.len()), layer);
                 Edit::MoveLayer { id, to: from }
             }
             Edit::SetLayerOpacity { id, opacity } => {
@@ -1702,7 +1690,6 @@ impl Document {
                 }
             }
             Edit::SetActiveLayer { id } => {
-                // Selection is not permission to paint (Paper has properties too).
                 self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
                 let previous = self.active_layer;
                 let mask = self.active_mask;

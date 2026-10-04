@@ -50,18 +50,7 @@ impl SnapshotGpu {
         document.selection = None;
         document.rulers.clear();
         document.reference_layers.clear();
-        let mut background = document.layers.iter().find(|l| l.kind == LayerKind::Background && l.visible)
-            .map(|paper| {
-                let mut color = paper.properties.paper_color.unwrap_or(layer_core::color::RgbColor::WHITE)
-                    .linear_in(document.color.space).expect("validated paper color");
-                color[3] *= paper.opacity;
-                color
-            }).unwrap_or([0.; 4]);
-        let paper = background[3] > 0. && target.is_none();
-        let paper_bounds = if paper && request.scope == ContentScope::All { Rect::from_extent(original_extent) } else { Rect::EMPTY };
-        if request.scope == ContentScope::All { background = [0.; 4]; }
-        document.layers.retain(|l| l.kind != LayerKind::Background);
-        if document.layers.is_empty() { return Ok(if paper { Rect::from_extent(original_extent) } else { Rect::EMPTY }); }
+        if document.layers.is_empty() { return Ok(Rect::EMPTY); }
         if document.layer(document.active_layer).is_none() {
             document.active_layer = document.layers[0].id;
             document.active_mask = false;
@@ -69,7 +58,7 @@ impl SnapshotGpu {
         if request.scope == ContentScope::All {
             document.layers.retain(|l| l.kind != LayerKind::Effect
                 || l.effect.as_ref().is_some_and(|e| e.program.kind == layer_core::EffectKind::Generator));
-            if document.layers.is_empty() { return Ok(paper_bounds); }
+            if document.layers.is_empty() { return Ok(Rect::EMPTY); }
             if document.layer(document.active_layer).is_none() {
                 document.active_layer = document.layers[0].id;
                 document.active_mask = false;
@@ -80,7 +69,7 @@ impl SnapshotGpu {
         } else if request.scope == ContentScope::Canvas || target.is_some() {
             vec![Rect::from_extent([document.width, document.height])]
         } else {
-            let mut candidates: Vec<_> = paper.then(|| Rect::from_extent(original_extent)).into_iter().collect();
+            let mut candidates = Vec::new();
             for layer in document.layers.iter().filter(|l| document.layer_is_visible(l.id) && l.opacity > 0.) {
                 let next = match layer.kind {
                     LayerKind::Paint => {
@@ -115,7 +104,7 @@ impl SnapshotGpu {
         candidates.retain(|bounds| !bounds.is_empty());
         let domain = if target.is_some() { Rect::from_extent([document.width, document.height]) }
             else { candidates.iter().copied().fold(Rect::EMPTY, Rect::union) };
-        if domain.is_empty() { return Ok(paper_bounds); }
+        if domain.is_empty() { return Ok(Rect::EMPTY); }
         let origin = [domain.min.x, domain.min.y].map(|v| (v / PAGE_SIZE as f32).floor() * PAGE_SIZE as f32);
         let extent = [domain.max.x.ceil() - origin[0], domain.max.y.ceil() - origin[1]];
         if extent.iter().any(|n| !n.is_finite() || *n < 1. || *n > (1 << 24) as f32) {
@@ -177,7 +166,7 @@ impl SnapshotGpu {
         document.width = extent[0];
         document.height = extent[1];
         const BATCH: usize = 8;
-        let mut snapshot = SnapshotRenderer::construct(Project { document }, background, request.time, control.clone(), self).map_err(|e| e.to_string())?;
+        let mut snapshot = SnapshotRenderer::construct(Project { document }, request.time, control.clone(), self).map_err(|e| e.to_string())?;
         snapshot.planned_pixel_bytes = PLANNED_PIXEL_BYTES / BATCH as u64;
         if target.is_none() { snapshot.renderer.capture_frame = Some((origin, original_extent)); }
         for (id, phase) in &request.effect_times {
@@ -242,7 +231,7 @@ impl SnapshotGpu {
         Ok(if b[0] >= b[2] || b[1] >= b[3] { Rect::EMPTY } else {
             Rect { min: Point { x: b[0] as f32 + origin[0], y: b[1] as f32 + origin[1] },
                 max: Point { x: b[2] as f32 + origin[0], y: b[3] as f32 + origin[1] } }
-        }.union(paper_bounds))
+        })
     }
 }
 async fn read_bounds(device: &PipelineDevice, queue: &wgpu::Queue, output: &wgpu::Buffer) -> Result<[u32; 4], String> {

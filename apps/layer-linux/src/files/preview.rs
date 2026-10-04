@@ -17,7 +17,6 @@ struct Image {
 fn thumbnail(
     gpu: &SnapshotGpu,
     project: Project,
-    background: [f32; 4],
     time: f32,
     control: CaptureControl,
     view: crate::display_color::ViewColor,
@@ -26,7 +25,7 @@ fn thumbnail(
 ) -> Result<Image, layer_ui::ColorFeatureError> {
     let hdr_document = project.document.color.depth.is_float();
     let mut renderer =
-        gpu.capture(project, background, time, control)
+        gpu.capture(project, time, control)
             .map_err(|e| e.to_string())?;
     let hdr = output.as_ref().is_some_and(|r| r.format.is_hdr());
     let display_hdr = hdr_document && headroom > 1. && (hdr || output.is_none());
@@ -78,7 +77,6 @@ fn present(preview:layer_render_wgpu::snapshot::SnapshotPreview,display_hdr:bool
 
 struct Pending {
     project: Project,
-    background: [f32; 4],
     time: f32,
     serial: u64,
     output: Option<ExportRecipe>,
@@ -227,8 +225,8 @@ impl Comparison {
             glib::timeout_future(std::time::Duration::from_millis(10)).await;
         }
     }
-    pub fn request(self: &Rc<Self>, project: Project, background: [f32; 4], time: f32) {
-        self.request_image(project, background, time, None);
+    pub fn request(self: &Rc<Self>, project: Project, time: f32) {
+        self.request_image(project, time, None);
     }
     pub fn set_headroom(&self, headroom: f32) -> bool {
         if self.headroom.replace(headroom) == headroom { return false; }
@@ -302,7 +300,6 @@ impl Comparison {
         self.refresh_labels();
         self.request_image(
             snapshot.project.clone(),
-            snapshot.background,
             snapshot.time,
             Some(recipe),
         );
@@ -310,14 +307,12 @@ impl Comparison {
     fn request_image(
         self: &Rc<Self>,
         project: Project,
-        background: [f32; 4],
         time: f32,
         output: Option<ExportRecipe>,
     ) {
         self.invalidate(self.copy.borrow().rendering.as_ref());
         *self.pending.borrow_mut() = Some(Pending {
             project,
-            background,
             time,
             serial: self.serial.get(),
             output,
@@ -347,7 +342,6 @@ impl Comparison {
                             thumbnail(
                                 &gpu,
                                 project,
-                                next.background,
                                 next.time,
                                 control.clone(),
                                 view,
@@ -359,7 +353,6 @@ impl Comparison {
                     let after = thumbnail(
                         &gpu,
                         next.project,
-                        next.background,
                         next.time,
                         control,
                         view,

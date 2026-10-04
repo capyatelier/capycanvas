@@ -42,7 +42,7 @@ impl ClipTask {
         }
         let mut renderer = self
             .gpu
-            .capture(capture.project.clone(), capture.background, capture.time, control)
+            .capture(capture.project.clone(), capture.time, control)
             .map_err(|e| e.to_string())?;
         let (source, png) =
             renderer.write_clip(capture.crop, capture.coverage.as_ref(), capture.original.is_none(), limit)?;
@@ -94,7 +94,7 @@ mod tests {
 
     fn photo_host(selection: Option<Selection>) -> NativeHost {
         let mut document = layer_core::Document::new("Clip", 64, 48, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
-        for paper in document.layers.iter_mut().filter(|l| l.kind == layer_core::LayerKind::Background) {
+        for paper in document.layers.iter_mut().filter(|l| l.id == layer_core::LayerId(2)) {
             paper.visible = false;
         }
         document.layers[0].source = Some(photo([64, 48], |x, y| [(x * 4) as u8, (y * 5) as u8, 200, 255]));

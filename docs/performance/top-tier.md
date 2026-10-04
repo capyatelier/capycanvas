@@ -43,7 +43,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Navigation with Gaussian Blur, Radius 85 | 120 | **Not met.** 40.55–41.09 presents/s; interval p99 33.33 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
 | Edge-Preserving Smooth slider | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
-| Fill layer or gradient-fill edit | 120, soft | | |
+| Fill layer or gradient-fill edit | 120, soft | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Navigation with proof or tone guide shown | 120 | | |
 | Navigation with exact artwork sampling (61 MP) | 120 | **Not met.** 48.43–49.89 canvas presents/s; interval p99 25.00 ms | [Exact artwork samples](#exact-artwork-samples), 2026-10-02 |
 | Web Histogram pan, statistics pending / Exact settled (61 MP) | 120 | **Not met.** Chrome surface 111.27–112.40 / 111.96–113.88 presents/s; p99 gaps 16.67–25.00 / 16.67 ms | [Web scopes](#web-scopes), 2026-10-03 |
@@ -58,7 +58,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Navigation with pending Auto statistics (61 MP) | 120 | **Not met.** 39.40–40.04 canvas presents/s; interval p99 33.33 ms | [Auto statistics worker](#auto-statistics-worker), 2026-10-03 |
 | Gradient drag | 120 | | |
 | Figure or ruler drag | 120 | | |
-| Layer opacity scrub | 120 | | |
+| Layer opacity scrub | 120 | Solid Color revision unmeasured on this reference device | [Low-tier measurements](low-tier.md#solid-color-fills) do not qualify this tier |
 | Layer reorder drag | 120 | | |
 | Navigation with 32 visible paint layers | 120 | | |
 | Drawing with 32 visible paint layers, G-Pen 1024 px | 120 | | |

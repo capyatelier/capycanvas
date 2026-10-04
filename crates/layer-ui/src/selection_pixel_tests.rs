@@ -96,7 +96,7 @@ mod selection_pixel_checks {
         assert_eq!(reason(&s).as_deref(), Some("The active layer is locked"));
         s.dispatch(UiAction::Layer { action: LayerAction::Lock { id, value: false } }).unwrap();
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        assert_eq!(reason(&s).as_deref(), Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Paper, s.localization()).as_ref()));
+        assert_eq!(reason(&s).as_deref(), Some(super::notices::drawing_refusal_text(layer_core::DrawingRefusal::Fill, s.localization()).as_ref()));
         s.dispatch(UiAction::SelectLayer { id }).unwrap();
         let selection = s.engine.document().selection.clone();
         s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id, replace: false } }).unwrap();
@@ -280,7 +280,7 @@ mod selection_pixel_checks {
         };
         assert_eq!(reasons(&s), [None, None]);
         s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
-        assert_eq!(reasons(&s)[0].as_deref(), Some("The paper can't be copied to a layer"));
+        assert_eq!(reasons(&s)[0].as_deref(), Some("An effect layer has no pixels of its own"));
         s.dispatch(UiAction::SelectLayer { id: paint }).unwrap();
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "curves".into() } }).unwrap();
         select(&mut s, rectangle([10., 10., 90., 90.]));

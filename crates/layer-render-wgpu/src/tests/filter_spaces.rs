@@ -39,7 +39,7 @@ fn filter(id: &str, values: &[(&str, f32)], space: EffectSpace) -> Layer {
 /// The composite, as the document's blend space holds it.
 fn composite(space: BlendSpace, layers: &[Layer]) -> Image {
     let mut r = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
-    let view = ViewState { background_rgba_linear: [1.; 4], ..crate::test_support::view(EXTENT) };
+    let view = crate::test_support::view(EXTENT) ;
     let packet = FramePacket { view, reset_layers: true, blend_space: space, ..packet(layers, EXTENT) };
     r.submit(packet).unwrap();
     while layer_render::CanvasRenderer::has_pending_work(&r) {

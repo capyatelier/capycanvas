@@ -242,8 +242,7 @@ fn main() -> Result<()> {
             width_px: SIZE[0],
             height_px: SIZE[1],
             document_to_surface: [SCALE, 0., 0., SCALE, tx, 0.],
-            background_rgba_linear: [1.; 4],
-        };
+            };
         let mut engine = CanvasEngine::new(
             gpu,
             document,

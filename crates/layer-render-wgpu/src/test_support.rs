@@ -6,7 +6,6 @@ pub(crate) fn view(extent: [u32; 2]) -> ViewState {
         width_px: extent[0],
         height_px: extent[1],
         document_to_surface: [1., 0., 0., 1., 0., 0.],
-        background_rgba_linear: [0.; 4],
     }
 }
 

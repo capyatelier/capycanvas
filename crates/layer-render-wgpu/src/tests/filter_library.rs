@@ -96,7 +96,6 @@ fn submit(
     let view = ViewState {
         width_px: extent[0],
         height_px: extent[1],
-        background_rgba_linear: [0.; 4],
         ..test_view()
     };
     r.submit(FramePacket {

@@ -29,7 +29,7 @@ impl Scene {
         let extent = layer.local_extent(packet.document_extent);
         let source = FramePacket {
             commit_rasters: true,
-            view: layer_render::ViewState { background_rgba_linear: [0.; 4], ..packet.view },
+            view: packet.view,
             document_extent: extent,
             layers: &layers,
             dabs: &[],

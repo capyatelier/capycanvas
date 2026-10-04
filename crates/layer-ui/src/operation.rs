@@ -341,9 +341,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn move_refusal(&self) -> Option<&'static str> {
         let doc = self.engine.document();
         let layer = doc.layer(doc.active_layer)?;
-        if layer.kind == LayerKind::Background {
-            Some("The paper can't be moved")
-        } else if doc.is_locked(layer.id) {
+        if doc.is_locked(layer.id) {
             Some("The active layer is locked")
         } else if !self.moves_selected_pixels() {
             (!doc.active_mask && doc.retained_transform_targets(&self.transform_roots()).is_err())

@@ -265,7 +265,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
 }
 
 fn dense_preview_oracle(doc: &Document) -> Histogram {
-    let mut snapshot = gpu().capture(layer_core::Project {document:doc.clone()},[0.;4],0.,CaptureControl::default()).unwrap();
+    let mut snapshot = gpu().capture(layer_core::Project {document:doc.clone()},0.,CaptureControl::default()).unwrap();
     let pixels = snapshot.read_region([0,0,doc.width,doc.height]).unwrap();
     let mut result = Histogram::new(doc.color);
     let grid = [doc.width.min(256),doc.height.min(256)];

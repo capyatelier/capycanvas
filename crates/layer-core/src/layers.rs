@@ -35,9 +35,9 @@ pub enum DrawingRefusal {
     /// An effect layer draws on the layer below it, and that layer is locked.
     BaseLocked,
     Group,
-    Paper,
     SelectionLayer,
     EffectWithoutBase,
+    Fill,
     /// Content tools draw on artwork, and the layer's mask is being edited.
     Mask,
     /// Content tools draw on artwork, and an effect layer draws on its mask.
@@ -100,6 +100,15 @@ pub fn backdrop_layers(layers: &[Layer], index: usize) -> Vec<usize> {
         .collect()
 }
 
+pub fn constant_backdrop(layers: &[Layer]) -> &[Layer] {
+    let count = layers.iter().rev().take_while(|layer| {
+        layer.properties.parent.is_none() && !layer.properties.clipped
+            && layer.properties.blend == LayerBlend::Normal
+            && !layer.mask.as_ref().is_some_and(|mask| mask.enabled)
+            && layer.effect.as_ref().is_some_and(|effect| effect.constant_color().is_some())
+    }).count();
+    &layers[layers.len() - count..]
+}
 pub fn composite_input_scope(layers: &[Layer], layer: &Layer) -> Option<LayerId> {
     if layer.properties.clipped { layer.properties.parent }
     else { isolated_scope(layers, layer.properties.parent) }
@@ -114,18 +123,16 @@ pub fn composite_input_layers(layers: &[Layer], index: usize) -> Vec<usize> {
     if !layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Adjustment) { return Vec::new(); }
     if !layer.properties.clipped {
         let mut input = backdrop_layers(layers, index);
-        input.retain(|&i| layers[i].is_artwork() && layers[i].kind != LayerKind::Background);
-        if composite_input_scope(layers, layer).is_none()
-            && let Some(paper) = layers.iter().position(|l| l.kind == LayerKind::Background) { input.push(paper); }
+        input.retain(|&i| layers[i].is_artwork());
         input.sort_unstable();
         return input;
     }
     let parent = layer.properties.parent;
     let end = layers.iter().enumerate().skip(index + 1).find(|(_, l)|
-        l.is_artwork() && l.kind != LayerKind::Background && l.properties.parent == parent && !l.properties.clipped)
+        l.is_artwork() && l.properties.parent == parent && !l.properties.clipped)
         .map_or(layers.len(), |(i, _)| i);
     (0..layers.len()).filter(|&i| {
-        if !layers[i].is_artwork() || layers[i].kind == LayerKind::Background { return false; }
+        if !layers[i].is_artwork() { return false; }
         let mut root = i;
         for _ in 0..layers.len() {
             if layers[root].properties.parent == parent { return root > index && root <= end; }
@@ -799,9 +806,6 @@ pub struct LayerProperties {
     pub locked: bool,
     pub clipped: bool,
     pub blend: LayerBlend,
-    /// None uses the canvas's default paper color.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub paper_color: Option<color::RgbColor>,
     /// Only Selection Layers store these display and painting settings.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection_mask: Option<SelectionMaskProperties>,
@@ -1234,7 +1238,7 @@ impl Document {
         let selected: std::collections::BTreeSet<_> = roots.iter().copied().collect();
         for &id in roots {
             let l = self.layer(id).ok_or(DocumentError::MissingLayer(id))?;
-            if self.is_locked(id) || l.kind == LayerKind::Background {
+            if self.is_locked(id) {
                 return Err(DocumentError::ProtectedLayer(id));
             }
             if l.properties.parent != parent {
@@ -1400,6 +1404,9 @@ impl Document {
             return Ok(mask.id);
         }
         while layer.kind == LayerKind::Effect {
+            if layer.effect.as_ref().is_some_and(|e| e.program.kind == EffectKind::Generator) {
+                return Err(DrawingRefusal::Fill);
+            }
             let base = if layer.properties.clipped {
                 self.clipping_base(layer.id).and_then(|id| self.layer(id))
             } else {
@@ -1413,7 +1420,6 @@ impl Document {
             LayerKind::Paint if self.is_locked(layer.id) => Err(DrawingRefusal::BaseLocked),
             LayerKind::Paint => {self.validate_content_write(layer.id)?;Ok(layer.id)},
             LayerKind::Group => Err(DrawingRefusal::Group),
-            LayerKind::Background => Err(DrawingRefusal::Paper),
             LayerKind::Selection => Err(DrawingRefusal::SelectionLayer),
             LayerKind::Effect => Err(DrawingRefusal::EffectWithoutBase),
         }
@@ -1477,7 +1483,7 @@ impl Document {
         for layer in self.layers.iter().filter(|l|members.contains(&l.id)) {
             if self.is_locked(layer.id){return Err(DocumentError::ProtectedLayer(layer.id));}
             if !layer.pending_operations.is_empty() || layer.mask.as_ref().is_some_and(|m|!m.pending_operations.is_empty()) {return Err(DocumentError::InvalidLayerOperation("Wait for the current edit"));}
-            if matches!(layer.kind,LayerKind::Background|LayerKind::Selection) || layer.effect.as_ref().is_some_and(|e|e.program.kind==EffectKind::Generator) {
+            if matches!(layer.kind,LayerKind::Selection) || layer.effect.as_ref().is_some_and(|e|e.program.kind==EffectKind::Generator) {
                 return Err(DocumentError::InvalidLayerOperation("This selection contains content that cannot retain a transform"));
             }
         }
@@ -1518,7 +1524,7 @@ impl Document {
     pub fn affine_edit_transform(&self, id: LayerId) -> Option<Affine> { affine_edit_transform(&self.layers,id) }
     pub fn validate_content_write(&self,id:LayerId)->Result<(),DrawingRefusal>{
         let owner=self.target_owner(id).ok_or(DrawingRefusal::NoLayer)?;
-        if owner.id==id&&owner.kind!=LayerKind::Paint {return Err(match owner.kind {LayerKind::Group=>DrawingRefusal::Group,LayerKind::Background=>DrawingRefusal::Paper,LayerKind::Selection=>DrawingRefusal::SelectionLayer,_=>DrawingRefusal::EffectWithoutBase});}
+        if owner.id==id&&owner.kind!=LayerKind::Paint {return Err(match owner.kind {LayerKind::Group=>DrawingRefusal::Group,LayerKind::Selection=>DrawingRefusal::SelectionLayer,_=>DrawingRefusal::EffectWithoutBase});}
         if self.is_locked(id){return Err(DrawingRefusal::Locked);}
         self.affine_edit_transform(id).ok_or(DrawingRefusal::NonAffine).map(|_|())
     }
@@ -1552,10 +1558,6 @@ impl Document {
             {
                 return Err(DocumentError::InvalidLayerOperation("Selection Layers cannot contain artwork"));
             }
-        }
-        if let Some(color) = layer.properties.paper_color
-            && (layer.kind != LayerKind::Background || color.validate_working_spaces().is_err()) {
-            return Err(DocumentError::InvalidLayerOperation("Invalid paper color"));
         }
         if let Some(mask) = &layer.properties.selection_mask {
             if layer.kind != LayerKind::Selection { return Err(DocumentError::InvalidLayerOperation("Mask properties require a Selection Layer")); }
@@ -1591,17 +1593,6 @@ impl Document {
                 .validate()
                 .map_err(DocumentError::InvalidLayerOperation)?;
         }
-        let paper = self.layers.iter().find(|l| l.kind == LayerKind::Background);
-        if (layer.kind == LayerKind::Background
-            && (paper.is_some_and(|p| p.id != layer.id)
-                || layer.properties.parent.is_some()
-                || layer.mask.is_some()
-                || layer.properties.clipped
-                || layer.properties.blend != LayerBlend::Normal))
-            || paper.is_some_and(|p| p.id == layer.id && layer.kind != LayerKind::Background)
-        {
-            return Err(DocumentError::ProtectedLayer(layer.id));
-        }
         if layer.properties.extent.is_some_and(|e| e.iter().any(|v| *v > crate::MAX_EXTENT)) {
             return Err(DocumentError::InvalidLayerOperation("Layer extent exceeds the image limit"));
         }
@@ -1636,7 +1627,7 @@ impl Document {
             .layer(self.active_layer)
             .ok_or(DocumentError::MissingLayer(self.active_layer))?
             .clone();
-        if self.is_locked(layer.id) || layer.kind == LayerKind::Background {
+        if self.is_locked(layer.id) {
             return Err(DocumentError::ProtectedLayer(layer.id));
         }
         let linked = layer.mask.as_ref().is_some_and(|m| m.linked);
