@@ -56,6 +56,14 @@ pub(super) fn document_at(extent: [u32; 2]) -> Document {
 }
 
 fn composition_mut(doc: &mut Document) -> &mut layer_core::authored::Composition { let root = doc.artwork.root; doc.artwork.compositions.get_mut(root).unwrap() }
+fn set_attachment(occurrence: &mut Occurrence, enabled: bool) {
+    occurrence.attachment = if !enabled { Attachment::None }
+        else if occurrence.kind() == LayerKind::Effect { Attachment::Effect } else { Attachment::Clip };
+}
+fn set_attachment_at(doc: &mut Document, index: usize, enabled: bool) {
+    set_attachment(occurrence_mut(doc, index), enabled);
+    reindex(doc);
+}
 fn occurrence_at(doc: &Document, index: usize) -> &Occurrence { doc.artwork.occurrences.get(doc.scene().order()[index]).unwrap() }
 fn occurrence_mut(doc: &mut Document, index: usize) -> &mut Occurrence { let handle = doc.scene().order()[index]; doc.artwork.occurrences.get_mut(handle).unwrap() }
 fn source_at(doc: &Document, index: usize) -> SourceTarget { match occurrence_at(doc, index).content { OccurrenceContent::Paint(paint) => SourceTarget::Paint(paint), _ => unreachable!() } }
@@ -747,7 +755,7 @@ fn optional_source_detail_yields_to_unallocated_required_images() {
         if let Some(levels) = requested.get(&target) {
             for &plan in levels.values() {
                 scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, handle,
-                    SourceRequest { plan, required: plan.bounds, covered: PixelRect::EMPTY }).unwrap();
+                    SourceRequest { plan, required: plan.bounds.into(), covered: PixelRect::EMPTY }).unwrap();
             }
         }
     }
@@ -825,7 +833,7 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
         let mut commands = Commands::new(&r);
         let mut encoder = crate::submission::CommandEncoder::new(&r.device, &Default::default());
         scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, doc.scene().order()[0], SourceRequest {
-            plan: display_mips::Plan::window(extent, 1, fine), required: fine, covered: PixelRect::EMPTY,
+            plan: display_mips::Plan::window(extent, 1, fine), required: fine.into(), covered: PixelRect::EMPTY,
         }).unwrap();
         scene.scale_sources.entries.get_mut(&id).unwrap().levels.remove(&2);
         let plan = display_mips::Plan::window(extent, 2, coarse);
@@ -835,7 +843,7 @@ fn source_windows_derive_across_origins_and_fill_only_missing_pages() {
         assert_eq!(complete, page_coordinates(fine.intersect(coarse)).count());
         assert_eq!(scene.scale_sources.entries[&id].updates, updates);
         scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, doc.scene().order()[0], SourceRequest {
-            plan, required: coarse, covered: PixelRect::EMPTY,
+            plan, required: coarse.into(), covered: PixelRect::EMPTY,
         }).unwrap();
         assert_eq!(scene.scale_sources.entries[&id].updates - updates, (page_coordinates(coarse).count() - complete) as u64);
         r.uploads.finish(&encoder); encoder.submit(&r.queue);
@@ -1018,7 +1026,7 @@ fn deriving_partial_sources_preserves_completed_texels_between_refreshed_regions
     for tile in [[0, 0], [3, 3]] {
         scene.scale_sources.entries.get_mut(&id).unwrap().levels.get_mut(&3).unwrap().valid.remove(&tile);
         scene.prepare_scale_color(&mut commands, &mut r, frame, &mut encoder, doc.scene().order()[0],
-            SourceRequest { plan: display_mips::Plan::at(extent, 1), required: page_rect(tile), covered: PixelRect::EMPTY }).unwrap();
+            SourceRequest { plan: display_mips::Plan::at(extent, 1), required: page_rect(tile).into(), covered: PixelRect::EMPTY }).unwrap();
     }
     scene.scale_sources.ensure_level(&mut commands, &mut r, &mut encoder, id, display_mips::Plan::at(extent, 3)).unwrap();
     r.uploads.finish(&encoder);
@@ -1064,7 +1072,7 @@ fn groups_clipping_and_all_blends_share_exact_stack_semantics() {
     let base=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[50,170,80,117])));
     doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.81;
     let clipped=paint_occurrence(&mut doc,"solid",Some(rgba8_source(extent,|_,_|[230,30,120,193])));
-    let occurrence=doc.artwork.occurrences.get_mut(clipped).unwrap(); occurrence.clipped=true; occurrence.opacity=0.54;
+    let occurrence=doc.artwork.occurrences.get_mut(clipped).unwrap(); set_attachment(occurrence, true); occurrence.opacity=0.54;
     let clip_mask=coverage_mask(&mut doc,clipped,Default::default(),None);
     doc.artwork.coverage.get_mut(clip_mask).unwrap().default_coverage=0.42;
     doc.artwork.occurrences.get_mut(clipped).unwrap().mask.as_mut().unwrap().inverted=true;

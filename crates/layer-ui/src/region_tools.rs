@@ -201,7 +201,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                                 occurrence.visible = true;
                                 occurrence.opacity = 1.;
                                 occurrence.blend = layer_core::LayerBlend::Normal;
-                                occurrence.clipped = false;
+                                occurrence.attachment = layer_core::Attachment::None;
                                 occurrence.mask = None;
                                 layer_render::RegionSource::Scene {snapshot,scope:SceneScope::Members(vec![handle].into())}
                             }

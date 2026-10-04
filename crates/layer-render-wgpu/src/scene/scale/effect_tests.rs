@@ -28,7 +28,7 @@ fn blur_chain(doc: &mut layer_core::Document) {
     }
 }
 
-fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer) {
+fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer, context: impl std::fmt::Debug) {
     let plan = window.scale_display.as_ref().unwrap().plan;
     let full_plan = full.scale_display.as_ref().unwrap().plan;
     assert_eq!(plan.level, full_plan.level);
@@ -41,7 +41,7 @@ fn assert_window_matches_full(window: &WgpuRasterizer, full: &WgpuRasterizer) {
         let y = origin[1] + i as u32 / plan.size[0];
         let reference = expected[(y * full_plan.size[0] + x) as usize];
         assert!(pixel.iter().zip(reference).all(|(a, b)| (a - b).abs() < 2e-5),
-            "level={} at [{x}, {y}]: {pixel:?} != {reference:?}", plan.level);
+            "{context:?} level={} at [{x}, {y}]: {pixel:?} != {reference:?}", plan.level);
     }
 }
 
@@ -54,6 +54,46 @@ fn assert_spatial_storage_reserved(r: &WgpuRasterizer, frame: FramePacket<'_>) {
     assert!(actual <= reserved, "spatial scratch storage={actual}, reservation={reserved}, images={images}");
     let resident = resident_bytes_with_pool(cache, r.scene.as_ref().unwrap());
     assert!(resident <= CACHE_BYTES, "spatial resident storage={resident}");
+}
+
+#[test]
+fn attached_finite_support_preserves_two_distant_contact_pages() {
+    let extent = [2048; 2];
+    let mut doc = document_at(extent);
+    let paint = source_at(&doc, 0);
+    let blur = effect(&mut doc, "gaussian_blur");
+    set_effect_value(&mut doc, blur, "sigma", EffectValue::Number(2.));
+    let program = effect_program_mut(&mut doc, blur);
+    let count = program.passes.len() as u32;
+    assert_eq!(16 % count, 0);
+    for pass in Arc::make_mut(&mut program.passes) {
+        pass.sampling = layer_core::EffectSampling::Neighborhood { radius: 16 / count };
+    }
+    doc.artwork.occurrences.get_mut(blur).unwrap().attachment = Attachment::Effect;
+    insert_occurrence(&mut doc, blur, 0);
+    assert_eq!(crate::effects::damage_radius(doc.scene().effect(blur).unwrap(), 0), Some(16));
+    let dabs = [[128., 128.], [1664., 1664.]].map(|position| crate::tests::test_dab(position, [0.9, 0.1, 0.3, 1.], 0.8));
+    let mut batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dabs[0].bounds().union(dabs[1].bounds()));
+    batch.dab_count = dabs.len() as u32;
+    for level in [0, 2] {
+        let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let scale = 1. / (1 << level) as f32;
+        let mut frame = packet(doc.scene(), extent);
+        frame.composite_all = false;
+        frame.view.width_px = extent[0]; frame.view.height_px = extent[1];
+        frame.view.document_to_surface = [scale, 0., 0., scale, 0., 0.];
+        r.submit(frame).unwrap();
+        let work = r.metrics.composited_pixels;
+        r.submit(FramePacket { dabs: &dabs, dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
+        assert_eq!(r.metrics.composited_pixels - work, 2 * u64::from(PAGE_SIZE >> level).pow(2),
+            "support expands each contact independently at level {level}");
+        let mut pages = r.metrics.frame_composited_pages.clone();pages.sort_unstable();
+        assert_eq!(pages, vec![(level, [0, 0]), (level, [6, 6])]);
+        let incremental = display_pixels(&r);
+        r.scale_display = None;
+        r.submit(FramePacket { composite_all: true, ..frame }).unwrap();
+        assert_eq!(display_pixels(&r), incremental, "sparse spatial output matches a full rebuild at level {level}");
+    }
 }
 
 #[test]
@@ -131,13 +171,14 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
         let extent = doc.composition().size;
         let paint = source_at(&doc, 0);
         blur_chain(&mut doc);
+        occurrence_mut(&mut doc, 2).attachment = Attachment::Effect;
         let masked=doc.scene().order()[1];
         coverage_mask(&mut doc,masked,layer_core::Point { x: 17., y: -9. },Some(layer_core::Selection::polygon(vec![
             layer_core::Point { x: 270., y: 170. }, layer_core::Point { x: 1700., y: 270. },
             layer_core::Point { x: 1600., y: 1290. }, layer_core::Point { x: 310., y: 1250. },
         ]).unwrap()));
         occurrence_mut(&mut doc,1).opacity = 0.7;
-        occurrence_mut(&mut doc,1).clipped = true;
+        set_attachment_at(&mut doc, 1, true);
         let mut window = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut full = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         for (step, (level, origin, sigma)) in [
@@ -160,7 +201,7 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
             assert_eq!(plan.level, level);
             assert!(plan.bounds.min_x() > 0 && plan.bounds.min_y() > 0);
             assert!(plan.bounds.area() < PixelRect::full(extent).area());
-            assert_window_matches_full(&window, &full);
+            assert_window_matches_full(&window, &full, (space, step, "navigation"));
             assert_spatial_storage_reserved(&window, frame);
             if step == 0 || step == 3 {
                 for center in [[plan.bounds.min_x() as f32 - 7., origin[1] + 70.],
@@ -170,7 +211,7 @@ fn finite_radius_windows_match_full_chains_through_navigation_damage_and_support
                     let batch = dab_batch(paint, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
                     window.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame }).unwrap();
                     full.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..whole }).unwrap();
-                    assert_window_matches_full(&window, &full);
+                    assert_window_matches_full(&window, &full, (space, step, center));
                     assert_spatial_storage_reserved(&window, frame);
                 }
             }
@@ -223,7 +264,7 @@ fn pointwise_graph_keeps_document_coordinates_masks_clipping_and_exact_queries()
         let mut updates = None;
         for state in 0..4 {
             set_effect_at(&mut doc,0,"exposure", EffectValue::Number(state as f32 * 0.1));
-            occurrence_mut(&mut doc,1).clipped = state % 2 == 0;
+            set_attachment_at(&mut doc, 1, state % 2 == 0);
             occurrence_mut(&mut doc,1).mask.as_mut().unwrap().inverted = state >= 2;
             occurrence_mut(&mut doc,1).mask.as_mut().unwrap().translation.x = if state == 3 { 17. } else { 0. };
             let mut frame = packet(doc.scene(), extent);
@@ -394,10 +435,6 @@ fn pass_through_graph_matches_ungrouping_and_fades_its_backdrop() {
                 .map(|(back, front)| std::array::from_fn(|i| back[i] + (front[i] - back[i]) * amount)).collect();
             assert!(error(&draw(&faded), &expected) < 2e-5, "level={level} masked={masked}");
         }
-        let mut clipped=doc.clone();occurrence_mut(&mut clipped,0).clipped=true;
-        let passing = draw(&clipped);
-        occurrence_mut(&mut clipped,0).blend = layer_core::LayerBlend::Normal;
-        assert!(error(&passing, &draw(&clipped)) < 2e-5, "clipped groups remain isolated");
     }
     }
 }
@@ -460,7 +497,7 @@ fn spatial_graph_keeps_masks_clipping_global_dependencies_and_scale_preparation(
     exact.test.reference = true;
     for (level, sigma, clipped) in [(1, 0., false), (2, 0.5, false), (3, 3., true), (4, 21., false), (1, 21., true)] {
         set_effect_at(&mut doc,0,"sigma", EffectValue::Number(sigma));
-        occurrence_mut(&mut doc,0).clipped = clipped;
+        set_attachment_at(&mut doc, 0, clipped);
         let mut frame = packet(doc.scene(), extent);
         frame.blend_space = space;
         let scale = 1. / (1 << level) as f32;
@@ -520,7 +557,7 @@ fn pointwise_curve_edits_reuse_sources_and_bound_window_passes_with_masked_coord
             let whole=FramePacket{view:layer_render::ViewState{width_px:extent[0],height_px:extent[1],document_to_surface:[0.5,0.,0.,0.5,0.,0.],..frame.view},..frame};
             let updates=window.scene.as_ref().and_then(|scene|scene.scale_sources.entries.get(&paint)).map(|source|source.updates);
             window.submit(frame).unwrap();full.submit(whole).unwrap();
-            assert_window_matches_full(&window,&full);
+            assert_window_matches_full(&window,&full, (space, step, "curves"));
             assert_spatial_storage_reserved(&window,frame);
             if step>0 {
                 assert_eq!(window.scene.as_ref().unwrap().scale_sources.entries[&paint].updates,updates.unwrap(),"curve edits must not rebuild photo source levels");
@@ -842,12 +879,14 @@ fn native_gaussian_windows_masks_and_clipping_match_full_rebuild() {
     let extent=[1541,771];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
     let field=Field::Step(1024,[0.1,0.4,0.9,1.],[0.8,0.2,0.3,1.]);
     let mut doc=gaussian_document(extent,color,[gaussian_fixture("gaussian_blur",85.,EffectResolution::Native),original(field)]);
+    let blur=doc.scene().order()[0];let content=doc.scene().order()[1];
+    let owner=stack_occurrence(&mut doc,"Gaussian input",vec![content]);set_root_entries(&mut doc,vec![blur,owner]);
     let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(128*1024*1024);
     let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
     for (step,(zoom,x,clipped)) in [(0.5,-384.,false),(1.,-1000.,false),(0.125,0.,true)].into_iter().enumerate() {
         let handle=doc.scene().order()[0];
         let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
-        occurrence_mut(&mut doc,0).opacity=0.6;occurrence_mut(&mut doc,0).clipped=clipped;
+        occurrence_mut(&mut doc,0).opacity=0.6;set_attachment_at(&mut doc, 0, clipped);
         let mut frame=packet(doc.scene(),extent);frame.view.width_px=96;frame.view.height_px=64;frame.view.document_to_surface=[zoom,0.,0.,zoom,x,-32.];
         window.submit(frame).unwrap();exact.submit(frame).unwrap();
         assert!(window.scale_display.as_ref().unwrap().evaluation==Evaluation::Native);
@@ -874,14 +913,14 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
         let mut doc=base.clone();
         let handle=effect_occurrence(&mut doc,adjustment,id);insert_occurrence(&mut doc,handle,0);
         let mask=coverage_mask(&mut doc,handle,Default::default(),None);doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.25;
-        let occurrence=doc.artwork.occurrences.get_mut(handle).unwrap();occurrence.opacity=0.6;occurrence.clipped=true;
+        let occurrence=doc.artwork.occurrences.get_mut(handle).unwrap();occurrence.opacity=0.6;set_attachment(occurrence, true);reindex(&mut doc);
         let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
         let mut frame=packet(doc.scene(),extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
         exact.submit(frame).unwrap();let reference=pixels(&exact,crate::test_support::document_texture(&exact));
         let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
         let [resident,uploads]=window.source_tiles.borrow().admitted_bytes();
         assert!(u64::from(extent[0].div_ceil(PAGE_SIZE)*extent[1].div_ceil(PAGE_SIZE))*u64::from(PAGE_SIZE).pow(2)*16>resident);
-        let tight=if sigma==21. {128u64<<20}else{224<<20};let mut allocated=0;
+        let tight=if sigma==21. {128u64<<20}else{160<<20};let mut allocated=0;
         for cap in [320u64<<20,tight] {
             window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);window.metrics.image_window_peak_bytes=0;
             let before=window.metrics().image_window_submissions;
@@ -890,12 +929,13 @@ fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_chang
             let maximum=actual.iter().zip(&reference).flat_map(|(a,b)|a.iter().zip(b).map(|(a,b)|(a-b).abs())).fold(0f32,f32::max);
             assert!(maximum<=2e-5,"{id} sigma={sigma} cap={cap} seam/pixel error={maximum}");
             let windows=window.metrics().image_window_submissions-before;
-            if cap==320<<20 {assert_eq!(windows,4,"{id} sigma={sigma}: one admission plus3 large windows");}
-            else {assert!(windows>4,"{id} sigma={sigma}: constrained budget must fall back");}
+            if cap==320<<20 {assert_eq!(windows,0,"{id} sigma={sigma}: retained image stages fit the full-image allowance");}
+            else {assert!(windows>0,"{id} sigma={sigma}: constrained budget must use windows");}
             let metrics=window.metrics();assert!(metrics.image_window_peak_bytes<=cap);
             assert!(metrics.source_upload_peak_bytes>0&&metrics.source_upload_peak_bytes<=uploads);
             assert!(metrics.source_tile_misses>=85,"all85 imported tiles must actually be decoded");
-            assert_eq!(window.scene.as_ref().unwrap().image_cache_bytes(),0);
+            let image_bytes=window.scene.as_ref().unwrap().image_cache_bytes();
+            if windows>0 {assert_eq!(image_bytes,0);}else{assert!(image_bytes<=cap);}
             let bytes=window.source_tiles.borrow().gpu_bytes();assert!(bytes<=resident+4*(1<<20));
             if allocated!=0 {assert_eq!(bytes,allocated,"source working-set changes must not grow the fixed decoded allocation");}allocated=bytes;
             println!("{id} sigma={sigma} cap={cap} submissions={windows} image peak={} source bytes={bytes} upload peak={} misses={} hits={} maximum={maximum}",metrics.image_window_peak_bytes,metrics.source_upload_peak_bytes,metrics.source_tile_misses,metrics.source_tile_hits);

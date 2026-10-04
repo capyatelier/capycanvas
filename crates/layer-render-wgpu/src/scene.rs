@@ -160,7 +160,8 @@ pub(super) struct Scene {
     pub effect_passes: u64,
     images: images::ImageStages,
     image_window: Option<PixelRect>,
-    stop_before: Option<(OccurrenceHandle, bool)>,
+    stop_before: Option<OccurrenceHandle>,
+    image_damage: Option<scale::Damage>,
 }
 
 /// Immutable device resources, compiled before input is enabled and shared by
@@ -389,6 +390,7 @@ impl Scene {
             images: images::ImageStages::default(),
             image_window: None,
             stop_before: None,
+            image_damage: None,
         }
     }
     fn forget_bindings(&mut self, retired: &[wgpu::TextureView]) {
@@ -1365,8 +1367,7 @@ impl Scene {
         for &handle in scene.order() {
             if !scene.visible(handle) { continue; }
             if let Some(effect) = scene.effect(handle).filter(|effect| effect.program.image_boundary()) {
-                images += 2 + u64::from(scene.mask(handle).is_some_and(|(mask, _)| mask.enabled))
-                    + if scene.effective_clipped(handle) { 2 } else { 0 };
+                images += 2 + u64::from(scene.mask(handle).is_some_and(|(mask, _)| mask.enabled));
                 scratch = scratch.max(effect.program.passes.len().saturating_sub(1).min(2) as u64);
             }
         }
@@ -1473,7 +1474,7 @@ impl Scene {
         self.jobs.clear();self.source_jobs.clear();
         self.clear_material_pages();
         self.used.fill(false);
-        self.stop_before = packet.scene.stop_before();
+        self.stop_before = packet.scene.effect_input();
         for tile in regions.iter().flat_map(|r| page_coordinates(*r)) {
             let image = match output {
                 Output::Artwork(parent) => {
@@ -1482,9 +1483,9 @@ impl Scene {
                 }
                 Output::EffectInput(id) | Output::EffectChannels(id) => {
                     packet.scene.occurrence(id).ok_or(GpuRasterError::InvalidExtent)?;
-                    self.stop_before = Some((id, packet.scene.effective_clipped(id)));
+                    self.stop_before = Some(id);
                     let image = self.group(r, packet, layer_core::composite_input_scope(packet.scene, id), tile)?;
-                    self.stop_before = packet.scene.stop_before();
+                    self.stop_before = packet.scene.effect_input();
                     let image = if matches!(output, Output::EffectChannels(_)) { self.effect(r, packet, &[id], tile, image)? } else { image };
                     self.converted(r, image, Convert::linear(packet))
                 }
@@ -1526,6 +1527,10 @@ impl Scene {
         self.encode_jobs(r, encoder)
     }
 
+    pub(crate) fn raster_published(&mut self,id:SourceTarget,data:Arc<layer_core::raster::RasterData>) {
+        self.scale_sources.published(id,data);
+    }
+
     pub fn compose(
         &mut self,
         r: &mut WgpuRasterizer,
@@ -1542,9 +1547,10 @@ impl Scene {
         let mut cache = r.scale_display.take().expect("prepared display cache");
         cache.submission_valid = Some(self.valid.clone());
         let result = (|| {
-            cache.prepare_graph(r, packet, self, &commands, tiles.filter(|_| scale::bounded(packet.scene)))?;
-            cache.invalidate_hierarchy(&self.scale_sources, dirty, tiles.filter(|_| scale::bounded(packet.scene)));
+            cache.prepare_graph(r, packet, self, &commands, tiles)?;
+            cache.invalidate_hierarchy(&self.scale_sources, dirty, tiles);
             if cache.evaluation == scale::Evaluation::Native {
+                self.image_damage = tiles.filter(|_|!scale::bounded(packet.scene)).map(|tiles|scale::Damage::from_tiles(dirty,Some(tiles)));
                 self.scale_sources.retain_levels(&Default::default(), 0);
                 cache.render_native(self, r, packet, dirty, &mut scale::Encoding { encoder, commands: &mut commands }, tiles)
             } else {
@@ -1565,6 +1571,7 @@ impl Scene {
         })();
         self.scale_commands = Some(commands);
         r.scale_display = Some(cache);
+        self.image_damage = None;
         if result.is_ok() { write.track(encoder); }
         result
     }
@@ -2102,7 +2109,7 @@ fn fusable_adjustment(scene: SceneView<'_>, handle: OccurrenceHandle) -> bool {
 }
 fn fuses_after(scene: SceneView<'_>, head: OccurrenceHandle, next: OccurrenceHandle, chain: usize) -> bool {
     let occurrence = scene.occurrence(next).unwrap();
-    scene.visible(next) && scene.effective_clipped(next) == scene.effective_clipped(head)
+    scene.visible(next) && scene.effect_owner(next) == scene.effect_owner(head)
         && direct_effect_mask(scene, next)
         && !(chain >= effects::MASK_SLOTS && occurrence.mask.as_ref().is_some_and(|mask| mask.enabled))
         && fusable_adjustment(scene, next)
@@ -2120,7 +2127,7 @@ pub(super) fn startup_effect_chains(scene: SceneView<'_>) -> Vec<(Vec<Occurrence
         }
     }
     for parent in parents {
-        let mut siblings = scene.members(parent).rev().filter(|handle| scene.occurrence(*handle).unwrap().is_artwork()).peekable();
+        let mut siblings = scene.members(parent).rev().filter(|handle| scene.occurrence(*handle).unwrap().is_artwork() && scene.visible(*handle)).peekable();
         while let Some(handle) = siblings.next() {
             if !scene.visible(handle) || !direct_effect_mask(scene, handle) || !fusable_adjustment(scene, handle) { continue; }
             let mut chain = vec![handle];

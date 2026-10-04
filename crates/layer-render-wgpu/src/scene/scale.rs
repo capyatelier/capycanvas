@@ -18,6 +18,58 @@ mod navigator;
 pub(crate) use navigator::Navigator;
 pub(crate) use sources::Sources;
 
+#[derive(Clone, Default)]
+pub(crate) struct Damage {
+    pub regions: Vec<PixelRect>,
+}
+impl From<PixelRect> for Damage {
+    fn from(region: PixelRect) -> Self { Self::from_regions([region]) }
+}
+impl Damage {
+    pub const EMPTY: Self = Self { regions: Vec::new() };
+    pub fn from_regions(regions: impl IntoIterator<Item = PixelRect>) -> Self {
+        let mut damage = Self::EMPTY;
+        for region in regions { damage.push(region); }
+        damage
+    }
+    pub fn from_tiles(bounds: PixelRect, tiles: Option<&BTreeSet<[u32; 2]>>) -> Self {
+        tiles.map_or_else(|| bounds.into(), |tiles| Self::from_regions(tiles.iter().map(|c| page_rect(*c).intersect(bounds))))
+    }
+    pub fn tile_region(tile: &brush_tiles::BrushTile) -> PixelRect {
+        let [x, y] = tile.coordinate.map(|c| c * PAGE_SIZE);
+        PixelRect::new(x + tile.local.min_x(), y + tile.local.min_y(), x + tile.local.max_x(), y + tile.local.max_y())
+    }
+    pub fn is_empty(&self) -> bool { self.regions.is_empty() }
+    pub fn bounds(&self) -> PixelRect { self.regions.iter().fold(PixelRect::EMPTY, |r, n| r.union(*n)) }
+    pub fn area(&self) -> u64 { self.regions.iter().map(|r| r.area()).sum() }
+    pub fn intersects(&self, region: PixelRect) -> bool { self.regions.iter().any(|r| !r.intersect(region).is_empty()) }
+    pub fn union(mut self, other: Self) -> Self { self.extend(&other); self }
+    pub fn extend(&mut self, other: &Self) { for &region in &other.regions { self.push(region); } }
+    fn push(&mut self, mut region: PixelRect) {
+        if region.is_empty() { return; }
+        let mut index = 0;
+        while index < self.regions.len() {
+            let previous = self.regions[index];
+            let combined = previous.union(region);
+            if combined.area() == previous.area() + region.area() - previous.intersect(region).area() {
+                region = combined;
+                self.regions.swap_remove(index);
+                index = 0;
+            } else { index += 1; }
+        }
+        self.regions.push(region);
+    }
+    pub fn intersect(&self, bounds: PixelRect) -> Self { self.map(|r| r.intersect(bounds)) }
+    pub fn expand(&self, radius: u32, extent: [u32; 2]) -> Self { self.map(|r| r.expand(radius, extent)) }
+    pub fn map(&self, f: impl FnMut(PixelRect) -> PixelRect) -> Self { Self::from_regions(self.regions.iter().copied().map(f)) }
+    pub fn pages(&self) -> BTreeSet<[u32; 2]> { self.regions.iter().flat_map(|r| page_coordinates(*r)).collect() }
+    fn dependency(&self, radius: Option<u32>, plan: display_mips::Plan) -> Self {
+        if self.is_empty() { Self::EMPTY }
+        else if let Some(radius) = radius { self.expand(radius, plan.extent).intersect(plan.bounds) }
+        else { plan.bounds.into() }
+    }
+}
+
 /// Device recipes survive level changes; display cache retirement drops pixels only.
 #[derive(Clone)]
 pub(crate) struct Pipelines {
@@ -93,10 +145,10 @@ pub(super) struct Encoding<'a> {
     pub encoder: &'a mut crate::submission::CommandEncoder,
     pub commands: &'a mut Commands,
 }
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct SourceRequest {
     plan: display_mips::Plan,
-    required: PixelRect,
+    required: Damage,
     covered: PixelRect,
 }
 
@@ -378,6 +430,13 @@ fn local_regions(scene: Option<&Scene>, required: PixelRect, covered: PixelRect,
     Ok((paint_transform::snapshot::source_region(placement, required.to_rect(), extent, scene.and_then(|scene|scene.mesh_geometry(placement)))?.expand(1 << level, extent), PixelRect::EMPTY))
 }
 
+fn local_damage(scene: Option<&Scene>, required: &Damage, covered: PixelRect, placement: &layer_core::ImageTransform, extent: [u32; 2], level: u32) -> Result<(Damage, PixelRect), GpuRasterError> {
+    if placement.is_identity() { return Ok((required.intersect(PixelRect::full(extent)), covered)); }
+    let mut regions = Damage::EMPTY;
+    for &region in &required.regions { regions.push(local_regions(scene, region, covered, placement, extent, level)?.0); }
+    Ok((regions, PixelRect::EMPTY))
+}
+
 fn source_plan(scene: Option<&Scene>, output: display_mips::Plan, placement: &layer_core::ImageTransform, extent: [u32; 2], moving: bool) -> Result<display_mips::Plan, GpuRasterError> {
     let level = source_level(output.level, placement, extent).saturating_sub(u32::from(moving && placement.is_identity()));
     let (bounds, _) = local_regions(scene, output.bounds, PixelRect::EMPTY, placement, extent, level)?;
@@ -403,8 +462,7 @@ pub(super) fn bounded(scene: SceneView<'_>) -> bool {
     !scene.order().iter().any(|handle| scene.visible(*handle) && scene.effect(*handle).is_some_and(|effect| effect.program.image_boundary()))
 }
 fn effect_radius(scene: SceneView<'_>, level: u32) -> Option<u32> {
-    scene.order().iter().filter(|handle| scene.visible(**handle)).filter_map(|handle| scene.effect(*handle))
-        .try_fold(0u32, |radius, effect| radius.checked_add(crate::effects::damage_radius(effect, level)?))
+    stack::support(scene, level)
 }
 fn input_plan(plan: display_mips::Plan, scene: SceneView<'_>) -> display_mips::Plan {
     let bounds = crate::effects::dependency(plan.bounds, effect_radius(scene, plan.level), display_mips::Plan::at(plan.extent, plan.level));
@@ -746,10 +804,12 @@ impl Cache {
         if previous != self.graph.root {
             let tiles = tiles.filter(|_| r.artwork_frame.as_ref().is_some_and(|old|
                 old.blend_space == packet.blend_space
+                    && (old.time == packet.time_seconds || !packet.scene.order().iter().any(|handle|
+                        packet.scene.visible(*handle) && packet.scene.effect(*handle).is_some_and(|effect| effect.animated())))
                     && old.scene.view().with_scope(&old.scope).order() == packet.scene.order()
                     && packet.scene.order().iter().all(|handle| metadata::Metadata::new(old.scene.view().with_scope(&old.scope), *handle) == metadata::Metadata::new(packet.scene, *handle))));
             if !self.unchanged && let Some(hierarchy) = &mut self.hierarchy {
-                hierarchy.invalidate(PixelRect::full(self.plan.extent), tiles);
+                hierarchy.invalidate(Damage::from_tiles(PixelRect::full(self.plan.extent), tiles));
             }
             self.valid.retain(|c| tiles.is_some_and(|tiles| !tiles.contains(c)));
             self.refined.retain(|c| tiles.is_some_and(|tiles| !tiles.contains(c)));
@@ -851,12 +911,15 @@ impl Cache {
         let copied = self.copy_shifted(r, encoder);
         let root = self.graph.root.clone().expect("prepared composition graph");
         let input = input_plan(self.plan, packet.scene);
-        let invalid = dirty.union(root.damage(&scene.scale_sources, self.plan));
-        self.valid.retain(|c| page_rect(*c).intersect(invalid).is_empty() || tiles.is_some_and(|tiles| !tiles.contains(c)));
-        self.refined.retain(|c| page_rect(*c).intersect(invalid).is_empty() || tiles.is_some_and(|tiles| !tiles.contains(c)));
+        let invalid = Damage::from_tiles(dirty, tiles).union(root.damage(&scene.scale_sources, self.plan));
+        self.valid.retain(|c| !invalid.intersects(page_rect(*c)));
+        self.refined.retain(|c| !invalid.intersects(page_rect(*c)));
         let regions = page_regions(page_coordinates(self.plan.bounds).filter(|c| !self.valid.contains(c)), self.plan.bounds);
         let changed = regions.iter().fold(PixelRect::EMPTY, |a, b| a.union(*b));
-        let required = if scene.scale_sources.reset { input.bounds } else { root.required(changed, input).union(changed) };
+        let required = if scene.scale_sources.reset { input.bounds.into() } else {
+            let changed = Damage::from_regions(regions.iter().copied());
+            root.required(changed.clone(), input).union(changed)
+        };
         let mut source_plans=std::collections::HashMap::new();
         let source_covered = if packet.scene.order().iter().any(|handle| packet.scene.effect(*handle).is_some_and(|effect| !effect.program.passes.is_empty())) { PixelRect::EMPTY } else { covered };
         for &handle in &visible {
@@ -869,8 +932,7 @@ impl Cache {
             source_plans.insert(id,(placement.clone(),extent,requested));
             if self.plan.level == 0 && requested.level == 0 { continue; }
             let plan = self.source_plan(&scene.scale_sources, id, requested);
-            let (needed, covered) = local_regions(Some(scene), required, source_covered, &placement, extent, plan.level)?;
-            let needed = if placement.is_identity() { needed } else { plan.bounds };
+            let (needed, covered) = local_damage(Some(scene), &required, source_covered, &placement, extent, plan.level)?;
             scene.prepare_scale_color(commands, r, packet, encoder, handle, SourceRequest { plan, required: needed, covered })?;
         }
         for &handle in packet.scene.order() {
@@ -883,8 +945,7 @@ impl Cache {
                 source_plans.insert(id, (placement.clone(), extent, requested));
                 if self.plan.level == 0 && requested.level == 0 { continue; }
                 let plan = self.source_plan(&scene.scale_sources, id, requested);
-                let (needed, covered) = local_regions(Some(scene), required, source_covered, &placement, extent, plan.level)?;
-                let needed = if placement.is_identity() { needed } else { plan.bounds };
+                let (needed, covered) = local_damage(Some(scene), &required, source_covered, &placement, extent, plan.level)?;
                 scene.prepare_scale_mask(commands, r, encoder, mask, source, SourceRequest { plan, required: needed, covered })?;
             }
         }
@@ -945,6 +1006,7 @@ impl Cache {
             written_pixels += u64::from(width) * u64::from(height);
             written_regions += 1;
             r.metrics.composited_pixels += u64::from(width) * u64::from(height);
+            r.metrics.frame_composited_pages.extend(page_coordinates(region).map(|coordinate| (self.plan.level, coordinate)));
         }
         if let Some((finer, changed)) = finer {
             let region = if self.ready { changed } else { covered };

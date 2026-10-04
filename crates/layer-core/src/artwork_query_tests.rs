@@ -299,19 +299,20 @@ fn raw_source_snapshot_identity_ignores_unrelated_effect_phases() {
 #[test]
 fn effect_input_key_tracks_noncontiguous_group_contributors_and_clipping() {
     for pass_through in [false, true] {
-        for clipped in [false, true] {
+        for attached in [false, true] {
             let mut doc = fixture::document([128, 96], &["Child", "Target", "Group"]);
             fixture::effect(&mut doc, "Target", "exposure");
             fixture::nest(&mut doc, "Group", &["Child"]);
             let target = fixture::id(&doc, "Target");
             let child = fixture::id(&doc, "Child");
             let group = fixture::id(&doc, "Group");
-            change_occurrence(&mut doc, target, |o| o.clipped = clipped);
             change_occurrence(&mut doc, group, |o| {
                 o.blend = if pass_through { crate::LayerBlend::PassThrough } else { crate::LayerBlend::Normal }
             });
+            if attached && pass_through && doc.scene().parent(target)!=Some(group) {assert!(doc.attachment_edit(target,true,false).is_err());continue;}
+            change_occurrence(&mut doc, target, |o| o.attachment = if attached { crate::Attachment::Effect } else { crate::Attachment::None });
             let key = crate::artwork_query::EffectInputKey::new(doc.snapshot(), target).unwrap();
-            assert!(key.contributors().any(|h| h == child), "pass-through={pass_through} clipped={clipped}");
+            assert!(key.contributors().any(|h| h == child), "pass-through={pass_through} attached={attached}");
             let query = crate::ArtworkQuery::new(&doc, ArtworkSource::EffectInput(target));
             let mutations: [fn(&mut Document, OccurrenceHandle); 3] = [
                 |d, h| change_occurrence(d, h, |o| o.opacity = 0.4),
@@ -369,7 +370,7 @@ fn artwork_query_public_source_and_snapshot_mutations_cannot_reuse_an_obsolete_i
 #[test]
 fn effect_input_key_distinguishes_isolated_and_pass_through_ancestor_backdrops() {
     for pass_through in [false, true] {
-        for clipped in [false, true] {
+        for attached in [false, true] {
             let mut doc = fixture::document([128, 96], &["Target", "Sibling", "Group", "Backdrop"]);
             fixture::effect(&mut doc, "Target", "exposure");
             fixture::nest(&mut doc, "Group", &["Target", "Sibling"]);
@@ -377,17 +378,18 @@ fn effect_input_key_distinguishes_isolated_and_pass_through_ancestor_backdrops()
             let sibling = fixture::id(&doc, "Sibling");
             let group = fixture::id(&doc, "Group");
             let backdrop = fixture::id(&doc, "Backdrop");
-            change_occurrence(&mut doc, target, |o| o.clipped = clipped);
             change_occurrence(&mut doc, group, |o| {
                 o.blend = if pass_through { crate::LayerBlend::PassThrough } else { crate::LayerBlend::Normal }
             });
+            if attached && pass_through && doc.scene().parent(target)!=Some(group) {assert!(doc.attachment_edit(target,true,false).is_err());continue;}
+            change_occurrence(&mut doc, target, |o| o.attachment = if attached { crate::Attachment::Effect } else { crate::Attachment::None });
             let query = crate::ArtworkQuery::new(&doc, ArtworkSource::EffectInput(target));
             let mut changed = doc.clone();
             change_occurrence(&mut changed, sibling, |o| o.opacity = 0.25);
             assert!(!query.matches_source(&changed));
             let mut changed = doc.clone();
             change_occurrence(&mut changed, backdrop, |o| o.opacity = 0.25);
-            assert_eq!(query.matches_source(&changed), !pass_through || clipped, "pass-through={pass_through} clipped={clipped}");
+            assert_eq!(query.matches_source(&changed), !pass_through || attached, "pass-through={pass_through} attached={attached}");
             let mut changed = doc.clone();
             change_occurrence(&mut changed, group, |o| o.translation = Point { x: 2., y: 3. });
             assert!(!query.matches_source(&changed));
@@ -472,10 +474,10 @@ fn scoped_effect_dependencies_ignore_excluded_ancestors_and_release_missing_clip
     assert_eq!(crate::isolated_scope(scene,scene.parent(target)),None);
     assert_eq!(crate::composite_input_layers(scene,target),[child,backdrop]);
     let included=SceneScope::Members(vec![target,child,group,backdrop].into());assert!(!doc.scene().with_scope(&included).visible(target));
-    change_occurrence(&mut doc,target,|o|o.clipped=true);
-    assert!(doc.scene().with_scope(&scope).effective_clipped(target));
+    change_occurrence(&mut doc,target,|o|o.attachment = crate::Attachment::Effect);
+    assert_eq!(doc.scene().with_scope(&scope).effect_owner(target),Some(child));
     assert_eq!(crate::composite_input_layers(doc.scene().with_scope(&scope),target),[child]);
     let missing=SceneScope::Members(vec![target,backdrop].into());let scene=doc.scene().with_scope(&missing);
-    assert!(!scene.effective_clipped(target));assert_eq!(crate::composite_input_scope(scene,target),None);
-    assert_eq!(crate::composite_input_layers(scene,target),[backdrop]);
+    assert!(!scene.effective_clipped(target));assert_eq!(crate::composite_input_scope(scene,target),Some(child));
+    assert!(crate::composite_input_layers(scene,target).is_empty());
 }

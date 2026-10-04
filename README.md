@@ -171,7 +171,7 @@ and supports wide-gamut and HDR documents. We track which regions changed and
 which cached results depend on them, so we can reuse the rest.
 
 Those dependencies branch when an adjustment uses a mask. In this example, a color
-adjustment is clipped to a paint layer, so it must change that paint without
+adjustment is attached to a paint layer, so it must change that paint without
 changing the background or the ink above it. Its mask and opacity control how much
 filtered color replaces the original, while the paint's coverage stays the same:
 
@@ -195,8 +195,9 @@ Ink tile ------------------------> Ink over result
 If the mask changes, we recompute the adjustment and the composition above it,
 reusing the paint, background and ink tiles. Adjustments that work on one pixel at a
 time are combined with their masks into a single shader, so no texture is written
-between them. Blurs need neighboring pixels, so we cache their larger intermediate
-images on the GPU. Some filters still need full-image storage.
+between them. Blurs can expand the layer's coverage and need neighboring pixels,
+so we cache their larger intermediate images on the GPU. Some filters still need
+full-image storage.
 
 We keep the composed image in GPU textures through presentation, so there is no
 second copy of the canvas on the CPU. Even on devices where the CPU and GPU share

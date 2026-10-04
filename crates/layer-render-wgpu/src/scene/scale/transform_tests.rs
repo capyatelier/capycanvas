@@ -347,10 +347,11 @@ fn transformed_group_children_keep_clipping_and_linked_mask_semantics() {
     for (mask_target, linked) in [(false,false),(false,true),(true,true)] {
         let mut doc = document_at(extent);
         let owner=doc.scene().order()[0];let paint=source_at(&doc,0);let base=copy_paint(&mut doc,0);doc.artwork.occurrences.get_mut(base).unwrap().opacity=0.73;
-        occurrence_mut(&mut doc,0).clipped=true;occurrence_mut(&mut doc,0).blend=layer_core::LayerBlend::Multiply;
+        occurrence_mut(&mut doc,0).blend=layer_core::LayerBlend::Multiply;
         let initial=Selection::polygon([[20.,10.],[230.,20.],[190.,120.],[30.,90.]].map(|[x,y]|Point{x,y}).to_vec()).unwrap();
         let mask=coverage_mask(&mut doc,owner,Point{x:13.,y:-4.},Some(initial));doc.artwork.coverage.get_mut(mask).unwrap().default_coverage=0.23;doc.artwork.occurrences.get_mut(owner).unwrap().mask.as_mut().unwrap().linked=linked;
         let id=if mask_target{SourceTarget::Coverage(mask)}else{paint};
+        set_attachment(occurrence_mut(&mut doc,0), true);
         let group=stack_occurrence(&mut doc,"group",vec![owner,base]);doc.artwork.occurrences.get_mut(group).unwrap().opacity=0.71;set_root_entries(&mut doc,vec![group]);
         let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
         let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();

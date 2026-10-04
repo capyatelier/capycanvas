@@ -111,7 +111,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             })?;
             let name = effects::resource_label(&draft.filters.blur.program.label, self.localization());
             let mut occurrence = Occurrence::new(OccurrenceContent::Effect(effect), name);
-            occurrence.clipped = true;
+            occurrence.attachment = layer_core::Attachment::Effect;
             let handle = artwork.occurrences.insert(PortableId::random(), occurrence)?;
             let containing = doc.scene().stack(draft.target).ok_or("The preview layer was removed")?;
             let stack = artwork.stacks.get_mut(containing).ok_or("The preview group was removed")?;

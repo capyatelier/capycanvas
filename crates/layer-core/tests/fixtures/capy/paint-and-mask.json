@@ -49,7 +49,7 @@
     },
     {
       "id": "00000000000000000000000000000003",
-      "type": "capy.occurrence/1",
+      "type": "capy.occurrence/2",
       "data": {
         "name": "Ink",
         "content": {

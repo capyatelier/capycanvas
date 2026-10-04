@@ -168,8 +168,8 @@ fn stacked_resources_masks_clipping_and_cropped_checkpoints_keep_distinct_inputs
 
         for clipped in [false,true]{let mut document=effect_document(&[top.clone(),bottom.clone(),pattern(&colors)],[256;2],r.document_color);
             let handles=document.scene().order().to_vec();let top_h=handles[0];let bottom_h=handles[1];
-            document.artwork.occurrences.get_mut(top_h).unwrap().opacity=0.8;document.artwork.occurrences.get_mut(top_h).unwrap().clipped=clipped;
-            document.artwork.occurrences.get_mut(bottom_h).unwrap().opacity=0.6;document.artwork.occurrences.get_mut(bottom_h).unwrap().clipped=clipped;mask(&mut document,bottom_h,0.25);
+            document.artwork.occurrences.get_mut(top_h).unwrap().opacity=0.8;document.artwork.occurrences.get_mut(top_h).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
+            document.artwork.occurrences.get_mut(bottom_h).unwrap().opacity=0.6;document.artwork.occurrences.get_mut(bottom_h).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };mask(&mut document,bottom_h,0.25);
             let full=render_document(&mut r,&document);
             let mut expected_mid=Vec::new();let mut expected_final=Vec::new();for input in colors{
                 let corrected=reference(&first,input,working,0,65.);let mid=std::array::from_fn::<_,4,_>(|i|if i==3{f64::from(input[i])}else{f64::from(input[i])+0.15*(corrected[i]-f64::from(input[i]))});
@@ -278,7 +278,7 @@ fn discontinuous_n65_vertices_require_native_graph_evaluation() {
             if !hdr {
                 mask(&mut document,target,1.);let coverage=document.scene().mask(target).unwrap().0.source;
                 document.artwork.coverage.get_mut(coverage).unwrap().initial=Some(layer_core::Selection::polygon(vec![Point{x:573.,y:237.},Point{x:1001.,y:257.},Point{x:987.,y:507.},Point{x:587.,y:479.}]).unwrap());
-                let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.7;occurrence.clipped=true;
+                let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.7;occurrence.attachment = layer_core::Attachment::Effect;
             }
             for level in [1,2,3] {
                 let scale=1./(1<<level) as f32;let mut frame=packet(document.scene().with_owner(0,0),extent);
@@ -364,7 +364,7 @@ fn resident_lookup_tiles_batch_with_immutable_auxiliary_and_bounded_sources() {
     let mut source_bytes=None;
     for (state,intensity) in [35.,70.,100.].into_iter().enumerate() {
         set_effect(&mut document,target,"intensity",EffectValue::Number(intensity));
-        let coverage=if state==2 {mask(&mut document,target,0.25);let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.6;occurrence.clipped=true;0.15}else{1.};
+        let coverage=if state==2 {mask(&mut document,target,0.25);let occurrence=document.artwork.occurrences.get_mut(target).unwrap();occurrence.opacity=0.6;occurrence.attachment = layer_core::Attachment::Effect;0.15}else{1.};
         let mut frame=packet(document.scene().with_owner(0,0),extent);frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];r.submit(frame).unwrap();
         let cache=r.scale_display.as_ref().unwrap();assert!(cache.resident_bytes()>0);assert!(!cache.has_pending_work(&r));
         let passes=r.scene.as_ref().unwrap().effect_passes;assert!(passes<=2,"32 cold/warm pointwise LUT tiles must share at most two effect passes: state={state} passes={passes}");

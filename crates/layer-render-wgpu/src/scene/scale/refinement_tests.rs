@@ -221,8 +221,65 @@ fn sparse_contacts_preserve_exact_pages_between_their_footprints() {
     assert!(r.scene.as_ref().unwrap().scale_sources.entries[&source_at(&doc, 0)].updates - updates <= 2 * levels,
         "only touched source pages need reduction at each retained level");
     let work = r.metrics.composited_pixels;
+    crate::test_support::complete(&r);
+    r.metrics.frame_composited_pages.clear();
+    let mut scene=r.scene.take().unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    scene.refine_display(&mut r,frame,&mut encoder).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);r.scene=Some(scene);
+    assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0]),(0,[2,1])],"plain painting batches explicit regions across gaps");
     assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     assert_eq!(r.metrics.composited_pixels - work, 2 * u64::from(PAGE_SIZE).pow(2), "only the two touched pages need exact repair");
+}
+
+#[test]
+fn idle_spatial_refinement_bounds_pass_work_and_yields_between_distant_contacts() {
+    let mut doc = document_at([2048;2]);
+    let extent = doc.composition().size;
+    let paint = source_at(&doc,0);
+    let mut program = (*crate::tests::fixture("exposure").program()).clone();
+    program.alpha = layer_core::EffectAlpha::Filter;
+    program.entry = "idle_average".into();
+    program.wgsl = "fn idle_average(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return (fx_sample(p-vec2<f32>(16.,0.))+fx_sample(p+vec2<f32>(16.,0.)))*.5;}".into();
+    program.passes = vec![layer_core::EffectPass {entry:program.entry.clone(),sampling:layer_core::EffectSampling::Neighborhood {radius:16}}].into();
+    let effect = effect_occurrence(&mut doc,EffectInstance::new(Arc::new(program)),"local average");
+    doc.artwork.occurrences.get_mut(effect).unwrap().attachment = layer_core::Attachment::Effect;
+    insert_occurrence(&mut doc,effect,0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    exact.test.reference = true;
+    let mut frame = packet(doc.scene(),extent);
+    frame.composite_all = false;
+    frame.view.document_to_surface = [0.25,0.,0.,0.25,0.,0.];
+    for renderer in [&mut r,&mut exact] {renderer.submit(frame).unwrap();}
+    assert_settled(&mut r,frame,&pixels(&exact,crate::test_support::document_texture(&exact)));
+    let mut dabs = [[128.,128.],[1664.,1664.]].map(|position|crate::tests::test_dab(position,[0.9,0.1,0.3,1.],0.8));
+    for dab in &mut dabs {dab.radii=[8.;2];}
+    let mut batch = dab_batch(paint,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dabs[0].bounds().union(dabs[1].bounds()));
+    batch.dab_count = 2;
+    let stroke = FramePacket {dabs:&dabs,dab_batches:std::slice::from_ref(&batch),..frame};
+    for renderer in [&mut r,&mut exact] {renderer.submit(stroke).unwrap();}
+    crate::test_support::complete(&r);
+    r.metrics.frame_composited_pages.clear();
+    let mut scene=r.scene.take().unwrap();
+    let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+    scene.refine_display(&mut r,frame,&mut encoder).unwrap();
+    r.uploads.finish(&encoder);encoder.submit(&r.queue);
+    r.scene=Some(scene);
+    assert_eq!(r.metrics.frame_composited_pages,vec![(0,[0,0])]);
+    assert_eq!(r.scene.as_ref().unwrap().image_work(),[1,1]);
+    assert_eq!(r.scene.as_ref().unwrap().image_pass_pixels(),272u64.pow(2),"the document-edge page reads only its declared halo");
+    assert!(r.has_pending_work(),"the distant page waits for another idle batch");
+    let submissions = r.metrics.submissions;
+    r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
+    r.background_refinement=true;
+    let dab=crate::tests::test_dab([640.,640.],[0.1,0.7,0.3,1.],0.8);
+    let batch=dab_batch(paint,crate::layer_tests::preset_style(DefaultBrushPreset::GPen),dab.bounds());
+    let stroke=FramePacket {dabs:std::slice::from_ref(&dab),dab_batches:std::slice::from_ref(&batch),..frame};
+    for renderer in [&mut r,&mut exact] {renderer.submit(stroke).unwrap();}
+    assert!(r.metrics.submissions>submissions,"fresh paint interrupts unfinished spatial refinement");
+    r.background_ready.store(true,std::sync::atomic::Ordering::Release);
+    assert_settled(&mut r,frame,&pixels(&exact,crate::test_support::document_texture(&exact)));
 }
 
 #[test]
@@ -456,6 +513,13 @@ fn animated_display_invalidates_retained_pixels_when_time_changes() {
     assert!(original != animated, "animation changes retained display output");
     let error = quality(&animated, &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
     assert!(error[2] < 0.002, "animated display {error:?}");
+    let dab = crate::tests::test_dab([30., 30.], [0.9, 0.1, 0.3, 1.], 0.8);
+    let batch = dab_batch(source_at(&doc, 1), crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+    frame.time_seconds = 3.;
+    let painting = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
+    r.submit(painting).unwrap(); exact.submit(painting).unwrap();
+    let error = quality(&display_pixels(&r), &pixels(&exact, crate::test_support::document_texture(&exact)), r.scale_display.as_ref().unwrap().plan);
+    assert!(error[2] < 0.002, "animation advances outside the simultaneous paint contact {error:?}");
 }
 
 #[test]
@@ -540,4 +604,62 @@ fn idle_display_refines_spatial_effects_and_invalidates_committed_paint() {
         r.submit(stroke).unwrap(); exact.submit(stroke).unwrap();
         assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
     }
+}
+
+#[test]
+fn published_clipped_paint_preserves_exact_pages_during_the_next_contact() {
+    fn frame(doc: &Document) -> FramePacket<'_> {
+        let mut frame = packet(doc.scene(), doc.composition().size);
+        frame.composite_all = false;
+        frame.blend_space = layer_core::BlendSpace::Perceptual;
+        frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
+        frame
+    }
+    fn settle(r: &mut WgpuRasterizer, doc: &Document) {
+        for step in 0..=65 {
+            if !r.has_pending_work() { break; }
+            assert!(step < 65);
+            r.wait_idle().unwrap();
+            r.submit(frame(doc)).unwrap();
+        }
+        r.wait_idle().unwrap();
+    }
+    fn verify(r: &mut WgpuRasterizer, doc: &Document) {
+        for tile in doc.scene().raster(source_at(doc, 0)).unwrap().wait_data().unwrap().tiles.values() { tile.wait_backing().unwrap(); }
+        let mut exact = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        exact.test.reference = true;
+        exact.submit(frame(doc)).unwrap();
+        assert_settled(r, frame(doc), &pixels(&exact, crate::test_support::document_texture(&exact)));
+    }
+    let mut doc = document_at([2048; 2]);
+    let paint = paint_occurrence(&mut doc, "clipped paint", None);
+    insert_occurrence(&mut doc, paint, 0);
+    occurrence_mut(&mut doc, 0).opacity = 0.35;
+    set_attachment_at(&mut doc, 0, true);
+    let target = source_at(&doc, 0);
+    let mut r = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+    r.set_complete_display_allowance(1024 << 20);
+    r.submit(frame(&doc)).unwrap();
+    settle(&mut r, &doc);
+    let mut checkpoint = None;
+    for (contact, position) in [[128., 128.], [1664., 1664.]].into_iter().enumerate() {
+        doc.apply(layer_core::Edit::SetRaster { target, revision: layer_core::raster::RasterRevision::pending() }).unwrap();
+        let mut dab = crate::tests::test_dab(position, [0.9, 0.1, 0.3, 1.], 0.8);
+        dab.radii = [8.; 2];
+        let mut batch = dab_batch(target, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        batch.stroke_id = layer_core::StrokeId(contact as u64 + 1);
+        r.metrics.frame_composited_pages.clear();
+        r.submit(FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame(&doc) }).unwrap();
+        assert_eq!(r.metrics.frame_composited_pages, vec![(2, [contact as u32 * 6; 2])]);
+        assert_eq!(doc.scene().raster(target).unwrap().wait_data().unwrap().tiles.len(), contact + 1);
+        if contact == 0 { checkpoint = Some(doc.scene().raster(target).unwrap().clone()); }
+        settle(&mut r, &doc);
+    }
+    verify(&mut r, &doc);
+    let checkpoint = checkpoint.unwrap();
+    doc.apply(layer_core::Edit::SetRaster { target, revision: checkpoint.clone() }).unwrap();
+    r.metrics.frame_composited_pages.clear();
+    r.submit(FramePacket { restore_rasters: &[(target, checkpoint)], ..frame(&doc) }).unwrap();
+    assert!(r.metrics.frame_composited_pages.contains(&(2, [6, 6])), "restoration repairs the removed page");
+    verify(&mut r, &doc);
 }

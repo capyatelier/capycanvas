@@ -106,7 +106,7 @@ kept within 0–1, which a blur of translucent pixels can round past. A new,
 empty layer that an operation writes into reserves in history only the pages
 it can write (`RasterRevision::pending_within`).
 
-Frequency Separation bakes Low with a clipped Gaussian blur, then computes High
+Frequency Separation bakes Low with an attached Gaussian blur, then computes High
 from the original and the captured Low with `FrequencyDetail`. High stores
 `0.5 + (original - Low) / 2` in the document's blend space; its Linear Light blend
 reconstructs the original. The blur runs once, and High uses Low's native
@@ -209,11 +209,9 @@ contrast, inversion and component modes) for the menus described in
 formula, on straight colors, and two premultiplied helpers: `blend_composite` puts
 a source over its backdrop and `blend_clip` blends a clipped source inside its
 base's coverage. They serve every place a layer's blend applies:
-- layers, groups and clipping stacks (`scene.wgsl`, op 4), including the cached
-  clipping composition of an image filter (`scene_images.rs`);
-- a clipping stack's final composite over a constant backdrop, folded into its
-  last adjustment (`effects.rs`);
-- effect layers over their input (`fx_adjustment` in `effects_color.wgsl`);
+- layers, groups and common-base clipping runs (`scene.wgsl`, op 4);
+- effect interpolation, preserving or filtering alpha as declared
+  (`fx_adjustment` and `fx_filter` in `effects_color.wgsl`);
 - region and scale composition, including transform previews
   (`scene/scale/compose.wgsl`);
 - brushes with a blend mode other than Normal (`material_brush.wgsl`), with the
@@ -234,8 +232,9 @@ composite with its own layers, and a composition that stops before a layer
 (`stop_before`) stops inside it too. At opacity below 1 or with a mask, the group
 retains the backdrop and then fades to its result,
 `backdrop + opacity × mask × (result − backdrop)`. Exact tiles and reduced graph
-expressions evaluate the same weighted sums and coverage product. A clipped Pass
-Through group composites isolated, and `blend_code` passes it as Normal.
+expressions evaluate the same weighted sums and coverage product. Direct clipping
+and effect attachment require an explicitly isolated group; admission rejects a
+Pass Through group with those relationships.
 
 **Ranges.** Float documents clamp no result. Modes defined only on [0, 1]
 (`BlendRange::Unit`) clamp their operands to [0, 1] in every document, and float
@@ -316,7 +315,7 @@ reduced first and converted after.
 
 **What holds the composite.** Group and clipping scratch tiles, retained display windows and their mips,
 image-filter outputs and checkpoints
-(`scene_images`), clipping backdrops and cached clipping compositions, retained graph branches, the folded constant backdrop, and the backdrop
+(`scene_images`), retained graph branches, the folded constant backdrop, and the backdrop
 and result a Pass Through group fades between hold the document's composite
 values. Their caches include the blend space
 (`ImageStages`, `artwork::Frame`, the filter-preview source key and the
@@ -398,20 +397,18 @@ results. The renderer retains those results and tracks their dependencies so,
 for example, changing a clipping layer does not force unrelated source images
 to be rebuilt.
 
-An adjustment's input image, a clipping stack's backdrop and a filter preview's
-source are composed in the nearest group around the layer that is not Pass
-Through (`isolated_scope`), and their damage follows `backdrop_layers`, the layers
-composited below the layer through its Pass Through groups. Switching a group into
-or out of Pass Through is a structural change that rebuilds them. A composition
-starts above a completed image boundary (a checkpoint) only among the composed
-group's own layers, so the layers of a Pass Through group are always composed from
-below it; this is correct, and repeats the work below the group.
+Attached adjustments receive their owner's masked content, followed by the
+preceding attached effects in bottom-to-top order. An owner's completed local
+result enters ordinary blending or common-base clipping once. An unattached
+adjustment receives the lower stack through Pass Through groups up to the nearest
+isolated scope. Only an unattached completed spatial result can checkpoint a stack
+prefix; a local result belongs to its owner.
 
-These dependencies branch: a masked adjustment needs the original image, its
-filtered result and the mask. Other layers contribute separately to the final
-composite. The [README's tile example](../../README.md#rendering-engine) shows a
-clipped adjustment between paint and ink. Editing its mask changes the adjustment
-and subsequent composition; it does not change the stored paint, ink or background.
+Cache dependencies use occurrence handles and local chain inputs. Moving an
+unrelated row retains valid spatial stages; a downstream parameter edit keeps
+valid upstream stages. Source changes retain separate rectangles through placement,
+filter support and page invalidation, so distant contacts do not invalidate the
+pages between them. Masks branch from the same dependencies at their boundary.
 Invalidated branches reuse retired textures with the same region and resolution,
 clearing their valid regions before evaluation. Parameter edits replace cached
 pixels without allocating another full-size intermediate image.
@@ -565,18 +562,22 @@ domains do not change during a bake.
 
 ## Filters
 
-Filters are stored as effect layers in the document. An adjustment processes the
-combined image beneath it within its group. Clipping restricts it to a clipping
-stack, and the effect layer's mask and opacity control its influence. Successive
-adjustments receive the result of the earlier ones. Generator effects instead
-produce new image content that participates in ordinary layer composition.
+Filters are effect occurrences in the document. Attached adjustments process one
+paint occurrence or isolated group after its content mask, bottom to top, before
+owner opacity, blending and outer clipping. The base's locally filtered alpha is
+the common clipping shape for every member of its run. A member's local effects
+process only that member; effects on a containing isolated group process its
+completed inner composition. Hidden owners hide their complete chains, and hiding
+an effect bypasses it without changing ownership. Unattached adjustments process
+the lower stack and cannot split a clipping run. Generators produce ordinary
+content rather than attached processing.
 
-A clipped adjustment processes its clipping stack before that stack is combined
-with the unrelated background. Its mask and opacity mix the original and adjusted
-colors while preserving the base layer's coverage. Applying the effect to the
-already flattened image would incorrectly include the background. Treating the
-adjustment as another ordinary paint layer could also increase opacity where it
-overlaps the original.
+At Normal blending an effect mask and opacity interpolate premultiplied input and
+result, including alpha for programs declaring `EffectAlpha::Filter`. Full strength
+returns the filtered result once. Spatial effects can expand coverage beyond the
+owner's original shape; masks and clipping outside that owner constrain the
+completed result at their own boundaries. Declared sampling support governs
+capture halos, damage and window budgets along actual dependency paths.
 
 A runtime filter consists of a JSON definition and WGSL shader code. The definition
 describes its parameters, inputs and execution requirements. Shared code validates

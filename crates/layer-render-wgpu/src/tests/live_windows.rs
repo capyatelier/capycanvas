@@ -47,7 +47,7 @@ fn completed_filter_windows_release_cached_texture_references() {
     if let Some(report) = r.device.generate_allocator_report() {
         let retained: Vec<_> = report.allocations.iter().filter(|allocation| matches!(allocation.name.as_str(),
             "effect source cache" | "effect result cache" | "effect mask cache" |
-            "clipping composition cache" | "clipping backdrop cache" | "reusable effect intermediate"
+            "reusable effect intermediate"
         )).collect();
         assert!(retained.is_empty(), "completed filter windows still own allocations: {retained:?}");
     }
@@ -66,8 +66,8 @@ fn native_live_windows_match_full_filters_masks_clips_and_reconfiguration() {
                 let first = effect(&mut document, false, false);
                 let second = effect(&mut document, false, false);
                 document.artwork.occurrences.get_mut(first).unwrap().opacity = 0.63;
-                document.artwork.occurrences.get_mut(first).unwrap().clipped = clipped;
-                document.artwork.occurrences.get_mut(second).unwrap().clipped = clipped;
+                document.artwork.occurrences.get_mut(first).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
+                document.artwork.occurrences.get_mut(second).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
                 let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, Point { x: 7., y: -9. });
                 mask.source.default_coverage = 0.;
                 mask.source.initial = Some(Selection::polygon(vec![Point { x: 0., y: 0. }, Point { x: 760., y: 99. }, Point { x: 440., y: 533. }]).unwrap());

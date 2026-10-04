@@ -81,7 +81,7 @@ inside the existing group thumbnail; add no horizontal column.
 
 ### 3. Group right swipe toggles pass-through; alpha lock stays paint-only
 
-On an eligible closed group row, right swipe toggles pass-through as a shortcut
+On an eligible group row, right swipe toggles pass-through as a shortcut
 to the visible group-mode action. Restore the group's previous isolated blend
 mode when returning from Pass Through; use Normal when no other isolated mode
 has been chosen. The retained mode belongs to the shared model and survives
@@ -410,7 +410,8 @@ Implement these rules in shared rendering and damage planning:
 
 - **Follow actual dependencies.** Carry the changed source/mask identity and
   regions into owner inputs, effect steps, clipping runs and containing stacks.
-  Include every occurrence of a shared source at its own placement. Preserve
+  Duplicated layers may share immutable backing but retain independent editable
+  source handles and damage. Preserve
   cache identity for unrelated owners across sibling insertion and reordering;
   stack indices and a global document revision are not sufficient cache keys.
   A local edit must not set a document-wide reset simply because attachments
@@ -477,16 +478,23 @@ without each behavior change and reuse existing harnesses.
 
 | Milestone | Complete result and acceptance gate |
 | --- | --- |
-| M1: shared semantics | Change authored relationships, group state, codec/admission, scene scopes, compositor and affected shared commands as one coherent switch. Save/reopen, undo/redo, actual pixels and exact consumers agree on the three decision-9 examples. Paint/group target capabilities are shared. Pass the incremental pixel/work gates and measure affected frame paths before accepting the compositor switch. Remove superseded boolean semantics. |
-| M2: structural editing | Relationship-aware reorder, attach/release, grouping, duplication and permitted merge/delete operations preserve unrelated owners and placement. A base moves with its run. Preview and commit match, and each completed operation has one undo step. Old/new damage clears removed output while preserving unrelated caches; measure drag-preview and commit responsiveness. |
-| M3: GTK interaction | Implement contextual button copy/icons, group indication and swipe, extended rails and vertical chain links at existing dimensions. Review narrow/wide layouts in both themes with mouse, touch and pen. Follow the existing [GTK-first review gate](../ui/README.md#rules-for-ui-changes) before porting the visual implementation. |
-| M4: host parity | Port the reviewed GTK presentation to Web, then Android, Apple and Windows through their shared view/action boundaries. Verify identical targets and pixels, native gesture arbitration, accessibility and retained row updates. |
-| M5: qualification | Finish cross-host user journeys, exact-output/capture coverage and affected performance rows on reference hardware. Move completed contracts into current guides and retire this plan only after the acceptance gates pass. |
+| M1: shared behavior | Switch authored relationships, group state, codec/admission, scene scopes, compositor, incremental invalidation and structural editing together. Save/reopen, undo/redo, pixels and exact consumers agree. Reorder, attach/release, grouping, duplication and merge/delete preserve unrelated owners and placement atomically. Pass focused pixel/work gates and measure changed rendering paths. Adapt host transport enough to keep clients building; delete superseded behavior. |
+| M2: GTK interaction | Complete shared contextual commands/copy, group indication and swipe, extended rails, chain links and drag feedback at existing dimensions. Complete the GTK journey in both themes and narrow/wide layouts with relevant mouse/touch/pen checks. Follow the [GTK-first review gate](../ui/README.md#rules-for-ui-changes) before porting visuals. |
+| M3: ports and completion | Port approved presentation to Web, then Android, Apple and Windows. Complete host journeys and native gesture checks, remaining affected performance measurements and final documentation. Apple presentation is included; Apple test runs are excluded from this implementation's validation scope. Move lasting contracts into current guides and retire this plan after the acceptance gates pass. |
 
-M1 may adapt host transport to the new shared view so every client still builds;
-it does not bypass the M3 visual review. This plan does not authorize implementing
-unrelated filter types, general graph editing, automatic recovery or additional
-clipping-order modes.
+Use a small set of authored fixtures across shared semantics, editing, persistence,
+rendering and host journeys. Add targeted variations at the boundary they test;
+do not multiply every variation across all hosts, color depths and devices.
+Run focused checks while editing and the required changed-area checks at each
+complete milestone. Capture baseline performance once, measure stable rendering
+in M1 and reuse those results while rendering remains unchanged. In later
+milestones measure newly affected paths; repeat other checks when changes,
+failures or unresolved concerns justify it.
+
+M1's transport adaptations do not bypass the M2 visual review. This plan does
+not authorize unrelated filter types, general graph editing, automatic recovery
+or additional clipping-order modes. Existing unrelated performance misses remain
+open and do not expand this work into a general renderer optimization project.
 
 ## Validation
 
@@ -561,7 +569,7 @@ account for input reads and any intermediate pass work separately.
 | Long local chain | Test one, two and four effects, including noncommuting pointwise/spatial combinations. Support expands only along the chain; changing a late effect preserves cached upstream spatial results. Fused pointwise steps need no artificial intermediate cache. |
 | Radius/offset/visibility changes | Increase and decrease support, bypass a middle effect, hide/show the owner, detach/delete and undo/redo. Old output disappears and new output appears; no unrelated chain resets. Test offset support when a shadow is available, without adding a filter just for this milestone. |
 | Mask and group edits | Paint owner and effect masks separately; change opacity, nested isolation and clipping-base coverage. Correct downstream scope and old/new bounds without invalidating independent groups. |
-| Structural edits and shared sources | Reorder/reattach/reparent within and between groups, move a base with its run, and edit a source used by multiple occurrences. Every true dependent updates at its placement; shifted row indices do not invalidate unrelated effects. |
+| Structural edits and shared backing | Reorder/reattach/reparent within and between groups, move a base with its run, and edit one duplicated layer sharing immutable backing. Its independent source changes without invalidating the other copy. Shifted row indices do not invalidate unrelated effects. Reused editable source handles remain outside the admitted subset and retain the unsupported-package outcome. |
 | Preview correction and refinement | Replacing/cancelling predicted strokes removes old predicted halos. Settled output matches the exact render. New input interrupts refinement without losing damage or reusing stale mip/thumbnail/Navigator pixels. |
 | Global/animated dependency | A genuinely document-wide filter updates its required domain; independent owners retain their caches. Freeze phases when comparing pixels. Hiding animation stops its pixel work without retargeting attachments. |
 | No artwork change | After settling, a no-op frame, row selection, rename or group expansion causes zero artwork recomposition and effect dispatches. Keep UI drawing and requested thumbnail work separate. |

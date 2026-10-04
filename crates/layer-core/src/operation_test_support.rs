@@ -102,6 +102,7 @@ pub fn saved(doc: &mut Document, name: &str, selection: Selection) {
     if doc.working.occurrence == Some(h) { doc.working.target = doc.scene().source_target(h); }
 }
 pub fn activate(doc: &mut Document, name: &str) {
+    refresh(doc);
     let h = id(doc, name);
     doc.working.occurrence = Some(h);
     doc.working.target = doc.scene().source_target(h);

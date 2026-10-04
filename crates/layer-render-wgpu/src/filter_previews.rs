@@ -1241,8 +1241,11 @@ mod tests {
         let flat_code = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{if p.x>=fx_extent().x*.5{return vec4<f32>(0.);}return vec4<f32>(.08+p.x/fx_extent().x*.15,.04+p.y/fx_extent().y*.12,.1,1.);}";
         let base_code = "fn pattern(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{if p.x>=fx_extent().x*.5{return vec4<f32>(0.);}return vec4<f32>(0.,0.,0.,1.);}";
         let mut artwork=Artwork::new(extent).unwrap();let selected=generated(&mut artwork,upper_code);
-        artwork.occurrences.get_mut(selected).unwrap().clipped=true;
-        let base=generated(&mut artwork,base_code);let clipped=(document(artwork,vec![selected,base]),selected);
+        artwork.occurrences.get_mut(selected).unwrap().attachment = layer_core::Attachment::Clip;
+        let generated_base=generated(&mut artwork,base_code);
+        let stack=artwork.stacks.insert(PortableId::random(),Stack {entries:vec![generated_base]}).unwrap();
+        let base=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"base")).unwrap();
+        let clipped=(document(artwork,vec![selected,base]),selected);
         let mut artwork=Artwork::new(extent).unwrap();let target=paint(&mut artwork,None);let source=generated(&mut artwork,flat_code);
         let flat=(document(artwork,vec![target,source]),target);
         for id in ["shadows_highlights","clarity"] {

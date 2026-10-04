@@ -116,7 +116,8 @@ shared session or workspace owners.
 | `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
 | `Occurrence.visible` | Contribution visibility, initially true. | Hiding contribution does not disable a source demanded by an explicit input. |
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
-| `Occurrence.blend`, `clipped` | Blend operation and clipping membership, initially Normal and false. | Clipping bases follow stack position; preserve the clipped pass-through rule. |
+| `Occurrence.blend`, `isolated_blend` | Actual blend operation and retained isolated group blend, initially Normal. | Pass Through is an explicit mode; toggling isolation restores the retained blend. |
+| `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
 | `Occurrence.translation` | Translation in enclosing-stack pixels, initially zero. | Preserve inherited group offsets, including mask placement. |
 | `Occurrence.placement` | Local retained projective placement, optional cubic mesh and interpolation; initially identity, no mesh, Linear. | Retain analytic geometry; omit generated tessellation and GPU buffers. |
 | `Occurrence.locked`, `alpha_locked` | Editing locks, initially false. | Derive ancestor locks; valid undo restores records without changing source sample identity. |
@@ -266,12 +267,23 @@ introduced by the container.
 
 The existing common stack evaluator owns baseline ordering. Evaluate entries
 bottom-to-top. Isolated groups start transparent; pass-through groups interpolate
-`B + opacity * mask * (group(B) - B)` in the applicable blend domain. A clipped
-pass-through group is isolated Normal. Adjustments transform their scoped lower
-composite; clipped adjustments preserve clipping-base coverage. Masks retain
-source evaluation, placement, inversion and application as separate stages.
-Explicit future matte connections stay attached across reorders; ordinary
-clipping is derived from current stack order.
+`B + opacity * mask * (group(B) - B)` in the applicable blend domain. Pass-through
+groups cannot clip, own attached effects or serve as clipping bases. An explicit
+isolate-and-attach edit changes mode and relationship atomically.
+
+Consecutive clipped content uses the first eligible unclipped paint or isolated
+group below it as a common base. Attached adjustment rows and saved selections
+do not become bases. An owner's content and mask feed its attached effects
+bottom-to-top before outer clipping; effects may expand alpha. Hidden effects
+are bypassed, and hidden owners suppress their chain without retargeting it.
+Attached effects and their owner occupy consecutive stack entries. Saved
+selections stay outside this unit: insertion inside a chain moves above its top
+effect, and attaching across selections moves those selections above the chain
+in the same edit. A position below the owner remains valid.
+An unattached adjustment transforms its scoped lower composite and cannot split
+a clipping run. Generators remain content and cannot become direct targets.
+Masks retain source evaluation, placement, inversion and application as separate
+stages.
 
 ## Shared edits, targets and undo
 
@@ -342,11 +354,16 @@ A worker that missed its baseline or recreated its device requests a full snapsh
 default output context; `snapshot_with_context` supplies an explicit captured
 context. `SceneSnapshot` retains artwork, index, owner, revision, context, scope
 and evaluation offset, excluding working selection and mask inspection.
-`SceneScope` selects All, Raw source, Members or a Prefix before an occurrence.
+`SceneScope` selects All, Raw source, Members or EffectInput for an occurrence.
 Member scopes preserve original placement ancestry while evaluating the selected
 contributors through their scoped parents; they do not copy or mutate occurrences.
+EffectInput resolves the owner content, descendants and preceding local effects
+for an attachment, or the ordinary lower backdrop for an unattached adjustment.
+`SceneView.effect_owner`, `attached_effects` and `clipping_base` expose the
+published relationships. Structural planners move an owner with its effects and
+a clipping base with its run, preserving unrelated targets and world placement.
 
-Queries address raw sources, placed occurrences, scalar coverage, stack prefixes,
+Queries address raw sources, placed occurrences, scalar coverage, stack composites,
 effect inputs or outputs against an immutable scene revision and evaluation
 context. Reference queries retain their scope and original occurrence records.
 Effect comparison retains an `EffectApplication` value snapshot. Bake/merge

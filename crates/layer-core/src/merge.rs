@@ -98,19 +98,8 @@ pub(crate) fn bake_bounds(snapshot: &SceneSnapshot, scope: &SceneScope, offset: 
     if bounds.is_empty() { bounds } else { bounds.intersect(Rect::from_extent(extent)) }
 }
 impl Document {
-    fn clips_above(&self, h: OccurrenceHandle) -> Vec<OccurrenceHandle> {
-        let scene = self.scene();
-        let siblings = scene.children(scene.parent(h));
-        let Some(index) = siblings.iter().position(|s| *s == h) else {
-            return Vec::new();
-        };
-        siblings[..index]
-            .iter()
-            .rev()
-            .copied()
-            .filter(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()))
-            .take_while(|h| scene.occurrence(*h).is_some_and(|o| o.clipped))
-            .collect()
+    fn clips_above(&self,h:OccurrenceHandle)->Vec<OccurrenceHandle> {
+        let scene=self.scene();scene.children(scene.parent(h)).iter().rev().copied().filter(|member|scene.clipping_base(*member)==Some(h)).collect()
     }
     fn sibling_below(&self, h: OccurrenceHandle) -> Option<OccurrenceHandle> {
         let scene = self.scene();
@@ -126,7 +115,8 @@ impl Document {
         let Some(o) = scene.occurrence(h) else {
             return MergeDown::Layer;
         };
-        match (o.clipped, adjustment(scene, h)) {
+        if let Some(owner)=scene.effect_owner(h) {return if scene.clipping_base(owner).is_some()||!self.clips_above(owner).is_empty(){MergeDown::ClippingStack}else{MergeDown::ApplyEffect};}
+        match (o.attachment.is_clip(), adjustment(scene, h)) {
             (true, true) => MergeDown::ClippingStack,
             (true, false) => MergeDown::Layer,
             (false, _) if !self.clips_above(h).is_empty() => MergeDown::ClippingStack,
@@ -201,7 +191,8 @@ impl Document {
                     return Err(MergeRefusal::Locked);
                 }
                 if self.merge_down() == MergeDown::ClippingStack {
-                    let base = if o.clipped { self.clipping_base(h).ok_or(MergeRefusal::NoLayerBelow)? } else { h };
+                    let owner=scene.effect_owner(h).unwrap_or(h);
+                    let base=scene.clipping_base(owner).unwrap_or(owner);
                     let b = scene.occurrence(base).ok_or(MergeRefusal::NoLayer)?;
                     if !b.visible {
                         return Err(MergeRefusal::BaseHidden);
@@ -217,12 +208,12 @@ impl Document {
                     m.members = self.checked(self.layer_subtrees(&stack))?;
                     m.anchor = Some(base);
                 } else {
-                    let below = self.sibling_below(h).ok_or(MergeRefusal::NoLayerBelow)?;
+                    let below=scene.effect_owner(h).or_else(||self.sibling_below(h)).ok_or(MergeRefusal::NoLayerBelow)?;
                     let b = scene.occurrence(below).unwrap();
                     if adjustment(scene, below) {
                         return Err(MergeRefusal::BelowEffect);
                     }
-                    if b.clipped && !o.clipped {
+                    if b.attachment.is_clip() && !o.attachment.is_clip() {
                         return Err(MergeRefusal::BelowClipped);
                     }
                     if !b.visible {
@@ -250,7 +241,7 @@ impl Document {
                     .copied()
                     .filter(|h| {
                         scene.occurrence(*h).is_some_and(|o| {
-                            o.visible && (!o.clipped || self.clipping_base(*h).and_then(|b| scene.occurrence(b)).is_some_and(|b| b.visible))
+                            o.visible && (!o.attachment.is_clip() || self.clipping_base(*h).and_then(|b| scene.occurrence(b)).is_some_and(|b| b.visible))
                         })
                     })
                     .collect();
@@ -270,7 +261,7 @@ impl Document {
                             .iter()
                             .copied()
                             .filter(|h| {
-                                scene.occurrence(*h).is_some_and(|o| !o.visible && o.clipped)
+                                scene.occurrence(*h).is_some_and(|o| !o.visible && o.attachment.is_clip())
                                     && self.clipping_base(*h).is_some_and(|b| m.members.contains(&b))
                             })
                             .collect();
@@ -342,7 +333,7 @@ impl Document {
         result.translation = Point { x: origin.x - parent_offset.x, y: origin.y - parent_offset.y };
         if let Some(h) = m.anchor {
             let anchor = scene.occurrence(h).unwrap();
-            result.clipped = anchor.clipped;
+            result.attachment = anchor.attachment;
             result.alpha_locked = kind == MergeKind::Down && anchor.kind() == LayerKind::Paint && anchor.alpha_locked;
             if m.group {
                 result.opacity = anchor.opacity;
@@ -370,7 +361,7 @@ impl Document {
         edits.extend(self.removal_edits(&removed).map_err(|_| MergeRefusal::NoLayer)?);
         for h in m.released {
             let mut o = scene.occurrence(h).unwrap().clone();
-            o.clipped = false;
+            o.attachment = crate::Attachment::None;
             edits.push(Edit::Occurrence(RecordChange::replace(&self.artwork.occurrences, h, Some(o)).map_err(|_| MergeRefusal::NoLayer)?));
         }
         let mut working = self.working.clone();

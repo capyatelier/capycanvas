@@ -129,7 +129,7 @@ fn clipping_stacks_and_groups_in(space: BlendSpace) {
     engine.apply_edit(edit_group).unwrap();
     edit(&mut engine, "Group", |o| o.opacity = 0.7);
     edit(&mut engine, "Shade", |layer| {
-        layer.clipped = true;
+        layer.attachment = layer_core::Attachment::Clip;
         layer.blend = LayerBlend::Multiply;
     });
     gradient(&mut engine, "Base", [[0.8, 0.7, 0.2, 1.], [0.3, 0.2, 0.9, 0.7]], true);

@@ -149,81 +149,39 @@ pub fn descends_from(scene: SceneView<'_>, handle: OccurrenceHandle, scope: Opti
 pub fn layer_is_visible(scene: SceneView<'_>, handle: OccurrenceHandle) -> bool {
     scene.visible(handle)
 }
-pub fn backdrop_layers(scene: SceneView<'_>, handle: OccurrenceHandle) -> Vec<OccurrenceHandle> {
-    let mut levels = vec![(scene.evaluation_parent(handle), handle)];
-    while let Some(&(Some(group), _)) = levels.last() {
-        if !scene.occurrence(group).is_some_and(|o| o.passes_through()) {
-            break;
+pub(crate) fn backdrop_contains(scene:SceneView<'_>,handle:OccurrenceHandle,member:OccurrenceHandle)->bool {
+    if !scene.includes(member){return false;}
+    let mut root=member;
+    loop {
+        let mut own=handle;
+        loop {
+            if scene.evaluation_parent(root)==scene.evaluation_parent(own){return scene.position(root)>scene.position(own);}
+            let Some(group)=scene.evaluation_parent(own) else{break;};
+            if !scene.occurrence(group).is_some_and(|o|o.passes_through()){break;}
+            own=group;
         }
-        levels.push((scene.evaluation_parent(group), group));
+        let Some(parent)=scene.evaluation_parent(root) else{return false;};root=parent;
     }
-    scene
-        .order()
-        .iter()
-        .copied()
-        .filter(|h| {
-            if !scene.includes(*h) {
-                return false;
-            }
-            let mut root = *h;
-            loop {
-                if let Some(&(_, own)) = levels.iter().find(|(p, _)| *p == scene.evaluation_parent(root)) {
-                    return scene.position(root) > scene.position(own);
-                }
-                let Some(parent) = scene.evaluation_parent(root) else {
-                    return false;
-                };
-                root = parent;
-            }
-        })
-        .collect()
+}
+pub fn backdrop_layers(scene: SceneView<'_>, handle: OccurrenceHandle) -> Vec<OccurrenceHandle> {
+    scene.order().iter().copied().filter(|h|backdrop_contains(scene,handle,*h)).collect()
+}
+pub(crate) fn local_input_contains(scene:SceneView<'_>,handle:OccurrenceHandle,owner:OccurrenceHandle,member:OccurrenceHandle)->bool {
+    member==owner||descends_from(scene,member,Some(owner))||scene.effect_owner(member)==Some(owner)&&scene.position(member)>scene.position(handle)
 }
 pub fn composite_input_scope(scene: SceneView<'_>, handle: OccurrenceHandle) -> Option<OccurrenceHandle> {
-    if scene.effective_clipped(handle) { scene.evaluation_parent(handle) } else { isolated_scope(scene, scene.evaluation_parent(handle)) }
+    if let Some(owner)=scene.effect_owner(handle){Some(owner)} else {isolated_scope(scene, scene.evaluation_parent(handle))}
 }
 pub fn composite_input_layers(scene: SceneView<'_>, handle: OccurrenceHandle) -> Vec<OccurrenceHandle> {
-    let Some(o) = scene.occurrence(handle) else {
-        return Vec::new();
-    };
-    if o.kind() == LayerKind::Group {
-        return scene
-            .order()
-            .iter()
-            .copied()
-            .filter(|h| {
-                scene.includes(*h) && scene.occurrence(*h).is_some_and(|o| o.is_artwork()) && descends_from(scene, *h, Some(handle))
-            })
-            .collect();
+    let Some(o)=scene.occurrence(handle) else{return Vec::new();};
+    if let Some(owner)=scene.effect_owner(handle) {
+        return scene.order().iter().copied().filter(|h|scene.includes(*h)&&local_input_contains(scene,handle,owner,*h)&&scene.occurrence(*h).is_some_and(|o|o.is_artwork())).collect();
     }
-    if !scene.effect(handle).is_some_and(|e| e.program.kind == EffectKind::Adjustment) {
-        return Vec::new();
+    if o.kind()==LayerKind::Group {
+        return scene.order().iter().copied().filter(|h|scene.includes(*h)&&scene.occurrence(*h).is_some_and(|o|o.is_artwork())&&descends_from(scene,*h,Some(handle))).collect();
     }
-    if !scene.effective_clipped(handle) {
-        let mut input = backdrop_layers(scene, handle);
-        input.retain(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()));
-        return input;
-    }
-    let siblings = scene.members(scene.evaluation_parent(handle)).collect::<Vec<_>>();
-    let Some(start) = siblings.iter().position(|h| *h == handle) else {
-        return Vec::new();
-    };
-    let end = siblings[start + 1..]
-        .iter()
-        .position(|h| {
-            scene.occurrence(*h).is_some_and(|o| o.is_artwork() && !scene.effective_clipped(*h))
-        })
-        .map_or(siblings.len(), |i| start + 1 + i + 1);
-    let roots = &siblings[start + 1..end];
-    scene
-        .order()
-        .iter()
-        .copied()
-        .filter(|h| {
-            scene.includes(*h)
-                && scene.occurrence(*h).is_some_and(|o| o.is_artwork())
-                && (roots.contains(h) || roots.iter().any(|r| descends_from(scene, *h, Some(*r))))
-        })
-        .collect()
+    if !scene.effect(handle).is_some_and(|e|e.program.kind==EffectKind::Adjustment){return Vec::new();}
+    backdrop_layers(scene,handle).into_iter().filter(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork())).collect()
 }
 /// How a layer combines with the pixels below it. The discriminant is the
 /// renderer's mode code and the flat `ALL` order; documents store the name.
@@ -565,35 +523,24 @@ impl Document {
             })
             .collect()
     }
+    pub fn relationship_roots(&self,roots:&[OccurrenceHandle])->Vec<OccurrenceHandle> {
+        let scene=self.scene();let mut selected:BTreeSet<_>=roots.iter().copied().collect();
+        loop {let count=selected.len();for &h in scene.order(){if selected.contains(&h){selected.extend(scene.attached_effects(h).iter().copied());}if scene.clipping_base(h).is_some_and(|base|selected.contains(&base)){selected.insert(h);}}if count==selected.len(){break;}}
+        scene.order().iter().copied().filter(|h|selected.contains(h)).collect()
+    }
     pub fn layer_subtrees(&self, roots: &[OccurrenceHandle]) -> BTreeSet<OccurrenceHandle> {
-        let scene = self.scene();
-        scene.order().iter().copied().filter(|h| roots.contains(h) || roots.iter().any(|r| descends_from(scene, *h, Some(*r)))).collect()
+        let scene=self.scene();
+        scene.order().iter().copied().filter(|h|roots.contains(h)||roots.iter().any(|r|descends_from(scene,*h,Some(*r)))||scene.effect_owner(*h).is_some_and(|owner|roots.contains(&owner)||roots.iter().any(|r|descends_from(scene,owner,Some(*r))))).collect()
     }
-    pub fn clipping_base(&self, id: OccurrenceHandle) -> Option<OccurrenceHandle> {
-        let scene = self.scene();
-        let siblings = scene.children(scene.parent(id));
-        let index = siblings.iter().position(|h| *h == id)?;
-        siblings[index + 1..]
-            .iter()
-            .copied()
-            .find(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork() && !o.clipped))
-            .filter(|h| scene.occurrence(*h).is_some_and(|o| o.kind() == LayerKind::Paint))
+    pub fn effect_target(&self,id:OccurrenceHandle)->Option<OccurrenceHandle> {
+        self.attachment_target_below(id,false).filter(|h|self.scene().eligible_target(*h))
     }
-    pub fn clipping_stack_top(&self, id: OccurrenceHandle) -> Option<OccurrenceHandle> {
-        let scene = self.scene();
-        scene.occurrence(id)?;
-        let siblings = scene.children(scene.parent(id));
-        let index = siblings.iter().position(|h| *h == id)?;
-        Some(
-            siblings[..index]
-                .iter()
-                .rev()
-                .copied()
-                .filter(|h| scene.occurrence(*h).is_some_and(|o| o.is_artwork()))
-                .take_while(|h| scene.occurrence(*h).is_some_and(|o| o.clipped))
-                .last()
-                .unwrap_or(id),
-        )
+    pub fn clipping_base(&self,id:OccurrenceHandle)->Option<OccurrenceHandle> {
+        self.attachment_target_below(id,true).filter(|h|self.scene().eligible_target(*h))
+    }
+    pub fn clipping_stack_top(&self,id:OccurrenceHandle)->Option<OccurrenceHandle> {
+        let scene=self.scene();scene.occurrence(id)?;let siblings=scene.children(scene.parent(id));let index=siblings.iter().position(|h|*h==id)?;
+        Some(siblings[..index].iter().rev().copied().filter(|h|scene.occurrence(*h).is_some_and(|o|o.is_artwork())).take_while(|h|scene.occurrence(*h).is_some_and(|o|o.attachment!=crate::Attachment::None)).last().unwrap_or(id))
     }
     pub fn target_owner(&self, target: SourceTarget) -> Option<OccurrenceHandle> {
         self.scene().source_owner(target)
@@ -622,8 +569,8 @@ impl Document {
             if scene.effect(id).is_some_and(|e| e.program.kind == EffectKind::Generator) {
                 return Err(DrawingRefusal::Fill);
             }
-            id = if occurrence.clipped {
-                self.clipping_base(id)
+            id = if occurrence.attachment == crate::Attachment::Effect {
+                scene.effect_owner(id)
             } else {
                 let siblings = scene.children(scene.parent(id));
                 let index = siblings.iter().position(|h| *h == id).ok_or(DrawingRefusal::NoLayer)?;
@@ -742,36 +689,24 @@ impl Document {
         };
         self.reference_members(|h| scene.position(h).is_some_and(|i| i > index))
     }
-    fn reference_members(&self, keep: impl Fn(OccurrenceHandle) -> bool) -> BTreeSet<OccurrenceHandle> {
-        let scene = self.scene();
-        let mut members: BTreeSet<_> =
-            scene.order().iter().copied().filter(|h| scene.occurrence(*h).is_some_and(|o| o.reference)).collect();
+    pub fn composition_members(&self,roots:&[OccurrenceHandle])->BTreeSet<OccurrenceHandle> {
+        let scene=self.scene();let mut members:BTreeSet<_>=roots.iter().copied().collect();
         loop {
-            let before = members.len();
-            members = self.layer_subtrees(&members.iter().copied().collect::<Vec<_>>());
-            for h in scene.order().iter().copied().filter(|h| members.contains(h)).collect::<Vec<_>>() {
-                let o = scene.occurrence(h).unwrap();
-                let base = if o.clipped { self.clipping_base(h).unwrap_or(h) } else { h };
-                members.insert(base);
-                let siblings = scene.children(scene.parent(h));
-                let index = siblings.iter().position(|h| *h == base).unwrap();
-                members.extend(siblings[..index].iter().rev().copied().take_while(|h| scene.occurrence(*h).is_some_and(|o| o.clipped)));
-                if scene.effect(h).is_some_and(|e| e.program.kind == EffectKind::Adjustment) && !o.clipped {
-                    members.extend(backdrop_layers(scene, h));
-                }
+            let count=members.len();members=self.layer_subtrees(&self.relationship_roots(&members.iter().copied().collect::<Vec<_>>()));
+            for h in members.iter().copied().collect::<Vec<_>>() {
+                if let Some(base)=scene.clipping_base(h){members.insert(base);}
+                if let Some(owner)=scene.effect_owner(h){members.insert(owner);}
+                if scene.effect(h).is_some_and(|e|e.program.kind==EffectKind::Adjustment) {members.extend(composite_input_layers(scene,h));}
             }
-            if before == members.len() {
-                break;
-            }
+            if count==members.len(){break;}
         }
-        members.retain(|h| keep(*h));
-        for h in members.iter().copied().collect::<Vec<_>>() {
-            let mut parent = scene.parent(h);
-            while let Some(h) = parent {
-                members.insert(h);
-                parent = scene.parent(h);
-            }
-        }
+        for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
+        members
+    }
+    fn reference_members(&self,keep:impl Fn(OccurrenceHandle)->bool)->BTreeSet<OccurrenceHandle> {
+        let scene=self.scene();let roots:Vec<_>=scene.order().iter().copied().filter(|h|scene.occurrence(*h).is_some_and(|o|o.reference)).collect();
+        let mut members=self.composition_members(&roots);members.retain(|h|keep(*h));
+        for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
         members
     }
     pub fn retained_transform_targets(&self, roots: &[OccurrenceHandle]) -> Result<Vec<OccurrenceHandle>, DocumentError> {
@@ -909,14 +844,14 @@ impl Document {
         for h in roots {
             scene.occurrence(*h).ok_or(DocumentError::MissingOccurrence(*h))?;
         }
-        let ids = self.layer_subtrees(roots);
+        let ids = self.layer_subtrees(&self.relationship_roots(roots));
         for h in &ids {
             if self.is_locked(*h) {
                 return Err(DocumentError::ProtectedOccurrence(*h));
             }
         }
         if scene.order().iter().any(|h| {
-            scene.occurrence(*h).is_some_and(|o| o.clipped) && !ids.contains(h) && self.clipping_base(*h).is_some_and(|b| ids.contains(&b))
+            scene.occurrence(*h).is_some_and(|o| o.attachment.is_clip()) && !ids.contains(h) && self.clipping_base(*h).is_some_and(|b| ids.contains(&b))
         }) {
             return Err(DocumentError::InvalidLayerOperation("Include the clipped layers above this base"));
         }
@@ -949,11 +884,12 @@ impl Document {
         name: impl Into<Arc<str>>,
     ) -> Result<Edit, DocumentError> {
         let scene = self.scene();
+        let roots=self.relationship_roots(roots);
         let first = *roots.first().ok_or(DocumentError::InvalidLayerOperation("Select layers first"))?;
         let parent = scene.parent(first);
         let stack = scene.stack(first).ok_or(DocumentError::MissingOccurrence(first))?;
         let selected: BTreeSet<_> = roots.iter().copied().collect();
-        for h in roots {
+        for h in &roots {
             scene.occurrence(*h).ok_or(DocumentError::MissingOccurrence(*h))?;
             if self.is_locked(*h) {
                 return Err(DocumentError::ProtectedOccurrence(*h));
@@ -968,7 +904,7 @@ impl Document {
             return Err(DocumentError::InvalidLayerOperation("Select neighboring layers to group"));
         }
         for h in siblings {
-            if scene.occurrence(*h).is_some_and(|o| o.clipped)
+            if scene.occurrence(*h).is_some_and(|o| o.attachment.is_clip())
                 && self.clipping_base(*h).is_none_or(|b| selected.contains(h) != selected.contains(&b))
             {
                 return Err(DocumentError::InvalidLayerOperation("Include the complete clipping stack"));
@@ -980,15 +916,16 @@ impl Document {
         );
         let mut group = Occurrence::new(OccurrenceContent::Stack(nested.handle), name);
         group.blend = blend;
+        if blend!=LayerBlend::PassThrough {group.isolated_blend=blend;}
         let occurrence = RecordChange::insert(&self.artwork.occurrences, group);
         let mut containing = self.artwork.stacks.get(stack).unwrap().clone();
         containing.entries.retain(|h| !selected.contains(h));
         containing.entries.insert(positions[0], occurrence.handle);
-        Ok(Edit::Batch(vec![
+        self.checked_relationship_edit(Edit::Batch(vec![
             Edit::Stack(nested),
             Edit::Occurrence(occurrence),
             Edit::Stack(RecordChange::replace(&self.artwork.stacks, stack, Some(containing))?),
-        ]))
+        ]),&roots)
     }
     pub fn ungroup_layer_edit(&self, id: OccurrenceHandle) -> Result<Edit, DocumentError> {
         let scene = self.scene();
@@ -1000,7 +937,9 @@ impl Document {
             || group.opacity != 1.
             || group.mask.is_some()
             || !(group.passes_through() || group.blend == LayerBlend::Normal)
-            || group.clipped
+            || group.attachment!=crate::Attachment::None
+            || !scene.attached_effects(id).is_empty()
+            || scene.order().iter().any(|h|scene.clipping_base(*h)==Some(id))
         {
             return Err(DocumentError::InvalidLayerOperation("Remove the group mask, blend and opacity effects before ungrouping"));
         }
@@ -1318,7 +1257,8 @@ mod organization_tests {
         let mut doc = document([128; 2], &["Group", "Clip", "Line", "Unrelated", "Ink"]);
         let group = nest(&mut doc, "Group", &["Clip", "Line", "Unrelated"]);
         occurrence_mut(&mut doc, "Group").translation = Point { x: 5., y: 8. };
-        occurrence_mut(&mut doc, "Clip").clipped = true;
+        occurrence_mut(&mut doc, "Clip").attachment = crate::Attachment::Clip;
+        crate::operation_test_support::refresh(&mut doc);
         assert!(reference_names(&doc).is_empty());
         for name in ["Line", "Clip"] {
             occurrence_mut(&mut doc, name).reference = true;
@@ -1338,7 +1278,7 @@ mod organization_tests {
         let mut doc = document([100; 2], &["Group", "Hidden clip", "Second", "Base", "Other root"]);
         nest(&mut doc, "Group", &["Hidden clip", "Second", "Base"]);
         for name in ["Hidden clip", "Second"] {
-            occurrence_mut(&mut doc, name).clipped = true;
+            occurrence_mut(&mut doc, name).attachment = crate::Attachment::Clip;
             occurrence_mut(&mut doc, name).visible = false;
         }
         assert_eq!(doc.clipping_stack_top(id(&doc, "Base")), Some(id(&doc, "Hidden clip")));
@@ -1380,12 +1320,14 @@ mod organization_tests {
     #[test]
     fn bulk_edits_protect_clipping_stacks_and_locks() {
         let mut doc = document([100; 2], &["Shade", "Ink"]);
-        occurrence_mut(&mut doc, "Shade").clipped = true;
         let base = id(&doc, "Ink");
         let shade = id(&doc, "Shade");
-        assert!(doc.delete_layers_edit(&[base]).is_err());
-        assert!(doc.group_layers_edit(&[base], LayerBlend::Normal, "Group").is_err());
-        assert!(doc.delete_layers_edit(&[base, shade]).is_ok());
+        doc.apply(doc.attachment_edit(shade,true,false).unwrap()).unwrap();
+        let before=doc.clone();
+        let undo=doc.apply(doc.delete_layers_edit(&[base]).unwrap()).unwrap();
+        assert!(doc.scene().occurrence(base).is_none()&&doc.scene().occurrence(shade).is_none());doc.apply(undo).unwrap();restored(&before,&doc);
+        let undo=doc.apply(doc.group_layers_edit(&[base],LayerBlend::Normal,"Group").unwrap()).unwrap();
+        assert_eq!(doc.scene().children(Some(id(&doc,"Group"))),[shade,base]);assert_eq!(doc.scene().clipping_base(shade),Some(base));doc.apply(undo).unwrap();restored(&before,&doc);
         insert_paint(&mut doc, "Other", 0, None);
         let before = doc.clone();
         let undo = doc.apply(doc.delete_layers_edit(&[base, shade]).unwrap()).unwrap();
@@ -1420,8 +1362,8 @@ mod organization_tests {
         let group = occurrence(&doc, "Group");
         assert!(group.passes_through());
         let mut clipped = group.clone();
-        clipped.clipped = true;
-        assert!(!clipped.passes_through());
+        clipped.attachment = crate::Attachment::Clip;
+        assert!(clipped.passes_through());
     }
     #[test]
     fn backdrops_widen_through_pass_through_groups_to_the_nearest_isolated_one() {

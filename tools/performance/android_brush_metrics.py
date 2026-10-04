@@ -61,12 +61,28 @@ def validate_setup(info, requested):
     for axis, (radius, extent) in enumerate(zip(requested["radii"], camera["work_area"][2:])):
         expected[f"radius_{axis}"] = min(radius, extent * .45)
         actual[f"radius_{axis}"] = info["radii"][axis]
-    expected.update(layers=requested["photo_layers"] + 2,
+    workload = requested.get("workload", "ordinary")
+    effect_count = int(workload == "blurred-base")
+    expected.update(layers=requested["photo_layers"] + 2 + effect_count,
                     diameter=requested["brush_size"], selected_preset=requested["preset"],
                     feedback=requested["prediction"])
     actual.update(layers=len(state["layers"]), diameter=state["brush"]["diameter"],
                   selected_preset=state["brush"]["preset"],
                   feedback=state["settings"]["feedback"])
+    expected["workload"] = workload
+    actual["workload"] = info.get("workload", "ordinary")
+    if workload != "ordinary":
+        fixture = info.get("attachment_fixture") or {}
+        paint, base, effect = (fixture.get(key) for key in ("paint", "base", "effect"))
+        expected["attachment_order"] = [paint] + ([effect] if effect_count else []) + [base]
+        actual["attachment_order"] = [layer.get("id") for layer in state["layers"][:2 + effect_count]]
+        expected["attached_rows"] = [True] * (1 + effect_count) + [False]
+        actual["attached_rows"] = [layer.get("clipped") for layer in state["layers"][:2 + effect_count]]
+        expected["attachment_handles"] = True
+        actual["attachment_handles"] = paint is not None and base is not None and paint != base and (not effect_count or effect is not None and effect not in (paint, base))
+        if effect_count:
+            expected.update(effect_id="gaussian_blur", effect_radius=requested["effect_radius"])
+            actual.update(effect_id=fixture.get("effect_id"), effect_radius=fixture.get("sigma"))
     if "paint_layer_index" in requested:
         expected["paint_layer_index"] = [requested["paint_layer_index"]]
         actual["paint_layer_index"] = [i for i, layer in enumerate(state["layers"]) if layer.get("selected")]

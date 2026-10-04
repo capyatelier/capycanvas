@@ -40,6 +40,34 @@ class SetupTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "duration_ms"):
             validate_setup(self.info, self.requested)
 
+    def test_attachment_workloads_require_the_authored_order_and_parameters(self):
+        self.requested.update(photo_layers=1, paint_layer_index=0, effect_radius=8)
+        for workload in ("clipped", "blurred-base"):
+            effect = workload == "blurred-base"
+            self.requested["workload"] = workload
+            self.info.update(workload=workload, attachment_fixture=dict(paint=3, base=2, effect=4 if effect else None,
+                             effect_id="gaussian_blur" if effect else None, sigma=8 if effect else None))
+            self.info["state"]["layers"] = [dict(id=3, clipped=True, selected=True)] + (
+                [dict(id=4, clipped=True)] if effect else []) + [dict(id=2, clipped=False), dict(id=1, clipped=False)]
+            validate_setup(self.info, self.requested)
+            for change, field in [(lambda d: d.pop("workload"), "workload"),
+                                  (lambda d: d.pop("attachment_fixture"), "attachment_handles"),
+                                  (lambda d: d["state"]["layers"][0].update(clipped=False), "attached_rows"),
+                                  (lambda d: d["state"]["layers"].reverse(), "attachment_order")]:
+                with self.subTest(workload=workload, field=field):
+                    info = copy.deepcopy(self.info)
+                    change(info)
+                    with self.assertRaisesRegex(ValueError, field):
+                        validate_setup(info, self.requested)
+            if effect:
+                for change, field in [(lambda d: d["attachment_fixture"].update(effect_id="exposure"), "effect_id"),
+                                      (lambda d: d["attachment_fixture"].update(sigma=3), "effect_radius"),
+                                      (lambda d: d["attachment_fixture"].update(effect=3), "attachment_handles")]:
+                    info = copy.deepcopy(self.info)
+                    change(info)
+                    with self.assertRaisesRegex(ValueError, field):
+                        validate_setup(info, self.requested)
+
     def test_requires_the_paint_layer_at_the_requested_position(self):
         self.requested["paint_layer_index"] = 3
         self.info["state"]["layers"] = [dict(selected=i == 3) for i in range(6)]

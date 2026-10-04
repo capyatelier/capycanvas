@@ -5,9 +5,9 @@ impl Cache {
         &mut self, scene: &mut Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<PixelRect, GpuRasterError> {
-        let mut missing = self.invalidate_native(scene, r, packet, dirty, encoding, tiles)?;
+        let mut missing = self.invalidate_native(scene, r, dirty, encoding, tiles)?;
         if let Some(overview) = &mut self.overview {
-            missing.extend(overview.invalidate_native(scene, r, packet, dirty, encoding, tiles)?);
+            missing.extend(overview.invalidate_native(scene, r, dirty, encoding, tiles)?);
         }
         if missing.is_empty() { return Ok(PixelRect::EMPTY); }
         let Encoding { encoder, commands } = encoding;
@@ -17,7 +17,8 @@ impl Cache {
         let changed = missing.iter().fold(PixelRect::EMPTY, |a, c| a.union(page_rect(*c))).intersect(PixelRect::full(packet.document_extent));
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
         let plan = windows::Plan::new(packet.scene, packet.document_extent, budget)?;
-        let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, PixelRect::full(packet.document_extent))], |p| p.regions(changed).collect());
+        let mut regions: Vec<_> = plan.map_or_else(|| vec![(changed, PixelRect::full(packet.document_extent))], |p| p.regions(changed)
+            .filter(|(output, _)| page_coordinates(*output).any(|c| missing.contains(&c))).collect());
         if reverse { regions.reverse(); }
         let mut image = match &self.hierarchy {
             Some(hierarchy) => hierarchy.root().clone(),
@@ -54,6 +55,7 @@ impl Cache {
                     let coordinate = [region.min_x() / PAGE_SIZE, region.min_y() / PAGE_SIZE];
                     if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }
                     r.metrics.composited_pixels += region.area();
+                    r.metrics.frame_composited_pages.push((0, coordinate));
                 }
                 self.write_exact(r, encoder, commands, &image, &batch)?;
                 if let Some(overview) = &mut self.overview { overview.write_exact(r, encoder, commands, &image, &batch)?; }
@@ -70,7 +72,7 @@ impl Cache {
     }
 
     fn invalidate_native(
-        &mut self, scene: &Scene, r: &mut WgpuRasterizer, packet: FramePacket<'_>,
+        &mut self, scene: &Scene, r: &mut WgpuRasterizer,
         dirty: PixelRect, encoding: &mut Encoding<'_>, tiles: Option<&BTreeSet<[u32; 2]>>,
     ) -> Result<BTreeSet<[u32; 2]>, GpuRasterError> {
         if self.reuse_output { return Ok(BTreeSet::new()); }
@@ -81,11 +83,10 @@ impl Cache {
             self.reduce_output(r, encoder, PixelRect::new(x, y, x + width, y + height), commands)?;
         }
         let root = self.graph.root.as_ref().expect("prepared composition graph");
-        let invalid = if self.unchanged { PixelRect::EMPTY } else {
-            dirty.union(root.damage(&scene.scale_sources, display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds)))
+        let invalid = if self.unchanged { Damage::EMPTY } else {
+            Damage::from_tiles(dirty, tiles).union(root.damage(&scene.scale_sources, display_mips::Plan::window(self.plan.extent, 0, self.plan.bounds)))
         };
-        let sparse = tiles.filter(|_| bounded(packet.scene));
-        self.refined.retain(|c| page_rect(*c).intersect(invalid).is_empty() || sparse.is_some_and(|s| !s.contains(c)));
+        self.refined.retain(|c| !invalid.intersects(page_rect(*c)));
         Ok(page_coordinates(self.plan.bounds).filter(|c| !self.refined.contains(c)).collect())
     }
 
@@ -121,11 +122,19 @@ impl Cache {
         let texture = image.texture.clone();
         let mut seen = BTreeSet::new();
         let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
+        let passes = packet.scene.order().iter().filter_map(|h|packet.scene.effect(*h).filter(|effect|
+            effect.program.image_boundary()&&packet.scene.visible(*h)))
+            .map(|effect|effect.program.passes.len().max(1) as u64).sum::<u64>();
         let mut bounds = PixelRect::EMPTY;
+        let mut work_limit=4*u64::from(PAGE_SIZE).pow(2);
         let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).take_while(|c| {
-            let combined = bounds.union(page_rect(*c)).intersect(PixelRect::full(self.plan.extent));
+            let region = page_rect(*c).intersect(PixelRect::full(self.plan.extent));
+            let combined = bounds.union(region);
             let window = Scene::capture_window(packet.scene, combined, packet.document_extent);
-            if !bounds.is_empty() && Scene::capture_image_bound(packet.scene, window) > budget { return false; }
+            let work = combined.area().saturating_add(window.area().saturating_mul(passes));
+            if bounds.is_empty() {work_limit=work_limit.max(work.saturating_add(work/2));}
+            if !bounds.is_empty() && (passes>0&&(combined.area()>bounds.area()+region.area()||work>work_limit)
+                ||Scene::capture_image_bound(packet.scene, window)>budget) {return false;}
             bounds = combined;
             true
         }).collect();
@@ -146,6 +155,7 @@ impl Cache {
                 overview.write_exact(r, encoder, commands, &image, &[region])?;
             }
             r.metrics.composited_pixels += region.area();
+            r.metrics.frame_composited_pages.push((0, coordinate));
             changed = changed.union(region);
         }
         if let Some(hierarchy) = &mut self.hierarchy { hierarchy.flush(encoder); }

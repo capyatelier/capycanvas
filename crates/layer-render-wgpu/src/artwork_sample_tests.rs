@@ -134,7 +134,7 @@ fn artwork_sample_layer_content_ignores_mask_opacity_and_places_pixels() {
     close(sample(&doc, ArtworkSource::Visible, [8., 5.], 1).unwrap(), [0.25, 0.25, 2., 0.125]);
     doc.artwork.compositions.get_mut(doc.artwork.root).unwrap().size=[64;2];
     let group=add_group(&mut doc,vec![owner],0);doc.artwork.occurrences.get_mut(group).unwrap().translation=Point {x:17.,y:23.};
-    let occurrence=doc.artwork.occurrences.get_mut(owner).unwrap();occurrence.visible=false;occurrence.opacity=0.4;occurrence.blend=layer_core::LayerBlend::Multiply;occurrence.clipped=true;
+    let occurrence=doc.artwork.occurrences.get_mut(owner).unwrap();occurrence.visible=false;occurrence.opacity=0.4;occurrence.blend=layer_core::LayerBlend::Multiply;occurrence.attachment = layer_core::Attachment::Clip;
     let mut raw=gpu().capture_scene(doc.snapshot(),SceneScope::Raw(id),CaptureControl::default()).unwrap();
     let pixel=raw.read_region([25,28,1,1]).unwrap()[0];
     for (actual,expected) in pixel.into_iter().zip([0.25,0.25,2.,1.]) {assert!((actual-expected).abs()<2e-5,"raw hidden source {pixel:?}");}
@@ -182,7 +182,7 @@ fn artwork_sample_effect_input_respects_isolated_group_and_clipped_base() {
     for clipped in [false, true] {
         let mut doc = document([16, 16], |_, _| [0.125, 0.25, 0.5, 0.5]);
         let paint=paint_occurrence(&doc);let active=insert_effect(&mut doc,doubled_effect(),0);let upper=insert_effect(&mut doc,doubled_effect(),0);
-        doc.artwork.occurrences.get_mut(active).unwrap().clipped=clipped;doc.artwork.occurrences.get_mut(upper).unwrap().clipped=clipped;
+        doc.artwork.occurrences.get_mut(active).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };doc.artwork.occurrences.get_mut(upper).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
         add_group(&mut doc,vec![upper,active,paint],0);
         let paper=doc.scene().children(None)[1];doc.artwork.occurrences.get_mut(paper).unwrap().visible=true;
         close(sample(&doc, ArtworkSource::EffectInput(active), [8.; 2], 1).unwrap(), [0.25, 0.5, 1., 0.5]);
@@ -194,7 +194,7 @@ fn artwork_sample_effect_input_follows_group_roots_instead_of_descendant_storage
     for clipped in [false,true] {
         let mut doc=document([16,16],|_,_|[0.125,0.25,0.5,0.5]);
         let child=paint_occurrence(&doc);let lower=add_group(&mut doc,vec![child],0);
-        let target=insert_effect(&mut doc,doubled_effect(),0);doc.artwork.occurrences.get_mut(target).unwrap().clipped=clipped;
+        let target=insert_effect(&mut doc,doubled_effect(),0);doc.artwork.occurrences.get_mut(target).unwrap().attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
         let source=document([16,16],|_,_|[0.5,0.125,0.25,1.]);
         let paint=doc.artwork.paint.insert(PortableId::random(),source.artwork.paint.get(paint_id(&source)).unwrap().clone()).unwrap();
         let upper_child=doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"Upper child")).unwrap();

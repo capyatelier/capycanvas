@@ -8,7 +8,7 @@ impl SnapshotRenderer {
         let scene = self.scene.view().with_scope(&self.scope).with_offset(self.offset);
         let contributors = if matches!(self.scope,SceneScope::Raw(_)) {Vec::new()} else {match output {
             scene::Output::EffectInput(id) | scene::Output::EffectChannels(id) => layer_core::composite_input_layers(scene, id),
-            scene::Output::Source(_) => Vec::new(), _ => scene.order().to_vec(),
+            scene::Output::Source(_) => Vec::new(), _ => scene.effect_input().map_or_else(||scene.order().to_vec(),|h|layer_core::composite_input_layers(scene,h)),
         }};
         let mut pending: Vec<_> = contributors.into_iter().filter(|&h| scene.visible(h)
             && scene.effect(h).is_some_and(|effect| effect.program.analysis().is_some()) && !self.analysis_ready.contains(&h)).collect();
@@ -24,7 +24,7 @@ impl SnapshotRenderer {
                 self.analysis_ready.insert(layer); continue;
             }
             let query = ArtworkQuery::from_snapshot(self.scene.clone(), ArtworkSource::EffectInput(layer), None);
-            let previous = std::mem::replace(&mut self.scope, SceneScope::Prefix {before:layer,clipped:self.scene.view().occurrence(layer).unwrap().clipped});
+            let previous = std::mem::replace(&mut self.scope, SceneScope::EffectInput(layer));
             let output = scene::Output::EffectInput(layer);
             let result = self.build_effect_guide_async(kind, output).await;
             self.scope = previous;
@@ -48,7 +48,7 @@ impl SnapshotGpu {
         let (mut snapshot, _) = self.artwork_capture(&query, control.clone()).await?;
         snapshot.scope = SceneScope::Members(layer_core::composite_input_layers(snapshot.scene.view(), target).into());
         snapshot.prepare_effect_analysis_async(scene::Output::Artwork(None)).await?;
-        snapshot.scope = SceneScope::Prefix {before: target, clipped: snapshot.scene.view().occurrence(target).unwrap().clipped};
+        snapshot.scope = SceneScope::EffectInput(target);
         let kind = snapshot.scene.view().effect(target).unwrap().program.analysis().ok_or("Missing effect analysis")?;
         if !snapshot.renderer.effect_analyses.iter().any(|entry|
             entry.layer() == target && entry.kind == kind && entry.matches(&snapshot.scene, &snapshot.renderer)) {

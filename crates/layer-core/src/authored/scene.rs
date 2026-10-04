@@ -11,6 +11,9 @@ pub struct SceneIndex {
     paint_uses:Vec<Option<OccurrenceHandle>>,
     coverage_uses:Vec<Option<OccurrenceHandle>>,
     selection_uses:Vec<Option<OccurrenceHandle>>,
+    effect_owners:Vec<Option<OccurrenceHandle>>,
+    attached_effects:Vec<Vec<OccurrenceHandle>>,
+    clipping_bases:Vec<Option<OccurrenceHandle>>,
 }
 impl SceneIndex {
     pub fn build(artwork:&Artwork)->Result<Self,String> {
@@ -19,7 +22,7 @@ impl SceneIndex {
         if !matches!(shape.validate(root,Default::default())?,Support::Editable){return Err("Artwork is outside the editable subset".into());}
         let n=artwork.occurrences.capacity();
         let mut index=Self {order:Vec::with_capacity(artwork.occurrences.len()),positions:vec![None;n],parents:vec![None;n],containing:vec![None;n],
-            paint_uses:vec![None;artwork.paint.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()]};
+            paint_uses:vec![None;artwork.paint.capacity()],coverage_uses:vec![None;artwork.coverage.capacity()],selection_uses:vec![None;artwork.selections.capacity()],effect_owners:vec![None;n],attached_effects:vec![Vec::new();n],clipping_bases:vec![None;n]};
         fn visit(a:&Artwork,index:&mut SceneIndex,stack:StackHandle,parent:Option<OccurrenceHandle>)->Result<(),String>{
             for &h in &a.stacks.get(stack).ok_or("Missing stack")?.entries {
                 let at=h.index() as usize;
@@ -30,6 +33,35 @@ impl SceneIndex {
             Ok(())
         }
         visit(artwork,&mut index,artwork.compositions.get(artwork.root).ok_or("Missing composition")?.result,None)?;
+        for (_,_,stack) in artwork.stacks.iter() {
+            let mut owner=None;let mut base=None;let mut barrier=false;
+            for &h in stack.entries.iter().rev() {
+                let o=artwork.occurrences.get(h).ok_or("Missing occurrence")?;
+                if !o.is_artwork(){if o.attachment!=Attachment::None{return Err("Selection Layers cannot attach".into());}owner=None;continue;}
+                let adjustment=match o.content {OccurrenceContent::Effect(e)=>artwork.effects.get(e).and_then(|e|artwork.definitions.get(e.definition)).is_some_and(|d|d.program.kind==crate::EffectKind::Adjustment),_=>false};
+                let eligible=matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Stack(_))&&!o.passes_through();
+                match o.attachment {
+                    Attachment::Effect=>{
+                        if !adjustment{return Err("Only adjustments can attach effects".into());}
+                        let target=owner.ok_or("An attached effect needs paint or an isolated group below")?;
+                        index.effect_owners[h.index() as usize]=Some(target);
+                        index.attached_effects[target.index() as usize].push(h);
+                    }
+                    Attachment::Clip=>{
+                        if adjustment||o.passes_through(){return Err("Only isolated content can clip".into());}
+                        if barrier{return Err("A stack adjustment cannot split a clipping run".into());}
+                        index.clipping_bases[h.index() as usize]=Some(base.ok_or("Clipped content needs paint or an isolated group below")?);
+                        owner=eligible.then_some(h);
+                    }
+                    Attachment::None=>{
+                        if adjustment {owner=None;barrier=true;} else {owner=eligible.then_some(h);base=owner;barrier=false;}
+                    }
+                }
+            }
+        }
+        for (h,_,o) in artwork.occurrences.iter() {
+            if o.attachment!=Attachment::None && index.effect_owners[h.index() as usize].or(index.clipping_bases[h.index() as usize]).is_none(){return Err("An attachment needs a target in its stack".into());}
+        }
         for &h in &index.order {
             let o=artwork.occurrences.get(h).ok_or("Missing placed occurrence")?;
             match o.content {
@@ -47,7 +79,7 @@ pub enum SceneScope {
     #[default] All,
     Members(Arc<[OccurrenceHandle]>),
     Raw(SourceTarget),
-    Prefix {before:OccurrenceHandle,clipped:bool},
+    EffectInput(OccurrenceHandle),
 }
 #[derive(Clone,Debug,PartialEq)]
 pub struct SceneSnapshot {
@@ -123,7 +155,7 @@ impl<'a> SceneView<'a> {
     pub fn constant_backdrop(self)->&'a [OccurrenceHandle]{
         let roots=self.children(None);
         let count=roots.iter().rev().take_while(|&&h|self.includes(h)&&self.occurrence(h).is_some_and(|o|
-            !o.clipped&&o.blend==crate::LayerBlend::Normal&&!o.mask.as_ref().is_some_and(|m|m.enabled)
+            !o.attachment.is_clip()&&o.blend==crate::LayerBlend::Normal&&!o.mask.as_ref().is_some_and(|m|m.enabled)
                 &&self.effect(h).is_some_and(|e|e.constant_color().is_some()))).count();
         &roots[roots.len()-count..]
     }
@@ -150,12 +182,17 @@ impl<'a> SceneView<'a> {
         else{SceneChildren::Stack(self.children(parent).iter())}
     }
     #[inline]
-    pub fn effective_clipped(self,h:OccurrenceHandle)->bool{
-        let Some(o)=self.occurrence(h) else{return false;};if !o.clipped{return false;}
-        if !matches!(self.scope,Some(SceneScope::Members(_))){return true;}
-        let siblings=self.children(self.parent(h));let Some(at)=siblings.iter().position(|v|*v==h) else{return false;};
-        siblings[at+1..].iter().find(|v|self.occurrence(**v).is_some_and(|o|o.is_artwork()&&!o.clipped)).is_some_and(|v|self.includes(*v))
-    }
+    pub fn effect_owner(self,h:OccurrenceHandle)->Option<OccurrenceHandle>{self.index.effect_owners.get(h.index() as usize).copied().flatten()}
+    #[inline]
+    pub fn attached_effects(self,h:OccurrenceHandle)->&'a [OccurrenceHandle]{self.index.attached_effects.get(h.index() as usize).map_or(&[],Vec::as_slice)}
+    #[inline]
+    pub fn clipping_base(self,h:OccurrenceHandle)->Option<OccurrenceHandle>{self.index.clipping_bases.get(h.index() as usize).copied().flatten()}
+    #[inline]
+    pub fn attachment_target(self,h:OccurrenceHandle)->Option<OccurrenceHandle>{self.effect_owner(h).or_else(||self.clipping_base(h))}
+    #[inline]
+    pub fn eligible_target(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|matches!(o.content,OccurrenceContent::Paint(_)|OccurrenceContent::Stack(_))&&!o.passes_through())}
+    #[inline]
+    pub fn effective_clipped(self,h:OccurrenceHandle)->bool{self.occurrence(h).is_some_and(|o|o.attachment.is_clip())&&self.clipping_base(h).is_some_and(|base|self.includes(base))}
     #[inline]
     pub fn paint(self,h:PaintHandle)->Option<&'a PaintSource>{self.artwork.paint.get(h)}
     #[inline]
@@ -194,23 +231,28 @@ impl<'a> SceneView<'a> {
     #[inline]
     pub fn local_extent(self,h:OccurrenceHandle)->[u32;2]{self.source_target(h).map(|t|self.target_extent(t)).or_else(||self.effect_application(h).map(|e|e.domain)).unwrap_or(self.composition().size)}
     #[inline]
-    pub fn includes(self,h:OccurrenceHandle)->bool{match self.scope{None|Some(SceneScope::All)|Some(SceneScope::Prefix{..})=>true,Some(SceneScope::Members(m))=>m.contains(&h),Some(SceneScope::Raw(t))=>self.source_owner(*t)==Some(h)}}
+    pub fn includes(self,h:OccurrenceHandle)->bool{match self.scope{None|Some(SceneScope::All)|Some(SceneScope::EffectInput(_))=>true,Some(SceneScope::Members(m))=>m.contains(&h),Some(SceneScope::Raw(t))=>self.source_owner(*t)==Some(h)}}
     #[inline]
     pub fn visible(self,h:OccurrenceHandle)->bool{
         if !self.includes(h){return false;}
+        if let Some(SceneScope::EffectInput(target))=self.scope {
+            let scene=Self{scope:None,..self};
+            let required=if let Some(owner)=self.effect_owner(*target){crate::layers::local_input_contains(scene,*target,owner,h)||crate::descends_from(scene,owner,Some(h))}else{scene.effect(*target).is_some_and(|e|e.program.kind==crate::EffectKind::Adjustment)&&(crate::layers::backdrop_contains(scene,*target,h)||crate::descends_from(scene,*target,Some(h)))};
+            if !required{return false;}
+        }
+        if let Some(owner)=self.effect_owner(h) && !self.visible(owner){return false;}
         if matches!(self.scope,Some(SceneScope::Raw(_))){return true;}let mut current=Some(h);
         while let Some(h)=current {if self.occurrence(h).is_none_or(|o|!o.visible){return false;}current=self.evaluation_parent(h);}true
     }
     #[inline]
-    pub fn stop_before(self)->Option<(OccurrenceHandle,bool)>{match self.scope{Some(SceneScope::Prefix{before,clipped})=>Some((*before,*clipped)),_=>None}}
+    pub fn effect_input(self)->Option<OccurrenceHandle>{match self.scope{Some(SceneScope::EffectInput(h))=>Some(*h),_=>None}}
     #[inline]
     pub fn occurrence_offset(self,h:OccurrenceHandle)->Point {
         let mut offset=self.offset;let mut current=Some(h);
         while let Some(h)=current {let Some(o)=self.occurrence(h) else{break;};offset.x+=o.translation.x;offset.y+=o.translation.y;current=self.parent(h);}offset
     }
     pub fn target_geometry(self,t:SourceTarget)->ImageTransform {
-        let Some(h)=self.source_owner(t) else{return ImageTransform::default();};let owner=self.occurrence(h).unwrap();
-        let world=self.occurrence_offset(h);
+        let Some(h)=self.source_owner(t) else{return ImageTransform::default();};let owner=self.occurrence(h).unwrap();let world=self.occurrence_offset(h);
         if matches!(t,SourceTarget::Coverage(_)) {
             let Some((mask,_))=self.mask(h) else{return ImageTransform::default();};let mut geometry=mask.geometry_in_parent(owner);
             let parent=Point{x:world.x-owner.translation.x,y:world.y-owner.translation.y};
@@ -229,7 +271,7 @@ impl Occurrence {
     #[inline]
     pub fn is_artwork(&self)->bool{!matches!(self.content,OccurrenceContent::Selection(_))}
     #[inline]
-    pub fn passes_through(&self)->bool{matches!(self.content,OccurrenceContent::Stack(_)) && self.blend==crate::LayerBlend::PassThrough && !self.clipped}
+    pub fn passes_through(&self)->bool{matches!(self.content,OccurrenceContent::Stack(_)) && self.blend==crate::LayerBlend::PassThrough}
 }
 impl Default for SourceTarget {fn default()->Self{Self::Paint(PaintHandle::INVALID)}}
 impl SourceTarget {
@@ -268,9 +310,9 @@ mod tests {
         doc.artwork.occurrences.get_mut(copies[0]).unwrap().blend=crate::LayerBlend::Multiply;
         assert_eq!(doc.scene().constant_backdrop(),&[fill]);
         doc.artwork.occurrences.get_mut(copies[0]).unwrap().blend=crate::LayerBlend::Normal;
-        doc.artwork.occurrences.get_mut(fill).unwrap().clipped=true;
+        doc.artwork.occurrences.get_mut(fill).unwrap().attachment = crate::Attachment::Clip;
         assert!(doc.scene().constant_backdrop().is_empty());
-        doc.artwork.occurrences.get_mut(fill).unwrap().clipped=false;
+        doc.artwork.occurrences.get_mut(fill).unwrap().attachment = crate::Attachment::None;
         let coverage=doc.allocate_coverage_handle();let mask=crate::CoverageSnapshot::reveal_all(coverage,[16,16],Point::default());
         doc.artwork.coverage.install(coverage,mask.source).unwrap();doc.artwork.occurrences.get_mut(fill).unwrap().mask=Some(mask.use_);
         assert!(doc.scene().constant_backdrop().is_empty());
@@ -281,6 +323,24 @@ mod tests {
         doc.artwork.stacks.get_mut(root).unwrap().entries.swap(0,2);
         doc.scene_index=Arc::new(SceneIndex::build(&doc.artwork).unwrap());
         assert!(doc.scene().constant_backdrop().is_empty());
+    }
+    #[test]
+    fn published_relationships_keep_common_bases_and_owner_local_inputs_when_hidden() {
+        use crate::operation_test_support as f;
+        let mut doc=f::document([32,32],&["Top","Curves","Saved","Blur","Shade","Base blur","Base","Backdrop"]);
+        f::effect(&mut doc,"Curves","exposure");f::effect(&mut doc,"Blur","gaussian_blur");f::effect(&mut doc,"Base blur","gaussian_blur");f::saved(&mut doc,"Saved",crate::Selection::empty());
+        for name in ["Base blur","Blur","Curves","Shade","Top"] {let h=f::id(&doc,name);doc.apply(doc.attachment_edit(h,true,false).unwrap()).unwrap();}
+        let top=f::id(&doc,"Top");let shade=f::id(&doc,"Shade");let base=f::id(&doc,"Base");let blur=f::id(&doc,"Blur");let curves=f::id(&doc,"Curves");let base_blur=f::id(&doc,"Base blur");
+        assert_eq!(doc.scene().clipping_base(top),Some(base));assert_eq!(doc.scene().clipping_base(shade),Some(base));
+        assert_eq!(doc.scene().attached_effects(shade),[blur,curves]);assert_eq!(doc.scene().effect_owner(curves),Some(shade));
+        assert_eq!(crate::composite_input_layers(doc.scene(),blur),[shade]);assert_eq!(crate::composite_input_layers(doc.scene(),curves),[blur,shade]);assert_eq!(crate::composite_input_layers(doc.scene(),base_blur),[base]);
+        let at=doc.scene().children(None).iter().position(|h|*h==curves).unwrap();let undo=doc.apply(doc.reparent_occurrence_edit(blur,None,at).unwrap()).unwrap();assert_eq!(doc.scene().attached_effects(shade),[curves,blur]);doc.apply(undo).unwrap();
+        assert_eq!(doc.content_insertion(None,doc.scene().children(None).iter().position(|h|*h==shade).unwrap()).0,at);
+        for name in ["Blur","Shade"] {let h=f::id(&doc,name);let mut o=doc.scene().occurrence(h).unwrap().clone();o.visible=false;doc.apply(crate::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,h,Some(o)).unwrap())).unwrap();}
+        assert_eq!(doc.scene().effect_owner(curves),Some(shade));assert!(!doc.scene().visible(curves));assert_eq!(doc.scene().clipping_base(top),Some(base));
+        let reopened=f::roundtrip(&doc);let scene=reopened.scene();let owner=f::id(&reopened,"Shade");assert_eq!(scene.effect_owner(f::id(&reopened,"Curves")),Some(owner));assert_eq!(scene.attached_effects(owner).len(),2);
+        let mut invalid=doc.scene().occurrence(base).unwrap().clone();invalid.attachment=Attachment::Effect;
+        assert!(doc.apply(crate::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,base,Some(invalid)).unwrap())).is_err());
     }
     #[test]
     fn fill_routes_drawing_only_to_its_own_mask() {

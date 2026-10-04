@@ -47,6 +47,11 @@ pub struct Stack { pub entries: Vec<OccurrenceHandle> }
 pub enum OccurrenceContent {
     Paint(PaintHandle), Stack(StackHandle), Effect(EffectHandle), Selection(SelectionHandle),
 }
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Attachment { #[default] None, Clip, Effect }
+impl Attachment {
+    pub fn is_clip(self) -> bool { self == Self::Clip }
+}
 #[derive(Clone, Debug, PartialEq)]
 pub struct Occurrence {
     pub content: OccurrenceContent,
@@ -57,7 +62,8 @@ pub struct Occurrence {
     pub locked: bool,
     pub alpha_locked: bool,
     pub reference: bool,
-    pub clipped: bool,
+    pub attachment: Attachment,
+    pub isolated_blend: LayerBlend,
     pub translation: Point,
     pub placement: LayerPlacement,
     pub mask: Option<MaskUse>,
@@ -65,7 +71,7 @@ pub struct Occurrence {
 impl Occurrence {
     pub fn new(content: OccurrenceContent, name: impl Into<Arc<str>>) -> Self {
         Self { content, name: name.into(), visible: true, opacity: 1., blend: LayerBlend::Normal,
-            locked:false, alpha_locked:false, reference:false, clipped:false,
+            locked:false, alpha_locked:false, reference:false, attachment:Attachment::None, isolated_blend:LayerBlend::Normal,
             translation:Point::default(), placement:LayerPlacement::default(), mask:None }
     }
 }

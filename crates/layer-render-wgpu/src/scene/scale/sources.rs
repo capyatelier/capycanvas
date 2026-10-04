@@ -2,6 +2,12 @@ use super::*;
 use std::collections::{BTreeMap, HashMap};
 use layer_core::raster::{RasterData, RasterPlane};
 
+fn missing_pages(required: &Damage, bounds: PixelRect, valid: &BTreeSet<[u32; 2]>, covered: PixelRect) -> Vec<[u32; 2]> {
+    required.regions.iter().flat_map(|region| page_coordinates(region.intersect(bounds)))
+        .filter(|coordinate| !valid.contains(coordinate) && page_rect(*coordinate).intersect(covered).is_empty())
+        .collect::<BTreeSet<_>>().into_iter().collect()
+}
+
 pub(super) struct Level {
     pub image: Image,
     pub valid: BTreeSet<[u32; 2]>,
@@ -19,8 +25,8 @@ pub(super) struct Source {
     source: Option<Arc<layer_core::color::source::SourceImage>>,
     backing: Option<Arc<RasterData>>,
     mask: Option<metadata::MaskMetadata>,
-    preview: BTreeSet<[u32; 2]>,
-    pub(super) damage: PixelRect,
+    preview: Damage,
+    pub(super) damage: Damage,
 }
 
 impl Source {
@@ -64,6 +70,10 @@ pub(crate) struct Sources {
     pub(super) reset: bool,
 }
 impl Sources {
+    pub(crate) fn published(&mut self, id: SourceTarget, data: Arc<RasterData>) {
+        if let Some(source) = self.entries.get_mut(&id) { source.backing = Some(data); }
+    }
+    pub fn damage(&self, id: SourceTarget) -> Option<&Damage> { self.entries.get(&id).map(|source| &source.damage) }
     #[cfg(test)]
     pub fn cache_info(&self, id: SourceTarget) -> Option<(wgpu::Texture, u64, u32)> {
         self.cache_info_at(id, *self.entries.get(&id)?.levels.first_key_value()?.0)
@@ -90,7 +100,7 @@ impl Sources {
                 source.raster = packet.scene.paint_source(handle).unwrap().raster.identity();
                 let watercolor = r.watercolor_style(id, packet.dab_batches);
                 if source.watercolor != watercolor {
-                    source.watercolor = watercolor; self.reset = true; source.damage = PixelRect::full(source.extent);
+                    source.watercolor = watercolor; self.reset = true; source.damage = PixelRect::full(source.extent).into();
                 }
             }
             if let Some((mask, _)) = packet.scene.mask(handle).filter(|(mask, _)| mask.enabled && (visible || packet.inspect_mask == Some(handle)))
@@ -110,7 +120,7 @@ impl Sources {
         let raw_material = !is_mask && mapped_material(r, packet, id);
         self.reset |= !self.entries.contains_key(&id);
         let source = self.entries.entry(id).or_insert_with(|| Source {
-            extent, updates: 0, blend_space, raster: 0, watercolor: None, raw_material, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: BTreeSet::new(), damage: PixelRect::EMPTY,
+            extent, updates: 0, blend_space, raster: 0, watercolor: None, raw_material, levels: BTreeMap::new(), source: None, backing: None, mask: None, preview: Damage::EMPTY, damage: Damage::EMPTY,
         });
         let resized = source.extent != extent;
         if resized { source.extent = extent; source.levels.clear(); self.reset = true; }
@@ -132,30 +142,37 @@ impl Sources {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b), (None, None) => true, _ => false,
         };
         let mut damage = std::mem::take(&mut source.preview);
+        let touched: BTreeSet<_> = packet.dab_batches.iter().zip(batch_tiles).filter(|(b, _)| b.target == id
+            && !packet.restore_rasters.iter().any(|(target, _)| *target == id))
+            .flat_map(|(_, tiles)| tiles.iter().map(|t| t.coordinate)).collect();
         if !same_backing {
             for key in source.backing.iter().chain(backing.iter()).flat_map(|b| b.tiles.keys()).filter(|k| k.plane == plane) {
                 let before = source.backing.as_ref().and_then(|b| b.tiles.get(key));
                 let after = backing.as_ref().and_then(|b| b.tiles.get(key));
-                if !matches!((before, after), (Some(a), Some(b)) if a.same_capture(b)) { damage.insert(key.coordinate); }
+                if !touched.contains(&key.coordinate) && !matches!((before, after), (Some(a), Some(b)) if a.same_capture(b)) {
+                    damage.regions.push(page_rect(key.coordinate));
+                }
             }
         }
         source.backing = backing;
         for (batch, tiles) in packet.dab_batches.iter().zip(batch_tiles).filter(|(b, _)| b.target == id) {
-            let coordinates = tiles.iter().map(|t| t.coordinate);
-            damage.extend(coordinates.clone());
-            damage.extend(r.stroke_finish_pages(batch));
-            if batch.kind == DabBatchKind::Preview { source.preview.extend(coordinates); }
+            let regions = tiles.iter().map(Damage::tile_region);
+            damage.regions.extend(regions.clone());
+            damage.regions.extend(r.stroke_finish_pages(batch).map(page_rect));
+            if batch.kind == DabBatchKind::Preview { source.preview.regions.extend(regions); }
         }
         if r.preview_layer_id == Some(id) {
-            source.preview.extend(r.preview_contact_tiles.clone().unwrap_or_else(|| page_coordinates(r.preview_damage).collect()));
+            if source.preview.is_empty() {
+                source.preview = Damage::from_tiles(r.preview_damage, r.preview_contact_tiles.as_ref());
+            }
         }
         for &(target, region) in &r.transform_damage {
-            if target == id { damage.extend(page_coordinates(region)); }
+            if target == id { damage.regions.push(region); }
         }
         let radius = source.watercolor.map_or(0, |w| w.radius());
-        if radius > 0 { damage = damage.into_iter().flat_map(|c| page_coordinates(page_rect(c).expand(radius, extent))).collect(); }
-        source.damage = if changed { PixelRect::full(extent) } else { damage.iter().fold(PixelRect::EMPTY, |r, c| r.union(page_rect(*c).intersect(PixelRect::full(extent)))) };
-        for level in source.levels.values_mut() { level.valid.retain(|c| !damage.contains(c)); }
+        if radius > 0 { damage = damage.expand(radius, extent); }
+        source.damage = if changed { PixelRect::full(extent).into() } else { damage.intersect(PixelRect::full(extent)) };
+        for level in source.levels.values_mut() { level.valid.retain(|c| !source.damage.intersects(page_rect(*c))); }
     }
     pub fn sample(&self, id: SourceTarget, requested: u32) -> Option<(display_mips::Plan, &wgpu::TextureView)> {
         let source = self.entries.get(&id)?;
@@ -263,7 +280,7 @@ impl Scene {
             let bytes = plan.level_bytes(level);
             if bytes > previous + remaining || plan.size.iter().any(|n| *n > r.device.limits().max_texture_dimension_2d) { continue; }
             remaining = remaining + previous - bytes;
-            let request = SourceRequest { plan, required: plan.bounds, covered: PixelRect::EMPTY };
+            let request = SourceRequest { plan, required: plan.bounds.into(), covered: PixelRect::EMPTY };
             if matches!(id, SourceTarget::Paint(_)) {
                 self.prepare_scale_color(commands, r, packet, encoder, handle, request)?;
             } else {
@@ -285,9 +302,7 @@ impl Scene {
         self.scale_sources.ensure_level(commands, r, encoder, id, plan)?;
         let cached = self.scale_sources.image(id, level);
         let output = cached.image.view.clone();
-        let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds))
-            .filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty())
-            .collect();
+        let missing = missing_pages(&required, plan.bounds, &cached.valid, covered);
         let changed = self.reduce_color_pages(commands, r, packet, encoder, handle, plan, &output, &missing, None)?;
         self.scale_sources.entries.get_mut(&id).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)
@@ -379,7 +394,7 @@ impl Scene {
         self.scale_sources.ensure_level(commands, r, encoder, SourceTarget::Coverage(mask.source), plan)?;
         let cached = self.scale_sources.image(SourceTarget::Coverage(mask.source), level);
         let output = cached.image.view.clone();
-        let missing: Vec<_> = page_coordinates(required.intersect(plan.bounds)).filter(|c| !cached.valid.contains(c) && page_rect(*c).intersect(covered).is_empty()).collect();
+        let missing = missing_pages(&required, plan.bounds, &cached.valid, covered);
         let changed = self.reduce_mask_pages(commands, r, encoder, mask, coverage, plan, &output, &missing)?;
         self.scale_sources.entries.get_mut(&SourceTarget::Coverage(mask.source)).unwrap().levels.get_mut(&level).unwrap().valid.extend(missing);
         Ok(changed)

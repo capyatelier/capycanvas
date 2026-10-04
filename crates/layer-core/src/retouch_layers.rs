@@ -145,7 +145,7 @@ impl Document {
         let authored = &mut Arc::make_mut(&mut high_scene).artwork;
         let source = authored.occurrences.get_mut(target).unwrap();
         source.opacity = 1.;
-        source.clipped = false;
+        source.attachment = crate::Attachment::None;
         let high_scope = SceneScope::Members(vec![target].into());
         let mut low_artwork = high_scene.artwork.clone();
         let definition = low_artwork
@@ -157,7 +157,7 @@ impl Document {
             .insert(PortableId::random(), EffectApplication { definition, values: filters.blur.values.clone(), domain: canvas })
             .map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let mut blur = Occurrence::new(OccurrenceContent::Effect(effect), filters.blur.program.id.clone());
-        blur.clipped = true;
+        blur.attachment = crate::Attachment::Effect;
         let blur = low_artwork.occurrences.insert(PortableId::random(), blur).map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let stack = scene.stack(target).unwrap();
         let entries = &mut low_artwork.stacks.get_mut(stack).unwrap().entries;
@@ -197,7 +197,7 @@ impl Document {
         allocator.stacks.change(nested.handle, nested.id, nested.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let mut group = Occurrence::new(OccurrenceContent::Stack(nested.handle), group_name);
         group.opacity = old.opacity;
-        group.clipped = old.clipped;
+        group.attachment = old.attachment;
         let group = RecordChange::insert(&allocator.occurrences, group);
         allocator.occurrences.change(group.handle, group.id, group.value.clone()).map_err(|_| RetouchLayerRefusal::TooLarge)?;
         let part = |h, name, blend| {

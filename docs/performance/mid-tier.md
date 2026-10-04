@@ -438,6 +438,55 @@ the rest of the simple class remains unqualified there.
 
 Retouching rows use the integrated-compositor measurements below, copying from the photo marked as a reference layer.
 
+## Layer attachment comparison
+
+Measured on 2026-10-04 on the Wacom MovinkPad 11. Current M1 source is
+`bc295637a65387dc8a712d3841fb553ec85057fa`; the matched control is
+`10811a2ee47165cdfeb05f9f0cc23df2b73263d6` with identical test-only brush
+instrumentation. Both use release Rust in the unminified Android benchmark APK.
+Frozen sources, harness hashes, APKs and raw records are under
+`artifacts/layer-attachment-{control,m1}-rebased/`;
+`matched-final-comparison.json` records the paired geometry and results.
+
+The same 6000 × 4000 Sony photo has one empty paint layer above it, Perceptual
+blending, Navigator open, Stats and tracing closed, default glass and 16 ms
+prediction. Thermal status is zero before and after every fixture. Each fixture
+has a priming stroke undone and three warmed five-second runs. Fit is 15.99%;
+the 210 × 110 surface-pixel ellipse keeps the entire 1536 px footprint inside
+the photo. Camera and geometry match exactly. The owner-blur fixture attaches
+Gaussian Blur at sigma 8 to the photo and clips the paint above it; metadata
+validates the attachment, row order and actual radius.
+
+| Workload | Control fresh updates/s, median (range) | Current fresh updates/s, median (range) | Current timing | Qualification |
+| --- | ---: | ---: | --- | --- |
+| Continuous G-Pen 1536 px | 62.17 (61.54–62.23) | 62.03 (61.74–62.13) | Fresh completion-gap p99 22.91–23.55 ms | Paired ranges overlap; 90/s and 22.2 ms criteria not met |
+| Continuous G-Pen 32 px | 197.97 (197.24–198.12) | 197.84 (197.47–197.94) | Fresh completion-gap p99 8.05–8.50 ms | Measured stroke criteria met; fresh ranges overlap |
+| Clipped 1536 px, repeated contacts | Active 19.23 (18.01–20.41) | Active 20.01 (19.21–20.80) | Renewed-completion p99 63.84–71.26 ms; pending input-queue p99 3.72–4.25 ms | Refinement diagnostic; paired rates and renewed completion overlap |
+| Paint clipped to an attached Gaussian, repeated contacts | No equivalent owner fixture | Active 20.80 (20.80–21.22) | Renewed-completion p99 82.54–92.65 ms; pending input-queue p99 3.57–4.36 ms | Refinement diagnostic; no prior owner equivalent claimed |
+
+Repeated-contact rows use 100 ms contacts and 100 ms pauses. Their denominator
+is the summed active contact windows, approximately 2.5 seconds, excluding idle
+pauses. They do not qualify sustained 90/s motion. Clipping observes 24 resumed
+contacts while refinement is pending per run; owner blur observes 25. Renewed
+completion means are 54.18–57.01 ms for clipping, versus 56.28–57.61 ms on the
+control, and 55.67–57.69 ms for owner blur. The owner-blur tail remains higher.
+Clipped settling is 864–907 ms, versus control 827–924 ms; owner-blur settling
+is 5.49–6.34 seconds. New contacts interrupt that work. These timing counters
+do not establish unchanged-effect reuse or GPU execution time.
+
+At 32 px, total completed updates including prediction are 308.18–312.75/s
+(median 312.31), versus control 314.59–317.95/s (median 315.04). The reverse-order
+control reaches 313.11–316.72/s (median 315.98), retaining a 1.16% median
+difference. Fresh-input ranges overlap both control batches, but the smaller
+prediction-inclusive rate remains recorded; it is not fresh-input throughput.
+
+Rates count completed raster work, not display scanout or physical pen latency.
+The panel holds 60 Hz, so no 90 Hz presentation or complete simple-brush-class
+qualification is claimed. Current Gaussian-slider, low-tier and top-tier
+attachment measurements remain unverified. Earlier Gaussian measurements and
+rejected intermediate binaries remain in their own artifacts and do not qualify
+this final source.
+
 ## G-Pen at the 1536 px guarantee
 
 Measured on 2026-10-01 UTC on the Wacom MovinkPad 11 at `2e7dd29f4`:

@@ -82,7 +82,7 @@ mod merge_checks {
         let doc = s.engine.document();
         let paint = RecordChange::insert(&doc.artwork.paint, PaintSource { domain: doc.composition().size, raster: Default::default(), original: None, operations: Default::default() });
         let mut clip = Occurrence::new(OccurrenceContent::Paint(paint.handle), "Shade");
-        clip.clipped = true;
+        clip.attachment = layer_core::Attachment::Clip;
         let clip = RecordChange::insert(&doc.artwork.occurrences, clip);
         let root = doc.composition().result;
         let mut stack = doc.artwork.stacks.get(root).unwrap().clone(); stack.entries.insert(0, clip.handle);

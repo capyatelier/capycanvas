@@ -69,7 +69,7 @@ mod clipboard_checks {
         let mut occurrence = doc.scene().occurrence(paint).unwrap().clone();
         occurrence.translation = Point { x: 7., y: 3. };
         occurrence.blend = LayerBlend::Multiply;
-        occurrence.clipped = false;
+        occurrence.attachment = layer_core::Attachment::None;
         occurrence.opacity = 0.4;
         occurrence.visible = false;
         let edit = Edit::Batch(vec![Edit::Stack(stack), Edit::Occurrence(group), Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences, paint, Some(occurrence)).unwrap()), Edit::Stack(RecordChange::replace(&doc.artwork.stacks, root, Some(containing)).unwrap())]);

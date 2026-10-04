@@ -72,12 +72,12 @@ fn representative(depth: SampleDepth) -> Document {
     layers.push(insert(&mut document, blur));
 
     let mut clipped = paint(&mut document, "Clipped", Some(source(depth, |u, v| [u, 0.3 + 0.5 * v, 1. - u, (0.2 + 0.7 * v).min(1.)])));
-    clipped.clipped = true;
+    clipped.attachment = layer_core::Attachment::Clip;
     clipped.blend = LayerBlend::Overlay;
     clipped.opacity = 0.7;
     layers.push(insert(&mut document, clipped));
     let mut clipped_curves = effect(&mut document, "curves");
-    clipped_curves.clipped = true;
+    clipped_curves.attachment = layer_core::Attachment::Effect;
     clipped_curves.opacity = 0.6;
     layers.push(insert(&mut document, clipped_curves));
     let mut base = paint(&mut document, "Clip base", Some(source(depth, |u, v| {
@@ -275,7 +275,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
         let OccurrenceContent::Stack(children) = group.content else { panic!("group") };
         let group = insert(&mut document, group);
         let mut clipped = paint(&mut document, "Clipped", Some(source(depth, |u, v| [v, 1. - u, 0.5, 0.2 + 0.8 * u])));
-        clipped.clipped = true;
+        clipped.attachment = layer_core::Attachment::Clip;
         clipped.blend = LayerBlend::SoftLight;
         clipped.opacity = 0.8;
         let clipped = insert(&mut document, clipped);
@@ -295,7 +295,7 @@ fn groups_masks_clips_and_opacity_match_an_encoded_reference() {
             layer.visible = true;
             layer.opacity = 1.;
             layer.mask = None;
-            layer.clipped = false;
+            layer.attachment = layer_core::Attachment::None;
             layer.blend = LayerBlend::Normal;
             *artwork.occurrences.get_mut(handle).unwrap() = layer;
             let root = artwork.compositions.get(artwork.root).unwrap().result;

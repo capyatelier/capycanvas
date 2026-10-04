@@ -209,7 +209,7 @@ enum SnapshotScope {
     All,
     Members(Vec<layer_core::OccurrenceHandle>),
     Raw(layer_core::SourceTarget),
-    Prefix {before:layer_core::OccurrenceHandle, clipped:bool},
+    EffectInput(layer_core::OccurrenceHandle),
 }
 #[derive(Serialize, Deserialize)]
 struct FrozenScene {
@@ -227,7 +227,7 @@ impl FrozenScene {
             All => SnapshotScope::All,
             Members(handles) => SnapshotScope::Members(handles.to_vec()),
             Raw(target) => SnapshotScope::Raw(*target),
-            Prefix {before,clipped} => SnapshotScope::Prefix {before:*before,clipped:*clipped},
+            EffectInput(target) => SnapshotScope::EffectInput(*target),
         };
         Self {owner:scene.owner,revision:scene.revision,elapsed:scene.context.elapsed,phases:scene.context.phases.as_ref().clone(),scope,offset:scene.offset}
     }
@@ -237,7 +237,7 @@ impl FrozenScene {
             SnapshotScope::All => All,
             SnapshotScope::Members(handles) => Members(handles.into()),
             SnapshotScope::Raw(target) => Raw(target),
-            SnapshotScope::Prefix {before,clipped} => Prefix {before,clipped},
+            SnapshotScope::EffectInput(target) => EffectInput(target),
         };
         let index = std::sync::Arc::new(layer_core::SceneIndex::build(&artwork)?);
         let mut snapshot = layer_core::SceneSnapshot::new(artwork,index,self.owner,self.revision,

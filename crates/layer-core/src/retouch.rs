@@ -177,7 +177,7 @@ mod tests {
     #[test]
     fn a_clipping_stack_below_keeps_only_clips_below_the_target() {
         let mut doc=f::document([64,64],&["Top clip","Target","Low clip","Base"]);
-        for name in ["Top clip","Target","Low clip"] {f::occurrence_mut(&mut doc,name).clipped=true;}
+        for name in ["Top clip","Target","Low clip"] {f::occurrence_mut(&mut doc,name).attachment = crate::Attachment::Clip;}f::refresh(&mut doc);
         references(&mut doc,&["Base"]);
         assert_eq!(names(&doc,&doc.references_below(f::id(&doc,"Target"))),["Low clip","Base"].map(String::from).into());
     }

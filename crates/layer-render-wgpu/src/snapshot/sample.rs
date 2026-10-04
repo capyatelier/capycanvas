@@ -68,7 +68,7 @@ impl SnapshotGpu {
                 *Arc::make_mut(&mut snapshot).artwork.effects.get_mut(baseline.effect).ok_or("Missing effect baseline")? = baseline.application.clone();
                 (snapshot.scope.clone(), scene::Output::Artwork(None))
             },
-            ArtworkSource::EffectInput(handle) => (SceneScope::Prefix {before:*handle,clipped:view.occurrence(*handle).unwrap().clipped}, scene::Output::EffectInput(*handle)),
+            ArtworkSource::EffectInput(handle) => (SceneScope::EffectInput(*handle), scene::Output::EffectInput(*handle)),
             ArtworkSource::EffectChannels(handle) => {
                 let original = view.effect_application(*handle).unwrap();
                 let definition_handle = original.definition;
@@ -78,7 +78,7 @@ impl SnapshotGpu {
                 program.entry = format!("{}_channels", program.entry).into();
                 let occurrence = snapshot.artwork.occurrences.get_mut(*handle).unwrap();
                 occurrence.opacity = 1.; occurrence.mask = None; occurrence.blend = layer_core::LayerBlend::Normal;
-                (SceneScope::Prefix {before:*handle,clipped:occurrence.clipped}, scene::Output::EffectChannels(*handle))
+                (SceneScope::Members(layer_core::composite_input_layers(snapshot.view(),*handle).into_iter().chain([*handle]).collect::<Vec<_>>().into()), scene::Output::EffectChannels(*handle))
             },
             ArtworkSource::Source(target) => {
                 view.source_owner(*target).ok_or("Missing source occurrence")?;

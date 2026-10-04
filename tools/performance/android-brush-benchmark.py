@@ -54,6 +54,8 @@ def main():
     p.add_argument("--blending", choices=["linear", "perceptual"], help="Document blend space; default uses the imported document")
     p.add_argument("--photo-layers", type=int, default=1, help="Photo layer count, with translucent duplicates")
     p.add_argument("--paint-layer-index", type=int, default=0, help="Paint layer index from the top, above the opaque base photo")
+    p.add_argument("--workload", choices=["ordinary", "clipped", "blurred-base"], default="ordinary")
+    p.add_argument("--effect-radius", type=float, default=8, help="Gaussian sigma in document pixels for blurred-base")
     tracing = p.add_mutually_exclusive_group()
     tracing.add_argument("--trace", action="store_true", help="Full CPU/GPU phase attribution")
     tracing.add_argument("--presentation-trace", action="store_true",
@@ -67,6 +69,10 @@ def main():
         p.error("--paint-load must be between 0 and 1")
     if not 0 <= args.paint_layer_index < args.photo_layers:
         p.error("--paint-layer-index must be between 0 and --photo-layers minus 1")
+    if not 0 < args.effect_radius <= 85:
+        p.error("--effect-radius must be greater than 0 and at most 85")
+    if args.workload != "ordinary" and (args.photo_layers != 1 or args.paint_layer_index != 0 or args.mode == "pinch"):
+        p.error("attachment workloads require one photo, top paint and a brush motion")
     args.output.mkdir(parents=True, exist_ok=True)
     adb = [args.adb, "-s", args.serial]
     remote = f"/sdcard/Android/data/{args.package}/files/brush-benchmark"
@@ -77,12 +83,15 @@ def main():
 
     for preset in map(int, args.presets.split(",")):
         label = f"{args.prefix}-{PRESETS[preset]}-{args.size}-{args.mode}"
+        if args.workload != "ordinary":
+            label += f"-{args.workload}"
         requested = dict(preset=preset, brush_size=args.size, mode=args.mode,
                          prediction=args.prediction == "true", speed=args.speed,
                          duration_ms=args.duration, repeats=args.repeats,
                          radii=[args.radius_x, args.radius_y], photo_layers=args.photo_layers,
                          paint_layer_index=args.paint_layer_index,
                          horizon=args.horizon, zoom=args.zoom, blending=args.blending, stats_panel=args.stats)
+        requested.update(workload=args.workload, effect_radius=args.effect_radius)
         if args.mode == "pauses":
             requested["pause_ms"] = args.pause_ms
             requested["contact_ms"] = args.contact_ms
@@ -104,6 +113,7 @@ def main():
                                speed=args.speed, prediction=args.prediction, horizon=args.horizon,
                                radiusX=args.radius_x, radiusY=args.radius_y, photo=args.photo,
                                photoLayers=args.photo_layers, paintLayerIndex=args.paint_layer_index,
+                               workload=args.workload, effectRadius=args.effect_radius,
                                pauseMs=args.pause_ms, contactMs=args.contact_ms,
                                settleDelayMs=args.settle_delay_ms,
                                memorySnapshots=str(args.memory).lower(), statsPanel=str(args.stats).lower(),

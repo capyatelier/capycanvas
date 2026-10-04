@@ -83,7 +83,7 @@ The initial registry is:
 | --- | --- |
 | `capy.composition/1` | `frame` with required pixel `size`, optional `origin`; `resolution`, `color`, `blend`, and required `result` endpoint. |
 | `capy.stack/1` | `entries`, an ordered array of occurrence references, front to back. |
-| `capy.occurrence/1` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `clipped`, `placement`, and optional `mask`. |
+| `capy.occurrence/2` | Required `content`; `name`, `visible`, `opacity`, `blend`, `locked`, `alpha_locked`, `reference`, `attachment`, `isolated_blend`, `placement`, and optional `mask`. |
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference and pixel `domain`; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
@@ -113,8 +113,9 @@ The common frozen defaults are:
 | `visible`, mask `enabled`, mask `linked` | True. |
 | `opacity` | One. |
 | Stack `entries` | Empty array. |
-| `locked`, `alpha_locked`, `reference`, `clipped`, `inverted` | False. |
-| Occurrence `blend` | `normal`; group pass-through is explicitly `pass_through`. |
+| `locked`, `alpha_locked`, `reference`, `inverted` | False. |
+| Occurrence `blend`, `isolated_blend` | `normal`; actual group pass-through is explicitly `pass_through`, and the retained isolated blend cannot be pass-through. |
+| Occurrence `attachment` | `none`; alternatives are `clip` and `effect`. |
 | Composition `blend` | `linear`. |
 | Composition `color` | Built-in `srgb`, unsigned `u8`. |
 | `origin`, placement translation | `[0,0]` in the owner's declared pixel domain. |
@@ -212,7 +213,12 @@ never Rust discriminants or GPU blend codes. Blend names are `normal`,
 `color_burn`, `linear_burn`, `color_dodge`, `hard_light`, `vivid_light`,
 `linear_light`, `pin_light`, `hard_mix`, `difference`, `exclusion`, `subtract`,
 `divide`, `hue`, `saturation`, `luminosity`, `pass_through`. Only stack occurrences
-admit pass-through. Rendering intents are `perceptual`, `relative_colorimetric`,
+admit pass-through. Attachment relationships resolve from stack order at admission:
+`clip` content shares an eligible unclipped base, while `effect` adjustments belong
+to the eligible content below their contiguous chain. Direct targets are paint or
+isolated groups. Selection rows do not affect clipping bases and cannot split an
+effect chain from its owner. Dangling attachments and pass-through
+dependencies are invalid. Rendering intents are `perceptual`, `relative_colorimetric`,
 `saturation`, `absolute_colorimetric`. Proof paper simulation requires black-ink
 simulation; absolute colorimetric intent forbids black-point compensation.
 
@@ -579,10 +585,12 @@ Fixtures distinguish malformed content from unsupported content and preservation
 | Save after rate change; renderer recreation; retained analysis/bake during later painting | Saved/reopened output uses captured roots and integrated phase; old resources live through accepted jobs. |
 
 The checked-in `codec/fixtures/authored-v1.capy` covers all 52 built-ins, exact
-raster samples, watercolor state, LUT samples and SDR rendition. Read it directly;
-do not regenerate it to make a changed reader pass. `parameter-bounds-v1.json`
-protects accepted numeric data independently of sliders. Add fixtures for each
-concrete conversion and test opening, editing, saving and reopening.
+raster samples, watercolor state, LUT samples and SDR rendition. Its occurrence/1
+records make it preserved content. `authored-filters-v1-occurrences-v2.capy` changes
+only those record types to occurrence/2, keeping the same filter data and resources
+for opening, editing, saving, reopening and compiling current filters. Keep both
+inputs fixed. `parameter-bounds-v1.json` protects accepted numeric data independently
+of sliders. Add fixtures for each concrete conversion.
 
 Retain exact-byte/source/material/profile/LUT/selection assertions from the existing
 codec tests when replacing their envelope fixtures. Retain the integrated-phase

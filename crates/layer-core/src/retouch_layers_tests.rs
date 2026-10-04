@@ -32,7 +32,7 @@ fn the_neutral_gray_encodes_to_the_middle_code_when_blending_perceptually() {
 #[test]
 fn a_dodge_and_burn_layer_goes_above_the_active_clipping_stack_filled_with_the_neutral_gray() {
     let mut doc = document(&["Clipped", "Base", "Under"]);
-    occurrence_mut(&mut doc, "Clipped").clipped = true;
+    occurrence_mut(&mut doc, "Clipped").attachment = crate::Attachment::Clip;
     activate(&mut doc, "Base");
     let plan = doc.dodge_burn_plan("Dodge & Burn").unwrap();
     let active = plan.active;
@@ -45,7 +45,7 @@ fn a_dodge_and_burn_layer_goes_above_the_active_clipping_stack_filled_with_the_n
     assert_eq!(names(&doc), ["Dodge & Burn", "Clipped", "Base", "Under", "Paper"]);
     let o = doc.scene().occurrence(active).unwrap();
     assert_eq!(o.blend, LayerBlend::SoftLight);
-    assert!(!o.clipped);
+    assert!(!o.attachment.is_clip());
     assert_eq!(doc.working.occurrence, Some(active));
     assert_eq!(doc.working.target, Some(target));
 }
@@ -104,7 +104,7 @@ fn frequency_separation_bakes_low_and_high_in_an_isolated_group_above_the_hidden
     let source = low_scene.view().occurrence(members[1]).unwrap();
     assert_eq!(members[1], photo);
     assert_eq!(low_scene.view().effect(blur).unwrap().values, filters.blur.values);
-    assert!(low_scene.view().occurrence(blur).unwrap().clipped);
+    assert_eq!(low_scene.view().occurrence(blur).unwrap().attachment, crate::Attachment::Effect);
     assert!(source.visible && source.opacity == 1.);
     assert_eq!(source.translation, Point { x: 4., y: 5. });
     assert_eq!(low_scene.view().target_offset(low_scene.view().source_target(photo).unwrap()), Point { x: 34., y: -5. });

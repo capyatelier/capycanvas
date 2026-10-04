@@ -198,7 +198,9 @@ pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resource
         if occurrence.blend==LayerBlend::PassThrough && !matches!(occurrence.content,OccurrenceContent::Stack(_)) {return Err("Pass through requires a stack".into());}
         let content=match &occurrence.content {OccurrenceContent::Paint(h)=>json!({"paint":reference(id(&art.paint,*h)?)}),OccurrenceContent::Stack(h)=>json!({"stack":reference(id(&art.stacks,*h)?)}),OccurrenceContent::Effect(h)=>json!({"effect":reference(id(&art.effects,*h)?)}),OccurrenceContent::Selection(h)=>json!({"selection":reference(id(&art.selections,*h)?)})};
         let mut data=json!({"content":content}).as_object().unwrap().clone(); set_name(&mut data,&occurrence.name);
-        for (key,value,default) in [("visible",occurrence.visible,true),("locked",occurrence.locked,false),("alpha_locked",occurrence.alpha_locked,false),("reference",occurrence.reference,false),("clipped",occurrence.clipped,false)] {set_bool(&mut data,key,value,default);}
+        for (key,value,default) in [("visible",occurrence.visible,true),("locked",occurrence.locked,false),("alpha_locked",occurrence.alpha_locked,false),("reference",occurrence.reference,false)] {set_bool(&mut data,key,value,default);}
+        if occurrence.attachment!=Attachment::None {data.insert("attachment".into(),json!(match occurrence.attachment {Attachment::Clip=>"clip",Attachment::Effect=>"effect",Attachment::None=>unreachable!()}));}
+        if occurrence.isolated_blend!=LayerBlend::Normal {data.insert("isolated_blend".into(),v::encode_layer_blend(occurrence.isolated_blend));}
         set_float(&mut data,"opacity",occurrence.opacity,1.)?;
         if occurrence.blend!=LayerBlend::Normal {data.insert("blend".into(),v::encode_layer_blend(occurrence.blend));}
         optional_object(&mut data,"placement",v::encode_placement(occurrence.translation,&occurrence.placement,content_bounds(art,&occurrence.content,canvas.size)?)?);
@@ -209,7 +211,7 @@ pub(crate) fn encode_with_inventory(art:&Artwork,cancel:&AtomicBool,mut resource
             optional_object(&mut m,"placement",v::encode_mask_placement(mask.translation,mask.placement,Rect::from_extent(source.domain))?);
             data.insert("mask".into(),Value::Object(m));
         }
-        records.push(record(identity,"capy.occurrence/1",Value::Object(data)));
+        records.push(record(identity,"capy.occurrence/2",Value::Object(data)));
     }
     for (_,identity,output) in art.outputs.iter() {
         let mut data=json!({"source":endpoint(id(&art.compositions,output.composition)?)}).as_object().unwrap().clone(); set_name(&mut data,&output.name);
@@ -253,12 +255,12 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
     let mut known=Vec::new();
     for (identity,record) in &manifest.objects {
         let kind=record["type"].as_str().ok_or("Missing object type")?;
-        if !matches!(kind,"capy.composition/1"|"capy.stack/1"|"capy.occurrence/1"|"capy.paint-source/1"|"capy.coverage-source/1"|"capy.effect/1"|"capy.effect-definition/1"|"capy.selection/1"|"capy.guides/1"|"capy.output/1") {
+        if !matches!(kind,"capy.composition/1"|"capy.stack/1"|"capy.occurrence/2"|"capy.paint-source/1"|"capy.coverage-source/1"|"capy.effect/1"|"capy.effect-definition/1"|"capy.selection/1"|"capy.guides/1"|"capy.output/1") {
             if record["ancillary"].as_bool()==Some(true) {continue;}
             return Err(DecodeError::Unsupported(format!("Unknown authored object {kind}")));
         }
         let (kind,data)=payload(record)?; known.push((*identity,kind,data));
-        match kind {"capy.composition/1"=>{reserve(&mut art.compositions,*identity,layout.is_some())?;},"capy.stack/1"=>{reserve(&mut art.stacks,*identity,layout.is_some())?;},"capy.occurrence/1"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},"capy.paint-source/1"=>{reserve(&mut art.paint,*identity,layout.is_some())?;},"capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,layout.is_some())?;},"capy.effect/1"=>{reserve(&mut art.effects,*identity,layout.is_some())?;},"capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,layout.is_some())?;},"capy.selection/1"=>{reserve(&mut art.selections,*identity,layout.is_some())?;},"capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},"capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},_=>unreachable!()}
+        match kind {"capy.composition/1"=>{reserve(&mut art.compositions,*identity,layout.is_some())?;},"capy.stack/1"=>{reserve(&mut art.stacks,*identity,layout.is_some())?;},"capy.occurrence/2"=>{reserve(&mut art.occurrences,*identity,layout.is_some())?;},"capy.paint-source/1"=>{reserve(&mut art.paint,*identity,layout.is_some())?;},"capy.coverage-source/1"=>{reserve(&mut art.coverage,*identity,layout.is_some())?;},"capy.effect/1"=>{reserve(&mut art.effects,*identity,layout.is_some())?;},"capy.effect-definition/1"=>{reserve(&mut art.definitions,*identity,layout.is_some())?;},"capy.selection/1"=>{reserve(&mut art.selections,*identity,layout.is_some())?;},"capy.guides/1"=>{reserve(&mut art.guides,*identity,layout.is_some())?;},"capy.output/1"=>{reserve(&mut art.outputs,*identity,layout.is_some())?;},_=>unreachable!()}
     }
     art.root=art.compositions.allocated(manifest.root).ok_or("Root is not a composition")?;
     for (identity,kind,value) in &known {if *kind=="capy.composition/1" {
@@ -300,8 +302,8 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
     }}
     for (identity,kind,value) in &known {match *kind {
         "capy.stack/1"=> {let data=fields(value,&["entries"])?;let entries=data.get("entries").map(|v|list(v)?.iter().map(|value|handle(&art.occurrences,value)).collect::<DecodeResult<Vec<_>>>()).transpose()?.unwrap_or_default();art.stacks.install(art.stacks.allocated(*identity).unwrap(),Stack {entries})?;},
-        "capy.occurrence/1"=> {
-            let data=fields(value,&["content","name","visible","opacity","blend","locked","alpha_locked","reference","clipped","placement","mask"])?;
+        "capy.occurrence/2"=> {
+            let data=fields(value,&["content","name","visible","opacity","blend","locked","alpha_locked","reference","attachment","isolated_blend","placement","mask"])?;
             let content=fields(v::required(data,"content")?,&["paint","stack","effect","selection"])?;
             if content.len()!=1 {return Err("Occurrence requires one content alternative".into());}
             let (kind,value)=content.iter().next().unwrap();let content=match kind.as_str() {"paint"=>OccurrenceContent::Paint(handle(&art.paint,value)?),"stack"=>OccurrenceContent::Stack(handle(&art.stacks,value)?),"effect"=>OccurrenceContent::Effect(handle(&art.effects,value)?),"selection"=>OccurrenceContent::Selection(handle(&art.selections,value)?),_=>unreachable!()};
@@ -314,7 +316,9 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
                 let bounds=Rect::from_extent(art.coverage.get(source).ok_or("Missing coverage source")?.domain);
                 let (translation,placement)=data.get("placement").map(|v|v::parse_mask_placement(v,bounds)).transpose()?.unwrap_or((Point::default(),crate::Projective::IDENTITY));
                 Ok::<_,DecodeError>(MaskUse {source,enabled:bool_field(data,"enabled",true)?,linked:bool_field(data,"linked",true)?,inverted:bool_field(data,"inverted",false)?,translation,placement})}).transpose()?;
-            let occurrence=Occurrence {content,name:name(data)?,visible:bool_field(data,"visible",true)?,opacity,blend,locked:bool_field(data,"locked",false)?,alpha_locked:bool_field(data,"alpha_locked",false)?,reference:bool_field(data,"reference",false)?,clipped:bool_field(data,"clipped",false)?,translation,placement,mask};
+            let attachment=match data.get("attachment").map(Value::as_str) {None|Some(Some("none"))=>Attachment::None,Some(Some("clip"))=>Attachment::Clip,Some(Some("effect"))=>Attachment::Effect,_=>return Err("Invalid occurrence attachment".into())};
+            let isolated_blend=data.get("isolated_blend").map(v::parse_layer_blend).transpose()?.unwrap_or(LayerBlend::Normal);
+            let occurrence=Occurrence {content,name:name(data)?,visible:bool_field(data,"visible",true)?,opacity,blend,locked:bool_field(data,"locked",false)?,alpha_locked:bool_field(data,"alpha_locked",false)?,reference:bool_field(data,"reference",false)?,attachment,isolated_blend,translation,placement,mask};
             art.occurrences.install(art.occurrences.allocated(*identity).unwrap(),occurrence)?;
         },_=>{}
     }}
@@ -354,6 +358,7 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
     let default=manifest.default_output.ok_or_else(||DecodeError::Unsupported("Artwork has no editable output".into()))?;
     art.default_output=art.outputs.allocated(default).ok_or("Default is not an output")?;
     art.topology()?;
+    if matches!(manifest.support,Support::Editable){SceneIndex::build(&art)?;}
     Ok(art)
 }
 
@@ -431,9 +436,10 @@ mod tests {
         assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Invalid(_))));
         manifest.objects.insert(paint,original.clone());manifest.objects.get_mut(&paint).unwrap()["data"]["future"]=true.into();
         assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Unsupported(_))));
-        manifest.objects.insert(paint,original);let occurrence=art.occurrences.iter().next().unwrap().1;
+        manifest.objects.insert(paint,original);let occurrence=art.occurrences.iter().next().unwrap().1;let original=manifest.objects[&occurrence].clone();
         manifest.objects.get_mut(&occurrence).unwrap()["data"]["mask"]["placement"]["interpolation"]="nearest".into();
         assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Unsupported(_))));
+        for attachment in ["clip","effect"] {manifest.objects.insert(occurrence,original.clone());manifest.objects.get_mut(&occurrence).unwrap()["data"]["attachment"]=attachment.into();assert!(matches!(reopen(&manifest,&backing),Err(DecodeError::Invalid(_))));}
     }
     #[test]
     fn tile_coordinates_and_output_phase_duplicates_are_invalid() {

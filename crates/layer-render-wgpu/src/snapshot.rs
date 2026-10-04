@@ -145,7 +145,7 @@ impl SnapshotGpu {
 pub(super) fn capture_targets(scene: SceneView<'_>, scope: &SceneScope) -> Vec<SourceTarget> {
     let contributors = match scope {
         SceneScope::Raw(target) => return vec![*target],
-        SceneScope::Prefix {before, ..} => layer_core::composite_input_layers(scene, *before),
+        SceneScope::EffectInput(before) => layer_core::composite_input_layers(scene, *before),
         _ => scene.order().iter().copied().filter(|&h| scene.visible(h)).collect(),
     };
     scene.targets().filter(|target| {
@@ -251,7 +251,7 @@ impl SnapshotRenderer {
         if self.offset != layer_core::Point::default() || visible.next().is_some() || !matches!(source_target, SourceTarget::Paint(_)) || occurrence.opacity != 1.
             || scene.parent(handle).is_some() || occurrence.translation != layer_core::Point::default()
             || occurrence.placement != layer_core::LayerPlacement::IDENTITY || occurrence.blend != layer_core::LayerBlend::Normal
-            || occurrence.clipped || occurrence.mask.as_ref().is_some_and(|m| m.enabled) || !self.backing[&source_target].tiles.is_empty() { return None; }
+            || occurrence.attachment.is_clip() || occurrence.mask.as_ref().is_some_and(|m| m.enabled) || !self.backing[&source_target].tiles.is_empty() { return None; }
         let source = scene.original(source_target)?;
         (source.extent == self.extent
             && source.interpretation.channels == target.channels

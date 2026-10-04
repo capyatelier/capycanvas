@@ -220,7 +220,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let mut current = Some(*h);
             while let Some(handle) = current {
                 let Some(occurrence) = scene.occurrence(handle) else { return false; };
-                if !occurrence.visible || occurrence.clipped || occurrence.opacity <= 0. { return false; }
+                if !occurrence.visible || occurrence.attachment == layer_core::Attachment::Clip || occurrence.opacity <= 0. { return false; }
                 current = scene.parent(handle);
             }
             true

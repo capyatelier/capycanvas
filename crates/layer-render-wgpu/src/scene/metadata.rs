@@ -43,13 +43,24 @@ impl PartialEq for Metadata {
     }
 }
 impl Metadata {
+    pub(super) fn same_content(&self, other: &Self) -> bool {
+        let normalize = |metadata: &Self| {
+            let mut metadata = metadata.clone();
+            metadata.occurrence.opacity = 1.;
+            metadata.occurrence.blend = layer_core::LayerBlend::Normal;
+            metadata.occurrence.attachment = layer_core::Attachment::None;
+            metadata
+        };
+        normalize(self) == normalize(other)
+    }
     pub(super) fn new(scene: layer_core::SceneView<'_>, handle: OccurrenceHandle) -> Self {
         let mut occurrence = scene.occurrence(handle).unwrap().clone();
         occurrence.name = Arc::from("");
         occurrence.locked = false;
         occurrence.alpha_locked = false;
         occurrence.reference = false;
-        occurrence.clipped = scene.effective_clipped(handle);
+        if occurrence.attachment.is_clip() && !scene.effective_clipped(handle) { occurrence.attachment = layer_core::Attachment::None; }
+        occurrence.isolated_blend = layer_core::LayerBlend::Normal;
         let effect = match occurrence.content {
             layer_core::authored::OccurrenceContent::Effect(effect) => scene.artwork().effects.shared(effect).map(Arc::downgrade),
             _ => None,

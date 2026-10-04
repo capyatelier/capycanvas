@@ -40,7 +40,19 @@ pub(crate) fn insert_source(document: &mut Document, name: &str, source: Arc<lay
 }
 pub(crate) fn effect_document(effects: &[EffectInstance], extent: [u32;2], color: DocumentColor) -> Document {
     let mut document = empty_document(extent,color);
-    for effect in effects {insert_effect(&mut document,effect.clone());}
+    let mut adjustment = false;
+    for effect in effects {
+        let handle = insert_effect(&mut document,effect.clone());
+        if effect.program.kind == EffectKind::Generator && adjustment {
+            let stack = document.artwork.stacks.insert(PortableId::random(),layer_core::authored::Stack {entries:vec![handle]}).unwrap();
+            let group = document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"source")).unwrap();
+            let root = document.composition().result;
+            let entry = document.artwork.stacks.get_mut(root).unwrap().entries.iter_mut().find(|h|**h==handle).unwrap();
+            *entry = group;
+            refresh(&mut document);
+        }
+        adjustment |= effect.program.kind == EffectKind::Adjustment;
+    }
     document
 }
 pub(crate) fn set_effect(document: &mut Document, occurrence: OccurrenceHandle, key: &str, value: EffectValue) {
@@ -88,6 +100,7 @@ fn source(rgb: [f32;3], alpha: f32) -> EffectInstance {
     effect
 }
 fn frame_document(r: &mut WgpuRasterizer, document: &Document) -> [f32;4] {
+    let document = Document::from_artwork(document.artwork.clone()).unwrap();
     r.submit(packet(document.scene().with_owner(0,0),document.composition().size)).unwrap();
     let bytes = crate::layer_tests::page_bytes(r,crate::test_support::document_texture(r));
     std::array::from_fn(|c| f32::from_le_bytes(bytes[c*4..c*4+4].try_into().unwrap()))

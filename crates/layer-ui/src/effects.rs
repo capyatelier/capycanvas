@@ -1088,6 +1088,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let stack_handle = scene.stack(top).ok_or("Missing containing stack")?;
                 let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
                 let index = stack.entries.iter().position(|handle| *handle == top).ok_or("Missing insertion position")?;
+                let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
                 let depth = doc.composition().color.depth;
                 let mut instance = EffectInstance::new(catalog.program());
                 if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
@@ -1112,7 +1113,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let mut occurrence = if replacing { occurrence.clone() } else {
                     let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
-                    value.clipped = choosing && occurrence.clipped; value
+                    value.attachment = if choosing && generator {insertion_attachment} else if choosing && occurrence.attachment != layer_core::Attachment::None {
+                        layer_core::Attachment::Effect
+                    } else { layer_core::Attachment::None }; value
                 };
                 occurrence.content = OccurrenceContent::Effect(effect_handle);
                 if masked {

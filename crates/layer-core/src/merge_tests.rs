@@ -88,8 +88,9 @@ fn merge_down_refuses_with_a_reason() {
 fn clipping_bases_bake_their_visible_stack_and_keep_hidden_clips() {
     let mut doc = document(&["Hidden clip", "Shade", "Base", "Below"]);
     for name in ["Hidden clip", "Shade"] {
-        occurrence_mut(&mut doc, name).clipped = true;
+        occurrence_mut(&mut doc, name).attachment = crate::Attachment::Clip;
     }
+    refresh(&mut doc);
     occurrence_mut(&mut doc, "Hidden clip").visible = false;
     occurrence_mut(&mut doc, "Shade").blend = LayerBlend::Multiply;
     activate(&mut doc, "Base");
@@ -99,9 +100,10 @@ fn clipping_bases_bake_their_visible_stack_and_keep_hidden_clips() {
     assert_eq!(names(&doc), ["Hidden clip", "Base", "Below", "Paper"]);
     let result = doc.working.occurrence.unwrap();
     assert_eq!(doc.clipping_base(id(&doc, "Hidden clip")), Some(result));
-    assert!(!doc.scene().occurrence(result).unwrap().clipped);
+    assert!(!doc.scene().occurrence(result).unwrap().attachment.is_clip());
     let mut doc = document(&["Shade", "Base"]);
-    occurrence_mut(&mut doc, "Shade").clipped = true;
+    occurrence_mut(&mut doc, "Shade").attachment = crate::Attachment::Clip;
+    refresh(&mut doc);
     occurrence_mut(&mut doc, "Shade").visible = false;
     activate(&mut doc, "Base");
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::ClipsHidden));
@@ -113,8 +115,9 @@ fn clipping_bases_bake_their_visible_stack_and_keep_hidden_clips() {
 fn clipped_layers_merge_within_their_stack() {
     let mut doc = document(&["Upper", "Lower", "Base", "Free"]);
     for name in ["Upper", "Lower"] {
-        occurrence_mut(&mut doc, name).clipped = true;
+        occurrence_mut(&mut doc, name).attachment = crate::Attachment::Clip;
     }
+    refresh(&mut doc);
     assert_eq!(doc.merge_down(), MergeDown::Layer);
     let plan = doc.merge_plan(MergeKind::Down).unwrap();
     let RasterOperationKind::Bake { scene, scope, .. } = &plan.operation.kind else { panic!("Bake") };
@@ -124,13 +127,15 @@ fn clipped_layers_merge_within_their_stack() {
     assert!(!members.contains(&id(&doc, "Base")));
     merged(&mut doc, MergeKind::Down);
     let result = doc.working.occurrence.unwrap();
-    assert!(doc.scene().occurrence(result).unwrap().clipped);
+    assert!(doc.scene().occurrence(result).unwrap().attachment.is_clip());
     assert_eq!(doc.clipping_base(result), Some(id(&doc, "Base")));
     let mut doc = document(&["Upper", "Base", "Other"]);
-    occurrence_mut(&mut doc, "Upper").clipped = true;
+    occurrence_mut(&mut doc, "Upper").attachment = crate::Attachment::Clip;
+    refresh(&mut doc);
     assert_eq!(baked(&doc, MergeKind::Down), ["Upper", "Base"]);
     let mut doc = document(&["Upper", "Clip", "Base"]);
-    occurrence_mut(&mut doc, "Clip").clipped = true;
+    occurrence_mut(&mut doc, "Clip").attachment = crate::Attachment::Clip;
+    refresh(&mut doc);
     assert_eq!(doc.merge_refusal(MergeKind::Down), Some(MergeRefusal::BelowClipped));
 }
 #[test]
@@ -151,9 +156,9 @@ fn effects_apply_to_the_layer_below_or_bake_their_clipping_stack() {
     assert_eq!(source.domain, doc.composition().size);
     let mut doc = document(&["Levels", "Shade", "Base", "Below"]);
     effect(&mut doc, "Levels", "levels");
-    for name in ["Levels", "Shade"] {
-        occurrence_mut(&mut doc, name).clipped = true;
-    }
+    occurrence_mut(&mut doc,"Levels").attachment=Attachment::Effect;
+    occurrence_mut(&mut doc,"Shade").attachment=Attachment::Clip;
+    refresh(&mut doc);
     assert_eq!(doc.merge_down(), MergeDown::ClippingStack);
     assert_eq!(baked(&doc, MergeKind::Down), ["Levels", "Shade", "Base"]);
     occurrence_mut(&mut doc, "Base").visible = false;
@@ -197,7 +202,8 @@ fn merge_group_keeps_the_groups_blend_and_opacity_and_bakes_its_mask() {
 #[test]
 fn merge_visible_keeps_hidden_layers_and_releases_their_clipping() {
     let mut doc = document(&["Top", "Hidden clip", "Base", "Hidden", "Bottom"]);
-    occurrence_mut(&mut doc, "Hidden clip").clipped = true;
+    occurrence_mut(&mut doc, "Hidden clip").attachment = crate::Attachment::Clip;
+    refresh(&mut doc);
     for name in ["Hidden clip", "Hidden"] {
         occurrence_mut(&mut doc, name).visible = false;
     }
@@ -205,10 +211,11 @@ fn merge_visible_keeps_hidden_layers_and_releases_their_clipping() {
     assert_eq!(baked(&doc, MergeKind::Visible), ["Top", "Base", "Bottom", "Paper"]);
     merged(&mut doc, MergeKind::Visible);
     assert_eq!(names(&doc), ["Hidden clip", "Hidden", "Paper"]);
-    assert!(!occurrence(&doc, "Hidden clip").clipped);
+    assert!(!occurrence(&doc, "Hidden clip").attachment.is_clip());
     assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().name.as_ref(), "Paper");
     let mut doc = document(&["Clip", "Base"]);
-    occurrence_mut(&mut doc, "Clip").clipped = true;
+    occurrence_mut(&mut doc, "Clip").attachment = crate::Attachment::Clip;
+    refresh(&mut doc);
     occurrence_mut(&mut doc, "Base").visible = false;
     occurrence_mut(&mut doc, "Paper").visible = false;
     assert_eq!(doc.merge_refusal(MergeKind::Visible), Some(MergeRefusal::NothingVisible), "a hidden base hides its clips");

@@ -256,7 +256,7 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
         Path::Clip => {
             let owner = document.artwork.occurrences.get_mut(top_layer).unwrap();
             owner.opacity = OPACITY;
-            owner.clipped = true;
+            owner.attachment = layer_core::Attachment::Clip;
             (vec![top_layer, bottom_layer], [0.; 4])
         }
         Path::Effect => {
@@ -266,13 +266,13 @@ fn case(depth: SampleDepth, path: Path, space: BlendSpace) -> Case {
         }
         Path::Folded => {
             let adjustment = effect(&mut document, false);
-            document.artwork.occurrences.get_mut(adjustment).unwrap().clipped = true;
+            document.artwork.occurrences.get_mut(adjustment).unwrap().attachment = layer_core::Attachment::Effect;
             document.artwork.occurrences.get_mut(bottom_layer).unwrap().opacity = OPACITY;
             (vec![adjustment, bottom_layer], BACKDROP)
         }
         Path::ImageComposition => {
             let filter = effect(&mut document, true);
-            document.artwork.occurrences.get_mut(filter).unwrap().clipped = true;
+            document.artwork.occurrences.get_mut(filter).unwrap().attachment = layer_core::Attachment::Effect;
             document.artwork.occurrences.get_mut(bottom_layer).unwrap().opacity = OPACITY;
             (vec![filter, bottom_layer, top_layer], [0.; 4])
         }
@@ -342,7 +342,7 @@ fn alone(r: &mut WgpuRasterizer, document: &Document, index: usize) -> Vec<Rgba>
         occurrence.visible = i == index;
         occurrence.opacity = 1.;
         occurrence.blend = LayerBlend::Normal;
-        occurrence.clipped = false;
+        occurrence.attachment = layer_core::Attachment::None;
     }
     live(r, isolated.scene(), document.composition().blend)
 }

@@ -213,7 +213,7 @@ fn lone_layer(frame: &artwork::Frame) -> Option<SourceTarget> {
     let mut visible = scene.order().iter().copied().filter(|&h| scene.visible(h));
     let handle = visible.next()?; let o = scene.occurrence(handle)?; let target = scene.source_target(handle)?;
     (visible.next().is_none() && matches!(target, SourceTarget::Paint(_)) && o.opacity == 1. && o.mask.is_none()
-        && scene.parent(handle).is_none() && !o.clipped && o.blend == layer_core::LayerBlend::Normal && scene.target_geometry(target).is_identity()).then_some(target)
+        && scene.parent(handle).is_none() && !o.attachment.is_clip() && o.blend == layer_core::LayerBlend::Normal && scene.target_geometry(target).is_identity()).then_some(target)
 }
 
 /// Pages within `PREFETCH_RING` of each point, nearest rings first.

@@ -53,32 +53,32 @@ impl Expression {
             }
         }
     }
-    pub(super) fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> PixelRect {
+    pub(super) fn damage(&self, sources: &Sources, plan: display_mips::Plan) -> Damage {
         match self {
-            Self::Color(_) => PixelRect::EMPTY,
-            Self::Source { id, placement, .. } => sources.entries.get(id).map_or(plan.bounds, |source| {
-                if source.damage.is_empty() { return PixelRect::EMPTY; }
+            Self::Color(_) => Damage::EMPTY,
+            Self::Source { id, placement, .. } => sources.entries.get(id).map_or_else(|| plan.bounds.into(), |source| {
+                if source.damage.is_empty() { return Damage::EMPTY; }
                 let placement = placement.0.clone();
-                if placement.is_identity() { return source.damage; }
+                if placement.is_identity() { return source.damage.clone(); }
                 let local = source.damage.expand(1 << source_level(plan.level, &placement, source.extent), source.extent);
-                pixel_rect(placement.forward_bounds(local.to_rect()), plan.extent).expand(
-                    source.watercolor.map_or(0, |w| w.radius()), plan.extent)
+                local.map(|local| pixel_rect(placement.forward_bounds(local.to_rect()), plan.extent).expand(
+                    source.watercolor.map_or(0, |w| w.radius()), plan.extent))
             }),
             Self::Opacity { input, .. } => input.damage(sources, plan),
             Self::Combine { front, back, .. } => front.damage(sources, plan).union(back.damage(sources, plan)),
             Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
-                crate::effects::dependency(input.damage(sources, plan), *radius, display_mips::Plan::at(plan.extent, plan.level)),
+                input.damage(sources, plan).dependency(*radius, display_mips::Plan::at(plan.extent, plan.level)),
                 |r, n| r.union(n.damage(sources, plan))),
         }
     }
-    pub(super) fn required(&self, region: PixelRect, plan: display_mips::Plan) -> PixelRect {
+    pub(super) fn required(&self, region: Damage, plan: display_mips::Plan) -> Damage {
         match self {
-            Self::Color(_) => PixelRect::EMPTY,
+            Self::Color(_) => Damage::EMPTY,
             Self::Source { .. } => region,
             Self::Opacity { input, .. } => input.required(region, plan),
-            Self::Combine { front, back, .. } => front.required(region, plan).union(back.required(region, plan)),
+            Self::Combine { front, back, .. } => front.required(region.clone(), plan).union(back.required(region, plan)),
             Self::Effect { input, masks, radius, .. } => masks.iter().flatten().fold(
-                input.required(crate::effects::dependency(region, *radius, plan), plan), |r, n| r.union(n.required(region, plan))),
+                input.required(region.dependency(*radius, plan), plan), |r, n| r.union(n.required(region.clone(), plan))),
         }
     }
     fn visit(node: &Node, all: &mut HashSet<Node>) {
@@ -159,7 +159,7 @@ impl Graph {
             let dirty = node.damage(sources, plan);
             let branch = self.branches.entry(node).or_insert_with(|| Branch { image: reusable.pop(), valid: BTreeSet::new() });
             if branch.image.as_ref().is_some_and(|image| image.plan != plan) { branch.image = None; branch.valid.clear(); }
-            branch.valid.retain(|c| page_rect(*c).intersect(dirty).is_empty());
+            branch.valid.retain(|c| !dirty.intersects(page_rect(*c)));
         }
         self.root = Some(root);
         Ok(())
@@ -179,7 +179,7 @@ fn compose(
     level: u32, space: layer_core::color::RgbSpace,
 ) -> Result<Node, GpuRasterError> {
     let mut builder = Builder { packet, sources, effects, level, space };
-    let output = stack::compose(&mut builder, packet.scene, None, packet.scene.stop_before())?;
+    let output = stack::compose(&mut builder, packet.scene, None, packet.scene.effect_input())?;
     let mut root = Expression::over(&output);
     if let Some(handle) = packet.inspect_mask
         && packet.scene.mask(handle).is_some_and(|(mask, _)| mask.enabled) {

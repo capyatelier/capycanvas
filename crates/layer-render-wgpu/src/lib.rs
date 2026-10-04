@@ -229,6 +229,7 @@ pub struct GpuRasterMetrics {
     pub dabs: u64,
     pub raster_candidate_pixels: u64,
     pub composited_pixels: u64,
+    pub frame_composited_pages: Vec<(u32, [u32; 2])>,
     pub paint_pages: u64,
     pub preview_pages: u64,
     pub destination_companion_pages: u64,
@@ -3427,6 +3428,7 @@ impl WgpuRasterizer {
         }
         self.transform_damage.clear();
         self.document_damage.clear();
+        self.metrics.frame_composited_pages.clear();
         if let Some(t) = &mut self.transforms {
             t.begin_frame();
         }
@@ -4157,9 +4159,6 @@ impl WgpuRasterizer {
             self.transforms = Some(transforms);
             self.transform_damage.extend(result?);
         }
-        // Pointwise edits need only their touched tiles, not the rectangle
-        // enclosing a fast curved stroke. Global effects and full rebuilds
-        // retain complete damage propagation.
         let local_contacts = !original_batches.is_empty()
             && watercolor_style_dirty.is_empty()
             && original_batches.iter().all(|b| {
@@ -4168,18 +4167,15 @@ impl WgpuRasterizer {
                     && !b.style.rendering.edge_after_stroke
             });
         let canonical_pages = native_commit.as_ref().map_or(&[][..], |frame| &frame.canonical_pages[..]);
+        self.transform_damage.extend(canonical_pages.iter().map(|&(id,coordinate)|(id,page_rect(coordinate))));
         let mut composite_tiles = (!reset && !packet.composite_all
             && (local_contacts || (dirty.is_empty()
                 && (!self.transform_damage.is_empty()
                     || !self.document_damage.is_empty()
                     || !canonical_pages.is_empty())
-                && original_batches.is_empty() && packet.dabs.is_empty()))
-            && packet.scene.order().iter().all(|&h| packet.scene.effect(h).is_none_or(|e| !e.animated() && !e.program.image_boundary())))
+                && original_batches.is_empty() && packet.dabs.is_empty())))
         .then(std::collections::BTreeSet::new);
         if local_contacts && let Some(tiles) = &mut composite_tiles {
-            // Brush allocation stays in layer coordinates; composition always
-            // uses document coordinates, including rotated/scaled photos and
-            // their masks. Reuse the same sparse contact plan for every host.
             dirty = PixelRect::EMPTY;
             let mut include = |id, local| {
                 let bounds = brush_tiles::document_damage(packet.scene, id, local, packet.document_extent);
@@ -4192,7 +4188,7 @@ impl WgpuRasterizer {
                 } else { include(id, old_preview_damage); }
             }
             for (batch, planned) in original_batches.iter().zip(&batch_tiles) {
-                for tile in planned { include(batch.target, page_rect(tile.coordinate)); }
+                for tile in planned { include(batch.target, scene::scale::Damage::tile_region(tile)); }
             }
         }
         for &(layer, bounds) in &self.transform_damage {
@@ -4211,22 +4207,11 @@ impl WgpuRasterizer {
             }
             dirty = dirty.union(bounds);
         }
-        for &(id, coordinate) in canonical_pages {
-            let bounds = brush_tiles::document_damage(packet.scene, id, page_rect(coordinate), packet.document_extent);
-            if let Some(tiles) = &mut composite_tiles {
-                tiles.extend(page_coordinates(bounds));
-            }
-            dirty = dirty.union(bounds);
-        }
         if self.transform_damage.iter().any(|(_, b)| !b.is_empty()) || !self.document_damage.is_empty() {
             self.filter_source_epoch = self.filter_source_epoch.wrapping_add(1);
         }
         if let Some(previews) = &mut self.filter_previews {
             previews.note_frame(FramePacket { view: requested_view, ..packet }, self.filter_source_epoch);
-        }
-        if composite_tiles.is_none() && (packet.dab_batches.iter().any(|batch| !layer_core::target_geometry(packet.scene, batch.target).is_identity())
-            || self.preview_layer_id.into_iter().chain(old_preview_layer).any(|id| !layer_core::target_geometry(packet.scene, id).is_identity())) {
-            dirty = PixelRect::full(packet.document_extent);
         }
         if packet.composite_all || reset {
             dirty = PixelRect::full(packet.document_extent);

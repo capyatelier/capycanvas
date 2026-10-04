@@ -554,6 +554,7 @@ impl WgpuRasterizer {
                 .unwrap()
                 .backing
                 .insert(publication.id, current.data.clone());
+            if commit && let Some(scene)=&mut self.scene {scene.raster_published(publication.id,current.data.clone());}
             current.changed.clear();
         }
         Ok(())

@@ -77,7 +77,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         while let Some(h)=ancestor {members.push(h);ancestor=scene.parent(h);}
         for &h in &members {
             let o=Arc::make_mut(&mut snapshot).artwork.occurrences.get_mut(h).ok_or("Missing capture occurrence")?;
-            o.visible=true;o.opacity=1.;o.blend=layer_core::LayerBlend::Normal;o.clipped=false;
+            o.visible=true;o.opacity=1.;o.blend=layer_core::LayerBlend::Normal;o.attachment=layer_core::Attachment::None;
             if h!=source_id {o.mask=None;}
         }
         let paint=RecordChange::insert(&doc.artwork.paint,PaintSource {domain:extent,raster:Default::default(),original:None,operations:Arc::default()});

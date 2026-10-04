@@ -75,7 +75,7 @@ fn kind(record: &Value) -> Result<&str, String> {
     Ok(name)
 }
 fn known_object(name: &str) -> bool { matches!(name,
-    "capy.composition/1" | "capy.stack/1" | "capy.occurrence/1" | "capy.paint-source/1" | "capy.coverage-source/1" |
+    "capy.composition/1" | "capy.stack/1" | "capy.occurrence/2" | "capy.paint-source/1" | "capy.coverage-source/1" |
     "capy.effect/1" | "capy.effect-definition/1" | "capy.selection/1" | "capy.guides/1" | "capy.output/1") }
 fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static str>) -> Result<Shape, String> {
     let fields = object(record)?;
@@ -89,7 +89,7 @@ fn shape(record: &Value, refs: &[PortableId], reasons: &mut BTreeSet<&'static st
     Ok(match name {
         "capy.composition/1" => Shape::Composition { result: endpoint(required(data, "result")?, &["color"], reasons)? },
         "capy.stack/1" => Shape::Stack { entries: data.get("entries").map_or(Ok(Vec::new()), |v| array(v)?.iter().map(reference).collect())? },
-        "capy.occurrence/1" => {
+        "capy.occurrence/2" => {
             let content = object(required(data, "content")?)?;
             let recognized: Vec<_> = ["paint", "stack", "effect", "selection"].into_iter().filter(|key| content.contains_key(*key)).collect();
             if content.is_empty() || recognized.len() > 1 { return Err("Invalid occurrence content".into()); }

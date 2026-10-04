@@ -8,7 +8,7 @@ impl SnapshotGpu {
             ContentScope::Target(target)=>scene.scope=SceneScope::Raw(target),
             ContentScope::PlacedTarget(handle)=>{
                 let view=scene.view();view.occurrence(handle).ok_or("The bounds target was removed")?;
-                let mut members:Vec<_>=view.order().iter().copied().filter(|h|*h==handle||layer_core::descends_from(view,*h,Some(handle))).collect();
+                let mut members:Vec<_>=view.order().iter().copied().filter(|h|*h==handle||view.effect_owner(*h)==Some(handle)||layer_core::descends_from(view,*h,Some(handle))).collect();
                 let mut parent=view.parent(handle);
                 while let Some(handle)=parent {members.push(handle);parent=view.parent(handle);}
                 scene.scope=SceneScope::Members(members.into());
@@ -17,11 +17,12 @@ impl SnapshotGpu {
                 let handles=scene.view().order().to_vec();
                 for handle in handles {
                     let occurrence=scene.artwork.occurrences.get_mut(handle).unwrap();
-                    occurrence.visible=true;occurrence.opacity=1.;occurrence.mask=None;occurrence.clipped=false;occurrence.blend=layer_core::LayerBlend::Normal;
+                    occurrence.visible=true;occurrence.opacity=1.;occurrence.mask=None;occurrence.attachment=layer_core::Attachment::None;occurrence.blend=layer_core::LayerBlend::Normal;
                 }
             }
             _=>{}
         }
+        scene.index = Arc::new(layer_core::SceneIndex::build(&scene.artwork)?);
         Ok(Arc::new(scene))
     }
     pub async fn content_bounds(&self, request: ContentBoundsRequest, control: CaptureControl) -> Result<Rect, String> {
@@ -40,7 +41,7 @@ impl SnapshotGpu {
             let extent = view.target_extent(target);
             let occurrence = scene.artwork.occurrences.get_mut(owner).unwrap();
             occurrence.translation = Point::default(); occurrence.placement = layer_core::LayerPlacement::IDENTITY;
-            occurrence.clipped = false; occurrence.visible = true; occurrence.opacity = 1.;
+            occurrence.attachment = layer_core::Attachment::None; occurrence.visible = true; occurrence.opacity = 1.;
             if matches!(target, SourceTarget::Paint(_)) { occurrence.mask = None; }
             else if let Some(mask) = &mut occurrence.mask {
                 mask.placement = layer_core::Projective::IDENTITY; mask.translation = Point::default(); mask.linked = false; mask.enabled = true;

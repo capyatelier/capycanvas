@@ -1,6 +1,6 @@
 //! Pass Through groups against the documents they are equivalent to: the same
 //! layers ungrouped, a fade between the composites without and with the
-//! group, and an isolated Normal group once clipped.
+//! group, and explicit isolation for clipping targets.
 use super::*;
 use layer_core::color::source::{SourceBuilder, SourceChannels, SourceImage, SourceInterpretation};
 use layer_core::color::{ColorProfile, DocumentColor, RgbSpace, SampleDepth};
@@ -115,9 +115,9 @@ fn nested() -> (Document, OccurrenceHandle) {
     b.layer(inner).translation = Point { x: 13., y: -7. };
     b.effect("Blur", Some(inner), "gaussian_blur");
     let clip = b.paint("Overlay clip", Some(inner), LayerBlend::Overlay, 7, |x, _| if x % 90 < 60 { 65535 } else { 0 });
-    b.layer(clip).clipped = true;
     let base = b.paint("Base", Some(inner), LayerBlend::Normal, 11, disc(150, 180, 90));
     b.layer(base).opacity = 0.8;
+    b.layer(clip).attachment = layer_core::Attachment::Clip;
     let isolated = b.group("Isolated", Some(outer), LayerBlend::Normal);
     let deepest = b.group("Deepest", Some(isolated), LayerBlend::PassThrough);
     b.paint("Difference", Some(deepest), LayerBlend::Difference, 13, disc(240, 220, 70));
@@ -129,6 +129,7 @@ fn nested() -> (Document, OccurrenceHandle) {
 
 /// The live composite of `document`, in its blend space.
 fn render(r: &mut WgpuRasterizer, document: &Document) -> Vec<[f32; 4]> {
+    let document = Document::from_artwork(document.artwork.clone()).unwrap();
     let view = crate::test_support::view(EXTENT);
     let frame = FramePacket { view, blend_space: document.composition().blend, ..packet(document.scene(), EXTENT) };
     r.submit(FramePacket { reset_layers: true, ..frame }).unwrap();
@@ -312,19 +313,19 @@ fn opacity_and_mask_fade_between_the_backdrop_and_the_groups_result() {
 }
 
 #[test]
-fn a_clipped_pass_through_group_composites_isolated() {
+fn clipping_a_group_requires_explicit_isolation() {
     let mut r = WgpuRasterizer::new_native_headless(COLOR).expect("physical GPU required");
     let mut b = Builder::new();
     let group = b.group("Clipped", None, LayerBlend::PassThrough);
-    b.layer(group).clipped = true;
     b.layer(group).opacity = 0.75;
     b.effect("Black & White", Some(group), "black_white");
     b.paint("Multiply", Some(group), LayerBlend::Multiply, 5, disc(150, 140, 110));
     b.paint("Base", None, LayerBlend::Normal, 11, disc(140, 150, 120));
     b.paint("Backdrop", None, LayerBlend::Normal, 19, |_, _| 65535);
+    b.layer(group).attachment = layer_core::Attachment::Clip;
+    assert!(Document::from_artwork(b.0.artwork.clone()).is_err());
+    b.layer(group).blend = LayerBlend::Normal;
     let clipped = render(&mut r, &b.0);
-    let normal = render(&mut r, &set(&b.0, group, |g| g.blend = LayerBlend::Normal));
-    assert_close(&clipped, &normal, 1e-6, "a clipped Pass Through group against a clipped Normal group");
-    let unclipped = render(&mut r, &set(&b.0, group, |g| g.clipped = false));
+    let unclipped = render(&mut r, &set(&b.0, group, |g| { g.attachment = layer_core::Attachment::None; g.blend = LayerBlend::PassThrough; }));
     assert!(largest_difference(&clipped, &unclipped) > 0.1, "unclipped, the group passes through");
 }

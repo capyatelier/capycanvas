@@ -28,8 +28,7 @@ impl Plan {
         if full <= limit {
             return Ok(None);
         }
-        let radius = layers.order().iter().filter(|handle| layers.visible(**handle)).filter_map(|handle| layers.effect(*handle))
-            .try_fold(0u32, |r, e| Some(r.saturating_add(e.damage_radius()?)))
+        let radius = stack::support(layers,0)
             .ok_or_else(|| GpuRasterError::Color(format!(
                 "Document-wide filters require up to {full} bytes of image pixels; the live filter limit is {limit} bytes"
             )))?;

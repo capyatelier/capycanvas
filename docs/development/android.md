@@ -512,6 +512,16 @@ separately because Stats changes the workspace and adds measurement work.
 `--presets` accepts every built-in preset, including wet, smudge, Liquify, and
 Clone Stamp, Healing Brush and Spot Healing Brush, which read the photo as a
 reference layer.
+`--workload clipped` clips the empty paint layer to the photo.
+`--workload blurred-base --effect-radius 8` also attaches Gaussian Blur to the
+photo, then paints its clipped layer. The radius argument is the Gaussian sigma
+in document pixels; sigma 8 has 24 px sampling support along each axis in the
+two separable blur passes. These fixtures require one photo and the paint layer
+at index zero. Their reports retain the paint, base and effect handles, actual
+sigma and initial layer state; setup validation checks row order, attachment,
+selected paint and parameters before collecting motion. Ordinary photo-plus-paint
+remains the default. The opaque tier photo measures ownership and cache cost;
+shared GPU fixtures cover expanded fractional alpha.
 `--mode pauses --contact-ms 100 --pause-ms 100` resumes during refinement.
 Increase only the gap to measure the same contacts after settling, or increase
 contact duration to test finalization after a broad stroke. The runner checks

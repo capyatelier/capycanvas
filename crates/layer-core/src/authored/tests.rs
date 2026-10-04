@@ -173,7 +173,7 @@ fn permanent_schema_fixtures_keep_structural_classification_and_visible_referenc
             let shape = match object["type"].as_str().unwrap() {
                 "capy.composition/1" => Shape::Composition { result: reference(&data["result"]["object"]) },
                 "capy.stack/1" => Shape::Stack { entries: data.get("entries").map_or(Vec::new(), |v| v.as_array().unwrap().iter().map(reference).collect()) },
-                "capy.occurrence/1" => {
+                "capy.occurrence/2" => {
                     let content = &data["content"];
                     let content = if let Some(paint) = content.get("paint") { Content::Paint(reference(paint)) }
                         else { Content::Group(reference(&content["stack"])) };

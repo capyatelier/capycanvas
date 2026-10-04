@@ -245,7 +245,7 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             id.id()
         );
         document.artwork.occurrences.get_mut(target).unwrap().mask = None;
-        document.artwork.occurrences.get_mut(target).unwrap().clipped = true;
+        document.artwork.occurrences.get_mut(target).unwrap().attachment = layer_core::Attachment::Effect;
         refresh(&mut document);
         prepare_analysis(&mut r, &document, target, 20.);
         submit(&mut r, EXTENT, &document, 20., false, true, None);

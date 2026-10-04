@@ -142,7 +142,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     let group_id = doc.artwork.occurrences.insert(PortableId::random(), group).unwrap();
     let canvas = doc.composition().size;
     let paint = doc.artwork.paint.insert(PortableId::random(), PaintSource { domain: canvas, raster: Default::default(), original: None, operations: Arc::default() }).unwrap();
-    let mut clipped = Occurrence::new(OccurrenceContent::Paint(paint), "Clipped"); clipped.clipped = true;
+    let mut clipped = Occurrence::new(OccurrenceContent::Paint(paint), "Clipped"); clipped.attachment = layer_core::Attachment::Clip;
     let clipped_id = doc.artwork.occurrences.insert(PortableId::random(), clipped).unwrap();
     doc.artwork.stacks.get_mut(nested).unwrap().entries.insert(0, clipped_id);
     let root = doc.composition().result; doc.artwork.stacks.get_mut(root).unwrap().entries = vec![group_id, paper];
@@ -152,14 +152,21 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     let source = Arc::unwrap_or_clone(rgba8_source([2, 1], |_, _| [255; 4]));
     assert_eq!(session.image_layer_drop_hint(occurrence_token(group_id), 0.5), Some(LayerDropPosition::Into));
     assert_eq!(session.image_layer_drop_hint(occurrence_token(paper), 0.9), Some(LayerDropPosition::Below));
-    assert_eq!(session.image_layer_drop_hint(occurrence_token(ink), 0.1), None, "insertion must not change a clipping base");
-    assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.9), None);
+    assert_eq!(session.image_layer_drop_hint(occurrence_token(ink), 0.1), Some(LayerDropPosition::Above));
+    assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.9), Some(LayerDropPosition::Below));
     assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.1), Some(LayerDropPosition::Above));
     let original = session.engine.document().clone();
+    session.place_layer_sources(vec![("Clipped import".into(), source.clone())], None,
+        Some(ImageLayerDestination { target: ink, position: LayerDropPosition::Above })).unwrap();
+    let imported = session.engine.document().working.occurrence.unwrap();
+    assert_eq!(session.engine.document().scene().clipping_base(imported), Some(ink));
+    assert_eq!(session.engine.document().scene().clipping_base(clipped_id), Some(ink));
+    invoke(&mut session, CommandId::CancelTransform);
+    assert_live_artwork_eq(session.engine.document(), &original);
     session.place_layer_sources(vec![("Menu import".into(), source.clone())], None, None).unwrap();
     assert_eq!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[1]).unwrap().name.as_ref(), "Menu import",
         "default Import goes above the complete clipped stack");
-    assert!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[2]).unwrap().clipped);
+    assert_eq!(session.engine.document().scene().occurrence(session.engine.document().scene().order()[2]).unwrap().attachment, layer_core::Attachment::Clip);
     invoke(&mut session, CommandId::CancelTransform);
     assert_live_artwork_eq(session.engine.document(), &original);
     for position in [LayerDropPosition::Into, LayerDropPosition::Below] {

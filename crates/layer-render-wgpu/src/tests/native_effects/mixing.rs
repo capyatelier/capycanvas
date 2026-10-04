@@ -118,7 +118,7 @@ fn selective_masks_opacity_and_clipping_preserve_original_input() {
                     let layer = selective(parameters, false, image);
                     let mut document=effect_document(&[layer,source(rgb,alpha)],[256;2],renderer.document_color);
                     let h=document.scene().order()[0];mask(&mut document,h,0.25);
-                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.clipped=clipped;
+                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
                     assert_color_bound(frame_document(&mut renderer,&document), expected, alpha, 3e-6,
                         &format!("Selective mask/opacity {space:?} image={image} clipped={clipped} alpha={alpha}"));
                 }
@@ -241,7 +241,7 @@ fn mixer_masks_opacity_and_clipping_preserve_original_input() {
                         let layer = mixer(rows, monochrome, image);
                         let mut document=effect_document(&[layer,source(rgb,alpha)],[256;2],renderer.document_color);
                     let h=document.scene().order()[0];mask(&mut document,h,0.25);
-                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.clipped=clipped;
+                    let occurrence=document.artwork.occurrences.get_mut(h).unwrap();occurrence.opacity=0.6;occurrence.attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
                     assert_color_bound(frame_document(&mut renderer,&document), expected, alpha, 2e-6,
                             &format!("Mixer mask {space:?} image={image} monochrome={monochrome} clipped={clipped}"));
                     }

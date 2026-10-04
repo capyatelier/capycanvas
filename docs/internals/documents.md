@@ -30,7 +30,7 @@ A raw source scope reads source pixels independently of occurrence opacity,
 visibility or blending, while preserving the source's placed geometry.
 
 With a filter selected, a stroke paints the first artwork layer below it in the
-same group, or its clipping base. Groups, maskless generators, locked bases and
+same group, or its attached effect owner. Groups, maskless generators, locked bases and
 selection layers refuse with a reason (`Document::try_drawing_target`). An empty
 stack stays valid.
 
@@ -56,9 +56,12 @@ transforms preserve both history directions. Mesh control roots are shared acros
 document and history, charged once by the existing resource accounting.
 
 Effect layers hold filters in the layer stack. An adjustment transforms the
-combined image below it within its group; a clipped adjustment acts on its
-clipping stack, preserving the base layer’s coverage. Multiple adjustments apply
-in layer order, forming an effect chain. A generator effect instead produces
+combined image below it within its group. An attached adjustment instead processes
+one paint layer or isolated group; local effects run bottom-to-top after the
+owner's mask and before its outer clipping. Clipped content shares the first
+eligible unclipped base below it, including that base's completed effects.
+Hidden effects bypass processing without changing owners. An unattached
+adjustment cannot split a clipping run. A generator effect instead produces
 content that is composited as a layer. Masks and opacity control where and how
 strongly an effect applies.
 
@@ -77,13 +80,16 @@ not grouped. A non-Normal layer inside blends with the layers below the group, a
 an adjustment inside changes everything below it up to the nearest isolated group
 ([`isolated_scope`, `backdrop_layers`](../../crates/layer-core/src/layers.rs)).
 The group's opacity and mask fade between what lies below and that result,
-`lerp(below, result, opacity × mask)`. A clipped Pass Through group composites
-isolated, as a Normal group.
+`lerp(below, result, opacity × mask)`. Pass-through groups cannot clip or serve as
+clipping bases or effect owners. The shared group-mode edit retains the prior
+isolated blend and refuses Pass Through while these relationships need isolation.
+An explicit isolate-and-attach edit performs both changes in one undo step.
 
 New groups, from New Group and Group Selected Layers, are isolated Normal groups
 unless the [Use Pass Through for new groups](../ui/settings.md) preference is on.
 Ungroup keeps the image, so it needs a group at full opacity, with no mask and
-not clipped, that is either Pass Through, holding any layers, or Normal, holding
+without clipping or attached effects or dependent clips, that is either Pass
+Through, holding any layers, or Normal, holding
 only Normal layers. A referenced adjustment inside a Pass Through group keeps what
 lies below the group in the reference composite.
 
@@ -121,8 +127,8 @@ ordinary document pixels.
   group. Both must be visible, unlocked and Normal, and the layer below must hold
   pixels or generated content, rather than an adjustment. A clipped layer below takes only a
   layer clipped to the same base. A clipping base instead merges its visible
-  clipped layers into itself (Merge Clipped Layers), as does an adjustment
-  clipped to a base. An unclipped adjustment applies to the layer below only
+  clipped layers and their local effects into itself (Merge Clipped Layers), as
+  does an effect attached to a member of that run. An unattached adjustment applies to the layer below only
   (Apply Effect to Layer Below), so whatever else lies below no longer takes it.
 - **Merge Group** composites a visible group, with its mask, into one layer that
   keeps the group's blend mode and opacity. Hidden layers inside are discarded. A

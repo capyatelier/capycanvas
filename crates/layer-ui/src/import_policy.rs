@@ -403,7 +403,7 @@ mod tests {
         let mut original = std::io::Cursor::new(&bytes);
         let directory = Directory::read(&mut original, 262_144, ProjectLimits::default().metadata_bytes).unwrap();
         let mut manifest: serde_json::Value = serde_json::from_slice(&directory.read_member(&mut original, directory.member("manifest.json").unwrap(), ProjectLimits::default().metadata_bytes as usize).unwrap()).unwrap();
-        let occurrence = manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record| record["type"] == "capy.occurrence/1").unwrap();
+        let occurrence = manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record| record["type"] == "capy.occurrence/2").unwrap();
         occurrence["data"]["opacity"] = "invalid required value".into();
         let manifest = serde_json::to_vec(&manifest).unwrap();
         let checksum = |bytes: &[u8]| { let mut crc = flate2::Crc::new(); crc.update(bytes); crc.sum() };

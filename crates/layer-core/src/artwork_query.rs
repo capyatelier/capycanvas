@@ -49,7 +49,7 @@ impl EffectInputKey {
         let old=self.scene();
         if self.snapshot.owner!=scene.owner() || !old.same_composition(scene){return false;}
         let (Some(a),Some(b))=(old.occurrence(self.target),scene.occurrence(self.target)) else{return false;};
-        if a.kind()!=b.kind() || old.parent(self.target)!=scene.parent(self.target) || a.clipped!=b.clipped{return false;}
+        if a.kind()!=b.kind() || old.parent(self.target)!=scene.parent(self.target) || a.attachment!=b.attachment{return false;}
         let (Some(a),Some(b))=(old.effect(self.target),scene.effect(self.target)) else{return false;};
         if a.program!=b.program{return false;}
         if channels && values && !a.program.parameters.iter().zip(a.values.iter().zip(b.values)).all(|(p,(a,b))|p.page.as_deref()==Some("rgb")||a==b){return false;}
@@ -57,7 +57,7 @@ impl EffectInputKey {
         self.input==input && self.ancestors==ancestors && input.iter().all(|h|old.same_occurrence(scene,*h,values))
             && ancestors.iter().all(|h|{
                 let (Some(a),Some(b))=(old.occurrence(*h),scene.occurrence(*h)) else{return false;};
-                a.kind()==b.kind() && a.visible==b.visible && a.clipped==b.clipped && a.passes_through()==b.passes_through()
+                a.kind()==b.kind() && a.visible==b.visible && a.attachment==b.attachment && a.passes_through()==b.passes_through()
                     && a.translation==b.translation && a.placement==b.placement && old.local_extent(*h)==scene.local_extent(*h)
             })
     }
@@ -159,7 +159,7 @@ impl SceneView<'_> {
     }
     pub fn same_occurrence(self,other:SceneView<'_>,h:OccurrenceHandle,values:bool)->bool {
         let (Some(a),Some(b))=(self.occurrence(h),other.occurrence(h)) else{return false;};
-        if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.clipped!=b.clipped||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
+        if a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask||self.parent(h)!=other.parent(h){return false;}
         if let Some(target)=self.source_target(h) {
             if self.raster(target)!=other.raster(target)||self.operations(target)!=other.operations(target)||self.target_extent(target)!=other.target_extent(target){return false;}
             if match (self.original(target),other.original(target)){(Some(a),Some(b))=>!Arc::ptr_eq(a,b),(None,None)=>false,_=>true}{return false;}

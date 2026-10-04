@@ -95,8 +95,8 @@ impl Hierarchy {
     pub fn missing_pages(&self) -> impl Iterator<Item = [u32; 2]> + '_ {
         page_coordinates(self.levels[0].plan.bounds).filter(|c| !self.refined.contains(c))
     }
-    pub fn invalidate(&mut self, dirty: PixelRect, tiles: Option<&BTreeSet<[u32; 2]>>) {
-        self.refined.retain(|c| page_rect(*c).intersect(dirty).is_empty() || tiles.is_some_and(|tiles| !tiles.contains(c)));
+    pub fn invalidate(&mut self, dirty: Damage) {
+        self.refined.retain(|c| !dirty.intersects(page_rect(*c)));
     }
     pub fn write(&mut self, encoder: &mut crate::submission::CommandEncoder, source: &wgpu::Texture,
         coordinate: [u32; 2], region: PixelRect,
@@ -160,7 +160,7 @@ impl Cache {
     }
     pub(in crate::scene) fn invalidate_hierarchy(&mut self, sources: &Sources, dirty: PixelRect, tiles: Option<&BTreeSet<[u32; 2]>>) {
         if !self.unchanged && let Some(hierarchy) = &mut self.hierarchy {
-            hierarchy.invalidate(dirty.union(self.graph.root.as_ref().unwrap().damage(sources, self.plan)), tiles);
+            hierarchy.invalidate(Damage::from_tiles(dirty, tiles).union(self.graph.root.as_ref().unwrap().damage(sources, self.plan)));
         }
     }
 }

@@ -4475,7 +4475,9 @@ fn native_layer_panel_review() {
         },
     );
     // Both fixed columns stay aligned at every nesting depth.
-    let x = row(1)
+    let outer_row = row(outer);
+    assert!(outer_row.width() > 0);
+    let x = outer_row
         .first_child()
         .unwrap()
         .compute_bounds(&w.layer_panel.root)
@@ -4771,7 +4773,6 @@ fn native_layer_panel_review() {
         (loaded.width(), loaded.height())
     );
     assert_eq!(loaded.width(), loaded.height());
-    // Paper is selectable, exposes only meaningful controls, and is anchored.
     let paper = row(2);
     click(
         &find_css(&paper, "layer-thumbnail")
@@ -4788,15 +4789,17 @@ fn native_layer_panel_review() {
             .unwrap()
             .selected
     );
-    assert!(!w.layer_panel.opacity.is_sensitive());
-    assert!(!state(&w).layer_tools.controls.mask);
+    assert!(w.layer_panel.opacity.is_sensitive());
+    let controls = state(&w).layer_tools.controls;
+    assert!(controls.opacity && controls.blend && controls.mask);
+    assert!(!controls.alpha_lock && !controls.fill);
     let thumbnail = find_css(&paper, "layer-thumbnail")
         .unwrap()
         .downcast::<gtk::Button>()
         .unwrap();
     assert_eq!(
         thumbnail.tooltip_text().as_deref(),
-        Some("Select layer content")
+        Some("Edit layer content")
     );
     capture_reference(&w, &format!("{dir}/17-paper-selected.png"), 1.);
     open_menu(2, false, "18-paper-context");

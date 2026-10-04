@@ -319,8 +319,8 @@ fn clipping_stack_keeps_soft_base_alpha_and_group_opacity_once() {
     let source = paint(&document).clone();
     let (a, a_target) = placement::append_paint(&mut document, "clip a", source.clone());
     let (b, b_target) = placement::append_paint(&mut document, "clip b", source);
-    document.artwork.occurrences.get_mut(a).unwrap().clipped = true;
-    document.artwork.occurrences.get_mut(b).unwrap().clipped = true;
+    document.artwork.occurrences.get_mut(a).unwrap().attachment = layer_core::Attachment::Clip;
+    document.artwork.occurrences.get_mut(b).unwrap().attachment = layer_core::Attachment::Clip;
     let root = document.composition().result;
     let stack = RecordChange::replace(&document.artwork.stacks, root, Some(Stack { entries: vec![b, a, base] })).unwrap();
     document.apply(layer_core::Edit::Stack(stack)).unwrap();

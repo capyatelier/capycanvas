@@ -5733,7 +5733,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             mask_linked: l.mask.as_ref().is_some_and(|m| m.linked),
             alpha_locked: l.alpha_locked,
             locked: doc.is_locked(id),
-            clipped: l.clipped,
+            clipped: l.attachment != layer_core::Attachment::None,
             reference: l.reference,
             group: l.kind() == LayerKind::Group,
             can_drop_below: true,
@@ -7846,9 +7846,12 @@ mod tests {
             occurrence.visible = false;
             occurrence.opacity = 0.25;
             occurrence.blend = layer_core::LayerBlend::Multiply;
-            occurrence.clipped = true;
+            occurrence.attachment = layer_core::Attachment::Clip;
             occurrence.locked = true;
-            let mut edits = Vec::new();
+            let root = document.composition().result;
+            let mut stack = document.artwork.stacks.get(root).unwrap().clone();
+            stack.entries.swap(0, 1);
+            let mut edits = vec![Edit::Stack(RecordChange::replace(&document.artwork.stacks, root, Some(stack)).unwrap())];
             if masked {
                 let coverage = RecordChange::insert(&document.artwork.coverage, CoverageSource {
                     domain: document.composition().size, initial: None, default_coverage: 0.,
@@ -7878,7 +7881,7 @@ mod tests {
             let occurrence = snapshot.view().occurrence(handle).unwrap();
             assert!(occurrence.visible && occurrence.opacity == 1.);
             assert_eq!(occurrence.blend, layer_core::LayerBlend::Normal);
-            assert!(!occurrence.clipped && occurrence.mask.is_none());
+            assert!(occurrence.attachment == layer_core::Attachment::None && occurrence.mask.is_none());
             assert_eq!(snapshot.view().effect(handle).unwrap(), s.engine.document().scene().effect(handle).unwrap());
             assert_eq!(s.engine.document().artwork, artwork);
             assert_eq!(s.engine.document().working, working);
@@ -9626,6 +9629,60 @@ mod tests {
     }
 
     #[test]
+    fn group_isolation_restores_blend_and_protects_attached_content() {
+        let mut s = session(Platform::Gtk);
+        layer(&mut s, LayerAction::New { group: true, clipped: false });
+        let group = s.engine.document().working.occurrence.unwrap();
+        let id = occurrence_token(group);
+        layer(&mut s, LayerAction::Blend { id, value: layer_core::LayerBlend::Multiply.code() });
+        layer(&mut s, LayerAction::TogglePassThrough { id });
+        assert!(s.engine.document().scene().occurrence(group).unwrap().passes_through());
+        assert!(s.dispatch(UiAction::Layer { action: LayerAction::AlphaLock { id, value: true } }).is_err());
+        layer(&mut s, LayerAction::TogglePassThrough { id });
+        assert_eq!(s.engine.document().scene().occurrence(group).unwrap().blend, layer_core::LayerBlend::Multiply);
+        invoke(&mut s, CommandId::Undo);
+        assert!(s.engine.document().scene().occurrence(group).unwrap().passes_through());
+        invoke(&mut s, CommandId::Redo);
+        layer(&mut s, LayerAction::New { group: false, clipped: true });
+        let paint = s.engine.document().working.occurrence.unwrap();
+        assert_eq!(s.engine.document().scene().parent(paint), s.engine.document().scene().parent(group));
+        assert_eq!(s.engine.document().scene().clipping_base(paint), Some(group));
+        let before = s.engine.document().artwork.clone();
+        assert!(s.dispatch(UiAction::Layer { action: LayerAction::TogglePassThrough { id } }).is_err());
+        assert_eq!(s.engine.document().artwork, before);
+    }
+
+    #[test]
+    fn attached_effect_moves_with_its_owner_and_detaches_in_one_undo_step() {
+        let mut s = session(Platform::Gtk);
+        let base = s.engine.document().working.occurrence.unwrap();
+        insert_effect(&mut s, "curves");
+        let effect = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::Clip { id: occurrence_token(effect), value: true });
+        assert_eq!(s.engine.document().scene().effect_owner(effect), Some(base));
+        layer(&mut s, LayerAction::Select { id: occurrence_token(base), mask: false });
+        layer(&mut s, LayerAction::New { group: false, clipped: true });
+        let clipped = s.engine.document().working.occurrence.unwrap();
+        assert_eq!(s.engine.document().scene().clipping_base(clipped), Some(base));
+        assert!(s.engine.document().scene().position(clipped) < s.engine.document().scene().position(effect));
+        let before = s.engine.document().artwork.clone();
+        layer(&mut s, LayerAction::Clip { id: occurrence_token(effect), value: false });
+        let scene = s.engine.document().scene();
+        assert_eq!(scene.effect_owner(effect), None);
+        assert_eq!(scene.clipping_base(clipped), Some(base));
+        assert!(scene.position(effect) < scene.position(clipped));
+        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().artwork, before);
+        layer(&mut s, LayerAction::New { group: true, clipped: false });
+        let group = s.engine.document().working.occurrence.unwrap();
+        layer(&mut s, LayerAction::Drop { id: occurrence_token(base), target: occurrence_token(group), fraction: 0.5 });
+        let scene = s.engine.document().scene();
+        for id in [clipped, effect, base] { assert_eq!(scene.parent(id), Some(group)); }
+        assert_eq!(scene.effect_owner(effect), Some(base));
+        assert_eq!(scene.clipping_base(clipped), Some(base));
+    }
+
+    #[test]
     fn filter_insertion_preserves_clipping_stack_and_delete_capabilities() {
         let mut s = session(Platform::Gtk);
         let base=s.engine.document().working.occurrence.unwrap();
@@ -9634,7 +9691,7 @@ mod tests {
             layer(&mut s, LayerAction::New { group: false, clipped: true, });
         }
         let scene=s.engine.document().scene();
-        let clips:Vec<_>=scene.order().iter().copied().filter(|h|scene.occurrence(*h).unwrap().clipped).collect();
+        let clips:Vec<_>=scene.order().iter().copied().filter(|h|scene.occurrence(*h).unwrap().attachment == layer_core::Attachment::Clip).collect();
         let top = clips[0];
         s.dispatch(UiAction::SetLayerVisibility {
             id: occurrence_token(top),
@@ -9646,8 +9703,8 @@ mod tests {
                 .unwrap();
             assert_eq!(
                 s.state.layer_tools.can_delete,
-                selected != base,
-                "base cannot be deleted without its clips"
+                true,
+                "deleting a base carries its clipping run"
             );
             s.dispatch(UiAction::Effect {
                 action: EffectAction::Insert {
@@ -9915,7 +9972,7 @@ mod tests {
         send(&mut s, LayerAction::DuplicateSelected);
         let doc = s.engine.document();
         let copies: Vec<_> = doc.ordered_layers().iter().copied().take(2).collect();
-        assert!(doc.scene().occurrence(copies[0]).unwrap().clipped);
+        assert_eq!(doc.scene().occurrence(copies[0]).unwrap().attachment, layer_core::Attachment::Clip);
         assert_eq!(doc.clipping_base(copies[0]), Some(copies[1]));
         assert_eq!(doc.clipping_base(shade), Some(occurrence_handle(1).unwrap()));
         assert_eq!(s.layer_interaction.selected.len(), 2);
@@ -10077,9 +10134,8 @@ mod tests {
         layer(&mut s, LayerAction::Select { id: 1, mask: false });
         layer(&mut s, LayerAction::New { group: false, clipped: true, });
         let clipped = occurrence_token(s.engine.document().working.occurrence.unwrap());
-        // Both moving the base out and orphaning a clipped layer are rejected.
-        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), None);
-        assert_eq!(s.layer_drop_hint(clipped, occurrence_token(child), 0.5), None);
+        assert_eq!(s.layer_drop_hint(1, occurrence_token(child), 0.5), Some(LayerDropPosition::Into));
+        assert_eq!(s.layer_drop_hint(clipped, occurrence_token(child), 0.5), Some(LayerDropPosition::Into));
     }
 
     #[test]
@@ -14388,7 +14444,7 @@ mod tests {
             value: true,
         })
         .unwrap();
-        assert_eq!(app.engine.document().clipping_base(id), Some(base));
+        assert_eq!(app.engine.document().scene().effect_owner(id), Some(base));
         app.state
             .workspace
             .layout

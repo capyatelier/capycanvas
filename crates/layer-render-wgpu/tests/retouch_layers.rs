@@ -60,7 +60,7 @@ fn insert_effect(doc: &Document, above: OccurrenceHandle, effect: &EffectInstanc
         definition: definition.handle, values: effect.values.clone(), domain: doc.composition().size,
     });
     let mut occurrence = Occurrence::new(OccurrenceContent::Effect(application.handle), name);
-    occurrence.clipped = true;
+    occurrence.attachment = layer_core::Attachment::Clip;
     let occurrence = RecordChange::insert(&doc.artwork.occurrences, occurrence);
     let handle = occurrence.handle;
     let containing = doc.scene().stack(above).unwrap();

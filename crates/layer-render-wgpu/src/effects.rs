@@ -656,7 +656,7 @@ fn fx_grid_sample(image:texture_2d<f32>,point:vec2<f32>,grid:vec4<f32>,step:f32)
     let q=(point-grid.xy)/step;let extent=grid.zw/step;
     let last=ceil(extent)-1.;let previous=last-.5;
     let adjusted=select(q,previous+(q-previous)/((extent-last+1.)*.5),q>previous);
-    return textureSampleLevel(image,sampling,clamp(adjusted,vec2(.5),last+.5)/vec2<f32>(textureDimensions(image)),0.);
+    return working_sample_float(image,clamp(adjusted,vec2(.5),last+.5));
 }
 fn fx_sample(p:vec2<f32>)->vec4<f32> {
     let point=p-settings.operation_offset.zw;
@@ -718,9 +718,10 @@ fn fx_original(p:vec2<f32>)->vec4<f32> {
         if last && p.kind == EffectKind::Adjustment {
             source.push_str(&format!("let c={};let controls=effect_data[0];var coverage=controls.z;if settings.options.w>.5 {{coverage=textureLoad(effect_mask_0,vec2<i32>(v.position.xy),0).a;}}", encoded("fx_original(position)".into())));
             if p.alpha == layer_core::EffectAlpha::Filter {
-                source.push_str("if settings.options.y<.5 {if controls.y==0. {return mix(c,adjusted,controls.x*coverage);}let rgb=blend(fx_unassociate(adjusted),fx_unassociate(c),u32(controls.y));return mix(c,vec4<f32>(rgb*adjusted.a,adjusted.a),controls.x*coverage);}");
+                source.push_str("return fx_filter(c,adjusted,u32(controls.y),controls.x*coverage);}");
+            } else {
+                source.push_str("return fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage);}");
             }
-            source.push_str("return fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage);}");
         } else {
             source.push_str("return adjusted;}");
         }
@@ -763,7 +764,7 @@ fn effect_result(v:Vertex)->vec4<f32> {
                 let bit = 1u32 << i;
                 source.push_str(&format!("else if (u32(settings.extent.z)&{bit}u)!=0u {{let m=textureLoad(effect_mask_{i},vec2<i32>(local),0).r;coverage=select(m,1.-m,(u32(settings.extent.w)&{bit}u)!=0u);}}\n"));
             }
-            source.push_str("c=fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage); }\n");
+            source.push_str(if p.alpha == layer_core::EffectAlpha::Filter { "c=fx_filter(c,adjusted,u32(controls.y),controls.x*coverage); }\n" } else { "c=fx_adjustment(c,adjusted,u32(controls.y),controls.x*coverage); }\n" });
         } else {
             source.push_str("c=adjusted; }\n");
         }
@@ -779,7 +780,7 @@ mod tests {
     #[test]
     fn builtin_shaders_and_saved_fixture_compile_with_the_current_catalog() {
         use layer_core::package::{codec::{open,OpenOutcome},ImmutableBacking,transport::ChunkedBytes};
-        let bytes=include_bytes!("../../layer-core/src/package/codec/fixtures/authored-v1.capy");
+        let bytes=include_bytes!("../../layer-core/src/package/codec/fixtures/authored-filters-v1-occurrences-v2.capy");
         let backing=ImmutableBacking::new(Arc::new(ChunkedBytes::new(vec![Arc::from(bytes.as_slice())]).unwrap())).unwrap();
         let OpenOutcome::Candidate {artwork,..}=open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap() else {panic!("saved fixture must be editable")};
         let mut programs:std::collections::BTreeMap<_,_>=fixtures().iter().map(|f|(f.id().to_string(),f.program())).collect();

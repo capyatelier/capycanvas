@@ -42,7 +42,6 @@ impl Evaluator<'_> {
             let mut data = crate::effects::image_grid(plan, plan, plan);
             data[..4].copy_from_slice(&[x as f32, y as f32, width as f32, height as f32]);
             if boundary {
-                data[9] = f32::from(self.packet.scene.effective_clipped(handles[0]));
                 data[11] = f32::from(last && present != 0);
             } else {
                 data[6] = present as f32;

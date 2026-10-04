@@ -147,6 +147,12 @@ Choose `--radius-x` and `--radius-y` from the photo's displayed bounds and brush
 radius; the default work-area ellipse can leave a small Fit-view canvas. Compare
 the observed camera, radii, layer count and settings in each `*-info.json`, even
 when both invocations use identical command-line arguments.
+Use `--workload clipped` for ordinary paint clipping or `--workload blurred-base
+--effect-radius 8` for painting above a photo with attached Gaussian Blur. Keep
+these separate from the default no-effects comparison. Record the reported
+owner/effect handles, actual sigma, initial layer state and source manifest with
+each run. The tier photo is opaque; these workloads exercise dependent composition
+and resident-owner reuse, while shared pixel fixtures cover soft expanding alpha.
 The runner waits for pending composition and queued GPU frames after each stroke.
 Reports include `settled_after_input_ms`; completed updates per second still count
 only nonempty updates completed inside the input window. Keep settling and the

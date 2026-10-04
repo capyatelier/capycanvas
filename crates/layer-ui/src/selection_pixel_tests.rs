@@ -229,7 +229,7 @@ mod selection_pixel_checks {
             assert_ne!(copy_id,base);
             let index=|id|doc.scene().position(id).unwrap();
             assert_eq!(index(copy_id) + 1, index(clipped), "{command:?} goes directly above the clipping stack");
-            assert!(!copy.clipped && copy.mask.is_none());
+            assert!(copy.attachment == layer_core::Attachment::None && copy.mask.is_none());
             assert_eq!(doc.scene().parent(copy_id),before.scene().parent(base));
             assert!(paint(doc,copy_id).original.is_none());
             assert_eq!(copy.placement, layer_core::LayerPlacement::IDENTITY);

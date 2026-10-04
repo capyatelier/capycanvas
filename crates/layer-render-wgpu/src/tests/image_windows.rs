@@ -10,7 +10,10 @@ pub(crate) fn document(extent: [u32; 2], color: DocumentColor) -> Document {
     Document::from_artwork(artwork).unwrap()
 }
 pub(crate) fn effect(doc: &mut Document, generator: bool, global: bool) -> OccurrenceHandle {
-    add_effect(doc, program(generator, global))
+    let handle = add_effect(doc, program(generator, global));
+    if !generator { return handle; }
+    let stack = doc.artwork.stacks.insert(PortableId::random(),Stack { entries:vec![handle] }).unwrap();
+    doc.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Stack(stack),"generated content")).unwrap()
 }
 pub(crate) fn add_effect(doc: &mut Document, instance: EffectInstance) -> OccurrenceHandle {
     let definition = doc.artwork.definitions.insert(PortableId::random(), Definition { program: instance.program }).unwrap();
@@ -113,7 +116,7 @@ fn image_windows_match_full_composition_with_halos_masks_and_clipping() {
             for owner in [first, second] {
                 let occurrence = document.artwork.occurrences.get_mut(owner).unwrap();
                 occurrence.opacity = 0.63;
-                occurrence.clipped = clipped;
+                occurrence.attachment = if clipped { layer_core::Attachment::Effect } else { layer_core::Attachment::None };
             }
             let mut mask = CoverageSnapshot::reveal_all(document.artwork.coverage.next_handle(), extent, Point { x: 7., y: -9. });
             mask.source.default_coverage = 0.;

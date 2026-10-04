@@ -106,11 +106,15 @@ Constant fill and mask-inspection colors use the composite representation, while
 coverage stays unencoded. Presentation decodes the completed composite before
 applying the output color transform.
 Pass Through children continue the enclosing composite. Group opacity and masks
-interpolate between its retained backdrop and the completed children; clipped
-groups remain isolated. The same traversal serves transform previews and exact
+interpolate between its retained backdrop and the completed children. Direct
+clipping and attachment require an explicitly isolated group. The same traversal serves transform previews and exact
 queries, including a query that stops inside a Pass Through group.
 Reusable branches retain page validity; a source
-change invalidates only dependent regions. Branch images share the display
+change invalidates only dependent regions. Separate contact rectangles retain
+their sampling support through placement and effects, so distant contacts leave
+intervening pages valid. Attached effects form owner-local expression branches
+before outer blending or common-base clipping; independent owners and valid
+upstream spatial stages retain their caches. Branch images share the display
 allowance with source levels, after reserving required sources, evaluation
 scratch, command storage and presentation mips. Large unchanged branches get
 priority. No cached expression owns original image bytes or raster history.
@@ -134,7 +138,8 @@ their result and derive an adjacent output mip for trilinear presentation.
 
 The expression graph fills a padded, page-aligned viewport window at the selected
 resolution. Retained root images have viewport bounds; finite-radius filters
-expand their input and branch bounds by the sum of their scaled pass supports.
+expand their input and branch bounds along dependency paths: supports add within
+a chain, while independent branches contribute their maximum support.
 Source preparation, scratch allocation and admission use those same padded
 bounds. Dense filter scratch reserves the expression graph's peak live images,
 including held masks and intermediate passes. Reduced pointwise effects use the
@@ -263,6 +268,10 @@ the next live tail returns to compact scratch. Save/undo history contains only
 committed native pixels. Idle display refinement composes those authoritative
 pixels without becoming a publication gate or adding work to undo history.
 Its unfinished GPU batch still precedes newly submitted painting on the queue.
+Native canonicalization invalidates both source levels and placed output pages
+before composition. After that frame publishes its backing, the source cache
+acknowledges the same pixels under their new backing identity. Capture-only work,
+restored rasters and external replacements retain normal source invalidation.
 
 Once the view and artwork stop changing, the renderer refines up to four native pages
 per idle submission through the same region executor used by exact queries.
@@ -270,7 +279,12 @@ It reduces the exact composite into the retained display window and overview,
 then updates the adjacent presentation mip. When a native hierarchy is resident,
 composition writes directly into it, batching pages that share a prepared source
 window into one command sequence. Neighborhood filters prepare the batch's
-combined halo once; the image allowance can reduce the batch below four pages.
+combined halo once. Before adding a page, the batch counts output pixels and
+dependency-window pixels per image pass against four pages of pixel work, or
+1.5 times the first page's work when its halo already exceeds that limit.
+One page with its complete halo is the minimum batch. Spatial effects evaluate
+pages separated by a gap in different batches. Without spatial effects, explicit
+page regions retain the four-page batch. The image allowance can also reduce it.
 Only one refinement batch may remain in flight. Idle comparisons include fill
 visibility and opacity, so unchanged constant-fill contributions do not enqueue
 empty work behind that batch.
@@ -325,6 +339,8 @@ display-resolution support execute in the reduced graph with document coordinate
 layer masks and clipping. Image passes expand dependency regions and damage by
 their sampling footprints; intermediate results populate the halo needed by
 later passes. Gaussian Blur prepares scaled kernels for the evaluation grid.
+Effect inputs interpolate in texel coordinates at every resolution, so cropped
+and full images use the same sample weights.
 Native-resolution effects and native views of image-boundary effects evaluate
 native regions into the same display cache. Native evaluation also handles
 source requests that exceed the reduced graph's admission limits. Region windows

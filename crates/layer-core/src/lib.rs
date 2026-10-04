@@ -1256,7 +1256,7 @@ impl Stroke {
 }
 
 pub use authored::{
-    Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
+    Attachment, Artwork, ArtworkCapture, CaptureCheckpoint, Composition, CompositionHandle, CoverageHandle,
     CoverageSource, Definition, DefinitionHandle, EffectApplication, EffectHandle,
     EvaluationContext, Guides, Handle, MaskUse, Occurrence, OccurrenceContent, OccurrenceHandle,
     Output, OutputHandle, PaintHandle, PaintSource, PortableId, RecordChange, SavedSelection,
@@ -1661,8 +1661,11 @@ impl Document {
             {
                 return Err(invalid("Only groups can use Pass Through"));
             }
+            if o.attachment!=Attachment::None && self.scene().attachment_target(h).is_none(){return Err(invalid("An attachment needs a target in its stack"));}
+            if o.isolated_blend==LayerBlend::PassThrough {return Err(invalid("The retained isolated blend cannot be Pass Through"));}
+            if o.passes_through() && (o.attachment!=Attachment::None || !self.scene().attached_effects(h).is_empty() || self.scene().order().iter().any(|other|self.scene().clipping_base(*other)==Some(h))) {return Err(invalid("Release attachments before switching to Pass Through"));}
             if let OccurrenceContent::Selection(_) = o.content
-                && (o.mask.is_some() || o.clipped || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.)
+                && (o.mask.is_some() || o.attachment != Attachment::None || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.)
             {
                 return Err(invalid("Selection Layers cannot contain artwork"));
             }
@@ -1784,7 +1787,7 @@ impl Edit {
         match self {
             Self::Guides(_)|Self::Output(_)|Self::SavedSelection(_)|Self::Working(_)=>false,
             Self::Composition(c)=>c.value.as_ref().zip(document.artwork.compositions.get(c.handle)).is_none_or(|(a,b)|a.size!=b.size||a.origin!=b.origin||a.color!=b.color||a.blend!=b.blend||a.result!=b.result),
-            Self::Occurrence(c)=>c.value.as_ref().zip(document.artwork.occurrences.get(c.handle)).is_none_or(|(a,b)|a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.clipped!=b.clipped||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask),
+            Self::Occurrence(c)=>c.value.as_ref().zip(document.artwork.occurrences.get(c.handle)).is_none_or(|(a,b)|a.content!=b.content||a.visible!=b.visible||a.opacity!=b.opacity||a.blend!=b.blend||a.attachment!=b.attachment||a.translation!=b.translation||a.placement!=b.placement||a.mask!=b.mask),
             Self::Batch(es)=>{
                 let mut current=document.clone();
                 for edit in es {
@@ -1823,6 +1826,8 @@ impl Edit {
                 .zip(document.artwork.occurrences.get(c.handle))
                 .is_none_or(|(a, b)| {
                     a.content != b.content
+                        || a.attachment != b.attachment
+                        || a.passes_through() != b.passes_through()
                         || a.mask.as_ref().map(|m| m.source) != b.mask.as_ref().map(|m| m.source)
                 }),
             Self::Paint(c) => c.value.is_none() || document.artwork.paint.get(c.handle).is_none(),
@@ -1834,9 +1839,7 @@ impl Edit {
                 .as_ref()
                 .zip(document.artwork.effects.get(c.handle))
                 .is_none_or(|(a, b)| a.definition != b.definition),
-            Self::Definition(c) => {
-                c.value.is_none() || document.artwork.definitions.get(c.handle).is_none()
-            }
+            Self::Definition(c) => c.value.as_ref().zip(document.artwork.definitions.get(c.handle)).is_none_or(|(a,b)|a.program.kind!=b.program.kind),
             Self::SavedSelection(c) => {
                 c.value.is_none() || document.artwork.selections.get(c.handle).is_none()
             }

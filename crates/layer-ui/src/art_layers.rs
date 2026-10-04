@@ -1,6 +1,6 @@
 //! Artwork commands and gestures. Native layer panels only render this model.
 use super::*;
-use layer_core::{Edit, LayerBlend, Point, Selection, CoverageSnapshot};
+use layer_core::{Attachment, Edit, LayerBlend, Point, Selection, CoverageSnapshot};
 use layer_core::authored::{Occurrence, OccurrenceContent, OccurrenceHandle, PaintSource, RecordChange, SourceTarget, Stack};
 use super::session::{occurrence_handle, occurrence_token};
 use serde::{Deserialize, Serialize};
@@ -163,7 +163,9 @@ impl LayerControls {
             blend: editable && unlocked,
             alpha_lock: l.kind() == LayerKind::Paint && unlocked,
             edit_lock: !doc.scene().parent(id).is_some_and(|p| doc.is_locked(p)),
-            clip: editable && unlocked && (l.clipped || doc.clipping_base(id).is_some()),
+            clip: editable && unlocked && (l.attachment != Attachment::None || if doc.scene().effect(id).is_some_and(|e| e.program.kind == layer_core::EffectKind::Adjustment) {
+                doc.effect_target(id).is_some()
+            } else { doc.clipping_base(id).is_some() }),
             mask: editable && unlocked,
             fill: l.kind() == LayerKind::Paint && unlocked && !matches!(doc.working.target, Some(SourceTarget::Coverage(_))),
         }
@@ -253,6 +255,16 @@ pub enum LayerAction {
     Clip {
         id: u64,
         value: bool,
+    },
+    IsolateAndAttach {
+        id: u64,
+    },
+    AttachEffect {
+        id: u64,
+        owner: u64,
+    },
+    TogglePassThrough {
+        id: u64,
     },
     Blend {
         id: u64,
@@ -430,8 +442,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let siblings = scene.children(parent);
         let mut index = if into { 0 } else { siblings.iter().position(|h| *h == target_handle).ok_or("Unknown destination")? + usize::from(fraction >= 0.5) };
         let handle = occurrence_handle(id)?;
-        if scene.parent(handle) == parent && let Some(from) = siblings.iter().position(|h| *h == handle) {
-            index = index.saturating_sub(usize::from(from < index));
+        if scene.parent(handle) == parent {
+            let moved = doc.relationship_roots(&[handle]);
+            index -= siblings[..index].iter().filter(|h| moved.contains(h)).count();
         }
         Ok(self.layer_reparent_edit(id, parent.map(occurrence_token), index as u32)?.map(|edit| (edit, position)))
     }
@@ -501,11 +514,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let mut index = if position == LayerDropPosition::Into { 0 }
             else { siblings.iter().position(|h| *h == id).ok_or("Unknown destination")? + usize::from(position == LayerDropPosition::Below) };
         if destination.is_none() && position == LayerDropPosition::Above {
-            while index > 0 && scene.occurrence(siblings[index - 1]).is_some_and(|l| l.clipped) { index -= 1; }
+            while index > 0 && scene.occurrence(siblings[index - 1]).is_some_and(|l| l.attachment != Attachment::None) { index -= 1; }
         }
-        if position != LayerDropPosition::Into && index > 0 && scene.occurrence(siblings[index - 1]).is_some_and(|l| l.clipped) {
-            return Err("Place images above the clipped stack or below its base".into());
-        }
+        index = doc.content_insertion(parent, index).0;
         Ok((index, parent))
     }
     pub(super) fn reference_action_removes(&self) -> bool {
@@ -577,6 +588,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if sources.is_empty() { return Err("Choose at least one image".into()); }
         let (index, parent) = self.image_layer_destination(destination)?;
         let doc = self.engine.document();
+        let attachment = if destination.is_some() { doc.insertion_attachment(parent, index) } else { Attachment::None };
         let [width, height] = doc.composition().size;
         let center = center.unwrap_or(Point { x: width as f32 * 0.5, y: height as f32 * 0.5 });
         if !center.x.is_finite() || !center.y.is_finite() { return Err("Invalid drop position".into()); }
@@ -597,6 +609,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             let [w, h] = source.extent.map(|v| v as f32);
             let paint = RecordChange::insert(&artwork.paint, PaintSource { domain: std::array::from_fn(|axis| doc.composition().size[axis].max(source.extent[axis])), raster: Default::default(), original: Some(Arc::new(source)), operations: Arc::default() });
             let mut occurrence = Occurrence::new(OccurrenceContent::Paint(paint.handle), name);
+            occurrence.attachment = attachment;
             if interactive {
                 let scale = 1_f32.min(width as f32 / w).min(height as f32 / h);
                 occurrence.placement = layer_core::LayerPlacement::from_affine(layer_core::Affine([
@@ -797,14 +810,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let doc = self.engine.document();
                 let scene = doc.scene();
                 let active = doc.working.occurrence;
-                if clipped && !active.and_then(|h| scene.occurrence(h)).is_some_and(|l| l.kind() == LayerKind::Paint) {
-                    return Err("Choose a paint layer to clip to".into());
+                if clipped && !active.and_then(|h| scene.occurrence(h)).is_some_and(|l| l.kind() == LayerKind::Paint || l.kind() == LayerKind::Group && !l.passes_through()) {
+                    return Err("Choose a paint layer or isolated group to clip to".into());
                 }
-                let parent = active.and_then(|h| if scene.occurrence(h).is_some_and(|l| l.kind() == LayerKind::Group) { Some(h) } else { scene.parent(h) });
+                let parent = active.and_then(|h| if !clipped && scene.occurrence(h).is_some_and(|l| l.kind() == LayerKind::Group) { Some(h) } else { scene.parent(h) });
                 if parent.is_some_and(|p| doc.is_locked(p)) { return Err("The destination group is locked".into()); }
                 let stack_handle = match parent { Some(h) => match scene.occurrence(h).unwrap().content { OccurrenceContent::Stack(h) => h, _ => unreachable!() }, None => doc.composition().result };
                 let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Unknown stack")?.clone();
-                let index = active.and_then(|h| stack.entries.iter().position(|id| *id == h)).unwrap_or(0);
+                let index = active.and_then(|h| {
+                    let top = if clipped { scene.attached_effects(h).last().copied().unwrap_or(h) } else { doc.clipping_stack_top(h).unwrap_or(h) };
+                    stack.entries.iter().position(|id| *id == top)
+                }).unwrap_or(0);
                 let mut edits = Vec::new();
                 let content = if group {
                     let change = RecordChange::insert(&doc.artwork.stacks, Stack::default());
@@ -816,7 +832,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = doc.artwork.occurrences.next_handle();
                 let mut layer = Occurrence::new(content, self.numbered_document_name(if group { MessageId::DOCUMENTS_GROUP_NAME } else { MessageId::DOCUMENTS_LAYER_NAME }, occurrence_token(id)));
                 if group { layer.blend = self.new_group_blend(); }
-                layer.clipped = clipped;
+                layer.attachment = if clipped { Attachment::Clip } else { Attachment::None };
                 let mut working = doc.working.clone();
                 working.occurrence = Some(id); working.target = match layer.content { OccurrenceContent::Paint(h) => Some(SourceTarget::Paint(h)), _ => None }; working.inspect_mask = None;
                 stack.entries.insert(index, id);
@@ -934,10 +950,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     let roots = doc.layer_roots(&self.layer_interaction.selected);
                     if roots.is_empty() { return Err("Select layers first".into()); }
                     self.layer_interaction.solo = Some(scene.order().iter().map(|id| (*id, scene.occurrence(*id).unwrap().visible)).collect());
-                    let mut keep = doc.layer_subtrees(&roots);
-                    for id in keep.clone() {
-                        if scene.occurrence(id).is_some_and(|l| l.clipped) && let Some(base) = doc.clipping_base(id) { keep.insert(base); }
-                    }
+                    let mut keep = doc.composition_members(&roots);
                     for id in roots {
                         let mut parent = scene.parent(id);
                         while let Some(p) = parent { keep.insert(p); parent = scene.parent(p); }
@@ -971,10 +984,46 @@ impl<R: CanvasRenderer> UiSession<R> {
             LayerAction::Reparent { id, parent, index } => {
                 if let Some(edit) = self.layer_reparent_edit(id, parent, index)? { self.layer_edit(edit)?; }
             }
+            LayerAction::Clip { id, value } => {
+                let edit = self.engine.document().attachment_edit(occurrence_handle(id)?, value, false).map_err(error)?;
+                self.layer_edit(edit)?;
+            }
+            LayerAction::IsolateAndAttach { id } => {
+                let edit = self.engine.document().attachment_edit(occurrence_handle(id)?, true, true).map_err(error)?;
+                self.layer_edit(edit)?;
+            }
+            LayerAction::AttachEffect { id, owner } => {
+                let doc = self.engine.document();
+                let id = occurrence_handle(id)?;
+                let owner = occurrence_handle(owner)?;
+                let index = doc.scene().attached_effects(owner).iter().filter(|h| **h != id).count();
+                let edit = doc.attach_effect_edit(id, owner, index, false).map_err(error)?;
+                self.layer_edit(edit)?;
+            }
+            LayerAction::TogglePassThrough { id } => {
+                let id = occurrence_handle(id)?;
+                let doc = self.engine.document();
+                let group = doc.scene().occurrence(id).ok_or("Unknown group")?;
+                let blend = if group.passes_through() { group.isolated_blend } else { LayerBlend::PassThrough };
+                self.layer_edit(doc.group_blend_edit(id, blend).map_err(error)?)?;
+            }
+            LayerAction::Blend { id, value } => {
+                let blend = LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
+                let handle = occurrence_handle(id)?;
+                let doc = self.engine.document();
+                if doc.scene().occurrence(handle).is_some_and(|o| o.kind() == LayerKind::Group) {
+                    self.layer_edit(doc.group_blend_edit(handle, blend).map_err(error)?)?;
+                } else {
+                    let mut layer = self.editable_layer(id)?;
+                    if blend == layer.blend { return Ok(()); }
+                    layer.blend = blend;
+                    self.layer_edit(self.occurrence_change(handle, layer)?)?;
+                }
+            }
             other => {
                 let token = match &other {
                     LayerAction::Rename { id, .. } | LayerAction::Clear { id } | LayerAction::AlphaLock { id, .. }
-                    | LayerAction::ToggleAlphaLock { id } | LayerAction::Clip { id, .. } | LayerAction::Blend { id, .. }
+                    | LayerAction::ToggleAlphaLock { id }
                     | LayerAction::AddMask { id, .. } | LayerAction::DeleteMask { id } | LayerAction::ApplyMask { id }
                     | LayerAction::EnableMask { id, .. } | LayerAction::LinkMask { id, .. } | LayerAction::ShowMask { id, .. }
                     | LayerAction::InvertMask { id } | LayerAction::ClearMask { id, .. } => *id,
@@ -998,14 +1047,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                     lock @ (LayerAction::AlphaLock { .. } | LayerAction::ToggleAlphaLock { .. }) => {
                         if layer.kind() != LayerKind::Paint { return Err("Alpha lock needs a paint layer".into()); }
                         layer.alpha_locked = if let LayerAction::AlphaLock { value, .. } = lock { value } else { !layer.alpha_locked };
-                    }
-                    LayerAction::Clip { value, .. } => {
-                        if value && self.engine.document().clipping_base(id).is_none() { return Err("There is no paint layer below to clip to".into()); }
-                        layer.clipped = value;
-                    }
-                    LayerAction::Blend { value, .. } => {
-                        let blend = LayerBlend::from_code(value).ok_or("Unknown blend mode")?;
-                        if blend == layer.blend { return Ok(()); } layer.blend = blend;
                     }
                     LayerAction::AddMask { replace, .. } => {
                         self.layer_interaction.tool = LayerCanvasTool::Paint; self.state.layer_tools.tool = LayerCanvasTool::Paint; self.refresh_tools();
@@ -1157,7 +1198,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 A::New { clipped, .. } => {
                     !parent.is_some_and(|p| doc.is_locked(p))
                         && (!clipped
-                            || l.kind() == LayerKind::Paint)
+                            || l.kind() == LayerKind::Paint || l.kind() == LayerKind::Group && !l.passes_through())
                 }
                 A::Reference { .. } => matches!(l.kind(), LayerKind::Paint | LayerKind::Group),
                 A::ReferenceSelection => !self.reference_selection().is_empty(),
@@ -1343,9 +1384,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.localization().text(MessageId::RESOURCES_LAYER_MENU_CLIP_TO_LAYER_BELOW).as_ref(),
                     A::Clip {
                         id,
-                        value: !l.clipped,
+                        value: l.attachment == Attachment::None,
                     },
-                    l.clipped,
+                    l.attachment != Attachment::None,
                 ),
                 if multiple {
                     item(self.localization().text(MessageId::RESOURCES_LAYER_MENU_USE_SELECTED_LAYERS_AS_REFERENCES).as_ref(), A::ReferenceSelection)

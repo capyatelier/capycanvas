@@ -173,7 +173,7 @@ export async function checkHdr({call,evaluate,settle}) {
     await checkProofKeys({call,evaluate,settle,invoke});
     assert.deepEqual(await hist(),original,'SDR appearance does not change HDR artwork');
     await writeFile(`${directory}/sdr-rendition.json`,JSON.stringify(await evaluate('layerApp.app.proof_form().rendition'))+'\n');
-    const master=await save();assert.deepEqual(packageResourceIdentity(master),packageResourceIdentity(master0));assert.deepEqual(packageObjects(master,'capy.occurrence/1'),packageObjects(master0,'capy.occurrence/1'));
+    const master=await save();assert.deepEqual(packageResourceIdentity(master),packageResourceIdentity(master0));assert.deepEqual(packageObjects(master,'capy.occurrence/2'),packageObjects(master0,'capy.occurrence/2'));
     mark('Touch cancel and pen edit on the SDR pad preserve HDR raster data; one-step undo/redo and save persist the rendition');
     await settle();await writeFile(`${directory}/proof-sdr.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     results.proofPattern=await checkProofPattern({evaluate});

@@ -53,6 +53,10 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val mode = arguments.getString("mode", "constant")!!
             val prediction = arguments.getString("prediction", "true") == "true"
             val statsPanel = arguments.getString("statsPanel", "false") == "true"
+            val workload = arguments.getString("workload", "ordinary")!!
+            val effectRadius = arguments.getString("effectRadius", "8")!!.toDouble()
+            check(workload in listOf("ordinary", "clipped", "blurred-base"))
+            check(effectRadius > 0 && effectRadius <= 85)
             val colorBeforeStrokes = arguments.getString("colorBeforeStrokes", "false") == "true"
             val speed = arguments.getString("speed", "1")!!.toDouble()
             val blending = arguments.getString("blending")
@@ -228,6 +232,28 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
             val paintLayerIndex = arguments.getString("paintLayerIndex", "0")!!.toInt()
             check(paintLayerIndex in 0 until photoLayers)
             repeat(paintLayerIndex) { invoke("lower_layer") }
+            var attachmentFixture: JSONObject? = null
+            if (workload != "ordinary") {
+                check(photoLayers == 1 && paintLayerIndex == 0 && mode != "pinch")
+                val paint = state().getJSONObject("layer_properties").getLong("layer")
+                val base = state().array("layers").objects().single { it.optString("label") == "Photo" }.getLong("id")
+                var effect: Long? = null
+                var radius: Double? = null
+                if (workload == "blurred-base") {
+                    action(obj("type" to "select_layer", "id" to base))
+                    action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gaussian_blur")))
+                    effect = state().getJSONObject("layer_properties").getLong("layer")
+                    action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to effect,
+                        "key" to "sigma", "value" to obj("kind" to "number", "value" to effectRadius))))
+                    radius = state().getJSONObject("layer_properties").array("controls").objects()
+                        .single { it.getString("key") == "sigma" }.getJSONObject("value").getDouble("value")
+                    action(obj("type" to "layer", "action" to obj("op" to "attach_effect", "id" to effect, "owner" to base)))
+                }
+                action(obj("type" to "select_layer", "id" to paint))
+                action(obj("type" to "layer", "action" to obj("op" to "clip", "id" to paint, "value" to true)))
+                attachmentFixture = obj("paint" to paint, "base" to base, "effect" to effect,
+                    "effect_id" to if (effect == null) null else "gaussian_blur", "sigma" to radius)
+            }
             invoke("fit_canvas")
             arguments.getString("zoom")?.toDouble()?.let { requested ->
                 check(requested in .01..8.0)
@@ -339,6 +365,7 @@ class BrushBenchmarkInstrumentation : Instrumentation() {
                 "brush_size" to size, "mode" to mode, "prediction" to prediction, "speed" to speed,
                 "memory_snapshots" to (arguments.getString("memorySnapshots") == "true"),
                 "stats_panel" to statsPanel,
+                "workload" to workload, "attachment_fixture" to attachmentFixture,
                 "color_before_strokes" to colorBeforeStrokes,
                 "duration_ms" to duration, "repeats" to repeats, "interval_ns" to sampleInterval,
                 "pause_ms" to pauseMs,

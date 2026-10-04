@@ -122,6 +122,17 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
 
+## Layer attachment qualification
+
+The current attachment implementation is unmeasured on the TCL reference
+tablet. No-effects painting, ordinary clipping and painting above an attached
+Gaussian remain unqualified on this tier. The reference tablet was reserved
+by another session during the matched mid-tier comparison.
+
+The frozen pre-attachment source, APKs and baseline records remain under
+`artifacts/layer-attachment-baseline-a918057/`. They do not qualify the current
+implementation; its Gaussian slider also differs in geometry and sampled values.
+
 ## Solid Color fills
 
 Measured on 2026-10-03 on the TCL reference tablet, thermal status 0 before

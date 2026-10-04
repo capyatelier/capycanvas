@@ -122,19 +122,20 @@ fn filters_resolve_drawing_without_borrowing_other_masks_or_entering_groups() {
     doc.apply(doc.select_occurrence_edit(upper).unwrap()).unwrap();
     doc.apply(effect_test_mask_edit(&doc,first,1.)).unwrap();
     assert_eq!(doc.drawing_target(),Some(paint),"ignore a lower filter's mask");
-    for handle in [upper,first] {doc.apply(effect_test_occurrence_edit(&doc,handle,|o|o.clipped=true)).unwrap();}
-    assert_eq!(doc.drawing_target(),Some(paint),"clipped filter uses its base");
+    for handle in [first,upper] {doc.apply(doc.attachment_edit(handle,true,false).unwrap()).unwrap();}
+    assert_eq!(doc.drawing_target(),Some(paint),"attached filter uses its owner");
     doc.apply(effect_test_mask_edit(&doc,upper,1.)).unwrap();
     let mask=doc.scene().mask(upper).unwrap().0.source;
     assert_eq!(doc.drawing_target(),Some(layer_core::SourceTarget::Coverage(mask)),"own mask wins without a separate mask click");
     doc.apply(effect_test_occurrence_edit(&doc,upper,|o|o.locked=true)).unwrap();assert_eq!(doc.drawing_target(),None);
-    doc.apply(effect_test_occurrence_edit(&doc,upper,|o|{o.locked=false;o.mask=None;o.clipped=false;})).unwrap();
+    doc.apply(effect_test_occurrence_edit(&doc,upper,|o|{o.locked=false;o.mask=None;o.attachment=layer_core::Attachment::None;})).unwrap();
     doc.apply(effect_test_occurrence_edit(&doc,base,|o|o.locked=true)).unwrap();
     assert_eq!(doc.drawing_target(),None,"do not skip a locked drawing layer");
     let group=layer_core::authored::RecordChange::insert(&doc.artwork.stacks,Default::default());let group_handle=group.handle;
     doc.apply(layer_core::Edit::Batch(vec![layer_core::Edit::Stack(group),effect_test_occurrence_edit(&doc,base,|o|{o.locked=false;o.content=layer_core::authored::OccurrenceContent::Stack(group_handle);})])).unwrap();
     doc.apply(effect_test_mask_edit(&doc,base,1.)).unwrap();
     assert_eq!(doc.drawing_target(),None,"a group and its mask are not drawing fallbacks");
+    doc.apply(doc.attachment_edit(first,false,false).unwrap()).unwrap();
     let fill = doc.scene().effect_handle(occurrence_handle(2).unwrap()).unwrap();
     let fill = layer_core::authored::RecordChange::insert(&doc.artwork.effects, doc.artwork.effects.get(fill).unwrap().clone());
     let content = layer_core::authored::OccurrenceContent::Effect(fill.handle);
@@ -452,6 +453,24 @@ fn replacing_fill_generators_preserves_the_presence_or_absence_of_a_mask() {
     insert_effect(&mut s, "solid_color");
     assert_eq!(s.engine.document().working.occurrence, Some(id));
     assert_eq!(s.engine.document().scene().mask(id).map(|(use_, source)| (use_.clone(), source.clone())), Some(mask));
+}
+
+#[test]
+fn fill_insertion_preserves_existing_effect_owners_and_common_base() {
+    let (mut s, _) = filters();let base=s.engine.document().working.occurrence.unwrap();
+    layer(&mut s,LayerAction::New{group:false,clipped:true});let owner=s.engine.document().working.occurrence.unwrap();
+    insert_effect(&mut s,"curves");let curves=s.engine.document().working.occurrence.unwrap();
+    layer(&mut s,LayerAction::Select{id:occurrence_token(owner),mask:false});insert_effect(&mut s,"gaussian_blur");let blur=s.engine.document().working.occurrence.unwrap();
+    layer(&mut s,LayerAction::Select{id:occurrence_token(owner),mask:false});layer(&mut s,LayerAction::New{group:false,clipped:true});let top=s.engine.document().working.occurrence.unwrap();
+    for selected in [blur,owner,base] {
+        layer(&mut s,LayerAction::Select{id:occurrence_token(selected),mask:false});assert!(s.filter_drawer_open());let before=s.engine.document().clone();
+        insert_effect(&mut s,"gradient_fill");let doc=s.engine.document();let fill=doc.working.occurrence.unwrap();
+        assert_eq!(doc.scene().effect(fill).unwrap().program.kind,layer_core::EffectKind::Generator);
+        for effect in [blur,curves]{assert_eq!(doc.scene().effect_owner(effect),Some(owner));}
+        for clip in [fill,owner,top]{assert_eq!(doc.scene().clipping_base(clip),Some(base));}
+        if selected!=base{assert!(doc.scene().position(fill)<doc.scene().position(curves));}
+        invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
+    }
 }
 
 #[test]

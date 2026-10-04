@@ -679,7 +679,7 @@ fn opaque_photo(r: &WgpuRasterizer, frame: &artwork::Frame, extent: [u32; 2]) ->
     let source = scene.original(target)?;
     if visible.next().is_some() || occurrence.opacity != 1. || occurrence.mask.is_some() || scene.parent(handle).is_some()
         || occurrence.translation != layer_core::Point::default() || occurrence.placement != layer_core::LayerPlacement::IDENTITY
-        || occurrence.clipped || occurrence.blend != layer_core::LayerBlend::Normal
+        || occurrence.attachment.is_clip() || occurrence.blend != layer_core::LayerBlend::Normal
         || source.interpretation.channels != layer_core::color::source::SourceChannels::Rgb
         || source.extent[0] < extent[0] || source.extent[1] < extent[1]
         || r.native_backing(target).is_some_and(|d| !d.tiles.is_empty())
@@ -720,14 +720,13 @@ mod tests {
             occurrence.mask = Some(mask.clone());
             occurrence.translation = Point {x:901.,y:-777.};
         }
-        document.artwork.occurrences.get_mut(fill).unwrap().clipped = true;
         let authored = document.snapshot();
         let mut normalized = authored.as_ref().clone();
         let occurrence = normalized.artwork.occurrences.get_mut(fill).unwrap();
         occurrence.visible = true;
         occurrence.opacity = 1.;
         occurrence.blend = LayerBlend::Normal;
-        occurrence.clipped = false;
+        occurrence.attachment = layer_core::Attachment::None;
         occurrence.mask = None;
         let normalized = Arc::new(normalized);
         let scope = SceneScope::Members(vec![fill].into());

@@ -49,7 +49,7 @@ fn retained_fixtures_distinguish_editable_content_from_unsupported_sharing() {
         }
     }
     let mut unplaced = fixture("paint");
-    push_object(&mut unplaced,json!({"id":id(9),"type":"capy.occurrence/1","data":{"content":{"paint":reference_value(4)}}}));
+    push_object(&mut unplaced,json!({"id":id(9),"type":"capy.occurrence/2","data":{"content":{"paint":reference_value(4)}}}));
     assert!(matches!(known(&unplaced,&directory(&[])).support,Support::Preserved(_)));
     unplaced["objects"][1]["data"]["entries"] = json!([reference_value(3),reference_value(3)]);
     assert!(parse(&unplaced,&directory(&[])).is_err());

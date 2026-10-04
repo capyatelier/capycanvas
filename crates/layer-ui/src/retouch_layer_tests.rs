@@ -97,7 +97,7 @@ mod retouch_layer_checks {
         assert_eq!((effect.program.id.as_ref(), effect.value("sigma")), ("gaussian_blur", Some(&layer_core::EffectValue::Number(4.))));
         let frame = preview.view();
         let index = frame.position(handle).unwrap();
-        assert!(frame.occurrence(handle).unwrap().clipped && frame.order()[index + 1] == photo, "clipped to the layer, directly above it");
+        assert!(frame.occurrence(handle).unwrap().attachment == layer_core::Attachment::Effect && frame.order()[index + 1] == photo, "attached to the layer, directly above it");
         let change = separation(&mut s, FrequencySeparationAction::Radius { radius: 9.5 }).unwrap();
         assert_eq!(change.regions, 0, "the dialog shows its own value");
         assert_eq!(s.state.layer_tools.frequency_separation.as_ref().unwrap().radius, 9.5);

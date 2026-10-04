@@ -1,6 +1,14 @@
 use super::*;
 
-const SAVED: &[u8] = include_bytes!("fixtures/authored-v1.capy");
+const SAVED: &[u8] = include_bytes!("fixtures/authored-filters-v1-occurrences-v2.capy");
+
+#[test]
+fn old_occurrence_records_preserve_the_original_package() {
+    let bytes=include_bytes!("fixtures/authored-v1.capy");
+    let outcome=open(backing(bytes.to_vec()),Default::default(),&AtomicBool::new(false)).unwrap();
+    let OpenOutcome::Preserved {reason,..}=outcome else {panic!("{outcome:?}")};
+    assert_eq!(reason,"Unknown authored object capy.occurrence/1");
+}
 
 #[test]
 fn saved_v1_artwork_retains_authored_values_resources_and_current_builtin_controls() {

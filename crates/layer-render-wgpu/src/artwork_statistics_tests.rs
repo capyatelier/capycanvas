@@ -304,7 +304,7 @@ fn sparse_statistics_nested_clipped_spatial_and_document_image_match_dense_pixel
         let mut doc = generated(extent,DocumentColor {depth:SampleDepth::F32,..Default::default()},&pixels);
         let base=doc.scene().children(None)[0];
         let spatial=insert_effect(&mut doc,crate::tests::image_windows::program(false,global),0);
-        let occurrence=doc.artwork.occurrences.get_mut(spatial).unwrap();occurrence.opacity=0.63;occurrence.clipped=true;
+        let occurrence=doc.artwork.occurrences.get_mut(spatial).unwrap();occurrence.opacity=0.63;occurrence.attachment = layer_core::Attachment::Effect;
         let coverage=doc.artwork.coverage.next_handle();let mut mask=layer_core::CoverageSnapshot::reveal_all(coverage,extent,layer_core::Point{x:7.,y:-9.});
         mask.source.default_coverage=0.;mask.source.initial=Some(Selection::polygon([[0.,0.],[1020.,99.],[440.,517.]].map(|[x,y]|layer_core::Point{x,y}).to_vec()).unwrap());
         doc.artwork.coverage.insert(PortableId::random(),mask.source).unwrap();doc.artwork.occurrences.get_mut(spatial).unwrap().mask=Some(mask.use_);

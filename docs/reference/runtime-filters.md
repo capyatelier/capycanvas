@@ -62,7 +62,9 @@ Properties schema on GTK, Web and Android.
 `auxiliary: {"kind":"analysis","analysis":"local_illumination"}` requests the
 renderer-owned guide at group 2, binding 1. Only adjustments can request it.
 Each guide analyzes the actual input before its adjustment's amount, mask,
-opacity and blend, including lower adjustments, clipping and group isolation.
+opacity and blend. Attached effects receive their masked owner and preceding
+local effects, before the owner's outer clipping and contribution opacity.
+Unattached adjustments receive the lower composite through group isolation.
 Source identity follows contributing layers and their ancestors, independently
 of storage order. Unrelated upper layers do not supply pixels or backing work.
 Own amount changes reuse the guide; lower artwork, placement, mask, color or

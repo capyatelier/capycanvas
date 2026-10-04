@@ -36,7 +36,7 @@ fn p21_hue_nondefault_ranges_and_colorize_meet_existing_reduced_graph_quality_or
             layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
         ]).unwrap()));
         let occurrence = doc.artwork.occurrences.get_mut(handle).unwrap();
-        occurrence.opacity = 0.7; occurrence.clipped = state % 2 == 0;
+        occurrence.opacity = 0.7; set_attachment(occurrence, state % 2 == 0);
         insert_occurrence(&mut doc, handle, 0);
         adjustment_handle = Some(handle);
         for level in [1, 2, 3] {
@@ -131,7 +131,7 @@ fn candidate_errors(name: &str) -> [f32; 2] {
                         layer_core::Point { x: 987., y: 507. }, layer_core::Point { x: 587., y: 479. },
                     ]).unwrap()));
                     let occurrence = doc.artwork.occurrences.get_mut(handle).unwrap();
-                    occurrence.opacity = 0.7; occurrence.clipped = true;
+                    occurrence.opacity = 0.7; set_attachment(occurrence, true);
                 }
                 insert_occurrence(&mut doc, handle, 0);
                 adjustment_handle = Some(handle);
@@ -272,7 +272,8 @@ fn native_pointwise_batches(preload: bool, admitted: bool) {
                 layer_core::Point { x: (extent[0]-206) as f32, y: 767. }, layer_core::Point { x: 7., y: 599. },
             ]).unwrap()));
             let occurrence = doc.artwork.occurrences.get_mut(effect).unwrap();
-            occurrence.opacity = 0.61; occurrence.clipped = true;
+            occurrence.opacity = 0.61; set_attachment(occurrence, true);
+            reindex(&mut doc);
         }
         let mut frame = packet(doc.scene(), extent);
         frame.view.document_to_surface = [0.25, 0., 0., 0.25, 0., 0.];
