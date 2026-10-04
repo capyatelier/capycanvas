@@ -23,7 +23,7 @@ import SwiftUI
     private var observing = false
     private var observeAgain = false
     init(store: EditorStore) { self.store = store }
-    var preferences: ColorPreferencesStore { store?.colorPreferences ?? ColorPreferencesStore(root: nil) }
+    var preferences: ColorPreferencesStore { store?.colorPreferences ?? ColorPreferencesStore(locations: nil) }
 
     func receive(_ state: JSON, gpuReady: Bool) {
         self.gpuReady = gpuReady

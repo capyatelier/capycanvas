@@ -118,8 +118,8 @@ import UIKit
         store.native?.restoreSession(sessions: sessions, scene: store.sessionIdentity, adopt: false, retry: true) {
             [weak self] failure, adopted in DispatchQueue.main.async {
             guard let self else { return }
-            restoring = false; restoreFailed = failure != nil && !adopted; error = failure
-            if failure == nil { schedule() }
+            self.restoring = false; self.restoreFailed = failure != nil && !adopted; self.error = failure
+            if failure == nil { self.schedule() }
         } }
     }
 }

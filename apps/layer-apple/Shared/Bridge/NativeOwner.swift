@@ -414,7 +414,7 @@ final class NativeOwner: @unchecked Sendable {
                             let result = capy_session_restore_finished(task.handle)
                             let text = result < 0 ? capy_session_error(task.handle) : nil
                             defer { if let text { capy_apple_string_free(text) } }
-                            completion(text.map(String.init(cString:)), true)
+                            completion(text.map { String(cString: $0) }, true)
                         }
                     } catch { completion(error.localizedDescription, false) }
                 }
