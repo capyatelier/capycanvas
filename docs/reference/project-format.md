@@ -8,6 +8,12 @@ shared capture and writer interfaces. Every host uses the same record adapters;
 there is no direct `Document` serialization or separate Web artwork schema.
 Photo export is a separate operation that renders a captured output.
 
+The shared writer compresses manifest metadata with lossless DEFLATE when smaller.
+Raster/channel resources retain their independently compressed bytes and direct
+pack offsets. Encoding borrows authored/resource records instead of duplicating
+the manifest JSON tree. Metadata compression and decoding run in the existing
+file worker with bounded lengths and cancellation between input chunks.
+
 ## Authored and working state
 
 An artwork contains compositions, ordered stacks, placed occurrences, paint and
@@ -54,8 +60,9 @@ with the original package; they never become empty artwork. Preserved and
 recovered views can copy the original or export a verified preview as exact PNG
 bytes to a different destination. Neither action adopts an editable document.
 
-The writer streams indexed resources through bounded I/O. ZIP members are STORED
-because heavy resources already carry their own lossless encoding. The
+The writer streams indexed resources through bounded I/O. Resource members are
+STORED because heavy data already carries its own lossless encoding; only the
+manifest may use ZIP DEFLATE. The
 [package contract](capy-package.md) specifies ZIP64, strict references, byte
 layouts, limits, ancillary preservation and unsupported-content outcomes.
 

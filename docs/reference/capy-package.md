@@ -315,8 +315,16 @@ bounded transport integrity, not knowledge of their decoder.
 
 ## Restricted ZIP64 transport
 
-Members use method 0 (STORED), zero flags, no encryption or descriptors, and
-matching size/CRC/name/version fields in local and central headers. Names are
+Resource packs, previews, signatures and `mimetype` use method 0 (STORED).
+`manifest.json` uses method 8 (raw DEFLATE) when its encoded bytes are smaller
+than the UTF-8 JSON, otherwise STORED. There is one bounded DEFLATE stream, with
+no trailing bytes or concatenated streams. The declared decoded metadata length
+is checked before allocation; decoding must consume exactly the encoded length
+and produce exactly the declared length. The manifest CRC covers decoded JSON.
+Resource CRCs and byte-range offsets retain their existing stored-byte meaning.
+
+All members have zero flags, no encryption or descriptors, and matching
+size/CRC/name/version fields in local and central headers. Names are
 relative ASCII paths without empty, `.` or `..` components, backslashes, drive
 prefixes, NULs or case-insensitive aliases. No directory entries, symlinks,
 archive/member comments, leading executable bytes or trailing bytes are allowed.
@@ -341,7 +349,8 @@ omit the corresponding ZIP64 value. At or above `0xffffffff` for U32 fields or
 `0xffff` for U16 counts, use that sentinel and the actual U64 value. ZIP64 extra
 field `0x0001` contains exactly the saturated fields in specification order:
 uncompressed size, compressed size, local-header offset, disk number. Local
-headers include only sizes; STORED sizes are equal and saturate together. No
+headers include only sizes; STORED sizes are equal and saturate together. The
+bounded compressed manifest has distinct encoded and decoded sizes. No
 other extra fields are accepted. Required extraction version is 20 for classic
 members and 45 when that member requires ZIP64.
 

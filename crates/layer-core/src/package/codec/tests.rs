@@ -106,7 +106,7 @@ fn rewrite(bytes: &[u8], change: impl FnOnce(&mut Value)) -> Vec<u8> {
         };
         (member.name.clone(),Cursor::new(data))
     }).collect::<Vec<_>>();
-    let mut members=inputs.iter_mut().map(|(name,input)|StoredMember {name,length:input.get_ref().len() as u64,crc32:crc32fast::hash(input.get_ref()),input}).collect::<Vec<_>>();
+    let mut members=inputs.iter_mut().map(|(name,input)|InputMember {name,length:input.get_ref().len() as u64,crc32:crc32fast::hash(input.get_ref()),input}).collect::<Vec<_>>();
     let mut output=Vec::new(); archive::write_archive(&mut output,&mut members,64*1024*1024).unwrap(); output
 }
 
@@ -221,8 +221,8 @@ fn corrupt_authorship_returns_only_a_verified_preview_and_latches_resource_failu
         let source=backing(broken); let owner=source.clone();
         match open(source,Default::default(),&AtomicBool::new(false)).unwrap() {
             OpenOutcome::RecoveredView {preview:recovered,reason,..}=>{
-                assert_eq!(recovered.pixels(),preview().pixels()); assert!(reason.contains("checksum"));
-                if mutation==1 {assert_eq!(owner.poll(0,1).unwrap_err(),reason);}
+                assert_eq!(recovered.pixels(),preview().pixels()); assert!(!reason.is_empty());
+                if mutation==1 {assert!(reason.contains("checksum")); assert_eq!(owner.poll(0,1).unwrap_err(),reason);}
             },outcome=>panic!("corrupt authorship became editable: {outcome:?}"),
         }
     }

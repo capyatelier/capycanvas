@@ -20,7 +20,7 @@ fn manifest(data: &[u8], resources: Vec<Value>, notes: Vec<Value>) -> (Manifest,
     value["resources"] = resources.into();
     let mut bytes = Vec::new();
     let members = [("mimetype",MIMETYPE),("manifest.json",b"{}".as_slice()),("data/tiles-1.bin",data)].into_iter()
-        .map(|(name,data)| { let member=Member {name:name.into(),offset:bytes.len() as u64,length:data.len() as u64,crc32:crc32fast::hash(data)};
+        .map(|(name,data)| { let member=Member {name:name.into(),offset:bytes.len() as u64,length:data.len() as u64,compressed_length:None,crc32:crc32fast::hash(data)};
             bytes.extend_from_slice(data); member }).collect();
     let directory = Directory { members, length:bytes.len() as u64 };
     let ManifestRead::Known(manifest) = Manifest::parse(&serde_json::to_vec(&value).unwrap(),&directory,ManifestLimits::default()).unwrap()

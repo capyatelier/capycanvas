@@ -16,19 +16,41 @@ BUILD28 and selected BUILD20 canvas diagnostics measure frozen `4a2cf6aa0`
 binaries. Earlier operation rows and 83/BUILD15 probes apply to their named
 binaries. Each row retains its presentation and scope limits.
 
-Overall M3 performance qualification remains pending. The finalized six normal
-release offscreen navigation runs meet the warmed 5% p95 and +1 ms p99 comparison
-bounds in all fifteen paired observations, for frame CPU, CPU through submission
-and completion time. Cold half/native/double navigation in the first pair exceeds
-5% p95; later same-phase comparisons improve, but individual cold observations
-are not all accepted. The later 100-repeat sixteen-layer affinity ABBA pair on
-frozen `4a2cf6aa0` meets the common moving and pen-up CPU-submit/completed bounds
-in both adjacent temporal comparisons; pen-up completion p99 changes by -0.246
-and -0.396 ms. This clears that bounded diagnostic, not the unrestricted matrix.
-These frozen binaries do not qualify current `192601dac` source, reference-tablet
-performance or physical input-to-present response. Exact results are retained in
-`artifacts/format/m3-uninstrumented-27/navigation-analysis.txt` and
-`artifacts/format/m3-final-ordinary-fixture-20261004/measurements/affinity-analysis.txt`.
+Overall M3 performance qualification remains pending. Matched release offscreen
+runs on the desktop RTX PRO 6000 compare frozen `192601dac` with the authored
+candidate. Navigation CPU p95 improves in every comparison, with unchanged
+camera/work/cache counters and zero source misses or recomposition. Completed
+p95 exceeds 5% in 7/15 cold and 8/15 warmed observations; warmed native-scale
+excesses repeat in all three pairs (+0.024–0.178 ms). All p99 shifts stay below
++1 ms. These completion spans include host queue polling, not GPU timestamps.
+
+The 100-repeat sixteen-layer bottom-paint ABBA comparison retains exact PNGs,
+frame/work counters and 110,624,776 bytes of capture backing. CPU-submit bounds
+pass both temporal pairs. The reverse pair exceeds completed-motion p95 by
+7.09% (+0.041 ms), loses 6.23% throughput and adds 1.025 ms to pen-up p99;
+the forward pair passes. These excesses remain unresolved and do not qualify
+reference-tablet rates or physical input-to-present response. Exact observations
+are under `artifacts/format/m3-uninstrumented-34/` and
+`artifacts/format/m3-final192-ordinary-fixture/measurements/`. Earlier passing
+`4a2cf6aa0` diagnostics remain in their own artifacts and do not override these
+current-source results.
+
+Shared codec diagnostic, 2026-10-04, desktop release builds: the committed
+`b3f6f8e51` writer versus the manifest-compression follow-up on the same authored
+input. A 2,048-fill metadata fixture shrinks from 2,951,109 to 461,626 bytes;
+a real GTK recovery file shrinks from 5,417 to 3,570 bytes. Independent ZIP
+reads preserve every decoded manifest byte, portable resource identity and
+encoded resource range. Pixels and channels are not recompressed.
+
+Seven metadata-only repetitions reduce preparation allocations from 913,050 to
+646,741 and phase net heap growth from 82,273,847 to 45,559,412 bytes. Median
+prepare/write/open times are 91.04/0.75/92.94 → 77.20/40.33/103.72 ms: compression
+trades worker time for smaller files. The small GTK file uses
+0.063/0.011/0.185 → 0.052/0.074/0.221 ms. These sequential codec diagnostics
+include allocator instrumentation where enabled, exclude fsync and do not
+qualify frame timing, total process memory or tablet latency. Full samples and
+exact source/binary identities are under
+`artifacts/format/m3-metadata-compression-44/`.
 
 Decoded-source ownership diagnostic, 2026-09-29: the 12 MP photo transform
 sequence retained 204 decoded tiles throughout after sharing the renderer's

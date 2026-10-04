@@ -10,28 +10,62 @@ export const authoredIdentity=manifest=>{
 };
 const evidenceByManifest = new WeakMap();
 
-export function packageManifest(bytes) {
+export async function packageManifest(bytes) {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  const text = new TextDecoder();
-  let at = 0, mimetype = false;
+  const text = new TextDecoder(), maxMetadata = 64 * 1024 * 1024;
+  const crcTable = Uint32Array.from({length:256}, (_, index) => {
+    let crc = index;
+    for (let bit = 0; bit < 8; bit++) crc = (crc >>> 1) ^ ((crc & 1) ? 0xedb88320 : 0);
+    return crc >>> 0;
+  });
+  let at = 0;
   while (at + 30 <= bytes.length && view.getUint32(at, true) === 0x04034b50) {
-    if (view.getUint16(at + 8, true) !== 0 || view.getUint16(at + 6, true) & 8) throw Error('Expected stored package member');
+    const method = view.getUint16(at + 8, true);
+    if (view.getUint16(at + 6, true) !== 0) throw Error('Unsupported package member flags');
     const nameLength = view.getUint16(at + 26, true), extraLength = view.getUint16(at + 28, true);
-    const name = text.decode(bytes.subarray(at + 30, at + 30 + nameLength));
-    let length = view.getUint32(at + 18, true);
-    if (length === 0xffffffff) {
-      const extra = at + 30 + nameLength;
-      if (extraLength < 20 || view.getUint16(extra, true) !== 1) throw Error('Missing ZIP64 member length');
-      length = Number(view.getBigUint64(extra + 12, true));
+    const extra = at + 30 + nameLength, start = extra + extraLength;
+    if (start > bytes.length) throw Error('Incomplete package member header');
+    const name = text.decode(bytes.subarray(at + 30, extra));
+    let length = view.getUint32(at + 18, true), decodedLength = view.getUint32(at + 22, true);
+    if (length === 0xffffffff || decodedLength === 0xffffffff) {
+      const fields = Number(decodedLength === 0xffffffff) + Number(length === 0xffffffff);
+      if (extraLength !== 4 + fields * 8 || view.getUint16(extra, true) !== 1
+          || view.getUint16(extra + 2, true) !== fields * 8) throw Error('Missing ZIP64 member length');
+      let offset = extra + 4;
+      if (decodedLength === 0xffffffff) { decodedLength = Number(view.getBigUint64(offset, true)); offset += 8; }
+      if (length === 0xffffffff) length = Number(view.getBigUint64(offset, true));
     }
-    const start = at + 30 + nameLength + extraLength, end = start + length;
-    if (!Number.isSafeInteger(end) || end > bytes.length) throw Error('Incomplete package member');
-    if (at === 0) {
-      mimetype = name === 'mimetype' && text.decode(bytes.subarray(start, end)) === 'application/x-capy-canvas';
-      if (!mimetype) throw Error('Missing Capy package mimetype');
-    }
+    const end = start + length;
+    if (!Number.isSafeInteger(length) || !Number.isSafeInteger(decodedLength) || !Number.isSafeInteger(end)
+        || end > bytes.length) throw Error('Incomplete package member');
+    if (method === 0 ? length !== decodedLength : method !== 8 || name !== 'manifest.json' || length >= decodedLength)
+      throw Error('Unsupported package member compression');
+    if (at === 0 && (name !== 'mimetype' || method !== 0
+        || text.decode(bytes.subarray(start, end)) !== 'application/x-capy-canvas')) throw Error('Missing Capy package mimetype');
     if (name === 'manifest.json') {
-      const manifest = JSON.parse(text.decode(bytes.subarray(start, end)));
+      if (decodedLength > maxMetadata) throw Error('Authored manifest exceeds metadata limit');
+      let decoded = bytes.subarray(start, end);
+      if (method === 8) {
+        decoded = new Uint8Array(decodedLength);
+        const reader = new Blob([bytes.subarray(start, end)]).stream().pipeThrough(new DecompressionStream('deflate-raw')).getReader();
+        let offset = 0;
+        try {
+          for (;;) {
+            const {value, done} = await reader.read();
+            if (done) break;
+            if (value.length > decodedLength - offset) throw Error('Authored manifest exceeds declared length');
+            decoded.set(value, offset); offset += value.length;
+          }
+          if (offset !== decodedLength) throw Error('Incomplete authored manifest');
+        } catch (error) {
+          await reader.cancel().catch(() => {});
+          throw error;
+        } finally { reader.releaseLock(); }
+      }
+      let crc = 0xffffffff;
+      for (const byte of decoded) crc = (crc >>> 8) ^ crcTable[(crc ^ byte) & 255];
+      if (((crc ^ 0xffffffff) >>> 0) !== view.getUint32(at + 14, true)) throw Error('Authored manifest CRC mismatch');
+      const manifest = JSON.parse(text.decode(decoded));
       if (manifest.format !== 'capy.canvas' || manifest.version !== 1) throw Error('Unexpected authored manifest');
       return manifest;
     }
@@ -67,7 +101,7 @@ export async function packageEvidence(bytes, manifest) {
   return result;
 }
 export async function readPackage(evaluate, expression) {
-  const [manifest, evidence] = await evaluate(`(async()=>{const bytes=${expression};const manifest=(${packageManifest.toString()})(bytes);return [manifest,await (${packageEvidence.toString()})(bytes,manifest)]})()`);
+  const [manifest, evidence] = await evaluate(`(async()=>{const bytes=${expression};const manifest=await (${packageManifest.toString()})(bytes);return [manifest,await (${packageEvidence.toString()})(bytes,manifest)]})()`);
   evidenceByManifest.set(manifest, evidence);
   return manifest;
 }

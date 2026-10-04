@@ -19,6 +19,7 @@ lz4_flex = { version = "=0.14.0", default-features = false, features = ["std", "
 sha2 = "=0.11.0"
 half = "=2.7.1"
 crc32fast = "=1.5.1"
-zip = { version = "=8.6.0", default-features = false }
+flate2 = "1"
+zip = { version = "=8.6.0", default-features = false, features = ["deflate-flate2"] }
 uuid = { version = "=1.26.1", features = ["v4", "js"] }
 png = "=0.18.1"

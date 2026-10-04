@@ -126,12 +126,12 @@ fn application_edit(document:&Document,index:usize,value:EffectValue)->Edit {
     Edit::Effect(RecordChange::replace(&document.artwork.effects,handle,Some(application)).unwrap())
 }
 fn rewrite_archive(bytes:&[u8],change:impl FnOnce(&mut serde_json::Value))->Vec<u8> {
-    use crate::package::archive::{Directory,StoredMember};
+    use crate::package::archive::{Directory,InputMember};
     let directory=Directory::read(&mut Cursor::new(bytes),262144,64*1024*1024).unwrap();
     let mut manifest=serde_json::from_slice(&directory.read_member(&mut Cursor::new(bytes),directory.member("manifest.json").unwrap(),64*1024*1024).unwrap()).unwrap();change(&mut manifest);
     let changed=serde_json::to_vec(&manifest).unwrap();
     let mut inputs=directory.members.iter().map(|member| {let data=if member.name=="manifest.json" {changed.clone()} else {directory.read_member(&mut Cursor::new(bytes),member,crate::package::MAX_RANGE_BYTES).unwrap()};(member.name.clone(),Cursor::new(data))}).collect::<Vec<_>>();
-    let mut members=inputs.iter_mut().map(|(name,input)|StoredMember {name,length:input.get_ref().len() as u64,crc32:crc32fast::hash(input.get_ref()),input}).collect::<Vec<_>>();
+    let mut members=inputs.iter_mut().map(|(name,input)|InputMember {name,length:input.get_ref().len() as u64,crc32:crc32fast::hash(input.get_ref()),input}).collect::<Vec<_>>();
     let mut output=Vec::new();crate::package::archive::write_archive(&mut output,&mut members,64*1024*1024).unwrap();output
 }
 

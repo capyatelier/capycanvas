@@ -387,7 +387,7 @@ mod tests {
     }
     #[test]
     fn aggregate_admission_preserves_valid_native_artwork_and_invalid_payload_recovers_preview() {
-        use layer_core::package::{archive::{Directory, StoredMember, write_archive, MIMETYPE}, codec::OpenOutcome, preview::Preview};
+        use layer_core::package::{archive::{Directory, InputMember, write_archive, MIMETYPE}, codec::OpenOutcome, preview::Preview};
         let document = Document::new(layer_core::PortableId::random(), 8, 8, DocumentNames { paint: "Ink".into(), paper: "Paper".into() });
         let preview = Preview::from_rgba([1, 1], vec![11, 23, 37, 255].into()).unwrap();
         let bytes = native_with_preview(&document, preview.clone());
@@ -411,9 +411,9 @@ mod tests {
         let mut manifest_reader = std::io::Cursor::new(&manifest);
         let mut preview_reader = std::io::Cursor::new(preview.encoded().as_ref());
         let mut members = [
-            StoredMember { name: "mimetype", length: MIMETYPE.len() as u64, crc32: checksum(MIMETYPE), input: &mut mime_reader },
-            StoredMember { name: "manifest.json", length: manifest.len() as u64, crc32: checksum(&manifest), input: &mut manifest_reader },
-            StoredMember { name: "preview.png", length: preview.encoded().len() as u64, crc32: checksum(preview.encoded()), input: &mut preview_reader },
+            InputMember { name: "mimetype", length: MIMETYPE.len() as u64, crc32: checksum(MIMETYPE), input: &mut mime_reader },
+            InputMember { name: "manifest.json", length: manifest.len() as u64, crc32: checksum(&manifest), input: &mut manifest_reader },
+            InputMember { name: "preview.png", length: preview.encoded().len() as u64, crc32: checksum(preview.encoded()), input: &mut preview_reader },
         ];
         let mut corrupted = Vec::new(); write_archive(&mut corrupted, &mut members, ProjectLimits::default().metadata_bytes as usize).unwrap();
         let outcome = read_import(std::io::Cursor::new(&corrupted), ImportIntent::Open, Default::default(), DocumentNames { paint: "".into(), paper: "".into() }, Default::default(), Default::default(), &AtomicBool::new(false)).unwrap();

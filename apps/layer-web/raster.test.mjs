@@ -27,10 +27,10 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
   await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');
   assert.deepEqual(await evaluate('Array.from([...rasterFiles].find(([name])=>name.endsWith(".capy"))[1].slice(0,4))'),[80,75,3,4]);
   console.log('Captured raster archive',await evaluate('Array.from(rasterFiles.entries(),([name,bytes])=>({name,size:bytes.length}))'));
-  await evaluate(`window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
+  await evaluate(`(async()=>{window.rasterOriginal=[...rasterFiles].find(([name])=>name.endsWith('.capy'))[1].slice();
     window.rasterManifest=${packageManifest.toString()};
-    window.rasterOriginalIndex=rasterManifest(rasterOriginal);
-    window.showOpenFilePicker=async()=>[{name:'restored.capy',async getFile(){return new File([rasterOriginal],'restored.capy')}}];`);
+    window.rasterOriginalIndex=await rasterManifest(rasterOriginal);
+    window.showOpenFilePicker=async()=>[{name:'restored.capy',async getFile(){return new File([rasterOriginal],'restored.capy')}}];})()`);
   const originalPackage = await readPackage(evaluate, 'rasterOriginal');
   assert.ok(packageResourceIdentity(originalPackage).length>0);
   await invoke('export_document');await wait('!layerApp.state().document_file.busy');

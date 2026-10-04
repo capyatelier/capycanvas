@@ -18,24 +18,30 @@ canvas is 6000 × 4000.
 
 ## Operations
 
-The BUILD20 comparisons measure the frozen M3 candidate on `4a2cf6aa0`.
-Earlier operation rows and 83/BUILD15 effect and transform probes apply
-to their named binaries; they do not establish BUILD20 canvas performance.
-No selected BUILD20 canvas measurements were collected on this tier.
+The latest G-Pen comparisons use clean `192601dac` and the authored-model
+candidate built on that revision (BUILD29/32). The cutover landed as `b3f6f8e51`;
+the intervening footer/preview UI changes do not change the measured renderer.
+Earlier operation rows and 83/BUILD15 effect and transform probes apply only
+to their named binaries. No current selected-transform measurements exist here.
 
-Overall M3 performance qualification remains pending. The finalized six normal
-release offscreen navigation runs meet the warmed 5% p95 and +1 ms p99 comparison
-bounds in all fifteen paired observations, for frame CPU, CPU through submission
-and completion time. Cold half/native/double navigation in the first pair exceeds
-5% p95; later same-phase comparisons improve, but individual cold observations
-are not all accepted. The later 100-repeat sixteen-layer affinity ABBA pair on
-frozen `4a2cf6aa0` meets the common moving and pen-up CPU-submit/completed bounds
-in both adjacent temporal comparisons; pen-up completion p99 changes by -0.246
-and -0.396 ms. This clears that bounded diagnostic, not the unrestricted matrix.
-These frozen binaries do not qualify current `192601dac` source, reference-tablet
-performance or physical input-to-present response. Exact results are retained in
-`artifacts/format/m3-uninstrumented-27/navigation-analysis.txt` and
-`artifacts/format/m3-final-ordinary-fixture-20261004/measurements/affinity-analysis.txt`.
+Overall M3 performance qualification remains pending. Matched release offscreen
+runs on the desktop RTX PRO 6000 compare frozen `192601dac` with the authored
+candidate. Navigation CPU p95 improves in every comparison, with unchanged
+camera/work/cache counters and zero source misses or recomposition. Completed
+p95 exceeds 5% in 7/15 cold and 8/15 warmed observations; warmed native-scale
+excesses repeat in all three pairs (+0.024–0.178 ms). All p99 shifts stay below
++1 ms. These completion spans include host queue polling, not GPU timestamps.
+
+The 100-repeat sixteen-layer bottom-paint ABBA comparison retains exact PNGs,
+frame/work counters and 110,624,776 bytes of capture backing. CPU-submit bounds
+pass both temporal pairs. The reverse pair exceeds completed-motion p95 by
+7.09% (+0.041 ms), loses 6.23% throughput and adds 1.025 ms to pen-up p99;
+the forward pair passes. These excesses remain unresolved and do not qualify
+reference-tablet rates or physical input-to-present response. Exact observations
+are under `artifacts/format/m3-uninstrumented-34/` and
+`artifacts/format/m3-final192-ordinary-fixture/measurements/`. Earlier passing
+`4a2cf6aa0` diagnostics remain in their own artifacts and do not override these
+current-source results.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
@@ -65,7 +71,7 @@ performance or physical input-to-present response. Exact results are retained in
 | Layer reorder drag | 90 | | |
 | Layer swipe right: alpha lock (24 MP photo) | 90 | **Not met.** Android 59.0–59.2 fps, interval p99 16.8 ms; Web 53.1–54.6 fps, interval p99 33.5–50.2 ms | `1d251ece`, 2026-09-27; details below |
 | Navigation with 16 visible paint layers | 90 | | |
-| Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD20: 74.304–75.047 fresh updates/s; fresh gap p99 18.236–19.527 ms, Linear | [BUILD20 middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); common response bound not cleared |
+| Drawing between 16 photo layers, G-Pen 1024 px (17 visible layers) | 90 | **Not met.** BUILD32: 74.733–75.449 fresh updates/s; fresh gap p99 18.465–18.871 ms, Linear | [Current middle-layer comparison](#drawing-in-the-middle-of-sixteen-photo-layers); measured comparison bounds pass, 90/s remains missed |
 | Panel, tab, column or toolbar drag and docking | 90 | **Not met.** Floating panel-group drag frame p50/p95 13.4/15.5 ms | `cbfad9e5`, 2026-09-26 |
 | Panel or column resize | 90 | | |
 | Drawer open and close | 90 | | |
@@ -212,78 +218,88 @@ refinement. The actual tablet viewport admits the 24 MP single-filter window
 under the 608 MiB composition-cache limit; total renderer storage includes
 additional source and paint allocations and is not bounded by that cache limit.
 
-## BUILD20 G-Pen comparison
+## Authored-model G-Pen comparison
 
-Measured on 2026-10-04 UTC with the clean `4a2cf6aa0` baseline and the M3
-candidate based on the same revision. Both are benchmark APKs with release Rust.
-The tier photo has one drawing layer above it, Paper hidden, Linear blending,
-Navigator open, Stats closed and default glass. Pressure is 1 and prediction is
-enabled. A priming stroke is undone before three warmed ten-second strokes with
-200 Hz OS-injected stylus input. Both before/after thermal samples are zero.
-The matched Fit zoom is 15.9900%, with screen semiaxes 310 × 150 px; the
-nominal full brush tip remains at least 46.90 px inside the photo.
+Measured on 2026-10-04 UTC with clean `192601dac` (BUILD29) and the authored-model
+candidate on that revision (BUILD32), candidate then baseline. Both benchmark
+APKs use release Rust, the 6000 × 4000 tier photo, Linear blending, Navigator
+open, Stats closed and default glass. The default solid fill is hidden. A priming
+stroke is undone before three warmed ten-second strokes with 200 Hz injected
+stylus input, pressure 1 and 16 ms prediction. Thermal status is zero before and
+after. Fit is 15.9900%; the 310 × 150 px ellipse keeps the full 1536 px tip at
+least 46.90 px inside the photo.
 
-Rates count completed nonempty updates consuming new paint input inside the
-contact, excluding refinement-only completions. Response is the latest consumed
-input event to GPU completion; its p99 differs from the intercompletion gap.
-Neither metric establishes physical pen latency or screen presentation.
+Rates count GPU-completed nonempty updates consuming fresh paint input inside
+the contact. Response ends at completion-callback service, not physical pen
+latency or presentation. No samples are discarded.
 
 | Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
 | --- | ---: | ---: | ---: | ---: |
-| Baseline 1 | 59.067 | 28.304 | 58.165 | 10.016 |
-| Baseline 2 | 59.393 | 27.050 | 54.822 | 9.825 |
-| Baseline 3 | 59.128 | 26.423 | 56.324 | 9.803 |
-| Candidate 1 | 58.890 | 27.519 | 56.363 | 10.096 |
-| Candidate 2 | 59.327 | 25.264 | 57.640 | 10.058 |
-| Candidate 3 | 59.790 | 25.503 | 57.149 | 10.003 |
+| Baseline 1 | 59.308 | 25.827 | 55.093 | 10.466 |
+| Baseline 2 | 59.531 | 25.705 | 55.321 | 10.413 |
+| Baseline 3 | 59.779 | 25.275 | 57.357 | 10.453 |
+| Candidate 1 | 59.668 | 27.371 | 55.247 | 10.690 |
+| Candidate 2 | 59.181 | 27.355 | 56.785 | 10.464 |
+| Candidate 3 | 59.116 | 26.389 | 58.013 | 10.559 |
 
-Both builds miss 90 fresh updates/s and the 22.2 ms gap limit at 1536 px.
-Candidate rate changes range from −0.30% to +1.12%, with owner CPU p95 growth
-of 0.80–2.37%. Response p99 changes by −1.802 / +2.818 / +0.826 ms; the second
-stroke exceeds the +1 ms bound, while the first improves. The samples do not
-resolve a common response pass or a repeatable regression.
-
-Accounted renderer residency is 1466.523 MiB candidate versus 1467.523 MiB
-baseline. Both retain 384 decoded source slots.
+Both builds miss 90 fresh updates/s and the 22.2 ms gap limit. Throughput,
+owner CPU p95 and callback wall p95 comparisons remain within 5%. Response p99
+changes by +0.154 / +1.464 / +0.656 ms: the second stroke exceeds +1 ms, so
+that common bound remains unresolved. Accounted renderer residency is identical
+at 1466.523 MiB in every contact; each build retains 384 decoded source slots
+before painting. Dynamic admission budgets differ and are recorded separately.
 
 ### Drawing in the middle of sixteen photo layers
 
-This additional matched 1024 px workload has sixteen photos plus the drawing
-layer: seventeen visible layers, with eight photos above and eight below the
-paint layer. Photo copies have 35% opacity over the opaque base photo. Other
-settings match the guarantee run. Its nominal full-tip margin is 87.83 px.
+The matched 1024 px workload has sixteen photos plus paint: seventeen visible
+layers, with eight photos above and eight below the paint layer. Photo copies
+have 35% opacity over the opaque base. Other settings match the guarantee run;
+the nominal full-tip margin is 87.83 px.
 
 | Build / stroke | Fresh updates/s | Fresh gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
 | --- | ---: | ---: | ---: | ---: |
-| Baseline 1 | 75.333 | 18.901 | 41.797 | 10.456 |
-| Baseline 2 | 74.592 | 19.177 | 42.259 | 10.558 |
-| Baseline 3 | 75.477 | 18.473 | 40.982 | 10.311 |
-| Candidate 1 | 74.304 | 19.244 | 44.138 | 10.501 |
-| Candidate 2 | 74.861 | 19.527 | 44.399 | 10.420 |
-| Candidate 3 | 75.047 | 18.236 | 40.778 | 10.189 |
+| Baseline 1 | 73.771 | 19.981 | 42.142 | 10.568 |
+| Baseline 2 | 75.047 | 18.207 | 40.515 | 10.714 |
+| Baseline 3 | 75.068 | 20.832 | 47.270 | 10.512 |
+| Candidate 1 | 74.733 | 18.784 | 40.246 | 10.273 |
+| Candidate 2 | 74.790 | 18.871 | 41.009 | 10.726 |
+| Candidate 3 | 75.449 | 18.465 | 39.904 | 10.371 |
 
-Both builds miss 90 updates/s. Candidate throughput changes by
-−1.37 / +0.36 / −0.57%, and owner CPU p95 remains within 5%. Response p99
-changes by +2.341 / +2.140 / −0.204 ms: two strokes exceed +1 ms, so the common
-response bound is not cleared. The adverse repetitions remain part of the
-comparison. Accounted renderer residency is 1709.094 MiB in both builds.
+Both builds miss 90 updates/s. Every pair meets the measured common throughput,
+owner CPU and callback-wall p95 bounds; response p99 changes by
+−1.896 / +0.494 / −7.366 ms. Accounted renderer residency is identical at
+1709.094 MiB. These results supersede the older BUILD20 middle-layer comparison
+for this workload; they do not clear the absolute rate miss or the guarantee
+workload's response excess.
 
-Measured resident boundaries stay within the additional max(16 MiB, 5%)
-comparison ceiling. Allocator snapshots are taken after settling, not inside
-motion; they do not establish continuous renderer/process/driver peaks or
-edit/undo/output lifetime. GPU execution p95 is unmeasured. Logical workload
-settings match; dynamic admission budgets are retained separately. One paired
-batch does not establish the repeatability of response outliers or complete M3
-qualification. Other brushes and earlier effect/transform rows retain their
-stated scope.
+Residency boundaries meet the additional max(16 MiB, 5%) ceiling. Settled
+allocator/RSS/high-water observations do not establish continuous memory peaks
+or edit/undo/output lifetime. GPU execution p95 and presentation remain
+unmeasured. Raw samples and analysis are under
+`artifacts/format/m3-final-android-performance-38/movinkpad11/`; APK/source
+provenance is under `artifacts/format/m3-baseline192-android-build-29/` and
+`artifacts/format/m3-candidate192-android-build-32/`.
+Baseline app SHA-256 is
+`e7ddce0b37f254df4fcdee4c502bc2220c5a2f050e644060bc4a47a06067e429`;
+candidate is `acccdc9d9464c2ca2db5fc3291dc252b7affe683ca9cadb7628ffef58863a51c`.
+Older BUILD20 samples remain under `artifacts/format/m3-final-android-performance-20/`.
 
-Baseline APK SHA-256:
-`2dd557379b1cac6ac51ce813f8a168a46cd9a460249846efe08a8e79b5801af2`.
-Candidate APK SHA-256:
-`83aa369e1b7cc2d9eb16eaf4c2dc1f0f40f574ddeaa0a2965317feb75c2ca01e`.
-Exact app/test APK and source provenance is under
-`artifacts/format/m3-{baseline,candidate}4a-android-build-20/`; raw strokes and
-per-repetition analysis are under `artifacts/format/m3-final-android-performance-20/`.
+### Composition CPU trace
+
+A separate matched sixteen-photo trace uses the same BUILD29/32 binaries and
+three ten-second contacts. Full CPU traces contain no buffer overwrite or
+kernel overruns. Matching raw begin events to scheduling threads avoids the
+existing report's incorrect zero owner-CPU result. Candidate composition CPU
+totals decrease by 383.051 ms across all contacts; per phase they decrease
+4.8841 → 4.7554 ms (2.64%). Total callback CPU decreases 1.48%; independent
+Android thread CPU decreases 1.69%. Publication adds 53.953 ms, largely inside
+nested command-finish work, which must not be added twice.
+
+The bounded GPU timing queue retains only 764/2052 baseline and 763/2024
+candidate frame observations. Missing timings are not zero-cost frames. This
+trace supports CPU attribution, not full GPU p95 or untraced tier qualification.
+Exact joins, missing IDs and per-contact results are under
+`artifacts/format/m3-mid-stack-trace-37/trace-diagnosis/`.
 
 ## Brushes
 

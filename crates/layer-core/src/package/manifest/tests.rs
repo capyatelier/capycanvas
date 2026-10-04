@@ -17,7 +17,7 @@ fn fixture(name: &str) -> Value {
 fn directory(extra: &[(&str, &[u8])]) -> Directory {
     let mut offset = 1024;
     let members = [("mimetype", MIMETYPE), ("manifest.json", b"{}".as_slice())].into_iter().chain(extra.iter().copied()).map(|(name, bytes)| {
-        let member = Member { name:name.into(), offset, length:bytes.len() as u64, crc32:crc32fast::hash(bytes) };
+        let member = Member { name:name.into(), offset, length:bytes.len() as u64, compressed_length:None, crc32:crc32fast::hash(bytes) };
         offset += bytes.len() as u64 + 64; member
     }).collect();
     Directory { members, length:offset }

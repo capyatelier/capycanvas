@@ -60,11 +60,11 @@ export async function checkPackageView({evaluate,settle}) {
   try {
     await invoke('save_document_as');await ready();
     const source=await evaluate('Array.from([...packageViewTest.files.values()].at(-1))');
-    const sourceManifest=packageManifest(Uint8Array.from(source));
+    const sourceManifest=await packageManifest(Uint8Array.from(source));
     assert.ok(packageObjects(sourceManifest,'capy.occurrence/1').length>0);
     const preview=Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAAXNSR0IB2cksfwAAAA5JREFUeJxj+M/A8B8EARD4A/1OlcFvAAAAAElFTkSuQmCC','base64');
     const preserved=preservedFixture(source,preview,true),withoutPreview=preservedFixture(source,preview,false);
-    const manifest=packageManifest(preserved),outputs=manifest.outputs.map(ref=>manifest.objects.find(o=>o.id===ref.ref)).map(o=>({id:o.id,name:o.data.name}));
+    const manifest=await packageManifest(preserved),outputs=manifest.outputs.map(ref=>manifest.objects.find(o=>o.id===ref.ref)).map(o=>({id:o.id,name:o.data.name}));
     for(const [name,bytes]of [['unsupported.capy',preserved],['source-only.capy',withoutPreview],['editable.capy',source]])await evaluate(`packageViewTest.inputs.set(${JSON.stringify(name)},Uint8Array.from(atob(${JSON.stringify(Buffer.from(bytes).toString('base64'))}),c=>c.charCodeAt(0)))`);
     await invoke('add_layer');await settle();await ready();
     const incumbent=await snapshot();

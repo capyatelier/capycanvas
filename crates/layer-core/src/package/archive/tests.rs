@@ -1,10 +1,11 @@
 use super::*;
 use std::{cell::Cell, io::Cursor};
 
-fn package(extra: &[(&str, &[u8])]) -> Vec<u8> {
-    let mut inputs: Vec<_> = [("mimetype", MIMETYPE), ("manifest.json", b"{}".as_slice())].into_iter().chain(extra.iter().copied())
+fn package(extra: &[(&str, &[u8])]) -> Vec<u8> { package_manifest(b"{}", extra) }
+fn package_manifest(manifest: &[u8], extra: &[(&str, &[u8])]) -> Vec<u8> {
+    let mut inputs: Vec<_> = [("mimetype", MIMETYPE), ("manifest.json", manifest)].into_iter().chain(extra.iter().copied())
         .map(|(name, bytes)| (name, Cursor::new(bytes))).collect();
-    let mut members: Vec<_> = inputs.iter_mut().map(|(name, input)| StoredMember { name, length: input.get_ref().len() as u64,
+    let mut members: Vec<_> = inputs.iter_mut().map(|(name, input)| InputMember { name, length: input.get_ref().len() as u64,
         crc32: crc32fast::hash(input.get_ref()), input }).collect();
     let mut bytes = Vec::new(); write_archive(&mut bytes, &mut members, 16 * 1024 * 1024).unwrap(); bytes
 }
@@ -44,15 +45,15 @@ fn crc_failure_never_becomes_empty_payload_and_signature_exception_is_exact() {
     let dir = read(&bytes).unwrap(); let member = dir.member("data/a").unwrap();
     bytes[member.offset as usize] ^= 1;
     assert!(dir.read_member(&mut Cursor::new(bytes), member, 100).unwrap_err().contains("checksum"));
-    assert!(verify(&Member { name:CREDENTIAL.into(), offset:0, length:1, crc32:0 }, 77).is_ok());
-    assert!(verify(&Member { name:"META-INF/other.c2pa".into(), offset:0, length:1, crc32:0 }, 77).is_err());
+    assert!(verify(&Member { name:CREDENTIAL.into(), offset:0, length:1, compressed_length:None, crc32:0 }, 77).is_ok());
+    assert!(verify(&Member { name:"META-INF/other.c2pa".into(), offset:0, length:1, compressed_length:None, crc32:0 }, 77).is_err());
 }
 
 #[test]
 fn names_and_case_aliases_are_rejected_without_extraction() {
     for name in ["../paint", "/paint", "data//paint", "data/./paint", "data\\paint", "c:paint", "data/", "data/é"] { assert!(!name_valid(name)); }
     let mut a = b"".as_slice(); let mut b = b"".as_slice();
-    let mut members = [StoredMember { name:"data/paint", length:0, crc32:0, input:&mut a }, StoredMember { name:"DATA/PAINT", length:0, crc32:0, input:&mut b }];
+    let mut members = [InputMember { name:"data/paint", length:0, crc32:0, input:&mut a }, InputMember { name:"DATA/PAINT", length:0, crc32:0, input:&mut b }];
     assert!(write_archive(&mut Vec::new(), &mut members, 1000).is_err());
 }
 
@@ -60,7 +61,7 @@ fn names_and_case_aliases_are_rejected_without_extraction() {
 fn zip64_thresholds_encode_only_saturated_fields_and_roundtrip_entry_count() {
     for length in [LIMIT32-1, LIMIT32, LIMIT32+1] {
         for offset in [LIMIT32-1, LIMIT32, LIMIT32+1] {
-            let (local, central) = headers("data/a", length, 17, offset);
+            let (local, central) = headers("data/a", length, None, 17, offset);
             let sizes = if length >= LIMIT32 { vec![length, length] } else { vec![] };
             extras(&local[36..], &sizes).unwrap();
             let mut values = sizes; if offset >= LIMIT32 { values.push(offset); }
@@ -86,11 +87,11 @@ fn failed_and_cancelled_streams_do_not_publish_a_complete_directory() {
     }
     let mut output = crate::Cancellable { inner: CancelAfter { bytes: Vec::new(), cancelled: &cancelled }, cancelled: || cancelled.get() };
     let mut input = b"hello".as_slice();
-    assert!(write_archive(&mut output, &mut [StoredMember { name:"mimetype", length:5, crc32:crc32fast::hash(b"hello"), input:&mut input }], 1000).is_err());
+    assert!(write_archive(&mut output, &mut [InputMember { name:"mimetype", length:5, crc32:crc32fast::hash(b"hello"), input:&mut input }], 1000).is_err());
     assert!(read(&output.inner.bytes).is_err());
     let mut input = b"short".as_slice();
     let mut bytes = Vec::new();
-    assert!(write_archive(&mut bytes, &mut [StoredMember { name:"mimetype", length:10, crc32:0, input:&mut input }], 1000).is_err());
+    assert!(write_archive(&mut bytes, &mut [InputMember { name:"mimetype", length:10, crc32:0, input:&mut input }], 1000).is_err());
     assert!(read(&bytes).is_err());
 }
 
@@ -226,7 +227,7 @@ fn sparse_zip64(length: u64) -> (SparseArchive, Vec<u64>, Vec<u64>, u64) {
         ("data/tail", 2, b"ok".as_slice())] {
         local_positions.push(offset);
         relative_central.push(directory.len() as u64);
-        let (mut local, central) = headers(name, length, crc32fast::hash(payload), offset);
+        let (mut local, central) = headers(name, length, None, crc32fast::hash(payload), offset);
         let data_offset = offset + local.len() as u64;
         local.extend(payload);
         chunks.push((offset, local));
@@ -285,4 +286,64 @@ fn large_archive_rejects_conflicting_zip64_values_and_offset_overflow() {
         assert!(Directory::read(&mut input, 4, 1024).is_err(), "accepted ZIP64 mutation at {offset}");
         assert!(input.read_bytes < 256 * 1024, "invalid directory scanned {} bytes", input.read_bytes);
     }
+}
+
+
+#[test]
+fn compressed_manifest_is_lossless_bounded_and_keeps_resource_ranges_seekable() {
+    let manifest = serde_json::to_vec(&serde_json::json!({"resources": (0..1024).map(|index|
+        serde_json::json!({"id": format!("{index:032x}"), "type": "capy.tile/1", "bytes": "65536", "data": {"width":256,"height":256}})
+    ).collect::<Vec<_>>()})).unwrap();
+    let payload = (0..8192).map(|value| (value * 37) as u8).collect::<Vec<_>>();
+    let bytes = package_manifest(&manifest, &[("data/tiles-1.bin", &payload)]);
+    let directory = read(&bytes).unwrap();
+    let member = directory.member("manifest.json").unwrap();
+    assert!(member.compressed_length.unwrap() < member.length / 4);
+    assert!(directory.read_member(&mut Cursor::new(&bytes), member, manifest.len() - 1).is_err());
+    assert_eq!(directory.read_member(&mut Cursor::new(&bytes), member, manifest.len()).unwrap(), manifest);
+    let pack = directory.member("data/tiles-1.bin").unwrap();
+    assert_eq!(pack.compressed_length, None);
+    assert_eq!(&bytes[pack.offset as usize..(pack.offset + pack.length) as usize], payload);
+    let mut independent = zip::ZipArchive::new(Cursor::new(&bytes)).unwrap();
+    let mut restored = Vec::new();
+    independent.by_name("manifest.json").unwrap().read_to_end(&mut restored).unwrap();
+    assert_eq!(restored, manifest);
+    assert_eq!(directory.members[0].compressed_length, None);
+}
+
+fn encoded_manifest(encoded: &[u8], length: u64, crc: u32) -> Vec<u8> {
+    let (mut bytes, mut directory) = headers("mimetype", MIMETYPE.len() as u64, None, crc32fast::hash(MIMETYPE), 0);
+    bytes.extend(MIMETYPE);
+    let (local, central) = headers("manifest.json", length, Some(encoded.len() as u64), crc, bytes.len() as u64);
+    bytes.extend(local); bytes.extend(encoded); directory.extend(central);
+    let end = tail(2, directory.len() as u64, bytes.len() as u64, false).unwrap();
+    bytes.extend(directory); bytes.extend(end); bytes
+}
+
+#[test]
+fn compressed_metadata_rejects_corruption_expansion_mismatch_and_extra_streams() {
+    let raw = vec![b'x'; 8192];
+    let archive = package_manifest(&raw, &[]);
+    let directory = read(&archive).unwrap();
+    let member = directory.member("manifest.json").unwrap();
+    let encoded = archive[member.offset as usize..(member.offset + member.compressed_length.unwrap()) as usize].to_vec();
+    let mut trailing = encoded.clone(); trailing.push(0);
+    let mut joined = encoded.clone(); joined.extend_from_slice(&encoded);
+    let mut corrupt = encoded.clone(); corrupt[0] ^= 0xff;
+    for (payload, length, crc) in [
+        (encoded.clone(), 8191, member.crc32), (encoded.clone(), 8193, member.crc32),
+        (encoded.clone(), 8192, member.crc32 ^ 1),
+        (encoded[..encoded.len()-1].to_vec(), 8192, member.crc32),
+        (trailing, 8192, member.crc32), (joined, 8192, member.crc32), (corrupt, 8192, member.crc32),
+    ] {
+        let bytes = encoded_manifest(&payload, length, crc);
+        let directory = read(&bytes).unwrap();
+        assert!(directory.read_member(&mut Cursor::new(&bytes), directory.member("manifest.json").unwrap(), 8193).is_err());
+    }
+    let bytes = encoded_manifest(&encoded, u64::from(u32::MAX)-1, member.crc32);
+    assert!(read(&bytes).is_err());
+    let mut bounded_output = Vec::new();
+    let mut input = raw.as_slice();
+    assert!(write_archive(&mut bounded_output, &mut [InputMember {name:"manifest.json", length:8192, crc32:member.crc32, input:&mut input}], 8191).is_err());
+    assert!(bounded_output.is_empty());
 }

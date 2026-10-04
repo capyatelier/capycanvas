@@ -7,24 +7,32 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 
 ## Operations
 
-The BUILD20 comparisons measure the current M3 candidate on `4a2cf6aa0`.
-Earlier operation rows and current83/BUILD15 effect and transform probes apply
-to their named binaries; they do not establish BUILD20 canvas performance.
-The selected BUILD20 canvas rows below retain their presentation and scope limits.
+The M3 cutover is committed at `b3f6f8e51`. The latest G-Pen measurements use
+frozen baseline BUILD29 and M3 BUILD32 binaries based on `192601dac`; their
+forward and reverse results are [below](#current-m3-g-pen-comparison).
+Both miss the tier target, and order-dependent CPU and response bounds remain
+unresolved. BUILD20 canvas comparisons use `4a2cf6aa0`; earlier operation,
+effect and transform rows apply only to their named binaries and retain their
+presentation and scope limits.
 
-Overall M3 performance qualification remains pending. The finalized six normal
-release offscreen navigation runs meet the warmed 5% p95 and +1 ms p99 comparison
-bounds in all fifteen paired observations, for frame CPU, CPU through submission
-and completion time. Cold half/native/double navigation in the first pair exceeds
-5% p95; later same-phase comparisons improve, but individual cold observations
-are not all accepted. The later 100-repeat sixteen-layer affinity ABBA pair on
-frozen `4a2cf6aa0` meets the common moving and pen-up CPU-submit/completed bounds
-in both adjacent temporal comparisons; pen-up completion p99 changes by -0.246
-and -0.396 ms. This clears that bounded diagnostic, not the unrestricted matrix.
-These frozen binaries do not qualify current `192601dac` source, reference-tablet
-performance or physical input-to-present response. Exact results are retained in
-`artifacts/format/m3-uninstrumented-27/navigation-analysis.txt` and
-`artifacts/format/m3-final-ordinary-fixture-20261004/measurements/affinity-analysis.txt`.
+Overall M3 performance qualification remains pending. Matched release offscreen
+runs on the desktop RTX PRO 6000 compare frozen `192601dac` with the authored
+candidate. Navigation CPU p95 improves in every comparison, with unchanged
+camera/work/cache counters and zero source misses or recomposition. Completed
+p95 exceeds 5% in 7/15 cold and 8/15 warmed observations; warmed native-scale
+excesses repeat in all three pairs (+0.024–0.178 ms). All p99 shifts stay below
++1 ms. These completion spans include host queue polling, not GPU timestamps.
+
+The 100-repeat sixteen-layer bottom-paint ABBA comparison retains exact PNGs,
+frame/work counters and 110,624,776 bytes of capture backing. CPU-submit bounds
+pass both temporal pairs. The reverse pair exceeds completed-motion p95 by
+7.09% (+0.041 ms), loses 6.23% throughput and adds 1.025 ms to pen-up p99;
+the forward pair passes. These excesses remain unresolved and do not qualify
+reference-tablet rates or physical input-to-present response. Exact observations
+are under `artifacts/format/m3-uninstrumented-34/` and
+`artifacts/format/m3-final192-ordinary-fixture/measurements/`. Earlier passing
+`4a2cf6aa0` diagnostics remain in their own artifacts and do not override these
+current-source results.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
@@ -36,9 +44,9 @@ performance or physical input-to-present response. Exact results are retained in
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |
 | Retained photo translation with snapping (61 MP) | 120 | **Not met.** 59.29–59.87 completed updates/s; matched snapping-off run 59.46–59.71/s | [Transform snapping](#transform-snapping), 2026-10-02 |
-| Imported dry-photo translation, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** Current M3 64.252–65.299 completed updates/s; completion gap p99 24.150–24.576 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
-| Imported dry-photo Distort, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** Current M3 60.489–61.278 completed updates/s; completion gap p99 26.172–27.025 ms; baseline setup fails | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
-| Imported dry-photo Warp, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** Current M3 18.961–19.375 completed updates/s; completion gap p99 88.404–91.979 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
+| Imported dry-photo translation, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 64.252–65.299 completed updates/s; completion gap p99 24.150–24.576 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
+| Imported dry-photo Distort, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 60.489–61.278 completed updates/s; completion gap p99 26.172–27.025 ms; baseline setup fails | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
+| Imported dry-photo Warp, sparse neighbor, snapping off (61 MP) | 120 | **Not met.** BUILD20 M3 18.961–19.375 completed updates/s; completion gap p99 88.404–91.979 ms; presentation unmeasured | [BUILD20 selected transforms](#build20-selected-imported-photo-transforms) |
 | Retained wet-photo Transform body drag (61 MP) | 120 | **Not met.** 36.3–37.0 renderer updates/s; presentation unmeasured | [Material transforms](#retained-wet-photo-transforms), 2026-10-02 |
 | Retained wet-photo Distort corner drag (61 MP) | 120 | **Not met.** 29.37 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
 | Retained wet-photo Warp node drag (61 MP) | 120 | **Not met.** 15.97 completed updates/s, warm median; presentation unmeasured | [Retained Distort and Warp](#retained-distort-and-warp), 2026-10-02 |
@@ -1178,6 +1186,62 @@ quantiles and configured admission limits are retained under
 `artifacts/format/m3-final-android-performance-20/`, with
 `canvas-analysis.local.md`, `canvas-analysis.json` and `canvas-gestures.tsv`.
 
+## Current M3 G-Pen comparison
+
+Measured on 2026-10-04 on the reference Wacom MovinkPad Pro 14, with the clean
+`192601dac` BUILD29 baseline and M3 BUILD32 based on the same revision. Both
+benchmark APKs use release Rust. These frozen measurements precede the
+committed `b3f6f8e51` cutover and do not qualify later runtime changes. The
+61 MP photo has one empty drawing layer
+above it, Solid Color fill hidden, Linear blending, Navigator open and Stats
+closed. G-Pen is 2048 px at Fit zoom 16.5341%, with pressure 1, 16 ms prediction
+and a 520 × 299 px ellipse. A priming stroke is undone before each series of
+three ten-second strokes with 200 Hz OS-injected stylus input.
+
+Forward runs measure baseline then candidate; the reverse series measures the
+same candidate then baseline APKs after an idle interval. Values below follow
+stroke order within each series. Fresh updates consume new input and complete
+inside the contact. Response ends at GPU completion, not presentation or
+physical pen response.
+
+| Series / build | Fresh updates/s | Completion-gap p99, ms | Input→GPU response p99, ms | Owner CPU p95, ms |
+| --- | --- | --- | --- | --- |
+| Forward baseline | 102.036 / 100.770 / 102.750 | 30.412 / 30.046 / 28.093 | 62.387 / 61.744 / 63.357 | 12.356 / 12.757 / 11.897 |
+| Forward candidate | 96.539 / 96.878 / 95.880 | 29.908 / 31.045 / 28.989 | 61.667 / 63.197 / 76.441 | 13.486 / 13.278 / 13.357 |
+| Reverse baseline | 102.188 / 102.930 / 102.616 | 28.832 / 27.915 / 28.826 | 61.651 / 57.428 / 62.433 | 12.692 / 11.935 / 12.104 |
+| Reverse candidate | 102.529 / 102.864 / 102.127 | 28.601 / 29.960 / 28.288 | 59.411 / 54.162 / 61.414 | 12.658 / 12.756 / 12.115 |
+
+**Neither build meets the target.** All strokes are below 120 fresh updates/s,
+its 95% floor of 114/s and the 16.7 ms gap limit. Indexed forward throughput
+changes are −5.39 / −3.86 / −6.69%; callback CPU p95 grows 10.09 / 4.08 / 12.53%.
+The reverse changes are +0.33 / −0.06 / −0.48% and −0.25 / +6.25 / +0.52%.
+Reverse stroke 2 still exceeds the CPU comparison bound: callback p95 grows
+0.769 ms, owner CPU p95 grows 6.87%, callback p99 grows 1.146 ms and the
+completion-gap p99 grows 2.045 ms. Forward response p99 grows 1.453 and
+13.084 ms in strokes 2 and 3; reverse response p99 improves in all three.
+These grouped series do not resolve an overall comparison pass.
+
+Visible tabs, workspace, settings, camera and fixture match. The forward
+candidate starts warmer; the reverse candidate starts cooler than its later
+baseline. Thermal status is zero at every endpoint, but clocks are unmeasured.
+Source admission also changes with the run: baseline/candidate retain 750/764
+decoded tiles forward and 762/748 reverse. Candidate accounted residency
+changes by +14 MiB forward and −14 MiB reverse. These settled boundaries do
+not measure continuous process or driver peaks.
+
+In reverse stroke 2, paint p95 improves by 0.261 ms while queue-present p95
+grows 1.177 ms. Each build's eleven largest callback records include ten in
+the first second and one at the contact end; the ongoing second half also has
+a callback p95 increase. No onset or tail sample is excluded. GPU execution
+and the internal renderer phases are unmeasured, so this does not assign a
+cause or qualify first-contact response. Other brush and canvas rows retain
+their stated build scope; overall M3 qualification remains pending.
+
+Exact APK/source identities and all forward/reverse records are retained in
+`artifacts/format/m3-{baseline192-android-build-29,candidate192-android-build-32}/`
+and `artifacts/format/m3-top-brush-35/`, including `order-comparison.json` and
+`reverse-stroke1-tail-analysis.json`.
+
 ## BUILD20 G-Pen comparison
 
 Measured on 2026-10-04 UTC with the clean `4a2cf6aa0` baseline and the M3
@@ -1250,7 +1314,7 @@ are kept separate from the 10 s comparison table below.
 
 | Brush (id) | Class | Size | Measured | Status |
 | --- | --- | --- | --- | --- |
-| G-Pen (1) | Simple | 2048 px | BUILD20: 101.817–104.616 fresh updates/s; fresh gap p99 24.615–25.925 ms, Linear | **Not met**; [BUILD20](#build20-g-pen-comparison) |
+| G-Pen (1) | Simple | 2048 px | BUILD32: forward 95.880–96.878, reverse 102.127–102.864 fresh updates/s; completion-gap p99 28.288–31.045 ms, Linear | **Not met**; [current M3 comparison](#current-m3-g-pen-comparison) |
 | Rough G-Pen (28) | Simple | 2048 px | 61.8 updates/s (60.6–62.7); gap p99 33.6 ms | **Not met** |
 | Calligraphy Pen (29) | Simple | 2048 px | 189.3 updates/s (188.6–190.5); gap p99 10.6 ms | Met |
 | Antique Pen (30) | Simple | 2048 px | 82.0 updates/s (81.7–82.2); gap p99 26.4 ms | **Not met** |
@@ -1289,7 +1353,7 @@ are kept separate from the 10 s comparison table below.
 | Liquify Expand (38) | Very complex | 512 px | 68.4 updates/s (66.7–69.2); gap p99 38.3 ms | **Not met** |
 | Liquify Crystals (39) | Very complex | 512 px | 41.6 updates/s (39.3–42.2); gap p99 70.0 ms | **Not met** |
 
-## Current G-Pen comparison
+## Retained-material G-Pen comparison
 
 This earlier comparison is measured on 2026-10-02 at `eb9b8bab1` with the retained-material changes:
 the tier photo beneath one paint layer, Perceptual blending, 2048 px G-Pen,

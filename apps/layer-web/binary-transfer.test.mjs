@@ -57,7 +57,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       const download=async url=>{const response=await fetch(url);if(!response.ok)throw Error('Fixture download failed: '+url+': '+response.status);return new Uint8Array(await response.arrayBuffer());};
       const bytes=await download(${JSON.stringify(fixture)});expectedProfile=await download(${JSON.stringify(fixture + '.icc')});
       check(expectedProfile.length===2*1024*1024 && new DataView(expectedProfile.buffer).getUint32(0)===expectedProfile.length && new TextDecoder().decode(expectedProfile.subarray(36,40))==='acsp');
-      const originalManifest=(${packageManifest.toString()})(bytes),originalEvidence=await (${packageEvidence.toString()})(bytes,originalManifest);
+      const originalManifest=await (${packageManifest.toString()})(bytes),originalEvidence=await (${packageEvidence.toString()})(bytes,originalManifest);
       const start=performance.now();const wire=await request('read',options,[bytes]);const read=performance.now()-start;
       const first=inspect(wire);const parts=[];let offset=0,largestWrite=0;
       const begin=performance.now();
@@ -67,7 +67,7 @@ export async function checkBinaryTransfer({evaluate}, fixture) {
       });
       const main=performance.now()-begin;
       const saved=new Blob(parts),expectedHash=await hash(saved),savedBytes=new Uint8Array(await saved.arrayBuffer());
-      const savedManifest=(${packageManifest.toString()})(savedBytes),savedEvidence=await (${packageEvidence.toString()})(savedBytes,savedManifest);
+      const savedManifest=await (${packageManifest.toString()})(savedBytes),savedEvidence=await (${packageEvidence.toString()})(savedBytes,savedManifest);
       const identity=manifest=>({objects:manifest.objects,resources:manifest.resources.map(({location,...resource})=>resource)});
       const exactOriginal=JSON.stringify(identity(savedManifest))===JSON.stringify(identity(originalManifest))&&JSON.stringify(savedEvidence)===JSON.stringify(originalEvidence);
       const again=await request('read',options,[new Uint8Array(await saved.arrayBuffer())]);const second=inspect(again);

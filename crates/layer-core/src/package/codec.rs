@@ -1,4 +1,4 @@
-use super::{archive::{self, Directory, StoredMember}, manifest::{Manifest, ManifestLimits, ManifestRead},
+use super::{archive::{self, Directory, InputMember}, manifest::{Manifest, ManifestLimits, ManifestRead},
     resources::{self, ResourceInventory, PreparedResources}, preview::{Preview, MAX_PREVIEW_BYTES}, transport::BackingReader, ImmutableBacking};
 use crate::authored::{Artwork, ArtworkCapture, CaptureCheckpoint, EvaluationContext, PortableId, Support};
 use serde_json::{Value, json};
@@ -22,6 +22,25 @@ pub enum OpenOutcome {
     Preserved { source: ImmutableBacking, outputs: Vec<OutputInfo>, preview: Option<Preview>, reason: String },
     RecoveredView { source: ImmutableBacking, preview: Preview, reason: String },
     Failure { source: ImmutableBacking, reason: String },
+}
+#[derive(serde::Serialize)]
+struct ManifestWire<'a> {
+    default_output: Value,
+    document: PortableId,
+    format: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    metadata: Option<&'a Value>,
+    objects: &'a [Value],
+    outputs: &'a [Value],
+    resources: ResourceRecords<'a>,
+    root: Value,
+    version: u32,
+}
+struct ResourceRecords<'a>(&'a [resources::PreparedResource]);
+impl serde::Serialize for ResourceRecords<'_> {
+    fn serialize<S:serde::Serializer>(&self, serializer:S) -> Result<S::Ok,S::Error> {
+        serializer.collect_seq(self.0.iter().map(|entry|&entry.record))
+    }
 }
 fn active(cancelled:&AtomicBool) -> Result<(),String> {
     if cancelled.load(Ordering::Relaxed) {Err("Package operation cancelled".into())} else {Ok(())}
@@ -62,11 +81,10 @@ impl PreparedPackage {
         if inventory.entries.keys().any(|id|*id==artwork.id || shape.objects.contains_key(id)) {return Err("Object and resource identities overlap".into());}
         let mut resources=inventory.prepare(cancelled)?;
         resources.append_opaque(opaque,cancelled)?;
-        let mut manifest=json!({"format":"capy.canvas","version":1,"document":artwork.id,
-            "root":resources::reference(root),"objects":objects,"resources":resources.entries.iter().map(|entry|&entry.record).collect::<Vec<_>>(),
-            "outputs":outputs,"default_output":resources::reference(default)});
-        if let Some(metadata)=metadata {manifest["metadata"]=metadata;}
-        let manifest=serde_json::to_vec(&manifest).map_err(|e|e.to_string())?;
+        let manifest=serde_json::to_vec(&ManifestWire {
+            default_output:resources::reference(default),document:artwork.id,format:"capy.canvas",metadata:metadata.as_ref(),
+            objects:&objects,outputs:&outputs,resources:ResourceRecords(&resources.entries),root:resources::reference(root),version:1,
+        }).map_err(|e|e.to_string())?;
         if manifest.len()>crate::ProjectLimits::default().metadata_bytes as usize {return Err("Artwork metadata exceeds package limit".into());}
         Ok(Self {checkpoint:capture.checkpoint,preview_status,manifest:manifest.into(),resources,preview})
     }
@@ -75,13 +93,13 @@ impl PreparedPackage {
     pub fn write(&self, output:&mut impl Write, cancelled:&AtomicBool) -> Result<(),String> {
         active(cancelled)?;
         let mut mime=Cursor::new(archive::MIMETYPE);
-        let mut manifest=Cursor::new(&*self.manifest);
+        let mut manifest=crate::Cancellable {inner:Cursor::new(&*self.manifest),cancelled:||cancelled.load(Ordering::Relaxed)};
         let mut pack=self.resources.reader(cancelled);
         let mut preview=Cursor::new(self.preview.as_ref().map(|p|p.encoded().as_ref()).unwrap_or(&[]));
-        let mut members=vec![StoredMember {name:"mimetype",length:archive::MIMETYPE.len() as u64,crc32:crc32fast::hash(archive::MIMETYPE),input:&mut mime},
-            StoredMember {name:"manifest.json",length:self.manifest.len() as u64,crc32:crc32fast::hash(&self.manifest),input:&mut manifest}];
-        if !self.resources.entries.is_empty() {members.push(StoredMember {name:"data/tiles-1.bin",length:self.resources.length,crc32:self.resources.crc,input:&mut pack});}
-        if let Some(p)=&self.preview {members.push(StoredMember {name:"preview.png",length:p.encoded().len() as u64,crc32:crc32fast::hash(p.encoded()),input:&mut preview});}
+        let mut members=vec![InputMember {name:"mimetype",length:archive::MIMETYPE.len() as u64,crc32:crc32fast::hash(archive::MIMETYPE),input:&mut mime},
+            InputMember {name:"manifest.json",length:self.manifest.len() as u64,crc32:crc32fast::hash(&self.manifest),input:&mut manifest}];
+        if !self.resources.entries.is_empty() {members.push(InputMember {name:"data/tiles-1.bin",length:self.resources.length,crc32:self.resources.crc,input:&mut pack});}
+        if let Some(p)=&self.preview {members.push(InputMember {name:"preview.png",length:p.encoded().len() as u64,crc32:crc32fast::hash(p.encoded()),input:&mut preview});}
         let mut writer=crate::Cancellable {inner:output,cancelled:||cancelled.load(Ordering::Relaxed)};
         archive::write_archive(&mut writer,&mut members,usize::try_from(crate::ProjectLimits::default().metadata_bytes).map_err(|_|"Package metadata limit exceeds address space")?)
     }

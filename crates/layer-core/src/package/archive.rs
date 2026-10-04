@@ -6,11 +6,11 @@ const LIMIT16: u64 = u16::MAX as u64;
 const CREDENTIAL: &str = "META-INF/content_credential.c2pa";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Member { pub name: String, pub offset: u64, pub length: u64, pub crc32: u32 }
+pub struct Member { pub name: String, pub offset: u64, pub length: u64, pub compressed_length: Option<u64>, pub crc32: u32 }
 #[derive(Clone, Debug)]
 pub struct Directory { pub members: Vec<Member>, pub length: u64 }
 
-pub struct StoredMember<'a> { pub name: &'a str, pub length: u64, pub crc32: u32, pub input: &'a mut dyn Read }
+pub struct InputMember<'a> { pub name: &'a str, pub length: u64, pub crc32: u32, pub input: &'a mut dyn Read }
 
 fn io(error: std::io::Error) -> String { format!("Package I/O failed: {error}") }
 fn u16_at(bytes: &[u8], offset: usize) -> u16 { u16::from_le_bytes(bytes[offset..offset+2].try_into().unwrap()) }
@@ -73,12 +73,16 @@ impl Directory {
             let file = archive.by_index_raw(index).map_err(|e| e.to_string())?;
             let name = std::str::from_utf8(file.name_raw()).map_err(|_| "Non-ASCII ZIP member")?;
             if !name_valid(name) || !names.insert(name.to_ascii_lowercase()) || file.encrypted()
-                || file.compression() != zip::CompressionMethod::Stored || file.size() != file.compressed_size()
+                || match file.compression() {
+                    zip::CompressionMethod::Stored => file.size() != file.compressed_size(),
+                    zip::CompressionMethod::Deflated => name != "manifest.json" || file.compressed_size() >= file.size() || file.size() > max_metadata,
+                    _ => true,
+                }
                 || file.unix_mode().is_some_and(|m| m & 0o170000 != 0 && m & 0o170000 != 0o100000) {
                 return Err("Unsupported or ambiguous ZIP member".into());
             }
             headers.push((file.header_start(), file.central_header_start()));
-            members.push(Member { name: name.into(), offset: file.data_start().ok_or("Missing ZIP data offset")?, length: file.size(), crc32: file.crc32() });
+            members.push(Member { name: name.into(), offset: file.data_start().ok_or("Missing ZIP data offset")?, length: file.size(), compressed_length: (file.compression() == zip::CompressionMethod::Deflated).then_some(file.compressed_size()), crc32: file.crc32() });
         }
         drop(archive);
         let (mut local, mut central) = (0, offset);
@@ -86,20 +90,22 @@ impl Directory {
             if local != header || central != directory { return Err("Gapped or overlapping ZIP members".into()); }
             let l = at::<30>(input, local)?;
             let c = at::<46>(input, central)?;
-            let large = member.length >= LIMIT32;
+            let encoded_length = member.compressed_length.unwrap_or(member.length);
+            let method = if member.compressed_length.is_some() { 8 } else { 0 };
+            let large = member.length >= LIMIT32 || encoded_length >= LIMIT32;
             let version = if large || header >= LIMIT32 { 45 } else { 20 };
             if u32_at(&l, 0) != 0x04034b50 || u32_at(&c, 0) != 0x02014b50
                 || u16_at(&l, 4) != version || u16_at(&c, 6) != version
                 || u16_at(&l, 6) != 0 || u16_at(&c, 8) != 0
-                || u16_at(&l, 8) != 0 || u16_at(&c, 10) != 0
+                || u16_at(&l, 8) != method || u16_at(&c, 10) != method
                 || l[10..14] != c[12..16] || u32_at(&l, 14) != member.crc32 || u32_at(&c, 16) != member.crc32
-                || u32_at(&l, 18) as u64 != member.length.min(LIMIT32) || u32_at(&l, 22) as u64 != member.length.min(LIMIT32)
-                || u32_at(&c, 20) as u64 != member.length.min(LIMIT32) || u32_at(&c, 24) as u64 != member.length.min(LIMIT32)
+                || u32_at(&l, 18) as u64 != encoded_length.min(LIMIT32) || u32_at(&l, 22) as u64 != member.length.min(LIMIT32)
+                || u32_at(&c, 20) as u64 != encoded_length.min(LIMIT32) || u32_at(&c, 24) as u64 != member.length.min(LIMIT32)
                 || u32_at(&c, 42) as u64 != header.min(LIMIT32) || u16_at(&c, 32) != 0 || u16_at(&c, 34) != 0
                 || usize::from(u16_at(&l, 26)) != member.name.len() || usize::from(u16_at(&c, 28)) != member.name.len() {
                 return Err("Conflicting or noncanonical ZIP headers".into());
             }
-            let mut expected = if large { vec![member.length, member.length] } else { Vec::new() };
+            let mut expected = [member.length, encoded_length].into_iter().filter(|value| *value >= LIMIT32).collect::<Vec<_>>();
             for (base, fixed, name_size, extra_size, is_central) in [
                 (local, 30, u16_at(&l, 26), u16_at(&l, 28), false),
                 (central, 46, u16_at(&c, 28), u16_at(&c, 30), true),
@@ -112,7 +118,7 @@ impl Directory {
                 extras(&extra, &expected)?;
             }
             if member.offset != add(local, 30 + member.name.len() as u64 + u64::from(u16_at(&l, 28)))? { return Err("Conflicting ZIP data offset".into()); }
-            local = add(member.offset, member.length)?;
+            local = add(member.offset, encoded_length)?;
             central = add(central, 46 + member.name.len() as u64 + u64::from(u16_at(&c, 30)))?;
         }
         if local != offset || central != directory_end { return Err("Conflicting ZIP member ranges".into()); }
@@ -127,9 +133,21 @@ impl Directory {
     }
     pub fn member(&self, name: &str) -> Option<&Member> { self.members.iter().find(|m| m.name == name) }
     pub fn read_member(&self, input: &mut (impl Read + Seek), member: &Member, limit: usize) -> Result<Vec<u8>, String> {
-        if member.length > limit as u64 || !self.members.contains(member) || member.offset.checked_add(member.length).is_none_or(|end|end>self.length) { return Err("ZIP member exceeds read bound".into()); }
+        let encoded_length = member.compressed_length.unwrap_or(member.length);
+        if member.length > limit as u64 || encoded_length > limit as u64 || !self.members.contains(member)
+            || member.offset.checked_add(encoded_length).is_none_or(|end| end > self.length) { return Err("ZIP member exceeds read bound".into()); }
         input.seek(SeekFrom::Start(member.offset)).map_err(io)?;
-        let mut bytes = vec![0; member.length as usize]; input.read_exact(&mut bytes).map_err(io)?;
+        let mut bytes = vec![0; encoded_length as usize]; input.read_exact(&mut bytes).map_err(io)?;
+        if member.compressed_length.is_some() {
+            let mut decoded = vec![0; (member.length as usize).checked_add(1).ok_or("Manifest length overflow")?];
+            let mut decoder = flate2::Decompress::new(false);
+            let status = decoder.decompress(&bytes, &mut decoded, flate2::FlushDecompress::Finish).map_err(|e| e.to_string())?;
+            if status != flate2::Status::StreamEnd || decoder.total_in() != encoded_length || decoder.total_out() != member.length {
+                return Err("Invalid compressed manifest length or stream".into());
+            }
+            decoded.truncate(member.length as usize);
+            bytes = decoded;
+        }
         verify(member, crc32fast::hash(&bytes))?;
         Ok(bytes)
     }
@@ -146,16 +164,17 @@ fn extra(values: &[u64]) -> Vec<u8> {
     if !values.is_empty() { word(&mut out, 1); word(&mut out, (values.len() * 8) as u16); for value in values { qword(&mut out, *value); } }
     out
 }
-fn headers(name: &str, length: u64, crc: u32, offset: u64) -> (Vec<u8>, Vec<u8>) {
-    let sizes = if length >= LIMIT32 { vec![length, length] } else { Vec::new() };
+fn headers(name: &str, length: u64, compressed_length: Option<u64>, crc: u32, offset: u64) -> (Vec<u8>, Vec<u8>) {
+    let encoded_length = compressed_length.unwrap_or(length);
+    let sizes = [length, encoded_length].into_iter().filter(|value| *value >= LIMIT32).collect::<Vec<_>>();
     let local_extra = extra(&sizes);
     let mut all = sizes;
     if offset >= LIMIT32 { all.push(offset); }
     let central_extra = extra(&all);
-    let version = if length >= LIMIT32 || offset >= LIMIT32 { 45 } else { 20 };
+    let version = if length >= LIMIT32 || encoded_length >= LIMIT32 || offset >= LIMIT32 { 45 } else { 20 };
     let mut common = Vec::new();
-    for value in [version, 0, 0, 0, 0] { word(&mut common, value); }
-    for value in [crc, length.min(LIMIT32) as u32, length.min(LIMIT32) as u32] { dword(&mut common, value); }
+    for value in [version, 0, if compressed_length.is_some() { 8 } else { 0 }, 0, 0] { word(&mut common, value); }
+    for value in [crc, encoded_length.min(LIMIT32) as u32, length.min(LIMIT32) as u32] { dword(&mut common, value); }
     word(&mut common, name.len() as u16);
     let mut local = Vec::new(); dword(&mut local, 0x04034b50); local.extend(&common); word(&mut local, local_extra.len() as u16);
     local.extend(name.as_bytes()); local.extend(local_extra);
@@ -180,7 +199,7 @@ fn tail(count: u64, size: u64, offset: u64, large_member: bool) -> Result<Vec<u8
     Ok(out)
 }
 
-pub fn write_archive(output: &mut impl Write, members: &mut [StoredMember<'_>], max_metadata: usize) -> Result<(), String> {
+pub fn write_archive(output: &mut impl Write, members: &mut [InputMember<'_>], max_metadata: usize) -> Result<(), String> {
     let mut names = BTreeSet::new();
     let mut directory = Vec::new();
     let mut offset = 0;
@@ -188,21 +207,43 @@ pub fn write_archive(output: &mut impl Write, members: &mut [StoredMember<'_>], 
     let mut buffer = vec![0; 64 * 1024];
     for member in members.iter_mut() {
         if !name_valid(member.name) || !names.insert(member.name.to_ascii_lowercase()) { return Err("Invalid or duplicate ZIP name".into()); }
-        let (local, central) = headers(member.name, member.length, member.crc32, offset);
+        let manifest = if member.name == "manifest.json" {
+            if member.length > max_metadata as u64 { return Err("Artwork metadata exceeds package limit".into()); }
+            let mut raw = Vec::with_capacity(member.length as usize);
+            let mut encoder = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
+            let mut remaining = member.length;
+            while remaining != 0 {
+                let count = remaining.min(buffer.len() as u64) as usize;
+                member.input.read_exact(&mut buffer[..count]).map_err(io)?;
+                raw.extend_from_slice(&buffer[..count]);
+                encoder.write_all(&buffer[..count]).map_err(io)?;
+                remaining -= count as u64;
+            }
+            if crc32fast::hash(&raw) != member.crc32 { return Err("ZIP member checksum failed".into()); }
+            let encoded = encoder.finish().map_err(io)?;
+            Some(if encoded.len() < raw.len() { (encoded, true) } else { (raw, false) })
+        } else { None };
+        let compressed_length = manifest.as_ref().and_then(|(bytes, compressed)| compressed.then_some(bytes.len() as u64));
+        let encoded_length = compressed_length.unwrap_or(member.length);
+        let mut encoded = std::io::Cursor::new(manifest.as_ref().map(|(bytes, _)| bytes.as_slice()).unwrap_or_default());
+        let input: &mut dyn Read = if manifest.is_some() { &mut encoded } else { member.input };
+        let (local, central) = headers(member.name, member.length, compressed_length, member.crc32, offset);
         if central.len() > max_metadata.saturating_sub(directory.len()) { return Err("ZIP directory exceeds memory bound".into()); }
         directory.extend(central);
         large |= member.length >= LIMIT32 || offset >= LIMIT32;
         output.write_all(&local).map_err(io)?;
-        offset = add(add(offset, local.len() as u64)?, member.length)?;
-        let mut remaining = member.length;
+        offset = add(add(offset, local.len() as u64)?, encoded_length)?;
+        let mut remaining = encoded_length;
         let mut crc = crc32fast::Hasher::new();
         while remaining != 0 {
             let count = remaining.min(buffer.len() as u64) as usize;
-            member.input.read_exact(&mut buffer[..count]).map_err(io)?;
+            input.read_exact(&mut buffer[..count]).map_err(io)?;
             crc.update(&buffer[..count]); output.write_all(&buffer[..count]).map_err(io)?;
             remaining -= count as u64;
         }
-        verify(&Member { name: member.name.into(), offset: 0, length: member.length, crc32: member.crc32 }, crc.finalize())?;
+        if compressed_length.is_none() && crc.finalize() != member.crc32 && !(member.name == CREDENTIAL && member.crc32 == 0) {
+            return Err("ZIP member checksum failed".into());
+        }
     }
     output.write_all(&directory).map_err(io)?;
     output.write_all(&tail(members.len() as u64, directory.len() as u64, offset, large)?).map_err(io)?;

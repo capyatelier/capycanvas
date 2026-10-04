@@ -497,9 +497,11 @@ GTK, Android, Apple and Windows file workers call the shared reader/writer throu
 [`project.rs`](../../apps/layer-apple/native/src/project.rs) and
 [`documents.rs`](../../apps/layer-windows/native/src/documents.rs). Keep snapshots,
 source capture, cancellation, recovery and durable-save acknowledgement in shared
-policy. Host publication guarantees still differ. ZIP STORED local headers require
-known sizes/CRCs; newly produced blocks/previews need bounded spooling before
-non-seekable output. ZIP64 and integer-safe offsets must cross every bridge.
+policy. Host publication guarantees still differ. ZIP local headers contain known
+sizes/CRCs; newly produced blocks/previews and compressed manifest metadata use
+bounded preparation before non-seekable output. Resource packs remain STORED;
+only bounded manifest JSON may use DEFLATE. ZIP64 and integer-safe offsets cross
+every bridge.
 
 The web path in
 [`artwork_transfer.rs`](../../apps/layer-web/src/artwork_transfer.rs) uses shared
