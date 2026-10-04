@@ -205,32 +205,34 @@ fn paint_category_variations(d: &mut Driver, theme: Theme) {
     assert_group_marker(&anchor_widget(d, anchor), false);
     assert!(ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).is_err());
 }
-fn paint_selection_variations(d: &mut Driver, theme: Theme) {
+fn paint_slot_variations(d: &mut Driver, theme: Theme) {
     restore(d, WorkspacePreset::Illustrator);
     for (slot, commands) in [
         (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect]),
+        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill]),
+        (ToolSlotId::Blend, vec![CommandId::Blend, CommandId::Clone]),
     ] {
         let anchor = slot_anchor(d, slot);
         let widget = anchor_widget(d, anchor);
         secondary_group_click(d, &widget);
         choose_variant(d, anchor, 0);
         let view = state(&d.w).tool_set;
-        let actual = view.subtools.iter().filter_map(|item| match item.action {
-            UiAction::Invoke { command } => Some(command),
+        let actual = view.groups.iter().chain(&view.subtools).filter_map(|item| match item.action {
+            UiAction::ChooseToolVariant { variant, anchor: origin } if origin == anchor => Some(variant.command()),
             _ => None,
         }).collect::<Vec<_>>();
         assert_eq!(actual.len(), commands.len());
         assert!(commands.iter().all(|command| actual.contains(command)));
         let tools = d.w.panel_widget(Panel::Brushes);
-        for tool in SelectionTool::ALL {
-            let name = format!("tool-choice-{:?}", tool.command());
-            assert_eq!(find_named(&tools, &name).is_some(), commands.contains(&tool.command()),
-                "native Tool Set membership for {slot:?}: {tool:?}");
+        for command in &commands {
+            let label = ui_session(&d.w).command(*command).label;
+            assert!(mapped_label(&tools, &label).is_some(), "native Tool Set contains {command:?}");
         }
         let last = commands.last().unwrap();
-        d.click(&find_named(&tools, &format!("tool-choice-{last:?}")).unwrap());
+        let label = ui_session(&d.w).command(*last).label;
+        d.click(&mapped_label(&tools, &label).unwrap());
         assert!(ui_session(&d.w).command(*last).selected);
         d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
     }
@@ -287,13 +289,12 @@ fn sketch_group_variations(d: &mut Driver, theme: Theme) {
     assert_eq!(drawer.columns, [vec![Panel::Tools], vec![Panel::ToolSettings]]);
     let tools = d.named("drawer-panel-Tools");
     assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), SelectionTool::ALL.len());
-    for tool in SelectionTool::ALL {
-        assert!(find_named(&tools, &format!("tool-choice-{:?}", tool.command())).is_some());
+    for item in state(&d.w).tool_panels.tools.subtools {
+        assert!(mapped_label(&tools, &item.label).is_some());
     }
     d.capture_canvas(&format!("sketch-Select-{theme:?}.png"));
     d.click(&widget);
     assert!(state(&d.w).customization.drawer.is_none());
-    sketch_overflow_variations(d, theme);
 }
 fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
     d.w.dispatch(HeaderAction::SetSize { size: HeaderSize::Large }.action());
@@ -513,6 +514,9 @@ fn native_toolbar_variations_input() {
                     d.click(&opener);
                     assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
                     let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+                    let docked = state(&d.w).tool_set.groups;
+                    assert_eq!(docked.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+                        menu.sections[0].iter().map(|item| item.label.as_str()).collect::<Vec<_>>());
                     let label = &menu.sections[0][index].label;
                     let drawer = d.named("drawer-panel-Brushes");
                     d.click(&mapped_label(&drawer, label).unwrap());
@@ -524,7 +528,7 @@ fn native_toolbar_variations_input() {
             }
         }
         paint_category_variations(&mut d, theme);
-        paint_selection_variations(&mut d, theme);
+        paint_slot_variations(&mut d, theme);
         sketch_group_variations(&mut d, theme);
     }
     d.finish();

@@ -47,9 +47,6 @@ impl ToolbarControl {
             _ => return None,
         })
     }
-    pub(crate) fn slot_group(self) -> Option<ToolSlotId> {
-        if let Some(ToolControlGroup::Slot(slot)) = self.tool_group() { Some(slot) } else { None }
-    }
     pub fn has_variants(self) -> bool { self.tool_group().is_some() }
 }
 impl ToolControlGroup {
@@ -500,6 +497,81 @@ impl UiState {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn group_choices(&self, group: ToolControlGroup, anchor: Option<DrawerAnchor>) -> Vec<(ToolVariant, ToolSetItem)> {
+        group.variants().into_iter().filter(|v| v.command().available_on(self.state.platform))
+            .map(|variant| (variant, ToolSetItem {
+                enabled: self.command(variant.command()).enabled,
+                label: variant.label(self.localization()).into(),
+                icon: variant.icon_in(&self.state),
+                action: anchor.map_or_else(|| self.variant_action(variant), |anchor| UiAction::ChooseToolVariant { anchor, variant }),
+                selected: variant.is_active(&self.state),
+                preview: if let ToolVariant::BrushPreset { id } = variant { Some(id) } else { None },
+            })).collect()
+    }
+
+    fn active_tool_group(&self) -> Option<(ToolControlGroup, Option<DrawerAnchor>)> {
+        let layout = &self.state.workspace.layout;
+        let origin = self.tool_origin.and_then(|(anchor, group)| {
+            let anchor = if let DrawerAnchor::Tile { tile, .. } = anchor {
+                layout.panels.iter().find_map(|panel| panel.tiles().iter().any(|t| t.id == tile)
+                    .then_some(DrawerAnchor::Tile { panel: panel.id, tile }))?
+            } else { anchor };
+            Some((anchor, group))
+        });
+        if let Some((anchor, group)) = origin
+            && layout.anchor_control(anchor).and_then(|c| c.tool_group()) == Some(group)
+            && group.active(&self.state) {
+            return Some((group, Some(anchor)));
+        }
+        if let Some((anchor, slot)) = layout.tool_slots().find(|(_, slot)| ToolControlGroup::Slot(*slot).active(&self.state)) {
+            return Some((ToolControlGroup::Slot(slot), Some(anchor)));
+        }
+        let group = if self.layer_interaction.tool.selection_tool().is_some() {
+            ToolControlGroup::Selection
+        } else if self.layer_interaction.tool == LayerCanvasTool::Transform {
+            ToolControlGroup::Slot(ToolSlotId::Operation)
+        } else {
+            ToolVariant::active(&self.state)?.control().tool_group()?
+        };
+        Some((group, None))
+    }
+
+    fn group_tool_set(&self, group: ToolControlGroup, anchor: Option<DrawerAnchor>) -> ToolSetView {
+        let mut view = tools::view(&self.state.brush, self.layer_interaction.tool, self.localization());
+        if matches!(group, ToolControlGroup::Drawing | ToolControlGroup::Sculpt) { return view; }
+        let choices = self.group_choices(group, anchor).into_iter().map(|(_, item)| item).collect();
+        match group {
+            ToolControlGroup::Slot(_) => {
+                if self.layer_interaction.tool == LayerCanvasTool::Paint {
+                    view.subtools.splice(0..0, std::mem::take(&mut view.groups));
+                } else if self.layer_interaction.tool.selection_tool().is_some()
+                    || self.layer_interaction.tool == LayerCanvasTool::LassoFill {
+                    view.subtools.clear();
+                }
+                view.groups = choices;
+            },
+            ToolControlGroup::Selection => { view.groups.clear(); view.subtools = choices; },
+            ToolControlGroup::Brush(tool) => {
+                if ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() > 1 { view.groups = choices; }
+                else { view.subtools = choices; }
+            },
+            ToolControlGroup::Drawing | ToolControlGroup::Sculpt => (),
+        }
+        view
+    }
+
+    pub(super) fn current_tool_set(&self) -> ToolSetView {
+        let Some((group, anchor)) = self.active_tool_group() else {
+            return tools::view(&self.state.brush, self.layer_interaction.tool, self.localization());
+        };
+        let mut view = self.group_tool_set(group, anchor);
+        if matches!(group, ToolControlGroup::Slot(ToolSlotId::Gradient))
+            || self.layer_interaction.tool.selection_tool().is_some() && matches!(group, ToolControlGroup::Slot(_)) {
+            view.subtools = std::mem::take(&mut view.groups);
+        }
+        view
+    }
+
     pub(crate) fn variant_action(&self, variant: ToolVariant) -> UiAction {
         match variant {
             ToolVariant::Command { command } => UiAction::Invoke { command },
@@ -545,18 +617,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         let Some(group) = control.tool_group() else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
         let remembered = self.group_variant(group, anchor);
-        let items = group
-            .variants()
-            .into_iter()
-            .filter(|v| v.command().available_on(self.state.platform))
-            .map(|variant| {
+        let items = self.group_choices(group, Some(anchor)).into_iter()
+            .map(|(variant, choice)| {
                 let mut item = ContextMenuItem::command(
-                    variant.label(self.localization()),
-                    UiAction::ChooseToolVariant { anchor, variant },
+                    choice.label.to_string(), choice.action,
                 );
-                item.icon = Some(variant.icon_in(&self.state));
+                item.icon = Some(choice.icon);
                 item.selected = Some(remembered == variant);
-                item.enabled = self.command(variant.command()).enabled;
+                item.enabled = choice.enabled;
                 if let Some(reason) = self.command_disabled_reason(variant.command()) {
                     item.hint = reason;
                 }
@@ -579,20 +647,6 @@ impl<R: CanvasRenderer> UiSession<R> {
         let variant = ToolVariant::BrushGroup { group: tools::group(id) };
         if group.contains(variant) { variant } else { ToolVariant::BrushPreset { id } }
     }
-    pub(crate) fn selection_slot(&self, tool: SelectionTool) -> Option<ToolSlotId> {
-        let variant = command(tool.command());
-        if let Some(group) = self.state.customization.drawer.as_ref()
-            .and_then(|d| self.state.workspace.layout.anchor_control(d.anchor))
-            .and_then(|c| c.tool_group())
-        {
-            match group {
-                ToolControlGroup::Selection => return None,
-                ToolControlGroup::Slot(slot) if slot.variants().contains(&variant) => return Some(slot),
-                _ => (),
-            }
-        }
-        self.state.workspace.layout.tool_slots().find_map(|(_, slot)| slot.variants().contains(&variant).then_some(slot))
-    }
     pub(crate) fn remember_tool_slots(&mut self) {
         if self.temporary_tool()
             || self.layer_interaction.tool.picks_color()
@@ -608,37 +662,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         }
     }
-    fn slot_drawer_tools(&self, slot: ToolSlotId, anchor: DrawerAnchor) -> ToolSetView {
-        let active = ToolVariant::active(&self.state);
-        let groups = slot
-            .variants()
-            .iter()
-            .filter(|v| v.command().available_on(self.state.platform))
-            .map(|&variant| ToolSetItem {
-                enabled: self.command(variant.command()).enabled,
-                label: variant.label(self.localization()).into(),
-                icon: variant.icon_in(&self.state),
-                action: UiAction::ChooseToolVariant { anchor, variant },
-                selected: active == Some(variant),
-                preview: None,
-            })
-            .collect();
-        let subtools = match self.state.layer_tools.tool {
-            LayerCanvasTool::Paint => self
-                .state
-                .tool_set
-                .groups
-                .iter()
-                .chain(&self.state.tool_set.subtools)
-                .cloned()
-                .collect(),
-            LayerCanvasTool::Figure { .. } | LayerCanvasTool::Region { fill: true, .. } => {
-                self.state.tool_set.subtools.clone()
-            }
-            _ => Vec::new(),
-        };
-        ToolSetView { groups, subtools }
-    }
     pub(crate) fn update_slot_drawer(&mut self) -> bool {
         let Some(drawer) = self.state.customization.drawer.as_ref() else {
             return false;
@@ -647,12 +670,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let control = self.state.workspace.layout.anchor_control(anchor);
         let active = ToolVariant::active(&self.state);
         let slot = match control {
-            Some(ToolbarControl::ToolOptions { .. }) => self
-                .state
-                .workspace
-                .layout
-                .tool_slots()
-                .find(|(_, slot)| active.is_some_and(|v| slot.variants().contains(&v))),
+            Some(ToolbarControl::ToolOptions { .. }) => self.active_tool_group().and_then(|(group, origin)| {
+                if let ToolControlGroup::Slot(slot) = group { origin.map(|origin| (origin, slot)) } else { None }
+            }),
             Some(control) => match control.tool_group() {
                 Some(ToolControlGroup::Slot(slot)) => Some((anchor, slot)),
                 Some(group) => {
@@ -686,7 +706,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             (
                 vec![vec![Panel::Brushes], vec![Panel::ToolSettings]],
-                Some(self.slot_drawer_tools(slot, origin)),
+                Some(self.group_tool_set(ToolControlGroup::Slot(slot), Some(origin))),
             )
         } else {
             let control = if self.state.layer_tools.tool.picks_color() {
@@ -805,7 +825,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             .as_ref()
             .filter(|d| !matches!(d.anchor, DrawerAnchor::Column { .. }))
             .map(|d| d.anchor);
-        let change = self.dispatch(self.variant_action(variant))?;
+        let previous = self.tool_origin.replace((anchor, group));
+        let change = match self.dispatch(self.variant_action(variant)) {
+            Ok(change) => change,
+            Err(error) => { self.tool_origin = previous; return Err(error); },
+        };
         if variant.is_active(&self.state) {
             self.remember_tool_slots();
             if let Some(old) = open {
@@ -828,9 +852,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             ),
         ))
     }
-    pub(crate) fn activate_tool_slot(
+    pub(crate) fn activate_tool_group(
         &mut self,
-        slot: ToolSlotId,
+        group: ToolControlGroup,
         anchor: DrawerAnchor,
     ) -> Result<UiChange, String> {
         if self.state.layer_tools.tool.picks_color() {
@@ -838,15 +862,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 command: CommandId::Eyedropper,
             });
         }
-        let variant = self.state.slot_variant(slot, anchor);
+        let variant = self.group_variant(group, anchor);
         if let Some(reason) = self.command_disabled_reason(variant.command()) {
             return Err(reason);
         }
-        let selected = ToolVariant::active(&self.state) == Some(variant);
+        let selected = variant.is_active(&self.state);
         let open = self.state.customization.drawer.as_ref().map(|d| d.anchor);
         if !selected {
             return self.choose_tool_variant(anchor, variant);
         }
+        self.tool_origin = Some((anchor, group));
+        self.refresh_tools();
         let action = match anchor {
             DrawerAnchor::Tile { panel, tile } => CustomizationAction::ToggleToolDrawer {
                 anchor: TileAnchor { panel, tile },
@@ -860,6 +886,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         let mut change = self.dispatch(UiAction::Customize { action })?;
+        change.regions |= regions::BRUSH;
         if open != Some(anchor) && self.update_slot_drawer() {
             change.regions |= regions::CUSTOMIZATION;
         }

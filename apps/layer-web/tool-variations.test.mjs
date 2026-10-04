@@ -69,7 +69,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
   const original=await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   await call('Emulation.setDeviceMetricsOverride',{width:1400,height:1000,deviceScaleFactor:1,mobile:false});await settle();
   try {
-    for(const theme of ['light','dark'])for(const [workspace,count,slot] of [['photographer',15,'lasso'],['illustrator',17,'manual_selection']]) {
+    for(const theme of ['light','dark'])for(const [workspace,count,slot] of [['photographer',15,'drawing'],['illustrator',17,'fill']]) {
       console.log(`Tool variations: ${workspace}/${theme}`);
       device='mouse';await click(`.workspace-switcher button[data-workspace-id="builtin:workspace:${workspace}"]`);
       await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy');await send({type:'set_theme',theme});
@@ -90,6 +90,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
         assert.equal(await menuOpen(),false);
         const view=await evaluate(`layerApp.app.panel_view('toolbar').tiles.find(t=>t.id===${tile.id})`);
         assert.equal(view.label,alternate.label);assert.equal(view.icon,alternate.icon);
+        assert.deepEqual(await evaluate(`layerApp.state().tool_set.groups.map(item=>item.label)`),rows.map(row=>row.label),'docked projection agrees with group menu');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===retainedVariationTile`),true,'variant retains pressed tile');
         assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' > button:first-child > svg')}).dataset.asset`),alternate.icon);
         await send({type:'customize',action:{type:'close_expanded'}});
@@ -147,18 +148,18 @@ export async function checkToolVariations({call,evaluate,settle}) {
       }
       await shot(`paint-media-${theme}`);
       const selection={};
-      for(const slot of ['manual_selection','automatic_selection']) {
+      for(const slot of ['manual_selection','automatic_selection','fill','blend']) {
         device=slot==='manual_selection'?'touch':'pen';
         const tile=tiles.find(t=>t.control.slot===slot);assert.ok(tile);
         const anchor={kind:'tile',panel:'toolbar',tile:tile.id},selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,view=groupView(anchor);
         const rows=(await model({kind:'tool_variants',anchor})).sections.flat();
-        assert.ok(rows.some(row=>row.icon===(slot==='manual_selection'?'lasso':'auto-select')));
+        assert.ok(rows.some(row=>row.icon===({manual_selection:'lasso',automatic_selection:'auto-select',fill:'fill',blend:'blend'})[slot]));
         await openChoices(anchor,selector);await choose(rows[0].label);await wait(`${view}.selected`);
-        const dock='.dock-group .brushes-control .tool-subtools';
+        const dock='.dock-group .brushes-control .'+(slot.includes('selection')?'tool-subtools':'tool-groups');
         const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
         assert.deepEqual([...dockLabels].sort(),rows.map(row=>row.label).sort(),'docked Tool Set uses the same scoped choices as the menu');
         const alternate=rows.find(row=>row.label!==rows[0].label)||rows[0];
-        await click(`${dock} [data-tool-choice="${alternate.label}"]`);assert.equal(await evaluate(`${view}.icon`),alternate.icon,'docked selection choice updates its group icon');
+        await click(`${dock} [data-tool-choice="${alternate.label}"]`);assert.equal(await evaluate(`${view}.icon`),alternate.icon,'docked sibling updates its group icon');
         await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
         const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)");
         assert.deepEqual(drawerLabels,rows.map(row=>row.label),'full selection drawer keeps the scoped choices');

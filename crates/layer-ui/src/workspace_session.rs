@@ -374,6 +374,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
         self.tools = working.tools;
         self.state.tool_slots = working.tool_slots;
+        self.tool_origin = None;
         self.state.colors = working.colors;
         self.state.brush = BrushState {
             preset: working.preset,

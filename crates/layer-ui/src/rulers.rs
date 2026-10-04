@@ -37,30 +37,6 @@ impl Default for RulerInteraction {
         }
     }
 }
-pub(crate) fn tool_set(kind: RulerKind, localizer: &crate::localization::Localizer) -> ToolSetView {
-    let groups = [
-        (RulerKind::Straight, localizer.text(crate::localization::MessageId::TOOL_RULERS_STRAIGHT), "ruler"),
-        (RulerKind::Parallel, localizer.text(crate::localization::MessageId::TOOL_RULERS_PARALLEL), "ruler-parallel"),
-        (RulerKind::Radial, localizer.text(crate::localization::MessageId::TOOL_RULERS_RADIAL), "ruler-radial"),
-    ]
-    .into_iter()
-    .map(|(k, label, icon)| ToolSetItem { enabled: true,
-        label,
-        icon,
-        selected: k == kind,
-        preview: None,
-        action: UiAction::Layer {
-            action: LayerAction::Tool {
-                tool: LayerCanvasTool::Ruler { kind: k },
-            },
-        },
-    })
-    .collect();
-    ToolSetView {
-        groups,
-        subtools: Vec::new(),
-    }
-}
 
 impl<B: CanvasRenderer> UiSession<B> {
     pub(super) fn ruler_reach(&self) -> f32 {

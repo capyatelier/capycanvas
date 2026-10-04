@@ -25,6 +25,7 @@ use held_actions::{ERASER_END, merge_change};
 #[path = "tool_slots.rs"]
 mod tool_slots;
 pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory, ToolSlotSelection};
+use tool_slots::ToolControlGroup;
 #[path = "gesture_input.rs"]
 mod gesture_input;
 #[path = "source_edit.rs"]
@@ -258,6 +259,7 @@ pub struct UiSession<R: CanvasRenderer> {
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
     tools: tools::WorkspaceToolMemory,
+    tool_origin: Option<(DrawerAnchor, tool_slots::ToolControlGroup)>,
     pending_tool_drawer: Option<(DrawerAnchor, DrawerAnchor, ToolVariant)>,
     files: document_files::DocumentFiles,
 }
@@ -435,6 +437,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             source_preview_revisions: Default::default(),
             tools: tools::WorkspaceToolMemory::default(),
             pending_tool_drawer: None,
+            tool_origin: None,
             files: document_files::DocumentFiles::default(),
             state: UiState {
                 tool_slots: ToolSlotMemory::default(),
@@ -3164,6 +3167,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = *workspace;
                 self.state.tool_slots = ToolSlotMemory::default();
+                self.tool_origin = None;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
                 self.floating_resize = None;
@@ -3849,8 +3853,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= DOCUMENT;
         }
         if choosing_tool { self.remember_tool_slots(); }
-        if changing_slot_layout && changed & (LAYOUT | CUSTOMIZATION) != 0
-            && self.layer_interaction.tool.selection_tool().is_some() {
+        if changing_slot_layout && changed & (LAYOUT | CUSTOMIZATION) != 0 {
             self.refresh_tools();
             changed |= BRUSH;
         }
@@ -5236,6 +5239,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
+    fn refresh_tool_set(&mut self) -> bool {
+        let mut view = self.current_tool_set();
+        if self.layer_interaction.tool.picks_color() {
+            view.groups.clear();
+            view.subtools = [
+                (MessageId::TOOL_COLOR_PICKER, "color-picker", ColorPickerStyle::Glass),
+                (MessageId::COMMAND_EYEDROPPER, "eyedropper", ColorPickerStyle::Eyedropper),
+            ].into_iter().map(|(label, icon, style)| ToolSetItem { enabled: true,
+                label: self.state.localization.text(label), icon, selected: self.state.color_picker.style == style,
+                action: UiAction::ColorPicker { action: ColorPickerAction::Style { style } }, preview: None,
+            }).collect();
+        }
+        let sets = |group| ToolSetView {
+            groups: self.group_choices(group, None).into_iter().map(|(_, item)| item).collect(),
+            subtools: Vec::new(),
+        };
+        let panels = ToolPanels {
+            brush_sets: sets(ToolControlGroup::Drawing),
+            sculpt_sets: sets(ToolControlGroup::Sculpt),
+            tools: ToolSetView { groups: Vec::new(), subtools: view.subtools.clone() },
+        };
+        let changed = self.state.tool_set != view || self.state.tool_panels != panels;
+        self.state.tool_set = view;
+        self.state.tool_panels = panels;
+        changed
+    }
+
     fn refresh_tools(&mut self) {
         self.selection_tools.options.tonal.adapt_to_document(self.engine.document().color.depth.is_float());
         self.state.tool_actions = if self.content_bounds.baking() {
@@ -5308,14 +5338,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .collect()
         };
         self.sync_retouch();
-        self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            let mut view = selection_tools::tool_set(tool, &self.state.localization);
-            if let Some(slot) = self.selection_slot(tool) {
-                view.subtools.retain(|item| matches!(item.action, UiAction::Invoke { command } if slot.variants().contains(&ToolVariant::Command { command })));
-            }
-            view
-        } else { tools::view(&self.state.brush, self.layer_interaction.tool, &self.state.localization) };
-        self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if let Some(tool) = self.layer_interaction.tool.selection_tool() {
             let commands: &[CommandId] = if tool==SelectionTool::Tonal { &[]
             } else if tool.geometric() {
@@ -5334,22 +5356,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|command| ToolSettingAction { command, checkable: command.is_toggle() }).collect() };
         }
 
-        if self.layer_interaction.tool.picks_color() {
-            self.state.tool_set.groups.clear();
-            self.state.tool_set.subtools = [
-                (MessageId::TOOL_COLOR_PICKER, "color-picker", ColorPickerStyle::Glass),
-                (MessageId::COMMAND_EYEDROPPER, "eyedropper", ColorPickerStyle::Eyedropper),
-            ].into_iter().map(|(label, icon, style)| ToolSetItem { enabled: true,
-                label: self.state.localization.text(label), icon, selected: self.state.color_picker.style == style,
-                action: UiAction::ColorPicker { action: ColorPickerAction::Style { style } }, preview: None,
-            }).collect();
-        }
         self.state.color_picker.layer = self.eyedropper.layer;
         self.state.color_picker.calibrating = self.eyedropper.calibration.is_some() || self.targeted_curve.is_some();
         self.state.color_picker.sample_width = if self.targeted_curve.is_some() {5} else {self.eyedropper.calibration.as_ref().map_or(self.eyedropper.area.width(), |calibration| calibration.width)};
         self.state.color_picker.sample_sizes = if self.targeted_curve.is_some() {&[5]} else {&COLOR_SAMPLE_WIDTHS};
         self.state.color_picker.can_sample_layer = self.picker_layer_available();
-        self.state.tool_panels = ToolPanels::new(&self.state.brush, self.layer_interaction.tool, &self.state.tool_set, &self.state.localization);
+        self.refresh_tool_set();
         self.state.tool_settings = if self.cropping() {
             self.crop_controls()
         } else if self.operation.active() {
@@ -5477,7 +5489,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         );
     }
     fn changed(&mut self, regions: u32, canvas_wake: bool) -> UiChange {
-        let regions = regions | if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
+        let mut regions = regions | if std::mem::take(&mut self.host_requests_changed) { regions::HOST } else { 0 };
+        if regions & (regions::COMMANDS | regions::LAYOUT) != 0 && self.refresh_tool_set() {
+            regions |= regions::BRUSH;
+        }
         let canvas_wake=canvas_wake || (regions & (regions::LAYOUT|regions::CUSTOMIZATION)!=0 && self.histogram_visibility_changed());
         if regions & regions::COMMAND_SEARCH != 0 {
             self.command_search.revision += 1;

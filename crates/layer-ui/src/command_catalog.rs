@@ -616,15 +616,17 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (a, b) => std::mem::discriminant(&a) == std::mem::discriminant(&b),
             };
             let tool = if same { current } else { representative };
-            let family = crate::shortcuts::tool_command(&UiAction::Layer { action: LayerAction::Tool { tool } })
-                .map_or_else(String::new, |command| self.command(command).label.to_string());
+            let command = crate::shortcuts::tool_command(&UiAction::Layer { action: LayerAction::Tool { tool } });
+            let family = command.map_or_else(String::new, |command| self.command(command).label.to_string());
             let view = tools::view(&self.state.brush, tool, l);
-            for item in view.groups.iter().chain(&view.subtools) {
+            let choices = command.and_then(|command| (ToolbarControl::Command { command }).tool_group())
+                .into_iter().flat_map(|group| self.group_choices(group, None).into_iter().map(|(_, item)| item));
+            for item in choices.chain(view.subtools) {
                 if !matches!(item.action, UiAction::Invoke { .. }) {
                     entries.push(entry(
                         command_text(l, MessageId::COMMANDS_PATH, &[("path", family.to_string()), ("label", item.label.to_string())]),
                         l.text(MessageId::COMMANDS_TOOL_OPTIONS),
-                        item.action.clone(),
+                        item.action,
                         idle,
                         Some(same && item.selected),
                         (settings, platform, l),
@@ -634,7 +636,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         for option in self.state.tool_options() {
             if let ToolOption::Choice { label, items, .. } = option {
-                for item in items.into_iter().filter(|i| {
+                for item in items.into_iter().map(|mut item| {
+                    if let UiAction::ChooseToolVariant { variant, .. } = item.action { item.action = self.variant_action(variant); }
+                    item
+                }).filter(|i| {
                     !matches!(
                         i.action,
                         UiAction::Invoke { .. } | UiAction::SelectBrush { .. } | UiAction::SelectToolGroup { .. }

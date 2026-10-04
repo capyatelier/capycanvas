@@ -41,11 +41,16 @@ Marker, Pastel, Watercolor, Oil and Spray. Brush category tooltips also name the
 remembered medium. Brush size and opacity do not change that identity. The full
 grouped drawer presents sibling variations, the active tool's presets or modes,
 and its settings.
-`ContentDrawer.tool_set` reuses `ToolSetView`. Selection menus, drawers and docked
-Tool Set panels use the same membership: Paint's five manual selection tools
-stay separate from its two automatic tools, and Photo's Marquee and Lasso
-pairs stay separate. Sketch's single Select group contains all eight selection
-tools. Choosing a sibling updates the retained drawer at the same origin.
+`ContentDrawer.tool_set` reuses `ToolSetView`. Menus, drawers, Tool Options and
+Tool Set panels project sibling choices from the same shared group definition,
+including their order, icons and availability. Presets and modes follow the
+active sibling. Selecting a group retains its origin, so overlapping groups in
+a custom layout stay distinct; moving a tile preserves that origin. Shortcuts
+keep a matching origin or resolve the first matching slot in layout order.
+Temporary held tools preserve the permanent origin. Paint's manual and automatic
+selection groups stay separate, Photo keeps its Marquee and Lasso pairs, and
+Sketch's single Select group contains all eight selection tools. Choosing a
+sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 

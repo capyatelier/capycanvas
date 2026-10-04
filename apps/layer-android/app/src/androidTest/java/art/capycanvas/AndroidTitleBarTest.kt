@@ -891,6 +891,27 @@ class AndroidTitleBarTest {
                 waitFor("selection drawer closes") { drawer() == null }
             }
         }
+        for ((workspace, slots) in listOf("illustrator" to listOf("fill", "blend"), "photographer" to listOf("drawing", "healing", "photo_fill"))) {
+            resetPreset("builtin:workspace:$workspace")
+            for (theme in listOf("light", "dark")) for (slot in slots) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                val tileId = tiles().first { it.getJSONObject("control").optString("slot") == slot }.getInt("id")
+                val anchor = obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId)
+                val rows = variantRows(anchor)
+                choose(anchor, "tile-variants-toolbar-$tileId", rows.first())
+                val docked = state().getJSONObject("tool_set").array("groups").objects()
+                assertEquals(rows.map { it.getString("label") }, docked.map { it.getString("label") })
+                assertEquals(rows.map { it.optBoolean("enabled", true) }, docked.map { it.optBoolean("enabled", true) })
+                val sibling = rows[1].getString("label")
+                if (workspace == "photographer" && node("tool-group-$sibling") == null) tap("column-icon-brushes")
+                waitFor("$slot panel sibling laid out") { (node("tool-group-$sibling")?.second?.boundsInRoot?.height ?: 0f) >= 42 * density }
+                tap("tool-group-$sibling")
+                waitFor("$slot panel sibling published") { state().getJSONObject("tool_set").array("groups").objects().any { it.getString("label") == sibling && it.optBoolean("selected") } }
+                assertEquals(rows.map { it.getString("label") }, state().getJSONObject("tool_set").array("groups").objects().map { it.getString("label") })
+                assertEquals(sibling, variantRows(anchor).single { it.optBoolean("selected") }.getString("label"))
+                shot("$workspace-$slot-panel-$theme")
+            }
+        }
         resetPreset("builtin:workspace:painter")
         waitFor("Sketch groups") { entries().firstOrNull { it.getJSONObject("item").objectOrNull("control")?.optString("command") == "drawing_brush" }
             ?.let { node("header-variants-${it.getInt("id")}") != null } == true }

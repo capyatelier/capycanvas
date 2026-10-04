@@ -498,38 +498,53 @@ fn choosing_a_variant_selects_once_and_active_slot_clicks_keep_settings_drawers(
 }
 
 #[test]
-fn grouped_slot_drawers_publish_all_siblings_and_the_active_brush_presets() {
+fn grouped_slots_publish_the_same_siblings_in_menus_panels_and_drawers() {
     for slot in ToolSlotId::ALL {
         let (mut s, panel, ids) = slot_fixture(Platform::Gtk, &[slot]);
         let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
-        let variant = slot.variants()[0];
-        s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
-        crate::session::test_support::finish_fixture_content_bounds(&mut s);
-        activate_slot(&mut s, anchor);
-        let drawer = s.state().customization.drawer.as_ref().unwrap();
-        assert_eq!(drawer.columns, [vec![Panel::Brushes], vec![Panel::ToolSettings]]);
-        let choices = drawer.tool_set.as_ref().unwrap();
-        assert_eq!(choices.groups.len(), slot.variants().len());
-        assert_eq!(choices.groups.iter().filter(|choice| choice.selected).count(), 1);
-        for (choice, &variant) in choices.groups.iter().zip(slot.variants()) {
-            assert_eq!(choice.action, UiAction::ChooseToolVariant { anchor, variant });
-            assert!(!choice.label.is_empty());
-            assert!(!choice.icon.is_empty());
+        if slot == ToolSlotId::Operation {
+            s.fill_selection(rectangle([100., 100., 300., 300.])).unwrap();
+            s.frame(1, 1).unwrap();
         }
-        if s.state().layer_tools.tool == LayerCanvasTool::Paint {
-            assert!(!choices.subtools.is_empty());
-            assert_eq!(choices.subtools.iter().filter(|choice|
-                choice.selected && matches!(choice.action, UiAction::SelectBrush { .. })).count(), 1);
-            for choice in &choices.subtools {
-                match choice.action {
-                    UiAction::SelectBrush { id } => {
-                        assert_eq!(tools::group(id).tool(), s.state().brush.tool);
-                        if choice.selected { assert_eq!(id, s.state().brush.preset); }
+        for &variant in slot.variants() {
+            s.dispatch(slot_choice(&s, anchor, variant)).unwrap();
+            crate::session::test_support::finish_fixture_content_bounds(&mut s);
+            let menu = slot_menu(&s, anchor);
+            let docked = &s.state().tool_set;
+            let siblings: Vec<_> = docked.groups.iter().chain(&docked.subtools)
+                .filter(|item| matches!(item.action, UiAction::ChooseToolVariant { anchor: origin, .. } if origin == anchor)).collect();
+            assert_eq!(siblings.iter().map(|item| item.label.as_ref()).collect::<Vec<_>>(),
+                menu.iter().map(|item| item.label.as_str()).collect::<Vec<_>>(), "{slot:?}");
+            assert_eq!(siblings.iter().map(|item| item.enabled).collect::<Vec<_>>(),
+                menu.iter().map(|item| item.enabled).collect::<Vec<_>>(), "{slot:?}");
+            activate_slot(&mut s, anchor);
+            let drawer = s.state().customization.drawer.as_ref().unwrap();
+            assert_eq!(drawer.columns, [vec![Panel::Brushes], vec![Panel::ToolSettings]]);
+            let choices = drawer.tool_set.as_ref().unwrap();
+            assert_eq!(choices.groups.len(), slot.variants().len());
+            assert_eq!(choices.groups.iter().filter(|choice| choice.selected).count(), 1);
+            for (choice, &variant) in choices.groups.iter().zip(slot.variants()) {
+                assert_eq!(choice.action, UiAction::ChooseToolVariant { anchor, variant });
+                assert!(!choice.label.is_empty());
+                assert!(!choice.icon.is_empty());
+            }
+            if s.state().layer_tools.tool == LayerCanvasTool::Paint {
+                assert!(!choices.subtools.is_empty());
+                assert_eq!(choices.subtools.iter().filter(|choice|
+                    choice.selected && matches!(choice.action, UiAction::SelectBrush { .. })).count(), 1);
+                for choice in &choices.subtools {
+                    match choice.action {
+                        UiAction::SelectBrush { id } => {
+                            assert_eq!(tools::group(id).tool(), s.state().brush.tool);
+                            if choice.selected { assert_eq!(id, s.state().brush.preset); }
+                        }
+                        UiAction::SelectToolGroup { group } => assert_eq!(group.tool(), s.state().brush.tool),
+                        _ => panic!("brush subtools expose mediums and presets"),
                     }
-                    UiAction::SelectToolGroup { group } => assert_eq!(group.tool(), s.state().brush.tool),
-                    _ => panic!("brush subtools expose mediums and presets"),
                 }
             }
+            activate_slot(&mut s, anchor);
+            if s.command(CommandId::CancelTransform).enabled { invoke(&mut s, CommandId::CancelTransform); }
         }
     }
 }
@@ -873,7 +888,12 @@ fn grouped_slot_drawer_availability_tracks_workspace_and_renderer_state() {
     invoke(&mut s, CommandId::Eraser);
     activate_slot(&mut s, anchor);
     activate_slot(&mut s, anchor);
-    let available = |s: &UiSession<Recorder>| s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap().groups.iter().map(|choice| choice.enabled).collect::<Vec<_>>();
+    let available = |s: &UiSession<Recorder>| {
+        let flags = s.state().tool_set.groups.iter().map(|choice| choice.enabled).collect::<Vec<_>>();
+        assert_eq!(flags, slot_menu(s, anchor).iter().map(|choice| choice.enabled).collect::<Vec<_>>());
+        assert_eq!(flags, s.state().customization.drawer.as_ref().unwrap().tool_set.as_ref().unwrap().groups.iter().map(|choice| choice.enabled).collect::<Vec<_>>());
+        flags
+    };
     assert!(available(&s).iter().all(|enabled| *enabled));
     s.set_workspace_read_only(true);
     assert!(available(&s).iter().all(|enabled| !enabled));

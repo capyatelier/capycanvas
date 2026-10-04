@@ -964,7 +964,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         control: ToolbarControl,
         anchor: DrawerAnchor,
     ) -> Result<UiChange, String> {
-        if let Some(slot)=control.slot_group() {return self.activate_tool_slot(slot,anchor);}
+        if let Some(group)=control.tool_group() {return self.activate_tool_group(group,anchor);}
         if control == ToolbarControl::Divider {
             return Ok(UiChange::default());
         }

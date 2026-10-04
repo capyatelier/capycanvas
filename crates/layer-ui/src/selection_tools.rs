@@ -247,30 +247,6 @@ impl SelectionTools {
     }
 }
 
-pub(crate) fn tool_set(active: SelectionTool, localizer: &crate::localization::Localizer) -> ToolSetView {
-    let item = |tool: SelectionTool| {
-        let command = tool.command();
-        ToolSetItem { enabled: true,
-            label: command.localized_label(localizer),
-            icon: command.icon().unwrap(),
-            action: UiAction::Invoke { command },
-            selected: tool == active,
-            preview: None,
-        }
-    };
-    ToolSetView {
-        groups: vec![ToolSetItem { enabled: true,
-            label: CommandId::Select.localized_label(localizer),
-            icon: "select",
-            action: UiAction::Invoke {
-                command: CommandId::Select,
-            },
-            selected: true,
-            preview: None,
-        }],
-        subtools: SelectionTool::ALL.into_iter().map(item).collect(),
-    }
-}
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn effective_selection_mode(&self) -> SelectionMode {

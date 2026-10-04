@@ -354,24 +354,6 @@ pub struct ToolPanels {
     pub sculpt_sets: ToolSetView,
     pub tools: ToolSetView,
 }
-impl ToolPanels {
-    pub(crate) fn new(brush: &BrushState, canvas_tool: LayerCanvasTool, current: &ToolSetView, localizer: &Localizer) -> Self {
-        Self {
-            brush_sets: ToolSetView {
-                groups: sets(brush, canvas_tool, is_drawing, localizer),
-                subtools: Vec::new(),
-            },
-            sculpt_sets: ToolSetView {
-                groups: sets(brush, canvas_tool, is_sculpt, localizer),
-                subtools: Vec::new(),
-            },
-            tools: ToolSetView {
-                groups: Vec::new(),
-                subtools: current.subtools.clone(),
-            },
-        }
-    }
-}
 impl crate::UiState {
     pub fn tool_panel(&self, panel: crate::Panel) -> &ToolSetView {
         match panel {
@@ -395,54 +377,13 @@ pub(crate) fn is_retouching(tool: Tool) -> bool {
     matches!(tool, Tool::Clone | Tool::Heal | Tool::SpotHeal)
 }
 
-fn sets(brush: &BrushState, canvas_tool: LayerCanvasTool, includes: fn(Tool) -> bool, localizer: &Localizer) -> Vec<ToolSetItem> {
-    ToolGroup::ALL
-        .into_iter()
-        .filter(|set| includes(set.tool()))
-        .map(|set| ToolSetItem { enabled: true,
-            label: set.localized_label(localizer),
-            icon: set.icon(),
-            action: UiAction::SelectBrushSet { group: set },
-            selected: canvas_tool == LayerCanvasTool::Paint && set == group(brush.preset),
-            preview: None,
-        })
-        .collect()
-}
-
 pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: &Localizer) -> ToolSetView {
-    if let LayerCanvasTool::Selection { kind } = canvas_tool {
-        return crate::session::selection_tools::tool_set(kind, localizer);
-    }
-    if matches!(canvas_tool, LayerCanvasTool::SelectColor { .. }) {
-        return crate::session::selection_tools::tool_set(SelectionTool::Color, localizer);
-    }
-    if matches!(
-        canvas_tool,
-        LayerCanvasTool::Move | LayerCanvasTool::Transform
-    ) {
-        return crate::session::operation::tool_set(canvas_tool == LayerCanvasTool::Transform, localizer);
-    }
-    if let LayerCanvasTool::Ruler { kind } = canvas_tool {
-        return crate::session::rulers::tool_set(kind, localizer);
-    }
     if let LayerCanvasTool::Figure { shape, paint } = canvas_tool {
-        return crate::session::figures::tool_set(shape, paint, localizer);
+        return ToolSetView { groups: Vec::new(), subtools: crate::session::figures::modes(shape, paint, localizer) };
     }
     if let LayerCanvasTool::Region { fill, source } = canvas_tool {
-        let command = if fill {
-            CommandId::Fill
-        } else {
-            CommandId::AutoSelect
-        };
-        let icon = command.icon().unwrap();
         return ToolSetView {
-            groups: vec![ToolSetItem { enabled: true,
-                label: command.localized_label(localizer),
-                icon,
-                action: UiAction::Invoke { command },
-                selected: true,
-                preview: None,
-            }],
+            groups: Vec::new(),
             subtools: [
                 (CommandId::SelectionVisible, RegionSource::Visible),
                 (CommandId::SelectionEditing, RegionSource::Editing),
@@ -466,63 +407,15 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
             .collect(),
         };
     }
-    if let LayerCanvasTool::Gradient { .. } = canvas_tool {
-        return ToolSetView {
-            groups: vec![ToolSetItem { enabled: true,
-                label: CommandId::Gradient.localized_label(localizer),
-                icon: "gradient",
-                action: UiAction::Invoke {
-                    command: CommandId::Gradient,
-                },
-                selected: true,
-                preview: None,
-            }],
-            subtools: [
-                (MessageId::TOOL_GRADIENT_LINEAR_COLOR, false, false),
-                (MessageId::TOOL_GRADIENT_LINEAR_CLEAR, false, true),
-                (MessageId::TOOL_GRADIENT_RADIAL_COLOR, true, false),
-                (MessageId::TOOL_GRADIENT_RADIAL_CLEAR, true, true),
-            ]
-            .into_iter()
-            .map(|(label, radial, transparent)| {
-                let tool = LayerCanvasTool::Gradient {
-                    radial,
-                    transparent,
-                };
-                ToolSetItem { enabled: true,
-                    label: localizer.text(label),
-                    icon: match (radial, transparent) {
-                        (false, false) => "gradient",
-                        (false, true) => "gradient-transparent",
-                        (true, false) => "gradient-radial",
-                        (true, true) => "gradient-radial-transparent",
-                    },
-                    action: UiAction::Layer {
-                        action: LayerAction::Tool { tool },
-                    },
-                    selected: canvas_tool == tool,
-                    preview: None,
-                }
-            })
-            .collect(),
-        };
-    }
     if canvas_tool.picks_color() {
         return ToolSetView::default();
     }
     if canvas_tool != LayerCanvasTool::Paint {
         let (label, icon) = match canvas_tool {
-            LayerCanvasTool::Select => (MessageId::TOOL_MODE_LASSO, "lasso"),
-            LayerCanvasTool::Selection { .. } | LayerCanvasTool::SelectColor { .. } => unreachable!(),
             LayerCanvasTool::LassoFill => (MessageId::TOOL_MODE_LASSO_FILL, "lasso-fill"),
-            LayerCanvasTool::Move | LayerCanvasTool::Transform => unreachable!(),
             LayerCanvasTool::Hand => (MessageId::TOOL_MODE_HAND, "hand"),
             LayerCanvasTool::Crop => (MessageId::TOOL_MODE_CROP, "crop"),
-            LayerCanvasTool::PickVisible | LayerCanvasTool::PickLayer => unreachable!(),
-            LayerCanvasTool::Gradient { .. } => unreachable!(),
-            LayerCanvasTool::Figure { .. } | LayerCanvasTool::Ruler { .. } => unreachable!(),
-            LayerCanvasTool::Region { .. } => unreachable!(),
-            LayerCanvasTool::Paint => unreachable!(),
+            _ => return ToolSetView::default(),
         };
         let item = ToolSetItem { enabled: true,
             label: localizer.text(label),

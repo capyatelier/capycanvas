@@ -275,34 +275,6 @@ pub(super) const HANDLES: [[f32; 2]; 8] = [
     [-1., 0.],
 ];
 
-pub(crate) fn tool_set(transform: bool, localizer: &crate::localization::Localizer) -> ToolSetView {
-    ToolSetView {
-        groups: [
-            (localizer.text(crate::localization::MessageId::TOOL_OPERATION_MOVE), "move", false),
-            (localizer.text(crate::localization::MessageId::TOOL_OPERATION_TRANSFORM), "transform", true),
-        ]
-        .into_iter()
-        .map(|(label, icon, item)| ToolSetItem { enabled: true,
-            label,
-            icon,
-            preview: None,
-            selected: item == transform,
-            action: if item {
-                UiAction::Invoke {
-                    command: CommandId::ScaleRotate,
-                }
-            } else {
-                UiAction::Layer {
-                    action: LayerAction::Tool {
-                        tool: LayerCanvasTool::Move,
-                    },
-                }
-            },
-        })
-        .collect(),
-        subtools: Vec::new(),
-    }
-}
 
 fn source_frame(doc: &Document, target: layer_core::LayerId) -> Rect {
     Rect::from_extent(doc.layer(target).and_then(|layer| layer.source.as_ref())
