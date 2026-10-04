@@ -506,7 +506,7 @@ impl EffectPanels {
                 category = Some(choice.category.clone());
             }
             let row = rows.entry(choice.id.clone()).or_insert_with(|| {
-                let body = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                let body: crate::tool_panels::PreviewRow = glib::Object::new();
                 let picture = gtk::Picture::builder()
                     .can_shrink(true)
                     .height_request(40)
@@ -525,8 +525,8 @@ impl EffectPanels {
                 }
                 caption.append(&crate::icons::image(&format!("layer-{}-symbolic", choice.icon)));
                 caption.append(&label);
-                body.append(&picture);
-                body.append(&caption);
+                picture.set_parent(&body);
+                caption.set_parent(&body);
                 let button = gtk::Button::builder()
                     .child(&body)
                     .tooltip_text(&choice.tooltip)

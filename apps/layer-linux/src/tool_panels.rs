@@ -121,7 +121,7 @@ impl ToolSet {
                         .content_fit(gtk::ContentFit::Fill)
                         .height_request(40)
                         .build();
-                    let content: ToolPreview = glib::Object::new();
+                    let content: PreviewRow = glib::Object::new();
                     preview.set_parent(&content);
                     tool_label(item).set_parent(&content);
                     button.set_child(Some(&content));
@@ -179,19 +179,19 @@ pub(crate) fn aligned_icon_label(text: &str, icon: &str, xalign: f32) -> gtk::Bo
 mod preview_row {
     use super::*;
     #[derive(Default)]
-    pub struct ToolPreview;
+    pub struct PreviewRow;
     #[glib::object_subclass]
-    impl ObjectSubclass for ToolPreview {
-        const NAME: &'static str = "CapyToolPreview";
-        type Type = super::ToolPreview;
+    impl ObjectSubclass for PreviewRow {
+        const NAME: &'static str = "CapyPreviewRow";
+        type Type = super::PreviewRow;
         type ParentType = gtk::Widget;
     }
-    impl ObjectImpl for ToolPreview {
+    impl ObjectImpl for PreviewRow {
         fn dispose(&self) {
             while let Some(child) = self.obj().first_child() { child.unparent(); }
         }
     }
-    impl WidgetImpl for ToolPreview {
+    impl WidgetImpl for PreviewRow {
         fn measure(&self, axis: gtk::Orientation, size: i32) -> (i32, i32, i32, i32) {
             let obj = self.obj();
             let (minimum, natural, _, _) = obj.last_child().unwrap().measure(axis, size);
@@ -218,7 +218,7 @@ mod preview_row {
     }
 }
 glib::wrapper! {
-    pub struct ToolPreview(ObjectSubclass<preview_row::ToolPreview>) @extends gtk::Widget,
+    pub struct PreviewRow(ObjectSubclass<preview_row::PreviewRow>) @extends gtk::Widget,
         @implements gtk::Accessible, gtk::Buildable, gtk::ConstraintTarget;
 }
 use std::{

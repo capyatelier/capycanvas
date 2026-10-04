@@ -280,50 +280,58 @@ fn native_tool_set_category_input() {
 }
 
 #[test]
-#[ignore = "isolated native-input.js --native-test=native_tool_set_preview_input"]
-fn native_tool_set_preview_input() {
-    let mut d = Driver::new("art.capycanvas.ToolSetPreview");
-    restore(&d, WorkspacePreset::Illustrator);
-    d.w.dispatch(UiAction::Invoke { command: CommandId::Brush });
-    d.w.dispatch(UiAction::MovePanel {
-        panel: Panel::Brushes, target: DockTarget::Float { position: [400., 180.] }, viewport: [1600., 1000.],
-    });
-    pump(300);
-    for theme in [Theme::Light, Theme::Dark] {
-        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
-        let (item, button, preview) = d.w.tool_set.buttons.borrow()[0].clone();
-        let preview = preview.unwrap();
-        let caption = preview.parent().unwrap().last_child().unwrap();
-        let mut full_height = 0;
-        for height in [600., 360., 600.] {
-            let layout = state(&d.w).workspace.layout;
-            let group = layout.panel_group(Panel::Brushes).unwrap();
-            let bounds = layout.workspace(1600., 1000., layer_ui::HEADER_HEIGHT, layer_ui::STATUS_HEIGHT)
-                .groups.into_iter().find(|placement| placement.id == group).unwrap().bounds;
-            let corner = [bounds.x + bounds.width, bounds.y + bounds.height];
-            for (phase, position) in [(ContactPhase::Down, corner), (ContactPhase::Up, [corner[0], bounds.y + height])] {
-                d.w.dispatch(UiAction::ResizeFloating { group, edge: layer_ui::ResizeEdge::BottomRight, phase, position, viewport: [1600., 1000.] });
+#[ignore = "isolated native-input.js --native-test=native_panel_preview_input"]
+fn native_panel_preview_input() {
+    let mut d = Driver::new("art.capycanvas.PanelPreview");
+    for panel in [Panel::Brushes, Panel::Adjustments] {
+        restore(&d, WorkspacePreset::Illustrator);
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+        if panel == Panel::Adjustments {
+            d.w.dispatch(UiAction::FilterPicker { action: layer_ui::FilterPickerAction::Category { category: Some("tone".into()) } });
+        }
+        d.w.dispatch(UiAction::MovePanel {
+            panel, target: DockTarget::Float { position: [400., 180.] }, viewport: [1600., 1000.],
+        });
+        pump(300);
+        let preset = state(&d.w).tool_set.subtools[0].preview.unwrap();
+        let name = if panel == Panel::Brushes { format!("brush-{preset}") } else { "adjustment-brightness_contrast".into() };
+        for theme in [Theme::Light, Theme::Dark] {
+            d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+            let button = d.named(&name).downcast::<gtk::Button>().unwrap();
+            let body = button.child().unwrap();
+            let preview = body.first_child().unwrap();
+            let caption = body.last_child().unwrap();
+            let mut full_height = 0;
+            for height in [700., 360., 700.] {
+                let layout = state(&d.w).workspace.layout;
+                let group = layout.panel_group(panel).unwrap();
+                let bounds = layout.workspace(1600., 1000., layer_ui::HEADER_HEIGHT, layer_ui::STATUS_HEIGHT)
+                    .groups.into_iter().find(|placement| placement.id == group).unwrap().bounds;
+                let corner = [bounds.x + bounds.width, bounds.y + bounds.height];
+                for (phase, position) in [(ContactPhase::Down, corner), (ContactPhase::Up, [corner[0], bounds.y + height])] {
+                    d.w.dispatch(UiAction::ResizeFloating { group, edge: layer_ui::ResizeEdge::BottomRight, phase, position, viewport: [1600., 1000.] });
+                }
+                pump(250);
+                let image = preview.compute_bounds(&body).unwrap();
+                let text = caption.compute_bounds(&body).unwrap();
+                assert!((40..=41).contains(&preview.height()), "Compression preserves the preview");
+                assert!(text.y() >= 0. && text.y() + text.height() <= body.height() as f32 + 1.);
+                if height == 360. {
+                    eprintln!("{panel:?} {theme:?} row height: {full_height} -> {}", button.height());
+                    assert!(button.height() as f32 <= full_height as f32 * 0.8,
+                        "Preview rows compact by about a quarter: {full_height} -> {}", button.height());
+                    assert!(text.y() < image.y() + image.height(), "Compact captions share preview space");
+                } else {
+                    if full_height == 0 { full_height = button.height(); }
+                    assert_eq!(button.height(), full_height, "Rows regain their original full height");
+                    assert!(text.y() >= image.y() + image.height() - 1., "Full captions sit below the preview");
+                }
+                assert_eq!(button.upcast_ref::<gtk::Widget>(), &d.named(&name), "Resizing retains the button");
+                d.capture_canvas(&format!("preview-{panel:?}-{theme:?}-{height}.png"));
+                d.click(button.upcast_ref());
+                if panel == Panel::Brushes { assert_eq!(state(&d.w).brush.preset, preset); }
+                else { assert_eq!(state(&d.w).filter_picker.selected.as_deref(), Some("brightness_contrast")); }
             }
-            pump(250);
-            let parent = preview.parent().unwrap();
-            let stroke = preview.compute_bounds(&parent).unwrap();
-            let text = caption.compute_bounds(&parent).unwrap();
-            assert!((40..=41).contains(&preview.height()), "Compression preserves the stroke preview");
-            assert!(text.y() >= 0. && text.y() + text.height() <= parent.height() as f32 + 1.);
-            if height == 360. {
-                eprintln!("Tool Set {theme:?} row height: {full_height} -> {}", button.height());
-                assert!(button.height() as f32 <= full_height as f32 * 0.8,
-                    "Tool rows compact by about a quarter: {full_height} -> {}", button.height());
-                assert!(text.y() < stroke.y() + stroke.height(), "Compact captions share preview space");
-            } else {
-                if full_height == 0 { full_height = button.height(); }
-                assert_eq!(button.height(), full_height, "Tool rows regain their original full height");
-                assert!(text.y() >= stroke.y() + stroke.height() - 1., "Full captions sit below the preview");
-            }
-            assert_eq!(button, d.w.tool_set.buttons.borrow()[0].1, "Resizing retains the tool button");
-            d.capture_canvas(&format!("tool-preview-{theme:?}-{height}.png"));
-            d.click(button.upcast_ref());
-            assert_eq!(state(&d.w).brush.preset, item.preview.unwrap());
         }
     }
     d.finish();
