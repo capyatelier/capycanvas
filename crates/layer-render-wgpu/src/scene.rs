@@ -141,7 +141,7 @@ pub(super) struct Scene {
     source_jobs: Vec<std::ops::Range<usize>>,
     // Retain table capacity across tile batches, but release resource handles
     // after encoding so these tables cannot pin evicted paint/source pages.
-    source_bindings: RecentBindings<[wgpu::TextureView; 3]>,
+    source_bindings: RecentBindings<(bool,[wgpu::TextureView; 3])>,
     compute_bindings: RecentBindings<[wgpu::TextureView; 3]>,
     output_bindings: RecentBindings<wgpu::TextureView>,
     watercolor_outputs: RecentBindings<wgpu::TextureView>,
@@ -341,7 +341,7 @@ impl Scene {
             mapped_at_creation: false,
         });
         let binding = uniform_binding(device, &uniforms, &buffer);
-        let effects = effects::Effects::new(r, &uniforms, &layout);
+        let effects = effects::Effects::new(r, &uniforms);
         use wgpu::util::DeviceExt;
         let coordinates = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("placed material neighborhood"),
@@ -393,7 +393,7 @@ impl Scene {
     }
     fn forget_bindings(&mut self, retired: &[wgpu::TextureView]) {
         if retired.is_empty() { return; }
-        self.source_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
+        self.source_bindings.forget(|(_,views)| views.iter().any(|view| retired.contains(view)));
         self.compute_bindings.forget(|views| views.iter().any(|view| retired.contains(view)));
         self.output_bindings.forget(|view| retired.contains(view));
         self.watercolor_outputs.forget(|view| retired.contains(view));
@@ -1221,6 +1221,7 @@ impl Scene {
             .collect();
         let watercolor = stored.watercolor.is_some() && settles;
         let erase = f32::from(matches!(op.kind, RasterOperationKind::Erase { .. }));
+        let gradient = if let RasterOperationKind::Gradient {gradient,..}=&op.kind {Some(crate::gradient::texture(r,gradient)?)} else {None};
         for (c, source, destination) in pages {
             let mask = self.command_mask_at(r, &op.coverage, layer_core::ImageTransform { placement: layer_core::LayerPlacement::from_projective(op.coverage.use_.placement.then(layer_core::Projective::from_affine(layer_core::Affine::translation(op.coverage.use_.translation))).ok_or(GpuRasterError::InvalidTransform("Invalid mask placement"))?), ..Default::default() }, c, (target, operation_index as u32))?;
             let out = self.alloc(r, wgpu::Color::TRANSPARENT);
@@ -1263,16 +1264,10 @@ impl Scene {
                             color,
                             alpha_locked,
                         } => ([color; 2], [0.0; 4], [6., 1., 0., f32::from(alpha_locked)]),
-                        RasterOperationKind::Gradient {
-                            start,
-                            end,
-                            colors,
-                            radial,
-                            alpha_locked,
-                        } => (
-                            colors,
-                            [start.x, start.y, end.x, end.y],
-                            [6., 1., f32::from(radial), f32::from(alpha_locked)],
+                        RasterOperationKind::Gradient {start,end,shape,reverse,opacity,alpha_locked,..} => (
+                            [[opacity,0.,0.,0.],[0.;4]],
+                            [start.x,start.y,end.x,end.y],
+                            [18.,crate::gradient::quantum(r.document_color.depth),shape as u8 as f32+4.*f32::from(reverse),f32::from(alpha_locked)],
                         ),
                         RasterOperationKind::Figure(ref f) => (
                             f.colors,
@@ -1298,7 +1293,8 @@ impl Scene {
                         false,
                         Convert::None,
                     );
-                    if let Some(Job::Draw { data, .. }) = self.jobs.last_mut() {
+                    if let Some(Job::Draw { data, sources, .. }) = self.jobs.last_mut() {
+                        if let Some(gradient)=&gradient {sources[2]=gradient.clone();}
                         data[6..8].copy_from_slice(&c.map(|v| (v * PAGE_SIZE) as f32));
                         data[12..16].copy_from_slice(&colors[0]);
                         data[16..20].copy_from_slice(&colors[1]);
@@ -1891,7 +1887,9 @@ impl Scene {
                                 Job::Draw { sources, .. } | Job::Effect { sources, .. } => sources,
                                 _ => unreachable!(),
                             };
-                            let binding = source_bindings.get(sources, || source_binding(r, &self.layout, sources));
+                            let effect=matches!(job,Job::Effect {..});
+                            let layout=if effect {&self.effects.sources} else {&self.layout};
+                            let binding = source_bindings.get(&(effect,sources.clone()), || source_binding(r, layout, sources, !effect));
                             if let Job::Effect {
                                 prepared, masks, ..
                             } = job
@@ -1956,7 +1954,7 @@ impl Scene {
 
 impl Pipelines {
     pub fn effects(&self, r: &WgpuRasterizer) -> effects::Effects {
-        effects::Effects::new(r, &self.uniforms, &self.layout)
+        effects::Effects::new(r, &self.uniforms)
     }
     pub fn new(device: &PipelineDevice) -> Self {
         let uniforms = crate::bindings::layout(device, "scene records", &[crate::bindings::buffer(
@@ -1974,13 +1972,14 @@ impl Pipelines {
                 wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 wgpu::SamplerBindingType::Filtering,
             ),
+            texture_entry(3),
         ]);
         let shader = Deferred::new({
             let device = device.clone();
             move || {
                 device.create_shader_module(wgpu::ShaderModuleDescriptor {
                     label: Some("layer scene"),
-                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), &crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("blend_modes.wgsl"), include_str!("scene.wgsl"), include_str!("scene_constant.wgsl")])),
+                    source: wgpu::ShaderSource::Wgsl(compose_wgsl(&[&working_color::shader(&device), &crate::view_color::hdr_shader(device.working_space(), layer_core::color::RgbSpace::Srgb), include_str!("blend_modes.wgsl"), include_str!("scene.wgsl"), "@group(1) @binding(3) var scene_extra:texture_2d<f32>; fn gradient_record(base:u32,index:u32)->vec4<f32>{return textureLoad(scene_extra,vec2<i32>(i32(index),0),0);}", include_str!("float_number.wgsl"), crate::gradient::SOURCE, include_str!("scene_constant.wgsl")])),
                 })
             }
         });
@@ -2178,12 +2177,12 @@ fn compute_source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, so
     ])
 }
 
-fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3]) -> wgpu::BindGroup {
-    crate::bindings::group(&r.device, "scene tile inputs", layout, [
-        wgpu::BindingResource::TextureView(&sources[0]),
-        wgpu::BindingResource::TextureView(&sources[1]),
-        wgpu::BindingResource::Sampler(&r.sampler),
-    ])
+fn source_binding(r: &WgpuRasterizer, layout: &wgpu::BindGroupLayout, sources: &[wgpu::TextureView; 3], extra:bool) -> wgpu::BindGroup {
+    let entries=[wgpu::BindGroupEntry {binding:0,resource:wgpu::BindingResource::TextureView(&sources[0])},
+        wgpu::BindGroupEntry {binding:1,resource:wgpu::BindingResource::TextureView(&sources[1])},
+        wgpu::BindGroupEntry {binding:2,resource:wgpu::BindingResource::Sampler(&r.sampler)},
+        wgpu::BindGroupEntry {binding:3,resource:wgpu::BindingResource::TextureView(&sources[2])}];
+    r.device.create_bind_group(&wgpu::BindGroupDescriptor {label:Some("scene tile inputs"),layout,entries:&entries[..3+usize::from(extra)]})
 }
 
 fn query_grid_size([x,y,w,h]:[u32;4])->[u32;2] {

@@ -715,7 +715,17 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .curve-axis-y { flex-direction:column; align-items:center; }
 .curve-ev { min-height:1em; text-align:right; color:var(--secondary); }
 .gradient-editor { display:flex; flex-direction:column; gap:6px; }
-.gradient-ramp { height:32px; margin:0 6px; border-radius:4px; cursor:crosshair; }
+.gradient-controls { display:flex; gap:6px; align-items:center; min-width:0; }
+.gradient-controls select { flex:1; min-width:0; }
+.gradient-controls .number-control { flex:1; min-width:0; }
+.gradient-controls .property-color { flex:0 0 36px; width:36px; height:28px; min-width:0; padding:0; font-size:0; }
+.gradient-controls button { flex-shrink:0; }
+.gradient-ramp { height:32px; margin:0 6px; border-radius:4px; overflow:hidden; cursor:crosshair; }
+.gradient-preview { display:block; width:100%; height:100%; background:repeating-conic-gradient(var(--checker-dark) 0 25%,var(--checker-light) 0 50%) 0 0/10px 10px; }
+.gradient-strip { min-width:0; }
+.toolbar-gradient { width:120px; height:24px; }
+.toolbar-gradient>button { width:100%; height:100%; padding:0; overflow:hidden; }
+.toolbar-editor-popover>.gradient-editor { width:240px; }
 .gradient-stops { position:relative; height:14px; margin:0 6px; }
 .gradient-stops button { position:absolute; padding:0; width:10px; min-width:0; height:10px; min-height:0; border-radius:50%; transform:translateX(-50%); border:1px solid var(--text); }
 .gradient-stops button.selected { outline:2px solid var(--text); outline-offset:1px; }
@@ -746,6 +756,8 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .tool-subtools .tool-choice-name { flex:1; min-width:0; text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .tool-subtools .tool-choice-button:not([data-brush]) .tool-choice-name { text-align:left; }
 .tool-settings-control { display:flex; flex-direction:column; gap:8px; }
+.tool-settings-control > .selection-modes:not(.choice-grid) > button { height:44px; }
+.tool-settings-control > .selection-modes:not(.choice-grid) svg { width:20px; height:20px; }
 .selection-modes { display:flex; width:100%; }
 .selection-modes > button { flex:1; min-width:0; height:36px; padding:0; display:grid; place-items:center; }
 .selection-modes svg { width:20px; height:20px; }

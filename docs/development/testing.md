@@ -20,7 +20,7 @@ GPU and platform crates that a given machine may not be able to run.
 | Renderer, shaders or runtime filters | `cargo test --locked -p layer-render-wgpu <filter>` and `-p layer-host` on a hardware GPU. If shader cache-key inputs changed, `python3 tools/build/test_shader_generation.py`. Frame-path changes need [measurements](#performance). |
 | Pen prediction or stroke placement | `cargo test --locked -p layer-engine --features prediction-bench`, then `cargo build --locked -p layer-engine --release --features prediction-bench --examples` and `python3 tools/prediction/replay-bank.py --output artifacts/strokes/bank --analyze --check`. |
 | GTK | `cargo test --locked -p layer-linux` for the model tests, then each affected journey on the private display: `bash tools/performance/workspace-motion.sh gtk --native-test=<name>`, adding `--tablet` for pen journeys ([Linux](linux.md#tests)). |
-| Web | `bash apps/layer-web/build.sh`, the pure tests `node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,raster-worker-client}.test.mjs`, then the affected journeys with `bash tools/performance/workspace-motion.sh web --<journey>` (headed, hardware WebGPU) or `node apps/layer-web/test.mjs --headless --<journey>` against `run.sh`. Packaging changes: `node apps/layer-web/package.mjs && node apps/layer-web/test.mjs --package` ([Web](web.md#tests)). |
+| Web | `bash apps/layer-web/build.sh`, the pure tests `node --test apps/layer-web/{run,package,frame,pointer,workspace-client,canvas-bar,notice,zoom-readout,export-controls,size-dialog,text-input,localization,numeric,histogram,workspace-manager-copy,toolbar-components-copy,color-controls-copy,document-color-copy,color-button-lifecycle,raster-worker-client}.test.mjs`, then the affected journeys with `bash tools/performance/workspace-motion.sh web --<journey>` (headed, hardware WebGPU) or `node apps/layer-web/test.mjs --headless --<journey>` against `run.sh`. Packaging changes: `node apps/layer-web/package.mjs && node apps/layer-web/test.mjs --package` ([Web](web.md#tests)). |
 | Android | Without a device: `./gradlew :app:assembleDebug :app:assembleDebugAndroidTest :app:lintDebug -PcapyAbi=arm64-v8a` in `apps/layer-android`. On a reserved tablet, through `tools/devices/devices.py run`: install both APKs with `adb install -r`, then `am instrument -w -e class art.capycanvas.<Class>[#method] $CAPY_APPLICATION_ID.test/androidx.test.runner.AndroidJUnitRunner`. Read `OK` or `FAILURES!!!`, not the exit status ([Android](android.md#device-tests)). |
 | Apple | Anywhere: `cargo test --locked -p layer-apple --lib -- --test-threads=1` and `python3 apps/layer-apple/tests/test_icon_assets.py`. On a Mac: the Swift fixtures, the command audit, and the XCTest journeys in the [Apple guide](apple.md#tests); journeys that render the canvas need a physical iPad. |
 | Windows | From any OS: `cargo test --locked -p layer-host -p layer-ui -p layer-workspace -p layer-windows --lib` and `cargo clippy --locked -p layer-windows --all-targets -- -D warnings`. On Windows: `apps/layer-windows/scripts/test-without-gpu.ps1`, then the `exercise-*.ps1` fixtures for the changed area; from Linux, `tools/windows-vm/windows-vm.py check` and `fixtures <name>`. Device-removal, HDR and performance checks need a hardware GPU ([Windows](windows.md)). |
@@ -101,6 +101,14 @@ reduced-resolution previews independently of catalog screenshots.
 Selective Color references lock original-color membership and Black scaling;
 Channel Mixer references cover signed coefficients, constants and independent
 Monochrome rows. Both preserve hidden page values through undo and project I/O.
+
+Gradient definitions use the core `gradient` tests, shared `shared_gradient`
+session tests and renderer gradient fixtures. GTK's
+`native_gradient_editor_modes_contacts_and_archive` exercises fill and map
+controls, numeric and color editing, cancellation and exact reopen.
+`native_gradient_tool_editor_shapes_and_reverse` covers each shape and Reverse,
+painted pixels, Quick Mask and saved selections. Run both at narrow and wide
+widths in both themes; scalar mask output must use Gray mode explicitly.
 
 Source-aware Shadows/Highlights, Clarity and Dehaze use `effect_analysis_tests` in
 `layer-ui`, `snapshot::tests::local_adjustments` and `effect_analysis_lease_tests`
@@ -229,6 +237,12 @@ brush previews with `cargo run --locked --release -p layer-bench -- --brush-prev
 
 These fail on `main` independently of your change. Don't chase them unless they
 are your task, and remove an entry when you fix it.
+
+- `layer-render-wgpu --test merge`: seven of nine tests fail pixel comparisons
+  on an unmodified `b3f6f8e51` export, with maximum differences of 56–166 U8
+  codes. Stroke-only, adjustment, clipping, merge, hidden-pixel and placed-photo
+  cases reproduce independently of the gradient changes; the blur/save and
+  stamp-visible cases pass. Keep the existing pixel bounds when testing changes.
 
 - Renderer `scene::scale::tests::refinement::global_filters_evict_optional_levels_before_rejecting_the_document`
   rejects the document during submission after its initial budget assertions

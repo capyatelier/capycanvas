@@ -354,7 +354,7 @@ fn figures_and_gradients_convert_both_portable_paints() {
     assert_eq!(figure.colors, expected);
     // Exercise the gradient through its public canvas-tool and contact path.
     s.cancel_layer_gesture().unwrap();
-    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::Gradient { radial: false, transparent: false, }, });
+    layer(&mut s, LayerAction::Tool { tool: LayerCanvasTool::Gradient {shape:layer_core::GradientShape::Linear}, });
     let mut down = event(&s, 1, PenPhase::Down, 1.);
     down.surface_position = Point { x: 50., y: 50. };
     s.pen(down).unwrap();
@@ -362,12 +362,13 @@ fn figures_and_gradients_convert_both_portable_paints() {
     up.surface_position = Point { x: 250., y: 250. };
     s.pen(up).unwrap();
     s.frame(10, 10).unwrap();
+    let color_space_for_gradient=s.engine.document().composition().color.space;
     let operations = &s.renderer_mut().pending_operations;
     let actual = operations
         .iter()
         .find_map(|(_, operation)| {
-            if let layer_core::RasterOperationKind::Gradient { colors, .. } = &operation.kind {
-                Some(*colors)
+            if let layer_core::RasterOperationKind::Gradient { gradient, opacity, .. } = &operation.kind {
+                Some([gradient.stops[0].color,gradient.stops[1].color].map(|color|{let mut rgba=color.linear_in(color_space_for_gradient).unwrap();rgba[3]*=*opacity;rgba}))
             } else {
                 None
             }
@@ -718,4 +719,249 @@ fn bristle_streaks_carry_the_color_that_is_not_painting() {
     assert_eq!(paints(&s),(red.linear_in(space).unwrap(),olive.linear_in(space).unwrap()),"painting with the second color streaks with the first");
     s.dispatch(UiAction::Color {action:ColorAction::Swap}).unwrap();
     assert_eq!(paints(&s).1,red.linear_in(space).unwrap());
+}
+
+fn p28_gradient_session(tool:bool)->UiSession<Recorder>{
+    let mut app=session(Platform::Gtk);
+    if tool{invoke(&mut app,CommandId::Gradient);}else{app.dispatch(UiAction::Effect{action:EffectAction::Insert{effect:"gradient_map".into()}}).unwrap();}
+    app.reveal_panel(Panel::Properties).unwrap();app.frame(1,1).unwrap();app
+}
+fn p28_destination(app:&UiSession<Recorder>,tool:bool)->crate::GradientDestination{
+    if tool{crate::GradientDestination::Tool{epoch:app.state.document_file.epoch}}
+    else{crate::GradientDestination::Effect{layer:app.state.layer_properties.layer.unwrap(),key:"gradient".into(),epoch:app.state.layer_properties.epoch}}
+}
+fn p28_control(app:&UiSession<Recorder>)->&crate::PropertyControl{
+    app.state.tool_extra.iter().find_map(|option|match option {crate::ToolOption::Gradient(control)=>Some(control.as_ref()),_=>None})
+        .unwrap_or_else(||app.state.layer_properties.controls.iter().find(|c|c.key=="gradient").unwrap())
+}
+fn p28_definition(app:&UiSession<Recorder>)->layer_core::GradientDefinition{
+    let control=p28_control(app);
+    let layer_core::EffectValue::Gradient(value)=&control.value else{panic!("gradient control")};value.clone()
+}
+fn p28_gradient_edit(app:&mut UiSession<Recorder>,target:crate::GradientDestination,edit:crate::GradientEdit){
+    app.dispatch(UiAction::Effect{action:EffectAction::Gradient{target,edit}}).unwrap();
+}
+#[test]
+fn shared_gradient_destinations_bound_stops_and_preserve_exact_close_neighbors(){
+    use crate::GradientEdit as G;
+    for tool in [false,true]{
+        let mut app=p28_gradient_session(tool);
+        for position in [0.5,f32::from_bits(0.5_f32.to_bits()+1)]{
+            let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:None,position,color:None,remove:false});
+        }
+        let close=p28_definition(&app);assert_eq!(close.stops.len(),4);assert_eq!(close.stops[2].position.to_bits(),0.5_f32.to_bits()+1);
+        let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:Some(1),position:0.6,color:None,remove:false});
+        assert_eq!(p28_definition(&app).stops[1].position,0.5);
+        for i in 1..40{let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:None,position:i as f32/41.,color:None,remove:false});}
+        assert_eq!(p28_definition(&app).stops.len(),32);
+        let original=p28_definition(&app);
+        let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:Some(0),position:0.4,color:None,remove:true});assert_eq!(p28_definition(&app),original);
+        while p28_definition(&app).stops.len()>2{let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:Some(1),position:0.,color:None,remove:true});}
+        let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:Some(1),position:0.4,color:None,remove:true});assert_eq!(p28_definition(&app).stops.len(),2);
+    }
+}
+#[test]
+fn shared_gradient_gestures_cancel_and_commit_one_destination_appropriate_history(){
+    use crate::GradientEdit as G;
+    for tool in [false,true]{for cancel in [false,true]{
+        let mut app=p28_gradient_session(tool);let original=p28_definition(&app);let checkpoint=app.engine.checkpoint();let target=p28_destination(&app,tool);
+        for (phase,position) in [(ContactPhase::Down,0.25),(ContactPhase::Move,0.4),(if cancel{ContactPhase::Cancel}else{ContactPhase::Up},0.6)]{
+            app.dispatch(UiAction::Effect{action:EffectAction::Gesture{phase,action:Box::new(EffectAction::Gradient{target:target.clone(),edit:G::Stop{index:if phase==ContactPhase::Down{None}else{Some(1)},position,color:None,remove:false}})}}).unwrap();
+        }
+        if cancel{assert_eq!(p28_definition(&app),original);assert_eq!(app.engine.checkpoint(),checkpoint);}
+        else{assert_eq!(p28_definition(&app).stops.len(),3);assert_eq!(p28_definition(&app).stops[1].position,0.6);
+            if tool{assert_eq!(app.engine.checkpoint(),checkpoint);}else{invoke(&mut app,CommandId::Undo);assert_eq!(p28_definition(&app),original);assert_eq!(app.engine.checkpoint(),checkpoint);invoke(&mut app,CommandId::Redo);assert_eq!(p28_definition(&app).stops[1].position,0.6);}}
+    }}
+}
+#[test]
+fn shared_gradient_tool_retains_settings_and_stale_destinations_do_not_edit(){
+    use crate::{GradientEdit as G,GradientDestination as D};
+    let mut app=p28_gradient_session(true);let checkpoint=app.engine.checkpoint();
+    for edit in [G::Interpolation{value:layer_core::ColorMixSpace::LinearRgb},G::Reverse]{let target=p28_destination(&app,true);p28_gradient_edit(&mut app,target,edit);}
+    let expected=p28_definition(&app);invoke(&mut app,CommandId::Hand);
+    assert!(!app.state.tool_extra.iter().any(|option|matches!(option,crate::ToolOption::Gradient(_))),"leaving Gradient retires its tool option");
+    invoke(&mut app,CommandId::Gradient);
+    assert_eq!(p28_definition(&app),expected);
+    let target=D::Tool{epoch:app.state.document_file.epoch.wrapping_sub(1)};p28_gradient_edit(&mut app,target,G::Reset);assert_eq!(p28_definition(&app),expected);assert_eq!(app.engine.checkpoint(),checkpoint);
+    let mut app=p28_gradient_session(false);let original=p28_definition(&app);let checkpoint=app.engine.checkpoint();let target=D::Effect{layer:app.state.layer_properties.layer.unwrap(),key:"gradient".into(),epoch:app.state.layer_properties.epoch.wrapping_sub(1)};
+    p28_gradient_edit(&mut app,target,G::Interpolation{value:layer_core::ColorMixSpace::Classic});assert_eq!(p28_definition(&app),original);assert_eq!(app.engine.checkpoint(),checkpoint);
+}
+
+#[test]
+fn shared_gradient_stale_gesture_down_cannot_acquire_tool_or_effect_owner(){
+    use crate::{GradientDestination as D,GradientEdit as G};
+    for tool in [false,true]{
+        let mut app=p28_gradient_session(tool);let original=p28_definition(&app);let checkpoint=app.engine.checkpoint();
+        let target=if tool{D::Tool{epoch:app.state.document_file.epoch.wrapping_sub(1)}}else{D::Effect{layer:app.state.layer_properties.layer.unwrap(),key:"gradient".into(),epoch:app.state.layer_properties.epoch.wrapping_sub(1)}};
+        app.dispatch(UiAction::Effect{action:EffectAction::Gesture{phase:ContactPhase::Down,action:Box::new(EffectAction::Gradient{target,edit:G::Stop{index:None,position:0.5,color:None,remove:false}})}}).unwrap();
+        assert_eq!(p28_definition(&app),original);assert_eq!(app.engine.checkpoint(),checkpoint);
+        assert!(app.effect_gesture.is_none(),"stale effect destination owns gesture");
+        assert!(app.layer_interaction.gradient_before.is_none(),"stale tool destination owns gesture");
+    }
+}
+
+#[test]
+fn shared_gradient_tool_option_preserves_layer_properties_and_panel_placement(){
+    let mut app=p28_gradient_session(false);
+    let properties=serde_json::to_value(&app.state.layer_properties).unwrap();
+    let layout=serde_json::to_value(&app.state.workspace.layout).unwrap();
+    invoke(&mut app,CommandId::Gradient);
+    assert_eq!(serde_json::to_value(&app.state.layer_properties).unwrap(),properties);
+    assert_eq!(serde_json::to_value(&app.state.workspace.layout).unwrap(),layout);
+    assert!(matches!(p28_control(&app).gradient.as_ref().unwrap().destination,crate::GradientDestination::Tool{..}));
+    let editor=app.state.tool_extra.iter().position(|option|matches!(option,crate::ToolOption::Gradient(_))).unwrap();
+    assert!(editor>0);
+    let crate::ToolOption::Choice{id,segmented,items,..}=&app.state.tool_extra[editor-1] else{panic!("shape must precede editor")};
+    assert_eq!(*id,"gradient-shape");assert!(*segmented);assert!(!items.is_empty());
+    let serialized=serde_json::to_value(p28_control(&app).gradient.as_ref().unwrap()).unwrap();
+    for removed in ["shape","shapes","dither_label"]{assert!(serialized.get(removed).is_none());}
+
+    let target=p28_destination(&app,true);p28_gradient_edit(&mut app,target,crate::GradientEdit::Interpolation{value:layer_core::ColorMixSpace::Classic});
+    assert_eq!(serde_json::to_value(&app.state.layer_properties).unwrap(),properties);
+}
+
+#[test]
+fn shared_gradient_shapes_are_independent_of_workspace_tool_groups(){
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
+        let mut app=session(platform);
+        for preset in [WorkspacePreset::Painter,WorkspacePreset::Illustrator,WorkspacePreset::Photographer] {
+            app.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(WorkspaceState {
+                layout:preset.layout(platform),..WorkspaceState::default()
+            })}).unwrap();
+            invoke(&mut app,CommandId::Gradient);
+            let shapes=app.state.tool_extra.iter().find_map(|option|match option {
+                crate::ToolOption::Choice {id:"gradient-shape",items,..}=>Some(items.clone()),_=>None
+            }).unwrap();
+            assert_eq!(shapes.len(),3,"{platform:?} {preset:?}");
+            for (item,shape) in shapes.into_iter().zip(layer_core::GradientShape::ALL) {
+                app.dispatch(UiAction::ToolbarEdit {context:app.state.toolbar_context(),action:Box::new(item.action)}).unwrap();
+                assert_eq!(app.state.layer_tools.tool,LayerCanvasTool::Gradient {shape});
+                let crate::ToolOption::Choice {items,..}=&app.state.tool_extra[0] else {panic!("shape first")};
+                assert_eq!(items.iter().filter(|item|item.selected).count(),1);
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_gradient_tool_edits_work_in_quick_and_saved_selection_masks() {
+    use crate::GradientEdit as G;
+    for saved in [false,true] {
+        let mut app=p28_gradient_session(true);
+        invoke(&mut app,CommandId::QuickMask);
+        if saved {invoke(&mut app,CommandId::SaveSelectionLayer);}
+        invoke(&mut app,CommandId::Gradient);
+        assert!(app.selection_masks.target().is_some());
+        let checkpoint=app.engine.checkpoint();let document=app.engine.document().clone();
+        for edit in [G::Interpolation{value:layer_core::ColorMixSpace::LinearRgb},G::Stop{index:None,position:0.4,color:None,remove:false}] {
+            let target=p28_destination(&app,true);p28_gradient_edit(&mut app,target,edit);
+        }
+        let expected=p28_definition(&app);assert_eq!(expected.interpolation,layer_core::ColorMixSpace::LinearRgb);assert_eq!(expected.stops.len(),3);
+        let target=p28_destination(&app,true);
+        for (phase,position) in [(ContactPhase::Down,0.5),(ContactPhase::Move,0.6),(ContactPhase::Cancel,0.6)] {
+            app.dispatch(UiAction::Effect{action:EffectAction::Gesture{phase,action:Box::new(EffectAction::Gradient{target:target.clone(),edit:G::Stop{index:Some(1),position,color:None,remove:false}})}}).unwrap();
+        }
+        assert_eq!(p28_definition(&app),expected);assert!(app.layer_interaction.gradient_before.is_none());
+        assert_eq!(app.engine.checkpoint(),checkpoint);assert_eq!(app.engine.document(),&document);
+        let effect=crate::GradientDestination::Effect{layer:occurrence_token(document.working.occurrence.unwrap()),key:"gradient".into(),epoch:app.state.layer_properties.epoch};
+        assert!(app.effect_action(EffectAction::Gradient{target:effect,edit:G::Reset}).is_err());
+        assert_eq!(p28_definition(&app),expected);assert_eq!(app.engine.document(),&document);
+    }
+}
+
+#[test]
+fn shared_gradient_reverse_reorders_colors_and_keeps_uneven_adjacent_knots_valid(){
+    use crate::GradientEdit as G;
+    for tool in [false,true]{
+        let mut app=p28_gradient_session(tool);
+        for (i,position) in [0.2,0.5,f32::from_bits(0.5_f32.to_bits()+1)].into_iter().enumerate(){
+            let color=layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[i as f32/3.,0.2,0.7,0.4]).unwrap();
+            let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Stop{index:None,position,color:Some(color),remove:false});
+        }
+        let before=p28_definition(&app);let checkpoint=app.engine.checkpoint();
+        let target=p28_destination(&app,tool);p28_gradient_edit(&mut app,target,G::Reverse);
+        let reversed=p28_definition(&app);reversed.validate().unwrap();
+        assert_eq!(reversed.stops.iter().map(|s|s.color).collect::<Vec<_>>(),before.stops.iter().rev().map(|s|s.color).collect::<Vec<_>>());
+        assert_eq!(reversed.stops[3].position,0.8);
+        assert!(reversed.stops[1].position<reversed.stops[2].position);
+        assert_eq!(reversed.interpolation,before.interpolation);
+        if tool{assert_eq!(app.engine.checkpoint(),checkpoint);}else{invoke(&mut app,CommandId::Undo);assert_eq!(p28_definition(&app),before);}
+    }
+}
+
+#[test]
+fn shared_gradient_bucket_uses_selected_paint_in_artwork_and_masks(){
+    use crate::GradientEdit as G;
+    for mask in [false,true]{
+        let mut app=p28_gradient_session(true);
+        if mask{invoke(&mut app,CommandId::QuickMask);invoke(&mut app,CommandId::Gradient);}
+        let selected=layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[0.1,0.7,0.3,0.6]).unwrap();
+        if mask{app.selection_masks.colors.background=selected;}else{app.state.colors.background=selected;}
+        app.dispatch(UiAction::Color{action:ColorAction::Select{slot:ColorSlot::Background}}).unwrap();
+        let checkpoint=app.engine.checkpoint();let target=p28_destination(&app,true);
+        p28_gradient_edit(&mut app,target,G::UseCurrentColor{index:1});
+        assert_eq!(p28_definition(&app).stops[1].color,selected,"mask={mask}");
+        assert_eq!(app.engine.checkpoint(),checkpoint);
+    }
+}
+
+#[test]
+fn shared_gradient_toolbar_admits_only_its_published_tool_destination(){
+    use crate::{GradientDestination as D,GradientEdit as G};
+    let mut app=p28_gradient_session(false);
+    let effect=p28_destination(&app,false);
+    let stale_context=app.state.toolbar_context();
+    invoke(&mut app,CommandId::Gradient);
+    let context=app.state.toolbar_context();let target=p28_destination(&app,true);
+    let original=p28_definition(&app);let checkpoint=app.engine.checkpoint();
+    let dispatch=|app:&mut UiSession<Recorder>,context,target,mode|app.dispatch(UiAction::ToolbarEdit{context,action:Box::new(UiAction::Effect{action:EffectAction::Gradient{target,edit:G::Interpolation{value:mode}}})});
+    assert!(dispatch(&mut app,stale_context,target.clone(),layer_core::ColorMixSpace::Classic).is_err());
+    assert_eq!(p28_definition(&app),original);
+    assert!(dispatch(&mut app,context.clone(),effect,layer_core::ColorMixSpace::Classic).is_err());
+    assert_eq!(p28_definition(&app),original);
+    let stale_epoch=app.state.document_file.epoch.wrapping_sub(1);
+    assert!(dispatch(&mut app,context.clone(),D::Tool{epoch:stale_epoch},layer_core::ColorMixSpace::Classic).is_err());
+    assert_eq!(p28_definition(&app),original);
+    dispatch(&mut app,context,target,layer_core::ColorMixSpace::Classic).unwrap();
+    assert_eq!(p28_definition(&app).interpolation,layer_core::ColorMixSpace::Classic);
+    assert_eq!(app.engine.checkpoint(),checkpoint);
+}
+
+#[test]
+fn shared_gradient_keyboard_release_preserves_precise_position_and_one_history_edit() {
+    use crate::{GradientEdit as G, NumericOperation};
+    for tool in [false, true] {
+        for narrow in [false, true] {
+            let mut app = p28_gradient_session(tool);
+            let position = f32::from_bits(0.405_f32.to_bits() + 7);
+            let neighbor = f32::from_bits(position.to_bits() + 2);
+            for value in [position, if narrow { neighbor } else { 0.8 }] {
+                let target = p28_destination(&app, tool);
+                p28_gradient_edit(&mut app, target, G::Stop { index: None, position: value, color: None, remove: false });
+            }
+            let original = p28_definition(&app);
+            let checkpoint = app.engine.checkpoint();
+            let target = p28_destination(&app, tool);
+            for phase in [ContactPhase::Down, ContactPhase::Move] {
+                app.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(
+                    EffectAction::Gradient { target: target.clone(), edit: G::Position { index: 1, operation: NumericOperation::Step { steps: 1. } } }
+                ) } }).unwrap();
+            }
+            let before_release = p28_definition(&app);
+            assert_ne!(before_release, original);
+            if narrow { assert_eq!(before_release.stops[1].position.to_bits(), neighbor.to_bits() - 1); }
+            app.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase: ContactPhase::Up, action: Box::new(
+                EffectAction::Gradient { target: target.clone(), edit: G::Position { index: 1, operation: NumericOperation::Step { steps: 0. } } }
+            ) } }).unwrap();
+            assert_eq!(p28_definition(&app), before_release, "release must preserve the full f32 knot position");
+            if tool { assert_eq!(app.engine.checkpoint(), checkpoint); }
+            else {
+                invoke(&mut app, CommandId::Undo);
+                assert_eq!(p28_definition(&app), original);
+                assert_eq!(app.engine.checkpoint(), checkpoint);
+                invoke(&mut app, CommandId::Redo);
+                assert_eq!(p28_definition(&app), before_release);
+            }
+        }
+    }
 }

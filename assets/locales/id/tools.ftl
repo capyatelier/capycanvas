@@ -184,13 +184,9 @@ tool-figures-outline-and-fill = Garis luar + isi
 
 tool-figures-rectangle = Persegi panjang
 
-tool-gradient-linear-clear = Linear: warna ke transparan
 
-tool-gradient-linear-color = Linear: warna ke warna
 
-tool-gradient-radial-clear = Radial: warna ke transparan
 
-tool-gradient-radial-color = Radial: warna ke warna
 
 tool-group-airbrush = Kuas semprot halus
 

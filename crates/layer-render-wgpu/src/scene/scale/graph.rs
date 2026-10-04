@@ -153,10 +153,11 @@ impl Graph {
         eligible.sort_by_cached_key(|n| (n.damage(sources, plan).area(), std::cmp::Reverse(n.cost().0), n.clone()));
         eligible.truncate((budget / plan.level_bytes(plan.level)) as usize);
         let wanted: HashSet<_> = eligible.into_iter().collect();
-        self.branches.retain(|node, _| wanted.contains(node));
+        let mut reusable: Vec<_> = self.branches.extract_if(|node, _| !wanted.contains(node))
+            .filter_map(|(_, branch)| branch.image.filter(|image| image.plan == plan)).collect();
         for node in wanted {
             let dirty = node.damage(sources, plan);
-            let branch = self.branches.entry(node).or_insert_with(|| Branch { image: None, valid: BTreeSet::new() });
+            let branch = self.branches.entry(node).or_insert_with(|| Branch { image: reusable.pop(), valid: BTreeSet::new() });
             if branch.image.as_ref().is_some_and(|image| image.plan != plan) { branch.image = None; branch.valid.clear(); }
             branch.valid.retain(|c| page_rect(*c).intersect(dirty).is_empty());
         }
@@ -312,5 +313,58 @@ impl Evaluator<'_> {
             branch.valid.extend(page_coordinates(region).filter(|c| page_rect(*c).intersect(bounds).intersect(region) == page_rect(*c).intersect(bounds)));
         }
         Ok(result)
+    }
+}
+
+#[cfg(test)]
+mod reuse_tests {
+    use super::*;
+    use super::super::tests::{document_at, add_fill, coverage_mask, set_effect_value, display_pixels};
+    use layer_core::{EffectValue, Point, Selection};
+    use layer_core::color::RgbColor;
+
+    #[test]
+    fn fill_edits_reuse_branch_textures_without_reusing_old_pixels() {
+        let mut doc = document_at([517, 259]);
+        let paint = doc.scene().order()[0];
+        doc.artwork.occurrences.get_mut(paint).unwrap().opacity = 0.37;
+        let color = |rgb, alpha| RgbColor::from_linear(doc.composition().color.space, [rgb, 0.27, 0.61, alpha]).unwrap();
+        let initial = color(0.13, 0.43);
+        let fill = add_fill(&mut doc, initial);
+        coverage_mask(&mut doc, fill, Point::default(), Some(Selection::polygon(vec![
+            Point { x: 0., y: 0. }, Point { x: 301., y: 0. },
+            Point { x: 301., y: 259. }, Point { x: 0., y: 259. },
+        ]).unwrap()));
+        let mut renderer = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+        let extent = doc.composition().size;
+        let mut previous_pixels: Option<Vec<[f32; 4]>> = None;
+        let mut previous_textures = Vec::new();
+        for (step, (red, alpha)) in [(0.13, 0.43), (0.83, 0.71), (0.31, 0.19)].into_iter().enumerate() {
+            let value = RgbColor::from_linear(doc.composition().color.space, [red, 0.27, 0.61, alpha]).unwrap();
+            set_effect_value(&mut doc, fill, "color", EffectValue::Color(value));
+            let mut frame = crate::test_support::packet(doc.scene(), extent);
+            frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+            renderer.submit(frame).unwrap();
+            let cache = renderer.scale_display.as_ref().unwrap();
+            let textures: Vec<_> = cache.graph.branches.values().filter_map(|branch|
+                branch.image.as_ref().map(|image| image.texture.clone())).collect();
+            assert!(!textures.is_empty(), "fixture must materialize cached effect branches");
+            if step > 0 {
+                assert_eq!(textures.len(), previous_textures.len());
+                assert!(textures.iter().all(|texture| previous_textures.contains(texture)),
+                    "same-plan Fill edits must reuse all retired branch textures");
+            }
+            let actual = display_pixels(&renderer);
+            let mut fresh = WgpuRasterizer::new_native_headless(doc.composition().color).unwrap();
+            fresh.submit(frame).unwrap();
+            let expected = display_pixels(&fresh);
+            assert!(crate::test_support::max_error(&actual, &expected) < 2e-5,
+                "recycled validity must not expose old masked/translucent Fill pixels");
+            if let Some(previous) = previous_pixels {
+                assert!(crate::test_support::max_error(&actual, &previous) > 0.01, "visible Fill edits must change pixels");
+            }
+            previous_pixels = Some(actual);
+            previous_textures = textures;
+        }
     }
 }

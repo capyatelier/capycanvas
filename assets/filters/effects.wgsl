@@ -238,11 +238,10 @@ fn capy_black_white(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     return fx_rgba(out,c.a);
 }
 fn capy_gradient_map(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
-    if FX_EXTENDED && fx_parameter(base,66u).x==0. {return c;}
+    if FX_EXTENDED && fx_parameter(base,65u).x==0. {return c;}
     let rgb=fx_rgb(c);let l=fx_luma(rgb);
-    let x=select(l,1.-l,fx_parameter(base,65u).x>.5);
-    let mapped=fx_lut(base,0u,x);
-    return fx_rgba(mix(rgb,mapped.rgb,mapped.a*fx_parameter(base,66u).x/100.),c.a);
+    let mapped=fx_gradient(base,l,position);
+    return fx_rgba(mix(rgb,working_encode(vec4(mapped.rgb,1.)).rgb,mapped.a*fx_parameter(base,65u).x/100.),c.a);
 }
 fn capy_posterize(c:vec4<f32>,position:vec2<f32>,base:u32) -> vec4<f32> {
     let levels=max(2.,round(fx_parameter(base,0u).x))-1.;

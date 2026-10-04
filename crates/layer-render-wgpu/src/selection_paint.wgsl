@@ -11,7 +11,9 @@ struct Output { rect: vec4<u32>, info: vec4<u32>, values: array<atomic<u32>> }
 @group(0) @binding(2) var<storage, read_write> footprint: array<f32>;
 @group(0) @binding(3) var<storage, read_write> output: Output;
 @group(0) @binding(8) var<uniform> style: Style;
-// Bindings 6/7 and sampling helpers come from selection_clip.wgsl.
+struct GradientRecords {values:array<vec4<f32>,65>}
+@group(0) @binding(9) var<uniform> gradient_records:GradientRecords;
+fn gradient_record(base:u32,index:u32)->vec4<f32>{return gradient_records.values[index];}
 
 @compute @workgroup_size(64)
 fn initialize(@builtin(global_invocation_id) id: vec3<u32>) {
@@ -52,13 +54,10 @@ fn paint(@builtin(global_invocation_id) id: vec3<u32>) {
         var gray = params.gray;
         var gradient_alpha = 1.;
         if params.gradient.x > 0. {
-            let delta = params.gradient_points.zw - params.gradient_points.xy;
-            let offset = p - params.gradient_points.xy;
-            let distance2 = max(dot(delta,delta),0.000001);
-            var progress = clamp(dot(offset,delta)/distance2,0.,1.);
-            if params.gradient.x > 1.5 { progress = clamp(length(offset)/sqrt(distance2),0.,1.); }
-            if params.gradient.z > .5 { gradient_alpha = 1.-progress; }
-            else { gray = mix(gray,params.gradient.y,progress); }
+            let t=gradient_shape(p-params.gradient_points.xy,params.gradient_points.zw-params.gradient_points.xy,u32(params.gradient.x)-1u,params.gradient.y>.5);
+            let sample=gradient_scalar(0u,t,p);
+            gradient_alpha=sample.y;
+            gray=select(0.,sample.x/max(sample.y,1.e-30),sample.y>0.);
         }
         if params.enclosed != 0u {
             let area = enclosed_at(p) * gradient_alpha;

@@ -1598,3 +1598,83 @@ boundaries are about 1.02 GB and 790–796 MB. These are not continuous peaks.
 Raw APK identities, native contacts, retention timings and full traces are in
 `artifacts/photo-editing-color/p20-p26-android-performance/`;
 `performance/dehaze-final-calibration-attribution.json` separates each path.
+
+## Unified gradients and precision controls
+
+On 2026-10-04, the reference MovinkPad Pro 14 ran the original 9504 × 6336 photo at Fit in
+Photo, default density 280, with thermal status 0 at the recorded boundaries.
+The private nondebuggable benchmark uses optimized release Rust. Its base is
+`0af58a32d` plus the unified-gradient changes: app SHA256 `5921585b`, test
+`c37654eb`, JNI `06c1da32`, source diff `d27cea30`. Each row primes, undoes and
+settles before three five-second contacts. Rates count SurfaceFlinger canvas
+presents strictly inside those contacts.
+
+| Motion | Canvas presents/s | p99 present gaps, ms | After-Up drain, s |
+| --- | --- | --- | --- |
+| Gradient tool geometry | 118.90 / 119.10 / 119.10 | 8.33 / 8.33 / 8.33 | 4.81 / 4.75 / 4.72 |
+| Gradient Map stop, before texture reuse | 27.42 / 26.62 / 27.42 | 75 / 83 / 75 | 3.11 / 3.29 / 3.27 |
+| Gradient Map stop, with texture reuse | 27.42 / 28.62 / 30.22 | 92 / 83 / 75 | 3.06 / 3.20 / 3.11 |
+| Gradient Fill stop, before texture reuse | 9.81 / 9.01 / 8.41 | 183 / 217 / 158 | 7.06 / 7.10 / 7.07 |
+| Gradient Fill stop, with texture reuse | 16.01 / 15.61 / 16.21 | 142 / 142 / 142 | 7.18 / 7.01 / 7.29 |
+| Levels Input Black | 28.22 / 32.03 / 30.83 | 75 / 67 / 67 | 3.28 / 3.24 / 3.21 |
+| Targeted Curves | 49.04 / 48.44 / 48.24 | 242 / 242 / 242 | 1.57 / 1.61 / 1.56 |
+| Dehaze Amount | 2.20 / 2.20 / 2.40 | 483 / 542 / 475 | .70 / .66 / .90 |
+
+Tool geometry meets the display-paced motion target for its interactive line
+preview. Each release adopts one document edit; the subsequent raster work and
+drain are separate and do not establish 120 Hz full-resolution painting. Opening
+Tool Settings also presents Navigator in the default Photo column; the benchmark
+declares and records that visible panel. The other rows miss the 120 Hz target.
+Native stop definitions change hundreds of times per contact.
+
+Levels Auto adopts its exact result in 14.885 s, and Undo restores Gamma 2.
+Targeted adjustment restores retained Exact statistics 13.397 ms after contact
+retirement; Up-to-Exact is 4.14 s including raster drain and retirement scheduling.
+These are different latencies. Renderer allocations at the measured boundaries
+are 2.28–2.73 GB; they are not continuous peaks. The resident native source
+hierarchy differs from the earlier Huion workload, so these rates are not a
+matched device speedup.
+
+Separate one-contact profiles show display-sized main gradient composition,
+about 3.76 million changed mip pixels per update, and stationary source upload
+hit/miss counters. The ordinary contacts before reuse record approximately
+39 ms renderer-owner CPU per submitted callback for Fill, versus 5 ms for Map.
+Fill's two cached branch images each occupy 60,678,144 bytes.
+Parameter edits now recycle invalidated branch storage
+with empty validity instead of allocating replacement textures.
+
+The matched reuse build uses app `9bdec068`, test `ad71997f` and JNI `dc50cfba`,
+with the same benchmark fixture, photo, layout and physical density. Fill's
+owner CPU median falls to 6.52–6.93 ms, and its rate rises to 15.61–16.21 frames/s.
+The 142 ms p99 gaps still miss the motion bound; seven-second post-contact drain
+remains a separate latency.
+Map records 27.42–30.22 frames/s with 4.83–5.26 ms owner CPU; the small rate
+change does not establish a repeatable gain, and its target remains unmet.
+The frozen build manifest is
+`artifacts/photo-editing-color/p30-android/keyboard-branch-reuse/numeric-phase/PERFORMANCE.local.json`;
+the matched contacts are in `performance/pro14-p30-branch-reuse-fill/` under the
+performance artifact directory below.
+
+The Fill profile also records 2.284 s of command finishing on a separate worker
+inside its five-second contact. The visible Histogram and windowed capture
+pattern suggest live statistics, but the trace lacks thread names, so that
+attribution is inferred. Overlapping wall-time scopes are not additive CPU cost;
+final-submit completion omits earlier internal composition waits and is not total
+GPU request latency. Neither the remaining misses nor these profiles establish
+a hardware ceiling or a soft-target waiver.
+
+APK and source identities are in
+`artifacts/photo-editing-color/p30-android/final-rebase/PERFORMANCE.local.json`.
+Contact records and traces are under
+`artifacts/photo-editing-color/p20-p26-android-performance/performance/`;
+`pro14-gradient-profile-attribution.json` separates the profiled paths.
+
+Separate desktop diagnostics use 256 × 256 documents and do not qualify a tablet
+tier. GTK stop drags present 49.45–49.46 frames/s with 50 Hz injected input;
+tool geometry presents 96.12–98.52 frames/s. In Web, coalescing gradient previews
+to animation frames reduces projection calls over matched five-second contacts
+from 1,202 to 298 for mouse, 1,040 to 516 for touch, and 1,248 to 144 for pen.
+Median projection cost remains 0.8–0.9 ms. These Web counts measure CPU preview
+work, not presented frames. Raw records are in
+`artifacts/photo-editing-color/p28-gtk/final-0af58/` and
+`artifacts/photo-editing-color/p28-web/final-matrix/`.

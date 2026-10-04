@@ -29,11 +29,11 @@ impl SelectionPainter {
             })
     }
     pub fn new(device: &PipelineDevice, textures: &wgpu::BindGroupLayout) -> Self {
-        let entries: Vec<_> = [0, 1, 2, 3, 6, 7, 8]
+        let entries: Vec<_> = [0, 1, 2, 3, 6, 7, 8, 9]
             .map(|binding| crate::bindings::buffer(
                 binding,
                 wgpu::ShaderStages::COMPUTE,
-                if binding <= 1 || binding == 8 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: !matches!(binding, 2 | 3), } },
+                if binding <= 1 || binding >= 8 { wgpu::BufferBindingType::Uniform } else { wgpu::BufferBindingType::Storage { read_only: !matches!(binding, 2 | 3), } },
                 false,
                 None,
             ))
@@ -58,6 +58,9 @@ impl SelectionPainter {
                 include_str!("brush_footprint.wgsl"),
                 &shader_source("before", 6),
                 &shader_source("enclosed", 7),
+                &working_color::shader(device),
+                include_str!("float_number.wgsl"),
+                crate::gradient::SOURCE,
                 include_str!("selection_paint.wgsl"),
             ]));
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -88,6 +91,7 @@ impl SelectionPainter {
         active: &Painting,
         enclosed: &wgpu::Buffer,
         style: &wgpu::Buffer,
+        gradient: &wgpu::Buffer,
     ) -> wgpu::BindGroup {
         let params = r
             .device
@@ -107,6 +111,7 @@ impl SelectionPainter {
             (6, &active.before),
             (7, enclosed),
             (8, style),
+            (9, gradient),
         ]
         .map(|(binding, buffer)| wgpu::BindGroupEntry {
             binding,
@@ -144,7 +149,7 @@ impl SelectionPainter {
                     opacity: update.opacity,
                     gray: update.gray,
                     style: update.style.clone(),
-                    gradient: update.gradient,
+                    gradient: update.gradient.clone(),
                     dabs: dabs.to_vec(),
                     finish: update.finish && last,
                     enclosed: if last { update.enclosed.clone() } else { None },
@@ -285,21 +290,17 @@ impl SelectionPainter {
             update.gray.to_bits(),
             u32::from(update.enclosed.is_some()),
             0,
-            update.gradient.map_or(0, |g| g.start.x.to_bits()),
-            update.gradient.map_or(0, |g| g.start.y.to_bits()),
-            update.gradient.map_or(0, |g| g.end.x.to_bits()),
-            update.gradient.map_or(0, |g| g.end.y.to_bits()),
-            update
-                .gradient
-                .map_or(0., |g| if g.radial { 2_f32 } else { 1. })
-                .to_bits(),
-            update.gradient.map_or(0, |g| g.background.to_bits()),
-            update
-                .gradient
-                .map_or(0., |g| f32::from(g.transparent))
-                .to_bits(),
-            0,
+            update.gradient.as_ref().map_or(0, |g| g.start.x.to_bits()),
+            update.gradient.as_ref().map_or(0, |g| g.start.y.to_bits()),
+            update.gradient.as_ref().map_or(0, |g| g.end.x.to_bits()),
+            update.gradient.as_ref().map_or(0, |g| g.end.y.to_bits()),
+            update.gradient.as_ref().map_or(0.,|g|1.+g.shape as u8 as f32).to_bits(),
+            update.gradient.as_ref().map_or(0.,|g|f32::from(g.reverse)).to_bits(),
+            0,0,
         ];
+        let records=update.gradient.as_ref().map(|g|g.gradient.parameters()).transpose().map_err(GpuRasterError::Effect)?.unwrap_or([[0.;4];65]);
+        let gradient=r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {label:Some("selection gradient stops"),
+            contents:&records.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>(),usage:wgpu::BufferUsages::UNIFORM});
         let dummy = r.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("selection initialization scratch"),
             size: 4,
@@ -314,6 +315,7 @@ impl SelectionPainter {
             self.active.as_ref().unwrap(),
             &enclosed,
             &style,
+            &gradient,
         );
         if fresh {
             dispatch(
@@ -351,6 +353,7 @@ impl SelectionPainter {
                 self.active.as_ref().unwrap(),
                 &enclosed,
                 &style,
+                &gradient,
             );
             dispatch(
                 &mut encoder,

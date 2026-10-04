@@ -27,7 +27,7 @@ impl Drop for CompileTrace<'_> {
 pub(crate) struct PipelineDevice {
     device: wgpu::Device,
     working_space: layer_core::color::RgbSpace,
-    hdr: bool,
+    depth: layer_core::color::SampleDepth,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
     pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
@@ -57,7 +57,7 @@ impl From<wgpu::Device> for PipelineDevice {
             analysis_memory: Default::default(),
             blend_pipelines: Default::default(),
             working_space: Default::default(),
-            hdr: false,
+            depth: Default::default(),
             source_samples: std::sync::Arc::new(layer_core::raster::DecodedTileCache::new(
                 512 * 1024 * 1024,
             )),
@@ -74,7 +74,7 @@ impl std::ops::Deref for PipelineDevice {
 }
 impl PipelineDevice {
     pub fn for_recipe(&self) -> Self {
-        Self { working_space: self.working_space, hdr: self.hdr,
+        Self { working_space: self.working_space, depth: self.depth,
             #[cfg(not(target_arch = "wasm32"))]
             cache: self.cache.clone(), ..Self::from(self.device.clone()) }
     }
@@ -83,8 +83,9 @@ impl PipelineDevice {
     pub fn working_format(&self) -> wgpu::TextureFormat {
         wgpu::TextureFormat::Rgba32Float
     }
-    pub fn hdr(&self) -> bool { self.hdr }
-    pub fn with_hdr(mut self, hdr: bool) -> Self { self.hdr = hdr; self }
+    pub fn hdr(&self) -> bool { self.depth.is_float() }
+    pub fn depth(&self) -> layer_core::color::SampleDepth {self.depth}
+    pub fn with_depth(mut self, depth:layer_core::color::SampleDepth) -> Self {self.depth=depth;self}
     pub fn working_space(&self) -> layer_core::color::RgbSpace {
         self.working_space
     }

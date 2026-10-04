@@ -98,6 +98,8 @@ preserves its source; subnormal outputs use explicit nearest-even packing.
 Guide samples contain log luminance, illumination, coverage mantissa and its
 base-two exponent. GPU reductions and gathers combine scaled weighted means, so
 positive coverage survives fractional areas below Float32's minimum value.
+Weighted means preserve constant values exactly and use a weighted numerator
+to avoid cancellation when one sample has nearly all the coverage.
 CPU delivery decodes the same representation; row analysis accumulates in Float64
 before packing the bounded Float32 guide. Sampling uses the source value only
 when every neighboring weight is zero.
@@ -276,9 +278,10 @@ the [Vulkan core minimum of four fractional bits](https://docs.vulkan.org/spec/l
 while native-grid tests retain their Float32 tolerance. Native views and programs
 declaring native resolution retain exact evaluation.
 
-The current filter ABI is **4**. Curves and gradients each occupy 65 vec4
+The current filter ABI is **5**. Curves and gradients each occupy 65 vec4
 parameter records: one header plus up to 32 pairs. Curves store Hermite segments
-with interval-scaled tangents; gradients store exact positions and RGBA stops.
+with interval-scaled tangents; gradients store exact positions, linear RGB, alpha
+and mixing coordinates.
 `fx_lut(base, offset, value)` locates a segment with at most five binary-search
 steps and evaluates it directly. The former 256-sample parameter representation
 is removed. Earlier ABI programs are rejected, including embedded document programs;
@@ -294,18 +297,27 @@ RGB can be finite and extended; alpha is linear coverage in [0,1]. Every support
 conversion is validated before accepting persistent state. Untagged arrays are
 rejected; there is no compatibility reader.
 
-GPU preparation converts these definitions to **encoded document RGB**, without
-clamping or changing their stored definitions. Gradient interpolation uses those
-straight RGB coordinates and alpha; inserting a stop records that interpolation
-in the document space. Assignment, conversion and depth changes retain the
-original endpoint definitions. The GPU record layout and shader contract remain
-ABI 4. Individual effects decide how alpha contributes: Gradient Map uses stop
-alpha as mapping strength; the built-in tint/ink/paper controls use RGB only.
+Color parameters are prepared in encoded document RGB. Gradients retain
+`{stops, interpolation}`; new gradients use Oklab. Integer gradients always dither.
+Interpolation can also be Linear light (document linear RGB) or Classic
+(document encoded RGB). The gradient header stores stop count, mixing space,
+record stride and a reserved zero. Each stop has position and document linear RGB
+in the first record, then alpha and mixing coordinates in the second. Mixing
+associates coordinates with alpha and unassociates before conversion to linear
+RGB. Exact knots retain their authored colors. Fully transparent spans contribute
+no hidden color. Assignment, conversion and depth changes retain tagged stops.
+
+`fx_gradient(base, value, document_position)` evaluates linear RGB and alpha.
+Integer-depth dithering adds triangular noise bounded by one code step in encoded RGB; floating
+depths bypass it. Document coordinates keep noise stable across tiles and export
+regions. Gradient Map uses stop alpha as mapping strength; Gradient Fill uses it
+as coverage. The same evaluator drives raster tool operations. Masks use scalar
+value and opacity stops derived by shared editor policy.
 
 A `"kind":"generator"` program ignores its input and supplies color and coverage.
 The Fill category's Solid Color (`solid_color`, the color's alpha is coverage)
-and Gradient Fill (`gradient_fill`: Linear or Radial, Angle counterclockwise from
-the x axis, Scale, Center and Reverse, with stops evaluated as in Gradient Map)
+and Gradient Fill (`gradient_fill`: Linear, Radial or Reflected, Angle counterclockwise from
+the x axis, Scale and Center, with stops evaluated as in Gradient Map)
 are generators. Layer › New inserts them with a reveal-all mask, or the
 selection as the mask, so painting edits the mask; Solid Color starts from the
 current color. New documents use a white Solid Color fill named Paper on the

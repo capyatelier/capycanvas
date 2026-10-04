@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = 角度
 resources-parameter-gradient-fill-center-x = 中心X
 resources-parameter-gradient-fill-center-y = 中心Y
 resources-parameter-gradient-fill-gradient = グラデーション
-resources-parameter-gradient-fill-reverse = 逆順
 resources-parameter-gradient-fill-scale = 拡大縮小
-resources-parameter-gradient-fill-style = スタイル
+resources-parameter-gradient-fill-style = 形状
 resources-parameter-gradient-map-amount = 量
 resources-parameter-gradient-map-gradient = グラデーション
 resources-parameter-gradient-map-reverse = 逆順
@@ -633,3 +632,9 @@ resources-layer-type-selection = 選択範囲
 resources-properties-layer-title = { $name }（{ $type }）
 
 resources-filter-dehaze = かすみの除去
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = リニアライト
+resources-gradient-mix-classic = クラシック

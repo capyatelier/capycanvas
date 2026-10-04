@@ -18,7 +18,7 @@ pub enum ToolVariant {
     BrushPreset { id: u32 },
     Figure { shape: FigureShape },
     Ruler { kind: RulerKind },
-    Gradient { radial: bool, transparent: bool },
+    Gradient {shape:layer_core::GradientShape},
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ToolControlGroup {
@@ -129,22 +129,9 @@ impl ToolSlotId {
             Self::PhotoFill => {
                 const {
                     &[
-                        V::Gradient {
-                            radial: false,
-                            transparent: false,
-                        },
-                        V::Gradient {
-                            radial: false,
-                            transparent: true,
-                        },
-                        V::Gradient {
-                            radial: true,
-                            transparent: false,
-                        },
-                        V::Gradient {
-                            radial: true,
-                            transparent: true,
-                        },
+                        V::Gradient {shape:layer_core::GradientShape::Linear},
+                        V::Gradient {shape:layer_core::GradientShape::Radial},
+                        V::Gradient {shape:layer_core::GradientShape::Reflected},
                         command(C::Fill),
                         command(C::LassoFill),
                     ]
@@ -186,22 +173,9 @@ impl ToolSlotId {
             Self::Gradient => {
                 const {
                     &[
-                        V::Gradient {
-                            radial: false,
-                            transparent: false,
-                        },
-                        V::Gradient {
-                            radial: false,
-                            transparent: true,
-                        },
-                        V::Gradient {
-                            radial: true,
-                            transparent: false,
-                        },
-                        V::Gradient {
-                            radial: true,
-                            transparent: true,
-                        },
+                        V::Gradient {shape:layer_core::GradientShape::Linear},
+                        V::Gradient {shape:layer_core::GradientShape::Radial},
+                        V::Gradient {shape:layer_core::GradientShape::Reflected},
                     ]
                 }
             }
@@ -267,15 +241,7 @@ impl ToolVariant {
                 RulerKind::Parallel => "ruler-parallel",
                 RulerKind::Radial => "ruler-radial",
             },
-            Self::Gradient {
-                radial,
-                transparent,
-            } => match (radial, transparent) {
-                (false, false) => "gradient",
-                (false, true) => "gradient-transparent",
-                (true, false) => "gradient-radial",
-                (true, true) => "gradient-radial-transparent",
-            },
+            Self::Gradient {shape}=>match shape {layer_core::GradientShape::Linear=>"gradient",layer_core::GradientShape::Radial=>"gradient-radial",layer_core::GradientShape::Reflected=>"gradient-reflected"},
         }
     }
     fn icon_in(self, state: &UiState) -> &'static str {
@@ -306,22 +272,9 @@ impl ToolVariant {
             Self::Ruler {
                 kind: RulerKind::Radial,
             } => MessageId::TOOL_RULERS_RADIAL,
-            Self::Gradient {
-                radial: false,
-                transparent: false,
-            } => MessageId::TOOL_GRADIENT_LINEAR_COLOR,
-            Self::Gradient {
-                radial: false,
-                transparent: true,
-            } => MessageId::TOOL_GRADIENT_LINEAR_CLEAR,
-            Self::Gradient {
-                radial: true,
-                transparent: false,
-            } => MessageId::TOOL_GRADIENT_RADIAL_COLOR,
-            Self::Gradient {
-                radial: true,
-                transparent: true,
-            } => MessageId::TOOL_GRADIENT_RADIAL_CLEAR,
+            Self::Gradient {shape}=>match shape {layer_core::GradientShape::Linear=>MessageId::RESOURCES_CHOICE_GRADIENT_FILL_STYLE_LINEAR,
+                layer_core::GradientShape::Radial=>MessageId::RESOURCES_CHOICE_GRADIENT_FILL_STYLE_RADIAL,
+                layer_core::GradientShape::Reflected=>MessageId::RESOURCES_CHOICE_GRADIENT_FILL_STYLE_REFLECTED},
         };
         localization.text(id).to_string()
     }
@@ -330,13 +283,7 @@ impl ToolVariant {
         Some(match tool {
             LayerCanvasTool::Figure { shape, .. } => Self::Figure { shape },
             LayerCanvasTool::Ruler { kind } => Self::Ruler { kind },
-            LayerCanvasTool::Gradient {
-                radial,
-                transparent,
-            } => Self::Gradient {
-                radial,
-                transparent,
-            },
+            LayerCanvasTool::Gradient {shape}=>Self::Gradient {shape},
             LayerCanvasTool::Paint => command(state.brush.tool.command()),
             _ => command(if let Some(selection) = tool.selection_tool() {
                 selection.command()
@@ -552,17 +499,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     tool: LayerCanvasTool::Ruler { kind },
                 },
             },
-            ToolVariant::Gradient {
-                radial,
-                transparent,
-            } => UiAction::Layer {
-                action: LayerAction::Tool {
-                    tool: LayerCanvasTool::Gradient {
-                        radial,
-                        transparent,
-                    },
-                },
-            },
+            ToolVariant::Gradient {shape}=>UiAction::Layer {action:LayerAction::Tool {tool:LayerCanvasTool::Gradient {shape}}},
         }
     }
     pub(crate) fn tool_variants_menu(&self, anchor: DrawerAnchor) -> Result<ContextMenu, String> {

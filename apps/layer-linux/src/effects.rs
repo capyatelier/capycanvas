@@ -1,6 +1,9 @@
 //! GTK views of the shared effect/property schemas. No filter-specific widgets.
 #[path = "gradient_preview.rs"]
 mod gradient_preview;
+#[path = "gradient_editor.rs"]
+mod gradient_editor;
+pub(crate) use gradient_editor::{GradientEditor,GradientButton};
 use crate::{number_control::NumberControl, workspace::Workspace};
 use adw::prelude::*;
 use gtk::glib;
@@ -778,7 +781,8 @@ impl EffectPanels {
             }
             self.property_labels.borrow_mut().clear();
             self.section_labels.borrow_mut().clear();
-            if let Some(layer) = view.layer {
+            {
+                let layer=view.layer.unwrap_or(0);
                 let mut section = None;let mut previous:Option<gtk::Widget>=None;
                 for (index, control) in view.controls.iter().enumerate() {
                     if section != control.section_id.as_ref() {
@@ -873,7 +877,7 @@ impl EffectPanels {
                             Field::Curve(input)
                         }
                         PropertyKind::Gradient => {
-                            let input = GradientEditor::new(w, layer, &control.key);
+                            let input = GradientEditor::new(w, control);
                             self.body.append(&input.root);
                             Field::Gradient(input)
                         }
@@ -913,7 +917,7 @@ impl EffectPanels {
                     i.set_color(*c, w.view_color())
                 }
                 (Field::Curve(i), EffectValue::Curve(_)) => i.update(c, &w.localization()),
-                (Field::Gradient(i), EffectValue::Gradient(stops)) => i.update(stops),
+                (Field::Gradient(i), EffectValue::Gradient(gradient)) => i.update(gradient,c.gradient.as_ref().expect("shared gradient controls")),
                 _ => {}
             }
         }
@@ -1092,204 +1096,6 @@ fn row(title: &str, input: &impl IsA<gtk::Widget>) -> gtk::Box {
     row.append(&label);
     row.append(input);
     row
-}
-/// Reusable gradient editor: click to insert/select, edit stop position/color,
-/// remove interior stops. Rust constrains order, endpoints and interpolation.
-struct GradientEditor {
-    root: gtk::Box,
-    stops: Rc<RefCell<Vec<layer_core::GradientStop>>>,
-    position: NumberControl,
-    sync: Rc<dyn Fn()>,
-}
-impl GradientEditor {
-    fn new(w: &Rc<Workspace>, layer: u64, key: &str) -> Self {
-        let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
-        let bar = gradient_preview::GradientPreview::new();
-        bar.set_widget_name("effect-gradient");
-        let stops = Rc::new(RefCell::new(Vec::<layer_core::GradientStop>::new()));
-        let selected = Rc::new(Cell::new(0usize));
-        let updating = Rc::new(Cell::new(false));
-        let color = crate::color_editor::ColorButton::new();
-        color.bind_copy(w);
-        color.widget.set_widget_name("effect-gradient-color");
-        let position = NumberControl::new(layer_ui::NumericControl::percent(), "", "", w.localization().clone());
-        position.set_widget_name("effect-gradient-position");
-        let remove = crate::icons::button("layer-minus-symbolic");
-        remove.set_widget_name("effect-gradient-remove");
-        let reset = crate::icons::button("layer-reset-symbolic");
-        reset.set_widget_name("effect-gradient-reset");
-        let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-        let label = gtk::Label::new(None);
-        label.set_widget_name("effect-gradient-color-label");
-        label.set_hexpand(true);
-        label.set_xalign(0.);
-        actions.append(&label);
-        actions.append(&color.widget);
-        actions.append(&remove);
-        actions.append(&reset);
-        root.append(&bar);
-        root.append(&position);
-        root.append(&actions);
-        w.on_localization(glib::clone!(#[weak] bar, #[weak] position, #[weak] remove, #[weak] reset, #[weak] label, #[upgrade_or] false, move |localization| {
-            let copy = layer_ui::NativeCopy::new(localization).color;
-            bar.set_tooltip_text(Some(&copy.add_stop));
-            position.set_caption(&copy.position, "", localization.clone());
-            remove.set_tooltip_text(Some(&copy.remove_stop));
-            reset.set_tooltip_text(Some(&copy.reset_gradient));
-            label.set_text(&copy.color);
-            true
-        }));
-        let change = Rc::new(glib::clone!(
-            #[weak]
-            w,
-            #[to_owned]
-            key,
-            move |index, position, color, remove| w.dispatch(UiAction::Effect {
-                action: EffectAction::GradientStop {
-                    layer,
-                    key: key.clone(),
-                    index,
-                    position,
-                    color,
-                    remove
-                }
-            })
-        ));
-        let update: Rc<dyn Fn()> = Rc::new(glib::clone!(
-            #[strong]
-            updating,
-            #[strong]
-            stops,
-            #[strong]
-            selected,
-            #[strong]
-            color,
-            #[weak]
-            w,
-            #[weak]
-            position,
-            #[weak]
-            remove,
-            #[weak]
-            bar,
-            move || {
-                updating.set(true);
-                let list = stops.borrow();
-                let index = selected.get().min(list.len().saturating_sub(1));
-                selected.set(index);
-                if let Some(s) = list.get(index) {
-                    color.set_color(s.color, w.view_color());
-                    position.set_value(s.position as f64);
-                    position.set_sensitive(index > 0 && index + 1 < list.len());
-                    remove.set_sensitive(index > 0 && index + 1 < list.len());
-                }
-                updating.set(false);
-                if let Some(g) = w.gpu.borrow().as_ref() {
-                    bar.set_gradient(&list, index, g.session.state().colors.rgb_space(), w.view_color());
-                }
-            }
-        ));
-        let click = gtk::GestureClick::new();
-        click.connect_pressed(glib::clone!(
-            #[strong]
-            stops,
-            #[strong]
-            selected,
-            #[strong]
-            change,
-            #[strong]
-            update,
-            move |gesture, _, x, _| {
-                let width = gesture.widget().unwrap().width() as f32 - 12.;
-                let position = ((x as f32 - 6.) / width).clamp(0., 1.);
-                let existing = stops
-                    .borrow()
-                    .iter()
-                    .position(|s| (s.position - position).abs() * width < 8.);
-                let index = existing
-                    .unwrap_or_else(|| stops.borrow().partition_point(|s| s.position < position));
-                selected.set(index);
-                if existing.is_none() {
-                    change(None, position, None, false);
-                }
-                update();
-            }
-        ));
-        bar.add_controller(click);
-        color.widget.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            #[weak]
-            color,
-            #[strong]
-            selected,
-            #[strong]
-            stops,
-            #[strong]
-            change,
-            move |_| {
-                let index = selected.get();
-                let original = stops.borrow().clone();
-                let Some(stop) = original.get(index) else { return; };
-                let selected = selected.clone();
-                let stops = stops.clone();
-                let change = change.clone();
-                let weak = Rc::downgrade(&color);
-                crate::color_editor::choose(&w, stop.color, move |_, color| {
-                    if weak.upgrade().is_some_and(|button| button.widget.root().is_some())
-                        && selected.get() == index && *stops.borrow() == original {
-                        change(Some(index), original[index].position, Some(color), false);
-                    }
-                });
-            }
-        ));
-        position.connect_value_changed(glib::clone!(
-            #[strong]
-            updating,
-            #[strong]
-            selected,
-            #[strong]
-            change,
-            move |n| {
-                if !updating.get() {
-                    change(Some(selected.get()), n.value() as f32, None, false);
-                }
-            }
-        ));
-        remove.connect_clicked(glib::clone!(
-            #[strong]
-            selected,
-            #[strong]
-            change,
-            move |_| {
-                let index = selected.get();
-                selected.set(index.saturating_sub(1));
-                change(Some(index), 0., None, true);
-            }
-        ));
-        reset.connect_clicked(glib::clone!(
-            #[weak]
-            w,
-            #[to_owned]
-            key,
-            move |_| w.dispatch(UiAction::Effect {
-                action: EffectAction::Reset {
-                    layer,
-                    key: key.clone()
-                }
-            })
-        ));
-        Self {
-            root,
-            stops,
-            position,
-            sync: update,
-        }
-    }
-    fn update(&self, stops: &[layer_core::GradientStop]) {
-        *self.stops.borrow_mut() = stops.to_vec();
-        (self.sync)();
-    }
 }
 fn bind_number(input: &NumberControl, w: &Rc<Workspace>, action: impl Fn(f64) -> EffectAction + 'static) {
     let action = Rc::new(action);

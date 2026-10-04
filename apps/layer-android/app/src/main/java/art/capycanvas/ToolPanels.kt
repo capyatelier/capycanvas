@@ -153,6 +153,7 @@ import kotlinx.coroutines.withContext
         choices.filterNot { it.has("beside") }.forEach { choice ->
             ToolbarChoice(choice, false, false, false, 20, host::dispatch, prefix = "tool", height = 32f)
         }
+        state.array("tool_extra").objects().mapNotNull {it.optJSONObject("Gradient")}.forEach {GradientControl(host,it)}
         val fieldControl: @Composable (JSONObject, Boolean) -> Unit = { field, compact ->
             val id = field.getString("id")
             Box(Modifier.testTag("tool-setting-$id")) {

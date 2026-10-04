@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = Açı
 resources-parameter-gradient-fill-center-x = Merkez X
 resources-parameter-gradient-fill-center-y = Merkez Y
 resources-parameter-gradient-fill-gradient = Gradyan
-resources-parameter-gradient-fill-reverse = Tersine çevir
 resources-parameter-gradient-fill-scale = Ölçek
-resources-parameter-gradient-fill-style = Tarz
+resources-parameter-gradient-fill-style = Şekil
 resources-parameter-gradient-map-amount = Miktar
 resources-parameter-gradient-map-gradient = Gradyan
 resources-parameter-gradient-map-reverse = Tersine çevir
@@ -516,3 +515,9 @@ resources-layer-type-selection = Seçim
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = Sisi gider
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = Doğrusal ışık
+resources-gradient-mix-classic = Klasik

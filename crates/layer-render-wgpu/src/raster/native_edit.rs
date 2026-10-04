@@ -276,7 +276,7 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let device = device
             .require_float32()?
-            .with_working_space(color.space).with_hdr(color.depth.is_float());
+            .with_working_space(color.space).with_depth(color.depth);
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Interactive)?;
         r.startup.as_mut().unwrap().host_catalog_pending = !cfg!(target_arch = "wasm32");
         r.initialize_native(color)?;
@@ -300,7 +300,7 @@ impl WgpuRasterizer {
     ) -> Result<Self, GpuRasterError> {
         let device = device
             .require_float32()?
-            .with_working_space(color.space).with_hdr(color.depth.is_float());
+            .with_working_space(color.space).with_depth(color.depth);
         let mut r = Self::from_wgpu_inner(adapter, device, queue, Initialization::Snapshot)?;
         r.initialize_native(color)?;
         Ok(r)
@@ -308,7 +308,7 @@ impl WgpuRasterizer {
 
     fn initialize_native(&mut self, color: DocumentColor) -> Result<(), GpuRasterError> {
         self.document_color = color;
-        self.device = self.device.clone().with_hdr(color.depth.is_float());
+        self.device = self.device.clone().with_depth(color.depth);
         self.ui_rendition = color.depth.is_float().then_some(Default::default());
         self.scene = None;
         self.source_tiles = std::cell::RefCell::new(crate::scene::sources::DecodedTiles::new(color.space));

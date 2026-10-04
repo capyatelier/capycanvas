@@ -702,6 +702,7 @@ fn disabled_slot_choices_are_revalidated_before_they_change_memory() {
 fn slot_choices_survive_layout_switch_and_editing_restart() {
     let (mut s, panel, ids) = slot_fixture(Platform::Gtk, &[ToolSlotId::Marquee, ToolSlotId::Gradient]);
     let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
+    s.reveal_panel(Panel::Properties).unwrap();
     let original = selected_slot_variant(&s, anchor);
     let blank = s.capture_workspace().unwrap();
     let other = *ToolSlotId::Marquee.variants().iter().find(|&&variant| variant != original).unwrap();

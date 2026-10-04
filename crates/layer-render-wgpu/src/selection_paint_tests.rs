@@ -162,3 +162,35 @@ fn saved_selection_overlay_uses_working_visibility_without_changing_authored_art
     assert!(r.selection_previews.texture.is_none());
     assert_eq!(document.artwork, authored);
 }
+
+#[test]
+fn selection_gradient_shapes_preserve_scalar_coverage_and_contact_opacity() {
+    use layer_core::{GradientShape, ScalarGradient, ScalarGradientStop};
+    for shape in GradientShape::ALL {
+        for reverse in [false,true] {
+            let mut r=renderer();
+            let mut paint=request(1,Selection::empty(),SelectionPaintMode::Gray,0.5);
+            paint.dabs.clear();
+            paint.style.rendering.accumulation=layer_core::BrushAccumulation::Uniform;
+            paint.enclosed=Some(Arc::new(Selection::polygon(vec![Point{x:52.,y:52.},Point{x:76.,y:52.},Point{x:76.,y:76.},Point{x:52.,y:76.}]).unwrap()));
+            paint.gradient=Some(layer_render::SelectionGradient {
+                start:Point {x:64.,y:64.},end:Point {x:80.,y:64.},shape,reverse,
+                gradient:ScalarGradient {stops:vec![
+                    ScalarGradientStop {position:0.,value:0.2,opacity:0.5},
+                    ScalarGradientStop {position:1.,value:0.8,opacity:0.25},
+                ]},
+            });
+            assert!(r.paint_selection(&paint).unwrap());
+            assert!(r.paint_selection(&paint).unwrap());
+            let result=receive(&mut r,paint);
+            for (x,y) in [(56,64),(64,64),(72,64),(64,70)] {
+                let dx=f64::from(x)+0.5-64.;let dy=f64::from(y)+0.5-64.;
+                let t=match shape {GradientShape::Linear=>dx/16.,GradientShape::Radial=>dx.hypot(dy)/16.,GradientShape::Reflected=>dx.abs()/16.}.clamp(0.,1.);
+                let t=if reverse {1.-t}else{t};
+                let expected=((0.2*0.5*(1.-t)+0.8*0.25*t)*0.5*255.).round();
+                assert!((f64::from(value(&result,x,y))-expected).abs()<=1.,"{shape:?}/{reverse}/{x},{y}: {} vs {expected}",value(&result,x,y));
+            }
+            assert_eq!(value(&result,2,2),0);
+        }
+    }
+}

@@ -2,6 +2,9 @@
 use super::*;
 #[path = "effects/curves.rs"]
 mod curves;
+#[path = "effects/gradient.rs"]
+mod gradient;
+pub use gradient::{GradientDestination,GradientEdit,GradientControls};
 pub use curves::{CurveAxis,CurveAxisView,CurveControls,CurveCoordinateControl,CurveDomain};
 pub(super) use curves::PropertyEditorState;
 use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{Definition, EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SavedSelection, SelectionHandle, SourceTarget}};
@@ -252,11 +255,6 @@ impl FilterPickerState {
 
 const CURVE_DETACH_MARGIN: f32 = 0.1;
 
-fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
-    let gap = ((upper - lower) * 0.25).min(0.001);
-    value.clamp(lower + gap, upper - gap)
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
@@ -303,14 +301,7 @@ pub enum EffectAction {
         point: [f32; 2],
         remove: bool,
     },
-    GradientStop {
-        layer: u64,
-        key: String,
-        index: Option<usize>,
-        position: f32,
-        color: Option<layer_core::color::RgbColor>,
-        remove: bool,
-    },
+    Gradient {target:GradientDestination,edit:GradientEdit},
 }
 impl EffectAction {
     pub(super) fn property_owner(&self)->Option<(u64,u64)> {
@@ -318,6 +309,7 @@ impl EffectAction {
             Self::ImportLookup {layer,epoch}|Self::LookupPreset {layer,epoch,..}|Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
             |Self::CurveSelectPoint {layer,epoch,..}|Self::CurveRemoveAt {layer,epoch,..}
             |Self::CurveContact {layer,epoch,..}|Self::CurveKey {layer,epoch,..}|Self::CurveNumber {layer,epoch,..}=>Some((*layer,*epoch)),
+            Self::Gradient {target:GradientDestination::Effect {layer,epoch,..},..}=>Some((*layer,*epoch)),
             Self::Gesture {action,..}=>action.property_owner(),
             _=>None,
         }
@@ -415,6 +407,7 @@ pub struct PropertyPageView { pub id:String, pub label:String }
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PropertyControl {
     pub curve:Option<CurveControls>,
+    pub gradient:Option<GradientControls>,
     pub page:Option<String>,
     pub plot: Vec<[f32; 2]>,
     pub key: String,
@@ -431,7 +424,7 @@ pub struct PropertyControl {
 impl PropertyControl {
     pub(super) fn new(key: &str, label: &str, kind: PropertyKind, value: EffectValue, default: EffectValue) -> Self {
         Self {
-            curve:None,
+            curve:None,gradient:None,
             page:None,
             plot: Vec::new(),
             key: key.into(),
@@ -691,8 +684,14 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
         view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_CURVE_TARGETED).to_string(),icon:Some("layer-cursor-sight-symbolic".into()),group:None,action:EffectAction::TargetCurve {layer:view.layer.unwrap(),epoch:view.epoch}});
     }
     view.controls.retain(|control|control.page.as_deref().is_none_or(|page|Some(page)==state.page()));
+    if effect.is_some_and(|effect|effect.program.id.as_ref()=="gradient_fill") {
+        view.controls.sort_by_key(|control|control.key!="style");
+    }
     let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
     for control in &mut view.controls {
+        if matches!(control.value,EffectValue::Gradient(_)) {
+            control.gradient=Some(GradientControls::new(GradientDestination::Effect {layer:view.layer.unwrap(),key:control.key.clone(),epoch:view.epoch},match &control.value {EffectValue::Gradient(value)=>value,_=>unreachable!()},l));
+        }
         let EffectValue::Curve(points)=&control.value else{continue;};
         let selected=if gesture.is_some_and(|gesture|gesture.key==control.key && gesture.detached_curve_point){None}else{state.selected(&control.key,points)};
         let coordinate=|axis:CurveAxis,index:usize| {
@@ -757,6 +756,7 @@ pub(super) struct EffectGesture {
 
 impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn cancel_effect_gesture(&mut self) -> Result<bool, String> {
+        if let Some(original)=self.layer_interaction.gradient_before.take() {self.layer_interaction.gradient=original;self.refresh_document();return Ok(true);}
         if let Some((_, old)) = self.selection_masks.quick_property_gesture.take() {
             self.selection_masks.quick_properties = old;
             self.refresh_document();
@@ -777,17 +777,32 @@ impl<R: CanvasRenderer> UiSession<R> {
         phase: ContactPhase,
         action: EffectAction,
     ) -> Result<(), String> {
+        if let EffectAction::Gradient {target,..}=&action {
+            let accepted=match target {
+                GradientDestination::Tool {epoch}=>*epoch==self.state.document_file.epoch && matches!(self.layer_interaction.tool,LayerCanvasTool::Gradient {..}),
+                GradientDestination::Effect {layer,epoch,..}=>self.property_editor.accepts(*layer,*epoch),
+            };
+            if !accepted {return Ok(());}
+        }
+        if matches!(&action,EffectAction::Gradient {target:GradientDestination::Tool {..},..}) {
+            if phase==ContactPhase::Down {self.require_idle()?;self.layer_interaction.gradient_before=Some(self.layer_interaction.gradient.clone());}
+            else if self.layer_interaction.gradient_before.is_none() {return Ok(());}
+            if phase==ContactPhase::Cancel || self.workspace_read_only || self.workspace_transition || self.rendering_suspended {self.cancel_effect_gesture()?;return Ok(());}
+            if let Err(reason)=self.effect_action(action) {self.cancel_effect_gesture()?;return Err(reason);}
+            if phase==ContactPhase::Up {self.layer_interaction.gradient_before=None;}
+            return Ok(());
+        }
         if let EffectAction::CurveNumber{layer,key,epoch,..}=&action
             && !self.curve_action_target(*layer,key,*epoch) {return Ok(());}
         let (layer, key) = match &action {
             EffectAction::CurvePoint { layer, key, .. }
             | EffectAction::CurveNumber { layer, key, .. }
             | EffectAction::Number { layer, key, .. }
-            | EffectAction::GradientStop { layer, key, .. }
+            | EffectAction::Gradient {target:GradientDestination::Effect {layer,key,..},..}
             | EffectAction::Set {
                 layer,
                 key,
-                value: EffectValue::Number(_) | EffectValue::Color(_) | EffectValue::Curve(_),
+                value: EffectValue::Number(_) | EffectValue::Color(_) | EffectValue::Curve(_) | EffectValue::Gradient(_),
             } => (*layer, key.clone()),
             _ => return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_PROPERTY_NOT_DRAGGABLE).to_string()),
         };
@@ -873,7 +888,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn effect_action(&mut self, action: EffectAction) -> Result<(), String> {
         if let Some(result) = self.mask_property_action(&action) { return result; }
 
-        if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
+        if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. } | EffectAction::Gradient {target:GradientDestination::Tool {..},..}) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
             EffectAction::LookupPreset {layer,epoch,preset} => {
                 if !self.property_editor.accepts(layer,epoch) {return Ok(());}
@@ -1005,57 +1020,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 return self.effect_action(EffectAction::Set { layer, key: key.clone(), value });
             }
             EffectAction::Gesture { phase, action } => return self.effect_gesture_action(phase, *action),
-            EffectAction::GradientStop {
-                layer,
-                key,
-                index,
-                position,
-                color,
-                remove,
-            } => {
-                if !position.is_finite() {
-                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_INVALID_GRADIENT_POSITION).to_string());
-                }
-                let EffectValue::Gradient(mut stops) = self.effect_parameter(layer, &key)? else {
-                    return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_GRADIENT_REQUIRED).to_string());
-                };
-                if let Some(i) = index {
-                    if i >= stops.len() {
-                        return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_UNKNOWN_GRADIENT_STOP).to_string());
-                    }
-                    if remove {
-                        if i > 0 && i + 1 < stops.len() {
-                            stops.remove(i);
-                        }
-                    } else {
-                        stops[i].position = if i == 0 {
-                            0.
-                        } else if i + 1 == stops.len() {
-                            1.
-                        } else {
-                            point_between(position, stops[i - 1].position, stops[i + 1].position)
-                        };
-                        if let Some(color) = color {
-                            stops[i].color = color;
-                        }
-                    }
-                } else if stops.len() < 32 && !remove {
-                    let position = position.clamp(0., 1.);
-                    if stops.iter().all(|s| (s.position - position).abs() > 0.002) {
-                        let color = match color {
-                            Some(color) => color,
-                            None => layer_core::gradient_value(&stops, position, self.engine.document().composition().color.space)?,
-                        };
-                        stops.push(layer_core::GradientStop { position, color });
-                        stops.sort_by(|a, b| a.position.total_cmp(&b.position));
-                    }
-                }
-                return self.effect_action(EffectAction::Set {
-                    layer,
-                    key,
-                    value: EffectValue::Gradient(stops),
-                });
-            }
+            EffectAction::Gradient {target,edit}=>return self.gradient_action(target,edit),
             EffectAction::CurvePoint {
                 layer,
                 key,

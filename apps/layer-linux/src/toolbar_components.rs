@@ -401,6 +401,7 @@ struct BrushPreview {
 }
 
 pub(crate) enum Field {
+    Gradient(crate::effects::GradientButton),
     Numeric(NumberControl),
     Range(Rc<RangeControl>),
     Choice(gtk::DropDown),
@@ -412,6 +413,7 @@ pub(crate) enum Field {
 impl Field {
     pub(crate) fn update(&self, option: &ToolOption, localization: &std::sync::Arc<layer_ui::Localizer>) {
         match (self, option) {
+            (Field::Gradient(field),ToolOption::Gradient(control))=>field.update(control),
             (Field::Extra(field), option) => field.refresh(option),
             (Field::Numeric(number), ToolOption::Numeric(f)) => {
                 number.set_caption(&f.label, &f.tooltip_localized(localization), localization.clone());
@@ -1210,6 +1212,9 @@ impl Component {
             }
         );
         let field = match option {
+            ToolOption::Gradient(control)=> {
+                let field=crate::effects::GradientButton::new(w,control);row.append(&field.root);Field::Gradient(field)
+            },
             ToolOption::Range { id, label, bounds } => {
                 let ids = bounds.each_ref().map(|f| f.id);
                 let send = send.clone();

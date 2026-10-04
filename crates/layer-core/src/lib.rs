@@ -24,6 +24,7 @@ mod contact_presets;
 pub use contact_presets::CONTACT_BRUSH_PRESETS;
 mod effect_catalog;
 mod effects;
+mod gradient;
 pub mod lut3d;
 pub use lut3d::Lut3d;
 #[cfg(test)]
@@ -46,6 +47,7 @@ mod levels_tests;
 mod color_adjustment_schema_tests;
 pub use selection::*;
 pub use effects::*;
+pub use gradient::*;
 mod presets;
 pub use layers::*;
 mod figures;

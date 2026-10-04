@@ -193,6 +193,12 @@ behavior and high-refresh presentation need a real tablet.
 
 ### Where to start
 
+- `AndroidHostTest#nativeGradientStopContactsAndCompactControlsRetainDefinition`
+  checks native stop contacts, precise positions, interpolation, color and
+  history, with archive reopening and Activity recreation.
+  `gradientToolPanelAndToolbarUseNativeGeometryContacts` exercises the tool
+  panel, toolbar popup and canvas shapes. Run both in narrow and wide layouts;
+  each covers light and dark themes.
 - `AndroidLanguageTest`: every shipped language through Preferences in both
   themes, retained popup routes, typed numeric refusals, raw color and export
   drafts, profile metadata and prepared comparisons, saved Unicode drawings,

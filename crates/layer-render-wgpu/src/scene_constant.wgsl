@@ -1,9 +1,8 @@
 // Aligned pointwise tiles write directly to their destinations.
 @group(2) @binding(0) var scene_output: texture_storage_2d<rgba32float, write>;
-@group(1) @binding(3) var lower: texture_2d<f32>;
 fn scene_normal_stack(preview: vec4<f32>, paint: vec4<f32>, v: Vertex) -> vec4<f32> {
     let top = scene_space(preview + paint * (1. - preview.a)) * settings.options.y;
-    let bottom = scene_space(scene_read(lower, v)) * settings.source_over.x;
+    let bottom = scene_space(scene_read(scene_extra, v)) * settings.source_over.x;
     let backdrop = bottom + settings.backdrop * (1. - bottom.a);
     return scene_convert(top + backdrop * (1. - top.a),settings.extent.w);
 }

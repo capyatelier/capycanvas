@@ -46,7 +46,7 @@ fn assert_settled(r: &mut WgpuRasterizer, frame: FramePacket<'_>, reference: &[[
 fn document() -> Document {
     document_at([517, 259])
 }
-fn document_at(extent: [u32; 2]) -> Document {
+pub(super) fn document_at(extent: [u32; 2]) -> Document {
     let mut doc = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let ink = doc.scene().order()[0];
     set_root_entries(&mut doc, vec![ink]);
@@ -106,7 +106,7 @@ fn effect_occurrence(doc: &mut Document, effect: layer_core::EffectInstance, nam
     let application = doc.artwork.effects.insert(PortableId::random(), EffectApplication { definition, values: effect.values, domain: doc.composition().size }).unwrap();
     doc.artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Effect(application), name)).unwrap()
 }
-fn add_fill(doc: &mut Document, color: layer_core::color::RgbColor) -> OccurrenceHandle {
+pub(super) fn add_fill(doc: &mut Document, color: layer_core::color::RgbColor) -> OccurrenceHandle {
     let mut effect = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("solid_color").unwrap().program());
     effect.set("color", layer_core::EffectValue::Color(color)).unwrap();
     let fill = effect_occurrence(doc, effect, "Fill");
@@ -118,14 +118,14 @@ fn add_fill(doc: &mut Document, color: layer_core::color::RgbColor) -> Occurrenc
 fn effect_handle(doc: &Document, handle: OccurrenceHandle) -> EffectHandle {
     match doc.artwork.occurrences.get(handle).unwrap().content { OccurrenceContent::Effect(effect) => effect, _ => unreachable!() }
 }
-fn set_effect_value(doc: &mut Document, handle: OccurrenceHandle, key: &str, value: layer_core::EffectValue) {
+pub(super) fn set_effect_value(doc: &mut Document, handle: OccurrenceHandle, key: &str, value: layer_core::EffectValue) {
     let effect = effect_handle(doc, handle);
     let application = doc.artwork.effects.get(effect).unwrap();
     let program = &doc.artwork.definitions.get(application.definition).unwrap().program;
     let parameter = program.parameters.iter().position(|parameter| parameter.key.as_ref() == key).unwrap();
     doc.artwork.effects.get_mut(effect).unwrap().values[parameter] = value;
 }
-fn coverage_mask(doc: &mut Document, handle: OccurrenceHandle, translation: layer_core::Point, initial: Option<layer_core::Selection>) -> CoverageHandle {
+pub(super) fn coverage_mask(doc: &mut Document, handle: OccurrenceHandle, translation: layer_core::Point, initial: Option<layer_core::Selection>) -> CoverageHandle {
     let source = doc.artwork.coverage.insert(PortableId::random(), CoverageSource { domain: doc.scene().local_extent(handle), raster: Default::default(), initial, default_coverage: 1., operations: Arc::default() }).unwrap();
     doc.artwork.occurrences.get_mut(handle).unwrap().mask = Some(MaskUse { source, enabled: true, linked: true, inverted: false, translation, placement: layer_core::Projective::IDENTITY });
     reindex(doc);

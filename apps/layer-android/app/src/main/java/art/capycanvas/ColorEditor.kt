@@ -39,19 +39,19 @@ internal fun documentRgbSpace(host: CanvasHost): String =
 private fun colorEpoch(host: CanvasHost): Long =
     host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch") ?: 0L
 
-@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, renderedPreview: JSONObject? = null, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
+@Composable internal fun ManagedColorButton(host: CanvasHost, label: String, value: JSONObject, enabled: Boolean, renderedPreview: JSONObject? = null, compact: Boolean = false, trailing: @Composable RowScope.() -> Unit = {}, onChange: (JSONObject) -> Unit) {
     var editing by remember { mutableStateOf<JSONObject?>(null) }
     val preview = renderedPreview ?: remember(value.toString()) {
         JSONArray(Native.colorUi(obj("type" to "preview", "colors" to JSONArray().put(value)).toString(), host.languageTag)).getJSONObject(0)
     }
-    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
-        Text(label, Modifier.weight(1f))
+    Row(if(compact) Modifier else Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+        if(!compact) Text(label, Modifier.weight(1f))
         Button(onClick = { editing = JSONObject(value.toString()) }, enabled = enabled,
-            modifier = Modifier.size(56.dp, 32.dp).testTag("property-color-$label"), contentPadding = PaddingValues(0.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = displayColor(preview))) { Text("…") }
+            modifier = Modifier.size(if(compact) 36.dp else 56.dp, 32.dp).semantics {contentDescription=label}.testTag("property-color-$label"), contentPadding = PaddingValues(0.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = displayColor(preview))) { if(!compact) Text("…") }
         trailing()
     }
-    if (!preview.getBoolean("in_gamut")) Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("outside_srgb"), style = MaterialTheme.typography.labelSmall)
+    if (!compact && !preview.getBoolean("in_gamut")) Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("outside_srgb"), style = MaterialTheme.typography.labelSmall)
     editing?.let { color -> ColorEditorDialog(host, color, { editing = null }) { selected -> editing = null; onChange(selected) } }
 }
 

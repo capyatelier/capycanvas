@@ -255,43 +255,10 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                     if(!control.isNull("color_action")) Box(Modifier.size(40.dp,36.dp).testTag("${key.replace('_','-')}-bucket")
                         .clickable(enabled=enabled){host.dispatch(control.getJSONObject("color_action"))},contentAlignment=Alignment.Center) { SharedIcon("fill",host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("use_selected")) }
                 }) { change(it) }
-                "gradient" -> GradientControl(host,layer,control,enabled)
+                "gradient" -> GradientControl(host,control,enabled)
             }
         }
     }
-    }
-}
-
-@Composable private fun GradientControl(host:CanvasHost,layer:Long,control:JSONObject,enabled:Boolean) {
-    val colors=LocalPalette.current
-    val key=control.getString("key")
-    val stops=control.getJSONObject("value").getJSONArray("value").objects()
-    var selected by remember(layer,key) {mutableIntStateOf(0)}
-    val index=selected.coerceIn(stops.indices)
-    val current by rememberUpdatedState(stops)
-    fun change(i:Int?,position:Float,color:JSONObject?=null,remove:Boolean=false) = host.effect(obj("op" to "gradient_stop","layer" to layer,"key" to key,"index" to i,"position" to position,"color" to color,"remove" to remove))
-    val samples = remember(control.getJSONObject("value").toString(), documentRgbSpace(host)) {
-        JSONArray(Native.colorUi(obj("type" to "gradient", "stops" to control.getJSONObject("value").getJSONArray("value"),
-            "document_space" to documentRgbSpace(host)).toString(), host.languageTag)).objects()
-    }
-    Canvas(Modifier.fillMaxWidth().height(44.dp).testTag("effect-gradient").pointerInput(layer,key,enabled) {
-        if(!enabled)return@pointerInput
-        awaitEachGesture {
-            val down=awaitFirstDown();down.consume();val p=((down.position.x-6.dp.toPx())/(size.width-12.dp.toPx())).coerceIn(0f,1f)
-            val found=current.indexOfFirst { kotlin.math.abs(it.number("position")-p)*(size.width-12.dp.toPx())<12.dp.toPx() }
-            if(found>=0)selected=found else {selected=current.count {it.number("position")<p};change(null,p)}
-        }
-    }) {
-        val margin=6.dp.toPx();val width=size.width-2*margin
-        val ramp=samples.mapIndexed { i, sample -> i.toFloat() / (samples.size - 1) to displayColor(sample) }.toTypedArray()
-        drawRect(Brush.horizontalGradient(*ramp,startX=margin,endX=size.width-margin),Offset(margin,0f),androidx.compose.ui.geometry.Size(width,32.dp.toPx()))
-        stops.forEachIndexed { i,s ->drawCircle(colors.text,(if(index==i)4f else 2.5f).dp.toPx(),Offset(margin+s.number("position")*width,39.dp.toPx())) }
-    }
-    NumericSetting(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("position"),stops[index].number("position"),host.catalog.getJSONObject("opacity"),enabled=enabled && index>0 && index<stops.lastIndex) {change(index,it)}
-    ManagedColorButton(host,host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("color"),stops[index].getJSONObject("color"),enabled) {change(index,stops[index].number("position"),it)}
-    Row(horizontalArrangement=Arrangement.spacedBy(6.dp)) {
-        TextButton(enabled=enabled && index>0 && index<stops.lastIndex,onClick={selected=(index-1).coerceAtLeast(0);change(index,0f,remove=true)}) {Text(host.catalog.getJSONObject("native_copy").getJSONObject("color").getString("remove_stop"))}
-        TextButton(enabled=enabled,onClick={host.effect(obj("op" to "reset","layer" to layer,"key" to key))}) {Text(host.bootstrap!!.getJSONObject("common").getString("reset"))}
     }
 }
 
@@ -341,7 +308,7 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
         contactOwner = null; keyOwner = null
         if (captured != null) send(captured, "curve_contact", "cancel")
     }
-    DisposableEffect(Unit) { onDispose { cancel(); if (host.curveControlFocus === focus) host.curveControlFocus = null } }
+    DisposableEffect(Unit) { onDispose { cancel(); if (host.pointControlFocus === focus) host.pointControlFocus = null } }
     Column(Modifier.fillMaxWidth().testTag("curve-$key"), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
             Column(Modifier.height(200.dp), verticalArrangement = Arrangement.SpaceBetween, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -355,8 +322,8 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                     Canvas(Modifier.fillMaxSize().testTag("effect-curve").semantics { contentDescription = control.getString("label") }
                         .onGloballyPositioned { origin = it.positionInRoot() }.focusRequester(focus)
                         .onFocusChanged {
-                            if (it.isFocused) host.curveControlFocus = focus
-                            else if (host.curveControlFocus === focus) { host.curveControlFocus = null; cancel() }
+                            if (it.isFocused) host.pointControlFocus = focus
+                            else if (host.pointControlFocus === focus) { host.pointControlFocus = null; cancel() }
                         }.onPreviewKeyEvent { event ->
                             val name = when (event.key) {
                                 Key.DirectionLeft -> "ArrowLeft"; Key.DirectionRight -> "ArrowRight"

@@ -527,7 +527,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         mode: gesture.mode,
                         opacity: gesture.opacity,
                         gray: gesture.gray,
-                        gradient: gesture.gradient,
+                        gradient: gesture.gradient.clone(),
                         style: gesture.stroke.style(),
                         dabs,
                         enclosed: area,

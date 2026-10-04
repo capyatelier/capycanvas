@@ -98,7 +98,7 @@ pub use clipboard::{ClipboardCapture, LARGE_CLIP_PIXELS, PasteMode, PixelClip};
 pub use notices::{Notice, NoticeAction};
 pub use canvas_bar::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarMenu, CanvasBarLayout, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar};
 pub use art_layers::{
-    ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
+    GradientToolSettings, ImageLayerDestination, ImagePlacementContext, LayerAction, LayerCanvasTool, LayerControls, LayerDropPosition, LayersView, RegionSource,
 };
 #[path = "application_menu.rs"]
 mod application_menu;
@@ -122,7 +122,7 @@ mod filter_loading;
 mod renderer_lifecycle;
 pub use document_files::*;
 pub use effects::{
-    AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
+    GradientDestination, GradientEdit, GradientControls, AdjustmentChoice, EffectAction, FilterCategoryChoice, FilterPickerAction, FilterPickerState,
     LayerPropertiesView, PropertyControl, PropertyKind, PropertyPageView, CurveAxis, CurveAxisView, CurveControls, CurveCoordinateControl, CurveDomain,
 };
 pub use filter_loading::FilterLoadState;
@@ -4868,13 +4868,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
             CommandId::Gradient => {
-                let [radial, transparent] = self.layer_interaction.gradient;
-                self.layer_action(LayerAction::Tool {
-                    tool: LayerCanvasTool::Gradient {
-                        radial,
-                        transparent,
-                    },
-                })?;
+                self.layer_action(LayerAction::Tool {tool:LayerCanvasTool::Gradient {shape:self.layer_interaction.gradient.shape}})?;
                 Ok((BRUSH | DOCUMENT, false))
             }
             CommandId::Eyedropper => {
@@ -5437,6 +5431,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layer_tools.image_size = self.image_size_view();
         self.state.layer_tools.frequency_separation = self.frequency_separation_view();
         let _ = self.prepare_transform_snapping();
+        if !self.operation.transforming() {self.state.tool_extra.extend(self.gradient_tool_options());}
     }
 
     /// Whether a contact of `kind` pressed with `button` at surface
@@ -5460,6 +5455,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         !self.painted_selections.has_contact()
             && !self.paint_contact_busy()
             && self.effect_gesture.is_none()
+            && self.layer_interaction.gradient_before.is_none()
             && self.selection_masks.quick_property_gesture.is_none()
             && self.sdr_gesture.is_none()
             && self.layer_interaction.path.is_empty()
@@ -7272,7 +7268,7 @@ mod tests {
             editing.selection.tonal.softness = 0.4;
             editing.region_values.insert("tolerance".into(), 0.31);
             editing.region_sources = [RegionSource::Visible, RegionSource::Editing];
-            editing.gradient = [true, true];
+            editing.gradient = GradientToolSettings {definition:Some(layer_core::GradientDefinition::default()),shape:layer_core::GradientShape::Reflected};
             editing.figure = (FigureShape::Ellipse, FigurePaint::Both);
             let palette = editing.color_library.active;
             let color = editing.colors.definition();
@@ -8437,10 +8433,10 @@ mod tests {
         let mut s = session(Platform::Gtk);
         assert!(key(&mut s, "g", true, false, false).handled);
         key(&mut s, "g", false, false, false);
-        assert_eq!(s.state.tool_set.subtools.len(), 4);
+        assert_eq!(s.state.tool_set.subtools.len(), 3);
         assert_eq!(s.state.tool_settings.len(), 1);
         assert_eq!(s.state.tool_settings[0].id, "opacity");
-        let action = s.state.tool_set.subtools[3].action.clone();
+        let action = s.state.tool_set.subtools[2].action.clone();
         s.dispatch(action).unwrap();
         let tool = s.layer_interaction.tool;
         invoke(&mut s, CommandId::Hand);
@@ -8513,18 +8509,23 @@ mod tests {
         let RasterOperationKind::Gradient {
             start,
             end,
-            colors,
-            radial,
+            ref gradient,
+            shape, reverse, opacity,
             alpha_locked,
         } = operations[0].kind
         else {
             panic!("gradient")
         };
-        assert!((start.x - 20.0).abs() < 0.001 && (start.y - 20.0).abs() < 0.001);
-        assert!((end.x - 120.0).abs() < 0.001 && (end.y - 120.0).abs() < 0.001);
-        assert!(radial && alpha_locked);
-        assert_eq!(colors, [[1.0, 0.0, 0.0, 0.4], [1.0, 0.0, 0.0, 0.0]]);
+
+        for (actual,expected) in [(start,Point{x:30.,y:40.}),(end,Point{x:130.,y:140.}),
+            (operations[0].placement.map(start),Point{x:20.,y:20.}),
+            (operations[0].placement.map(end),Point{x:120.,y:120.})] {
+            assert!((actual.x-expected.x).abs()<0.001 && (actual.y-expected.y).abs()<0.001);
+        }
+        assert_eq!(shape,layer_core::GradientShape::Reflected);assert!(alpha_locked);assert!(!reverse);assert_eq!(opacity,0.4);
+        assert_eq!(gradient.stops[0].color,s.state.colors.foreground);assert_eq!(gradient.stops[1].color,s.state.colors.background);
         let selection = operations[0].coverage.source.initial.as_ref().unwrap();
+
         let first = selection.contours()[0][0];
         assert_eq!(selection.affine.map(first), Point::default());
         assert!(s.layer_interaction.path.is_empty());
@@ -14187,7 +14188,7 @@ mod tests {
             } else if effect != "gradient_map" {
                 EffectValue::Number(0.5)
             } else {
-                EffectValue::Gradient(vec![
+                EffectValue::Gradient(layer_core::GradientDefinition::new(vec![
                     GradientStop {
                         position: 0.,
                         color: color([0., 0., 0., 1.]),
@@ -14200,7 +14201,7 @@ mod tests {
                         position: 1.,
                         color: color([1., 1., 1., 1.]),
                     },
-                ])
+                ]))
             };
             app.dispatch(UiAction::Effect {
                 action: EffectAction::Set {
@@ -14210,7 +14211,7 @@ mod tests {
                 },
             })
             .unwrap();
-            let gesture = |phase, position| UiAction::Effect {
+            let gesture = |phase, position, gradient_epoch| UiAction::Effect {
                 action: EffectAction::Gesture {
                     phase,
                     action: Box::new(if effect == "curves" {
@@ -14222,14 +14223,12 @@ mod tests {
                             remove: false,
                         }
                     } else if effect == "gradient_map" {
-                        EffectAction::GradientStop {
-                            layer,
-                            key: key.clone(),
+                        EffectAction::Gradient {target:crate::GradientDestination::Effect {layer,key:key.clone(),epoch:gradient_epoch},edit:crate::GradientEdit::Stop {
                             index: Some(1),
                             position,
                             color: None,
                             remove: false,
-                        }
+                        }}
                     } else {
                         EffectAction::Set {
                             layer,
@@ -14244,9 +14243,9 @@ mod tests {
                 },
             };
             let checkpoint = app.engine.checkpoint();
-            app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+            app.dispatch(gesture(ContactPhase::Down, 0.5, app.state.layer_properties.epoch)).unwrap();
             for i in 1..=20 {
-                app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01))
+                app.dispatch(gesture(ContactPhase::Move, 0.5 + i as f32 * 0.01, app.state.layer_properties.epoch))
                     .unwrap();
             }
             assert_eq!(
@@ -14264,7 +14263,7 @@ mod tests {
                 app.dispatch(UiAction::SelectLayer { id: 1 }).is_err(),
                 "Another document operation must not overwrite the preview"
             );
-            app.dispatch(gesture(ContactPhase::Up, 0.7)).unwrap();
+            app.dispatch(gesture(ContactPhase::Up, 0.7, app.state.layer_properties.epoch)).unwrap();
             app.require_document_snapshot_idle().unwrap();
             assert_ne!(app.engine.checkpoint(), checkpoint);
             invoke(&mut app, CommandId::Undo);
@@ -14283,13 +14282,13 @@ mod tests {
                 "invalid",
                 "unchanged",
             ] {
-                app.dispatch(gesture(ContactPhase::Down, 0.5)).unwrap();
+                app.dispatch(gesture(ContactPhase::Down, 0.5, app.state.layer_properties.epoch)).unwrap();
                 if end != "unchanged" {
-                    app.dispatch(gesture(ContactPhase::Move, 0.65)).unwrap();
+                    app.dispatch(gesture(ContactPhase::Move, 0.65, app.state.layer_properties.epoch)).unwrap();
                 }
                 match end {
                     "cancel" => {
-                        app.dispatch(gesture(ContactPhase::Cancel, 0.65)).unwrap();
+                        app.dispatch(gesture(ContactPhase::Cancel, 0.65, app.state.layer_properties.epoch)).unwrap();
                     }
                     "blur" => {
                         app.input(UiInput::Blur).unwrap();
@@ -14307,18 +14306,18 @@ mod tests {
                     }
                     "readonly" => {
                         app.set_workspace_read_only(true);
-                        app.dispatch(gesture(ContactPhase::Up, 0.65)).unwrap();
-                        assert!(app.dispatch(gesture(ContactPhase::Down, 0.5)).is_err());
+                        app.dispatch(gesture(ContactPhase::Up, 0.65, app.state.layer_properties.epoch)).unwrap();
+                        assert!(app.dispatch(gesture(ContactPhase::Down, 0.5, app.state.layer_properties.epoch)).is_err());
                         app.set_workspace_read_only(false);
                     }
                     "invalid" => {
-                        assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN)).is_err());
+                        assert!(app.dispatch(gesture(ContactPhase::Move, f32::NAN, app.state.layer_properties.epoch)).is_err());
                     }
                     _ => {
-                        app.dispatch(gesture(ContactPhase::Up, 0.5)).unwrap();
+                        app.dispatch(gesture(ContactPhase::Up, 0.5, app.state.layer_properties.epoch)).unwrap();
                     }
                 }
-                app.dispatch(gesture(ContactPhase::Up, 0.8)).unwrap();
+                app.dispatch(gesture(ContactPhase::Up, 0.8, app.state.layer_properties.epoch)).unwrap();
                 assert_eq!(app.state.layer_properties.controls[index].value, initial);
                 assert_eq!(app.engine.checkpoint(), checkpoint);
                 app.require_document_snapshot_idle().unwrap();
@@ -14329,10 +14328,10 @@ mod tests {
             }
             invoke(&mut app, CommandId::Redo);
             assert_eq!(app.state.layer_properties.controls[index].value, preview);
-            app.dispatch(gesture(ContactPhase::Down, 0.7)).unwrap();
-            app.dispatch(gesture(ContactPhase::Move, 0.6)).unwrap();
+            app.dispatch(gesture(ContactPhase::Down, 0.7, app.state.layer_properties.epoch)).unwrap();
+            app.dispatch(gesture(ContactPhase::Move, 0.6, app.state.layer_properties.epoch)).unwrap();
             app.suspend_renderer().unwrap();
-            app.dispatch(gesture(ContactPhase::Cancel, 0.6)).unwrap();
+            app.dispatch(gesture(ContactPhase::Cancel, 0.6, app.state.layer_properties.epoch)).unwrap();
             assert_eq!(app.state.layer_properties.controls[index].value, preview);
             app.require_document_snapshot_idle().unwrap();
         }
@@ -14448,20 +14447,19 @@ mod tests {
             },
         );
         let layer = app.state.layer_properties.layer.unwrap();
+        let gradient_epoch=app.state.layer_properties.epoch;
         send(
             &mut app,
-            EffectAction::GradientStop {
-                layer,
-                key: "gradient".into(),
+            EffectAction::Gradient {target:crate::GradientDestination::Effect {layer,key:"gradient".into(),epoch:gradient_epoch},edit:crate::GradientEdit::Stop {
                 index: None,
                 position: 0.5,
                 color: Some(layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.7, 0.2, 0.1, 0.5]).unwrap()),
                 remove: false,
-            },
+            }},
         );
         let edited = app.state.layer_properties.controls[0].value.clone();
         assert!(
-            matches!(&edited, EffectValue::Gradient(stops) if stops.len()==3 && stops[1].color.rgba[3]==0.5)
+            matches!(&edited, EffectValue::Gradient(stops) if stops.stops.len()==3 && stops.stops[1].color.rgba[3]==0.5)
         );
         invoke(&mut app, CommandId::Undo);
         assert_eq!(

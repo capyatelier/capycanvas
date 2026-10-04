@@ -233,6 +233,18 @@ fn view_store(original:vec4<f32>)->vec4<f32> {
     if VIEW_FLOAT16 {return vec4<f32>(view_half(c.r),view_half(c.g),view_half(c.b),view_half(c.a));}
     return c;
 }
+fn view_quantize(original:vec4<f32>,surface:vec2<f32>,enabled:bool)->vec4<f32> {
+    let stored=view_store(original);
+    if !VIEW_8BIT || !enabled || stored.a!=1. {return stored;}
+    let noise=quantization_noise(surface,0x3c6ef372u)/255.;
+    var encoded=stored.rgb;
+    if VIEW_SRGB_ATTACHMENT {encoded=sdr_encode(encoded,0u);}
+    let interior=vec3<bool>((encoded.r > 0. && encoded.r < 1.),(encoded.g > 0. && encoded.g < 1.),(encoded.b > 0. && encoded.b < 1.));
+    encoded=select(encoded,clamp(encoded+noise,vec3(0.),vec3(1.)),interior);
+    encoded=select(encoded,round(clamp(encoded,vec3(0.),vec3(1.))*255.)/255.,interior);
+    if VIEW_SRGB_ATTACHMENT {encoded=select(stored.rgb,sdr_decode(clamp(encoded,vec3(0.),vec3(1.)),0u),interior);}
+    return vec4(encoded,stored.a);
+}
 fn window_coverage(surface: vec2<f32>) -> f32 {
     let radius = camera.viewport.w;
     let q = abs(surface - camera.viewport.xy * 0.5) - camera.viewport.xy * 0.5 + radius;
@@ -301,7 +313,8 @@ fn surface_color(vertex:Vertex,source:u32)->vec4<f32> {
     }
     // Signed distance to the full-window rounded rectangle; no inset/cropping.
     let coverage = window_coverage(surface);
-    return view_store(vec4<f32>(rgb * coverage, coverage));
+    let quantize=paint.a>0. && camera.composite.z==0. && camera.composite.w==0. && camera.selection.z<.5 && camera.rotation.z<.5 && !cropping;
+    return view_quantize(vec4<f32>(rgb * coverage, coverage),surface,quantize);
 }
 
 struct CursorVertex {

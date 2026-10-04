@@ -1,6 +1,7 @@
 import { captureSliderContacts, createNumberField } from './numeric.js';
 import { createRangeControl } from './range-control.js';
 import { bindCopy, liveCopy } from './localization.js';
+import {gradientButton} from './gradient.js';
 const key = value => JSON.stringify(value, (_, v) => typeof v === 'bigint' ? String(v) : v);
 const semantic = ({label, tooltip, disabled_reason, ...value}) => value;
 const fieldSemantic = ({group, ...value}) => semantic(value);
@@ -311,6 +312,7 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
     if (standalone) return;
     const fieldHeight = 24;
     const sizes = fields.map(f => {
+      if (f.gradient) return [vertical?extent[0]:120,24];
       if (f.segmented) return vertical ? [extent[0], style.size[1] * (extent[0] < style.size[0] * f.segmented ? f.segmented : 1)] : [style.size[0] * f.segmented, fieldHeight];
       if (!f.interval && (vertical || f.action)) return style.size;
       f.row.style.width = 'max-content'; f.row.style.height = 'auto'; f.row.hidden = false;
@@ -329,14 +331,14 @@ export function createToolbarComponent({ app, tile, view, element, button, icon,
   root.updateComponent = next => {
     const value = next.component;
     copyChanged = copyKey !== copy.more_options; copyKey = copy.more_options;
-    const nextSchema = key([value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
+    const nextSchema = key([value.context, value.numeric && { ...fieldSemantic(value.numeric), value: 0 }, value.options.map(o => o.Gradient ? {Gradient:o.Gradient.gradient.destination} : o.Range ? {Range:{...semantic(o.Range),bounds:o.Range.bounds.map(f=>({...fieldSemantic(f),value:0}))}} : o.Numeric ? { Numeric: { ...fieldSemantic(o.Numeric), value: 0 } } : o.Choice ? { Choice: { ...semantic(o.Choice), items: o.Choice.items.map(i => ({ ...semantic(i), selected: false })) } } : { Action: { ...o.Action, state: { ...semantic(o.Action.state), selected: false, enabled: true } } })]);
     const sliderField = () => value.numeric || { id: tile.control.kind === 'brush_size_slider' ? 'size' : 'opacity', label: next.label, numeric: app.toolbar_ui({ type: 'slider_spec', control: tile.control }), value: 0.5 };
     model = value;
     if (nextSchema !== schema) {
       closePopup(); fields.forEach(f => { f.dispose?.(); f.row.remove(); }); fields = []; schema = nextSchema;
       if (standalone) {
         fields.push(brushSlider(sliderField(), value.context));
-      } else fields = value.options.map(o => o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
+      } else fields = value.options.map(o => o.Gradient ? gradientButton({app,element,button,icon,dispatch:action=>send(value.context,action)},o.Gradient,openPopup) : o.Range ? range(o.Range, value.context) : o.Numeric ? numeric(o.Numeric, value.context) : o.Choice ? choice(o.Choice, value.context) : action(o.Action, value.context));
       fields.forEach(f => root.append(f.row)); measured = '';
     }
     if (standalone) fields[0].update(sliderField());

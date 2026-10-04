@@ -443,8 +443,10 @@ pub enum RasterOperationKind {
     Gradient {
         start: Point,
         end: Point,
-        colors: [[f32; 4]; 2],
-        radial: bool,
+        gradient: crate::GradientDefinition,
+        shape: crate::GradientShape,
+        reverse: bool,
+        opacity: f32,
         alpha_locked: bool,
     },
     Bake {
@@ -526,14 +528,14 @@ impl RasterOperation {
             }
             RasterOperationKind::Figure(figure) => figure.valid(),
             RasterOperationKind::Fill { color, .. } => color_ok(color),
-            RasterOperationKind::Gradient { start, end, colors, .. } => {
-                let dx = end.x - start.x;
-                let dy = end.y - start.y;
-                let length2 = dx * dx + dy * dy;
-                [start.x, start.y, end.x, end.y].iter().all(|v| v.is_finite())
-                    && length2.is_finite()
-                    && length2 >= 0.000001
-                    && colors.iter().all(color_ok)
+            RasterOperationKind::Gradient {
+                start, end, gradient, opacity, ..
+            } => {
+                [start.x, start.y, end.x, end.y]
+                    .iter()
+                    .all(|v| v.is_finite())
+                    && start != end && (end.x-start.x).is_finite() && (end.y-start.y).is_finite()
+                    && gradient.validate().is_ok() && opacity.is_finite() && (0. ..=1.).contains(opacity)
             }
         };
         if valid { Ok(()) } else { Err(DocumentError::InvalidLayerOperation("Invalid paint operation")) }
@@ -1148,8 +1150,8 @@ mod organization_tests {
                 RasterOperationKind::Gradient {
                     start: Point { x: 10., y: 20. },
                     end: Point { x: 80., y: 60. },
-                    colors: [color; 2],
-                    radial: false,
+                    gradient: crate::GradientDefinition::new([0.,1.].map(|position|crate::GradientStop {position,color:crate::color::RgbColor {space:crate::color::RgbSpace::Srgb,linear_rgb:Some([color[0],color[1],color[2]]),rgba:std::array::from_fn(|c|if c==3 {color[c]}else{crate::color::RgbSpace::Srgb.encode(f64::from(color[c])) as f32})}}).to_vec()),
+                    shape:crate::GradientShape::Linear, reverse:false, opacity:1.,
                     alpha_locked: false,
                 },
                 RasterOperationKind::Figure(crate::Figure {

@@ -74,10 +74,7 @@ pub enum LayerCanvasTool {
         fill: bool,
         source: RegionSource,
     },
-    Gradient {
-        radial: bool,
-        transparent: bool,
-    },
+    Gradient {shape:layer_core::GradientShape},
     Figure {
         shape: FigureShape,
         paint: FigurePaint,
@@ -344,6 +341,11 @@ pub struct ImagePlacementContext {
     pub center: Option<Point>,
     pub destination: Option<ImageLayerDestination>,
 }
+#[derive(Clone,Debug,Default,PartialEq,Serialize,Deserialize)]
+pub struct GradientToolSettings {
+    pub definition:Option<layer_core::GradientDefinition>,
+    pub shape:layer_core::GradientShape,
+}
 #[derive(Default)]
 pub(super) struct LayerInteraction {
     pub tool: LayerCanvasTool,
@@ -355,7 +357,8 @@ pub(super) struct LayerInteraction {
     original: Option<(OccurrenceHandle, Occurrence)>,
     solo: Option<Vec<(OccurrenceHandle, bool)>>,
     pub changed: bool,
-    pub gradient: [bool; 2],
+    pub gradient: GradientToolSettings,
+    pub gradient_before: Option<GradientToolSettings>,
     pub figure: (FigureShape, FigurePaint),
 }
 impl LayerInteraction {
@@ -885,12 +888,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some((fill, source, _)) = tool.region() {
                     self.region_tools.source[usize::from(fill)] = source;
                 }
-                if let LayerCanvasTool::Gradient {
-                    radial,
-                    transparent,
-                } = tool
-                {
-                    self.layer_interaction.gradient = [radial, transparent];
+                if let LayerCanvasTool::Gradient {shape}=tool {
+                    self.layer_interaction.gradient.shape=shape;
                 }
                 self.layer_interaction.tool = tool;
                 self.state.layer_tools.tool = tool;
@@ -1580,15 +1579,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                     if matches!(self.layer_interaction.tool, LayerCanvasTool::Figure { .. }) {
                         self.commit_figure()?;
                     }
-                    if let LayerCanvasTool::Gradient {
-                        radial,
-                        transparent,
-                    } = self.layer_interaction.tool
-                    {
-                        let start = self.layer_interaction.path[0];
-                        if (p.x - start.x).hypot(p.y - start.y) >= 0.5 / self.state.camera.zoom {
-                            self.gradient_fill(start, p, radial, transparent)?;
-                        }
+                    if let LayerCanvasTool::Gradient {..}=self.layer_interaction.tool {
+                        let start=self.layer_interaction.path[0];
+                        if start!=p {self.gradient_fill(start,p)?;}
                     }
                     if matches!(
                         self.layer_interaction.tool,
@@ -1676,54 +1669,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
 
-    fn gradient_fill(
-        &mut self,
-        start: Point,
-        end: Point,
-        radial: bool,
-        transparent: bool,
-    ) -> Result<(), String> {
-        if let Some(target) = self.selection_masks.target() {
-            return self.queue_mask_gradient(target, layer_render::SelectionGradient {
-                start, end, radial, transparent, background: if !self.grayscale_masks() { 1. } else { self.selection_masks.background() },
-            });
+    fn gradient_fill(&mut self,start:Point,end:Point)->Result<(),String> {
+        let gradient=self.tool_gradient();
+        let shape=self.layer_interaction.gradient.shape;
+        let reverse=false;
+        if let Some(target)=self.selection_masks.target() {
+            let stops=gradient.stops.iter().map(|stop|layer_core::ScalarGradientStop {position:stop.position,
+                value:if self.grayscale_masks() {selection_masks::mask_gray(stop.color)} else {1.},opacity:stop.color.rgba[3]}).collect();
+            return self.queue_mask_gradient(target,layer_render::SelectionGradient {start,end,shape,reverse,
+                gradient:layer_core::ScalarGradient {stops}});
         }
-        let doc = self.engine.document();
-        let target = doc.drawing_content().ok_or("Select a drawing layer")?;
-        let offset = doc.target_offset(target);
-        let local = |p: Point| Point {
-            x: p.x - offset.x,
-            y: p.y - offset.y,
-        };
-        let color = self.state.colors.foreground;
-        let definitions = [
-            color,
-            if transparent {
-                color
-            } else {
-                self.state.colors.background
-            },
-        ];
-        let mut colors = [[0.; 4]; 2];
-        for (value, definition) in colors.iter_mut().zip(definitions) {
-            *value = definition.linear_in(doc.composition().color.space)?;
-            value[3] *= self.state.brush.opacity;
-        }
-        if transparent {
-            colors[1][3] = 0.0;
-        }
-        let kind = layer_core::RasterOperationKind::Gradient {
-            start: local(start),
-            end: local(end),
-            colors,
-            radial,
-            alpha_locked: doc.target_owner(target).and_then(|id| doc.scene().occurrence(id)).is_some_and(|l| l.alpha_locked),
-        };
-        self.paint_operation(
-            doc.working.selection.clone(),
-            kind,
-            &definitions[..if transparent { 1 } else { 2 }],
-        )
+        let doc=self.engine.document();
+        let target=doc.drawing_content().ok_or("Select a drawing layer")?;
+        let colors:Vec<_>=gradient.stops.iter().map(|stop|stop.color).collect();
+        let kind=layer_core::RasterOperationKind::Gradient {start,end,gradient,shape,reverse,
+            opacity:self.state.brush.opacity,alpha_locked:doc.target_owner(target).and_then(|id|doc.scene().occurrence(id)).is_some_and(|layer|layer.alpha_locked)};
+        self.paint_operation(doc.working.selection.clone(),kind,&colors)
     }
 
     pub(super) fn paint_operation(
@@ -1740,7 +1701,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let offset = self.engine.document().target_offset(id);
         let inverse = self.engine.document().affine_edit_transform(id).and_then(layer_core::Affine::inverse).ok_or("Invalid layer placement")?;
-        let placement = layer_core::Affine::translation(offset).then(inverse);
+        let placement = if matches!(kind,layer_core::RasterOperationKind::Gradient {..}) {inverse} else {layer_core::Affine::translation(offset).then(inverse)};
         let domain = self.engine.document().target_extent(id);
         let mut coverage = CoverageSnapshot::reveal_all(self.engine.allocate_coverage_handle(), domain, Point::default());
         let doc = self.engine.document();
@@ -1759,8 +1720,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let paints = match &kind {
             layer_core::RasterOperationKind::Fill { color, .. } => color[3] > 0.,
-            layer_core::RasterOperationKind::Gradient { colors, .. } => {
-                colors.iter().any(|c| c[3] > 0.)
+            layer_core::RasterOperationKind::Gradient { gradient, opacity, .. } => {
+                *opacity>0. && gradient.stops.iter().any(|stop| stop.color.rgba[3]>0.)
             }
             layer_core::RasterOperationKind::Figure(figure) => {
                 !figure.erase && figure.colors.iter().any(|c| c[3] > 0.)

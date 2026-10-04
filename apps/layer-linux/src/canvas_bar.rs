@@ -317,7 +317,7 @@ fn build(
             unfocused(button.upcast_ref());
             (button.clone().upcast(), Some(Field::Menu(button, image, text)))
         }
-        ToolOption::Numeric(_) | ToolOption::Range { .. } => (gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(), None),
+        ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => (gtk::Box::new(gtk::Orientation::Horizontal, 0).upcast(), None),
     }
 }
 

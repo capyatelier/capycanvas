@@ -1,7 +1,7 @@
 # Packaged GTK runtime
 
-The normal Linux packager invokes `build.sh BUILD_DIRECTORY PREFIX` and ships
-the resulting GTK 4.22.4 library. `pad-event-surface.patch` prevents a null
+The Linux packager and development launcher invoke `build.sh BUILD_DIRECTORY PREFIX`
+and use the resulting GTK 4.22.4 library. `pad-event-surface.patch` prevents a null
 Wayland pad-mode event surface from being dereferenced before keyboard focus.
 Device state and targeted input remain enabled.
 `tablet-proximity-cursor.patch` waits for the pen's first positioned motion
@@ -25,7 +25,7 @@ the build directory can supply extracted development headers/tools, as in the
 recorded Fedora review build. The prefix contains the library, source archive,
 license, patch, standalone build script and a checksum manifest.
 
-`apps/layer-linux/package.mjs` defaults to `target/gtk-runtime` as its cache;
+`apps/layer-linux/package.mjs` and `run.sh` default to `target/gtk-runtime` as their cache;
 `CAPY_GTK_BUILD_DIR` can select another cache. The launcher selects the bundled
 library using an executable-relative path that survives relocation and symlinks.
 Applications can replace the local library with a compatible rebuilt version.

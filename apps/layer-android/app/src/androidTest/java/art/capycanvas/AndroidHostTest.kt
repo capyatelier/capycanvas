@@ -115,8 +115,8 @@ class AndroidHostTest {
         enabled("redo"); action(obj("type" to "invoke", "command" to "redo"))
         action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "gradient_map")))
         val view = state().getJSONObject("layer_properties")
-        action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
-            "key" to "gradient", "index" to 1, "position" to 1.0, "color" to color, "remove" to false)))
+        action(obj("type" to "effect", "action" to obj("op" to "gradient", "target" to view.array("controls").objects().first { it.getString("key")=="gradient" }.getJSONObject("gradient").getJSONObject("destination"),
+            "edit" to obj("kind" to "stop", "index" to 1, "position" to 1.0, "color" to color, "remove" to false))))
         compose.onNodeWithTag("effect-gradient").assertIsDisplayed()
         compose.onNodeWithTag("effect-gradient").performTouchInput { click(androidx.compose.ui.geometry.Offset(width - 8f, height - 4f)) }
         val before = state().getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").toString()
@@ -129,6 +129,273 @@ class AndroidHostTest {
         assertNull(host.failure)
         assertNull(host.actionError)
         capture("native-sdr-tagged-gradient")
+    }
+
+    private fun gradientOutput():ByteArray {
+            val color=runBlocking {host.withNative {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}}
+            val recipe=runBlocking {ColorPreferencesStore.presets(compose.activity,color,obj("type" to "get","index" to 0))}.getJSONObject("recipe")
+            val flag=Native.captureControl()
+            try {return Native.inspectionOutput(runBlocking {host.withNative {Native.inspectionTask(it,flag)}},recipe.toString())[1] as ByteArray} finally {Native.captureFree(flag)}
+        }
+    @Test fun nativeGradientStopContactsAndCompactControlsRetainDefinition() {
+        fun <T> native(block:(Long)->T):T=runBlocking {host.withNative(block)}
+        val task = native { handle ->
+            Native.dispatch(handle, obj("type" to "invoke", "command" to "new_document").toString())
+            var published = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+            var request = published.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+            if (request.getJSONObject("kind").getJSONObject("request").getString("type") == "confirm_close") {
+                Native.documentClose(handle, request.getInt("id"), "\"discard\"")
+                published = JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
+                request = published.array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+            }
+            val file = published.getJSONObject("document_file")
+            Native.projectTask(handle, request.getInt("id"), "null", file.getLong("epoch"), file.getLong("revision"))
+        }
+        try {
+            Native.projectOptions(task, obj("extent" to JSONArray(listOf(128, 128)), "color" to obj("space" to "Srgb", "depth" to "F32"), "background" to "White").toString())
+            Native.projectWork(task, -1, 128, 128)
+            native { Native.projectAdopt(it, task, "null") }
+        } finally { Native.projectFree(task) }
+        compose.runOnUiThread { host.documentChanged() }
+        compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme","theme" to theme))
+            action(obj("type" to "invoke","command" to "add_layer"))
+            action(obj("type" to "invoke","command" to "pen"));penStroke(8)
+            compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true}
+            action(obj("type" to "effect","action" to obj("op" to "insert","effect" to "gradient_map")))
+            fun definition()=state().getJSONObject("layer_properties").array("controls").objects().first {it.getString("key")=="gradient"}.getJSONObject("value").getJSONObject("value").toString()
+            compose.onNodeWithTag("gradient-editor").assertIsDisplayed()
+            compose.onNodeWithTag("effect-gradient").performTouchInput {click(center)}
+            waitState {it.getJSONObject("layer_properties").array("controls").objects().first {c->c.getString("key")=="gradient"}.getJSONObject("value").getJSONObject("value").getJSONArray("stops").length()==3}
+            fun stopContact(tool:Int,cancel:Boolean=false) {
+                val bounds=compose.onNodeWithTag("effect-gradient").fetchSemanticsNode().boundsInRoot
+                val source=when(tool){MotionEvent.TOOL_TYPE_STYLUS->InputDevice.SOURCE_STYLUS;MotionEvent.TOOL_TYPE_MOUSE->InputDevice.SOURCE_MOUSE;else->InputDevice.SOURCE_TOUCHSCREEN}
+                val location=IntArray(2);instrumentation.runOnMainSync {compose.activity.window.decorView.getLocationOnScreen(location)}
+                val down=SystemClock.uptimeMillis()
+                val stops=JSONObject(definition()).getJSONArray("stops");val start=stops.getJSONObject(1).getDouble("position").toFloat()
+                for((phase,offset) in listOf(MotionEvent.ACTION_DOWN to 0f,MotionEvent.ACTION_MOVE to .04f,(if(cancel)MotionEvent.ACTION_CANCEL else MotionEvent.ACTION_UP) to .04f)) {
+                    val point=MotionEvent.PointerCoords().apply {x=location[0]+bounds.left+6*compose.activity.resources.displayMetrics.density+(bounds.width-12*compose.activity.resources.displayMetrics.density)*(start+offset);y=location[1]+bounds.center.y;pressure=.7f}
+                    val properties=MotionEvent.PointerProperties().apply {id=0;toolType=tool}
+                    val event=MotionEvent.obtain(down,SystemClock.uptimeMillis(),phase,1,arrayOf(properties),arrayOf(point),0,if(tool==MotionEvent.TOOL_TYPE_MOUSE)MotionEvent.BUTTON_PRIMARY else 0,1f,1f,0,0,source,0)
+                    try {assertTrue(instrumentation.uiAutomation.injectInputEvent(event,true))} finally {event.recycle()}
+                    SystemClock.sleep(30)
+                }
+                compose.waitForIdle()
+            }
+            for(tool in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS,MotionEvent.TOOL_TYPE_MOUSE)) {
+                val before=definition();stopContact(tool,true);assertEquals(before,definition())
+                stopContact(tool);val dragged=definition();assertNotEquals(before,dragged)
+                action(obj("type" to "invoke","command" to "undo"));assertEquals(before,definition())
+                action(obj("type" to "invoke","command" to "redo"));assertEquals(dragged,definition())
+            }
+            compose.onNodeWithTag("number-value-gradient-position").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) {compose.onAllNodesWithTag("number-Position").fetchSemanticsNodes().isNotEmpty()}
+            compose.onNodeWithTag("number-Position").performTextReplacement("62.5%")
+            compose.onNodeWithTag("number-Position").performImeAction()
+            waitState {JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getDouble("position")==.625}
+            compose.onNodeWithTag("number-value-gradient-position").assertIsEnabled()
+            compose.onNodeWithTag("gradient-reverse").performClick()
+            compose.onNodeWithTag("number-value-gradient-position").assertIsEnabled()
+            assertEquals(.375,JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getDouble("position"),0.0)
+            compose.onNodeWithTag("gradient-interpolation").assertIsDisplayed()
+            val modes=state().getJSONObject("layer_properties").array("controls").objects().first {it.getString("key")=="gradient"}.getJSONObject("gradient").getJSONArray("interpolations")
+            assertEquals(3,modes.length())
+            for(choice in (0 until modes.length()).map {modes.getJSONArray(it)}) {
+                compose.onNodeWithTag("gradient-interpolation").performClick()
+                compose.onNode(hasText(choice.getString(1)) and hasAnyAncestor(isPopup())).performClick()
+                waitState {JSONObject(definition()).getString("interpolation")==choice.getString(0)}
+                assertEquals(choice.getString(0),JSONObject(definition()).getString("interpolation"))
+                compose.onNodeWithTag("number-value-gradient-position").assertIsEnabled()
+            }
+            fun focusStop()=compose.onNodeWithTag("effect-gradient").performTouchInput {
+                val position=JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getDouble("position").toFloat()
+                val inset=6*compose.activity.resources.displayMetrics.density
+                click(androidx.compose.ui.geometry.Offset(inset+(width-2*inset)*position,height*.85f))
+            }
+            fun keyboardIdle(phase:String,beforeRelease:String=definition()) {
+                val file=File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-keyboard-$theme.json")
+                fun status()=native {JSONObject(Native.toneStatus(it))}
+                file.writeText(obj("phase" to phase,"before" to status(),"definition" to definition()).toString())
+                try {compose.waitUntil(5_000) {status().getBoolean("idle")}}
+                finally {file.writeText(obj("phase" to phase,"before_release" to JSONObject(beforeRelease),"after" to status(),"definition" to definition()).toString())}
+            }
+            focusStop();val keyBefore=definition()
+            fun arrow(phase:Int,repeat:Int=0) {val now=SystemClock.uptimeMillis();instrumentation.sendKeySync(KeyEvent(now,now,phase,KeyEvent.KEYCODE_DPAD_RIGHT,repeat))}
+            arrow(KeyEvent.ACTION_DOWN);arrow(KeyEvent.ACTION_DOWN,1)
+            waitState {definition()!=keyBefore}
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE);arrow(KeyEvent.ACTION_UP);keyboardIdle("cancel")
+            waitState {definition()==keyBefore}
+            focusStop();arrow(KeyEvent.ACTION_DOWN);arrow(KeyEvent.ACTION_DOWN,1);arrow(KeyEvent.ACTION_DOWN,2)
+            waitState {JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getDouble("position")>.4}
+            val beforeRelease=definition();arrow(KeyEvent.ACTION_UP);keyboardIdle("up",beforeRelease);waitState {JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getDouble("position")>.4};val keyAfter=definition()
+            action(obj("type" to "invoke","command" to "undo"));assertEquals(keyBefore,definition())
+            action(obj("type" to "invoke","command" to "redo"));assertEquals(keyAfter,definition())
+            compose.onNodeWithTag("property-color-Color").performClick()
+            compose.onNodeWithTag("color-input-model").performClick()
+            compose.onNode(hasText("Linear RGB") and hasAnyAncestor(isPopup())).performClick()
+            compose.onNodeWithTag("color-input-0").performTextReplacement("1")
+            compose.onNodeWithTag("color-input-1").performTextReplacement("0")
+            compose.onNodeWithTag("color-input-2").performTextReplacement("0")
+            compose.onNodeWithTag("color-input-3").performTextReplacement("40")
+            compose.onNodeWithTag("color-intensity-value").performTextReplacement("2")
+            compose.onNodeWithTag("color-form-use").assertIsEnabled().performClick()
+            compose.waitUntil(5_000) {compose.onAllNodesWithTag("color-form-use").fetchSemanticsNodes().isEmpty()}
+            val tagged=JSONObject(definition()).getJSONArray("stops").getJSONObject(1).getJSONObject("color")
+            assertTrue(tagged.getJSONArray("rgba").getDouble(0)>1.0)
+            assertEquals(.4,tagged.getJSONArray("rgba").getDouble(3),1e-6)
+            val committed=definition();val expectedPixels=gradientOutput()
+            val selected=native {JSONObject(Native.documentTabs(it,obj("op" to "view").toString())).getLong("selected")}
+            var task=0L;compose.waitUntil(10_000) {task=native {Native.projectRecoveryFor(it,selected)};task!=0L}
+            val archive=File(device.root,"p30-gradient-$theme.capy")
+            try {Native.projectPublish(task,archive.absolutePath)} finally {Native.projectFree(task)}
+            compose.runOnUiThread {assertTrue(host.documents.openUris(listOf(android.net.Uri.fromFile(archive))))}
+            compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true&&state().getJSONObject("document_file").optString("location").contains(archive.name)}
+            fun publishedGradient(phase:String) {
+                val file=File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-$phase-$theme.json")
+                val before=JSONObject(host.snapshot!!.toString())
+                file.writeText(obj("phase" to phase,"before" to before).toString())
+                try {waitState {it.getJSONObject("layer_properties").array("controls").objects().any {c->c.getString("key")=="gradient"}}}
+                catch(error:Throwable) {capture("p30-reopen-failure-$theme");throw error}
+                finally {file.writeText(obj("phase" to phase,"before" to before,"after" to host.snapshot).toString())}
+            }
+            fun selectGradient(id:Long,phase:String) {
+                val file=File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-selection-$phase-$theme.json")
+                val before=obj("blocked" to host.documentInputBlocked,"switching" to host.drawingTabs.switching,"snapshot" to host.snapshot)
+                file.writeText(before.toString())
+                compose.waitUntil(10_000) {!host.documentInputBlocked&&!host.drawingTabs.switching}
+                action(obj("type" to "select_layer","id" to id))
+                try {waitState {it.array("layers").objects().any {row->row.getLong("id")==id&&row.getBoolean("selected")}}}
+                finally {file.writeText(obj("before" to before,"blocked" to host.documentInputBlocked,"switching" to host.drawingTabs.switching,"after" to host.snapshot).toString())}
+            }
+            val label=state().array("adjustments").objects().first {it.getString("id")=="gradient_map"}.getString("label")
+            val reopenedLayer=state().array("layers").objects().first {it.optString("label")==label}.getLong("id")
+            selectGradient(reopenedLayer,"reopen")
+            publishedGradient("reopen")
+            assertEquals(committed,definition());assertArrayEquals(expectedPixels,gradientOutput())
+            compose.activityRule.scenario.recreate();compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true}
+            selectGradient(state().array("layers").objects().first {it.optString("label")==label}.getLong("id"),"recreate")
+            publishedGradient("recreate")
+            assertEquals(committed,definition());assertArrayEquals(expectedPixels,gradientOutput())
+            compose.onNodeWithTag("property-color-Color").performClick()
+            compose.onNodeWithText("Edit Color").assertIsDisplayed()
+            action(obj("type" to "effect","action" to obj("op" to "insert","effect" to "gradient_map")))
+            val replacement=definition()
+            compose.onAllNodesWithText("Use Color").fetchSemanticsNodes().firstOrNull()?.let {compose.onNodeWithText("Use Color").performClick()}
+            assertEquals(replacement,definition());assertNotEquals(committed,replacement)
+            compose.activityRule.scenario.recreate()
+            waitState {it.getJSONObject("layer_properties").array("controls").objects().any {c->c.getString("key")=="gradient"}}
+            assertEquals(replacement,definition());assertNull(host.failure);assertNull(host.actionError)
+            capture("p30-gradient-$theme")
+        }
+    }
+
+    @Test fun gradientToolPanelAndToolbarUseNativeGeometryContacts() {
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "restore_workspace","workspace" to JSONObject(defaultWorkspace)))
+            action(obj("type" to "set_theme","theme" to theme))
+            val commands=state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first {it.getString("id")=="commands"}
+            commands.getJSONObject("content").array("tiles").objects().forEach {customize(obj("type" to "remove_tool","panel" to "commands","tile" to it.getInt("id")))}
+            customize(obj("type" to "insert_tools","panel" to "commands","before" to null))
+            customize(obj("type" to "picker_select","control" to obj("kind" to "tool_options","style" to obj("text" to true,"sliders" to true)),"selected" to true))
+            customize(obj("type" to "confirm_tools"))
+            assertEquals("tool_options",state().getJSONObject("workspace").getJSONObject("layout").array("panels").objects().first {it.getString("id")=="commands"}.getJSONObject("content").array("tiles").getJSONObject(0).getJSONObject("control").getString("kind"))
+            action(obj("type" to "move_panel","panel" to "commands","viewport" to viewport(),"target" to obj("kind" to "edge","edge" to "top","outer" to true)))
+            action(obj("type" to "invoke","command" to "add_layer"))
+            action(obj("type" to "invoke","command" to "gradient"))
+            customize(obj("type" to "set_panel_visible","panel" to "tool_settings","visible" to true))
+            floatPanel("tool_settings",20f,140f)
+            action(obj("type" to "select_panel_tab","group" to group("tool_settings").getLong("id"),"panel" to "tool_settings"))
+            fun panelNode(tag:String)=compose.onNode(hasTestTag(tag) and hasAnyAncestor(hasTestTag("panel-body-tool_settings")),useUnmergedTree=true)
+            panelNode("tool-segments-gradient-shape").performScrollTo().assertIsDisplayed()
+            panelNode("gradient-editor").assertIsDisplayed()
+            val toolbarTags=compose.onAllNodes(SemanticsMatcher("Toolbar tag") {it.config.getOrNull(SemanticsProperties.TestTag)?.startsWith("toolbar-")==true},useUnmergedTree=true).fetchSemanticsNodes()
+            File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-toolbar-$theme.json").writeText(obj("state" to state(),"tags" to JSONArray(toolbarTags.map {node->obj("tag" to node.config.getOrNull(SemanticsProperties.TestTag),"bounds" to node.boundsInRoot.toString())})).toString())
+            compose.onNode(hasTestTag("toolbar-gradient") and hasAnyAncestor(hasTestTag("panel-body-commands")),useUnmergedTree=true).assertIsDisplayed().performClick()
+            compose.onNode(hasTestTag("gradient-editor") and hasAnyAncestor(isPopup())).assertIsDisplayed()
+            compose.onNode(hasTestTag("effect-gradient") and hasAnyAncestor(isPopup())).performTouchInput {click(center)}
+            waitState {it.array("tool_extra").objects().firstOrNull {option->option.has("Gradient")}?.getJSONObject("Gradient")?.getJSONObject("value")?.getJSONObject("value")?.getJSONArray("stops")?.length()==3}
+            val toolBefore=state().getJSONArray("tool_extra").toString()
+            instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ESCAPE)
+            compose.waitUntil(5_000) {compose.onAllNodes(hasTestTag("gradient-editor") and hasAnyAncestor(isPopup())).fetchSemanticsNodes().isEmpty()}
+            assertEquals(toolBefore,state().getJSONArray("tool_extra").toString())
+            action(obj("type" to "invoke","command" to "fit_canvas"))
+            val shapeNodes=compose.onAllNodes(SemanticsMatcher("Gradient shape tag") {it.config.getOrNull(SemanticsProperties.TestTag)?.contains("gradient-shape")==true},useUnmergedTree=true).fetchSemanticsNodes()
+            File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-shape-$theme.json").writeText(obj("tool_extra" to state().getJSONArray("tool_extra"),"tags" to JSONArray(shapeNodes.map {node->obj("tag" to node.config.getOrNull(SemanticsProperties.TestTag),"bounds" to node.boundsInRoot.toString())})).toString())
+            fun output(phase:String):ByteArray {
+                val file=File(File(compose.activity.getExternalFilesDir(null),"validation").apply {mkdirs()},"p30-contact-$theme.json")
+                fun published()=runBlocking {host.withNative {obj("snapshot" to (Native.snapshot(it)?.let(::JSONObject) ?: host.snapshot!!),"tone" to JSONObject(Native.toneStatus(it)))}}
+                file.writeText(obj("phase" to phase,"before" to published()).toString())
+                runBlocking {host.glassPresented()}
+                try {
+                    compose.waitUntil(5_000) {published().getJSONObject("tone").getBoolean("idle")}
+                    file.writeText(obj("phase" to phase,"retired" to published()).toString())
+                    return gradientOutput()
+                } catch(error:Throwable) {
+                    file.writeText(obj("phase" to phase,"failed" to published(),"error" to error.toString()).toString())
+                    throw error
+                }
+            }
+            for(index in 0..2) {
+                panelNode("tool-segment-gradient-shape-$index").performClick()
+                for(tool in listOf(MotionEvent.TOOL_TYPE_FINGER,MotionEvent.TOOL_TYPE_STYLUS,MotionEvent.TOOL_TYPE_MOUSE)) {
+                action(obj("type" to "invoke","command" to "fit_canvas"))
+                val camera=state().getJSONObject("camera");val viewport=camera.getJSONArray("viewport");val area=camera.getJSONArray("work_area")
+                fun point(x:Double)=androidx.compose.ui.geometry.Offset(((area.getDouble(0)+area.getDouble(2)*x)/viewport.getDouble(0)).toFloat(),((area.getDouble(1)+area.getDouble(3)*.5)/viewport.getDouble(1)).toFloat())
+                val before=output("$index/$tool/before")
+                canvasEvent(MotionEvent.ACTION_DOWN,listOf(point(.35)),tool);canvasEvent(MotionEvent.ACTION_MOVE,listOf(point(if(tool==MotionEvent.TOOL_TYPE_MOUSE).75 else .65)),tool);canvasEvent(MotionEvent.ACTION_CANCEL,listOf(point(if(tool==MotionEvent.TOOL_TYPE_MOUSE).75 else .65)),tool)
+                assertArrayEquals(before,output("$index/$tool/cancel"))
+                canvasEvent(MotionEvent.ACTION_DOWN,listOf(point(.35)),tool);canvasEvent(MotionEvent.ACTION_MOVE,listOf(point(if(tool==MotionEvent.TOOL_TYPE_MOUSE).75 else .65)),tool);canvasEvent(MotionEvent.ACTION_UP,listOf(point(if(tool==MotionEvent.TOOL_TYPE_MOUSE).75 else .65)),tool)
+                compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true}
+                val after=output("$index/$tool/up")
+                if(tool==MotionEvent.TOOL_TYPE_FINGER)assertArrayEquals(before,after)
+                else {
+                    assertFalse(before.contentEquals(after))
+                    action(obj("type" to "invoke","command" to "undo"));assertArrayEquals(before,output("$index/$tool/undo"))
+                    action(obj("type" to "invoke","command" to "redo"));assertArrayEquals(after,output("$index/$tool/redo"))
+                }
+                assertNull(host.failure);assertNull(host.actionError)
+                }
+            }
+            panelNode("gradient-reverse").performClick()
+            capture("p30-tool-gradient-$theme")
+        }
+    }
+
+    @Test fun gradientDefinitionsRetainTaggedStopsAndRejectRetiredDestinations() {
+        for(theme in listOf("light","dark")) {
+            action(obj("type" to "set_theme","theme" to theme))
+            action(obj("type" to "effect","action" to obj("op" to "insert","effect" to "gradient_map")))
+            fun control()=state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="gradient" }
+            fun definition()=control().getJSONObject("value").getJSONObject("value")
+            val destination=control().getJSONObject("gradient").getJSONObject("destination")
+            fun edit(value:JSONObject)=action(obj("type" to "effect","action" to obj("op" to "gradient","target" to control().getJSONObject("gradient").getJSONObject("destination"),"edit" to value)))
+            assertEquals("effect",destination.getString("kind"))
+            assertEquals("Oklab",definition().getString("interpolation"))
+            assertFalse(definition().has("dither"))
+            assertFalse(control().getJSONObject("gradient").has("shape"))
+            assertFalse(control().getJSONObject("gradient").has("shapes"))
+            edit(obj("kind" to "stop","index" to JSONObject.NULL,"position" to .375,"color" to obj("space" to "DisplayP3","rgba" to JSONArray(listOf(2.0,.125,.5,.4))),"remove" to false))
+            assertEquals(3,definition().getJSONArray("stops").length())
+            val stop=definition().getJSONArray("stops").getJSONObject(1)
+            assertEquals(.375,stop.getDouble("position"),0.0)
+            assertEquals("DisplayP3",stop.getJSONObject("color").getString("space"))
+            assertEquals(2.0,stop.getJSONObject("color").getJSONArray("rgba").getDouble(0),0.0)
+            assertEquals(.4,stop.getJSONObject("color").getJSONArray("rgba").getDouble(3),1e-6)
+            for(space in listOf("Oklab","LinearRgb","Classic")) {
+                edit(obj("kind" to "interpolation","value" to space))
+                assertEquals(space,definition().getString("interpolation"))
+            }
+            val before=definition().toString()
+            edit(obj("kind" to "position","index" to 1,"operation" to obj("type" to "expression","text" to "62.5%")))
+            assertEquals(.625,definition().getJSONArray("stops").getJSONObject(1).getDouble("position"),0.0)
+            action(obj("type" to "invoke","command" to "undo"));assertEquals(before,definition().toString())
+            action(obj("type" to "invoke","command" to "redo"));assertEquals(.625,definition().getJSONArray("stops").getJSONObject(1).getDouble("position"),0.0)
+            action(obj("type" to "effect","action" to obj("op" to "insert","effect" to "gradient_map")))
+            val replacement=definition().toString()
+            action(obj("type" to "effect","action" to obj("op" to "gradient","target" to destination,"edit" to obj("kind" to "interpolation","value" to "Classic"))));assertEquals(replacement,definition().toString())
+            assertNull(host.failure);assertNull(host.actionError)
+        }
     }
 
     @Test fun completedDropFeedbackSurvivesNewerMotion() {
@@ -943,7 +1210,7 @@ class AndroidHostTest {
             graph().performTouchInput { click(center) }
             waitState { !control().getJSONObject("curve").isNull("selected") }
             graph().assertIsFocused()
-            assertNotNull(host.curveControlFocus)
+            assertNotNull(host.pointControlFocus)
             key(KeyEvent.KEYCODE_DPAD_UP, true)
             assertNotEquals("Focused native graph ArrowUp edits the selected knot", original, points())
             key(KeyEvent.KEYCODE_DPAD_UP, true, 1)
@@ -1496,9 +1763,9 @@ class AndroidHostTest {
             }
             if(controls.any {it.getJSONObject("kind").getString("kind")=="gradient"}) {
                 compose.onNodeWithTag("effect-gradient").performTouchInput {click(center)}
-                waitState {it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONArray("value").length()==3}
-                action(obj("type" to "effect", "action" to obj("op" to "gradient_stop", "layer" to view.getLong("layer"),
-                    "key" to "gradient", "index" to 1, "position" to .5, "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(.8,.2,.1,1))), "remove" to false)))
+                waitState {it.getJSONObject("layer_properties").getJSONArray("controls").getJSONObject(0).getJSONObject("value").getJSONObject("value").getJSONArray("stops").length()==3}
+                action(obj("type" to "effect", "action" to obj("op" to "gradient", "target" to controls.first { it.getString("key")=="gradient" }.getJSONObject("gradient").getJSONObject("destination"),
+                    "edit" to obj("kind" to "stop", "index" to 1, "position" to .5, "color" to obj("space" to "Srgb", "rgba" to JSONArray(listOf(.8,.2,.1,1))), "remove" to false))))
                 if(controls.any { it.getString("key")=="amount" }) action(obj("type" to "effect", "action" to obj("op" to "reset", "layer" to view.getLong("layer"), "key" to "amount")))
             }
             capture("adjustment-$id")

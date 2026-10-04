@@ -361,12 +361,15 @@ extension XCTestCase {
                 #endif
             }
         }
-        attachEditor(in: app, name: "figure-controls")
-        tool("Gradient")
         for radial in [false, true] {
             for transparent in [false, true] {
-                let name = "\(radial ? "Radial" : "Linear"): color to \(transparent ? "clear" : "color")"
-                choose(name, group: false)
+                app.terminate()
+                let alpha = transparent ? 0 : 1
+                app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"light\"},{\"type\":\"set_color\",\"rgba\":[0.9,0.25,0.2,\(alpha)]},{\"type\":\"color\",\"action\":{\"op\":\"swap\"}},{\"type\":\"set_color\",\"rgba\":[0.2,0.45,0.8,1]}]"
+                app.launch(); capturePaintEditor(in: app)
+                attachEditor(in: app, name: "figure-controls")
+                tool("Gradient")
+                choose(radial ? "Radial" : "Linear", group: false)
                 XCTAssertTrue(app.buttons["number-value-tool-opacity"].exists)
                 #if os(macOS)
                 let points = [paper.point(0.27, 0.5), paper.point(0.425, 0.5), paper.point(0.85, 0.5)]

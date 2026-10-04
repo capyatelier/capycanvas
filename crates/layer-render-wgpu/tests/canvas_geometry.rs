@@ -165,7 +165,7 @@ fn gradients() -> (Engine, InputProducer<PenEvent>) {
             .append_raster_operation(engine.document().scene().source_target(id).unwrap(), RasterOperation {
                 placement: Affine::IDENTITY,
                 coverage: CoverageSnapshot::reveal_all(CoverageHandle::from_index(0), SIZE, Point::default()),
-                kind: RasterOperationKind::Gradient { start, end, colors, radial: false, alpha_locked: false },
+                kind: RasterOperationKind::Gradient { start, end, gradient:layer_core::GradientDefinition {stops:colors.into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {position:i as f32,color:layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,rgba).unwrap()}).collect(),interpolation:layer_core::ColorMixSpace::LinearRgb},shape:layer_core::GradientShape::Linear,reverse:false,opacity:1.,alpha_locked:false },
             })
             .unwrap();
         image(&mut engine, 1_000_000);

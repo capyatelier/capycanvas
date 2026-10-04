@@ -635,7 +635,7 @@ mod tests {
     fn non_painting_modes_have_distinct_packaged_icons() {
         let brush = BrushState { preset: Tool::Pen.default_preset(), tool: Tool::Pen, diameter: 10., opacity: 1., color: [0., 0., 0., 1.] };
         for tool in [
-            LayerCanvasTool::Gradient { radial: false, transparent: false },
+            LayerCanvasTool::Gradient {shape:layer_core::GradientShape::Linear},
             LayerCanvasTool::Region { fill: true, source: RegionSource::Visible },
             LayerCanvasTool::Region { fill: false, source: RegionSource::Visible },
             LayerCanvasTool::PickVisible,

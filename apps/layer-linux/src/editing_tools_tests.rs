@@ -5,7 +5,7 @@ use layer_core::color::{DocumentColor, RgbColor, RgbSpace, SampleDepth};
 use layer_core::raster::{RasterRevision, TileKey};
 use std::collections::BTreeMap;
 
-fn raster(w: &Workspace) -> RasterRevision {
+pub(super) fn raster(w: &Workspace) -> RasterRevision {
     let gpu = w.gpu.borrow();
     let document = gpu.as_ref().unwrap().session.engine().document();
     active_raster(document).clone()
@@ -22,7 +22,7 @@ fn healthy(w: &Workspace) {
     assert!(session.state().host_error.is_none(), "{:?}", session.state().host_error);
     assert!(!w.status.is_visible(), "{}", w.status.text());
 }
-fn committed(w: &Rc<Workspace>, before: &RasterRevision) {
+pub(super) fn committed(w: &Rc<Workspace>, before: &RasterRevision) {
     let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         pump(10); healthy(w);
@@ -33,7 +33,7 @@ fn committed(w: &Rc<Workspace>, before: &RasterRevision) {
     ready(w);
 }
 
-fn stroke(input: &mut RemoteInput, w: &Workspace, from: [f32; 2], to: [f32; 2]) {
+pub(super) fn stroke(input: &mut RemoteInput, w: &Workspace, from: [f32; 2], to: [f32; 2]) {
     let m = state(w).camera.document_to_surface();
     let scale = w.area.scale_factor() as f32;
     let at = |p: [f32; 2]| {
@@ -91,8 +91,10 @@ fn native_portable_paint_pointer_workflow() {
         for (radial, transparent) in [(false, false), (false, true), (true, false), (true, true)] {
             invoke(&w, CommandId::Gradient);
             w.dispatch(UiAction::Layer { action: LayerAction::Tool {
-                tool: LayerCanvasTool::Gradient { radial, transparent },
+                tool: LayerCanvasTool::Gradient { shape:if radial {layer_core::GradientShape::Radial} else {layer_core::GradientShape::Linear} },
             } });
+            let mut color=state(&w).colors.background;color.rgba[3]=if transparent {0.} else {1.};
+            w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Gradient {target:layer_ui::GradientDestination::Tool {epoch:state(&w).document_file.epoch},edit:layer_ui::GradientEdit::Stop {index:Some(1),position:1.,color:Some(color),remove:false}}});
             let before = raster(&w); let old = pixels(&before);
             stroke(&mut input, &w, [64., 64.], [320., 192.]); committed(&w, &before);
             let edited = pixels(&raster(&w)); assert_ne!(edited, old);

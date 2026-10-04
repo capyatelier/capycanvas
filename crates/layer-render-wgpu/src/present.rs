@@ -467,7 +467,9 @@ impl ViewportPresenter {
             label: Some("viewport shader"),
             source: wgpu::ShaderSource::Wgsl(
                 format!(
-                    "const VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    "const VIEW_8BIT:bool={};\nconst VIEW_SRGB_ATTACHMENT:bool={};\nconst VIEW_FLOAT16:bool={};\nconst VIEW_WHITE_SCALE:f32={};\nconst VIEW_PQ:bool={};\nconst VIEW_EXTENDED_SRGB:bool={};\nconst SCREEN_SAMPLE_STRIDE:u32={}u;\nconst CANVAS_SPACE:u32={}u;\n{}\n{}\n{}\n{}\n{}\n{}\n{}\n{}",
+                    matches!(format,wgpu::TextureFormat::Rgba8Unorm|wgpu::TextureFormat::Bgra8Unorm|wgpu::TextureFormat::Rgba8UnormSrgb|wgpu::TextureFormat::Bgra8UnormSrgb),
+                    format.is_srgb(),
                     format == wgpu::TextureFormat::Rgba16Float,
                     if color == SdrSurfaceColor::WindowsScrgb { 2.5375 } else { 1. },
                     color == SdrSurfaceColor::Bt2100Pq,
@@ -476,7 +478,7 @@ impl ViewportPresenter {
                     crate::working_color::space_id(device.working_space()),
                     crate::view_color::matrix_shader("view_bt2020", layer_core::color::hdr::srgb_to_bt2020()),
                     crate::view_color::shader(device.working_space(), color.primaries()),
-                    include_str!("sdr_color.wgsl"),
+                    concat!(include_str!("sdr_color.wgsl"), "\n", include_str!("dither.wgsl")),
                     crate::view_color::hdr_shader(device.working_space(), color.primaries()),
                     concat!(include_str!("float_number.wgsl"), "\n", include_str!("guide_luminance.wgsl"), "\n", include_str!("hdr_view.wgsl")),
                     concat!(include_str!("tetrahedron.wgsl"), "\n", include_str!("proof_view.wgsl")),

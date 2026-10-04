@@ -360,18 +360,18 @@ try {
     Capture 'channel-mixer'
 
     Select-Filter 'gradient_map' 'Gradient Map'
-    Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.Count -eq 3} 'Gradient stop not added'
+    Invoke 'property-gradient-add';Wait-Until {(Property 'gradient').value.value.stops.Count -eq 3} 'Gradient stop not added'
     Edit 'property-gradient-position' '35';(Control 'property-gradient-color').SetFocus()
-    Wait-Until {[Math]::Abs((Property 'gradient').value.value[1].position-.35) -lt .000001} 'Gradient position not updated'
+    Wait-Until {[Math]::Abs((Property 'gradient').value.value.stops[1].position-.35) -lt .000001} 'Gradient position not updated'
     Invoke 'property-gradient-color';Edit 'property-gradient-color-3' '40';Invoke 'property-gradient-color-apply'
-    Wait-Until {[Math]::Abs((Rgba (Property 'gradient').value.value[1].color)[3]-.4) -lt .000001} 'Gradient alpha not updated'
-    if([Math]::Abs((Rgba (Property 'gradient').value.value[1].color)[0]-.5) -gt .000001){throw 'Alpha edit changed RGB'}
+    Wait-Until {[Math]::Abs((Rgba (Property 'gradient').value.value.stops[1].color)[3]-.4) -lt .000001} 'Gradient alpha not updated'
+    if([Math]::Abs((Rgba (Property 'gradient').value.value.stops[1].color)[0]-.5) -gt .000001){throw 'Alpha edit changed RGB'}
     (Control 'property-reverse').GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Toggle()
     Wait-Until {(Property 'reverse').value.value} 'Reverse toggle not updated'
     Capture 'gradient'
     Edit 'property-gradient-color-0' '90';Invoke 'property-gradient-reset'
-    Wait-Until {(Property 'gradient').value.value.Count -eq 2} 'Gradient reset failed'
-    if((Rgba (Property 'gradient').value.value[0].color)[0] -ne 0){throw 'Draft leaked into reset gradient'}
+    Wait-Until {(Property 'gradient').value.value.stops.Count -eq 2} 'Gradient reset failed'
+    if((Rgba (Property 'gradient').value.value.stops[0].color)[0] -ne 0){throw 'Draft leaked into reset gradient'}
     if((Control 'property-gradient-position').Current.IsEnabled){throw 'Gradient endpoint position should be disabled'}
     Select-Filter 'split_tone' 'Split Tone';Invoke 'property-shadows-color'
     Edit 'property-shadows-color-0' '0.25';Invoke 'property-shadows-color-apply'

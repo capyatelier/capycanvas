@@ -171,11 +171,11 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
             let start = Point { x: 64., y: 32. };
             let end = Point { x: 320., y: 96. };
             let mut kinds = vec![RasterOperationKind::Fill { color: colors[0], alpha_locked: false }];
-            for radial in [false, true] {
+            for (shape, reverse) in layer_core::GradientShape::ALL.into_iter().flat_map(|shape| [false, true].map(move |reverse| (shape, reverse))) {
                 for transparent in [false, true] {
                     let mut colors = colors;
                     if transparent { colors[1][3] = 0.; }
-                    kinds.push(RasterOperationKind::Gradient { start, end, colors, radial, alpha_locked: false });
+                    kinds.push(RasterOperationKind::Gradient { start, end, gradient: layer_core::GradientDefinition { stops: colors.into_iter().enumerate().map(|(i, rgba)| layer_core::GradientStop { position: i as f32, color: layer_core::color::RgbColor::from_linear(space, rgba).unwrap() }).collect(), interpolation: layer_core::ColorMixSpace::LinearRgb }, shape, reverse, opacity: 1., alpha_locked: false });
                 }
             }
             kinds.push(RasterOperationKind::Figure(Figure {
@@ -200,10 +200,17 @@ fn native_extended_fill_gradient_and_figure_pixels_survive_history_and_save() {
                 for (x, y) in [(16, 64), (128, 64), (300, 64), (368, 64)] {
                     let expected = match &kind {
                         RasterOperationKind::Fill { color, .. } => *color,
-                        RasterOperationKind::Gradient { colors: [a, b], radial, .. } => {
+                        RasterOperationKind::Gradient { gradient, shape, reverse, .. } => {
+                            let a = gradient.stops[0].color.linear_in(space).unwrap();
+                            let b = gradient.stops[1].color.linear_in(space).unwrap();
                             let p = [x as f64 + 0.5 - 64., y as f64 + 0.5 - 32.];
-                            let t = (if *radial { p[0].hypot(p[1]) / 256f64.hypot(64.) }
-                                else { (p[0]*256. + p[1]*64.) / (256.*256. + 64.*64.) }).clamp(0., 1.);
+                            let projected = (p[0]*256. + p[1]*64.) / (256.*256. + 64.*64.);
+                            let t = match shape {
+                                layer_core::GradientShape::Radial => p[0].hypot(p[1]) / 256f64.hypot(64.),
+                                layer_core::GradientShape::Reflected => projected.abs(),
+                                layer_core::GradientShape::Linear => projected,
+                            }.clamp(0.,1.);
+                            let t = if *reverse {1.-t} else {t};
                             let alpha = (1.-t)*f64::from(a[3]) + t*f64::from(b[3]);
                             std::array::from_fn(|i| if i == 3 { alpha as f32 } else if alpha == 0. { 0. }
                                 else { (((1.-t)*f64::from(a[i])*f64::from(a[3]) + t*f64::from(b[i])*f64::from(b[3])) / alpha) as f32 })
@@ -916,4 +923,80 @@ fn watercolor_prediction_canonicalizes_coverage_with_candidate_fallback() {
         assert!(r.native_edit.as_ref().unwrap().promoter.is_some());
         crate::layer_tests::placement::watercolor_prediction_and_commit_with_renderer(r, 256, false);
     }
+}
+
+#[test]
+fn native_gradient_dither_changes_integer_code_boundaries_without_bias() {
+    use layer_core::{Affine,GradientDefinition,GradientShape,GradientStop,ColorMixSpace,RasterOperation,RasterOperationKind,Point,SceneScope};
+    use layer_core::color::RgbColor;
+    use crate::tests::native_effects::{empty_document,insert_effect,insert_source};
+    for route in ["tool","fill","map"] {for space in RgbSpace::ALL {for depth in [SampleDepth::U8,SampleDepth::U16,SampleDepth::F32] {
+        let maximum=if depth==SampleDepth::U16 {65535u16}else{255u16};
+        let first=if depth==SampleDepth::U16 {25000.}else{100.};
+        let mut document=layer_core::Document::new(PortableId::random(),1024,128,layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+        set_color(&mut document,DocumentColor {space,depth});let id=target(&document);
+        let (_,mut live)=engine(document);
+        let gradient=GradientDefinition {stops:[first,first+8.].into_iter().enumerate().map(|(i,code)|GradientStop {position:i as f32,color:RgbColor::new(space,[(code/f64::from(maximum)) as f32,(code/f64::from(maximum)) as f32,(code/f64::from(maximum)) as f32,1.]).unwrap()}).collect(),interpolation:ColorMixSpace::Classic};
+        let kind=if route=="tool" {RasterOperationKind::Gradient {gradient:gradient.clone(),shape:GradientShape::Linear,reverse:false,opacity:1.,start:Point::default(),end:Point {x:1024.,y:0.},alpha_locked:false}} else {
+            let definition=layer_core::bundled_effect_catalog().get(if route=="fill" {"gradient_fill"}else{"gradient_map"}).unwrap();
+            let mut instance=layer_core::EffectInstance::new(definition.program());instance.set("gradient",layer_core::EffectValue::Gradient(gradient)).unwrap();
+            if route=="fill" {instance.set("angle",layer_core::EffectValue::Number(0.)).unwrap();}
+            let mut members=empty_document([1024,128],DocumentColor {space,depth});
+            insert_effect(&mut members,instance);
+            if route=="map" {
+                let interpretation=layer_core::color::source::SourceInterpretation {channels:layer_core::color::source::SourceChannels::Rgba,depth:SampleDepth::U8,profile:layer_core::color::ColorProfile::Builtin(space),profile_assumed:false};
+                let mut builder=layer_core::color::source::SourceBuilder::new([1024,128],interpretation,16*1024*1024).unwrap();
+                let row:Vec<u8>=(0..1024).flat_map(|x|{let code=(x*255/1023) as u8;[code,code,code,255]}).collect();
+                for _ in 0..128 {builder.push_row(&row).unwrap();}
+                insert_source(&mut members,"Gray input",Arc::new(builder.finish().unwrap()));
+            }
+            RasterOperationKind::Bake {scene:members.snapshot(),scope:SceneScope::Members(members.scene().order().to_vec().into()),offset:Point::default()}
+        };
+        let mut exported=None;
+        let mut float_pixels=None;
+        let mut tiles=None;
+        if route=="map" {
+            let RasterOperationKind::Bake {scene,scope,..}=&kind else {unreachable!()};
+            let mut capture=live.backend().snapshot_gpu().capture_scene(scene.clone(),scope.clone(),Default::default()).unwrap();
+            if depth==SampleDepth::F32 {float_pixels=Some(capture.read_region([0,0,1024,128]).unwrap());}
+            else {
+                let interpretation=layer_core::color::source::SourceInterpretation {channels:layer_core::color::source::SourceChannels::Rgba,depth,profile:layer_core::color::ColorProfile::Builtin(space),profile_assumed:false};
+                let mut png=Vec::new();capture.write_png(&mut png,&interpretation,Default::default(),None).unwrap();
+                let source=layer_color::photo::read_photo(std::io::Cursor::new(png),Default::default()).unwrap();
+                let mut reader=source.rows();let mut row=vec![0;1024*depth.bytes()*4];let mut bytes=Vec::new();
+                for y in 0..128 {reader.read(y,&mut row).unwrap();bytes.extend_from_slice(&row);}
+                exported=Some(bytes);
+            }
+        } else {
+            live.append_raster_operation(id,RasterOperation {placement:Affine::IDENTITY,coverage:reveal_all([1024,128],Point::default()),kind}).unwrap();flush(&mut live);
+            tiles=Some(backing(&paint(live.document()).raster));
+        }
+        let mut actual=Vec::new();let mut plain=Vec::new();
+        for y in 0..128u32 {for x in 0..1024u32 {
+            let key=TileKey {plane:layer_core::raster::RasterPlane::Color,coordinate:[x/256,0]};
+            let (bytes,offset)=if let Some(bytes)=&exported {(bytes.as_slice(),((y*1024+x) as usize)*depth.bytes()*4)}
+                else if let Some(tiles)=&tiles {(tiles[&key].as_slice(),((y*256+x%256) as usize)*depth.bytes()*4)}
+                else {(&[][..],0)};
+            let t=if route=="map" {f64::from(x*255/1023)/255.} else {(f64::from(x)+0.5)/1024.};
+            if depth==SampleDepth::F32 {
+                let linear=if let Some(pixels)=&float_pixels {pixels[(y*1024+x) as usize][0]}else{f32::from_le_bytes(bytes[offset..offset+4].try_into().unwrap())};
+                let encoded=space.encode(f64::from(linear))*f64::from(maximum);
+                assert!((encoded-(first+8.*t)).abs()<0.0005,"{route} {space:?} {x},{y}: {encoded}");
+                continue;
+            }
+            let code=if depth==SampleDepth::U8 {u16::from(bytes[offset])}else{u16::from_le_bytes(bytes[offset..offset+2].try_into().unwrap())};actual.push(code);
+            plain.push((first+8.*t).round() as u16);
+        }}
+        if depth==SampleDepth::F32 {continue; }
+        let changed=plain.iter().zip(&actual).filter(|(a,b)|a!=b).count();
+        let mean=plain.iter().zip(&actual).map(|(a,b)|f64::from(*b)-f64::from(*a)).sum::<f64>()/plain.len() as f64;
+        let varied=(0..1024).filter(|&x|(1..128).any(|y|actual[y*1024+x]!=actual[x])).count();
+        let runs=|image:&Vec<u16>| {let mut count=0usize;for row in image.chunks_exact(1024){count+=1+row.windows(2).filter(|pair|pair[0]!=pair[1]).count();}image.len() as f64/count as f64};
+        let plain_band=runs(&plain);let dither_band=runs(&actual);
+        let range=actual.iter().fold([u16::MAX,0],|[a,b],&v|[a.min(v),b.max(v)]);
+        println!("DITHER_CODES {route} {space:?} {depth:?} changed={changed}/{} row_varied_columns={varied}/1024 mean_delta={mean} band_px={plain_band}->{dither_band} range={range:?}",plain.len());
+        assert!(dither_band<plain_band/8.);
+        assert!(changed>plain.len()/8);assert!(varied>512);assert!(mean.abs()<0.02);
+        assert!(plain.iter().zip(&actual).all(|(a,b)|a.abs_diff(*b)<=1));
+    }}}
 }

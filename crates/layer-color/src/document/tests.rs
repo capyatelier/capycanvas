@@ -115,10 +115,10 @@ fn fixture(color: DocumentColor) -> Document {
     let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0.234567, 123. / 65535.]).unwrap();
     for (id, key, value) in [
         ("black_white", "tint_color", EffectValue::Color(color)),
-        ("gradient_map", "gradient", EffectValue::Gradient(vec![
+        ("gradient_map", "gradient", EffectValue::Gradient(layer_core::GradientDefinition {stops:vec![
             GradientStop { position: 0., color },
             GradientStop { position: 1., color: RgbColor::new(RgbSpace::ProPhoto, [0.123456, 0.75, 0.5, 0.37]).unwrap() },
-        ])),
+        ],interpolation:layer_core::ColorMixSpace::Classic})),
     ] {
         let mut effect = EffectInstance::new(layer_core::bundled_effect_catalog().get(id).unwrap().program());
         effect.set(key, value).unwrap();

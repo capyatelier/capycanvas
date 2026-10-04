@@ -37,6 +37,7 @@ impl EditingState {
             if !slot.variants().contains(variant) { return Err("Invalid remembered tool variant".into()); }
         }
         self.selection.validate()?;
+        if let Some(gradient)=&self.gradient.definition {gradient.validate()?;}
         if let LayerCanvasTool::Selection { kind } = self.canvas_tool
             && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
             return Err("Invalid geometric selection tool".into());
@@ -227,7 +228,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .map(|(id, _, _, _, value)| (id.into(), value))
                 .collect(),
             region_sources: self.region_tools.source,
-            gradient: self.layer_interaction.gradient,
+            gradient: self.layer_interaction.gradient.clone(),
             figure: self.layer_interaction.figure,
         }
     }

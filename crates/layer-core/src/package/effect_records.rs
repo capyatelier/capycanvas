@@ -1,3 +1,4 @@
+use crate::GradientStop;
 use crate::{authored::{Definition, Dimension, Resource}, effect_catalog::ResourceLabel, effects::*, Lut3d};
 use super::values::{self, DecodeError, DecodeResult, object, required, string, boolean, array, finite_f32, u32_value};
 use serde_json::{json, Map, Value};
@@ -46,8 +47,9 @@ fn encode_value(value: &EffectValue, kind: &EffectParameterKind, writer: &mut im
             json!(options.get(*index as usize).ok_or("Invalid effect choice")?.value())
         },
         EffectValue::Color(v) => values::encode_rgb_color(*v)?, EffectValue::Curve(v) => json!(v),
-        EffectValue::Gradient(stops) => Value::Array(stops.iter().map(|stop| Ok(json!({"position":stop.position,
-            "color":values::encode_rgb_color(stop.color)?}))).collect::<Result<_, String>>()?),
+        EffectValue::Gradient(gradient) => json!({"stops":gradient.stops.iter().map(|stop| Ok(json!({"position":stop.position,
+            "color":values::encode_rgb_color(stop.color)?}))).collect::<Result<Vec<_>, String>>()?,
+            "interpolation":gradient.interpolation}),
         EffectValue::Lut3d(None) => Value::Null, EffectValue::Lut3d(Some(resource)) => writer.lut(resource)?,
     };
     Ok(json!({"kind":kind_name(kind),"value":payload}))
@@ -70,10 +72,17 @@ fn decode_value(value: &Value, kind: &EffectParameterKind, reader: &mut impl Res
         EffectParameterKind::Curve => EffectValue::Curve(bounded(value, 32)?.iter().map(|v| {
             let pair = array(v, 2)?; Ok([finite_f32(&pair[0])?,finite_f32(&pair[1])?])
         }).collect::<DecodeResult<_>>()?),
-        EffectParameterKind::Gradient => EffectValue::Gradient(bounded(value, 32)?.iter().map(|v| {
-            let fields = object(v, &["position", "color"])?;
-            Ok(GradientStop { position: finite_f32(required(fields,"position")?)?, color: values::parse_rgb_color(required(fields,"color")?)? })
-        }).collect::<DecodeResult<_>>()?),
+        EffectParameterKind::Gradient => {
+            let fields=object(value,&["stops","interpolation"])?;
+            let gradient=crate::GradientDefinition {
+                stops:bounded(required(fields,"stops")?,32)?.iter().map(|v| {
+                    let fields=object(v,&["position","color"])?;
+                    Ok(GradientStop {position:finite_f32(required(fields,"position")?)?,color:values::parse_rgb_color(required(fields,"color")?)?})
+                }).collect::<DecodeResult<_>>()?,
+                interpolation:serde_json::from_value(required(fields,"interpolation")?.clone()).map_err(|_|unsupported("gradient interpolation"))?,
+            };
+            gradient.validate()?;EffectValue::Gradient(gradient)
+        },
         EffectParameterKind::Lut3d => EffectValue::Lut3d(if value.is_null() {None} else {Some(reader.lut(value)?)}),
     })
 }
@@ -390,7 +399,7 @@ mod tests {
             (EffectParameterKind::Choice {options:vec![EffectOption::Literal("first".into()),EffectOption::Literal("second".into())].into()},EffectValue::Choice(1)),
             (EffectParameterKind::Color,EffectValue::Color(color)),
             (EffectParameterKind::Curve,EffectValue::Curve(vec![[0.,0.],[0.3,0.7],[1.,1.]])),
-            (EffectParameterKind::Gradient,EffectValue::Gradient(vec![GradientStop {position:0.,color},GradientStop {position:1.,color}])),
+            (EffectParameterKind::Gradient,EffectValue::Gradient(crate::GradientDefinition {stops:vec![crate::GradientStop {position:0.,color},crate::GradientStop {position:1.,color}],interpolation:crate::ColorMixSpace::Classic})),
             (EffectParameterKind::Lut3d,EffectValue::Lut3d(Some(lut.clone()))),
             (EffectParameterKind::Lut3d,EffectValue::Lut3d(None)),
         ];
@@ -399,6 +408,14 @@ mod tests {
             let decoded=decode_value(&encoded,&kind,&mut resources).unwrap();
             assert_eq!(decoded,value);
             if let EffectValue::Choice(_)=value {assert_eq!(encoded["value"],"second");}
+            if let EffectValue::Gradient(_)=value {
+                assert_eq!(encoded["value"]["interpolation"],"Classic");
+                assert!(encoded["value"].get("dither").is_none());
+                let mut stale=encoded.clone();stale["value"]=encoded["value"]["stops"].clone();
+                assert!(decode_value(&stale,&kind,&mut resources).is_err());
+                let mut extra=encoded.clone();extra["value"]["dither"]=json!(false);
+                assert!(decode_value(&extra,&kind,&mut resources).is_err());
+            }
             if let EffectValue::Lut3d(Some(reopened))=decoded {
                 assert_eq!(encoded["value"],json!({"ref":lut.resource().unwrap().id().to_string()}));
                 assert!(Arc::ptr_eq(reopened.storage().unwrap(),lut.storage().unwrap()));

@@ -146,7 +146,7 @@ impl Default for SelectionMasks {
     }
 }
 /// Mask coverage uses display-encoded luminance; the picker retains the color.
-fn mask_gray(color: layer_core::color::RgbColor) -> f32 {
+pub(super) fn mask_gray(color: layer_core::color::RgbColor) -> f32 {
     let c = color.encoded_in(layer_core::color::RgbSpace::Srgb).expect("validated mask color");
     (c[0] * 0.2126 + c[1] * 0.7152 + c[2] * 0.0722).clamp(0., 1.)
 }
@@ -184,9 +184,6 @@ impl SelectionMasks {
     }
     pub fn gray(&self) -> f32 {
         mask_gray(self.colors.definition())
-    }
-    pub fn background(&self) -> f32 {
-        mask_gray(self.colors.background)
     }
     pub fn erases(&self) -> bool {
         self.colors.transparent()

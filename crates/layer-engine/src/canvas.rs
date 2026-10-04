@@ -3863,8 +3863,8 @@ mod tests {
             layer_core::RasterOperationKind::Gradient {
                 start: Point::default(),
                 end: Point { x: 128.0, y: 0.0 },
-                colors: [[1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 1.0]],
-                radial: false,
+                gradient: layer_core::GradientDefinition::new(vec![layer_core::GradientStop {position:0.,color:layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[1.,0.,0.,1.]).unwrap()},layer_core::GradientStop {position:1.,color:layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb,[0.,0.,1.,1.]).unwrap()}]),
+                shape:layer_core::GradientShape::Linear, reverse:false, opacity:1.,
                 alpha_locked: false,
             },
         ] {

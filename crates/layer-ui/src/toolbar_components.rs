@@ -116,6 +116,7 @@ impl ToolbarNumericBinding {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 #[expect(clippy::large_enum_variant, reason = "Tool option publications retain inline range fields without allocating")]
 pub enum ToolOption {
+    Gradient(Box<PropertyControl>),
     Numeric(ToolSetting),
     /// One atomic interval field; endpoint edits use the existing setting IDs.
     Range {
@@ -143,6 +144,7 @@ impl ToolOption {
     /// Values, selection and presentation copy do not invalidate native editors.
     pub fn same_schema(&self, other: &Self) -> bool {
         match (self, other) {
+            (Self::Gradient(a),Self::Gradient(b))=>a.key==b.key && a.gradient.as_ref().map(|c|&c.destination)==b.gradient.as_ref().map(|c|&c.destination),
             (Self::Numeric(a), Self::Numeric(b)) => {
                 a.id == b.id && a.numeric == b.numeric
             }
@@ -240,6 +242,11 @@ impl UiState {
     }
     pub(crate) fn toolbar_edit_allowed(&self, action: &UiAction) -> bool {
         match action {
+            UiAction::Effect {action} => {
+                let action=if let crate::EffectAction::Gesture {action,..}=action {action.as_ref()} else {action};
+                matches!(action,crate::EffectAction::Gradient {target,..} if self.tool_extra.iter().any(|option|
+                    matches!(option,ToolOption::Gradient(control) if control.gradient.as_ref().is_some_and(|gradient|&gradient.destination==target))))
+            }
             UiAction::Tonal { .. } | UiAction::TransformReference { .. } => self.tool_extra.iter().any(|o| matches!(o,ToolOption::Choice {items,..} if items.iter().any(|i| i.action==*action))),
             UiAction::ToggleSliderBookmark { control } => control.slider()
                 .is_some_and(|binding| binding.field(self).is_some()),
@@ -263,7 +270,7 @@ impl UiState {
                     .iter()
                     .chain(&self.tool_set.subtools)
                     .any(|i| i.action == *action)
-                    || self.tool_options().iter().any(|option| {
+                    || self.tool_options().iter().chain(&self.tool_extra).any(|option| {
                         matches!(option, ToolOption::Choice { items, .. } if items.iter().any(|i| i.action == *action))
                     })
             }
@@ -355,7 +362,7 @@ impl UiState {
                 .collect();
             options.extend(choice(group.id(), group.localized_label(&self.localization), group.segmented(), items));
         }
-        options.extend(self.tool_extra.iter().cloned());
+        options.extend(self.tool_extra.iter().filter(|option| !matches!(option,ToolOption::Choice {id:"gradient-shape",..})).cloned());
         let mut fields = self.tool_settings.iter().peekable();
         while let Some(field) = fields.next() {
             if field.id == "tonal_lower" && fields.peek().is_some_and(|f| f.id == "tonal_upper") {

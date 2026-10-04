@@ -1548,10 +1548,10 @@ fn stateless_color_forms_preserve_tagged_precision_and_convert_previews() {
     assert_eq!(preview[0]["space"], "Srgb");
     assert_eq!(preview[0]["rgba"], json!([1.,0.,0.,0.25]));
     assert_eq!(preview[0]["in_gamut"], false);
-    let gradient = resolve(json!({"type":"gradient","document_space":"ProPhoto","stops":[
+    let gradient = resolve(json!({"type":"gradient","document_space":"ProPhoto","gradient":{"interpolation":"Classic","stops":[
         {"position":0.,"color":{"space":"ProPhoto","rgba":[0.,0.,0.,1.]}},
         {"position":1.,"color":{"space":"ProPhoto","rgba":[1.,1.,1.,1.]}}
-    ]}));
+    ]}}));
     assert_eq!(gradient.as_array().unwrap().len(), 257);
     // Encoded ProPhoto midpoint -> linear (gamma 1.8) -> encoded sRGB.
     let expected = 1.055 * 0.5_f64.powf(1.8 / 2.4) - 0.055;

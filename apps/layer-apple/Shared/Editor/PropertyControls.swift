@@ -292,7 +292,7 @@ private struct GradientProperty: View {
     @State private var dragStop: (index: Int, position: Double)?
     @State private var ramp = JSON()
     @State private var previews = JSON()
-    private var stops: [JSON] { control["value"]["value"].array }
+    private var stops: [JSON] { control["value"]["value"]["stops"].array }
     private var index: Int { max(0, min(selected, stops.count - 1)) }
     private var removable: Bool { index > 0 && index < stops.count - 1 }
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
@@ -306,8 +306,8 @@ private struct GradientProperty: View {
             guard index == nil || index == self.index,
                 revision == nil || revision == fieldRevision else { completion?(nil); return }
         }
-        effect(["op": "gradient_stop", "index": index as Any? ?? NSNull(),
-            "position": position, "color": color, "remove": remove], phase, completion)
+        effect(["op": "gradient", "target": control["gradient"]["destination"].raw, "edit": ["kind": "stop", "index": index as Any? ?? NSNull(),
+            "position": position, "color": color, "remove": remove]], phase, completion)
     }
     private func opacity(_ value: Double, index: Int, revision: UInt64, phase: String? = nil,
         completion: @escaping @MainActor (String?) -> Void) {
@@ -397,8 +397,8 @@ private struct GradientProperty: View {
                 Button(nativeCopy["color"]["reset_gradient"].string, action: reset)
                     .accessibilityIdentifier("gradient-reset")
             }.buttonStyle(.plain)
-        }.task(id: JSON([stops.map(\.raw), store.state["colors"]["rgb_space"].raw]).stableKey) {
-            ramp = ColorUI.resolve(["type": "gradient", "stops": stops.map(\.raw),
+        }.task(id: JSON([control["value"]["value"].raw, store.state["colors"]["rgb_space"].raw]).stableKey) {
+            ramp = ColorUI.resolve(["type": "gradient", "gradient": control["value"]["value"].raw,
                 "document_space": store.state["colors"]["rgb_space"].raw, "display_space": "DisplayP3"])
             previews = ColorUI.resolve(["type": "preview", "colors": stops.map { $0["color"].raw }, "display_space": "DisplayP3"])
             if !ramp["error"].isNull { store.failure = ramp["error"].string }

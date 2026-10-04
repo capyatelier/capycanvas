@@ -181,6 +181,7 @@ private fun formatted(language: String, control: JSONObject, value: Float, units
 
 internal fun toolOptionSize(option: JSONObject, vertical: Boolean, width: Float, tileWidth: Float, tileHeight: Float,
     preferences: JSONObject, textWidth: (String) -> Float, caption: String? = null, language: String = ""): List<Float> = when {
+    option.has("Gradient") -> listOf(if(vertical) width else 120f,24f)
     option.has("Range") -> listOf(if (preferences.getBoolean("sliders")) 280f else 100f, 28f)
     option.has("Choice") && option.getJSONObject("Choice").optInt("columns") > 0 -> option.getJSONObject("Choice").let {
         val columns = it.getInt("columns")
@@ -217,6 +218,7 @@ internal fun menuButtonWidth(caption: String, textWidth: (String) -> Float) = ca
     choiceMenu: ((String, (JSONObject?) -> Unit) -> Unit)? = null,
     choiceCopy: (suspend (String) -> JSONObject?)? = null) {
     when {
+        option.has("Gradient") -> GradientButton(LocalCanvasHost.current,option.getJSONObject("Gradient"),edit)
         option.has("Range") -> option.getJSONObject("Range").let { range ->
             val fields = range.array("bounds").objects()
             RangeControl(fields, range.getString("label"), Modifier.fillMaxWidth(), prefix=prefix, showSlider=preferences.getBoolean("sliders")) { index, value ->

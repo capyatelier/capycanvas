@@ -1,17 +1,18 @@
 //! Managed gradient artwork; neutral stop handles keep native GTK styling.
 use crate::display_color::ViewColor;
 use gtk::{gdk, glib, prelude::*, subclass::prelude::*};
-use layer_core::{GradientStop, color::RgbSpace};
+use layer_core::{GradientDefinition, color::DocumentColor};
 use std::cell::{Cell, RefCell};
 
 mod imp {
     use super::*;
     #[derive(Default)]
     pub struct Preview {
-        pub stops: RefCell<Vec<GradientStop>>,
+        pub gradient: RefCell<GradientDefinition>,
         pub selected: Cell<usize>,
-        pub color: Cell<Option<(RgbSpace, ViewColor)>>,
-        pub textures: RefCell<Option<(usize, [gdk::Texture; 2])>>,
+        pub color: Cell<Option<(DocumentColor, ViewColor)>>,
+        pub textures: RefCell<Option<([u32;2], [gdk::Texture; 2])>>,
+        pub compact: Cell<bool>,
     }
     #[glib::object_subclass]
     impl ObjectSubclass for Preview {
@@ -25,47 +26,53 @@ mod imp {
             if orientation == gtk::Orientation::Horizontal {
                 (80, 160, -1, -1)
             } else {
-                (44, 44, -1, -1)
+                let height=if self.compact.get() {24} else {44};
+                (height, height, -1, -1)
             }
         }
         fn snapshot(&self, snapshot: &gtk::Snapshot) {
             let obj = self.obj();
             let (width, height) = (obj.width() as f32, obj.height() as f32);
-            let stops = self.stops.borrow();
-            let Some((space, view)) = self.color.get() else {
+            let gradient = self.gradient.borrow();
+            let stops=&gradient.stops;
+            let Some((document, view)) = self.color.get() else {
                 return;
             };
             if stops.len() < 2 || width <= 12. || height <= 12. {
                 return;
             }
-            let pixels = ((width - 12.) * obj.scale_factor() as f32).ceil() as usize;
+            let inset=if self.compact.get() {0.} else {6.};
+            let bottom=if self.compact.get() {0.} else {12.};
+            let scale=obj.scale_factor() as f32;
+            let extent=[((width-2.*inset)*scale).ceil().clamp(1.,4096.) as u32,((height-bottom)*scale).ceil().clamp(1.,256.) as u32];
+            let pixels=extent[0] as usize*extent[1] as usize;
             if self
                 .textures
                 .borrow()
                 .as_ref()
-                .is_none_or(|(size, _)| *size != pixels)
+                .is_none_or(|(size, _)| *size != extent)
             {
                 let mut rows = [
                     Vec::with_capacity(pixels * 8),
                     Vec::with_capacity(pixels * 8),
                 ];
-                for x in 0..pixels {
-                    let position = x as f32 / pixels.saturating_sub(1).max(1) as f32;
-                    let color = layer_core::gradient_value(&stops, position, space)
-                        .expect("validated gradient");
-                    for (row, rgba) in rows.iter_mut().zip(view.checker_colors(color)) {
+                let colors=gradient.preview(extent,document.space,document.depth).expect("validated gradient");
+                let mut mapped=std::collections::HashMap::new();
+                for color in colors {
+                    let pair=*mapped.entry((color.space,color.rgba.map(f32::to_bits))).or_insert_with(||view.checker_colors(color));
+                    for (row, rgba) in rows.iter_mut().zip(pair) {
                         row.extend(rgba.into_iter().flat_map(|v| {
                             half::f16::from_f32(v).to_bits().to_ne_bytes()
                         }));
                     }
                 }
                 *self.textures.borrow_mut() = Some((
-                    pixels,
+                    extent,
                     rows.map(|bytes| {
                         view.texture(
-                            [pixels as u32, 1],
+                            extent,
                             gdk::MemoryFormat::R16g16b16a16Float,
-                            pixels * 8,
+                            extent[0] as usize * 8,
                             bytes,
                         )
                     }),
@@ -73,17 +80,17 @@ mod imp {
             }
             let textures = self.textures.borrow();
             let (_, textures) = textures.as_ref().unwrap();
-            let bounds = gtk::graphene::Rect::new(6., 0., width - 12., height - 12.);
+            let bounds = gtk::graphene::Rect::new(inset, 0., width - 2.*inset, height - bottom);
             snapshot.push_clip(&bounds);
             snapshot.append_texture(&textures[0], &bounds);
             let cell = layer_ui::TRANSPARENCY_CHECKER_CELL;
-            for y in 0..((height - 12.) / cell).ceil() as i32 {
-                for x in 0..((width - 12.) / cell).ceil() as i32 {
+            for y in 0..((height - bottom) / cell).ceil() as i32 {
+                for x in 0..((width - 2.*inset) / cell).ceil() as i32 {
                     if (x + y) % 2 == 0 {
                         continue;
                     }
                     snapshot.push_clip(&gtk::graphene::Rect::new(
-                        6. + x as f32 * cell,
+                        inset + x as f32 * cell,
                         y as f32 * cell,
                         cell,
                         cell,
@@ -93,6 +100,7 @@ mod imp {
                 }
             }
             snapshot.pop();
+            if self.compact.get() {return;}
             let cr = snapshot.append_cairo(&gtk::graphene::Rect::new(0., 0., width, height));
             let color = obj.color();
             cr.set_source_rgba(
@@ -124,17 +132,20 @@ impl GradientPreview {
         obj.set_hexpand(true);
         obj
     }
+    pub fn set_compact(&self,compact:bool) {
+        if self.imp().compact.replace(compact)!=compact {self.imp().textures.borrow_mut().take();self.queue_resize();}
+    }
     pub fn set_gradient(
         &self,
-        stops: &[GradientStop],
+        gradient: &GradientDefinition,
         selected: usize,
-        space: RgbSpace,
+        document: DocumentColor,
         view: ViewColor,
     ) {
-        if self.imp().color.replace(Some((space, view))) != Some((space, view))
-            || *self.imp().stops.borrow() != stops
+        if self.imp().color.replace(Some((document, view))) != Some((document, view))
+            || *self.imp().gradient.borrow() != *gradient
         {
-            *self.imp().stops.borrow_mut() = stops.to_vec();
+            *self.imp().gradient.borrow_mut() = gradient.clone();
             self.imp().textures.borrow_mut().take();
         }
         self.imp().selected.set(selected);

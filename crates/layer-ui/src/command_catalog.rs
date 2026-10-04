@@ -602,13 +602,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let current = self.layer_interaction.tool;
         let (shape, paint) = self.layer_interaction.figure;
-        let [radial, transparent] = self.layer_interaction.gradient;
+        let shape_gradient=self.layer_interaction.gradient.shape;
         for representative in [
             LayerCanvasTool::Ruler { kind: RulerKind::Straight },
             LayerCanvasTool::Figure { shape, paint },
             LayerCanvasTool::Region { fill: false, source: RegionSource::Visible },
             LayerCanvasTool::Region { fill: true, source: RegionSource::Visible },
-            LayerCanvasTool::Gradient { radial, transparent },
+            LayerCanvasTool::Gradient {shape:shape_gradient},
         ] {
             use LayerCanvasTool as T;
             let same = match (current, representative) {

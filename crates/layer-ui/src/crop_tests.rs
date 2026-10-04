@@ -80,7 +80,7 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
         .map(|item| match &item.option {
             ToolOption::Choice { id, items, .. } => (*id, items.iter().map(|i| i.label.as_ref()).collect::<Vec<_>>().join(" ")),
             ToolOption::Action { state, .. } => (state.label.as_ref(), item.label.to_string()),
-            ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
+            ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => unreachable!("bars hold no values"),
         })
         .collect();
     assert_eq!(items, [

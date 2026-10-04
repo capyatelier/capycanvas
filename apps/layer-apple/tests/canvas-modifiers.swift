@@ -336,7 +336,19 @@ private final class ContactEvent: UIEvent {
             }
             for radial in [false, true] {
                 for transparent in [false, true] {
-                    try await tool(["gradient":["radial":radial, "transparent":transparent]])
+                    try await tool(["gradient":["shape":radial ? "Radial" : "Linear"]])
+                    guard let control = store.state["tool_extra"].array.first(where: { !$0["Gradient"].isNull }) else {
+                        throw HostFailure(message: "Published gradient tool definition")
+                    }
+                    let destination = control["Gradient"]["gradient"]["destination"]
+                    let stops: [[String: Any]] = [
+                        ["position":0, "color":["space":"Srgb", "rgba":[0,0,1,1]]],
+                        ["position":1, "color":["space":"Srgb", "rgba":[1,0,0,transparent ? 0 : 1]]],
+                    ]
+                    for (index, stop) in stops.enumerated() {
+                        try await action(["type":"effect", "action":["op":"gradient", "target":destination.object,
+                            "edit":["kind":"stop", "index":index, "position":stop["position"]!, "color":stop["color"]!, "remove":false]]])
+                    }
                     let points = [CGPoint(x:32,y:64), CGPoint(x:64,y:64), CGPoint(x:96,y:64)]
                     try await path(points, device: device, cancel: true)
                     try require(try await pixels() == paper, "Cancelled gradient preserves every pixel")

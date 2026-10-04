@@ -29,13 +29,13 @@ pub struct SelectionPaint {
     /// Replace an already displayed provisional footprint (final end taper).
     pub restart: bool,
 }
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct SelectionGradient {
     pub start: layer_core::Point,
     pub end: layer_core::Point,
-    pub background: f32,
-    pub radial: bool,
-    pub transparent: bool,
+    pub gradient: layer_core::ScalarGradient,
+    pub shape: layer_core::GradientShape,
+    pub reverse: bool,
 }
 impl SelectionPaint {
     pub fn is_valid(&self) -> bool {
@@ -44,12 +44,12 @@ impl SelectionPaint {
             .all(|v| v.is_finite() && (0. ..=1.).contains(&v))
             && self.before.validate().is_ok()
             && self.enclosed.as_ref().is_none_or(|s| s.validate().is_ok())
-            && self.gradient.is_none_or(|g| {
+            && self.gradient.as_ref().is_none_or(|g| {
                 [g.start.x, g.start.y, g.end.x, g.end.y]
                     .into_iter()
                     .all(f32::is_finite)
-                    && g.background.is_finite()
-                    && (0. ..=1.).contains(&g.background)
+                    && g.start != g.end && (g.end.x-g.start.x).is_finite() && (g.end.y-g.start.y).is_finite()
+                    && g.gradient.validate()
             })
             && self.style.execution == layer_core::BrushExecution::Dry
             && self.style.brush_to_layer == layer_core::Affine::IDENTITY

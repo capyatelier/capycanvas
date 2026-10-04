@@ -2736,16 +2736,15 @@ fn native_gradient_tool() {
         command: CommandId::Gradient,
     });
     pump(150);
-    assert_eq!(w.tool_set.buttons.borrow().len(), 4);
+    assert_eq!(w.tool_set.buttons.borrow().len(), 3);
     let opacity = named::<crate::number_control::NumberControl>(&w.panel_widget(Panel::ToolSettings), "tool-setting-opacity");
     edit_number(&opacity, "80");
     assert!((state(&w).brush.opacity - 0.8).abs() < 0.001);
     let dir = artifact_dir("../../artifacts/familiar-workspace");
     for (index, name) in [
         "linear-colors",
-        "linear-clear",
         "radial-colors",
-        "radial-clear",
+        "reflected-colors",
     ]
     .into_iter()
     .enumerate()
@@ -3959,7 +3958,7 @@ fn native_adjustment_panels_review() {
             "black_white" => ("reds", EffectValue::Number(80.)),
             "gradient_map" => (
                 "gradient",
-                EffectValue::Gradient(vec![
+                EffectValue::Gradient(layer_core::GradientDefinition::new(vec![
                     layer_core::GradientStop {
                         position: 0.,
                         color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [0.03, 0.05, 0.2, 1.]).unwrap(),
@@ -3972,7 +3971,7 @@ fn native_adjustment_panels_review() {
                         position: 1.,
                         color: layer_core::color::RgbColor::new(layer_core::color::RgbSpace::Srgb, [1., 0.9, 0.5, 1.]).unwrap(),
                     },
-                ]),
+                ])),
             ),
             "posterize" => ("levels", EffectValue::Number(4.)),
             "solid_color" => (
@@ -4036,24 +4035,14 @@ fn native_adjustment_panels_review() {
         }
         if kind.id() == "gradient_map" {
             let bar = find_named(w.effects.properties.upcast_ref(), "effect-gradient").unwrap();
-            let controllers = bar.observe_controllers();
-            for i in 0..controllers.n_items() {
-                if let Some(click) = controllers
-                    .item(i)
-                    .and_then(|c| c.downcast::<gtk::GestureClick>().ok())
-                {
-                    click.emit_by_name::<()>(
-                        "pressed",
-                        &[&1i32, &(bar.width() as f64 * 0.3), &20f64],
-                    );
-                }
-            }
+            let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+            input.click(screen_point(&bar,&w.window,[0.3,0.5]));input.finish();
             pump(80);
             let EffectValue::Gradient(stops) = &state(&w).layer_properties.controls[0].value else {
                 panic!("gradient control")
             };
             assert_eq!(
-                stops.len(),
+                stops.stops.len(),
                 4,
                 "native gradient insertion is handled by Rust"
             );

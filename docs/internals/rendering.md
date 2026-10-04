@@ -131,6 +131,14 @@ zoom and rotation. The shared
 composed image into the platform's target. Panning the view does not, by itself,
 require repainting committed raster tiles.
 
+Eight-bit canvas surfaces use deterministic triangular dithering after resampling
+and display color mapping. The noise uses logical screen coordinates and the
+encoded attachment domain. Noisy values are rounded to byte code centers before
+attachment conversion, including the decode for hardware sRGB attachments. It
+does not change artwork or exports. Floating surfaces, window edges, surrounding UI and
+diagnostic overlays retain their existing values. Source gradient dithering
+remains in document coordinates so saved pixels do not depend on the camera.
+
 Viewport presentation and staging uploads return mapping failures to their host.
 A device removed during buffer allocation must not unwind the render owner; the
 host can reconstruct its GPU while retaining the shared document session. Uploads
@@ -404,6 +412,9 @@ filtered result and the mask. Other layers contribute separately to the final
 composite. The [README's tile example](../../README.md#rendering-engine) shows a
 clipped adjustment between paint and ink. Editing its mask changes the adjustment
 and subsequent composition; it does not change the stored paint, ink or background.
+Invalidated branches reuse retired textures with the same region and resolution,
+clearing their valid regions before evaluation. Parameter edits replace cached
+pixels without allocating another full-size intermediate image.
 
 [Image-stage caching](../../crates/layer-render-wgpu/src/scene_images.rs) handles
 operations that need reusable image inputs. A blur needs pixels outside its output

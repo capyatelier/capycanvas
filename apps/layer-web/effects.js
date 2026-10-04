@@ -5,6 +5,7 @@ import {captureSliderContacts} from "./numeric.js";
 import {strokeRecordingControl} from './stroke-recording.js';
 import {colorButton, colorCss} from './color-controls.js';
 import {filterPreviewView} from './filter-previews.js';
+import {gradientEditor} from './gradient.js';
 // Views of the shared Rust effect/property schema; no filter-specific UI logic.
 export function createEffectPanels({app,wake,catalog,state,panels,element,button,icon,dispatch,numberField,contentChanged,splitPicker=false,message}) {
   const copy=liveCopy(app,"catalog").native_copy.color,common=liveCopy(app,"bootstrap_view").common;
@@ -283,7 +284,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
         else if(c.kind.kind==="color"){const n=colorButton({app,label:()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",element,button,change,current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}`});let input=n.node,bucket;
           if(c.color_action){bucket=button("",()=>dispatch(c.color_action));bucket.dataset.action=`${c.key.replaceAll("_","-")}-bucket`;bindCopy(bucket,()=>copy.use_selected,"title");bindCopy(bucket,()=>copy.use_selected,"ariaLabel");bucket.append(icon("fill"));input=element("div","color-action-property");input.append(n.node,bucket);}
           field={node:row(()=>state().layer_properties.controls.find(v=>v.key===c.key)?.label??"",input),update:c=>n.update(c.value.value),disable:x=>{n.disable(x);if(bucket)bucket.disabled=x;},dispose:()=>n.dispose()};}
-        else if(c.kind.kind==="gradient")field=gradientEditor(view.layer,c.key);
+        else if(c.kind.kind==="gradient")field=gradientEditor({app,element,button,icon,dispatch});
         if(field){field.node.dataset.propertyKey=c.key;field.schema=fieldSchema(c);fields.set(c.key,field);}
         }
         if(field)children.push(field.node);
@@ -296,32 +297,4 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
     for(const c of view.controls){const field=fields.get(c.key);field?.update(c);field?.disable?.(!view.enabled);}
   }
   return {refresh,refreshHistograms(){if(state().layer_properties.histogram)tonal.refresh();for(const field of fields.values())field.refreshHistogram?.();},dispose(){tonal.dispose();groupMenus.forEach(menu=>menu.remove());for(const field of fields.values())field.dispose?.();disposePreviews();clearInterval(statsTimer);disposeRecording();}};
-  function gradientEditor(layer,key) {
-    const node=element("div","gradient-editor"),bar=element("div","gradient-ramp"),stopsRow=element("div","gradient-stops");
-    let stops=[],selected=0,rampKey;
-    const change=(index,position,color=null,remove=false)=>send({op:"gradient_stop",layer,key,index,position,color,remove});
-    const color=colorButton({app,label:()=>copy.color,element,button,change:value=>change(selected,stops[selected].position,value),current:()=>`${state().document_file.epoch}:${state().layer_properties.layer}:${selected}`});
-    const position=numberField(catalog.opacity,()=>copy.position,value=>change(selected,value));
-    const opacity=numberField(catalog.opacity,()=>copy.opacity,value=>change(selected,stops[selected].position,{...stops[selected].color,rgba:[...stops[selected].color.rgba.slice(0,3),value]}));
-    const remove=button("",()=>{const i=selected;selected=Math.max(0,i-1);change(i,0,null,true);});remove.append(icon("minus"));bindCopy(remove,()=>copy.remove_stop,"title");
-    const reset=button("",()=>send({op:"reset",layer,key}));reset.append(icon("reset"));bindCopy(reset,()=>copy.reset_gradient,"title");
-    const controls=element("div","property-row");controls.append(element("span","",()=>copy.color),color.node,remove,reset);
-    node.append(bar,stopsRow,position,controls,opacity);
-    bar.onclick=e=>{const b=bar.getBoundingClientRect(),p=Math.max(0,Math.min(1,(e.clientX-b.left)/b.width));selected=stops.filter(s=>s.position<p).length;change(null,p);};
-    function update(c) {
-      stops=c.value.value;selected=Math.min(selected,stops.length-1);
-      const nextRamp=JSON.stringify([state().colors.rgb_space,stops]);
-      if(nextRamp!==rampKey){
-        rampKey=nextRamp;
-        const samples=app.color_ui({type:"gradient",stops,document_space:state().colors.rgb_space});
-        bar.style.background=`linear-gradient(to right,${samples.map((p,i)=>`${colorCss(p)} ${i*100/(samples.length-1)}%`).join(",")})`;
-      }
-      const previews=app.color_ui({type:"preview",colors:stops.map(s=>s.color)});
-      stopsRow.replaceChildren(...stops.map((s,i)=>{const b=button("",()=>{selected=i;update(c);});b.style.left=`${s.position*100}%`;b.style.background=colorCss(previews[i]);b.classList.toggle("selected",selected===i);b.title=`Color stop ${i+1}`;return b;}));
-      const s=stops[selected];color.update(s.color);
-      position.update(s.position);position.setDisabled(selected===0||selected===stops.length-1);remove.disabled=selected===0||selected===stops.length-1;
-      opacity.update(s.color.rgba[3]);
-    }
-    return {node,update,dispose(){color.dispose();position.dispose();opacity.dispose();}};
-  }
 }

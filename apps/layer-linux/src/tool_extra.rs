@@ -8,6 +8,7 @@ use std::{cell::Cell, rc::Rc};
 pub struct ExtraField {
     pub root: gtk::Box,
     buttons: Vec<gtk::ToggleButton>,
+    gradient: Option<crate::effects::GradientEditor>,
     updating: Rc<Cell<bool>>,
 }
 impl Drop for ExtraField {
@@ -17,6 +18,11 @@ impl Drop for ExtraField {
 }
 impl ExtraField {
     pub fn new(w: &Rc<Workspace>, option: &ToolOption, context: ToolbarContext) -> Self {
+        if let ToolOption::Gradient(control)=option {
+            let editor=crate::effects::GradientEditor::new(w,control);
+            editor.update_control(control);
+            return Self {root:editor.root.clone(),gradient:Some(editor),buttons:Vec::new(),updating:Rc::new(Cell::new(false))};
+        }
         let ToolOption::Choice {
             id, label, items, columns, segmented: true, ..
         } = option
@@ -75,11 +81,13 @@ impl ExtraField {
             } else { root.append(&button); }
             buttons.push(button);
         }
-        let field = Self { root, buttons, updating };
+        let field = Self { root, buttons, updating, gradient:None };
         field.refresh(option);
         field
     }
     pub fn refresh(&self, option: &ToolOption) {
+        if let (Some(editor),ToolOption::Gradient(control))=(&self.gradient,option) {editor.update_control(control);return;}
+
         let ToolOption::Choice { label, items, .. } = option else {
             return;
         };

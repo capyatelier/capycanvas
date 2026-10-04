@@ -72,6 +72,7 @@ pub use startup::finish_shader_compiler_shutdown;
 pub use startup::ShaderActivity;
 mod effect_validation;
 mod effects;
+mod gradient;
 mod flood;
 mod frame_timing;
 mod performance_trace;

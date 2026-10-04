@@ -1,4 +1,4 @@
-// ABI 4 library: premultiplied input/output, linear unless FX_ENCODED (a
+// ABI 5 library: premultiplied input/output, linear unless FX_ENCODED (a
 // filter that follows the document's Blending in a Perceptual document),
 // document-pixel position, vec4 parameter base. fx_parameter/fx_lut are
 // supplied by the host wrapper.

@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = Угол
 resources-parameter-gradient-fill-center-x = Центр X
 resources-parameter-gradient-fill-center-y = Центр Y
 resources-parameter-gradient-fill-gradient = Градиент
-resources-parameter-gradient-fill-reverse = Обратить
 resources-parameter-gradient-fill-scale = Масштаб
-resources-parameter-gradient-fill-style = Стиль
+resources-parameter-gradient-fill-style = Форма
 resources-parameter-gradient-map-amount = Величина
 resources-parameter-gradient-map-gradient = Градиент
 resources-parameter-gradient-map-reverse = Обратить
@@ -517,3 +516,9 @@ resources-layer-type-selection = Выделение
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = Удаление дымки
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = Линейный свет
+resources-gradient-mix-classic = Классический

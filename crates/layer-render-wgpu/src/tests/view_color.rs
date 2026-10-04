@@ -882,3 +882,79 @@ fn local_sdr_spatial_guide_matches_cpu_and_preserves_master() {
         }
     }
 }
+
+#[test]
+fn surface_triangular_quantization_is_phase_stable_and_format_aware() {
+    use layer_core::color::{ColorProfile,DocumentColor,SampleDepth,RgbSpace,source::{SourceBuilder,SourceInterpretation,SourceChannels}};
+    use crate::tests::native_effects::{empty_document,insert_source};
+    let mut r=crate::WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::U16}).unwrap();
+    for format in [wgpu::TextureFormat::Rgba8UnormSrgb,wgpu::TextureFormat::Bgra8UnormSrgb,wgpu::TextureFormat::Rgba8Unorm,wgpu::TextureFormat::Bgra8Unorm,wgpu::TextureFormat::Rgba16Float] {
+        for scale in [1.,0.25,0.125,2.] {
+            let size=[(512.*scale) as u32,(256.*scale) as u32];
+            let camera=layer_render::ViewState {width_px:size[0],height_px:size[1],document_to_surface:[scale,0.,0.,scale,0.,0.]};
+            for (code,alpha) in [(255.,1.),(0.,1.),(100.,1.),(100.25,1.),(100.5,1.),(100.75,1.),(100.25,0.5),(100.25,0.),(-100.,1.),(510.,1.),(255.*1e10,1.)] {
+                let encoded=code/255.;let linear=RgbSpace::Srgb.decode(encoded) as f32;
+                let interpretation=SourceInterpretation {channels:SourceChannels::Rgba,depth:SampleDepth::F32,profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+                let mut builder=SourceBuilder::new([512,256],interpretation,16*1024*1024).unwrap();
+                let pixel:Vec<u8>=[linear,linear,linear,alpha].into_iter().flat_map(f32::to_le_bytes).collect();let row=pixel.repeat(512);
+                for _ in 0..256 {builder.push_row(&row).unwrap();}
+                let mut document=empty_document([512,256],r.document_color());
+                insert_source(&mut document,"continuous gray",std::sync::Arc::new(builder.finish().unwrap()));
+                r.submit(crate::FramePacket {view:camera,..crate::test_support::packet(document.scene(),[512,256])}).unwrap();
+                let target=crate::create_target(r.device(),size,format,"quantization oracle surface").0;
+                let mut presenter=crate::ViewportPresenter::for_surface(&r,format,crate::SdrSurfaceColor::Srgb).unwrap();
+                presenter.present(&r,&target.create_view(&Default::default()),camera,[0.,0.,0.,1.]).unwrap();
+                let first=crate::layer_tests::page_bytes(&r,&target);
+                let continuous_target=crate::create_target(r.device(),size,wgpu::TextureFormat::Rgba32Float,"continuous display quantization control").0;
+                let mut continuous_presenter=crate::ViewportPresenter::for_surface(&r,wgpu::TextureFormat::Rgba32Float,crate::SdrSurfaceColor::Srgb).unwrap();
+                continuous_presenter.present(&r,&continuous_target.create_view(&Default::default()),camera,[0.,0.,0.,1.]).unwrap();
+                let continuous=crate::layer_tests::page_bytes(&r,&continuous_target);
+                let continuous_code=f64::from(f32::from_le_bytes(continuous[16..20].try_into().unwrap()))*255.;
+
+                presenter.present(&r,&target.create_view(&Default::default()),camera,[0.,0.,0.,1.]).unwrap();
+                assert_eq!(first,crate::layer_tests::page_bytes(&r,&target),"surface noise must be spatially deterministic");
+                if code==100.25 && alpha==1. && scale==1. {
+                    let border_size=[size[0]+16,size[1]+16];
+                    let border=crate::create_target(r.device(),border_size,format,"unmodified UI surround").0;
+                    let border_camera=layer_render::ViewState {width_px:border_size[0],height_px:border_size[1],document_to_surface:[1.,0.,0.,1.,8.,8.]};
+                    presenter.present(&r,&border.create_view(&Default::default()),border_camera,[0.2,0.3,0.4,1.]).unwrap();
+                    let bytes=crate::layer_tests::page_bytes(&r,&border);let stride=if format==wgpu::TextureFormat::Rgba16Float {8}else{4};
+                    for y in 1..7 {for x in 1..7 {let index=(y*border_size[0] as usize+x)*stride;assert_eq!(&bytes[index..index+stride],&bytes[stride..stride*2],"UI surround must remain spatially constant");}}
+                }
+                if format==wgpu::TextureFormat::Rgba16Float {
+                    let samples:Vec<_>=first.chunks_exact(8).map(|p|u16::from_le_bytes(p[..2].try_into().unwrap())).collect();
+                    assert!(samples.iter().all(|p|p&0x7c00!=0x7c00),"floating output must remain finite");
+                    if alpha==1. {assert!(samples.iter().all(|p|*p==samples[0]),"float surface must not add quantization noise");}
+                    continue;
+                }
+                let mut samples=Vec::new();
+                for y in 1..size[1]-1 {for x in 1..size[0]-1 {
+                    let p=&first[((y*size[0]+x)*4) as usize..][..4];assert_eq!(p[3],255);samples.push(f64::from(p[0]));
+                }}
+                if code<=0. || code>=255. {let clamped=code.clamp(0.,255.);assert!(samples.iter().all(|v|*v==clamped),"{format:?} scale{scale} code{code} continuous{continuous_code} range{:?}",samples.iter().fold([f64::INFINITY,f64::NEG_INFINITY],|[a,b],v|[a.min(*v),b.max(*v)]));continue;}
+                if alpha!=1. {
+                    let mut errors:[Vec<f64>;2]=std::array::from_fn(|_|Vec::new());
+                    for y in 1..size[1]-1 {for x in 1..size[0]-1 {
+                        let parity=(((x as f32+0.5)/scale/16.).floor() as usize+((y as f32+0.5)/scale/16.).floor() as usize)%2;
+                        let checker=if parity==0 {0.94}else{0.80};
+                        let expected=RgbSpace::Srgb.encode(f64::from(linear)*f64::from(alpha)+checker*(1.-f64::from(alpha)))*255.;
+                        errors[parity].push(f64::from(first[((y*size[0]+x)*4) as usize])-expected);
+                    }}
+                    for values in &errors {
+                        let mean=values.iter().sum::<f64>()/values.len() as f64;
+                        let variance=values.iter().map(|v|(v-mean).powi(2)).sum::<f64>()/values.len() as f64;
+                        if alpha==0. {assert!(variance<1e-12);assert!(mean.abs()<0.501);}
+                        else {assert!(mean.abs()<0.035,"partial-alpha bias{mean}");assert!((0.20..0.30).contains(&variance),"partial-alpha variance{variance}");}
+                    }
+                    continue;
+                }
+                let mean=samples.iter().sum::<f64>()/samples.len() as f64;
+                let variance=samples.iter().map(|v|(v-mean).powi(2)).sum::<f64>()/samples.len() as f64;
+                println!("PRESENT_TPDF {format:?} scale{scale} code{code} continuous{continuous_code} mean{mean} variance{variance}");
+                assert!((mean-continuous_code).abs()<0.035);
+                assert!((0.20..0.30).contains(&variance),"{format:?} scale{scale} phase{} variance{variance}",code.fract());
+                assert!(samples.iter().all(|v|(*v-code).abs()<1.51));
+            }
+        }
+    }
+}

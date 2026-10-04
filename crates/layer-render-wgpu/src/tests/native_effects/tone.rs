@@ -1,5 +1,6 @@
 use super::super::curve_reference::evaluate as curve_reference;
 use super::*;
+use layer_core::{GradientDefinition, ColorMixSpace};
 
 #[test]
 fn native_tagged_effect_and_gradient_colors_match_document_rgb_in_both_depths() {
@@ -17,9 +18,9 @@ fn native_tagged_effect_and_gradient_colors_match_document_rgb_in_both_depths() 
                     close(frame(&mut r, &[ink, source([0.; 3], alpha)]),
                         expected[..3].try_into().unwrap(), alpha, &format!("ink {space:?} {depth:?} {image}"));
                     let mut gradient = effect(3, "gradient_map", image);
-                    set(&mut gradient, "gradient", EffectValue::Gradient(vec![
+                    set(&mut gradient, "gradient", EffectValue::Gradient(GradientDefinition { stops: vec![
                         GradientStop { position: 0., color }, GradientStop { position: 1., color },
-                    ]));
+                    ], interpolation: ColorMixSpace::Classic }));
                     // Gradient alpha is mapping strength; RGB interpolation occurs
                     // before document decoding, as declared by the table shader.
                     let encoded = color.encoded_in(space).unwrap();
@@ -198,7 +199,7 @@ fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots
             .collect();
         for component in 0..4 {
             let mut probe = table_probe("gradient_map", image, component);
-            set(&mut probe, "gradient", EffectValue::Gradient(stops.clone()));
+            set(&mut probe, "gradient", EffectValue::Gradient(GradientDefinition { stops: stops.clone(), interpolation: ColorMixSpace::Classic }));
             for (code, actual) in samples(&mut r, &probe).into_iter().enumerate() {
                 let x = f64::from(code as f32 / 65535.);
                 let i = stops
@@ -207,8 +208,13 @@ fn native_analytic_curve_and_gradient_tables_resolve_every_code_and_narrow_knots
                     .min(stops.len() - 2);
                 let t = (x - f64::from(stops[i].position))
                     / (f64::from(stops[i + 1].position) - f64::from(stops[i].position));
-                let expected = f64::from(stops[i].color.rgba[component]) * (1. - t)
-                    + f64::from(stops[i + 1].color.rgba[component]) * t;
+                let aa = f64::from(stops[i].color.rgba[3]);
+                let ab = f64::from(stops[i + 1].color.rgba[3]);
+                let alpha = aa * (1. - t) + ab * t;
+                let expected = if component == 3 { alpha } else {
+                    RgbSpace::ProPhoto.decode((f64::from(stops[i].color.rgba[component]) * aa * (1. - t)
+                        + f64::from(stops[i + 1].color.rgba[component]) * ab * t) / alpha)
+                };
                 assert!(
                     (f64::from(actual) - expected).abs() <= 1. / 65535.,
                     "gradient image={image}, {component}, {code}: {actual} vs {expected}"
@@ -359,5 +365,43 @@ fn final_effect_covers_partial_document_tiles_without_overwriting_neighbors() {
                 assert_eq!(actual,[0.25,2.,-0.125,1.],"{depth:?} {extent:?} {},{}",i%extent[0] as usize,i/extent[0] as usize);
             }
         }
+    }
+}
+
+#[test]
+fn native_gradient_normalized_alpha_keeps_subnormal_coordinate_weights() {
+    use layer_core::{GradientStop, color::RgbColor};
+    let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::F32}).unwrap();
+    for alpha in [f32::from_bits(1),f32::MIN_POSITIVE,0.5] {
+        let mut layer=table_probe("gradient_map",false,0);
+        let p=Arc::make_mut(&mut layer.program);
+        p.wgsl="fn table_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let v=fx_lut(b,0u,.5);return vec4(v.rgb,1.);}".into();
+        set(&mut layer,"gradient",EffectValue::Gradient(GradientDefinition {
+            stops:vec![
+                GradientStop {position:0.,color:RgbColor::from_linear(RgbSpace::Srgb,[1.,0.,0.,alpha]).unwrap()},
+                GradientStop {position:1.,color:RgbColor::from_linear(RgbSpace::Srgb,[0.,1.,0.,alpha]).unwrap()},
+            ],interpolation:ColorMixSpace::LinearRgb,
+        }));
+        close(frame(&mut r,&[layer]),[0.5,0.5,0.],1.,&format!("alpha bits {}",alpha.to_bits()));
+    }
+}
+
+#[test]
+fn native_gradient_signed_hdr_interpolation_keeps_finite_interior_values() {
+    use layer_core::{GradientStop,color::RgbColor};
+    let mut r=WgpuRasterizer::new_native_headless(DocumentColor {space:RgbSpace::Srgb,depth:SampleDepth::F32}).unwrap();
+    let magnitude=2.8e38f32;
+    for (mix,expected) in [(ColorMixSpace::LinearRgb,0.75),(ColorMixSpace::Oklab,0.421875)] {
+        let mut layer=table_probe("gradient_map",false,0);
+        let p=Arc::make_mut(&mut layer.program);
+        p.wgsl="fn table_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{let v=fx_lut(b,0u,.125);return vec4(ldexp(v.rgb,vec3<i32>(-127)),1.);}".into();
+        set(&mut layer,"gradient",EffectValue::Gradient(GradientDefinition {
+            stops:[magnitude,-magnitude].into_iter().enumerate().map(|(i,v)|GradientStop {
+                position:i as f32,color:RgbColor::from_linear(RgbSpace::Srgb,[v,v,v,1.]).unwrap(),
+            }).collect(),interpolation:mix,
+        }));
+        let actual=frame(&mut r,&[layer]);
+        assert!(actual.iter().all(|v|v.is_finite()),"{mix:?}: {actual:?}");
+        close(actual,[(f64::from(magnitude)/2f64.powi(127)*f64::from(expected)) as f32;3],1.,&format!("signed HDR {mix:?}"));
     }
 }

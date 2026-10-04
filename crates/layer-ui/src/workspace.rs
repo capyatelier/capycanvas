@@ -333,7 +333,7 @@ pub struct EditingState {
     pub selection: crate::SelectionOptions,
     pub region_values: std::collections::BTreeMap<String, f32>,
     pub region_sources: [crate::RegionSource; 2],
-    pub gradient: [bool; 2],
+    pub gradient: crate::GradientToolSettings,
     pub figure: (crate::FigureShape, crate::FigurePaint),
 }
 

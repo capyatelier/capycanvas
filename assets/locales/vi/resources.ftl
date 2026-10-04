@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = Góc
 resources-parameter-gradient-fill-center-x = Tâm X
 resources-parameter-gradient-fill-center-y = Tâm Y
 resources-parameter-gradient-fill-gradient = Chuyển màu
-resources-parameter-gradient-fill-reverse = Đảo chiều
 resources-parameter-gradient-fill-scale = Tỷ lệ
-resources-parameter-gradient-fill-style = Kiểu
+resources-parameter-gradient-fill-style = Hình dạng
 resources-parameter-gradient-map-amount = Mức độ
 resources-parameter-gradient-map-gradient = Chuyển màu
 resources-parameter-gradient-map-reverse = Đảo chiều
@@ -517,3 +516,9 @@ resources-layer-type-selection = Vùng chọn
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = Khử sương
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = Ánh sáng tuyến tính
+resources-gradient-mix-classic = Cổ điển

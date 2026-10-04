@@ -70,10 +70,14 @@ fn working_to_oklab(value: vec3<f32>) -> vec3<f32> {
 }
 
 fn working_from_oklab(color: vec3<f32>) -> vec3<f32> {
+    let magnitude=max(max(abs(color.x),abs(color.y)),abs(color.z));
+    if magnitude==0. {return vec3(0.);}
+    let exponent=frexp(magnitude).exp;
+    let normalized=ldexp(color,vec3(-exponent));
     let root = vec3<f32>(
-        color.x + 0.3963377774 * color.y + 0.2158037573 * color.z,
-        color.x - 0.1055613458 * color.y - 0.0638541728 * color.z,
-        color.x - 0.0894841775 * color.y - 1.2914855480 * color.z,
+        normalized.x + 0.3963377774 * normalized.y + 0.2158037573 * normalized.z,
+        normalized.x - 0.1055613458 * normalized.y - 0.0638541728 * normalized.z,
+        normalized.x - 0.0894841775 * normalized.y - 1.2914855480 * normalized.z,
     );
     let lms = root * root * root;
     let srgb = vec3<f32>(
@@ -81,5 +85,9 @@ fn working_from_oklab(color: vec3<f32>) -> vec3<f32> {
        -1.2684380046 * lms.x + 2.6097574011 * lms.y - 0.3413193965 * lms.z,
        -0.0041960863 * lms.x - 0.7034186147 * lms.y + 1.7076147010 * lms.z,
     );
-    return working_from_srgb(srgb);
+    let converted=working_from_srgb(srgb);
+    let components=frexp(converted);
+    let powers=components.exp+vec3(3*exponent);
+    let finite=ldexp(components.fract,min(powers,vec3(128)));
+    return select(finite,sign(converted)*vec3(3.402823466e38),powers>vec3(128));
 }

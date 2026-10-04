@@ -211,7 +211,8 @@ export async function checkAdjustments({call,evaluate,settle}) {
     }
     if(gradient) {
       await evaluate("document.querySelector('.gradient-ramp').click()");
-      await send({type:"effect",action:{op:"gradient_stop",layer:view.layer,key:gradient.key,index:null,position:.5,color:{space:"Srgb",rgba:[.8,.2,.1,1]},remove:false}});
+      const target=await evaluate(`layerApp.state().layer_properties.controls.find(c=>c.key===${JSON.stringify(gradient.key)}).gradient.destination`);
+      await send({type:"effect",action:{op:"gradient",target,edit:{kind:"stop",index:null,position:.5,color:{space:"Srgb",rgba:[.8,.2,.1,1]},remove:false}}});
       assert.equal(await evaluate("document.querySelectorAll('.gradient-stops button').length"),3);
       if(view.controls.some(c=>c.key==="amount"))await send({type:"effect",action:{op:"reset",layer:view.layer,key:"amount"}});
     }

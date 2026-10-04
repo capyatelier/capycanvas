@@ -297,7 +297,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     internal var colorControlFocus: Any? = null
     /** Focused interval handles own their native adjustment keys. */
     internal var rangeControlFocus: Any? = null
-    internal var curveControlFocus: Any? = null
+    internal var pointControlFocus: Any? = null
     internal var pickerPopupOpen = false
     internal var restartingWindow = false
     private var workspaceContentRevision = -1L

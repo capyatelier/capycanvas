@@ -227,9 +227,12 @@ fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return fx_sample(p+warp*fx_parameter(b,0u).x);
 }
 fn capy_gradient_fill(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let extent=fx_extent();let delta=p-extent*vec2<f32>(fx_parameter(b,69u).x,fx_parameter(b,70u).x)/100.;
-    let scale=fx_parameter(b,68u).x/100.;var t=length(delta)/(.5*length(extent)*scale);
-    if fx_parameter(b,66u).x<.5 {let axis=fx_axis(-fx_parameter(b,67u).x);t=dot(delta,axis)/((abs(axis.x)*extent.x+abs(axis.y)*extent.y)*scale)+.5;}
-    let mapped=fx_lut(b,0u,select(t,1.-t,fx_parameter(b,65u).x>.5));
-    return fx_rgba(mapped.rgb,mapped.a);
+    let extent=fx_extent();let delta=p-extent*vec2(fx_parameter(b,68u).x,fx_parameter(b,69u).x)/100.;
+    let shape=u32(fx_parameter(b,65u).x);let scale=fx_parameter(b,67u).x/100.;
+    let axis=fx_axis(-fx_parameter(b,66u).x);
+    let axis_length=select((abs(axis.x)*extent.x+abs(axis.y)*extent.y)*scale,.5*length(extent)*scale,shape==1u);
+    let relative=select(delta,delta+axis*axis_length*.5,shape==0u);
+    let t=gradient_shape(relative,axis*axis_length,shape,false);
+    let mapped=fx_gradient(b,t,p);
+    return vec4(mapped.rgb*mapped.a,mapped.a);
 }

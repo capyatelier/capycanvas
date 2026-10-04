@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = มุม
 resources-parameter-gradient-fill-center-x = ศูนย์กลาง X
 resources-parameter-gradient-fill-center-y = ศูนย์กลาง Y
 resources-parameter-gradient-fill-gradient = ไล่ระดับสี
-resources-parameter-gradient-fill-reverse = ย้อนกลับ
 resources-parameter-gradient-fill-scale = มาตราส่วน
-resources-parameter-gradient-fill-style = รูปแบบ
+resources-parameter-gradient-fill-style = รูปร่าง
 resources-parameter-gradient-map-amount = ปริมาณ
 resources-parameter-gradient-map-gradient = ไล่ระดับสี
 resources-parameter-gradient-map-reverse = ย้อนกลับ
@@ -517,3 +516,9 @@ resources-layer-type-selection = พื้นที่เลือก
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = ลดหมอกควัน
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = แสงเชิงเส้น
+resources-gradient-mix-classic = คลาสสิก

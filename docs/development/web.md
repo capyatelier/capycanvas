@@ -134,7 +134,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
-| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
+| Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--gradients`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |
 | Canvas size, crop and image commands | `--canvas-size`, `--crop`, `--image-commands` |
 | Photo files, packages and export | `--portable-photo`, `--package-view`, `--export-metadata`, `--document-errors` |
 | Title bar | `--title-bar`, `--title-bar-state`, `--title-bar-feedback`, `--title-bar-overflow`, `--menu-labels`, `--compact-workspaces`, `--header-controls` |
@@ -183,6 +183,12 @@ checks that a removed field cannot publish a deferred color-dialog result.
 `--pointwise-effects-smoke` reuses the journey at 1100 pixels wide in both themes,
 checking Colorize and Threshold compositor pixels, controls, focus and archive
 reopening without slider motion.
+
+`--gradients` exercises the shared stop editor in Properties, Tool Settings and
+the toolbar popup, including mouse, pen and touch contacts, numeric edits,
+cancellation, undo and selected-stop retention. It checks two-dimensional
+integer preview dithering, unchanged floating previews, and gradient definitions
+through archive reopening and renderer recreation in both themes and widths.
 
 `--package-view` exercises preserved packages with and without a verified preview
 in light and dark themes. It checks output names, preview pixels, exact original

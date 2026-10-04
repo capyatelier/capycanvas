@@ -252,11 +252,10 @@ resources-parameter-gradient-fill-center-y = Pusat Y
 
 resources-parameter-gradient-fill-gradient = Gradasi
 
-resources-parameter-gradient-fill-reverse = Balik arah
 
 resources-parameter-gradient-fill-scale = Skala
 
-resources-parameter-gradient-fill-style = Gaya
+resources-parameter-gradient-fill-style = Bentuk
 
 resources-parameter-gradient-map-amount = Jumlah
 
@@ -945,3 +944,9 @@ resources-layer-type-selection = Seleksi
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = Hilangkan kabut
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = Cahaya linear
+resources-gradient-mix-classic = Klasik

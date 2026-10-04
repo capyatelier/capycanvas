@@ -13,6 +13,8 @@ Vulkan.
 Install a recent stable Rust toolchain, a C/C++ toolchain, `pkg-config`, and the
 GTK 4.22+, libadwaita 1.9 and Wayland development packages. Enabled API features
 are declared in [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
+The launcher also builds the [patched GTK runtime](../../tools/build/gtk-runtime/README.md),
+which needs Meson, Ninja, `glslc` and GTK's development dependencies.
 Photo codecs and ICC color management are Rust crates; no libjpeg-turbo,
 LittleCMS or HEIF system packages are needed.
 
@@ -278,14 +280,15 @@ asserting, and check persistence by reopening, not only by reading rows.
 ## Troubleshooting
 
 - **Startup crash with a tablet, or an arrow cursor flash on pen entry.** Upstream
-  GTK 4.22.4 dereferences a null surface when a tablet pad reports a mode change
+  GTK 4.22.4 and 4.22.5 dereference a null surface when a tablet pad reports a mode change
   before keyboard focus, and picks a cursor from stale coordinates when a pen
-  enters. The package ships a patched GTK; `run.sh` and the tests use the system
-  one. To run from source with the patches:
+  enters. The package and `run.sh` build and use the same patched GTK, cached in
+  `target/gtk-runtime` or `CAPY_GTK_BUILD_DIR`. Direct Cargo commands and tests
+  use system GTK unless the local runtime is selected explicitly:
 
   ```bash
   bash tools/build/gtk-runtime/build.sh target/gtk-runtime target/gtk-runtime/prefix
-  LD_LIBRARY_PATH="$PWD/target/gtk-runtime/prefix/lib" ./apps/layer-linux/run.sh
+  LD_LIBRARY_PATH="$PWD/target/gtk-runtime/prefix/lib" cargo test --locked --release -p layer-linux
   ```
 
 - **Canvas colors look darker than the controls.** The canvas surface describes

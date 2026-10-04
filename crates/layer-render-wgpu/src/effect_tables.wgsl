@@ -1,4 +1,4 @@
-// ABI 4 parameter tables: exact Hermite segments and gradient stops. Bounded
+// ABI 5 parameter tables: exact Hermite segments and gradient stops. Bounded
 // binary search replaces the old 256-sample approximation at control knots.
 fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
     let start=base+1u+offset;let header=effect_data[start];
@@ -23,19 +23,5 @@ fn fx_lut(base:u32,offset:u32,value:f32)->vec4<f32> {
         else {y=clamp(((c.w*t+c.z)*t+c.y)*t+c.x,min(c.x,b.z),max(c.x,b.z));}
         return vec4<f32>(y,0.,0.,0.);
     }
-    // Gradients deliberately extend endpoint colors. Stops interpolate exact
-    // encoded document RGB and alpha, with no resampled table between them.
-    x=clamp(x,0.,1.);
-    var low=0u;var high=count-2u;
-    for(var step=0u;step<5u;step++) {
-        if low>=high {break;}
-        let mid=(low+high)/2u;
-        if x<=effect_data[start+3u+2u*mid].x {high=mid;} else {low=mid+1u;}
-    }
-    let a=effect_data[start+1u+2u*low];let b=effect_data[start+3u+2u*low];
-    let ca=vec4<f32>(a.yzw,effect_data[start+2u+2u*low].x);
-    let cb=vec4<f32>(b.yzw,effect_data[start+4u+2u*low].x);
-    let t=clamp((x-a.x)/(b.x-a.x),0.,1.);
-    if t==0. {return ca;} if t==1. {return cb;}
-    return mix(ca,cb,t);
+    return gradient_sample(start,x).color;
 }

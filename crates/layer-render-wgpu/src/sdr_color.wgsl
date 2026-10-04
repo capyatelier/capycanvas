@@ -15,6 +15,7 @@ fn sdr_decode_component(value: f32, space: u32) -> f32 {
 }
 fn sdr_encode_component(value: f32, space: u32) -> f32 {
     let magnitude = abs(value);
+    if magnitude==1. {return value;}
     var encoded: f32;
     if space < 2u {
         encoded = select(1.055 * pow(magnitude, 1.0 / 2.4) - 0.055, magnitude * 12.92, magnitude <= 0.0031308);

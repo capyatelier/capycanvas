@@ -33,7 +33,7 @@ fn operate(engine: &mut Engine, id: OccurrenceHandle, kind: RasterOperationKind)
 fn gradient(engine: &mut Engine, name: &str, colors: [[f32; 4]; 2], vertical: bool) {
     let id = self::id(engine, name);
     let end = if vertical { Point { x: 0., y: SIZE[1] as f32 } } else { Point { x: SIZE[0] as f32, y: 0. } };
-    operate(engine, id, RasterOperationKind::Gradient { start: Point::default(), end, colors, radial: false, alpha_locked: false });
+    operate(engine, id, RasterOperationKind::Gradient { start: Point::default(), end, gradient:layer_core::GradientDefinition {stops:colors.into_iter().enumerate().map(|(i,rgba)|layer_core::GradientStop {position:i as f32,color:layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb,rgba).unwrap()}).collect(),interpolation:layer_core::ColorMixSpace::LinearRgb},shape:layer_core::GradientShape::Linear,reverse:false,opacity:1.,alpha_locked:false });
 }
 
 fn document(names: &[&str], space: BlendSpace) -> Document { named_document(names, SIZE, space) }

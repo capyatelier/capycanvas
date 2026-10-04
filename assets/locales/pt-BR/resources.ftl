@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = Ângulo
 resources-parameter-gradient-fill-center-x = Centro X
 resources-parameter-gradient-fill-center-y = Centro Y
 resources-parameter-gradient-fill-gradient = Degradê
-resources-parameter-gradient-fill-reverse = Reverter
 resources-parameter-gradient-fill-scale = Escala
-resources-parameter-gradient-fill-style = Estilo
+resources-parameter-gradient-fill-style = Forma
 resources-parameter-gradient-map-amount = Quantidade
 resources-parameter-gradient-map-gradient = Degradê
 resources-parameter-gradient-map-reverse = Reverter
@@ -517,3 +516,9 @@ resources-layer-type-selection = Seleção
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = Desembaçar
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = Luz linear
+resources-gradient-mix-classic = Clássico

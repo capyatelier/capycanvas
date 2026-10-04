@@ -5,6 +5,7 @@ import { createRasterWorker } from './raster-worker-client.js';
 import { chooseColor } from './color-controls.js';
 import { createRangeControl } from './range-control.js';
 import { choiceField } from './toolbar-components.js';
+import {gradientEditor} from './gradient.js';
 const selectionModes = new Set(['selection_new', 'selection_add', 'selection_subtract', 'selection_intersect']);
 // DOM widgets for shared editor models. Rust owns tool/color/geometry policy.
 export function createEditorPanels({ selectionUi, app, state, element, button, icon, numberField, dispatch, asset, wake, applyChange, contentChanged }) {
@@ -69,8 +70,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     };
   }
   function toolSettings(root) {
-    let key = "", numbers = [], actions = [], range, choices = [], sampler;
-    root.disposeSettings = () => { range?.dispose(); numbers.forEach(([,n])=>n.cancelEditing()); };
+    let key = "", numbers = [], actions = [], range, choices = [], sampler, gradient;
+    root.disposeSettings = () => { gradient?.dispose();gradient=null; range?.dispose(); numbers.forEach(([,n])=>n.cancelEditing()); };
     return () => {
       const s = state(),editing=s.layer_tools.editing_layer;
       const owner=[String(s.document_file.epoch),String(editing?.id??''),editing?.mask_selected,String(editing?.mask_id??'')];
@@ -98,14 +99,16 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         }
         sampler.source.value=String(picker.layer);sampler.size.value=String(picker.sample_width);return;
       }
-      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])])],(_,v)=>typeof v==='bigint'?String(v):v);
+      const next = JSON.stringify([owner,s.tool_settings.map(f=>[f.id,f.numeric,f.group_id]),s.tool_actions.map(a=>[a.command,a.checkable]),s.tool_extra.map(o=>o.Choice?[o.Choice.id,o.Choice.items.map(i=>[i.icon,i.action])]:["gradient",o.Gradient.gradient.destination])],(_,v)=>typeof v==='bigint'?String(v):v);
       if (next !== key) {
         key = next; root.disposeSettings(); range=null; root.replaceChildren(); numbers=[]; actions=[]; choices=[]; let group="";
         const modes = element("div", "selection-modes");
         modes.setAttribute("role", "group"); bindCopy(modes,()=>copy.tool_controls.selection_mode,"ariaLabel");
         if (s.tool_actions.some(spec => selectionModes.has(spec.command))) root.append(modes);
         const beside=new Map();let grouped;
-        for (const {Choice:spec} of s.tool_extra) {
+        for (const option of s.tool_extra) {
+          if(option.Gradient){gradient=gradientEditor({app,element,button,icon,dispatch});root.append(gradient.node);continue;}
+          const spec=option.Choice;
           const field=choiceField({element,button,icon},spec,dispatch),bar=field.row;
           bar.dataset.toolChoiceBar=spec.id;
           [...bar.children].forEach((node,index)=>node.dataset.toolChoiceTone=String(index));
@@ -141,7 +144,8 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
       }
       for (const [id,node] of numbers) node.update(s.tool_settings.find(f=>f.id===id).value);
       if(range) {range.relabel(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id)),copy.tool_controls.range_hint);range.update(['tonal_lower','tonal_upper'].map(id=>s.tool_settings.find(f=>f.id===id).value));}
-      for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice.id===id));
+      for(const [id,field] of choices)field.update(s.tool_extra.find(o=>o.Choice?.id===id));
+      if(gradient)gradient.update(s.tool_extra.find(o=>o.Gradient).Gradient);
       for (const [spec,node] of actions) {
         const c=s.commands.find(c=>c.id===spec.command);
         if(!node.firstChild) {

@@ -1,13 +1,3 @@
-fn packed_number(mantissa:f32,exponent:i32)->f32 {
-    if mantissa==0. {return 0.;}
-    var m=mantissa;var e=exponent;
-    for(var i=0u;i<2u;i++){if m<1.{m*=2.;e--;}else if m>=2.{m*=.5;e++;}}
-    if e>=-126{return ldexp(m,e);}
-    if e< -150{return 0.;}
-    let scaled=m*exp2(f32(e+149));var bits=u32(floor(scaled));let fraction=scaled-f32(bits);
-    if fraction>.5 || (fraction==.5 && (bits&1u)!=0u){bits++;}
-    return bitcast<f32>(bits);
-}
 fn dehaze_direct_math(pixel:vec4<f32>)->bool {
     let magnitude=abs(pixel.rgb);
     return pixel.a>=exp2(-32.) && pixel.a<=1. && all(magnitude<=vec3(exp2(32.)))

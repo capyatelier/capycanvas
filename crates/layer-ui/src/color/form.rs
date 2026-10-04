@@ -27,12 +27,19 @@ pub enum ColorUiRequest {
         rendition: Option<layer_core::color::hdr::SdrRendition>,
     },
     Gradient {
-        stops: Vec<layer_core::GradientStop>,
+        gradient: layer_core::GradientDefinition,
         document_space: RgbSpace,
         #[serde(default)]
         display_space: RgbSpace,
         rendition: Option<layer_core::color::hdr::SdrRendition>,
+        image: Option<GradientPreview>,
     },
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GradientPreview {
+    size: [u32;2],
+    depth: layer_core::color::SampleDepth,
 }
 #[cfg(test)]
 fn color_ui(request: ColorUiRequest) -> Result<serde_json::Value, String> { color_ui_localized(request, &crate::Localizer::shared(crate::UiLanguage::English)) }
@@ -97,23 +104,25 @@ pub fn color_ui_localized(request: ColorUiRequest, localizer: &crate::localizati
             )
         }
         ColorUiRequest::Gradient {
-            stops,
+            gradient,
             document_space,
             display_space,
             rendition,
+            image,
         } => {
-            if stops.len() > 64 {
-                return Err("Too many gradient stops".into());
+            if let Some(GradientPreview {size,depth})=image {
+                if size[0]>2048 || size[1]>64 {return Err("Invalid gradient preview size".into());}
+                let mut mapped=std::collections::HashMap::new();
+                let pixels=gradient.preview(size,document_space,depth)?.into_iter().map(|color| {
+                    let key=(color.space,color.rgba.map(f32::to_bits));
+                    if let Some(pixel)=mapped.get(&key) {return Ok(*pixel);}
+                    let rgba=mapped_preview(color,document_space,display_space,rendition)?.rgba.map(|v|(v.clamp(0.,1.)*255.).round() as u32);
+                    let pixel=rgba[3]<<24|rgba[0]<<16|rgba[1]<<8|rgba[2];mapped.insert(key,pixel);Ok(pixel)
+                }).collect::<Result<Vec<u32>,String>>()?;
+                return Ok(serde_json::json!({"size":size,"argb":pixels}));
             }
-            // Preserve the shader's encoded document interpolation before
-            // transforming each display sample. Hosts only draw these samples.
-            let samples = (0..=256)
-                .map(|i| {
-                    let color =
-                        layer_core::gradient_value(&stops, i as f32 / 256., document_space)?;
-                    mapped_preview(color, document_space, display_space, rendition)
-                })
-                .collect::<Result<Vec<_>, String>>()?;
+            let samples=gradient.samples((0..=256).map(|i|i as f32/256.),document_space)?.into_iter()
+                .map(|color|mapped_preview(color,document_space,display_space,rendition)).collect::<Result<Vec<_>,String>>()?;
             serde_json::to_value(samples)
         }
     };
@@ -511,6 +520,48 @@ mod tests {
         }
     }
 
+    fn gradient_image(gradient:layer_core::GradientDefinition,size:[u32;2],depth:layer_core::color::SampleDepth,rendition:Option<layer_core::color::hdr::SdrRendition>)->Result<serde_json::Value,String> {
+        color_ui(serde_json::from_value(serde_json::json!({"type":"gradient","gradient":gradient,"document_space":"Srgb","image":{"size":size,"depth":depth},"rendition":rendition})).unwrap())
+    }
+    #[test]
+    fn gradient_image_transport_preserves_two_dimensional_noise_and_float_columns() {
+        use layer_core::color::SampleDepth;
+        let gradient=layer_core::GradientDefinition::default();
+        let integer=gradient_image(gradient.clone(),[257,16],SampleDepth::U8,None).unwrap();
+        let float=gradient_image(gradient,[257,16],SampleDepth::F32,None).unwrap();
+        assert_eq!(integer["size"],serde_json::json!([257,16]));
+        assert_eq!(integer.as_object().unwrap().len(),2);
+        let pixels=integer["argb"].as_array().unwrap();let floats=float["argb"].as_array().unwrap();
+        assert_eq!(pixels.len(),257*16);
+        assert!(pixels.iter().all(|v|v.as_u64().is_some_and(|v|v<=u32::MAX as u64)));
+        assert!(pixels.chunks(257).skip(1).any(|row|row!=&pixels[..257]));
+        for row in floats.chunks(257) {assert_eq!(row,&floats[..257]);}
+        for row in pixels.chunks(257) {assert_eq!(row[0],serde_json::json!(0xff000000u32));assert_eq!(row[256],serde_json::json!(0xffffffffu32));}
+    }
+    #[test]
+    fn gradient_image_transport_keeps_constant_alpha_and_maps_hdr() {
+        use layer_core::{GradientDefinition,GradientStop,color::SampleDepth};
+        let color=RgbColor::new(RgbSpace::Srgb,[1.,0.,0.,0.5]).unwrap();
+        let gradient=GradientDefinition::new(vec![GradientStop {position:0.,color},GradientStop {position:1.,color}]);
+        let image=gradient_image(gradient,[9,4],SampleDepth::U8,None).unwrap();
+        assert!(image["argb"].as_array().unwrap().iter().all(|pixel|*pixel==serde_json::json!(0x80ff0000u32)));
+        let color=RgbColor::from_linear(RgbSpace::Srgb,[4.,2.,0.5,0.5]).unwrap();
+        let gradient=GradientDefinition::new(vec![GradientStop {position:0.,color},GradientStop {position:1.,color}]);
+        let mapped=gradient_image(gradient.clone(),[9,4],SampleDepth::F32,Some(Default::default())).unwrap();
+        let raw=gradient_image(gradient,[9,4],SampleDepth::F32,None).unwrap();
+        assert_ne!(mapped,raw);
+        assert!(mapped["argb"].as_array().unwrap().iter().all(|pixel|pixel.as_u64().unwrap()>>24==128));
+        assert_eq!(mapped["argb"][0],mapped["argb"][35]);
+    }
+    #[test]
+    fn gradient_image_transport_bounds_size_and_preserves_array_api() {
+        use layer_core::color::SampleDepth;
+        for size in [[0,1],[1,0],[2049,1],[1,65]] {assert!(gradient_image(Default::default(),size,SampleDepth::F32,None).is_err());}
+        for size in [[1,1],[2048,1],[1,64]] {assert_eq!(gradient_image(Default::default(),size,SampleDepth::F32,None).unwrap()["argb"].as_array().unwrap().len(),size[0] as usize*size[1] as usize);}
+        let array=color_ui(serde_json::from_value(serde_json::json!({"type":"gradient","gradient":layer_core::GradientDefinition::default(),"document_space":"Srgb"})).unwrap()).unwrap();
+        assert_eq!(array.as_array().unwrap().len(),257);assert!(array[0]["rgba"].is_array());
+    }
+
     #[test]
     fn hdr_palette_and_gradient_previews_follow_the_saved_appearance() {
         let color=RgbColor::from_linear(RgbSpace::DisplayP3,[4.,2.,0.5,0.5]).unwrap();
@@ -521,7 +572,7 @@ mod tests {
         let mapped=color_ui(serde_json::from_value(request.clone()).unwrap()).unwrap();
         assert_ne!(mapped,unmapped);
         assert_eq!(mapped[0]["rgba"][3],serde_json::json!(0.5));
-        let gradient=color_ui(serde_json::from_value(serde_json::json!({"type":"gradient","stops":[{"position":0.,"color":color},{"position":1.,"color":color}],"document_space":"DisplayP3","rendition":recipe})).unwrap()).unwrap();
+        let gradient=color_ui(serde_json::from_value(serde_json::json!({"type":"gradient","gradient":{"stops":[{"position":0.,"color":color},{"position":1.,"color":color}],"interpolation":"Oklab"},"document_space":"DisplayP3","rendition":recipe})).unwrap()).unwrap();
         // Gradient interpolation returns through encoded document RGB; allow Float32 roundoff.
         for at in [0,256] {for channel in 0..4 {assert!((gradient[at]["rgba"][channel].as_f64().unwrap()-mapped[0]["rgba"][channel].as_f64().unwrap()).abs()<1e-6);}}
         request["rendition"]["exposure"]=serde_json::json!(-1.);

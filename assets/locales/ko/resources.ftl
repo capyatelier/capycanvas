@@ -125,9 +125,8 @@ resources-parameter-gradient-fill-angle = 각도
 resources-parameter-gradient-fill-center-x = 중심 X
 resources-parameter-gradient-fill-center-y = 중심 Y
 resources-parameter-gradient-fill-gradient = 그레이디언트
-resources-parameter-gradient-fill-reverse = 반전
 resources-parameter-gradient-fill-scale = 크기 조절
-resources-parameter-gradient-fill-style = 스타일
+resources-parameter-gradient-fill-style = 모양
 resources-parameter-gradient-map-amount = 양
 resources-parameter-gradient-map-gradient = 그레이디언트
 resources-parameter-gradient-map-reverse = 반전
@@ -633,3 +632,9 @@ resources-layer-type-selection = 선택 영역
 resources-properties-layer-title = { $name } ({ $type })
 
 resources-filter-dehaze = 디헤이즈
+
+resources-choice-gradient-fill-style-reflected = Reflected
+resources-gradient-interpolation = Interpolation
+resources-gradient-mix-oklab = Oklab
+resources-gradient-mix-linear = 선형광
+resources-gradient-mix-classic = 클래식

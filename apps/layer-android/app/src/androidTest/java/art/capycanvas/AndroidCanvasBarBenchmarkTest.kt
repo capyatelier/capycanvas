@@ -1139,6 +1139,96 @@ class AndroidCanvasBarBenchmarkTest {
                     invoke("undo"); check(controls() == before); precisionSettled("Targeted Undo settled")
                 }
             }
+            if (wanted("gradients")) {
+                val selectedLabels = args.getString("labels")?.split(',')
+                fun enabled(label: String) = selectedLabels == null || label in selectedLabels
+                fun reveal(panel: String) {
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to true)))
+                    val group = host.panelGroup(panel)
+                    action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                    if (group.optString("active") != panel) action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to panel))
+                    action(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+                }
+                for (effectId in listOf("gradient_map", "gradient_fill")) {
+                    val label = "effect-$effectId-stop-drag"
+                    if (!enabled(label)) continue
+                    val photoLayer = photoDocument()
+                    action(obj("type" to "select_layer", "id" to photoLayer))
+                    waitFor("Gradient catalog ready") { !state().getJSONObject("filter_load").getBoolean("pending") }
+                    action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to effectId)))
+                    reveal("properties")
+                    fun definition() = state().getJSONObject("layer_properties").array("controls").objects()
+                        .first { it.getString("key") == "gradient" }.getJSONObject("value").getJSONObject("value")
+                    waitFor("Native gradient strip") { findTag("effect-gradient") != null }
+                    clickControl("effect-gradient")
+                    waitFor("Native interior gradient stop") { definition().getJSONArray("stops").length() == 3 }
+                    invoke("fit_canvas"); waitGuide("Gradient source settled")
+                    fun strip() = settledControl("Gradient stop strip", { findTag("effect-gradient") })
+                    fun start(bounds: android.graphics.RectF): Pair<Double, Double> {
+                        val inset = 6 * activity.resources.displayMetrics.density
+                        val position = definition().getJSONArray("stops").getJSONObject(1).getDouble("position")
+                        return bounds.left + inset + (bounds.width() - 2 * inset) * position - host.surfaceOrigin.x to bounds.centerY() - host.surfaceOrigin.y.toDouble()
+                    }
+                    val original = definition().toString()
+                    var bounds = strip()
+                    drag(start(bounds), 250) { t -> bounds.width() * .1 * t / .25 to 0.0 }
+                    waitFor("Native gradient prime changes definition") { definition().toString() != original }
+                    invoke("undo"); check(definition().toString() == original); waitGuide("Gradient warmup settled")
+                    repeat(args.getString("effectRepeats", "1")!!.toInt()) { index ->
+                        waitGuide("Gradient contact settled"); bounds = strip()
+                        val before = definition().toString()
+                        val variants = java.util.Collections.synchronizedSet(mutableSetOf<String>())
+                        measure(label) {
+                            val sampler = Thread {
+                                val until = SystemClock.uptimeMillis() + duration
+                                while (SystemClock.uptimeMillis() < until) { variants += definition().toString(); SystemClock.sleep(8) }
+                            }.apply { start() }
+                            drag(start(bounds), duration) { t -> bounds.width() * .2 * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
+                            sampler.join()
+                        }
+                        check(variants.size > 1) { "Native gradient stop motion did not change its definition" }
+                        val result = File(output, "$label.json")
+                        result.writeText(JSONObject(result.readText()).put("gradient_definition_variants", variants.size)
+                            .put("gradient_definition_before", JSONObject(before)).put("gradient_definition_after", definition())
+                            .put("native_strip_bounds", JSONArray(listOf(bounds.left, bounds.top, bounds.right, bounds.bottom))).toString(2))
+                        result.copyTo(File(output, "$label-$index.json"), overwrite = true)
+                        if (definition().toString() != before) { invoke("undo"); check(definition().toString() == before) }
+                    }
+                }
+                val label = "gradient-tool-geometry-drag"
+                if (enabled(label)) {
+                    photoDocument(); invoke("add_layer"); invoke("gradient"); reveal("tool_settings")
+                    clickControl("tool-segment-gradient-shape-0"); invoke("fit_canvas"); waitGuide("Gradient tool source settled")
+                    fun geometry() = state().getJSONObject("camera").getJSONArray("work_area")
+                    fun start(area: JSONArray) = area.getDouble(0) + area.getDouble(2) * .35 to area.getDouble(1) + area.getDouble(3) * .5
+                    var area = geometry()
+                    val beforePrime = state().getJSONObject("document_file").getLong("revision")
+                    drag(start(area), 250) { t -> area.getDouble(2) * .25 * t / .25 to 0.0 }
+                    waitFor("Native gradient tool prime adopted") { state().getJSONObject("document_file").getLong("revision") > beforePrime }
+                    waitGuide("Gradient tool prime settled"); invoke("undo"); waitGuide("Gradient tool warmup settled")
+                    repeat(args.getString("effectRepeats", "1")!!.toInt()) { index ->
+                        waitGuide("Gradient tool contact settled"); area = geometry()
+                        val before = state().getJSONObject("document_file").getLong("revision")
+                        val points = mutableSetOf<Pair<Double, Double>>()
+                        measure(label) {
+                            drag(start(area), duration) { t ->
+                                val point = area.getDouble(2) * .25 * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0
+                                points += point; point
+                            }
+                        }
+                        waitFor("Native gradient tool contact adopted") { state().getJSONObject("document_file").getLong("revision") > before }
+                        waitGuide("Gradient tool commit settled")
+                        val result = File(output, "$label.json")
+                        result.writeText(JSONObject(result.readText()).put("injected_geometry_positions", points.size)
+                            .put("geometry_work_area", area).put("document_revision_before", before)
+                            .put("document_revision_after", state().getJSONObject("document_file").getLong("revision"))
+                            .put("commit_settled_boot_ns", SystemClock.elapsedRealtimeNanos())
+                            .put("motion_phase", "native geometry preview; raster commit and drain follow Up").toString(2))
+                        result.copyTo(File(output, "$label-$index.json"), overwrite = true)
+                        invoke("undo"); waitGuide("Gradient tool Undo settled")
+                    }
+                }
+            }
             if (wanted("curves") && args.getString("labels")?.split(',')?.let { "effect-curves-drag" in it } != false) {
                 val photoLayer = photoDocument()
                 action(obj("type" to "select_layer", "id" to photoLayer))

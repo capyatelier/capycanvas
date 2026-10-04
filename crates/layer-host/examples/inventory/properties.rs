@@ -2,7 +2,7 @@
 //! Shared action/history observations do not establish native widget or pixels.
 use super::*;
 use layer_core::color::RgbColor;
-use layer_core::GradientStop;
+use layer_core::{GradientStop,GradientDefinition};
 
 fn dispatch(host: &mut NativeHost, action: Value) -> Result<(), String> {
     host.dispatch(serde_json::from_value(action).map_err(|e| e.to_string())?)
@@ -64,13 +64,14 @@ fn changed_value(control: &Value) -> Result<Value, String> {
         }
         "curve" => json!([[0., 0.], [0.5, 0.75], [1., 1.]]),
         "gradient" => {
-            let stops: Vec<GradientStop> = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
-            let space = stops.first().ok_or("No gradient stops")?.color.space;
-            json!([
+            let mut gradient: GradientDefinition = serde_json::from_value(value.clone()).map_err(|e| e.to_string())?;
+            let space = gradient.stops.first().ok_or("No gradient stops")?.color.space;
+            gradient.stops=[
                 (0., [0., 0., 0., 1.]),
                 (0.375, [0.75, 0.25, 0.5, 1.]),
                 (1., [1., 1., 1., 1.]),
-            ].map(|(position, rgba)| GradientStop { position, color: RgbColor { space, rgba, linear_rgb: None } }))
+            ].map(|(position, rgba)| GradientStop { position, color: RgbColor { space, rgba, linear_rgb: None } }).into();
+            json!(gradient)
         }
         kind => return Err(format!("No inventory edit for property kind {kind}")),
     })

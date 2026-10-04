@@ -130,6 +130,7 @@ struct Instance {
 pub(super) struct Effects {
     layout: wgpu::BindGroupLayout,
     pub masks: wgpu::BindGroupLayout,
+    pub sources: wgpu::BindGroupLayout,
     pipeline_layout: wgpu::PipelineLayout,
     pipelines: Vec<(
         Vec<Arc<EffectProgram>>,
@@ -211,6 +212,7 @@ impl Effects {
         Self {
             layout: self.layout.clone(),
             masks: self.masks.clone(),
+            sources: self.sources.clone(),
             pipeline_layout: self.pipeline_layout.clone(),
             pipelines: self.pipelines.clone(),
             instances: HashMap::new(),
@@ -244,11 +246,15 @@ impl Effects {
     pub fn new(
         r: &WgpuRasterizer,
         uniforms: &wgpu::BindGroupLayout,
-        sources: &wgpu::BindGroupLayout,
     ) -> Self {
         if let Some(cache) = &r.validated_effects {
             return cache.fork();
         }
+        let sources = crate::bindings::layout(&r.device, "effect sources", &[
+            crate::bindings::texture(0,wgpu::ShaderStages::FRAGMENT,true),
+            crate::bindings::texture(1,wgpu::ShaderStages::FRAGMENT,true),
+            crate::bindings::sampler(2,wgpu::ShaderStages::FRAGMENT,wgpu::SamplerBindingType::Filtering),
+        ]);
         let layout = crate::bindings::layout(&r.device, "effect parameters", &[crate::bindings::buffer(
             0,
             wgpu::ShaderStages::FRAGMENT,
@@ -266,13 +272,14 @@ impl Effects {
         let pipeline_layout = r
             .device
             .create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("WGSL effects ABI 4"),
-                bind_group_layouts: &[Some(uniforms), Some(sources), Some(&layout), Some(&masks)],
+                label: Some("WGSL effects ABI 5"),
+                bind_group_layouts: &[Some(uniforms), Some(&sources), Some(&layout), Some(&masks)],
                 immediate_size: 0,
             });
         Self {
             layout,
             masks,
+            sources,
             pipeline_layout,
             pipelines: Vec::new(),
             instances: HashMap::new(),
@@ -360,6 +367,7 @@ impl Effects {
             data.push(*properties);
             data.extend(effect.gpu_parameters(r.device().working_space()).map_err(GpuRasterError::Effect)?);
             data[*offsets.last().unwrap() as usize + 1][2] = (1 << level) as f32;
+            data[*offsets.last().unwrap() as usize + 1][3] = crate::gradient::quantum(r.device().depth());
         }
         let programs: Vec<_> = effects.iter().map(|e| e.program.clone()).collect();
         let bytes: Vec<_> = data
@@ -647,6 +655,7 @@ fn shader_source(
     let y = space.to_xyz()[1];
     source.push_str(&format!("\nconst FX_EXTENDED:bool=true;\nconst FX_HDR:bool={hdr};\nconst FX_ENCODED:bool={input_encoded};\nconst FX_SPACE:u32={space_id}u;\nconst FX_LUMA:vec3<f32>=vec3<f32>({:.12},{:.12},{:.12});\n", y[0], y[1], y[2]));
     source.push_str(include_str!("effects_color.wgsl"));
+    source.push_str(crate::gradient::SOURCE);
     source.push_str(include_str!("float_number.wgsl"));
     source.push_str(include_str!("guide_luminance.wgsl"));
     for i in 0..MASK_SLOTS {
@@ -661,6 +670,13 @@ fn shader_source(
 fn fx_auxiliary_words(index:u32)->vec4<u32>{return effect_auxiliary[index];}
 fn fx_auxiliary(index:u32)->vec4<f32> {return bitcast<vec4<f32>>(effect_auxiliary[index]);}
 fn fx_parameter(base:u32,index:u32)->vec4<f32> { return effect_data[base+1u+index]; }
+fn gradient_record(base:u32,index:u32)->vec4<f32>{
+    return effect_data[base+index];
+}
+fn fx_gradient(base:u32,value:f32,position:vec2<f32>)->vec4<f32>{
+    let sample=gradient_sample(base+1u,value);
+    return gradient_dither(sample.color,position,effect_data[base].w,sample.dither);
+}
 fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
     let directory=base+u32(effect_data[base].x);let entry=effect_data[directory+table];
     return effect_data[base+u32(entry.x)+min(index,u32(entry.y)-1u)];

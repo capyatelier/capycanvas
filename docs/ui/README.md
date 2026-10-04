@@ -83,6 +83,26 @@ screen transforms; they never change artwork, exported pixels or histogram
 counts. While either is active it takes precedence over mask tint and gamut
 warning. Their settings remain intact and their display returns afterward.
 
+## Gradients
+
+The Gradient tool uses Tool Settings and the Tool Options bar. Tool Settings
+places Linear, Radial and Reflected shapes above the gradient editor. The toolbar
+keeps shape outside its gradient popup. The tool shares one stop editor with
+Gradient Fill and Gradient Map. Gradient Fill places Shape first in Properties,
+then the stop editor and its angle, scale and position. Click the strip to
+add a stop, click a handle to select it, and drag to move it. The selected stop's
+position and color sit together below the strip; the color picker includes
+opacity. Interior stops can be deleted. Endpoints stay at 0% and 100%.
+
+Oklab is the default interpolation. Linear light and Classic (encoded document
+RGB) are available in the same selector. Integer gradients always use dithering;
+floating-point gradients are unchanged. The preview shows the same
+quantization and dithering. Reverse mirrors the stops; the bucket applies the
+current drawing color to the selected stop. Tool settings are retained separately from artwork;
+one canvas drag creates one undo step. Effect stop drags also create one step,
+and Escape cancels the current drag. Reset returns tool stops to the current
+foreground/background pair or restores an effect's default gradient.
+
 ## Different workflows, shared tools
 
 The interface serves digital painters, photographers and comic artists. Their

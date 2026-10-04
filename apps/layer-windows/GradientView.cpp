@@ -15,12 +15,12 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
     int selected=0;
     uint32_t generation=0;
     hstring drawn,positionContext;
-    A stops()const{return array(object(property->model(),L"value"),L"value");}
+    A stops()const{return array(object(object(property->model(),L"value"),L"value"),L"stops");}
     J stop()const{auto all=stops();return all.Size()?all.GetObjectAt(std::clamp(selected,0,int(all.Size())-1)):J{};}
     hstring context()const{return to_hstring(selected)+L"/"+to_hstring(stops().Size())+L"/"+to_hstring(generation);}
     void change(int index,double position,V color=JsonValue::CreateNullValue(),bool erase=false){
-        property->action(O({{L"op",S(L"gradient_stop")},{L"index",index<0?JsonValue::CreateNullValue():N(index)},
-            {L"position",N(position)},{L"color",color},{L"remove",B(erase)}}));
+        property->action(O({{L"op",S(L"gradient")},{L"target",object(object(property->model(),L"gradient"),L"destination")},{L"edit",O({{L"kind",S(L"stop")},{L"index",index<0?JsonValue::CreateNullValue():N(index)},
+            {L"position",N(position)},{L"color",color},{L"remove",B(erase)}})}}));
     }
     void add(double at){
         auto all=stops();selected=0;
@@ -87,9 +87,9 @@ struct GradientEditor : std::enable_shared_from_this<GradientEditor> {
         for(auto const& update:positionBindings)update();for(auto const& update:fields)update();
         double width=std::max(0.,bar.ActualWidth()-12);
         auto panel=object(data->model,L"color_panel");auto space=str(panel,L"rgb_space",L"Srgb");auto rendition=panel.GetNamedValue(L"rendition",JsonValue::CreateNullValue());
-        auto next=O({{L"stops",all},{L"width",N(width)},{L"selected",N(selected)},{L"rgb_space",S(space)},{L"rendition",rendition}}).Stringify();
+        auto next=O({{L"gradient",object(object(property->model(),L"value"),L"value")},{L"width",N(width)},{L"selected",N(selected)},{L"rgb_space",S(space)},{L"rendition",rendition}}).Stringify();
         if(next==drawn)return;drawn=next;ramp.Width(width);brush.GradientStops().Clear();dots.Children().Clear();
-        auto samples=colorUi(data->localization.get(),O({{L"type",S(L"gradient")},{L"stops",all},
+        auto samples=colorUi(data->localization.get(),O({{L"type",S(L"gradient")},{L"gradient",object(object(property->model(),L"value"),L"value")},
             {L"document_space",S(space)},{L"rendition",rendition}})).GetArray();
         for(uint32_t i=0;i<samples.Size();++i){GradientStop entry;entry.Offset(double(i)/(samples.Size()-1));
             entry.Color(displayColor(samples.GetObjectAt(i)));brush.GradientStops().Append(entry);}

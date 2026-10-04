@@ -182,22 +182,19 @@ fn scene_value(v: Vertex) -> vec4<f32> {
         return hdr_map_sdr(ink,settings.operation_linear,settings.operation_offset)*mask;
     }
     let raw = scene_read(front,v);
-    if op == 6u || op == 11u {
+    if op == 6u || op == 11u || op == 18u {
         // Constant fills are the degenerate case (equal endpoint colors).
         let local = settings.extent.zw + v.uv * settings.rect.zw;
         let p = mat2x2<f32>(settings.operation_linear.xy, settings.operation_linear.zw) * local + settings.operation_offset.xy;
         var src: vec4<f32>;
         if op == 11u { src = figure_color(p)*raw.a; }
-        else {
-            let delta = settings.backdrop.zw - settings.backdrop.xy;
-            let length2 = max(dot(delta, delta), .000001);
-            let relative = p - settings.backdrop.xy;
-            let t = clamp(select(dot(relative, delta) / length2,
-                length(relative) * inverseSqrt(length2), settings.options.z > .5), 0., 1.);
-            let first = vec4<f32>(settings.color.rgb * settings.color.a, settings.color.a);
-            let last = vec4<f32>(settings.source_over.rgb * settings.source_over.a, settings.source_over.a);
-            src = mix(first, last, t) * raw.a;
-        }
+        else if op==18u {
+            let flags=u32(settings.options.z);
+            let t=gradient_shape(p-settings.backdrop.xy,settings.backdrop.zw-settings.backdrop.xy,flags%4u,flags>=4u);
+            let sample=gradient_sample(0xffffffffu,t);
+            let color=gradient_dither(sample.color,p,settings.options.y,sample.dither);
+            src=vec4(color.rgb*color.a,color.a)*settings.color.x*raw.a;
+        } else {src=vec4(settings.color.rgb*settings.color.a,settings.color.a)*raw.a;}
         let dst = scene_read(back,v);
         if op==11u && settings.options.y>=16. {
             return select(dst*(1.-src.a),dst,settings.options.w>.5);

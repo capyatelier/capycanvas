@@ -228,8 +228,8 @@ fn placed_photo_gradient_and_figure_use_document_geometry() {
         RasterOperationKind::Gradient {
             start: Point { x: 48., y: 48. },
             end: Point { x: 85., y: 70. },
-            colors: [[1., 0., 0., 1.], [0., 0., 1., 1.]],
-            radial: true,
+            gradient: layer_core::GradientDefinition { stops: [[1., 0., 0., 1.], [0., 0., 1., 1.]].into_iter().enumerate().map(|(i, rgba)| layer_core::GradientStop { position: i as f32, color: layer_core::color::RgbColor::from_linear(layer_core::color::RgbSpace::Srgb, rgba).unwrap() }).collect(), interpolation: layer_core::ColorMixSpace::LinearRgb },
+            shape: layer_core::GradientShape::Radial, reverse: false, opacity: 1.,
             alpha_locked: false,
         },
         RasterOperationKind::Figure(layer_core::Figure {

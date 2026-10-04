@@ -139,7 +139,7 @@ impl CanvasBarView {
         self.items.iter().chain(&self.completion).flat_map(|item| match &item.option {
             ToolOption::Action { state, .. } => vec![UiAction::Invoke { command: state.id }],
             ToolOption::Choice { items, .. } => items.iter().map(|i| i.action.clone()).collect(),
-            ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
+            ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. } => Vec::new(),
         })
     }
     pub(crate) fn allows(&self, action: &UiAction) -> bool {
@@ -963,7 +963,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             (ToolOption::Choice { label, items, .. }, None) => {
                 vec![ContextMenuItem::submenu(label.as_ref(), vec![choice_items(items, &wrap)])]
             }
-            (ToolOption::Numeric(_) | ToolOption::Range { .. }, None) => Vec::new(),
+            (ToolOption::Gradient(_) | ToolOption::Numeric(_) | ToolOption::Range { .. }, None) => Vec::new(),
         });
         let toggle = ContextMenuItem {
             selected: Some(self.state.workspace.layout.canvas_bar),
