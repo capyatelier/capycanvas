@@ -61,6 +61,7 @@ impl PreparedPackage {
         if artwork.paint.iter().any(|(_,_,s)|!s.operations.is_empty())||artwork.coverage.iter().any(|(_,_,s)|!s.operations.is_empty()){return Err("Wait for the current edit before saving".into());}
         let shape=artwork.topology()?;
         let (mut objects,mut inventory)=super::artwork_records::encode(artwork,cancelled)?;
+        if objects.iter().any(custom_definition) {return Err("Drawings with custom filters can't be saved yet".into());}
         let metadata=metadata(artwork,&mut inventory)?;
         let root=artwork.compositions.id(artwork.root).ok_or("Missing authored root")?;
         let default=artwork.outputs.id(artwork.default_output).ok_or("Missing default output")?;
@@ -121,6 +122,7 @@ fn matching_preview(manifest:&Manifest,preview:Option<Preview>) -> Option<Previe
     let representation=&record["data"]["representation"];
     (representation==&json!({"member":"preview.png","size":preview.size(),"color":"srgb"})).then_some(preview)
 }
+fn custom_definition(record:&Value)->bool {record["type"]=="capy.effect-definition/1" && record["data"].get("builtin").is_none()}
 pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool) -> Result<OpenOutcome,String> {
     active(cancelled)?;
     let mut reader=BackingReader::new(&source,cancelled);
@@ -142,6 +144,7 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     match decoded {
         Ok(mut artwork)=>{
             if let Support::Preserved(reasons)=&manifest.support {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:reasons.iter().copied().collect::<Vec<_>>().join("; ")});}
+            if manifest.objects.values().any(custom_definition) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:"Custom filters are unsupported".into()});}
             artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview)})
         }

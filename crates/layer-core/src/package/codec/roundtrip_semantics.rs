@@ -96,14 +96,9 @@ fn exact_tiles(expected: &RasterRevision, actual: &RasterRevision) {
     }
 }
 #[test]
-fn literal_choices_and_pixels_resave_unchanged() {
+fn layer_names_choices_and_pixels_resave_unchanged() {
     let mut artwork=fixture(SampleDepth::U16);
-    let original_program=crate::effect_catalog::custom_program("curves");
-    let mut program=(*original_program).clone();program.label=crate::ResourceLabel::from("Curves");
-    let parameter=Arc::make_mut(&mut program.parameters).iter_mut().find(|p|p.key.as_ref()=="domain").unwrap();
-    let crate::EffectParameterKind::Choice{options}=&mut parameter.kind else{panic!()};
-    for option in Arc::make_mut(options){*option=crate::EffectOption::Literal(option.value().into());}
-    let mut effect=EffectInstance::new(Arc::new(program));effect.set("domain",EffectValue::Choice(1)).unwrap();
+    let mut effect=EffectInstance::new(crate::bundled_effect_catalog().get("curves").unwrap().program());effect.set("domain",EffectValue::Choice(1)).unwrap();
     let definition=artwork.definitions.insert(identity(90),Definition{program:effect.program}).unwrap();
     let application=artwork.effects.insert(identity(91),EffectApplication{definition,values:effect.values.clone()}).unwrap();
     let occurrence=artwork.occurrences.insert(identity(92),Occurrence::new(OccurrenceContent::Effect(application),"  My curves { $name } 한글 🎨  ")).unwrap();
@@ -114,14 +109,6 @@ fn literal_choices_and_pixels_resave_unchanged() {
     let reopened=Document::from_artwork(reopened).unwrap();let restored=reopened.artwork.occurrences.resolve(identity(92)).unwrap();
     assert_eq!(reopened.scene().occurrence(restored).unwrap().name,artwork.occurrences.get(occurrence).unwrap().name);
     assert_eq!(reopened.scene().effect(restored).unwrap().values,effect.values);
-    let mut explicit=artwork.clone();
-    let program=&mut explicit.definitions.get_mut(definition).unwrap().program;
-    let parameter=Arc::make_mut(&mut Arc::make_mut(program).parameters).iter_mut().find(|p|p.key.as_ref()=="domain").unwrap();
-    parameter.kind=original_program.parameters.iter().find(|p|p.key.as_ref()=="domain").unwrap().kind.clone();
-    let bytes=serialize(&prepare(&explicit,false));let reopened=editable(bytes.clone());
-    assert_eq!(serialize(&prepare(&reopened,false)),bytes);
-    exact_rasters(&explicit,&reopened);
-    assert_eq!(reopened.effects.get(reopened.effects.resolve(identity(91)).unwrap()).unwrap().values,effect.values);
 }
 #[test]
 fn native_sdr_archives_preserve_space_depth_every_code_and_scalar_planes() {

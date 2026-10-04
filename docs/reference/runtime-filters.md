@@ -4,7 +4,8 @@
 
 Built-in filters use the current bundled JSON/WGSL catalog. Artwork stores their
 stable IDs, parameter-data versions and all authored keyed values. Custom filters
-embed their own code and schema. Both use the shared renderer; custom filters
+are a development feature: recovery and worker captures embed their code and
+schema, but `.capy` files cannot contain them yet. Both use the shared renderer; custom filters
 execute separately and do not join built-in fusion.
 **Curves and Gradient Map are
 the agreed exceptions:** their custom controls and parameter preparation remain
@@ -222,10 +223,11 @@ rejected; there is no compatibility reader. Each filter contains a
 `program`, category, icon and optional preview overrides. A shader accepts inline
 WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
 shared source chunks, so fused filters include common helpers once. Custom
-document programs contain resolved code and do not need their original package.
+programs in recovery and worker captures contain resolved code and do not need
+their original package.
 Built-in document records contain only ID and parameter-data version.
 The runtime package schema includes editor presentation and execution
-optimizations. Custom `.capy` definitions retain literal labels, semantic kinds,
+optimizations. Custom definitions in recovery and worker captures retain literal labels, semantic kinds,
 hard bounds, units, dimensions, defaults, constraints, opaque-color capability,
 shader code, slots, passes and resource bindings. They omit pages, sections,
 conditional visibility, slider bounds/mapping, steps, decimal places,

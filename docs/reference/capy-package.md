@@ -87,7 +87,7 @@ The initial registry is:
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
-| `capy.effect-definition/1` | Built-in: required `builtin` ID and parameter-data `version`. Custom: stable `key`, evaluation `contract`, `kind`, `code`, `entry`, keyed `parameters`, ordered `slots` and literal labels. |
+| `capy.effect-definition/1` | Required `builtin` ID and parameter-data `version`. Custom definitions belong only to the private session and worker formats. |
 | `capy.selection/1` | Required `shape`; placement/inversion. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
 | `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and optional `representation`. |
@@ -175,8 +175,13 @@ the format. New fields must represent authored
 intent; runtime layouts, caches, preview settings and editor organization stay
 outside the file.
 
-Custom definitions embed code and their schema, use literal labels, and execute
-independently of built-in shader fusion. Their `slots` fixes the shader layout.
+Custom filters are not yet part of the portable format. A writer refuses to save
+artwork that uses one, and a reader opens a package containing one as preserved.
+The private session and worker formats keep them with the grammar below until a
+portable custom filter contract is designed. Custom definitions have a stable
+`key`, evaluation `contract`, `kind`, `code`, `entry`, keyed `parameters`,
+ordered `slots` and literal labels, and execute independently of built-in shader
+fusion. Their `slots` fixes the shader layout.
 Their parameter dimensions use `scalar`, `count`, `angle`, `time`, or `length` with a
 `source_pixels`, `composition_pixels` or `normalized` reference. Built-in dimensions
 come from the current catalog; a displayed unit never controls resizing.
@@ -319,7 +324,7 @@ Pack partition and range changes never change source or resource identity.
 | `capy.selection-coverage/1` | `capy.lz4-coverage/1`; coverage depth `u4` or `u8`, required extent/bounds and chunk index. |
 | `capy.icc/1` | `raw`; exact profile bytes, profile interpretation validated by the color subsystem. |
 | `capy.photo-metadata/1` | `raw`; `kind` is `exif`, `xmp` or `iptc`; retain exact supplied bytes. |
-| `capy.wgsl/1` | `utf8`; resolved shader text, local dependency slots only. |
+| `capy.wgsl/1` | `utf8`; resolved shader text for custom definitions in the private formats, local dependency slots only. |
 | `capy.lut3d/1` | `capy.rgb-f32/1`; current immutable little-endian F32 cube block, red coordinate fastest, declared size/domain. Titles belong to individual parameter bindings. |
 
 ICC, photo metadata, WGSL and LUT resources may use `capy.lz4-bytes/1` instead

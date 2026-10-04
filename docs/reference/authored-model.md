@@ -207,7 +207,8 @@ may change slightly with bug fixes; authored values must remain readable and
 editable. No shader generations or retained historical built-in implementations
 are required.
 
-Custom definitions retain code, ordered slots, kind, alpha/space policy,
+Portable saves refuse custom definitions until custom filters ship; recovery and
+worker captures keep them. Custom definitions retain code, ordered slots, kind, alpha/space policy,
 passes, time input, lookup declarations, auxiliary bindings, literal labels,
 parameters and constraints. They execute separately from built-in fusion. Their
 schema includes accepted numeric bounds, units and dimensions. The fixed

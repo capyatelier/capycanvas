@@ -92,7 +92,8 @@ fn fixture(depth: SampleDepth) -> Artwork {
     output.frame=Some((Point{x:-2.,y:3.5},[240,200])); output.sdr.exposure=0.5;
     artwork
 }
-fn rewrite(bytes: &[u8], change: impl FnOnce(&mut Value)) -> Vec<u8> {
+fn rewrite(bytes: &[u8], change: impl FnOnce(&mut Value)) -> Vec<u8> { rewrite_with(bytes,Vec::new(),change) }
+fn rewrite_with(bytes: &[u8], added: Vec<(String,Vec<u8>)>, change: impl FnOnce(&mut Value)) -> Vec<u8> {
     let directory=Directory::read(&mut Cursor::new(bytes),262144,64*1024*1024).unwrap();
     let mut manifest:Value=serde_json::from_slice(&directory.read_member(&mut Cursor::new(bytes),directory.member("manifest.json").unwrap(),64*1024*1024).unwrap()).unwrap();
     change(&mut manifest);
@@ -102,7 +103,7 @@ fn rewrite(bytes: &[u8], change: impl FnOnce(&mut Value)) -> Vec<u8> {
             directory.read_member(&mut Cursor::new(bytes),member,MAX_RANGE_BYTES).unwrap()
         };
         (member.name.clone(),Cursor::new(data))
-    }).collect::<Vec<_>>();
+    }).chain(added.into_iter().map(|(name,data)|(name,Cursor::new(data)))).collect::<Vec<_>>();
     let mut members=inputs.iter_mut().map(|(name,input)|InputMember {name,length:input.get_ref().len() as u64,crc32:crc32fast::hash(input.get_ref()),input}).collect::<Vec<_>>();
     let mut output=Vec::new(); archive::write_archive(&mut output,&mut members,64*1024*1024).unwrap(); output
 }
@@ -316,7 +317,31 @@ fn effect_removal_and_replacement_reclaim_only_newly_unused_definitions() {
 }
 
 #[test]
-fn reopened_effects_resize_by_declared_dimension_independently_of_display_units() {
+fn custom_filters_stay_out_of_portable_files() {
+    let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
+    let bytes=serialize(&prepare(&document.artwork,false));
+    let paper=document.scene().effect_handle(document.scene().order()[1]).unwrap();
+    let definition=document.artwork.effects.get(paper).unwrap().definition;
+    let program=crate::effect_catalog::custom_program("solid_color");
+    document.artwork.definitions.get_mut(definition).unwrap().program=program.clone();
+    let error=PreparedPackage::prepare(&capture(&document.artwork),None,&AtomicBool::new(false)).unwrap_err();
+    assert_eq!(error,"Drawings with custom filters can't be saved yet");
+    let mut inventory=resources::ResourceInventory::default();
+    let custom=super::super::effect_records::encode_definition(&Definition{program:program.clone()},&mut inventory).unwrap();
+    let sources=program.wgsl.sources().unwrap();
+    let records:Vec<_>=sources.iter().map(|source|json!({"id":source.id(),"type":"capy.wgsl/1","data":{},"encoding":"utf8",
+        "location":{"member":format!("data/{}",source.id())},"bytes":source.len().to_string(),"crc32":format!("{:08x}",crc32fast::hash(source.as_bytes()))})).collect();
+    let members=sources.iter().map(|source|(format!("data/{}",source.id()),source.as_bytes().to_vec())).collect();
+    let id=json!(document.artwork.definitions.id(definition).unwrap());
+    let bytes=rewrite_with(&bytes,members,|manifest| {
+        manifest["objects"].as_array_mut().unwrap().iter_mut().find(|record|record["id"]==id).unwrap()["data"]=custom;
+        manifest["resources"].as_array_mut().unwrap().extend(records);
+    });
+    let OpenOutcome::Preserved {reason,..}=open(backing(bytes),Default::default(),&AtomicBool::new(false)).unwrap() else {panic!("custom filters must open read-only")};
+    assert_eq!(reason,"Custom filters are unsupported");
+}
+#[test]
+fn effects_resize_by_declared_dimension_independently_of_display_units() {
     for dimension in [Dimension::Scalar,Dimension::Angle,Dimension::Time,Dimension::SourcePixels,Dimension::CompositionPixels,Dimension::Normalized] {
         for unit in ["","px"] {
             let mut document=crate::Document::new(PortableId::random(),16,16,crate::DocumentNames{paint:"Ink".into(),paper:"Paper".into()});
@@ -330,8 +355,7 @@ fn reopened_effects_resize_by_declared_dimension_independently_of_display_units(
             let mut instance=EffectInstance::new(program.clone());instance.set("sigma",EffectValue::Number(3.)).unwrap();
             document.artwork.definitions.get_mut(definition).unwrap().program=program;
             document.artwork.effects.get_mut(effect).unwrap().values=instance.values;
-            let original=editable(serialize(&prepare(&document.artwork,false)));
-            let mut editor=crate::Editor::new(crate::Document::from_artwork(original.clone()).unwrap());
+            let mut editor=crate::Editor::new(crate::Document::from_artwork(document.artwork).unwrap());
             let geometry=crate::CanvasGeometry::resize([16,16],[32,32],crate::Interpolation::Bicubic);
             let plan=editor.document().canvas_geometry_plan(&geometry,crate::GeometryLimits{project:Default::default(),device_dimension:8192}).unwrap();
             editor.perform(crate::Edit::Batch(plan.edits)).unwrap();
@@ -339,7 +363,7 @@ fn reopened_effects_resize_by_declared_dimension_independently_of_display_units(
             let expected=if matches!(dimension,Dimension::SourcePixels|Dimension::CompositionPixels){6.}else{3.};
             assert_eq!(effect.value("sigma"),Some(&EffectValue::Number(expected)),"{dimension:?}, {unit}");
             assert!(editor.undo().unwrap());
-            assert_eq!(serialize(&prepare(&editor.document().artwork,false)),serialize(&prepare(&original,false)));
+            assert_eq!(editor.document().scene().effect(editor.document().scene().order()[1]).unwrap().value("sigma"),Some(&EffectValue::Number(3.)));
         }
     }
 }

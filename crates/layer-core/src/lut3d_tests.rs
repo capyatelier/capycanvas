@@ -1,8 +1,5 @@
 fn lookup_effect() -> crate::EffectInstance {
-    let mut program=(*crate::effect_catalog::custom_program("color_lookup")).clone();
-    for parameter in Arc::make_mut(&mut program.parameters) {match parameter.key.as_ref() {"resource"=>parameter.key="table".into(),"color_space"=>parameter.key="space".into(),_=>()}}
-    program.auxiliary=Some(crate::EffectAuxiliary::Lut3d {resource:"table".into(),color_space:"space".into()});
-    crate::EffectInstance::new(Arc::new(program))
+    crate::EffectInstance::new(crate::bundled_effect_catalog().get("color_lookup").unwrap().program())
 }
 use crate::{color::RgbSpace, Lut3d};
 use std::sync::Arc;
@@ -73,8 +70,8 @@ fn finite_tables_are_distinct_from_safe_selected_space_admission() {
 fn typed_resource_schema_requires_one_declared_resource_and_atomic_space_admission() {
     use crate::{EffectParameterKind,EffectValue};
     let mut effect=lookup_effect();effect.validate().unwrap();
-    let valid=Arc::new(Lut3d::parse_cube(cube().as_bytes()).unwrap());effect.set("table",EffectValue::Lut3d(Some(valid.clone()))).unwrap();assert!(Arc::ptr_eq(effect.lut3d().unwrap(),&valid));
-    let before=effect.clone();assert!(effect.set("table",EffectValue::Lut3d(Some(Arc::new(descriptor(&valid))))).is_err());assert_eq!(effect,before);
+    let valid=Arc::new(Lut3d::parse_cube(cube().as_bytes()).unwrap());effect.set("resource",EffectValue::Lut3d(Some(valid.clone()))).unwrap();assert!(Arc::ptr_eq(effect.lut3d().unwrap(),&valid));
+    let before=effect.clone();assert!(effect.set("resource",EffectValue::Lut3d(Some(Arc::new(descriptor(&valid))))).is_err());assert_eq!(effect,before);
     let mut undeclared=effect.clone();Arc::make_mut(&mut undeclared.program).auxiliary=None;assert!(undeclared.validate().is_err());
     let mut duplicated=effect.clone();let parameter=duplicated.program.parameters[0].clone();let mut parameters=duplicated.program.parameters.to_vec();let mut second=parameter;second.key="second_table".into();parameters.push(second);Arc::make_mut(&mut duplicated.program).parameters=parameters.into();duplicated.values.push(EffectValue::Lut3d(None));assert!(duplicated.validate().is_err());
     let mut wrong_space=effect.clone();let parameters=Arc::make_mut(&mut Arc::make_mut(&mut wrong_space.program).parameters);let EffectParameterKind::Choice {options}=&mut parameters[1].kind else {panic!()};let options=Arc::make_mut(options);options.swap(0,1);wrong_space.validate().unwrap();
@@ -98,8 +95,7 @@ fn resource_document() -> Document {
     for title in ["First","Alias"] {
         let mut json=serde_json::to_value(resource.as_ref()).unwrap();json["title"]=serde_json::json!(title);
         let alias:Lut3d=serde_json::from_value(json).unwrap();let alias=Arc::new(alias.with_shared_payload(&resource).unwrap());
-        let mut effect=lookup_effect();effect.set("table",EffectValue::Lut3d(Some(alias.clone()))).unwrap();
-        Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters)[0].default=EffectValue::Lut3d(Some(alias));
+        let mut effect=lookup_effect();effect.set("resource",EffectValue::Lut3d(Some(alias))).unwrap();
         let definition=document.artwork.definitions.insert(PortableId::random(),Definition {program:effect.program}).unwrap();
         let effect=document.artwork.effects.insert(PortableId::random(),EffectApplication {definition,values:effect.values}).unwrap();
         let occurrence=document.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Effect(effect),title)).unwrap();
@@ -132,7 +128,7 @@ fn application_edit(document:&Document,index:usize,value:EffectValue)->Edit {
     let handle=document.scene().effect_handle(document.scene().order()[index]).unwrap();
     let mut application=document.artwork.effects.get(handle).unwrap().clone();
     let program=&document.artwork.definitions.get(application.definition).unwrap().program;
-    let index=program.parameters.iter().position(|p|p.key.as_ref()=="table").unwrap();application.values[index]=value;
+    let index=program.parameters.iter().position(|p|p.key.as_ref()=="resource").unwrap();application.values[index]=value;
     Edit::Effect(RecordChange::replace(&document.artwork.effects,handle,Some(application)).unwrap())
 }
 fn rewrite_archive(bytes:&[u8],change:impl FnOnce(&mut serde_json::Value))->Vec<u8> {
@@ -146,14 +142,14 @@ fn rewrite_archive(bytes:&[u8],change:impl FnOnce(&mut serde_json::Value))->Vec<
 }
 
 #[test]
-fn archive_restores_values_defaults_and_deduplicates_aliases() {
+fn archive_restores_values_and_deduplicates_aliases() {
     let document=resource_document();document.validate(Default::default()).unwrap();let prepared=prepared(&document);
     let manifest:serde_json::Value=serde_json::from_slice(prepared.manifest()).unwrap();
     let resources=manifest["resources"].as_array().unwrap();assert_eq!(resources.iter().filter(|r|r["type"]=="capy.lut3d/1").count(),1);
     let bytes=archive(&document);let reopened=open_document(&bytes,Default::default()).unwrap();
     assert_eq!(self::prepared(&reopened).manifest(),prepared.manifest());
     let a=effect(&reopened,0);let b=effect(&reopened,1);assert_ne!(a.lut3d().unwrap().title(),b.lut3d().unwrap().title());
-    assert!(Arc::ptr_eq(a.lut3d().unwrap().storage().unwrap(),b.lut3d().unwrap().storage().unwrap()));assert_eq!(a.resources().count(),2);
+    assert!(Arc::ptr_eq(a.lut3d().unwrap().storage().unwrap(),b.lut3d().unwrap().storage().unwrap()));assert_eq!(a.resources().count(),1);
     for resource in a.resources(){assert!(Arc::ptr_eq(resource.storage().unwrap(),a.lut3d().unwrap().storage().unwrap()));}
     let budget=code_bytes(&document)+96;
     assert!(open_document(&bytes,crate::ProjectLimits {asset_bytes:budget-1,..Default::default()}).is_err());
