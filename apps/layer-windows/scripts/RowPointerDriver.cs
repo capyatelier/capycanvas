@@ -200,6 +200,13 @@ public static class CapyRowPointer {
    }finally{MouseButton(up);}
   }
  }
+ public static void Wheel(int x,int y,int delta) {
+  lock(gate){
+   Check();if(active)throw new Exception("A review contact is already active.");
+   var point=new Point{x=x,y=y};Guard(point);MouseMove(point);last=point;
+   if(SendInput(1,new[]{new Input{mouse=new Mouse{data=unchecked((uint)delta),flags=0x0800}}},40)!=1)throw new Win32Exception(Marshal.GetLastWin32Error());
+  }
+ }
  public static void RightClick(int x,int y) {
   lock(gate){
    Check();if(active)throw new Exception("A review contact is already active.");

@@ -394,7 +394,7 @@ to the camera limits, zooms about the work-area centre and rounds like Actual
 Pixels. The field takes its value from the camera and refreshes only while the
 menu is open.
 
-GTK, Web, Android, macOS and iPadOS also show a rotation slider from
+The menu also shows a rotation slider from
 `NumericControl::rotation()`. Both fields use one row with the slider and editable
 value, without a visible label or step buttons. Zoom controls and percentages
 precede Lock zoom; the rotation slider, Reset rotation and Lock rotation follow
@@ -418,7 +418,8 @@ choosing an item preserves canvas keyboard focus; typing borrows it:
 - Android opens a windowless dropdown that becomes focusable only while the
   field is being typed in.
 - Windows opens a transient flyout whose readout and rows cannot take focus;
-  Escape and a second press close it.
+  Escape and a second press close it. `exercise-zoom-readout.ps1` covers the menu,
+  both fields and locks in either theme.
 
 The camera works in physical pixels. Web uses the fractional
 `devicePixelRatio` and Android physical pixels, so 100% is 1:1 there. GTK

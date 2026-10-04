@@ -1,5 +1,6 @@
 #include "pch.h"
 #include "NavigatorView.h"
+#include "NavigationControls.h"
 #include <winrt/Microsoft.UI.Xaml.Shapes.h>
 #include <optional>
 
@@ -47,21 +48,8 @@ struct NavigatorView::Impl : std::enable_shared_from_this<Impl> {
         AutomationProperties::SetName(overview,data->caption(L"color",L"navigator_overview"));
         AutomationProperties::SetAutomationId(overview,L"navigator-overview");
         content.Children().Append(overview);
-        for(int i=0;i<6;i++){ColumnDefinition column;column.Width({1,GridUnitType::Star});actions.ColumnDefinitions().Append(column);}
-        int column=0;
-        for(auto id:{L"zoom_out",L"zoom_in",L"rotate_left",L"rotate_right",L"flip_horizontal",L"flip_vertical"}){
-            auto command=find(array(data->state,L"commands"),L"id",id);
-            auto pick=button(data,str(command,L"label"),[data=data,id]{data->dispatch(O({{L"type",S(L"invoke")},{L"command",S(id)}}));});
-            pick.Content(icon(str(command,L"icon"),data->theme()));pick.Height(32);
-            pick.HorizontalAlignment(HorizontalAlignment::Stretch);
-            tooltip(pick,str(command,L"label"));
-            AutomationProperties::SetAutomationId(pick,hstring(L"navigator-")+id);
-            Grid::SetColumn(pick,column++);actions.Children().Append(pick);
-            bindings.emplace_back([data=data,id,pick]{auto command=find(array(data->state,L"commands"),L"id",id);
-                tooltip(pick,str(command,L"tooltip",str(command,L"label")));
-                pick.IsEnabled(flag(command,L"enabled"));pick.Background(flag(command,L"selected")?selected(data):clear());
-                AutomationProperties::SetItemStatus(pick,flag(command,L"selected")?data->caption(L"search",L"selected"):L"");});
-        }
+        actions=NavigationButtons(data,L"navigator",[data=data]{return array(data->state,L"commands");},bindings);
+        for(auto const& bind:bindings)bind();
         Grid::SetRow(actions,1);content.Children().Append(actions);root.Children().Append(content);
         overview.PointerPressed([weak](auto&&,PointerRoutedEventArgs const& e){if(auto self=weak.lock()){
             auto p=e.GetCurrentPoint(self->overview);
