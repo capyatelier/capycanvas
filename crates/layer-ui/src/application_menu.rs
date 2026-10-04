@@ -1,6 +1,16 @@
 //! Menu identity and contents are shared policy. Hosts only project these models.
 use super::*;
 
+pub const NAVIGATOR_COMMANDS: [CommandId; 6] = [CommandId::ZoomOut, CommandId::ZoomIn,
+    CommandId::RotateLeft, CommandId::RotateRight, CommandId::FlipHorizontal, CommandId::FlipVertical];
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ZoomMenu {
+    #[serde(flatten)]
+    pub menu: ContextMenu,
+    pub buttons: Vec<CommandState>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApplicationLink {
@@ -242,8 +252,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         model.with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
     }
 
-    /// The zoom readout's menu: the view commands, then fixed percentages.
-    pub fn zoom_menu(&self) -> ContextMenu {
+    pub fn zoom_menu(&self) -> ZoomMenu {
         let idle = self.require_idle().is_ok();
         let command = |id: CommandId| {
             let state = self.command(id);
@@ -257,14 +266,26 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.localization().format(MessageId::MENU_ZOOM_LEVEL, &args)
             }, UiAction::SetZoom { zoom })
         };
-        ContextMenu {
+        let lock = |label, selected, action| ContextMenuItem {
+            selected: Some(selected), enabled: idle,
+            ..ContextMenuItem::command(self.localization().text(label).to_string(), action)
+        };
+        let menu = ContextMenu {
             title: self.localization().text(MessageId::MENU_ZOOM).to_string(),
             sections: vec![
                 [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels].map(command).into(),
                 ZOOM_LEVELS.map(level).into(),
+                vec![ContextMenuItem { enabled: idle,
+                    ..ContextMenuItem::command(self.localization().text(MessageId::MENU_RESET_ROTATION).to_string(),
+                        UiAction::SetRotation { rotation: 0.0 }) }],
+                vec![lock(MessageId::MENU_LOCK_ROTATION, self.state.camera.rotation_locked,
+                        UiAction::SetRotationLocked { locked: !self.state.camera.rotation_locked }),
+                    lock(MessageId::MENU_LOCK_ZOOM, self.state.camera.zoom_locked,
+                        UiAction::SetZoomLocked { locked: !self.state.camera.zoom_locked })],
             ],
         }
-        .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization())
+        .with_shortcuts_localized(&self.state.settings, self.state.platform, self.localization());
+        ZoomMenu { menu, buttons: NAVIGATOR_COMMANDS.into_iter().map(|id| self.command(id)).collect() }
     }
 }
 

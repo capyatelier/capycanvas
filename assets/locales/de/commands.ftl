@@ -597,3 +597,7 @@ commands-transform-again-whole-layer = Die Pixelauswahl aufheben und eine ganze 
 commands-show-histogram = Histogramm anzeigen
 command-waveform = Wellenform
 commands-show-waveform = Wellenform anzeigen
+menu-rotation = Drehung
+menu-reset-rotation = Drehung zurücksetzen
+menu-lock-rotation = Drehung sperren
+menu-lock-zoom = Zoom sperren

@@ -22,17 +22,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.PopupProperties
 import org.json.JSONObject
 
-/** The canvas zoom and rotation readout. It opens the shared zoom menu under a
- * typed zoom field without taking window focus; typing borrows it. The field
- * shows the camera stream's zoom, and Rust applies every change. Camera state is
- * read here so navigation never invalidates the workspace tree. */
 @Composable internal fun ZoomReadout(host: CanvasHost) {
     val camera = host.cameraReadout
     val button = remember { WindowlessMenuButton() }
     Box {
         Text("${camera.zoomPercent}% · ${camera.rotationDegrees}°",
             Modifier.testTag("camera-readout").focusProperties { canFocus = false }
-                .opensWindowlessMenu(button, "Zoom") { load -> host.query(obj("type" to "zoom_menu")) { load(it as? JSONObject) } }
+                .opensWindowlessMenu(button, host.catalog.getJSONObject("native_copy").getJSONObject("header").getString("zoom")) { load -> host.query(obj("type" to "zoom_menu")) { load(it as? JSONObject) } }
                 .padding(horizontal = 10.dp, vertical = 3.dp))
         ZoomMenu(host, button)
     }
@@ -45,19 +41,28 @@ import org.json.JSONObject
     if (menu == null) return
     var typing by remember { mutableStateOf(false) }
     val zoom = host.cameraZoom
-    val opened = remember { zoom }
-    LaunchedEffect(zoom) {
-        if (zoom != opened) host.query(obj("type" to "zoom_menu")) { next -> if (button.menu != null) (next as? JSONObject)?.let { button.menu = it } }
+    val rotation = host.cameraRotation
+    val locks = host.cameraLocks
+    val commands = host.snapshot?.getJSONObject("state")?.array("commands")
+    val copy = host.catalog.getJSONObject("native_copy").getJSONObject("header")
+    LaunchedEffect(zoom, rotation, locks, commands) {
+        host.query(obj("type" to "zoom_menu")) { next -> if (button.menu != null) (next as? JSONObject)?.let { button.menu = it } }
     }
     BackHandler(!typing, close)
     DropdownMenu(true, close, Modifier.widthIn(min = 240.dp, max = 380.dp).testTag("zoom-menu"),
         properties = if (typing) PopupProperties(focusable = true) else WindowlessMenu,
         shape = RoundedCornerShape(10.dp), containerColor = LocalPalette.current.panel) {
         Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("zoom-field")) {
-            NumericSetting("Zoom", zoom, host.catalog.getJSONObject("zoom"), Modifier.fillMaxWidth(), inline = true,
+            NumericSetting(copy.getString("zoom"), zoom, host.catalog.getJSONObject("zoom"), Modifier.fillMaxWidth(), inline = true,
                 onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_zoom", "zoom" to it)) }
+        }
+        Box(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp).testTag("rotation-field")) {
+            NumericSetting(copy.getString("rotation"), rotation, host.catalog.getJSONObject("rotation"), Modifier.fillMaxWidth(),
+                onTyping = { if (it) typing = true }) { host.dispatch(obj("type" to "set_rotation", "rotation" to it)) }
         }
         HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
         WorkspaceMenuItems(host, menu.array("sections"), close)
+        HorizontalDivider(Modifier.padding(horizontal = 6.dp, vertical = 6.dp), color = LocalPalette.current.divider)
+        NavigationButtons(host, menu.array("buttons").objects(), "zoom")
     }
 }

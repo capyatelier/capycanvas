@@ -598,3 +598,7 @@ commands-transform-again-whole-layer = Снимите выделение пик�
 commands-show-histogram = Показать гистограмму
 command-waveform = Волновая форма
 commands-show-waveform = Показать волновую форму
+menu-rotation = Поворот
+menu-reset-rotation = Сбросить поворот
+menu-lock-rotation = Заблокировать поворот
+menu-lock-zoom = Заблокировать масштаб

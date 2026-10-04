@@ -1,19 +1,21 @@
-//! The canvas zoom and rotation readout. It opens the shared zoom menu with a
-//! typed zoom field; the camera supplies the value and Rust applies each
-//! change. Closing the menu hands keyboard focus back, normally to the canvas.
+//! Canvas view controls.
 use crate::{number_control::NumberControl, workspace::Workspace};
 use adw::prelude::*;
 use gtk::{gio, glib};
 use layer_ui::{Camera, NumericControl, UiAction};
 use std::{cell::RefCell, rc::Rc};
 
-const FIELD: &str = "zoom-field";
+const FIELD: &str = "zoom-fields";
+const BUTTONS: &str = "zoom-buttons";
 
 pub struct ZoomReadout {
     pub root: gtk::Button,
     label: gtk::Label,
     pub(crate) menu: gtk::PopoverMenu,
     pub(crate) field: NumberControl,
+    pub(crate) rotation: NumberControl,
+    fields: gtk::Box,
+    controls: crate::navigator::NavigationControls,
     previous_focus: RefCell<Option<glib::WeakRef<gtk::Widget>>>,
 }
 
@@ -32,14 +34,24 @@ impl ZoomReadout {
         let menu = gtk::PopoverMenu::from_model(None::<&gio::MenuModel>);
         menu.set_widget_name("zoom-menu");
         menu.set_position(gtk::PositionType::Top);
-        let field = NumberControl::inline(NumericControl::zoom(), &title, localization);
-        field.set_widget_name(FIELD);
+        let field = NumberControl::inline(NumericControl::zoom(), &title, localization.clone());
+        field.set_widget_name("zoom-field");
         field.set_size_request(220, -1);
+        let rotation = NumberControl::new(NumericControl::rotation(), &localization.text(layer_ui::MessageId::MENU_ROTATION), "", localization);
+        rotation.set_widget_name("rotation-field");
+        let fields = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        fields.set_widget_name(FIELD);
+        fields.append(&field);
+        fields.append(&rotation);
+        let controls = crate::navigator::NavigationControls::new("zoom");
         Rc::new(Self {
             root,
             label,
             menu,
             field,
+            rotation,
+            fields,
+            controls,
             previous_focus: RefCell::new(None),
         })
     }
@@ -47,10 +59,20 @@ impl ZoomReadout {
     pub fn set_localization(&self, localization: std::sync::Arc<layer_ui::Localizer>) {
         let title = localization.text(layer_ui::MessageId::MENU_ZOOM);
         self.root.set_tooltip_text(Some(&title));
-        self.field.set_caption(&title, "", localization);
+        self.field.set_caption(&title, "", localization.clone());
+        self.rotation.set_caption(&localization.text(layer_ui::MessageId::MENU_ROTATION), "", localization);
     }
 
     pub fn bind(self: &Rc<Self>, workspace: &Rc<Workspace>) {
+        self.controls.bind(workspace);
+        let context = gtk::GestureClick::new();
+        context.set_button(3);
+        context.connect_pressed(glib::clone!(#[weak(rename_to = readout)] self, #[weak] workspace,
+            move |gesture, _, _, _| {
+                gesture.set_state(gtk::EventSequenceState::Claimed);
+                readout.open(&workspace);
+            }));
+        self.root.add_controller(context);
         self.root.connect_clicked(glib::clone!(
             #[weak(rename_to = readout)]
             self,
@@ -78,36 +100,45 @@ impl ZoomReadout {
             workspace,
             move |field| workspace.dispatch(UiAction::SetZoom { zoom: field.value() as f32 })
         ));
+        self.rotation.connect_value_changed(glib::clone!(#[weak] workspace,
+            move |field| workspace.dispatch(UiAction::SetRotation { rotation: field.value() as f32 })));
     }
 
     fn open(self: &Rc<Self>, workspace: &Rc<Workspace>) {
-        let Some((model, zoom)) = workspace
+        let Some((model, camera)) = workspace
             .gpu
             .borrow()
             .as_ref()
-            .map(|g| (g.session.zoom_menu(), g.session.state().camera.zoom))
+            .map(|g| (g.session.zoom_menu(), g.session.state().camera.clone()))
         else {
             return;
         };
         *self.previous_focus.borrow_mut() = gtk::prelude::RootExt::focus(&workspace.window).map(|f| f.downgrade());
-        if self.field.parent().is_some() {
-            self.menu.remove_child(&self.field);
+        if self.fields.parent().is_some() {
+            self.menu.remove_child(&self.fields);
+            self.menu.remove_child(&self.controls.root);
         }
-        let root = workspace.workspace_menu_model(&self.menu, model);
+        self.controls.refresh(&model.buttons);
+        let root = workspace.workspace_menu_model(&self.menu, model.menu);
         let item = gio::MenuItem::new(None, None);
         item.set_attribute_value("custom", Some(&FIELD.to_variant()));
         let section = gio::Menu::new();
         section.append_item(&item);
         root.prepend_section(None, &section);
+        let item = gio::MenuItem::new(None, None);
+        item.set_attribute_value("custom", Some(&BUTTONS.to_variant()));
+        let section = gio::Menu::new();
+        section.append_item(&item);
+        root.append_section(None, &section);
         self.menu.set_menu_model(Some(&root));
-        self.menu.add_child(&self.field, FIELD);
-        self.field.set_value(f64::from(zoom));
+        self.menu.add_child(&self.fields, FIELD);
+        self.menu.add_child(&self.controls.root, BUTTONS);
+        self.field.set_value(f64::from(camera.zoom));
+        self.rotation.set_value(f64::from(camera.rotation));
         workspace.popup_at(self.menu.upcast_ref(), &self.root, [self.root.width() as f32 / 2., 0.]);
     }
 
-    /// The field is refreshed only while its menu is open, so pan and zoom
-    /// motion updates one label.
-    pub fn refresh(&self, camera: &Camera) {
+    pub fn refresh(&self, camera: &Camera, commands: &[layer_ui::CommandState]) {
         self.label.set_text(&format!(
             "{:.0}% · {:.0}°",
             camera.zoom * 100.0,
@@ -115,6 +146,8 @@ impl ZoomReadout {
         ));
         if self.menu.is_visible() {
             self.field.set_value(f64::from(camera.zoom));
+            self.rotation.set_value(f64::from(camera.rotation));
+            self.controls.refresh(commands);
         }
     }
 }

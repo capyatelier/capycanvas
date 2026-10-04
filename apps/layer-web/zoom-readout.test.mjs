@@ -8,6 +8,7 @@ class FakeElement extends SharedElement {
     super();
     this.tagName = tag.toUpperCase(); this.className = className; this.children = []; this.parentNode = null;
     this.attributes = new Map(); this.style = {}; this.hidden = false; this.listeners = {}; this.textContent = "";
+    this.dataset = {}; this.classList = { add: value => { this.className += ` ${value}`; } };
     this.open = false; this.isConnected = true; this.rect = { left: 0, top: 0, right: 0, bottom: 0, width: 0, height: 0 };
   }
   dispatch(type, event = {}) {
@@ -28,7 +29,8 @@ class FakeElement extends SharedElement {
 }
 
 const document = { body: new FakeElement("body"), activeElement: null };
-const menuModel = zoomIn => ({ title: "Zoom", sections: [
+const commands = ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"];
+const menuModel = zoomIn => ({ buttons: commands.map(id => ({ id, icon: id, label: id, tooltip: id, enabled: id !== "zoom_in" || zoomIn, selected: false })), title: "Zoom", sections: [
   [["Zoom in", { type: "invoke", command: "zoom_in" }, zoomIn], ["Actual Pixels", { type: "invoke", command: "actual_pixels" }, true]],
   [["50%", { type: "set_zoom", zoom: 0.5 }, true], ["200%", { type: "set_zoom", zoom: 2 }, true]],
 ].map(section => section.map(([label, action, enabled]) => ({ label, action, enabled, hint: "", selected: null, sections: [] }))) });
@@ -40,6 +42,7 @@ function harness() {
   let camera = { zoom: 0.5, rotation: Math.PI / 2 }, zoomIn = true;
   const element = (tag, className) => new FakeElement(tag, className);
   const numberField = (control, label, onChange, inline) => {
+    label = typeof label === "function" ? label() : label;
     const field = element("div", "number-control");
     const entry = element("input", "number-entry"), valueButton = element("button", "number-value");
     field.append(valueButton, entry);
@@ -56,7 +59,11 @@ function harness() {
     }
   };
   const readout = createZoomReadout({
-    root, workspace, canvas, element, numberField, control: { kind: "slider", unit: "%" },
+    root, workspace, canvas, element, numberField,
+    button: (text, action) => { const node = element("button"); node.addEventListener("click", action); return node; },
+    icon: name => element("svg", name),
+    catalog: { zoom: { kind: "slider", unit: "%" }, rotation: { kind: "slider", unit: "°" }, navigator_commands: commands,
+      native_copy: { header: { zoom: "Zoom", rotation: "Rotation" } } },
     menu: () => menuModel(zoomIn), renderMenu, refreshMenu: renderMenu,
     dispatch: action => dispatched.push(action), camera: () => camera, doc: document, target: window,
     viewport: () => ({ width: 1440, height: 1000 }),
@@ -159,4 +166,24 @@ test("the menu stays inside the viewport", () => {
   const size = { width: 240, height: 300 }, viewport = { width: 800, height: 600 };
   assert.deepEqual(zoomMenuPlacement({ left: 700, top: 560, right: 798, bottom: 580 }, size, viewport), { left: 800 - 240 - MARGIN, top: 560 - 300 - MARGIN });
   assert.deepEqual(zoomMenuPlacement({ left: 0, top: 40, right: 60, bottom: 60 }, size, viewport), { left: MARGIN, top: 60 + MARGIN });
+});
+
+test("rotation and navigation buttons follow the open menu and keep it open", () => {
+  const h = harness();
+  h.root.dispatch("contextmenu");
+  assert.equal(h.readout.open(), true);
+  assert.equal(h.readout.rotation.label, "Rotation");
+  assert.deepEqual(h.readout.rotation.values, [Math.PI / 2]);
+  h.readout.rotation.onChange(Math.PI / 4);
+  h.readout.controls.children[3].click();
+  assert.deepEqual(h.dispatched, [{ type: "set_rotation", rotation: Math.PI / 4 }, { type: "invoke", command: "rotate_right" }]);
+  assert.equal(h.readout.open(), true);
+  h.setZoomIn(false);
+  h.readout.refresh({ zoom: 16, rotation: Math.PI / 4 });
+  assert.deepEqual(h.readout.rotation.values, [Math.PI / 2, Math.PI / 4]);
+  assert.equal(h.readout.controls.children[1].disabled, true);
+  assert.equal(h.key(h.readout.rotation.entry).defaultPrevented, false);
+  h.readout.close();
+  h.readout.refresh({ zoom: 4, rotation: 0 });
+  assert.deepEqual(h.readout.rotation.values, [Math.PI / 2, Math.PI / 4]);
 });

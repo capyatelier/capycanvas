@@ -56,6 +56,51 @@ fn native_zoom_readout_menu_and_field() {
     assert!(w.area.has_focus());
     assert!(!w.view_info.root.can_focus(), "the readout never takes focus from the canvas");
 
+    for theme in [Theme::Light, Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        open(&w, &mut input);
+        until(|| w.view_info.rotation.is_mapped(), "the rotation slider is visible");
+        capture_menu(&w, &format!("zoom-menu-{theme:?}.png"));
+        choose(&w, &mut input, "Lock rotation");
+        until(|| state(&w).camera.rotation_locked && !w.view_info.menu.is_visible(), "rotation lock applies");
+        open(&w, &mut input);
+        choose(&w, &mut input, "Lock zoom");
+        until(|| state(&w).camera.zoom_locked && !w.view_info.menu.is_visible(), "zoom lock applies");
+        open(&w, &mut input);
+        capture_menu(&w, &format!("zoom-menu-locked-{theme:?}.png"));
+        for (name, changed) in [("zoom-RotateRight", 0), ("zoom-RotateLeft", 0),
+            ("zoom-ZoomIn", 1), ("zoom-ZoomOut", 1), ("zoom-FlipHorizontal", 2), ("zoom-FlipVertical", 2)] {
+            let button = descendants::<gtk::Button>(w.view_info.menu.upcast_ref()).into_iter()
+                .find(|b| b.widget_name() == name && b.is_mapped()).unwrap();
+            let before = state(&w).camera;
+            input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
+            until(|| {
+                let after = state(&w).camera;
+                match changed { 0 => after.rotation != before.rotation, 1 => after.zoom != before.zoom, _ => after.flipped != before.flipped }
+            }, "the navigation button works while gestures are locked");
+            assert!(w.view_info.menu.is_visible());
+        }
+        let value = descendants::<gtk::Button>(w.view_info.rotation.upcast_ref()).into_iter()
+            .find(|b| b.is_mapped() && b.has_css_class("number-value")).unwrap();
+        input.click(screen_point(value.upcast_ref(), &w.window, [0.5, 0.5]));
+        let entry = descendants::<gtk::Entry>(w.view_info.rotation.upcast_ref()).into_iter().next().unwrap();
+        until(|| entry.is_mapped(), "the rotation editor opens");
+        for key in ['4' as u32, '5' as u32, 0xff0d] { input.key(key); }
+        until(|| (state(&w).camera.rotation - std::f32::consts::FRAC_PI_4).abs() < 1e-5, "typed rotation applies while locked");
+        let slider = descendants::<gtk::Scale>(w.view_info.rotation.upcast_ref()).into_iter().find(|s| s.is_mapped()).unwrap();
+        input.click(screen_point(slider.upcast_ref(), &w.window, [0.3, 0.5]));
+        until(|| (state(&w).camera.rotation - std::f32::consts::FRAC_PI_4).abs() > 0.01, "the rotation slider works while locked");
+        choose(&w, &mut input, "Reset rotation");
+        until(|| state(&w).camera.rotation.abs() < 1e-6 && !w.view_info.menu.is_visible(), "reset rotation applies");
+        open(&w, &mut input);
+        choose(&w, &mut input, "Lock rotation");
+        open(&w, &mut input);
+        choose(&w, &mut input, "Lock zoom");
+        w.dispatch(UiAction::Invoke { command: CommandId::FlipHorizontal });
+        w.dispatch(UiAction::Invoke { command: CommandId::FlipVertical });
+        assert!(!state(&w).camera.zoom_locked && !state(&w).camera.rotation_locked);
+    }
+
     open(&w, &mut input);
     pump(200);
     capture_menu(&w, "zoom-menu.png");

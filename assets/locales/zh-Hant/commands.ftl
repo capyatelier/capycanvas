@@ -596,3 +596,7 @@ commands-transform-again-whole-layer = 請取消像素選取範圍並選取整�
 commands-show-histogram = 顯示直方圖
 command-waveform = 波形
 commands-show-waveform = 顯示波形
+menu-rotation = 旋轉
+menu-reset-rotation = 重設旋轉
+menu-lock-rotation = 鎖定旋轉
+menu-lock-zoom = 鎖定縮放

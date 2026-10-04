@@ -23,6 +23,7 @@ canvas is 6000 × 4000.
 | Pan: Hand tool, one or two fingers | 90 | Renderer 60.1 completed canvas updates/s; completion gap p99 18.8–19.3 ms, 24 MP photo | Spatial composition comparison below; 90 Hz not met |
 | Pinch zoom | 90 | Every 60 Hz vsync, 4096 px document; GPU p50 7.8 ms Linear, 8.5 ms Perceptual | [Blend space](../internals/rendering.md#blend-space), 2026-09-28 |
 | Two-finger rotate | 90 | | |
+| Footer zoom and rotation sliders | 90 | Unmeasured on the reference tablet | |
 | Navigator drag | 90 | | |
 | Brush-cursor hover | 90 | | |
 | Placed-photo drag (24 MP photo) | 90 | screen 59.0/s; renderer 99.4 completed updates/s, Navigator closed | Transform presentation below; 90 Hz not met |

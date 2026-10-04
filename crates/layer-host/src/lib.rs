@@ -1742,6 +1742,16 @@ mod tests {
         app.dispatch(serde_json::from_value(actual["action"].clone()).unwrap()).unwrap();
         assert_eq!(app.session.state().camera.zoom, 1.0);
         assert_eq!(app.query(json!({"type": "catalog"})).unwrap()["zoom"], json!(layer_ui::NumericControl::zoom()));
+        app.take_value().unwrap();
+        for action in [layer_ui::UiAction::SetZoomLocked { locked: true }, layer_ui::UiAction::SetRotationLocked { locked: true }] {
+            app.dispatch(action).unwrap();
+            let update = app.take_value().unwrap();
+            assert_eq!(update["camera"], json!(app.session.state().camera));
+        }
+        let menu = app.query(json!({"type": "zoom_menu"})).unwrap();
+        assert_eq!(menu["sections"][3][0]["selected"], true);
+        assert_eq!(menu["sections"][3][1]["selected"], true);
+        assert_eq!(menu["buttons"].as_array().unwrap().len(), layer_ui::NAVIGATOR_COMMANDS.len());
     }
 
     #[test]

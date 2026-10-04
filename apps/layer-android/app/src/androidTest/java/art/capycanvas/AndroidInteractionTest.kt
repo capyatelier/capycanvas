@@ -9,6 +9,7 @@ import android.view.View
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Rect
 import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -2025,6 +2026,10 @@ class AndroidInteractionTest {
         return result
     }
     @Test fun zoomReadoutMenuAndFieldAcrossDevices() {
+        fun choose(text: String) {
+            revealInMenu(hasLabel(text), "zoom-menu")
+            tap(zoomItem(text)!!.center)
+        }
         fun invoke(command: String) = action(obj("type" to "invoke", "command" to command))
         fun camera() = state().getJSONObject("camera")
         fun zoom() = camera().getDouble("zoom")
@@ -2051,17 +2056,59 @@ class AndroidInteractionTest {
         val originalTheme = state().getJSONObject("settings").opt("theme") ?: JSONObject.NULL
         popupInput = true
         try {
-            for (device in pointerTools) {
+            for (theme in listOf("light", "dark")) for (device in pointerTools) {
+                action(obj("type" to "set_theme", "theme" to theme))
                 val name = listOf("mouse", "finger", "stylus")[pointerTools.indexOf(device)]
                 tool = device
                 action(obj("type" to "set_zoom", "zoom" to .37))
                 open(name)
-                if (device == MotionEvent.TOOL_TYPE_STYLUS) for (theme in listOf("light", "dark")) {
-                    action(obj("type" to "set_theme", "theme" to theme))
-                    waitFor("$name the menu stays open across themes", 3_000) { zoomMenuShown() }
-                    captureCanvasBar("zoom-menu-$theme", "zoom-readout")
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) captureCanvasBar("zoom-menu-$theme", "zoom-readout")
+                choose("Lock rotation")
+                waitFor("$name rotation lock applies", 5_000) { camera().getBoolean("rotation_locked") && !zoomMenuShown() }
+                open(name)
+                choose("Lock zoom")
+                waitFor("$name zoom lock applies", 5_000) { camera().getBoolean("zoom_locked") && !zoomMenuShown() }
+                open(name)
+                onMain {
+                    for (label in listOf("Lock rotation", "Lock zoom")) {
+                        val row = generateSequence(zoomMenuRoot()?.find(hasLabel(label))) { it.parent }
+                            .firstOrNull { it.config.getOrNull(SemanticsProperties.Selected) != null }
+                        assertEquals("$label has a checkmark", true, row?.config?.getOrNull(SemanticsProperties.Selected))
+                    }
                 }
-                tap(zoomItem("200%")!!.center)
+                if (device == MotionEvent.TOOL_TYPE_STYLUS) captureCanvasBar("zoom-menu-locked-$theme", "zoom-readout")
+                for (id in listOf("zoom_in", "zoom_out", "rotate_right", "rotate_left", "flip_horizontal", "flip_vertical")) {
+                    val before = camera()
+                    revealInMenu(hasTag("zoom-$id"), "zoom-menu")
+                    tap(bounds("zoom-$id").center)
+                    waitFor("$name $id works while locked", 5_000) { camera().getLong("revision") > before.getLong("revision") }
+                    val after = camera()
+                    if (id.startsWith("zoom_")) assertNotEquals(before.getDouble("zoom"), after.getDouble("zoom"))
+                    else if (id.startsWith("rotate_")) assertNotEquals(before.getDouble("rotation"), after.getDouble("rotation"))
+                    else assertNotEquals(before.getJSONArray("flipped").toString(), after.getJSONArray("flipped").toString())
+                    assertTrue("$name navigation buttons keep the menu open", zoomMenuShown())
+                }
+                revealInMenu(hasTag("number-value-Rotation"), "zoom-menu")
+                tap(bounds("number-value-Rotation").center)
+                waitFor("$name rotation editor takes keyboard focus", 5_000) {
+                    var typing = false
+                    onMain { typing = zoomMenuRoot()?.let { it.view.hasWindowFocus() && it.find(hasTag("number-Rotation")) != null } == true }
+                    typing
+                }
+                instrumentation.sendStringSync("45")
+                instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_ENTER)
+                waitFor("$name typed rotation works while locked", 5_000) { kotlin.math.abs(camera().getDouble("rotation") - Math.PI / 4) < .00001 }
+                revealInMenu(hasTag("number-slider-Rotation"), "zoom-menu")
+                val slider = bounds("number-slider-Rotation")
+                tap(Offset(slider.left + slider.width * .3f, slider.center.y))
+                waitFor("$name rotation slider works while locked", 5_000) { kotlin.math.abs(camera().getDouble("rotation") - Math.PI / 4) > .01 }
+                choose("Reset rotation")
+                waitFor("$name reset rotation applies", 5_000) { kotlin.math.abs(camera().getDouble("rotation")) < .00001 && !zoomMenuShown() }
+                open(name); choose("Lock rotation")
+                open(name); choose("Lock zoom")
+                invoke("flip_horizontal"); invoke("flip_vertical")
+                open(name)
+                choose("200%")
                 waitFor("$name 200% applies and closes the menu", 5_000) { zoom() == 2.0 && !zoomMenuShown() }
                 assertTrue("$name 200% lands on whole device pixels", whole())
                 waitFor("$name the readout follows the camera", 3_000) { readout("200% · 0°") }
@@ -2069,7 +2116,7 @@ class AndroidInteractionTest {
 
                 invoke("rotate_right"); action(obj("type" to "set_zoom", "zoom" to .37))
                 open(name)
-                tap(zoomItem("Actual Pixels")!!.center)
+                choose("Actual Pixels")
                 waitFor("$name Actual Pixels applies", 5_000) { zoom() == 1.0 && !zoomMenuShown() }
                 assertTrue("$name a quarter-turned 1:1 view lands on whole device pixels", whole())
                 waitFor("$name the readout shows the turned 1:1 view", 3_000) { readout("100% · 90°") }
@@ -2090,7 +2137,7 @@ class AndroidInteractionTest {
                 instrumentation.sendKeyDownUpSync(KeyEvent.KEYCODE_BACK)
                 waitFor("$name Back closes the menu and hands focus back", 5_000) { !zoomMenuShown() && owner.view.hasWindowFocus() }
                 assertNull(host.actionError)
-                println("PASS zoom readout device=$name")
+                println("PASS zoom readout device=$name theme=$theme")
             }
         } finally {
             popupInput = false
@@ -2494,14 +2541,16 @@ class AndroidInteractionTest {
         return result
     }
     /** Scroll the open menu until `text` lies inside it and the scroll has stopped. */
-    private fun revealInMenu(text: String) {
+    private fun revealInMenu(text: String) = revealInMenu(hasLabel(text), "workspace-menu")
+    private fun revealInMenu(match: (SemanticsNode) -> Boolean, menuTag: String) {
         var scrolled = false
-        onMain { scrolled = scrollMenuTo(text) }
+        onMain { scrolled = scrollMenuTo(match, menuTag) }
         if (scrolled) SystemClock.sleep(1_000)
     }
-    private fun scrollMenuTo(text: String): Boolean =
-        semanticsRoots().filter { it !== owner && it.find(hasTag("workspace-menu")) != null }
-            .firstNotNullOfOrNull { root -> root.find(hasLabel(text))?.let { root to it } }?.let { (root, item) ->
+    private fun scrollMenuTo(text: String): Boolean = scrollMenuTo(hasLabel(text), "workspace-menu")
+    private fun scrollMenuTo(match: (SemanticsNode) -> Boolean, menuTag: String): Boolean =
+        semanticsRoots().filter { it !== owner && it.find(hasTag(menuTag)) != null }
+            .firstNotNullOfOrNull { root -> root.find(match)?.let { root to it } }?.let { (root, item) ->
                 generateSequence(item.parent) { it.parent }.firstOrNull { it.config.getOrNull(SemanticsActions.ScrollBy) != null }?.let { list ->
                     val margin = item.size.height.toFloat()
                     val shownTop = list.boundsInRoot.top + margin

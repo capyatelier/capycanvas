@@ -165,7 +165,7 @@ try {
     [process.argv.includes("--color-pages-smoke"), () => checkPointwiseEffects({call,evaluate,settle,motion:false,colorPages:true,widths:[1100]}), checkErrors],
     [process.argv.includes("--image-placement"), () => checkDeviceImagePlacement({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle,device:true}), checkErrors],
-    [process.argv.includes("--zoom-readout"), () => checkZoomReadout({call,evaluate,settle,device:true}), checkErrors],
+    [(process.argv.includes("--zoom-readout") || process.argv.includes("--zoom-controls")), () => checkZoomReadout({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
     [process.argv.includes("--photo-edit"), () => checkPhotoEdit({call,evaluate,settle,device:true}), checkErrors],
     [process.argv.includes("--canvas-size"), () => checkCanvasSize({call,evaluate,settle,device:true}), checkErrors],

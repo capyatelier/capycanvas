@@ -388,16 +388,26 @@ to whole device pixels, so the bilinear presenter samples pixel centres and the
 Chrome does not switch tabs. It differs from the placement bar's **Original Size
 (100%)**, which returns a placed image to its own pixel size.
 The footer's "N% · D°" readout is a button. It opens `UiSession::zoom_menu()`:
-Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400% as
-`UiAction::SetZoom { zoom }`, beside a typed zoom field described by
-`NumericControl::zoom()` (percent on a logarithmic track). `SetZoom` clamps to
-the camera limits, zooms about the work-area centre and rounds like Actual
-Pixels. The field takes its value from the camera, not a model, and refreshes
-only while the menu is open, so navigation updates one label. Web, Android,
-Windows, macOS and iPadOS read the field's control from `UiCatalog.zoom` and the menu
-through the Web `zoom_menu` export or the `zoom_menu` native query. Opening the menu or choosing
-an item never takes keyboard focus from the canvas; only typing in the field
-borrows it:
+Zoom In, Zoom Out, Fit, Actual Pixels, then 25% to 400%, with a typed zoom field
+from `NumericControl::zoom()` (percent on a logarithmic track). `SetZoom` clamps
+to the camera limits, zooms about the work-area centre and rounds like Actual
+Pixels. The field takes its value from the camera and refreshes only while the
+menu is open.
+
+GTK, Web and Android also show a rotation slider from
+`NumericControl::rotation()`, Reset rotation, and a separate section with Lock
+rotation and Lock zoom checkmarks. `SetRotation` rotates about the work-area
+centre without changing the artwork. The locks belong to the camera and stop
+canvas navigation gestures, including touch, wheel and continuous zoom input;
+pan remains available. Explicit sliders, percentages, commands and shortcuts
+remain usable while locked. The bottom row uses the same shared
+`NAVIGATOR_COMMANDS` order as Navigator: zoom out/in, rotate left/right and flip
+horizontal/vertical. These buttons keep the menu open and follow live command
+availability.
+
+Hosts read numeric specifications from `UiCatalog` and menu sections and buttons
+from the Web `zoom_menu` export or native `zoom_menu` query. Opening the menu or
+choosing an item preserves canvas keyboard focus; typing borrows it:
 - GTK's readout button cannot take focus, and closing its popover returns
   focus to the canvas.
 - Web's `#view-info` button is out of the tab order and its menu cancels the

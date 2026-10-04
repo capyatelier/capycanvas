@@ -1,3 +1,6 @@
+import { createNavigationControls } from "./navigation-controls.js";
+import { bindCopy } from "./localization.js";
+
 export const MARGIN = 6;
 
 export const readoutText = camera => `${Math.round(camera.zoom * 100)}% · ${Math.round((camera.rotation * 180) / Math.PI)}°`;
@@ -8,36 +11,47 @@ export function zoomMenuPlacement(anchor, size, viewport) {
   return { left, top: above >= MARGIN ? above : Math.max(MARGIN, Math.min(anchor.bottom + MARGIN, viewport.height - size.height - MARGIN)) };
 }
 
-export function createZoomReadout({ root, workspace, canvas, element, numberField, control, menu, renderMenu, refreshMenu,
+export function createZoomReadout({ root, workspace, canvas, element, button, icon, numberField, catalog, menu, renderMenu, refreshMenu,
   dispatch, camera, toggled = () => {}, doc = globalThis.document, target = globalThis,
   viewport = () => ({ width: innerWidth, height: innerHeight }) }) {
   root.type = "button"; root.tabIndex = -1;
-  root.title = "Canvas zoom and rotation";
+  const copy = catalog.native_copy.header;
+  bindCopy(root, () => copy.zoom, "title");
   root.setAttribute("aria-haspopup", "menu"); root.setAttribute("aria-expanded", "false");
-  const field = numberField(control, "Zoom", zoom => dispatch({ type: "set_zoom", zoom }), true);
+  const field = numberField(catalog.zoom, () => copy.zoom, zoom => dispatch({ type: "set_zoom", zoom }), true);
+  const rotation = numberField(catalog.rotation, () => copy.rotation, rotation => dispatch({ type: "set_rotation", rotation }));
+  rotation.classList.add("rotation-field");
   const popup = element("div", "zoom-menu");
-  popup.popover = "auto"; popup.setAttribute("aria-label", "Zoom");
+  popup.popover = "auto";
+  bindCopy(popup, () => copy.zoom, "ariaLabel");
   const items = element("div", "zoom-menu-items");
   items.setAttribute("role", "menu");
-  popup.append(field, element("hr"), items); workspace.append(popup);
+  const controls = createNavigationControls({ element, button, icon, dispatch, commands: catalog.navigator_commands, prefix: "zoom" });
+  popup.append(field, rotation, element("hr"), items, element("hr"), controls); workspace.append(popup);
   let text = "", wasOpen = false, previous = null;
   const open = () => popup.matches(":popover-open");
   const close = () => { if (open()) popup.hidePopover(); };
   const keepFocus = e => { if (!e.target.closest?.("input")) e.preventDefault(); };
   root.addEventListener("mousedown", keepFocus);
   popup.addEventListener("mousedown", keepFocus);
-  root.addEventListener("contextmenu", e => e.preventDefault());
+  root.addEventListener("contextmenu", e => { e.preventDefault(); if (!open()) show(); });
   root.addEventListener("pointerdown", () => { wasOpen = open(); });
   root.addEventListener("click", () => {
     const skip = wasOpen; wasOpen = false;
     if (skip || open()) { close(); return; }
+    show();
+  });
+  function show() {
     previous = doc.activeElement;
-    renderMenu(items, menu(), close);
+    const model = menu();
+    renderMenu(items, model, close);
+    controls.update(model.buttons);
     field.update(camera().zoom);
+    rotation.update(camera().rotation);
     popup.showPopover();
     const { left, top } = zoomMenuPlacement(root.getBoundingClientRect(), popup.getBoundingClientRect(), viewport());
     popup.style.left = `${left}px`; popup.style.top = `${top}px`;
-  });
+  }
   popup.addEventListener("toggle", e => {
     const shown = e.newState === "open";
     root.setAttribute("aria-expanded", String(shown));
@@ -52,7 +66,7 @@ export function createZoomReadout({ root, workspace, canvas, element, numberFiel
     toggled();
   });
   target.addEventListener("keydown", e => {
-    if (e.key !== "Escape" || !open() || e.target === field.entry) return;
+    if (e.key !== "Escape" || !open() || e.target === field.entry || e.target === rotation.entry) return;
     e.preventDefault(); e.stopPropagation();
     close();
   }, { capture: true });
@@ -61,7 +75,10 @@ export function createZoomReadout({ root, workspace, canvas, element, numberFiel
     if (next !== text) root.textContent = text = next;
     if (!open()) return;
     field.update(state.zoom);
-    refreshMenu(items, menu(), close);
+    rotation.update(state.rotation);
+    const model = menu();
+    refreshMenu(items, model, close);
+    controls.update(model.buttons);
   }
-  return { root, popup, field, items, refresh, open, close };
+  return { root, popup, field, rotation, controls, items, refresh, open, close };
 }

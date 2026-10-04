@@ -223,6 +223,15 @@ impl NumericControl {
     pub fn pressure() -> Self {
         Self::number(0.25, 4.0, 0.05, 2).unit("×")
     }
+    pub fn rotation() -> Self {
+        Self {
+            kind: NumericKind::Slider,
+            scale: 180.0 / std::f64::consts::PI,
+            resolution: std::f64::consts::PI / 1800.0,
+            unit: "°".into(),
+            ..Self::number(-std::f64::consts::PI, std::f64::consts::PI, std::f64::consts::PI / 180.0, 1)
+        }
+    }
     pub fn validate(&self, value: f32, label: impl Into<ResourceLabel>) -> Result<(), NumericError> {
         // Actions and engine parameters are f32, including their endpoints.
         if !value.is_finite() || !(self.min as f32..=self.max as f32).contains(&value) {

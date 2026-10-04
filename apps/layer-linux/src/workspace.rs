@@ -2849,7 +2849,7 @@ impl Workspace {
             self.preferences.refresh(self, view);
         }
         if regions & regions::CAMERA != 0 {
-            self.view_info.refresh(&state.camera);
+            self.view_info.refresh(&state.camera, &state.commands);
         }
         if regions & (regions::CANVAS_BAR | regions::COMMANDS | regions::LAYOUT) != 0 {
             self.canvas_bar.refresh(self, state.canvas_bar.as_ref());

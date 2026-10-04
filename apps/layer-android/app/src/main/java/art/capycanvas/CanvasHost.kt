@@ -156,6 +156,10 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     /** Exact camera zoom for the readout's field; only an open zoom menu reads it. */
     internal var cameraZoom by mutableFloatStateOf(1f)
         private set
+    internal var cameraRotation by mutableFloatStateOf(0f)
+        private set
+    internal var cameraLocks by mutableStateOf(false to false)
+        private set
     internal val canvasBar: JSONObject? get() = snapshot?.objectOrNull("state")?.objectOrNull("canvas_bar")
     internal var canvasBarVisible by mutableStateOf(true)
         private set
@@ -921,6 +925,8 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     private fun updateCameraReadout(camera: JSONObject) {
         cameraZoom = camera.number("zoom", 1.0)
+        cameraRotation = camera.number("rotation")
+        cameraLocks = camera.optBoolean("zoom_locked") to camera.optBoolean("rotation_locked")
         cameraReadout = CameraReadout((cameraZoom * 100).roundToInt(),
             (camera.number("rotation") * 180 / Math.PI).roundToInt())
     }

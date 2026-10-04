@@ -596,3 +596,7 @@ commands-transform-again-whole-layer = ยกเลิกการเลือ�
 commands-show-histogram = แสดงฮิสโตแกรม
 command-waveform = รูปคลื่น
 commands-show-waveform = แสดงรูปคลื่น
+menu-rotation = การหมุน
+menu-reset-rotation = รีเซ็ตการหมุน
+menu-lock-rotation = ล็อกการหมุน
+menu-lock-zoom = ล็อกการซูม

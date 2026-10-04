@@ -598,3 +598,7 @@ commands-transform-again-whole-layer = Bỏ vùng chọn pixel và chọn toàn 
 commands-show-histogram = Hiện biểu đồ phân bố
 command-waveform = Dạng sóng
 commands-show-waveform = Hiện dạng sóng
+menu-rotation = Xoay
+menu-reset-rotation = Đặt lại góc xoay
+menu-lock-rotation = Khóa xoay
+menu-lock-zoom = Khóa thu phóng

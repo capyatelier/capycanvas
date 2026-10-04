@@ -102,7 +102,7 @@ pub use command_catalog::{COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescr
 mod document_files;
 #[path = "workspace_session.rs"]
 mod workspace_session;
-pub use application_menu::{ApplicationLink, ApplicationMenu};
+pub use application_menu::{ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS};
 pub use workspace_session::PreparedWorkspace;
 #[path = "effects.rs"]
 pub(crate) mod effects;
@@ -2902,6 +2902,27 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.sync_camera();
                 (CAMERA, true)
             }
+            UiAction::SetRotation { rotation } => {
+                self.require_idle()?;
+                self.state.camera.rotate_to(rotation)?;
+                self.initial_fit = false;
+                self.sync_camera();
+                (CAMERA, true)
+            }
+            UiAction::SetZoomLocked { locked } => {
+                self.require_idle()?;
+                self.state.camera.zoom_locked = locked;
+                self.state.camera.revision += 1;
+                self.sync_camera();
+                (CAMERA, false)
+            }
+            UiAction::SetRotationLocked { locked } => {
+                self.require_idle()?;
+                self.state.camera.rotation_locked = locked;
+                self.state.camera.revision += 1;
+                self.sync_camera();
+                (CAMERA, false)
+            }
             UiAction::FilterPicker { action } => {
                 self.state.filter_picker.apply(action);
                 self.state.adjustments =
@@ -5022,7 +5043,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                             CommandId::RotateRight => std::f32::consts::FRAC_PI_2,
                             _ => 0.0,
                         };
-                        camera.gesture(center, center, scale, rotation)?;
+                        camera.transform(center, center, scale, rotation)?;
                     }
                 }
                 self.sync_camera();

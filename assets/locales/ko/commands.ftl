@@ -596,3 +596,7 @@ commands-transform-again-whole-layer = 픽셀 선택을 해제하고 레이어 �
 commands-show-histogram = 히스토그램 표시
 command-waveform = 파형
 commands-show-waveform = 파형 표시
+menu-rotation = 회전
+menu-reset-rotation = 회전 초기화
+menu-lock-rotation = 회전 잠금
+menu-lock-zoom = 확대/축소 잠금

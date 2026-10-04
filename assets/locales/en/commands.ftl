@@ -597,3 +597,7 @@ commands-transform-again-whole-layer = Clear the pixel selection and select a wh
 commands-show-histogram = Show Histogram
 command-waveform = Waveform
 commands-show-waveform = Show Waveform
+menu-rotation = Rotation
+menu-reset-rotation = Reset rotation
+menu-lock-rotation = Lock rotation
+menu-lock-zoom = Lock zoom

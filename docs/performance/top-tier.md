@@ -12,6 +12,7 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#benchmarks), 2026-09-27 |
 | Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | 2026-09-22; `2c3cb244`, 2026-09-27 |
 | Two-finger rotate | 120 | | |
+| Footer zoom and rotation sliders | 120 | Unmeasured on the reference tablet | |
 | Navigator drag | 120 | | |
 | Brush-cursor hover | 120 | | |
 | Placed-photo drag (24 MP photo) | 120 | | |

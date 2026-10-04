@@ -247,7 +247,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .panel-context-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 180px; max-height: calc(100dvh - 24px); overflow-y: auto; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; user-select: none; -webkit-user-select: none; }
 .panel-context-menu button { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 8px; text-align: left; font-weight: 400; }
 .panel-context-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
-.zoom-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 240px; width: max-content; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; font-size: var(--ui-text-size); user-select: none; -webkit-user-select: none; }
+.zoom-menu { position: fixed; inset: auto; margin: 0; padding: 6px; min-width: 240px; width: max-content; max-height: calc(100dvh - 12px); overflow-y: auto; border: 0; border-radius: var(--surface-radius); background: var(--popover); color: var(--text); box-shadow: 0 4px 16px #0005; font-size: var(--ui-text-size); user-select: none; -webkit-user-select: none; }
 .zoom-menu hr { height: 1px; border: 0; margin: 6px; background: color-mix(in srgb, var(--text) 15%, transparent); }
 .zoom-menu > .number-control { padding: 2px 8px; }
 .zoom-menu-items { display: flex; flex-direction: column; }

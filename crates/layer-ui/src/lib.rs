@@ -116,7 +116,7 @@ pub use workspace_manager_ui::{ManagedWorkspace, WorkspaceChoice, WorkspaceComma
 mod stats;
 pub use session::{HistogramAction, HistogramView};
 pub use session::{
-    AdjustmentChoice, ApplicationLink, ApplicationMenu, ClipboardCapture, CloseDecision,
+    AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT,
     DocumentColorOperation, DocumentIdleReason, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
@@ -339,6 +339,8 @@ pub struct UiCatalog {
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
     pub zoom: NumericControl,
+    pub rotation: NumericControl,
+    pub navigator_commands: &'static [CommandId],
     /// Blend mode labels in code order, for hosts that show a flat list.
     pub layer_blends: Vec<std::sync::Arc<str>>,
 }
@@ -377,6 +379,8 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
         opacity: NumericControl::percent(),
         layer_opacity: NumericControl::layer_opacity(),
         zoom: NumericControl::zoom(),
+        rotation: NumericControl::rotation(),
+        navigator_commands: &NAVIGATOR_COMMANDS,
         layer_blends: layer_core::LayerBlend::ALL
             .iter()
             .map(|b| session::effects::blend_label(*b, localization))
@@ -1386,6 +1390,15 @@ pub enum UiAction {
     /// Zoom about the work-area centre, clamped to the camera limits.
     SetZoom {
         zoom: f32,
+    },
+    SetRotation {
+        rotation: f32,
+    },
+    SetZoomLocked {
+        locked: bool,
+    },
+    SetRotationLocked {
+        locked: bool,
     },
     SelectBrush {
         id: u32,

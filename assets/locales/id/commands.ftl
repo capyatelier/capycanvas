@@ -1179,3 +1179,7 @@ commands-transform-again-whole-layer = Batalkan seleksi piksel dan pilih lapisan
 commands-show-histogram = Tampilkan Histogram
 command-waveform = Bentuk gelombang
 commands-show-waveform = Tampilkan bentuk gelombang
+menu-rotation = Rotasi
+menu-reset-rotation = Atur ulang rotasi
+menu-lock-rotation = Kunci rotasi
+menu-lock-zoom = Kunci zoom

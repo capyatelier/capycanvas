@@ -597,3 +597,7 @@ commands-transform-again-whole-layer = Borra la selección de píxeles y selecci
 commands-show-histogram = Mostrar histograma
 command-waveform = Forma de onda
 commands-show-waveform = Mostrar forma de onda
+menu-rotation = Rotación
+menu-reset-rotation = Restablecer rotación
+menu-lock-rotation = Bloquear rotación
+menu-lock-zoom = Bloquear zoom

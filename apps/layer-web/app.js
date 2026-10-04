@@ -1831,7 +1831,7 @@ try {
   canvasBar = createCanvasBar({ app, workspace, element, button, icon, dispatch, glass, reappearMs: catalog.canvas_bar_reappear_ms,
     openMenu: node => customization.openMenu(node), presented: () => { selectionUi.place(); frequencySeparationUi.place(); notice?.place(); } });
   notice = createNotice({ workspace, element, button, answer: answerNotice, layout: () => layout, bar: () => selectionUi.bounds() ?? frequencySeparationUi.bounds() ?? canvasBar.bounds() });
-  zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, numberField, control: catalog.zoom,
+  zoomReadout = createZoomReadout({ root: $("view-info"), workspace, canvas, element, button, icon, numberField, catalog,
     menu: () => app.zoom_menu(), renderMenu: customization.renderMenu, refreshMenu: customization.refreshMenu,
     dispatch, camera: () => state.camera, toggled: updateZen });
   const screenChip = element("button", "proof-status");

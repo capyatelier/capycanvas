@@ -597,3 +597,7 @@ commands-transform-again-whole-layer = Piksel seçimini kaldırın ve bir katman
 commands-show-histogram = Histogramı göster
 command-waveform = Dalga biçimi
 commands-show-waveform = Dalga biçimini göster
+menu-rotation = Döndürme
+menu-reset-rotation = Döndürmeyi sıfırla
+menu-lock-rotation = Döndürmeyi kilitle
+menu-lock-zoom = Yakınlaştırmayı kilitle

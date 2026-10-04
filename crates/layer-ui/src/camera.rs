@@ -15,6 +15,8 @@ pub struct Camera {
     pub viewport: [u32; 2],
     pub zoom: f32,
     pub rotation: f32,
+    pub zoom_locked: bool,
+    pub rotation_locked: bool,
     /// Document-axis reflections; affect presentation and input, never pixels.
     pub flipped: [bool; 2],
     pub translation: [f32; 2],
@@ -30,6 +32,8 @@ impl Camera {
             viewport,
             zoom: 1.0,
             rotation: 0.0,
+            zoom_locked: false,
+            rotation_locked: false,
             flipped: [false; 2],
             translation: [0.0; 2],
             work_area: [0.0, 0.0, viewport[0] as f32, viewport[1] as f32],
@@ -63,6 +67,20 @@ impl Camera {
 
     /// Carries the document point at `from` to `to`, with anchored zoom/rotate.
     pub fn gesture(
+        &mut self,
+        from: [f32; 2],
+        to: [f32; 2],
+        scale: f32,
+        rotation: f32,
+    ) -> Result<(), String> {
+        if !scale.is_finite() || scale <= 0.0 || !rotation.is_finite() {
+            return Err("Invalid camera gesture".into());
+        }
+        self.transform(from, to, if self.zoom_locked { 1.0 } else { scale },
+            if self.rotation_locked { 0.0 } else { rotation })
+    }
+
+    pub(crate) fn transform(
         &mut self,
         from: [f32; 2],
         to: [f32; 2],
@@ -187,6 +205,14 @@ impl Camera {
         let center = self.input_transform().map(layer_core::Point { x, y });
         self.flipped[usize::from(!horizontal)] ^= true;
         self.center_on([center.x, center.y]);
+    }
+
+    pub fn rotate_to(&mut self, rotation: f32) -> Result<(), String> {
+        if !rotation.is_finite() {
+            return Err("Invalid rotation".into());
+        }
+        let center = self.work_area_center();
+        self.transform(center, center, 1.0, rotation.rem_euclid(std::f32::consts::TAU) - self.rotation)
     }
 
     pub fn view(&self) -> ViewState {

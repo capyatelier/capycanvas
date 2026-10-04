@@ -314,7 +314,7 @@ impl Overview {
 pub struct Navigator {
     pub root: gtk::Box,
     overview: Overview,
-    buttons: Vec<(CommandId, gtk::Button)>,
+    controls: NavigationControls,
 }
 impl Navigator {
     pub fn new(images: &Rc<Overviews>) -> Self {
@@ -344,43 +344,16 @@ impl Navigator {
             }
         ));
         root.append(&overview);
-        let row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        row.set_homogeneous(true);
-        row.add_css_class("navigator-controls");
-        let buttons = [
-            CommandId::ZoomOut,
-            CommandId::ZoomIn,
-            CommandId::RotateLeft,
-            CommandId::RotateRight,
-            CommandId::FlipHorizontal,
-            CommandId::FlipVertical,
-        ]
-        .into_iter()
-        .map(|id| {
-            let button = crate::icons::button(&format!("layer-{}-symbolic", id.icon().unwrap()));
-            button.add_css_class("flat");
-            button.set_widget_name(&format!("navigator-{id:?}"));
-            button.set_tooltip_text(Some(&id.label()));
-            row.append(&button);
-            (id, button)
-        })
-        .collect();
-        root.append(&row);
+        let controls = NavigationControls::new("navigator");
+        root.append(&controls.root);
         Self {
             root,
             overview,
-            buttons,
+            controls,
         }
     }
     pub fn bind(&self, w: &Rc<Workspace>) {
-        for (id, button) in &self.buttons {
-            let id = *id;
-            button.connect_clicked(glib::clone!(
-                #[weak]
-                w,
-                move |_| w.dispatch(UiAction::Invoke { command: id })
-            ));
-        }
+        self.controls.bind(w);
         let drag = gtk::GestureDrag::new();
         drag.set_button(1);
         for phase in [ContactPhase::Down, ContactPhase::Move, ContactPhase::Up] {
@@ -442,8 +415,39 @@ impl Navigator {
                 self.overview.queue_draw();
             }
         }
+        self.controls.refresh(&state.commands);
+    }
+}
+
+pub(crate) struct NavigationControls {
+    pub root: gtk::Box,
+    buttons: Vec<(CommandId, gtk::Button)>,
+}
+impl NavigationControls {
+    pub fn new(prefix: &str) -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 2);
+        root.set_homogeneous(true);
+        root.add_css_class("navigator-controls");
+        let buttons = layer_ui::NAVIGATOR_COMMANDS.into_iter().map(|id| {
+            let button = crate::icons::button(&format!("layer-{}-symbolic", id.icon().unwrap()));
+            button.add_css_class("flat");
+            button.set_focus_on_click(false);
+            button.set_widget_name(&format!("{prefix}-{id:?}"));
+            root.append(&button);
+            (id, button)
+        }).collect();
+        Self { root, buttons }
+    }
+    pub fn bind(&self, w: &Rc<Workspace>) {
         for (id, button) in &self.buttons {
-            if let Some(command) = state.commands.iter().find(|c| c.id == *id) {
+            let id = *id;
+            button.connect_clicked(glib::clone!(#[weak] w,
+                move |_| w.dispatch(UiAction::Invoke { command: id })));
+        }
+    }
+    pub fn refresh(&self, commands: &[layer_ui::CommandState]) {
+        for (id, button) in &self.buttons {
+            if let Some(command) = commands.iter().find(|c| c.id == *id) {
                 button.set_sensitive(command.enabled);
                 button.set_tooltip_text(Some(&command.tooltip));
                 selected(button, command.selected);

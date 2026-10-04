@@ -25,6 +25,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Pan: Hand tool, one or two fingers | 60 | Photo, two fingers, Navigator open: screen 59.31 presents/s, p99 ≤16.70 ms; renderer 59.71 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Pinch zoom | 60 | Photo, Navigator open: screen 59.43 presents/s, p99 ≤16.86 ms; renderer 59.83 fresh completed updates/s | [Solid Color fills](#solid-color-fills) |
 | Two-finger rotate | 60 | | |
+| Footer zoom and rotation sliders | 60 | Unmeasured on the reference tablet | |
 | Navigator drag | 60 | | |
 | Brush-cursor hover | 60 | | |
 | Placed-photo translation | 60 | Navigator closed: screen 59.3 presents/s, p99 16.9 ms; renderer 122.9 completed updates/s | Earlier direct-presentation comparison below, `photo-translate-drag` |

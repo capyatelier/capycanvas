@@ -96,13 +96,18 @@ import kotlin.math.roundToInt
                     Size(rect.number("width") * density, rect.number("height") * density), blendMode = BlendMode.Clear)
             }
         }
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-            val commands = host.snapshot?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList()
-            for (id in listOf("zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical")) {
-                commands.find { it.getString("id") == id }?.let { command ->
-                    IconButton({ host.invoke(id) }, modifier = Modifier.size(32.dp).testTag("navigator-$id"), enabled = command.getBoolean("enabled")) {
-                        SharedIcon(command.getString("icon"), command.getString("label"))
-                    }
+        NavigationButtons(host)
+    }
+}
+
+@Composable internal fun NavigationButtons(host: CanvasHost,
+    commands: List<JSONObject> = host.snapshot?.getJSONObject("state")?.array("commands")?.objects() ?: emptyList(),
+    prefix: String = "navigator") {
+    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+        for (id in host.catalog.array("navigator_commands").let { ids -> (0 until ids.length()).map { ids.getString(it) } }) {
+            commands.find { it.getString("id") == id }?.let { command ->
+                IconButton({ host.invoke(id) }, modifier = Modifier.size(32.dp).testTag("$prefix-$id"), enabled = command.getBoolean("enabled")) {
+                    SharedIcon(command.getString("icon"), command.getString("label"))
                 }
             }
         }

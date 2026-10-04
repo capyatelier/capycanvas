@@ -62,8 +62,8 @@ fn set_zoom_clamps_to_the_camera_limits_and_waits_for_idle() {
 fn zoom_menu_offers_view_commands_then_fixed_levels() {
     let mut s = session(Platform::Gtk);
     let menu = s.zoom_menu();
-    let [commands, levels] = menu.sections.as_slice() else {
-        panic!("two sections: {menu:?}");
+    let [commands, levels, reset, locks] = menu.menu.sections.as_slice() else {
+        panic!("four sections: {menu:?}");
     };
     let invoked: Vec<_> = commands
         .iter()
@@ -72,6 +72,9 @@ fn zoom_menu_offers_view_commands_then_fixed_levels() {
             _ => panic!("{i:?}"),
         })
         .collect();
+    assert_eq!(reset[0].action, Some(UiAction::SetRotation { rotation: 0.0 }));
+    assert_eq!(locks.iter().map(|i| i.selected).collect::<Vec<_>>(), [Some(false), Some(false)]);
+    assert_eq!(menu.buttons.iter().map(|c| c.id).collect::<Vec<_>>(), NAVIGATOR_COMMANDS);
     assert_eq!(invoked, [CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels]);
     assert_eq!(commands[3].label, "Actual Pixels");
     assert_eq!(commands[3].hint, "Ctrl+1 / Ctrl+Alt+0");
@@ -87,7 +90,7 @@ fn zoom_menu_offers_view_commands_then_fixed_levels() {
     }
     s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
     let busy = s.zoom_menu();
-    assert!(busy.sections.iter().flatten().all(|i| !i.enabled), "no zoom item runs under a contact");
+    assert!(busy.menu.sections.iter().flatten().all(|i| !i.enabled), "no zoom item runs under a contact");
     assert_eq!(serde_json::to_value(NumericControl::zoom()).unwrap()["mapping"], serde_json::json!({"type": "log"}));
 }
 
@@ -104,6 +107,79 @@ fn zoom_field_types_percent_on_a_logarithmic_track() {
     assert!((halfway - (f64::from(MIN_ZOOM) * f64::from(MAX_ZOOM)).sqrt()).abs() < 1e-3, "{halfway}");
     let doubling = |v: f64| zoom.resolve(v, NumericOperation::Format).unwrap().fill;
     assert!(((doubling(2.0) - doubling(1.0)) - (doubling(1.0) - doubling(0.5))).abs() < 1e-9);
+}
+
+#[test]
+fn navigation_locks_preserve_pan_and_leave_explicit_controls_usable() {
+    for platform in [Platform::Gtk, Platform::Android, Platform::Web] {
+        let mut s = session(platform);
+        s.dispatch(UiAction::SetZoom { zoom: 1.0 }).unwrap();
+        s.dispatch(UiAction::SetRotation { rotation: 0.4 }).unwrap();
+        for (zoom, rotation) in [(true, false), (false, true), (true, true), (false, false)] {
+            s.dispatch(UiAction::SetZoomLocked { locked: zoom }).unwrap();
+            s.dispatch(UiAction::SetRotationLocked { locked: rotation }).unwrap();
+            let before = s.state.camera.clone();
+            let from = before.work_area_center();
+            let point = before.input_transform().map(layer_core::Point { x: from[0], y: from[1] });
+            let to = [from[0] + 30.0, from[1] - 20.0];
+            s.gesture(from, to, 1.2, 0.3).unwrap();
+            assert!((s.state.camera.zoom - before.zoom * if zoom { 1.0 } else { 1.2 }).abs() < 1e-5);
+            assert!((s.state.camera.rotation - before.rotation - if rotation { 0.0 } else { 0.3 }).abs() < 1e-5);
+            let anchored = s.state.camera.input_transform().map(layer_core::Point { x: to[0], y: to[1] });
+            assert!((anchored.x - point.x).abs() < 1e-3 && (anchored.y - point.y).abs() < 1e-3);
+            let locks = &s.zoom_menu().menu.sections[3];
+            assert_eq!(locks[0].selected, Some(rotation));
+            assert_eq!(locks[1].selected, Some(zoom));
+            assert_eq!(s.engine.view().document_to_surface, s.state.camera.document_to_surface());
+        }
+        s.dispatch(UiAction::SetZoomLocked { locked: true }).unwrap();
+        s.dispatch(UiAction::SetRotationLocked { locked: true }).unwrap();
+        let before = s.state.camera.clone();
+        for (scale, rotation) in [(f32::NAN, 0.0), (0.0, 0.0), (1.0, f32::INFINITY)] {
+            assert!(s.gesture([100., 100.], [100., 100.], scale, rotation).is_err());
+            assert_eq!(s.state.camera, before);
+        }
+        for (id, phase, point) in [(1, PenPhase::Down, [100., 100.]), (2, PenPhase::Down, [300., 100.]),
+            (2, PenPhase::Move, [200., 300.]), (1, PenPhase::Up, [100., 100.]), (2, PenPhase::Up, [200., 300.])] {
+            s.touch(id, phase, point);
+        }
+        assert_eq!(s.state.camera.zoom, before.zoom);
+        assert_eq!(s.state.camera.rotation, before.rotation);
+        assert_ne!(s.state.camera.translation, before.translation);
+        s.scroll([100., 100.], [0., -100.], 1.0, true, false).unwrap();
+        assert_eq!(s.state.camera.zoom, before.zoom);
+        invoke(&mut s, CommandId::ZoomIn);
+        assert!(s.state.camera.zoom > before.zoom);
+        invoke(&mut s, CommandId::RotateRight);
+        assert_ne!(s.state.camera.rotation, before.rotation);
+        s.dispatch(UiAction::SetZoom { zoom: 2.0 }).unwrap();
+        s.dispatch(UiAction::SetRotation { rotation: 0.0 }).unwrap();
+        assert_eq!(s.state.camera.zoom, 2.0);
+        assert!(s.state.camera.rotation.abs() < 1e-6);
+    }
+}
+
+#[test]
+fn rotation_field_preserves_the_center_and_refuses_invalid_or_busy_edits() {
+    let mut s = session(Platform::Gtk);
+    let center = s.state.camera.work_area_center();
+    let point = s.state.camera.input_transform().map(layer_core::Point { x: center[0], y: center[1] });
+    let control = NumericControl::rotation();
+    let value = control.resolve(0.0, NumericOperation::Expression { text: "45".into() }).unwrap();
+    assert!((value.value - std::f64::consts::FRAC_PI_4).abs() < 1e-6);
+    s.dispatch(UiAction::SetRotation { rotation: value.value as f32 }).unwrap();
+    let anchored = s.state.camera.input_transform().map(layer_core::Point { x: center[0], y: center[1] });
+    assert!((anchored.x - point.x).abs() < 1e-3 && (anchored.y - point.y).abs() < 1e-3);
+    let camera = s.state.camera.clone();
+    for rotation in [f32::NAN, f32::INFINITY] {
+        assert!(s.dispatch(UiAction::SetRotation { rotation }).is_err());
+        assert_eq!(s.state.camera, camera);
+    }
+    s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
+    for action in [UiAction::SetRotation { rotation: 0.0 }, UiAction::SetZoomLocked { locked: true }, UiAction::SetRotationLocked { locked: true }] {
+        assert!(s.dispatch(action).is_err());
+        assert_eq!(s.state.camera, camera);
+    }
 }
 
 #[test]

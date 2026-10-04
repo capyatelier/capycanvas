@@ -596,3 +596,7 @@ commands-transform-again-whole-layer = ピクセルの選択を解除して、�
 commands-show-histogram = ヒストグラムを表示
 command-waveform = 波形
 commands-show-waveform = 波形を表示
+menu-rotation = 回転
+menu-reset-rotation = 回転をリセット
+menu-lock-rotation = 回転をロック
+menu-lock-zoom = ズームをロック

@@ -213,7 +213,7 @@ try {
     [process.argv.includes("--notices"), () => checkNotices({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--screen-status"), () => checkScreenStatus({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pipeline-takeover"), () => checkPipelineTakeover({evaluate,settle}), checkErrors],
-    [process.argv.includes("--zoom-readout"), () => checkZoomReadout({call,evaluate,settle}), checkErrors],
+    [(process.argv.includes("--zoom-readout") || process.argv.includes("--zoom-controls")), () => checkZoomReadout({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--blend-menu"), () => checkBlendMenu({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--color-mixing"), () => checkColorMixing({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--pass-through"), () => checkPassThrough({call,evaluate,settle}), checkErrors],

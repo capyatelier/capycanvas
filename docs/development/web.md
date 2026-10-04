@@ -120,7 +120,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Area | Selectors |
 | --- | --- |
 | Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster`, `--color-mixing` |
-| Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-readout`, `--move-selection` |
+| Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
 | Layers and filters | `--layers`, `--blend-menu`, `--pass-through`, `--blending`, `--adjustments`, `--curves`, `--pointwise-effects`, `--filter-drawer`, `--filter-previews`, `--spatial-filter-windows`, `--photo-edit`, `--merges`, `--retouch-layers` |

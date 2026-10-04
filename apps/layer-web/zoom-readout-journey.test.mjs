@@ -16,7 +16,7 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
   const waitLong=async(expression,rounds=8)=>{for(let i=1;;i++){try{return await wait(expression);}catch(error){if(i>=rounds)throw error;}}};
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
   const invoke=command=>send({type:'invoke',command});
-  const camera=()=>evaluate('(()=>{const c=layerApp.state().camera;return{zoom:c.zoom,rotation:c.rotation,t:Array.from(c.translation)}})()');
+  const camera=()=>evaluate('(()=>{const c=layerApp.state().camera;return{zoom:c.zoom,rotation:c.rotation,t:Array.from(c.translation),flipped:Array.from(c.flipped),revision:Number(c.revision)}})()');
   const whole=async label=>{const c=await camera();assert.ok(c.t.every(Number.isInteger),`${label}: whole device pixels ${JSON.stringify(c.t)}`);};
   const text=()=>evaluate(`document.querySelector('${readout}').textContent`);
   const rect=selector=>evaluate(`(()=>{const r=document.querySelector(${JSON.stringify(selector)}).getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height}})()`);
@@ -56,13 +56,52 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
       assert.ok(await evaluate(canvasFocused),`${kind}: opening leaves focus on the canvas`);
       assert.equal(await evaluate(`Number(document.querySelector('${menu} input.number-slider').getAttribute('aria-valuetext')?.replace(/[^0-9.]/g,''))`),37,`${kind}: the field shows the camera zoom`);
       const labels=await evaluate(`[...document.querySelectorAll('${menu} .zoom-menu-items .menu-label')].map(n=>n.textContent)`);
-      assert.deepEqual(labels,['Zoom in','Zoom out','Fit canvas','Actual Pixels','25%','50%','100%','200%','400%'],'the shared zoom menu');
+      assert.deepEqual(labels,['Zoom in','Zoom out','Fit canvas','Actual Pixels','25%','50%','100%','200%','400%','Reset rotation','Lock rotation','Lock zoom'],'the shared zoom menu');
       if(index===0)for(const name of ['light','dark']){await send({type:'set_theme',theme:name});await pause(150);await screenshot(`zoom-menu-${name}`);}
       await choose('200%',kind);
       await wait(`layerApp.state().camera.zoom===2&&!${opened}`);
       await whole(`${kind} 200%`);
       await wait(`document.querySelector('${readout}').textContent==='200% · 0°'`);
       assert.ok(await evaluate(canvasFocused),`${kind}: choosing a level keeps focus on the canvas`);
+    }
+    for (const theme of ['light', 'dark']) {
+      await send({type:'set_theme',theme});
+      await openWith('mouse');
+      await choose('Lock rotation','mouse');
+      await wait('layerApp.state().camera.rotation_locked');
+      await openWith('mouse');
+      assert.equal(await evaluate(`${row('Lock rotation')}.getAttribute('aria-checked')`),'true');
+      await choose('Lock zoom','mouse');
+      await wait('layerApp.state().camera.zoom_locked');
+      await openWith('mouse');
+      assert.equal(await evaluate(`${row('Lock zoom')}.getAttribute('aria-checked')`),'true');
+      const before = await camera();
+      await evaluate('void layerApp.app.gesture(100,100,140,120,1.5,.4)');await settle();
+      const locked = await camera();
+      assert.equal(locked.zoom,before.zoom);assert.equal(locked.rotation,before.rotation);
+      for(const id of ['zoom_in','zoom_out','rotate_right','rotate_left','flip_horizontal','flip_vertical']) {
+        const before = await camera();
+        await tap(await middle(`#zoom-${id}`),'mouse');
+        await wait(`layerApp.state().camera.revision>${before.revision}`);
+        const after = await camera();
+        if(id.startsWith('zoom_'))assert.notEqual(after.zoom,before.zoom);
+        else if(id.startsWith('rotate_'))assert.notEqual(after.rotation,before.rotation);
+        else assert.notDeepEqual(after.flipped,before.flipped);
+        assert.ok(await evaluate(opened));
+      }
+      await tap(await middle(`${menu} .rotation-field .number-value`),'mouse');
+      await call('Input.insertText',{text:'45'});await key('Enter','Enter',13);
+      await wait('Math.abs(layerApp.state().camera.rotation-Math.PI/4)<.00001');
+      const slider = `${menu} .rotation-field input.number-slider`;
+      const r = await rect(slider);
+      await tap({x:r.x+r.width*.3,y:r.y+r.height/2},'mouse');
+      await wait('Math.abs(layerApp.state().camera.rotation-Math.PI/4)>.01');
+      await choose('Reset rotation','mouse');
+      await wait(`Math.abs(layerApp.state().camera.rotation)<.00001&&!${opened}`);
+      await openWith('mouse');await choose('Lock rotation','mouse');
+      await openWith('mouse');await choose('Lock zoom','mouse');
+      await invoke('flip_horizontal');await invoke('flip_vertical');
+      await send({type:'set_zoom',zoom:.37});
     }
     if(theme)await send({type:'set_theme',theme});
 
@@ -155,6 +194,10 @@ export async function checkZoomReadout({call,evaluate,settle,device=false}) {
       }
     }
 
+    if (process.argv.includes('--zoom-controls')) {
+      console.log('Footer zoom/rotation controls passed: locks, slider, reset, Navigator buttons, mouse/touch/pen, both themes and keyboard focus');
+      return;
+    }
     await invoke('fit_canvas');
     const files=`window.zoomFiles`;
     await evaluate(`window.zoomPicker=window.showSaveFilePicker;${files}=new Map();window.zoomPicks=0;

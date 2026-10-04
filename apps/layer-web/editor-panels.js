@@ -1,3 +1,4 @@
+import { createNavigationControls } from "./navigation-controls.js";
 import {createScope} from './histogram.js';
 import {liveCopy,bindCopy} from './localization.js';
 import { createRasterWorker } from './raster-worker-client.js';
@@ -347,8 +348,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
   }
   function navigatorPanel(root) {
     const overview=element("div","navigator-overview"),surface=element("canvas","navigator-surface"),clip=element("div","navigator-clip"),hole=element("div","overview-hole");clip.append(surface);overview.append(clip,hole);root.append(overview);
-    const controls=element("div","navigator-buttons");root.append(controls);
-    const buttons=["zoom_out","zoom_in","rotate_left","rotate_right","flip_horizontal","flip_vertical"].map(id=>{const node=button("",()=>dispatch({type:"invoke",command:id}));node.dataset.navigatorCommand=id;controls.append(node);return[id,node];});
+    const controls=createNavigationControls({element,button,icon,dispatch,commands:liveCopy(app,"catalog").navigator_commands});root.append(controls);
     const record={id:nextNavigator++,root,overview,surface,hole,size:""};navigators.add(record);
     app.navigator_surface(record.id,surface);
     const resize=new ResizeObserver(([entry])=>{
@@ -362,12 +362,10 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
     overview.addEventListener("pointermove",e=>{if(contact===e.pointerId)send(e,"move");});
     overview.addEventListener("pointerup",e=>{if(contact===e.pointerId){send(e,"up");contact=null;}});
     for(const name of ["pointercancel","lostpointercapture"])overview.addEventListener(name,e=>{if(contact===e.pointerId){send(e,"cancel");contact=null;}});
-    let commandsKey="";
     return()=>{
       const aspect=app.navigator_aspect();
       if(aspect!==record.aspect){record.aspect=aspect;overview.style.aspectRatio=`1 / ${aspect}`;contentChanged("navigator");}
-      const commands=buttons.map(([id])=>state().commands.find(c=>c.id===id)),key=JSON.stringify(commands);
-      if(key!==commandsKey){commandsKey=key;buttons.forEach(([,node],i)=>{const c=commands[i];if(!node.firstChild)node.append(icon(c.icon));node.title=c.tooltip;node.setAttribute("aria-label",c.label);node.setAttribute("aria-pressed",String(c.selected));node.disabled=!c.enabled;});}
+      controls.update(state().commands);
       queuePositions();
     };
   }
