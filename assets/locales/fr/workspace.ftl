@@ -595,3 +595,4 @@ workspace-storage-full = Le stockage des espaces de travail est plein. Libérer 
 workspace-storage-unavailable = Le stockage des espaces de travail n’a pas pu être ouvert. Réessayer.
 workspace-unreadable-name = Espace de travail illisible
 workspace-backup-saved = Sauvegarde de l’espace de travail enregistrée.
+workspace-tool-description-waveform = Examiner les couleurs et la luminosité de gauche à droite

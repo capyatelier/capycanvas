@@ -146,6 +146,27 @@ fn private_transport_attach_refuses_late_bad_donor_without_partial_mutation() {
 }
 
 #[test]
+fn resolve_input_range_matches_domain_headers_and_refuses_ambiguous_shapers() {
+    let domain=cube().replace("DOMAIN_MAX 1 1 1","DOMAIN_MAX 2 2 2").replace("DOMAIN_MIN 0 0 0","DOMAIN_MIN -1 -1 -1");
+    let resolve=cube().replace("DOMAIN_MAX 1 1 1","LUT_3D_INPUT_RANGE -1 2").replace("DOMAIN_MIN 0 0 0\n","");
+    let expected=Lut3d::parse_cube(domain.as_bytes()).unwrap();let actual=Lut3d::parse_cube(resolve.as_bytes()).unwrap();assert_eq!(actual,expected);
+    let reordered=resolve.replace("LUT_3D_INPUT_RANGE -1 2\n","").replace("LUT_3D_SIZE 2","LUT_3D_SIZE 2\nLUT_3D_INPUT_RANGE -1 2");assert_eq!(Lut3d::parse_cube(reordered.as_bytes()).unwrap(),expected);
+    for invalid in [resolve.replace("LUT_3D_INPUT_RANGE -1 2","LUT_3D_INPUT_RANGE -1 2\nLUT_3D_INPUT_RANGE -1 2"),resolve.replace("LUT_3D_INPUT_RANGE -1 2","LUT_3D_INPUT_RANGE -1 2\nDOMAIN_MIN -1 -1 -1"),format!("DOMAIN_MAX 2 2 2\n{resolve}"),format!("{resolve}LUT_3D_INPUT_RANGE -1 2\n"),resolve.replace("-1 2","2 -1"),resolve.replace("-1 2","1 1"),resolve.replace("-1 2","nan 2"),resolve.replace("-1 2","-1 inf"),resolve.replace("-1 2","-1 2 3"),format!("LUT_1D_SIZE 2\n{resolve}"),format!("LUT_1D_INPUT_RANGE 0 1\n{resolve}")] {assert!(Lut3d::parse_cube(invalid.as_bytes()).is_err(),"{invalid}");}
+}
+
+#[test]
+fn builtin_looks_share_finite_payloads_and_preserve_black_white_endpoints() {
+    use crate::lut3d::Look;
+    for look in Look::ALL {
+        let start=std::time::Instant::now();let resource=look.resource();eprintln!("{look:?} first generation: {:?}",start.elapsed());
+        assert!(Arc::ptr_eq(&resource,&look.resource()));assert_eq!(Look::for_resource(&resource),Some(look));
+        let samples=resource.samples().unwrap().collect::<Vec<_>>();assert_eq!(samples.first(),Some(&[0.;3]));assert_eq!(samples.last(),Some(&[1.;3]));assert!(samples.iter().flatten().all(|v|v.is_finite() && (0.0..=1.0).contains(v)));
+        if look==Look::Monochrome {assert!(samples.iter().all(|v|v[0]==v[1] && v[1]==v[2]));}
+        assert!(resource.accepts(RgbSpace::Srgb));let hydrated=descriptor(&resource).with_payload(resource.payload().unwrap()).unwrap();assert_eq!(Look::for_resource(&hydrated),Some(look));
+    }
+}
+
+#[test]
 fn lookup_resource_identity_survives_aliases_and_saved_payload_installation() {
     let original = Lut3d::parse_cube(cube().as_bytes()).unwrap();
     let resource = original.resource().unwrap();

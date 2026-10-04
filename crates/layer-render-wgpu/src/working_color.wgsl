@@ -29,6 +29,12 @@ fn working_mix(a:vec3<f32>,b:vec3<f32>,amount:f32)->vec3<f32> {
     if amount==1. {return b;}
     return mix(a,b,amount);
 }
+fn working_sample_mix(a:vec4<f32>,b:vec4<f32>,amount:f32)->vec4<f32> {
+    let opposite=(bitcast<vec4<u32>>(a)^bitcast<vec4<u32>>(b))>=vec4<u32>(0x80000000u);
+    let difference=b-select(a,vec4(0.),opposite);
+    let base=a*select(vec4(1.),vec4(1.-amount),opposite);
+    return fma(difference,vec4(amount),base);
+}
 // Texture coordinates are texel centers; callers retain their edge policy.
 fn working_sample_float(image:texture_2d<f32>,point:vec2<f32>)->vec4<f32> {
     let p=point-.5;let origin=vec2<i32>(floor(p));let f=fract(p);
@@ -36,13 +42,13 @@ fn working_sample_float(image:texture_2d<f32>,point:vec2<f32>)->vec4<f32> {
     let a=textureLoad(image,clamp(origin,vec2<i32>(0),maximum),0);
     if f.x==0. {
         if f.y==0. {return a;}
-        return mix(a,textureLoad(image,clamp(origin+vec2<i32>(0,1),vec2<i32>(0),maximum),0),f.y);
+        return working_sample_mix(a,textureLoad(image,clamp(origin+vec2<i32>(0,1),vec2<i32>(0),maximum),0),f.y);
     }
     let b=textureLoad(image,clamp(origin+vec2<i32>(1,0),vec2<i32>(0),maximum),0);
-    if f.y==0. {return mix(a,b,f.x);}
+    if f.y==0. {return working_sample_mix(a,b,f.x);}
     let c=textureLoad(image,clamp(origin+vec2<i32>(0,1),vec2<i32>(0),maximum),0);
     let d=textureLoad(image,clamp(origin+vec2<i32>(1,1),vec2<i32>(0),maximum),0);
-    return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);
+    return working_sample_mix(working_sample_mix(a,b,f.x),working_sample_mix(c,d,f.x),f.y);
 }
 // Oklab conversions adapted from Björn Ottosson's MIT-licensed reference:
 // https://bottosson.github.io/posts/oklab/ — see THIRD_PARTY_NOTICES.md.

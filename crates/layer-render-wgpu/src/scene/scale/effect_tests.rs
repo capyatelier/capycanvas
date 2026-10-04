@@ -554,3 +554,422 @@ fn pointwise_large_window_keeps_tiled_scratch_admission() {
     assert!(use_tiles(&r,plan,frame,None,false,None),"whole-window scratch must not exceed the existing cache budget");
     assert!(allocation_for(&r,plan,frame,None,false,None).into_iter().sum::<u64>()<=CACHE_BYTES,"tiled fallback remains admitted without full-window scratch");
 }
+
+#[test]
+fn decoded_gaussian_display_refinement_finishes_with_bounded_chunks() {
+    let extent=[2049,1281];
+    let mut doc=document_at(extent);
+    doc.layers[0].source=Some(crate::test_support::depth_source(extent,SampleDepth::U8,
+        layer_core::color::RgbSpace::Srgb,16<<20,|x,y| {
+            if x<1024 {[0.08,0.4,0.9,1.]}else{[0.8,0.12+0.2*(y%257) as f32/256.,0.25,1.]}
+        }));
+    let mut blur=effect(80,"gaussian_blur");
+    Arc::make_mut(blur.effect.as_mut().unwrap()).set("sigma",EffectValue::Number(85.)).unwrap();
+    doc.layers.insert(0,blur);
+    for cap in [256u64<<20,96<<20] {
+    let mut r=WgpuRasterizer::new_native_headless(doc.color).unwrap();
+    r.set_complete_display_allowance(1024<<20);
+    r.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);
+    r.source_tiles.get_mut().admit(0);
+    let mut frame=packet(&doc.layers,extent);frame.composite_all=false;
+    frame.view.width_px=512;frame.view.height_px=320;
+    frame.view.document_to_surface=[0.25,0.,0.,0.25,0.,0.];
+    r.submit(frame).unwrap();
+    assert!(r.scale_display.as_ref().unwrap().evaluation==Evaluation::Display);
+    let pages=page_coordinates(PixelRect::full(extent)).count();
+    let revision=r.artwork_revision;
+    let mut records=Vec::new();
+    for step in 0..=pages {
+        if !r.has_pending_work(){break;}
+        assert!(step<pages,"Gaussian display refinement did not finish within one visit per native page");
+        r.wait_idle().unwrap();
+        let composed=r.metrics.composited_pixels;
+        let passes=r.metrics.command_passes;
+        let image_before=r.scene.as_ref().unwrap().image_pass_pixels();
+        r.submit(frame).unwrap();
+        let image_after=r.scene.as_ref().unwrap().image_pass_pixels();
+        assert!(r.scene.as_ref().unwrap().image_cache_bytes()<=cap,"refinement images exceed {cap} bytes");
+        let produced=r.metrics.composited_pixels-composed;
+        assert!(produced<=4*u64::from(PAGE_SIZE).pow(2),"refinement exceeded the input-yield chunk");
+        assert_eq!(r.artwork_revision,revision);
+        records.push((step,produced,r.metrics.command_passes-passes,image_after-image_before));
+    }
+    assert!(!r.has_pending_work());
+    assert!(r.scale_display.as_ref().unwrap().resident_bytes()>0);
+    let image_pixels=records.iter().map(|r|r.3).sum::<u64>();
+    let single_page_pixels=page_coordinates(PixelRect::full(extent)).map(|c| {
+        let page=page_rect(c).intersect(PixelRect::full(extent));
+        Scene::capture_window(&doc.layers,page,extent).area()*2
+    }).sum::<u64>();
+    println!("decoded Gaussian sigma85 cap={cap} refinement image_pixels={image_pixels} single_page_pixels={single_page_pixels} chunks={records:?}");
+    assert!(image_pixels*4<=single_page_pixels*3,"batched refinement must avoid rebuilding each page's complete blur halo");
+    let native=pixels(&r,&r.scale_display.as_ref().unwrap().hierarchy.as_ref().unwrap().root().texture);
+    assert_presentation_mip(&r);
+    let mut exact=WgpuRasterizer::new_native_headless(doc.color).unwrap();exact.test.reference=true;
+    exact.submit(packet(&doc.layers,extent)).unwrap();
+    let reference=pixels(&exact,crate::test_support::document_texture(&exact));
+    assert_eq!(native.len(),reference.len());
+    let maximum=crate::test_support::max_error(&native,&reference);
+    assert!(maximum<=2e-5,"completed native refinement pixels differ from full source reference: {maximum}");
+    let work=r.metrics.composited_pixels;r.submit(frame).unwrap();
+    assert_eq!(r.metrics.composited_pixels,work,"settled Gaussian composition must not restart");
+    }
+}
+
+mod gaussian {
+use super::*;
+use layer_core::{EffectInstance, EffectKind, EffectResolution, EffectSpace, EffectValue};
+use std::sync::Arc;
+
+const SIGMAS:[f32;8]=[0.,0.1,1.,3.,21.,21.1,64.,85.];
+const CONSUMERS:[&str;6]=["gaussian_blur","unsharp_mask","high_pass","bloom","soft_focus","pencil"];
+
+fn gaussian_fixture(id:&str,sigma:f32,resolution:EffectResolution)->Layer {
+    let mut program=(*crate::tests::fixture(id).program()).clone();
+    program.resolution=resolution;
+    let mut layer=Layer::paint(LayerId(80),id);layer.kind=LayerKind::Effect;
+    layer.effect=Some(Arc::new(EffectInstance::new(Arc::new(program).for_depth(SampleDepth::F32))));
+    set(&mut layer,"sigma",sigma);
+    layer
+}
+
+fn set(layer:&mut Layer,key:&str,value:f32) {
+    Arc::make_mut(layer.effect.as_mut().unwrap()).set(key,EffectValue::Number(value)).unwrap();
+}
+
+#[derive(Clone,Copy,Debug)]
+enum Field { Constant([f32;4]), Impulse([i32;2],[f32;4]), Step(i32,[f32;4],[f32;4]) }
+
+fn original(field:Field)->Layer {
+    let literal=|c:[f32;4]|format!("vec4<f32>({:?},{:?},{:?},{:?})",c[0],c[1],c[2],c[3]);
+    let expression=match field {
+        Field::Constant(c)=>literal(c),
+        Field::Impulse(p,c)=>format!("select(vec4<f32>(0.),{},all(vec2<i32>(floor(p))==vec2<i32>({},{})))",literal(c),p[0],p[1]),
+        Field::Step(x,left,right)=>format!("select({},{},p.x>=f32({}))",literal(left),literal(right),x),
+    };
+    let mut program=(*crate::tests::fixture("exposure").program()).clone();
+    program.kind=EffectKind::Generator;program.space=EffectSpace::Linear;
+    program.entry="gaussian_original_field".into();
+    program.wgsl=format!("fn gaussian_original_field(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return {expression};}}").into();
+    let mut layer=Layer::paint(LayerId(1),"Gaussian analytic source");layer.kind=LayerKind::Effect;
+    layer.effect=Some(Arc::new(EffectInstance::new(Arc::new(program))));layer
+}
+
+fn kernel(sigma:f32)->Vec<f64> {
+    if sigma==0. {return vec![1.];}
+    let sigma=f64::from(sigma);let radius=(3.*sigma).ceil() as usize;
+    let mut weights=(0..=radius).map(|i|(-0.5*(i as f64/sigma).powi(2)).exp()).collect::<Vec<_>>();
+    let total=weights[0]+2.*weights[1..].iter().sum::<f64>();
+    for weight in &mut weights{*weight/=total;}weights
+}
+
+fn weight(weights:&[f64],distance:i32)->f64 {
+    weights.get(distance.unsigned_abs() as usize).copied().unwrap_or(0.)
+}
+
+fn expected(field:Field,p:[i32;2],extent:[u32;2],weights:&[f64])->[f64;4] {
+    let radius=weights.len() as i32-1;
+    let mass=|axis:usize,predicate:&dyn Fn(i32)->bool|(-radius..=radius)
+        .filter(|k|predicate((p[axis]+k).clamp(0,extent[axis] as i32-1)))
+        .map(|k|weight(weights,k)).sum::<f64>();
+    match field {
+        Field::Impulse(center,c)=>c.map(|v|f64::from(v)*mass(0,&|x|x==center[0])*mass(1,&|y|y==center[1])),
+        Field::Constant(c)=>{let total=mass(0,&|_|true)*mass(1,&|_|true);c.map(|v|f64::from(v)*total)},
+        Field::Step(edge,left,right)=>{
+            let vertical=mass(1,&|_|true);let a=mass(0,&|x|x<edge);let b=mass(0,&|x|x>=edge);
+            std::array::from_fn(|i|(a*f64::from(left[i])+b*f64::from(right[i]))*vertical)
+        }
+    }
+}
+
+fn assert_points(image:&[[f32;4]],extent:[u32;2],field:Field,sigma:f32,points:&[[i32;2]]) {
+    let weights=kernel(sigma);let mut maximum=0_f64;
+    for &p in points {
+        let actual=image[(p[1] as u32*extent[0]+p[0] as u32) as usize];let target=expected(field,p,extent,&weights);
+        for i in 0..4 {
+            let error=(f64::from(actual[i])-target[i]).abs();maximum=maximum.max(error);
+            let tolerance=match field {Field::Impulse(..)=>target[i].abs()*0.003+2e-10,_=>2e-5*target[i].abs().max(1.)};
+            assert!(actual[i].is_finite()&&error<=tolerance,"{field:?} sigma={sigma} at={p:?} actual={actual:?} expected={target:?}");
+        }
+    }
+    println!("Gaussian {field:?} sigma={sigma} maximum selected component error={maximum}");
+}
+
+#[test]
+fn gaussian_support_edges_and_seams_match_unpaired_f64_kernel() {
+    let extent=[1029,517];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    let center=[256,258];
+    let fields=[Field::Constant([1.5,-0.25,2.,0.5]),Field::Impulse(center,[0.25,0.5,1.,1.]),Field::Step(1024,[0.1,0.2,0.3,0.5],[0.8,0.4,0.2,1.])];
+    for field in fields {
+        for sigma in SIGMAS {
+            let layers=[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)];
+            r.submit(packet(&layers,extent)).unwrap();
+            let image=pixels(&r,crate::test_support::document_texture(&r));
+            let mut points=vec![[0,0],[0,258],[255,258],[256,258],[257,258],[1023,258],[1024,258],[1028,516]];
+            points.extend([0,1,63,64,127,128,200,254,255,256].into_iter().map(|d|[center[0]+d,center[1]]));
+            assert_points(&image,extent,field,sigma,&points);
+            if sigma==0. {
+                for p in [[0,0],center,[1028,516]] {assert_eq!(image[(p[1] as u32*extent[0]+p[0] as u32) as usize],expected(field,p,extent,&[1.]).map(|v|v as f32));}
+            }
+        }
+    }
+}
+
+#[test]
+fn gaussian_consumers_share_preparation_and_reuse_it_for_amount_changes() {
+    let extent=[517,517];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let field=Field::Constant([0.1,0.4,0.9,1.]);
+    for id in CONSUMERS {
+        let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+        let mut layers=[gaussian_fixture(id,85.,EffectResolution::Native),original(field)];
+        if id=="bloom" {set(&mut layers[0],"threshold",0.);}
+        r.submit(packet(&layers,extent)).unwrap();
+        let count=r.scene.as_ref().unwrap().effects.preparation_count();assert_eq!(count,1,"{id}");
+        let image=pixels(&r,crate::test_support::document_texture(&r));let actual=image[(258*extent[0]+258) as usize];
+        let target=match id {
+            "gaussian_blur"|"unsharp_mask"|"soft_focus"=>[0.1,0.4,0.9,1.],
+            "high_pass"=>{let v=layer_core::color::RgbSpace::Srgb.decode(0.5);[v,v,v,1.]},
+            "bloom"=>{let amount=match layers[0].effect.as_ref().unwrap().value("amount").unwrap(){EffectValue::Number(v)=>f64::from(*v)/100.,_=>panic!("amount")};[0.1*(1.+amount),0.4*(1.+amount),0.9*(1.+amount),1.]},
+            "pencil"=>{let c=[0.97,0.95,0.9].map(|v|layer_core::color::RgbSpace::Srgb.decode(v));[c[0],c[1],c[2],1.]},_=>unreachable!(),
+        };
+        for i in 0..4 {assert!((f64::from(actual[i])-target[i]).abs()<2e-5,"{id} constant actual={actual:?} expected={target:?}");}
+        let independent_key=if id=="pencil"{"contrast"}else{"amount"};
+        if layers[0].effect.as_ref().unwrap().value(independent_key).is_some(){set(&mut layers[0],independent_key,61.);}else{layers[0].opacity=0.61;}
+        r.submit(packet(&layers,extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count,"{id} amount-only");
+        set(&mut layers[0],"sigma",64.);r.submit(packet(&layers,extent)).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} sigma edit");
+        r.submit(FramePacket{composite_all:false,..packet(&layers,extent)}).unwrap();assert_eq!(r.scene.as_ref().unwrap().effects.preparation_count(),count+1,"{id} frozen");
+    }
+}
+
+#[test]
+fn sigma_zero_preserves_tiny_alpha_signed_hdr_and_transparent_pixels_exactly() {
+    let extent=[259,257];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    for c in [[2e-7,-8e-8,4e-7,8e-8],[4.,-2.,8.,1.],[0.;4]] {
+        let layers=[gaussian_fixture("gaussian_blur",0.,EffectResolution::Native),original(Field::Constant(c))];
+        r.submit(packet(&layers,extent)).unwrap();
+        let image=pixels(&r,crate::test_support::document_texture(&r));
+        assert!(image.iter().all(|actual|*actual==c),"sigma zero must preserve original {c:?}");
+    }
+}
+
+#[test]
+fn gaussian_normalized_fields_have_valid_coverage_before_output_encoding() {
+    let extent=[33,17];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    for sigma in [0.,0.1,1.,3.,21.,21.1,64.,85.] {
+        for c in [[0.25,0.5,0.75,1.],[4.,-2.,8.,1.],[0.1,0.2,0.4,0.5],
+            [f32::MIN_POSITIVE,-f32::MIN_POSITIVE,2.*f32::MIN_POSITIVE,1.],
+            [2e-7,-8e-8,4e-7,8e-8]] {
+            let source=original(Field::Constant(c));
+            let unfiltered=if sigma<=0.1 {
+                r.submit(packet(&[source.clone()],extent)).unwrap();Some(pixels(&r,crate::test_support::document_texture(&r)))
+            }else{None};
+            r.submit(packet(&[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),source],extent)).unwrap();
+            let image=pixels(&r,crate::test_support::document_texture(&r));
+            for actual in &image {
+                assert!(actual.iter().all(|v|v.is_finite())&&(0. ..=1.).contains(&actual[3]),"sigma={sigma} original={c:?} normalized={actual:?}");
+                if c[3]<1e-6 {for i in 0..4 {
+                    assert!((f64::from(actual[i])-f64::from(c[i])).abs()<=2e-5*f64::from(c[i]).abs(),"small normal alpha sigma={sigma} original={c:?} normalized={actual:?}");
+                }}
+            }
+            if let Some(unfiltered)=unfiltered {for (index,(actual,original)) in image.iter().zip(&unfiltered).enumerate() {
+                assert_eq!(actual,original,"degenerate kernel sigma={sigma} must preserve actual unfiltered field {c:?} at pixel {index}");
+            }}
+            if c[0]==f32::MIN_POSITIVE {println!("minimum-normal RGB sigma={sigma} input={c:?} output={:?}",image[0]);}
+        }
+    }
+}
+
+#[test]
+fn gaussian_convex_filter_preserves_finite_extreme_and_opposite_signed_fields() {
+    let extent=[129,65];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    for limit in [f32::MAX*0.75,f32::MAX] {
+        for field in [Field::Constant([limit,-limit,limit,1.]),
+            Field::Step(64,[limit,-limit,limit,1.],[-limit,limit,-limit,1.])] {
+            for sigma in SIGMAS {
+                r.submit(packet(&[gaussian_fixture("gaussian_blur",sigma,EffectResolution::Native),original(field)],extent)).unwrap();
+                let image=pixels(&r,crate::test_support::document_texture(&r));let weights=kernel(sigma);
+                for x in [0,1,32,63,64,96,128] {
+                    let target=expected(field,[x,32],extent,&weights);let actual=image[(32*extent[0]+x as u32) as usize];
+                    assert!(actual.iter().all(|v|v.is_finite())&&(0. ..=1.).contains(&actual[3]),"{field:?} sigma={sigma} x={x}: {actual:?}");
+                    for i in 0..3 {assert!((f64::from(actual[i])-target[i]).abs()/f64::from(limit)<2e-5,"{field:?} sigma={sigma} x={x}: {actual:?} expected={target:?}");}
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn native_bilinear_sampling_is_convex_at_finite_rgb_extremes_on_both_axes() {
+    let extent=[8,8];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    for limit in [32.,f32::MAX*0.75,f32::MAX] {
+        let mut source=original(Field::Constant([limit,-limit,limit,1.]));
+        Arc::make_mut(&mut Arc::make_mut(source.effect.as_mut().unwrap()).program).wgsl=format!(
+            "fn gaussian_original_field(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{let sign=select(-1.,1.,(u32(floor(p.x))+u32(floor(p.y)))%2u==0u);return vec4<f32>(sign*{limit:?},-sign*{limit:?},sign*{limit:?},1.);}}").into();
+        for [dx,dy] in [[0.,0.],[-0.25,0.],[0.,-0.25],[-0.25,-0.25],[0.5,0.5]] {
+            let mut sampled=gaussian_fixture("gaussian_blur",0.,EffectResolution::Native);
+            let effect=Arc::make_mut(sampled.effect.as_mut().unwrap());let program=Arc::make_mut(&mut effect.program);
+            program.entry="bilinear_probe".into();
+            program.wgsl=format!("fn bilinear_probe(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{{return fx_sample(p+vec2<f32>({dx:?},{dy:?}));}}").into();
+            program.passes=vec![layer_core::EffectPass {entry:program.entry.clone(),sampling:layer_core::EffectSampling::Document}].into();
+            r.submit(packet(&[sampled,source.clone()],extent)).unwrap();
+            let actual=pixels(&r,crate::test_support::document_texture(&r))[3*8+3];
+            let x=3.+f64::from(dx);let y=3.+f64::from(dy);let fx=x-x.floor();let fy=y-y.floor();
+            let mut expected=0.;for j in 0..2 {for i in 0..2 {
+                let sign=if (x.floor() as i32+i+y.floor() as i32+j)%2==0 {1.}else{-1.};
+                expected+=sign*f64::from(limit)*if i==0 {1.-fx}else{fx}*if j==0 {1.-fy}else{fy};
+            }}
+            assert!(actual.iter().all(|v|v.is_finite()),"limit={limit} offset={dx},{dy}: {actual:?}");
+            for (component,target) in actual[..3].iter().zip([expected,-expected,expected]) {
+                assert!((f64::from(*component)-target).abs()/f64::from(limit)<=4.*f64::from(f32::EPSILON),"limit={limit} offset={dx},{dy}: {actual:?} expected={expected}");
+            }
+            assert_eq!(actual[3],1.);
+        }
+    }
+}
+
+#[test]
+fn native_gaussian_windows_masks_and_clipping_match_full_rebuild() {
+    let extent=[1541,771];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let field=Field::Step(1024,[0.1,0.4,0.9,1.],[0.8,0.2,0.3,1.]);
+    let mut layers=[gaussian_fixture("gaussian_blur",85.,EffectResolution::Native),original(field)];
+    let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(128*1024*1024);
+    let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
+    for (step,(zoom,x,clipped)) in [(0.5,-384.,false),(1.,-1000.,false),(0.125,0.,true)].into_iter().enumerate() {
+        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());mask.default_coverage=0.25;
+        layers[0].mask=Some(mask);layers[0].opacity=0.6;layers[0].properties.clipped=clipped;
+        let mut frame=packet(&layers,extent);frame.view.width_px=96;frame.view.height_px=64;frame.view.document_to_surface=[zoom,0.,0.,zoom,x,-32.];
+        window.submit(frame).unwrap();exact.submit(frame).unwrap();
+        assert!(window.scale_display.as_ref().unwrap().evaluation==Evaluation::Native);
+        assert!(!window.scale_display.as_ref().unwrap().has_pending_work(&window));
+        assert!(window.metrics.image_window_peak_bytes<=128*1024*1024);
+        let reference=pixels(&exact,crate::test_support::document_texture(&exact));assert_settled(&mut window,frame,&reference);
+        if step==0 {let p=[1024,385];let raw=expected(field,p,extent,&kernel(85.));let original=[0.8,0.2,0.3,1.];let actual=reference[(p[1] as u32*extent[0]+p[0] as u32) as usize];for i in 0..4{let target=original[i]+0.15*(raw[i]-original[i]);assert!((f64::from(actual[i])-target).abs()<2e-5,"mask mix {actual:?} expected={target}");}}
+    }
+}
+
+#[test]
+fn native_gaussian_windows_bound_decoded_sources_across_budget_and_support_changes() {
+    let extent=[4101,1029];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let codes=[[26u8,102,230,255],[204,51,77,255]];
+    let mut source=Layer::paint(LayerId(90),"immutable step source");
+    source.source=Some(crate::test_support::depth_source(extent,SampleDepth::U8,layer_core::color::RgbSpace::Srgb,
+        32<<20,|x,_|codes[usize::from(x>=2048)].map(|v|f32::from(v)/255.)));
+    let decoded=codes.map(|c|[0,1,2,3].map(|i|if i==3 {1.}else{layer_core::color::RgbSpace::Srgb.decode(f64::from(c[i])/255.) as f32}));
+    let field=Field::Step(2048,decoded[0],decoded[1]);
+    for id in ["gaussian_blur"] {for sigma in [21.,85.] {
+        let mut adjustment=gaussian_fixture(id,sigma,EffectResolution::Native);
+        let mut mask=layer_core::LayerMask::reveal_all(LayerId(98),Default::default());mask.default_coverage=0.25;
+        adjustment.mask=Some(mask);adjustment.opacity=0.6;adjustment.properties.clipped=true;
+        if adjustment.effect.as_ref().unwrap().value("amount").is_some() {set(&mut adjustment,"amount",61.);}
+        let layers=[adjustment,source.clone()];
+        let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;
+        let mut frame=packet(&layers,extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
+        exact.submit(frame).unwrap();let reference=pixels(&exact,crate::test_support::document_texture(&exact));
+        let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
+        let [resident,uploads]=window.source_tiles.borrow().admitted_bytes();
+        assert!(u64::from(extent[0].div_ceil(PAGE_SIZE)*extent[1].div_ceil(PAGE_SIZE))*u64::from(PAGE_SIZE).pow(2)*16>resident);
+        let tight=if sigma==21. {128u64<<20}else{224<<20};let mut allocated=0;
+        for cap in [320u64<<20,tight] {
+            window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(cap);window.metrics.image_window_peak_bytes=0;
+            let before=window.metrics().image_window_submissions;
+            window.submit(frame).unwrap();
+            let actual=display_pixels(&window);assert_eq!(actual.len(),reference.len());
+            let maximum=actual.iter().zip(&reference).flat_map(|(a,b)|a.iter().zip(b).map(|(a,b)|(a-b).abs())).fold(0f32,f32::max);
+            assert!(maximum<=2e-5,"{id} sigma={sigma} cap={cap} seam/pixel error={maximum}");
+            let windows=window.metrics().image_window_submissions-before;
+            if cap==320<<20 {assert_eq!(windows,4,"{id} sigma={sigma}: one admission plus3 large windows");}
+            else {assert!(windows>4,"{id} sigma={sigma}: constrained budget must fall back");}
+            let metrics=window.metrics();assert!(metrics.image_window_peak_bytes<=cap);
+            assert!(metrics.source_upload_peak_bytes>0&&metrics.source_upload_peak_bytes<=uploads);
+            assert!(metrics.source_tile_misses>=85,"all85 imported tiles must actually be decoded");
+            assert_eq!(window.scene.as_ref().unwrap().image_cache_bytes(),0);
+            let bytes=window.source_tiles.borrow().gpu_bytes();assert!(bytes<=resident+4*(1<<20));
+            if allocated!=0 {assert_eq!(bytes,allocated,"source working-set changes must not grow the fixed decoded allocation");}allocated=bytes;
+            println!("{id} sigma={sigma} cap={cap} submissions={windows} image peak={} source bytes={bytes} upload peak={} misses={} hits={} maximum={maximum}",metrics.image_window_peak_bytes,metrics.source_upload_peak_bytes,metrics.source_tile_misses,metrics.source_tile_hits);
+            if id=="gaussian_blur" {for x in [2047,2048,2049,3071,3072,4099] {
+                let expected=expected(field,[x,514],extent,&kernel(sigma));let input=if x<2048 {decoded[0]}else{decoded[1]};
+                let actual=actual[(514*extent[0]+x as u32) as usize];
+                for i in 0..4 {let target=f64::from(input[i])+0.15*(expected[i]-f64::from(input[i]));
+                    assert!((f64::from(actual[i])-target).abs()<=2e-5,"independent seam[{x}] sigma={sigma} actual={actual:?} expected={target}");}
+            }}
+        }
+    }}
+    let mut layers=vec![source];
+    for i in 0..3 {let mut layer=gaussian_fixture("gaussian_blur",85.,EffectResolution::Native);layer.id=LayerId(80+i);layers.insert(0,layer);}
+    let mut frame=packet(&layers,extent);frame.view.width_px=extent[0];frame.view.height_px=extent[1];
+    let mut exact=WgpuRasterizer::new_native_headless(color).unwrap();exact.test.reference=true;exact.submit(frame).unwrap();
+    let reference=pixels(&exact,crate::test_support::document_texture(&exact));
+    let mut window=WgpuRasterizer::new_native_headless(color).unwrap();window.source_tiles.get_mut().admit(0);
+    window.native_edit.as_mut().unwrap().image_pixel_bytes=Some(448<<20);window.submit(frame).unwrap();
+    assert!(window.metrics().image_window_submissions>11,"deep halos must use a smaller admitted window");
+    assert!(window.metrics().image_window_peak_bytes<=448<<20);
+    let actual=display_pixels(&window);assert_eq!(actual.len(),reference.len());
+    assert!(actual.iter().zip(&reference).all(|(a,b)|a.iter().zip(b).all(|(a,b)|(a-b).abs()<=2e-5)));
+}
+
+#[test]
+fn native_and_reduced_gaussian_preparation_variants_do_not_overwrite_each_other() {
+    let extent=[1029,517];let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut layers=[gaussian_fixture("gaussian_blur",85.,EffectResolution::Display),original(Field::Step(256,[0.1,0.2,0.3,1.],[0.8,0.4,0.2,1.]))];
+    let mut reused=WgpuRasterizer::new_native_headless(color).unwrap();
+    for (sigma,level) in [(85.,0),(85.,1),(85.,2),(85.,3),(64.,3),(64.,0),(85.,2),(85.,0)] {
+        set(&mut layers[0],"sigma",sigma);let side=(1<<level) as f32;
+        reused.scale_display=None;
+        let mut frame=packet(&layers,extent);frame.composite_all=false;frame.view.document_to_surface=[1./side,0.,0.,1./side,0.,0.];
+        reused.submit(frame).unwrap();let mut fresh=WgpuRasterizer::new_native_headless(color).unwrap();fresh.submit(frame).unwrap();
+        let error=crate::test_support::max_error(&display_pixels(&reused),&display_pixels(&fresh));
+        assert!(error<2e-5,"Gaussian prepared variant sigma={sigma} level={level} differs from fresh {error}");
+        let size=reused.scale_display.as_ref().unwrap().plan.size;let step=1<<level;
+        assert_points(&display_pixels(&reused),size,Field::Step(256/step,[0.1,0.2,0.3,1.],[0.8,0.4,0.2,1.]),
+            sigma/side,&[[256/step-1,258/step],[256/step,258/step],[512/step,258/step]]);
+    }
+}
+
+
+#[test]
+fn every_gaussian_consumer_matches_discrete_step_reference_across_the_admitted_range() {
+    let extent=[517,517];let left=[0.1,0.1,0.1,1.];let right=[0.8,0.8,0.8,1.];
+    let field=Field::Step(256,left,right);
+    let encode=|v:f64|if v<=0.0031308 {12.92*v}else{1.055*v.powf(1./2.4)-0.055};
+    let decode=|v:f64|if v<=0.04045 {v/12.92}else{((v+0.055)/1.055).powf(2.4)};
+    let color=layer_core::color::DocumentColor{depth:SampleDepth::F32,..Default::default()};
+    let mut r=WgpuRasterizer::new_native_headless(color).unwrap();r.test.reference=true;
+    for id in CONSUMERS {
+        let mut maximum=0_f64;
+        for sigma in SIGMAS {
+            let mut layers=[gaussian_fixture(id,sigma,EffectResolution::Native),original(field)];
+            if id!="gaussian_blur" && id!="pencil" {set(&mut layers[0],"amount",61.);}
+            if id=="bloom" || id=="unsharp_mask" {set(&mut layers[0],"threshold",0.);}
+            if id=="pencil" {set(&mut layers[0],"contrast",23.);}
+            r.submit(packet(&layers,extent)).unwrap();
+            let image=pixels(&r,crate::test_support::document_texture(&r));
+            let weights=kernel(sigma);
+            for x in [1,128,255,256,384,515] {
+                let p=[x,258];let input=f64::from(if x<256{left[0]}else{right[0]});
+                let blurred=expected(field,p,extent,&weights)[0];
+                let target=match id {
+                    "gaussian_blur"=>blurred,
+                    "unsharp_mask"=>{let detail=input-blurred;let t=(detail.abs()*3_f64.sqrt()/0.02).clamp(0.,1.);input+detail*0.61*t*t*(3.-2.*t)},
+                    "high_pass"=>decode(0.5+0.61*(encode(input)-encode(blurred))),
+                    "bloom"=>input+0.61*blurred,
+                    "soft_focus"=>input+0.61*(blurred-input).max(0.),
+                    "pencil"=>{let ratio=((encode(input)+0.01)/(encode(blurred)+0.01)).clamp(0.,1.);let ink=1.-ratio.powf(1.+23.*0.12);decode(0.97+(0.07-0.97)*ink)},
+                    _=>unreachable!(),
+                };
+                let actual=image[(p[1] as u32*extent[0]+x as u32) as usize];
+                let error=(f64::from(actual[0])-target).abs();maximum=maximum.max(error);
+                assert!(error<2e-5,"{id} sigma={sigma} x={x} actual={actual:?} expected red={target}");
+                if id=="gaussian_blur" {assert!((actual[3]-1.).abs()<2e-5,"normalized Gaussian coverage");}
+                else {assert_eq!(actual[3],1.,"{id} opaque input coverage");}
+            }
+        }
+        println!("Gaussian consumer {id} maximum selected red error={maximum}");
+    }
+}
+
+}

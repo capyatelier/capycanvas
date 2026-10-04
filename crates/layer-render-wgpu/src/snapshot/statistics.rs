@@ -1,5 +1,5 @@
 use super::*;
-use layer_core::{ArtworkStatisticsRequest, color::histogram::Histogram};
+use layer_core::{ArtworkStatisticsRequest, color::histogram::{Histogram,Waveform}};
 use wgpu::util::DeviceExt;
 
 const WORDS: u64 = 1043;
@@ -57,8 +57,9 @@ impl SnapshotGpu {
             label: Some(label), size, usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
-        let shards = buffer("histogram shards", WORDS * SHARDS * 4+4*(1+256*256));
-        let summary = buffer("histogram counts", WORDS * 4);
+        let waveform_words = if request.waveform {Waveform::WORDS as u64} else {0};
+        let shards = buffer("histogram shards", WORDS * SHARDS * 4+4*(1+256*256)+waveform_words*8*4);
+        let summary = buffer("histogram counts", (WORDS+waveform_words)*4);
         let weights = histogram.color.space.to_xyz()[1];
         let coefficients = [weights[0], 1. - weights[0] - weights[2], weights[2]];
         let boundaries: Vec<_> = [0, 3].into_iter().flat_map(|channel| histogram.boundaries(channel)).chain(coefficients)
@@ -72,13 +73,13 @@ impl SnapshotGpu {
         let no_selection = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("histogram unrestricted"), contents: &[0; 48], usage: wgpu::BufferUsages::STORAGE,
         });
-        let reserved = shards.size()+summary.size()+boundaries.size();
+        let reserved = shards.size()+summary.size()*2+boundaries.size()+no_selection.size()+48;
         let mut folded=None;
         snapshot.capture_query_gpu(output,request.preview,1,reserved,selection.as_ref(),|r,view,region,encoder| {
             let weights = histogram.color.space.to_xyz()[1];
             let words = [region.min_x(), region.min_y(), region.width(), region.height(), extent[0], extent[1],
                 u32::from(request.preview), u32::from(histogram.color.depth.is_float() && histogram.domain==layer_core::color::histogram::HistogramDomain::Artwork),
-                (weights[0] as f32).to_bits(), (weights[2] as f32).to_bits(), 0, 0];
+                (weights[0] as f32).to_bits(), (weights[2] as f32).to_bits(), u32::from(request.waveform), 0];
             let area = r.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("histogram region"), contents: &words.into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>(),
                 usage: wgpu::BufferUsages::UNIFORM,
@@ -105,17 +106,21 @@ impl SnapshotGpu {
             let mut encoder=submission::CommandEncoder::new(&self.device,&Default::default());
             let mut pass=encoder.begin_compute_pass(&Default::default());
             pass.set_pipeline(&pipeline.fold);pass.set_bind_group(0,&group,&[]);
-            pass.dispatch_workgroups((WORDS as u32).div_ceil(64),1,1);drop(pass);encoder.submit(&self.queue);
+            pass.dispatch_workgroups(((WORDS+waveform_words) as u32).div_ceil(64),1,1);drop(pass);encoder.submit(&self.queue);
         }
         let bytes = crate::local_tone::read_buffer_async(&self.device, &self.queue, &summary).await?;
         control.check().map_err(|e| e.to_string())?;
-        let words: Vec<_> = bytes.chunks_exact(4).map(|b| u64::from(u32::from_le_bytes(b.try_into().unwrap()))).collect();
+        let words: Vec<_> = bytes[..WORDS as usize*4].chunks_exact(4).map(|b| u64::from(u32::from_le_bytes(b.try_into().unwrap()))).collect();
         if words[1042] != 0 { return Err("The artwork contains invalid color values".into()); }
         for (i, channel) in histogram.channels.iter_mut().enumerate() {
             channel.bins.copy_from_slice(&words[i*256..(i+1)*256]);
             [channel.below, channel.above, channel.black, channel.white] = words[1024+i*4..1028+i*4].try_into().unwrap();
         }
         histogram.pixels = words[1040];histogram.transparent = words[1041];
+        if request.waveform {
+            histogram.waveform=Some(Waveform {counts:bytes[WORDS as usize*4..].chunks_exact(4)
+                .map(|b|u32::from_le_bytes(b.try_into().unwrap())).collect()});
+        }
         Ok(histogram)
     }
 }

@@ -32,19 +32,24 @@ canvas is 9504 × 6336. Every row targets **120 fps** unless marked soft.
 | Threshold slider, exact native resolution | 120, soft | **Not met.** 4.75–4.79 presents/s, interval p99 241.67 ms | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |
 | Selective Color, neutral and red-family corrections | 120, soft | **Not met.** 110.35–113.31 and 113.89–114.09 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
 | Channel Mixer, coefficient and Constant | 120, soft | **Not met.** 112.20–115.25 and 109.06–112.53 presents/s | [Selective Color and Channel Mixer](#selective-color-and-channel-mixer), 2026-10-03 |
-| Color Lookup Intensity, native 65³ table | 120, soft | **Not met.** 2.94–3.19 presents/s; interval p99 325.01–333.34 ms | [Color Lookup](#color-lookup), 2026-10-03 |
+| Color Lookup Intensity, native 65³ table | 120, soft | **Not met.** 2.72–2.99 presents/s; interval p99 341.68–366.68 ms | [Color Lookup](#color-lookup), 2026-10-03 |
 | Navigation with Color Lookup, native 65³ table | 120 | **Not met.** 41.34–51.29 presents/s; interval p99 25.00–33.33 ms | [Color Lookup](#color-lookup), 2026-10-03 |
-| Shadows and Highlights sliders, native | 120, soft | **Not met.** Shadows 3.16–4.00, Highlights 1.40–1.59 presents/s | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
-| Clarity slider, native | 120, soft | **Not met.** 1.98–2.20 presents/s; interval p99 483.35–716.69 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
-| Navigation with Shadows/Highlights or Clarity | 120 | **Not met.** 41.09–55.07 presents/s; interval p99 25.00–33.33 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Shadows and Highlights sliders, native | 120, soft | **Not met.** Shadows 2.99–3.99, Highlights 1.20–1.40 presents/s | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Clarity slider, native | 120, soft | **Not met.** 1.76–1.99 presents/s; interval p99 533.35–741.69 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Navigation with Shadows/Highlights or Clarity | 120 | **Not met.** 40.14–44.71 presents/s; interval p99 25.00–33.33 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
-| Neighbourhood filter slider: Gaussian Blur, Unsharp Mask, Edge-Preserving Smooth | 120, soft | | |
+| Gaussian Blur Radius, soft range | 120, soft | **Not met.** 34.15–35.44 presents/s; interval p99 66.67–75.00 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
+| Unsharp Mask Amount, native Radius 21 or 85 | 120, soft | **Not met.** No presents during three five-second contacts at either radius | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
+| Navigation with Gaussian Blur, Radius 85 | 120 | **Not met.** 40.55–41.09 presents/s; interval p99 33.33 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
+| Edge-Preserving Smooth slider | 120, soft | | |
 | Animated or warping filter: Domain Warp, Ripple | 120, soft | | |
 | Fill layer or gradient-fill edit | 120, soft | | |
 | Navigation with proof or tone guide shown | 120 | | |
 | Navigation with exact artwork sampling (61 MP) | 120 | **Not met.** 48.43–49.89 canvas presents/s; interval p99 25.00 ms | [Exact artwork samples](#exact-artwork-samples), 2026-10-02 |
-| Navigation with Histogram Preview (61 MP) | 120 | **Not met.** 38.94–41.24 canvas presents/s; interval p99 33.33–41.67 ms | [Artwork statistics](#artwork-statistics), 2026-10-03 |
-| Navigation with Histogram Exact (61 MP) | 120 | **Not met.** 36.61–39.30 canvas presents/s; interval p99 33.33–41.67 ms | [Artwork statistics](#artwork-statistics), 2026-10-03 |
+| Navigation with Histogram Preview (61 MP) | 120 | **Not met.** 35.78–36.90 canvas presents/s; interval p99 41.67–50.00 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
+| Navigation with Histogram Exact (61 MP) | 120 | **Not met.** 33.56–35.81 canvas presents/s; interval p99 41.67 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
+| Navigation with Waveform Preview (61 MP) | 120 | **Not met.** 35.29–36.53 canvas presents/s; interval p99 41.67–50.00 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
+| Navigation with Waveform Exact (61 MP) | 120 | **Not met.** 33.47–35.58 canvas presents/s; interval p99 41.67 ms | [Waveform statistics](#waveform-statistics), 2026-10-03 |
 | Navigation with clipping preview (61 MP) | 120 | **Not met.** 36.01–38.50 canvas presents/s; interval p99 33.33–41.67 ms | [Clipping preview](#clipping-preview), 2026-10-03 |
 | Navigation with pending Auto statistics (61 MP) | 120 | **Not met.** 39.40–40.04 canvas presents/s; interval p99 33.33 ms | [Auto statistics worker](#auto-statistics-worker), 2026-10-03 |
 | Gradient drag | 120 | | |
@@ -218,7 +223,9 @@ actual presents inside the input window count. Thermal status stays zero.
 
 | Motion | Actual presents/s, three contacts | Moving interval p99 |
 | --- | --- | --- |
-| Intensity | 3.194 / 2.935 / 2.996 | 325.011–333.344 ms |
+| Intensity, sampler/window slider APK `6b37` | 2.990 / 2.773 / 2.717 | 341.678–366.678 ms |
+| Intensity, Android import controls build | 3.194 / 2.946 / 2.965 | 333.344–400.013 ms |
+| Intensity, preceding shared-resource build | 3.194 / 2.935 / 2.996 | 325.011–333.344 ms |
 | Hand navigation, Intensity 100% | 51.291 / 43.695 / 41.338 | 25.002–33.334 ms |
 
 The matched preceding build presents Intensity at 0.399 / 0.200 / 0.200 Hz.
@@ -267,22 +274,161 @@ slider or navigation path. Raw records, workload/source hashes,
 CPU memory scope and the failed observer run are retained in
 `artifacts/photo-editing-color/p23-performance/p23-final-evidence.json`.
 
+The Android import-controls measurement uses APK SHA-256
+`f1af2d5a5cf934d98d6f56f4269485dcc57bc76ae0b8ca3d39baf0c40d2d7180`
+and the same native-resolution 65³ resource, digest
+`7c4f0421c8d2169516f0ce532022e02e61c11363f890c08fd50e0b1c50244ca1`.
+Three five-second Intensity contacts retain thermal status zero and approximately
+2.247 GB of reported renderer allocations. The target remains unmet. Raw motion
+records and build/resource hashes are in
+`artifacts/photo-editing-color/p27-android/performance/final-lut-61mp-intensity-summary.json`.
+
+The sampler/window slider APK, SHA-256
+`6b37f85eb43371bc7fd2b797c9bd9ca03952d1c9db63e2793bb1af48a3f95335`,
+repeats the same imported 65³ Intensity workload at 2.990 / 2.773 / 2.717 Hz.
+The preceding import-controls and original P23 measurements remain separate.
+The final native resource, digest and layer resolution are unchanged; native
+presets remain a distinct 17³ workload. Records are in
+`artifacts/photo-editing-color/p27-android/performance/final-2048-lut-61mp-intensity-summary.json`.
+
+Native controls pass import, cancel, malformed-file refusal, resource replacement,
+stale-adoption refusal, undo/redo and save/reopen checks in both themes and both
+orientations. The default display is 2880 × 1800 physical pixels at 280 dpi
+(approximately 1646 × 1029 dp, reversed in portrait). A separate compact display
+uses 1000 × 1600 pixels at the same density (571 × 914 dp). The native picker
+request is exercised with intercepted results rather than manual system-picker
+navigation. The final APK `37f7` repeats all four default-display routes. Preset completion
+takes 491–707 ms and valid import takes 399–490 ms on that build; these boundaries include controls and an exact PNG export
+checkpoint, not input-to-photon latency. The built-in preset resources are 17³,
+distinct from the imported 65³ motion workload. The valid picker-import timing
+uses a small 2³ inverse fixture. Process PSS at replacement
+boundaries changes by approximately −10, −27, −66 and −13 MiB across the four
+final default-display routes. The compact-display routes remain separately
+qualified by the preceding import-controls build. Continuous process/driver peaks and resource-leak absence
+remain unverified. Evidence is retained in
+`artifacts/photo-editing-color/p27-android/lut-native-evidence.json`,
+`lut-refresh-timing.json` and `lut-narrow-evidence.json` in the same directory;
+final default-display timings are in
+`rebased-halo-fixed/p24-native-lut-timing.json`.
+
+## Gaussian Blur and Unsharp Mask
+
+Measured on 2026-10-03 on the reference tablet with the original 9504 × 6336
+photo, Fit zoom 0.17329544, Navigator and default glass. Thermal status is zero.
+Each slider starts after actual raster completion and uses three requested
+five-second native contacts. Rates count the owned SurfaceView's presents inside
+the input window; post-motion completion is separate. Radius denotes Gaussian
+sigma, with a soft range of 0–21 and native text entry up to 85.
+
+| Motion and measured build | Actual presents/s, three contacts | Moving interval p99 |
+| --- | --- | --- |
+| Gaussian Radius, observed sigma 9.7–13.1, slider APK `6b37` | 34.299 / 35.438 / 34.150 | 66.669–75.002 ms |
+| Unsharp Amount, native sigma 21, slider APK `6b37` | 0 / 0 / 0 | No moving presents |
+| Unsharp Amount, native sigma 85, slider APK `6b37` | 0 / 0 / 0 | No moving presents |
+| Unsharp navigation, native sigma 85, APK `6b37` | 42.674 / 41.295 / 42.545 | 25.001–33.334 ms |
+| Gaussian navigation, sigma 85, final APK `37f7` | 41.091 / 40.549 / 40.684 | 33.334 ms |
+
+At native sigma 21, slider APK `6b37` drains in 7.51–7.68 seconds after motion,
+versus 9.26–9.55 seconds for the matched pre-change Amount workload. Maximum
+renderer-owner CPU falls from approximately 3.9 seconds to 2.66–2.72 seconds.
+This improves completion cost but does not meet the frame-rate target. At native
+sigma 85, the drain is 25.85–26.36 seconds, maximum owner CPU is 3.46–3.64
+seconds and maximum callback duration is 15.01–15.23 seconds. First GPU
+completion occurs 10.03–10.26 seconds after motion ends. Reported retained
+allocation boundaries are approximately 2.214 GB at sigma 21 and 2.244 GB at
+sigma 85. Continuous process and driver peaks remain unverified.
+
+Gaussian uses a display grid with texel side 4 at this Fit zoom, making the
+observed slider sigma approximately 2.425–3.275 on that grid. The preceding
+linear slider reaches sigma 14.3–16.6 for the same physical gesture; the current
+shared power mapping reaches 9.7–13.1. This is not a matched-sigma comparison.
+The successful Gaussian phase is preserved despite its combined fixture's later
+next-document snapshot failure; corrected independent fixtures pass.
+
+Final APK `37f7` completes native text entry to sigma 85 and full raster readiness
+in **79.802 seconds**, within the existing 120-second deadline. The earlier
+`6b37` build fails that deadline with repeated internal composition work, despite
+completed surface submissions. The corrected idle gate and batched refinement
+remove that failure. Reported allocation boundaries change from 2.313 to
+2.404 GB. Subsequent navigation drains in 33–49 ms after motion, but its moving
+rate still misses 120 Hz. Cold completion includes pending source/filter work;
+it is not an isolated kernel time or input-to-photon latency.
+A separate single five-second interruption diagnostic starts with composition
+still pending and records 265 presents, 52.631 Hz. DOWN injection acknowledgment
+takes 32.397 ms and the first GPU completion occurs at 208.862 ms; frame/input
+identity does not establish input-to-display latency. Refinement then drains for
+81.612 seconds after motion. This confirms interruption progresses, but is an
+unqualified responsiveness and latency miss, not a three-contact target pass.
+
+Supplementary 6000 × 4000 measurements on this same tablet use Fit zoom 0.2745
+and Gaussian texel side 2. With APK `6b37`, Gaussian Radius presents at
+16.951 / 16.941 / 17.174 Hz, interval p99 233.341–241.674 ms. Native sigma 85
+Unsharp Amount has one present in each recorded five-second prefix, 0.2 Hz.
+The original input operations last 6.72–9.89 seconds because release injection
+acknowledgment blocks; their whole-operation rates are 0.136 / 0.202 / 0.149 Hz.
+Both windows remain recorded. Retained allocations are approximately 1.261 GB
+for Gaussian and 2.222 GB for Unsharp. Typed sigma 85 navigation reaches
+40.546–42.161 Hz for Gaussian and 38.509–41.752 Hz for Unsharp. Cold text entry
+through readiness takes 62.835 and 4.558 seconds respectively. This is
+supplementary top-tier evidence, not a mid-tier hardware measurement.
+
+Native Gaussian and Unsharp controls pass all eight combinations of theme and
+orientation on final APK `37f7`: typed Radius 85, exact PNG, changed pixels,
+undo/redo and save/reopen state and pixels. Surface recovery and all four
+Color Lookup import/preset routes also pass on that build.
+
+The implementation prepares 129 paired records with a 256-lane reduction,
+accumulates grouped half-scaled FMA pairs and preserves degenerate-kernel
+identity. Strict finite RGB, coverage and real PNG tests pass. Native sigma 85
+requires radius 255, 128 paired taps and 257 sample requests per blur axis:
+514 across two passes, plus one original sample for Unsharp. These are nominal
+shader requests, not physical memory transfers or hardware limits.
+Budget-admitted 2048-pixel windows reduce the native sigma 21 planner from 70 to
+20 windows. In the minimum 256 MiB image-budget model, sigma 85 uses 1024:
+its 2048 image bound is 451,805,952 bytes, while the 1024 bound is
+200,540,928 bytes. Actual tablet image admission can be larger depending on
+composition and retained storage; this model is not a measured universal window
+choice. Display refinement
+prepares shared halos for at most four output pages per chunk. A real-source GPU
+regression completes within bounded page visits at both 96 and 256 MiB, respects
+actual image storage limits and matches an independent full-render pixel oracle.
+It measures 42.75–44.99 million filter-pass pixels against a conservative
+98.64 million old per-page halo bound. These remaining target misses do not
+establish a hardware ceiling.
+
+Slider APK SHA-256:
+`6b37f85eb43371bc7fd2b797c9bd9ca03952d1c9db63e2793bb1af48a3f95335`.
+Final cold/navigation APK SHA-256:
+`37f7fc2dbb002d7da09e701659f3638456b7a508428898a3c27743b5a6f6944a`.
+Raw measurements, exact source hashes and retained failures are under
+`artifacts/photo-editing-color/p27-android/`; offscreen completion, budget and
+pixel evidence is in `artifacts/photo-editing-color/p27-b11/display-refinement/`.
+
 ## Local guide adjustments
 
 Measured on 2026-10-03 on the reference tablet using the original 9504 × 6336
 photo, Fit zoom 0.17329544, Navigator, default glass and the private release
 benchmark. Each motion has three warmed five-second contacts. Rates count the
 owned SurfaceView's actual presents inside input windows; thermal status is zero.
+Current amount, export and successful navigation runs have thermal status zero.
 Both effects retain native evaluation: reduced evaluation with the same frozen
 guide exceeds the photographic error bounds in 53 of 168 GPU comparisons.
 
 | Motion | Actual presents/s, three contacts | Moving interval p99 |
 | --- | --- | --- |
-| Shadows | 3.996 / 3.742 / 3.160 | 291.68–341.68 ms |
-| Highlights | 1.398 / 1.593 / 1.398 | 675.02–850.03 ms |
-| Clarity | 2.197 / 1.999 / 1.981 | 483.35–716.69 ms |
-| Hand navigation, Shadows/Highlights | 55.073 / 42.992 / 43.135 | 25.00–33.33 ms |
-| Hand navigation, Clarity | 44.675 / 41.088 / 41.707 | 25.00–33.33 ms |
+| Shadows | 3.990 / 3.390 / 2.990 | 300.01–341.68 ms |
+| Highlights | 1.399 / 1.398 / 1.198 | 750.02–900.03 ms |
+| Clarity | 1.991 / 1.950 / 1.762 | 533.35–741.69 ms |
+| Hand navigation, Shadows/Highlights | 44.527 / 41.932 / 42.311 | 33.33 ms |
+| Hand navigation, Clarity | 44.706 / 40.140 / 40.494 | 25.00–33.33 ms |
+
+Surface configuration previously raced background analysis submissions, causing
+“Failed to wait for GPU to come idle before reconfiguring the Surface.” The
+configure path now excludes new submissions until reconfiguration finishes and
+delivers callbacks after releasing its locks. All six navigation contacts above
+complete without that failure. Pixel checks also pass across suspension, Activity
+recreation, rotation and GPU replacement. Native callback p99 is 11.95–13.46 ms;
+one initial Clarity callback reaches 736.84 ms. The target remains unmet.
 
 The path without an admitted full composition pyramid initially uses 950 effect
 passes per update and about 1.52 seconds of renderer-owner CPU. Horizontal
@@ -294,7 +440,7 @@ seconds. Source allowance is closely matched: 445.6 versus 444.6 MB, 425 versus
 950-tile update. Independent exact-pixel tests reduce 72 cached tiles from 152
 total passes to 24, including sparse updates, masks and shifted windows.
 
-The final five-second diagnostic observes six composition updates. Nested spans
+The preceding batching checkpoint’s five-second diagnostic observes six composition updates. Nested spans
 include 3.860 seconds of composition, 2.210 seconds of bounded waits, 1.443
 seconds of command finalization and 15.4 ms of queue submission. These durations
 are not additive. The preceding strip checkpoint spends 1.340 seconds submitting
@@ -306,8 +452,12 @@ single RGBA32Float native read/write moves 1.927 GB, or 28.7 ms at the tablet's
 67.2 GB/s theoretical peak; actual paths do more work. This arithmetic does not
 excuse avoidable CPU or scheduling costs.
 
-Initial guide publication and settling take 1.192 seconds for Shadows, 1.250 for
-Highlights and 1.156 for Clarity. The 768 × 512 guide occupies one observed
+The finite-guide repair preserves coverage and computes the weighted mean without
+nonfinite intermediates. Current guide publication and settling take 1.146 seconds
+for Shadows, 1.223 for Highlights and 1.153 for Clarity, compared with the preceding
+1.192 / 1.250 / 1.156 seconds. Current native amount contacts supersede the preceding
+Shadows 3.16–4.00, Highlights 1.40–1.59 and Clarity 1.98–2.20 presents/s; sequential
+order and admission differences do not establish a controlled rate regression. The 768 × 512 guide occupies one observed
 6,291,520-byte allocation. Independent GPU and shared-state observers verify
 reuse across 100 own-parameter edits, snapshot leases and release on error or
 cancellation. An in-flight 42,119,200-byte reservation releases 5.460 ms after
@@ -315,19 +465,32 @@ cancellation in the workstation diagnostic; tablet build/upload counts are not
 observed directly.
 
 A real stacked 61 MP export uses Shadows 63 and Clarity 28. Guide-cold capture
-takes 1.391 seconds and its PNG worker 27.860 seconds; warm capture takes 20.956
-ms and its worker 16.883 seconds. Both original-resolution U8 sRGB PNGs are
-140,470,997 bytes with identical SHA-256. Worker time includes exact rendering,
+takes 1.423 seconds and its PNG worker 29.788 seconds; warm capture takes 18.561
+ms and its worker 17.807 seconds. Both current original-resolution U8 sRGB PNGs are
+140,471,461 bytes with identical SHA-256
+`c96c3d46fc68cf8a423bd9a76f14a9a7cab234548c5fa4e966dcf6cfa824ec89`.
+The preceding shader’s workers take 27.860 / 16.883 seconds; its output hash is
+retained separately rather than required to match the repaired consumer. Worker time includes exact rendering,
 readback, conversion and encoding. A source-opacity change rebuilds both guides
-and settles the live renderer in 15.346 seconds.
+and settles the live renderer in 15.812 seconds, compared with 15.346 seconds
+before the finite-guide repair.
 
 These rows do not meet 120 Hz. An eight-millisecond parameter observer includes
 drag slop and does not establish changed-preview or physical pen latency.
 Source allocation counts are boundary observations, not a decoded-slot census;
 continuous process/driver peaks and low/mid-tier qualification remain unverified.
-Measured APK SHA-256 is
-`6a47d7166150ea05e0533a19dd431f36e5a4ad4d5f93c3b83c7ba151b9ad4e66`.
-Raw records, source hashes, diagnostics and observer evidence are under
+Amount, guide and export APK SHA-256 is
+`d10069f5ee46015685dd9ed687d4f64f48eee95489a557fce3b52a175fdc5e85`.
+Navigation and recovery use the surface-fix APK
+`07f9dbd57f9113fdcad29d59a02cfa5026419499a59fd0b70fecf197861cdfeb`;
+records are in
+`artifacts/photo-editing-color/waveform-performance/guide-confirmation/configure-fixed-navigation-summary.json`
+and `artifacts/photo-editing-color/surface-configure-android/hardware-final.local.md`.
+Finite-guide confirmation records and source hashes are under
+`artifacts/photo-editing-color/waveform-performance/guide-confirmation/current-evidence.json`.
+The preceding APK is
+`6a47d7166150ea05e0533a19dd431f36e5a4ad4d5f93c3b83c7ba151b9ad4e66`;
+its batching diagnostics and independent lease observers remain under
 `artifacts/photo-editing-color/p25-performance/final-evidence.json`.
 
 ## Exact artwork samples
@@ -391,8 +554,10 @@ Raw records are under
 
 ## Artwork statistics
 
-Measured on 2026-10-02–03 on the reference tablet, with the original 9504 × 6336
-photo and private, nondebuggable ARM64 benchmark using release Rust. Visible
+The initial Histogram checkpoints were measured on 2026-10-02–03 on the reference
+tablet, with the original 9504 × 6336 photo and private, nondebuggable ARM64
+benchmark using release Rust. Current query/cadence controls appear in
+[Waveform statistics](#waveform-statistics) below. Visible
 Preview counts 65,536 deterministic original-grid positions; Exact counts all
 60,217,344 pixels. Counts and channel totals pass in every reported request.
 First requests start after photo import and source preparation, so they do not
@@ -411,7 +576,7 @@ worker elapsed time.
 
 Preparing 1024-pixel source windows reduces Exact to 5.59 s, but submitting all
 16 native tiles together lowers navigation to 19.96–22.75 presents/s, with
-75–100 ms interval p99 and 89 ms cancellation return. The current implementation
+75–100 ms interval p99 and 89 ms cancellation return. The accepted per-tile implementation
 retains that source preparation and submits and waits per 256-pixel Exact tile.
 Exact cancellation returns in 15.19 ms after cancellation at 100 ms; Preview
 returns in 7.25 ms. This restores short submission boundaries at the cost of
@@ -455,6 +620,65 @@ Records are under `artifacts/photo-editing-color/p16-performance/`, including
 `shared-window-navigation-summary.json`, `tile-submit-summary.json`,
 `tile-submit-navigation-summary.json`, `common-capture-navigation-summary.json`
 and paired APK/source hashes.
+
+## Waveform statistics
+
+Measured on 2026-10-03 using the original 9504 × 6336 photo and an owned
+same-size uniform white U8 sRGB JPEG on the reference tablet. Both use the same
+immutable Visible query, exact original-grid counts, Fit and Navigator. Waveform
+adds four 256 × 256 count planes. Shared GPU tests verify spatial counts directly;
+Android asserts histogram channel totals while timing the complete worker,
+including the Waveform readback. Full planes are omitted from UI serialization.
+
+| Warm worker completion, two requests after the first | Histogram only | With Waveform |
+| --- | ---: | ---: |
+| Photo Preview | 1.635–1.734 s | 1.676–1.793 s |
+| Photo Exact | 10.507–10.525 s | 11.546–11.766 s |
+| Uniform Preview | 1.634–1.638 s | 1.644–1.653 s |
+| Uniform Exact | 8.303–8.367 s | 9.809–9.853 s |
+
+The first request is recorded separately and is not a hardware-cache cold test.
+The initial uniform Exact implementation adds about 32% wall time. Aggregating
+repeated bin/column keys within each invocation reduces warm overhead to about
+18%; the photo Exact overhead is about 10–12%. This removes repeated atomic
+writes without extra buffers or changing counts. Sequential order, source
+admission and clock scaling prevent a controlled GPU-speedup claim.
+
+| Three five-second navigation contacts | Actual presents/s | Presented interval p99 |
+| --- | ---: | ---: |
+| No queries | 34.94–36.33 | 41.67 ms |
+| Histogram Preview | 35.78–36.90 | 41.67–50.00 ms |
+| Waveform Preview | 35.29–36.53 | 41.67–50.00 ms |
+| Histogram Exact | 33.56–35.81 | 41.67 ms |
+| Waveform Exact | 33.47–35.58 | 41.67 ms |
+
+Four Preview requests or one Exact request cover each complete moving window.
+Actual presents come from the owned SurfaceView's deduplicated SurfaceFlinger
+latency timestamps restricted to injected motion. Post-motion drain is excluded:
+2.85–3.41 s for Preview, 7.02–7.28 s for Histogram Exact and 7.97–8.25 s for
+Waveform Exact. These current Histogram controls supersede the earlier cadence
+rows above. Every condition misses 120 Hz; no hardware ceiling is established.
+
+Waveform cancellation returns in 4.67–5.44 ms for Preview and 23.02–26.03 ms
+for Exact after a five-millisecond worker delay. Three reopened requests have
+stable allocated-byte boundaries after each result releases. Preview cancellation
+briefly retains about 540 KB of small capture resources; the 250 ms settled
+boundary returns to the preceding value. The requested Waveform budget includes
+10 MiB for shards, summary and readback staging. These observations include the
+live canvas and do not measure continuous allocator, process or driver peaks.
+Process PSS and system MemAvailable are recorded separately. Android has no
+Histogram/Waveform UI port: this is query interference with Navigator visible,
+not qualification of panel-open motion or UI hide/reopen resource lifetime.
+
+The initial APK SHA-256 is
+`7dabed7684d03ffef5eeb43a19b2d0eac7b27626d92e23cfc9da35e87cc87aa8`;
+the current optimized APK is
+`d10069f5ee46015685dd9ed687d4f64f48eee95489a557fce3b52a175fdc5e85`.
+Test APK, source/fixture hashes, thermal observations, individual requests and
+navigation windows are under
+`artifacts/photo-editing-color/waveform-performance/current-evidence.json`
+and `initial-latency-evidence.json`. Low/mid tiers, changed-preview latency and
+reference-hardware panel interactions remain unverified.
 
 ## Clipping preview
 

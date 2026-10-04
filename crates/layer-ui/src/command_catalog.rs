@@ -1723,6 +1723,7 @@ fn panel_visibility_label(l: &Localizer, panel: Panel) -> String {
         Panel::Proof => MessageId::COMMANDS_SHOW_PROOF,
         Panel::CustomToolbar(_) => MessageId::COMMANDS_CUSTOM_TOOLBAR,
         Panel::Histogram => MessageId::COMMANDS_SHOW_HISTOGRAM,
+        Panel::Waveform => MessageId::COMMANDS_SHOW_WAVEFORM,
     };
     l.text(message).to_string()
 }

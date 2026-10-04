@@ -27,15 +27,17 @@ impl Analyses {
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
-    pub(super) fn clear_effect_analyses(&mut self) -> Result<(), String> {
+    pub(super) fn cancel_effect_analyses(&mut self) {
         self.engine.backend_mut().cancel_effect_analysis();
-        if !self.rendering_suspended { self.engine.backend_mut().retain_effect_analyses(&[]).map_err(error)?; }
         self.effect_analyses = Analyses {epoch: self.state.document_file.epoch, ..Default::default()};
-        Ok(())
+    }
+    pub(super) fn clear_effect_analyses(&mut self) -> Result<(), String> {
+        self.cancel_effect_analyses();
+        self.engine.backend_mut().retain_effect_analyses(&[]).map_err(error)
     }
     pub(super) fn poll_effect_analyses(&mut self, now: u64) -> Result<u32, String> {
-        if self.effect_analyses.epoch != self.state.document_file.epoch { self.clear_effect_analyses()?; }
         if self.rendering_suspended { return Ok(0); }
+        if self.effect_analyses.epoch != self.state.document_file.epoch { self.clear_effect_analyses()?; }
         let mut tasks = std::mem::take(&mut self.effect_analyses);
         let document = self.engine.document();
         let time = self.engine.animation_time();

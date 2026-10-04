@@ -15,6 +15,15 @@ pub fn configure_raster_worker(worker: js_sys::Function) {
     WORKER.with(|slot| *slot.borrow_mut() = Some(worker));
 }
 
+#[wasm_bindgen]
+pub fn raster_worker_lookup(name:&str,bytes:&[u8])->Result<JsValue,JsValue> {
+    let resource=layer_core::Lut3d::parse_cube_named(bytes,name).map_err(js)?;
+    let result=js_sys::Object::new();
+    js_sys::Reflect::set(&result,&js("metadata"),&js(serde_json::to_string(&(&resource,resource.admitted_spaces())).map_err(js)?))?;
+    js_sys::Reflect::set(&result,&js("bytes"),&js_sys::Uint8Array::from(resource.payload().unwrap()))?;
+    Ok(result.into())
+}
+
 pub(super) fn call(
     operation: &str,
     metadata: &str,
@@ -202,7 +211,7 @@ pub async fn raster_worker_snapshot(metadata: &str, buffers: js_sys::Array) -> R
         }
         SnapshotTask::ArtworkStatistics { source, time, effect_times, preview, selection } => {
             let query = layer_core::ArtworkQuery::from_snapshot(std::sync::Arc::new(project.document), source, time, effect_times);
-            let histogram = renderer.snapshot_gpu().artwork_statistics(layer_core::ArtworkStatisticsRequest { query, preview, selection }, Default::default()).await.map_err(js)?;
+            let histogram = renderer.snapshot_gpu().artwork_statistics(layer_core::ArtworkStatisticsRequest { query, preview, selection, waveform:false }, Default::default()).await.map_err(js)?;
             serialize(&histogram)
         }
         SnapshotTask::ArtworkSample { source, position, width, time, effect_times } => {

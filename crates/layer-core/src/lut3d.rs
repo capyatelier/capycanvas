@@ -5,6 +5,36 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::sync::Arc;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum Look { Warm, Cool, Monochrome }
+impl Look {
+    pub const ALL:[Self;3]=[Self::Warm,Self::Cool,Self::Monochrome];
+    fn title(self)->&'static str {match self {Self::Warm=>"Warm",Self::Cool=>"Cool",Self::Monochrome=>"Monochrome"}}
+    pub fn resource(self)->Arc<Lut3d> {
+        static RESOURCES:[std::sync::OnceLock<Arc<Lut3d>>;3]=[const {std::sync::OnceLock::new()};3];
+        RESOURCES[self as usize].get_or_init(|| {
+            let samples=(0..17u32.pow(3)).map(|index| {
+                let rgb=[index%17,(index/17)%17,index/289].map(|v|f64::from(v)/16.);
+                match self {
+                    Self::Monochrome=>{
+                        let linear=rgb.map(|v|RgbSpace::Srgb.decode(v));let weights=RgbSpace::Srgb.to_xyz()[1];
+                        [RgbSpace::Srgb.encode(linear.iter().zip(weights).map(|(v,w)|v*w).sum()) as f32;3]
+                    },
+                    _=>{
+                        let direction=if self==Self::Warm {1.} else {-1.};
+                        std::array::from_fn(|i|(rgb[i]+[0.16,0.02,-0.16][i]*direction*rgb[i]*(1.-rgb[i])) as f32)
+                    }
+                }
+            }).collect::<Vec<_>>();
+            Arc::new(Lut3d::from_samples(17,[[0.;3],[1.;3]],self.title().into(),samples.into()).expect("built-in color look"))
+        }).clone()
+    }
+    pub fn for_resource(resource:&Lut3d)->Option<Self> {
+        Self::ALL.into_iter().find(|look|resource.title()==look.title() && resource.digest()==look.resource().digest())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Descriptor {
@@ -173,12 +203,20 @@ impl Lut3d {
             }
             if !line.is_ascii() || line.bytes().any(|b| b.is_ascii_control() && b != b'\t') { return Err("Invalid color lookup syntax"); }
             match first {
+                "LUT_1D_SIZE" | "LUT_1D_INPUT_RANGE" => return Err("Use a 3D .cube LUT without a 1D shaper"),
                 "LUT_3D_SIZE" => {
                     if data || size.is_some() { return Err("Duplicate or misplaced color lookup size"); }
                     let n: u32 = words.next().ok_or("Missing color lookup size")?.parse().map_err(|_| "Invalid color lookup size")?;
                     if !(2..=Self::MAX_SIZE).contains(&n) || words.next().is_some() { return Err("Invalid color lookup size"); }
                     samples.try_reserve_exact((n as usize).pow(3)).map_err(|_| "Color lookup allocation failed")?;
                     size = Some(n);
+                }
+                "LUT_3D_INPUT_RANGE" => {
+                    if data || domain.iter().any(Option::is_some) {return Err("Duplicate or mixed color lookup domain");}
+                    let minimum=number(words.next().ok_or("Incomplete color lookup domain")?)?;
+                    let maximum=number(words.next().ok_or("Incomplete color lookup domain")?)?;
+                    if words.next().is_some() {return Err("Invalid color lookup domain");}
+                    domain=[Some([minimum;3]),Some([maximum;3])];
                 }
                 "DOMAIN_MIN" | "DOMAIN_MAX" => {
                     let index = usize::from(first == "DOMAIN_MAX");

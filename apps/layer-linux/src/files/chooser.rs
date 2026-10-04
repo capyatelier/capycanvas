@@ -6,6 +6,7 @@ use std::{io::Read, path::PathBuf};
 pub(super) enum Folder {
     Artwork,
     Profiles,
+    Lookup,
     Save,
     Export,
 }
@@ -24,6 +25,7 @@ fn location(folder: Folder) -> PathBuf {
     root.join("file-dialogs").join(match folder {
         Folder::Artwork => "artwork",
         Folder::Profiles => "profiles",
+        Folder::Lookup => "lookup",
         Folder::Save => "save",
         Folder::Export => "export",
     })
@@ -45,6 +47,8 @@ async fn restore(dialog: &gtk::FileDialog, folder: Folder) {
     .flatten();
     if let Some(uri) = uri {
         dialog.set_initial_folder(Some(&gio::File::for_uri(&uri)));
+    } else if matches!(folder,Folder::Lookup) {
+        dialog.set_initial_folder(Some(&gio::File::for_path(glib::user_special_dir(glib::UserDirectory::Downloads).unwrap_or_else(glib::home_dir))));
     }
 }
 

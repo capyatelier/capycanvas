@@ -25,7 +25,7 @@ pub(super) fn generated(extent: [u32; 2], color: DocumentColor, pixels: &[[f32; 
 }
 
 fn statistics(doc: &Document, preview: bool, selection: bool) -> Result<Histogram, String> {
-    pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {
+    pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest { waveform: false,
         query: ArtworkQuery::new(doc, ArtworkSource::Visible), preview, selection,
     }, CaptureControl::default()))
 }
@@ -107,7 +107,7 @@ fn statistics_selection_counts_partial_coverage_once_in_exact_and_preview() {
 #[test]
 fn statistics_frozen_source_and_cancel_do_not_publish_changed_pixels() {
     let mut doc = generated([17, 13], DocumentColor { depth: SampleDepth::F32, ..Default::default() }, &[[0.25, 0.5, 1., 1.]]);
-    let request = ArtworkStatisticsRequest { query: ArtworkQuery::new(&doc, ArtworkSource::Visible), preview: false, selection: false };
+    let request = ArtworkStatisticsRequest { waveform: false, query: ArtworkQuery::new(&doc, ArtworkSource::Visible), preview: false, selection: false };
     let expected = oracle(&doc, &[[0.25, 0.5, 1., 1.]], false, |_, _| true);
     doc.layers[0] = doubled_effect(10);
     assert!(!request.query.matches_artwork(&doc));
@@ -210,7 +210,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
     presenter.present(&r,&target,view,[0.;4]).unwrap();
     let baseline = crate::test_support::float_pixels(&r,&texture);
     let artwork = r.readback_srgb_rgba8().unwrap();
-    let request = ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
+    let request = ArtworkStatisticsRequest { waveform: false,query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
     let before = pollster::block_on(r.snapshot_gpu().artwork_statistics(request.clone(),CaptureControl::default())).unwrap();
     let mut references=Vec::new();
     for (shadows,highlights) in [(true,false),(false,true),(true,true)] {
@@ -237,7 +237,7 @@ fn presenter_clipping_marks_each_rgb_lane_without_changing_artwork_or_statistics
         assert_eq!(pollster::block_on(r.snapshot_gpu().artwork_statistics(request.clone(),CaptureControl::default())).unwrap(),before);
     }
     doc.layers[0].mask.as_mut().unwrap().show_area=true;
-    let masked_request=ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
+    let masked_request=ArtworkStatisticsRequest { waveform: false,query:ArtworkQuery::new(&doc,ArtworkSource::Visible),preview:false,selection:false};
     let mut attached=crate::AttachedRenderer(Some(Box::new(r)));
     attached.set_clipping_preview(false,false);
     attached.submit(layer_render::FramePacket {blend_space:doc.blend_space,..crate::test_support::packet(&doc.layers,extent)}).unwrap();
@@ -376,8 +376,176 @@ fn statistics_curve_input_and_channels_use_typed_domain_without_master_mask_or_o
         for source in [ArtworkSource::EffectInput(LayerId(60)),ArtworkSource::EffectChannels(LayerId(60))] {
             let channel_source = matches!(source,ArtworkSource::EffectChannels(_));
             let expected = curve_histogram_oracle(&doc,&pixels,logarithmic,channels && channel_source);
-            let actual = pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {query:ArtworkQuery::new(&doc,source.clone()),preview:false,selection:false},CaptureControl::default())).unwrap();
+            let actual = pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest { waveform: false,query:ArtworkQuery::new(&doc,source.clone()),preview:false,selection:false},CaptureControl::default())).unwrap();
             same(actual,expected,(space,logarithmic,channels,source));
         }
     }}}
+}
+
+#[cfg(test)]
+mod waveform {
+    use super::*;
+
+    fn inspect(doc: &Document, preview: bool, selection: bool, waveform: bool) -> Result<Histogram, String> {
+        pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {
+            query: ArtworkQuery::new(doc, ArtworkSource::Visible), preview, selection, waveform,
+        }, CaptureControl::default()))
+    }
+
+    fn encoded(value: f64, space: RgbSpace) -> f64 {
+        let x = value.abs();
+        let y = match space {
+            RgbSpace::Srgb | RgbSpace::DisplayP3 => if x <= 0.0031308 { 12.92 * x } else { 1.055 * x.powf(1. / 2.4) - 0.055 },
+            RgbSpace::AdobeRgb => x.powf(256. / 563.),
+            RgbSpace::ProPhoto => if x <= 1. / 512. { 16. * x } else { x.powf(1. / 1.8) },
+        };
+        y.copysign(value)
+    }
+
+    fn reference(doc: &Document, preview: bool, pixel: impl Fn(u32, u32) -> [f32; 4], admitted: impl Fn(u32, u32) -> bool) -> (Histogram, Vec<u32>) {
+        let mut histogram = Histogram::new(doc.color);
+        let mut counts = vec![0u32; 4 * 256 * 256];
+        let extent = [doc.width, doc.height];
+        let grid = if preview { extent.map(|n| n.min(256)) } else { extent };
+        let row = doc.color.space.to_xyz()[1];
+        let weights = [row[0], 1. - row[0] - row[2], row[2]];
+        for iy in 0..grid[1] {
+            for ix in 0..grid[0] {
+                let world = [0, 1].map(|axis| if preview {
+                    ((2 * u64::from([ix, iy][axis]) + 1) * u64::from(extent[axis]) / (2 * u64::from(grid[axis]))) as u32
+                } else { [ix, iy][axis] });
+                let [x, y] = world;
+                if !admitted(x, y) { continue; }
+                let rgba = pixel(x, y);
+                if rgba[3] == 0. { histogram.transparent += 1; continue; }
+                histogram.pixels += 1;
+                let rgb = [0, 1, 2].map(|i| f64::from(rgba[i]) / f64::from(rgba[3]));
+                let luminance: f64 = if rgb[0] == rgb[1] && rgb[1] == rgb[2] { rgb[0] }
+                    else { rgb.into_iter().zip(weights).map(|(value, weight)| value * weight).sum() };
+                for (channel, value) in rgb.into_iter().chain([luminance]).enumerate() {
+                    let bin = if doc.color.depth.is_float() {
+                        let (low, span) = if doc.color.depth == SampleDepth::F32 { (-149., 277.) } else { (-12., 28.) };
+                        if value <= 0. { 0 } else { 1 + (((value.log2() - low) / span).clamp(0., 1.) * 254.).floor() as usize }
+                    } else {
+                        let coordinate = if channel < 3 { encoded(value, doc.color.space) } else { value };
+                        (coordinate.clamp(0., 1.) * 256.).floor().min(255.) as usize
+                    };
+                    let lane = &mut histogram.channels[channel];
+                    lane.bins[bin] += 1;
+                    lane.below += u64::from(value < 0.); lane.above += u64::from(value > 1.);
+                    lane.black += u64::from(value <= 0.); lane.white += u64::from(value >= 1.);
+                    let column = (u64::from(x) * 256 / u64::from(extent[0])) as usize;
+                    counts[(channel * 256 + bin) * 256 + column] += 1;
+                }
+            }
+        }
+        (histogram, counts)
+    }
+
+    fn matches(actual: &Histogram, expected: (Histogram, Vec<u32>), context: impl std::fmt::Debug) {
+        same(actual.clone(), expected.0, &context);
+        let counts = &actual.waveform.as_ref().expect("requested waveform").counts;
+        assert_eq!(counts.len(), 4 * 256 * 256, "{context:?}: waveform layout");
+        let differences: Vec<_> = counts.iter().zip(&expected.1).enumerate().filter(|(_, (a, e))| a != e)
+            .take(12).map(|(index, (a, e))| (index / 65536, (index / 256) % 256, index % 256, *a, *e)).collect();
+        assert!(differences.is_empty(), "{context:?}: (channel, bin, world-column, actual, expected) {differences:?}");
+        for channel in 0..4 {
+            for bin in 0..256 {
+                let row = &counts[(channel * 256 + bin) * 256..(channel * 256 + bin + 1) * 256];
+                assert_eq!(row.iter().map(|n| u64::from(*n)).sum::<u64>(), actual.channels[channel].bins[bin], "{context:?}: waveform collapses to histogram");
+            }
+        }
+    }
+
+    fn row_document(extent: [u32; 2], color: DocumentColor, row: &[[f32; 4]]) -> Document {
+        let mut doc = generated(extent, color, row);
+        let program = Arc::make_mut(&mut Arc::make_mut(doc.layers[0].effect.as_mut().unwrap()).program);
+        program.wgsl = program.wgsl.sources().unwrap()[0].replace("+3u*u32(floor(p.y))", "").into();
+        doc
+    }
+
+    #[test]
+    fn reversed_artwork_keeps_histogram_but_reverses_waveform_columns() {
+        let row: Vec<_> = (0..256).map(|x| { let red = x as f32 / 255.; [red, 0.25, 1. - red, 1.] }).collect();
+        let reversed: Vec<_> = row.iter().copied().rev().collect();
+        for space in RgbSpace::ALL {
+            let color = DocumentColor { space, depth: SampleDepth::U8 };
+            let doc = row_document([256, 7], color, &row);
+            let flipped = row_document([256, 7], color, &reversed);
+            let a = inspect(&doc, false, false, true).unwrap();
+            let b = inspect(&flipped, false, false, true).unwrap();
+            matches(&a, reference(&doc, false, |x, _| row[x as usize], |_, _| true), (space, "original"));
+            matches(&b, reference(&flipped, false, |x, _| reversed[x as usize], |_, _| true), (space, "reversed"));
+            assert_eq!(a.channels, b.channels, "{space:?}: reversal keeps distributions");
+            let a = &a.waveform.as_ref().unwrap().counts;
+            let b = &b.waveform.as_ref().unwrap().counts;
+            assert_ne!(a, b, "{space:?}: spatial inspection distinguishes distributions");
+            for channel in 0..4 { for bin in 0..256 { for column in 0..256 {
+                assert_eq!(a[(channel * 256 + bin) * 256 + column], b[(channel * 256 + bin) * 256 + 255 - column]);
+            } } }
+        }
+    }
+
+    #[test]
+    fn waveform_counts_original_positions_at_odd_preview_and_selection_edges() {
+        let pixels = [[0.; 4], [0.125, 0.25, 0.5, 1.], [2., -0.0625, 1., 0.5], [1.; 4],
+            [1e-8, 2e-8, 4e-8, 8e-8], [0.25, 0.125, 0.0625, 0.25], [0.0625, 0.125, 0.25, 0.5]];
+        for space in RgbSpace::ALL {
+            let mut doc = generated([517, 259], DocumentColor { space, depth: SampleDepth::F32 }, &pixels);
+            doc.selection = Some(coverage_selection([doc.width, doc.height]));
+            for preview in [false, true] {
+                for selected in [false, true] {
+                    let actual = inspect(&doc, preview, selected, true).unwrap();
+                    matches(&actual, reference(&doc, preview, |x, y| pixels[((x + 3 * y) as usize) % pixels.len()], |x, y| !selected || (x + 3 * y) % 5 != 0), (space, preview, selected));
+                    if !selected { assert_eq!(actual.pixels + actual.transparent, if preview { 256 * 256 } else { 517 * 259 }); }
+                }
+                doc.selection.as_mut().unwrap().inverted = true;
+                let actual = inspect(&doc, preview, true, true).unwrap();
+                matches(&actual, reference(&doc, preview, |x, y| pixels[((x + 3 * y) as usize) % pixels.len()], |x, y| (x + 3 * y) % 5 != 4), (space, preview, "inverted"));
+                doc.selection.as_mut().unwrap().inverted = false;
+            }
+        }
+    }
+
+    #[test]
+    fn waveform_reuses_exact_rgb_and_luminance_classification_for_hdr_and_tiny_alpha() {
+        let pixels = [[0.; 4], [0., 0., 0., 1.], [-1., 0.5, 4., 1.], [1.; 4], [4., 4., 4., 1.],
+            [3e38, -2e38, 1e38, 1.], [f32::from_bits(1), f32::from_bits(2), f32::from_bits(3), f32::from_bits(1)]];
+        for space in RgbSpace::ALL {
+            for depth in [SampleDepth::U8, SampleDepth::U16, SampleDepth::F16, SampleDepth::F32] {
+                let doc = generated([7, 3], DocumentColor { space, depth }, &pixels);
+                matches(&inspect(&doc, false, false, true).unwrap(), reference(&doc, false, |x, y| pixels[((x + 3 * y) as usize) % pixels.len()], |_, _| true), (space, depth));
+            }
+        }
+    }
+
+    #[test]
+    fn histogram_without_waveform_demand_does_not_return_spatial_counts() {
+        let pixels = [[0.; 4], [0.125, 0.25, 0.5, 1.], [1.; 4]];
+        let doc = generated([19, 13], DocumentColor::default(), &pixels);
+        let plain = inspect(&doc, false, false, false).unwrap();
+        assert!(plain.waveform.is_none());
+        let spatial = inspect(&doc, false, false, true).unwrap();
+        same(plain, spatial, "optional waveform preserves histogram");
+        let control = CaptureControl::default(); control.cancel();
+        assert!(pollster::block_on(gpu().artwork_statistics(ArtworkStatisticsRequest {
+            query: ArtworkQuery::new(&doc, ArtworkSource::Visible), preview: false, selection: false, waveform: true,
+        }, control)).is_err());
+    }
+
+    #[test]
+    fn uniform_waveform_preserves_every_full_scan_count_without_stale_demand() {
+        let pixel = [0.25, 0.25, 0.25, 1.];
+        let doc = generated([1025, 1027], DocumentColor::default(), &[pixel]);
+        let expected = reference(&doc, false, |_, _| pixel, |_, _| true);
+        inspect(&doc, true, false, false).unwrap();
+        for demand in [false, true, false, true] {
+            let started = std::time::Instant::now();
+            let actual = inspect(&doc, false, false, demand).unwrap();
+            eprintln!("uniform full statistics waveform={demand} elapsed_ms={}", started.elapsed().as_millis());
+            assert_eq!(actual.pixels, 1025 * 1027);
+            if demand { matches(&actual, expected.clone(), "uniform hot bins"); }
+            else { assert!(actual.waveform.is_none()); same(actual, expected.0.clone(), "uniform histogram only"); }
+        }
+    }
 }

@@ -90,6 +90,12 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   panels.get("adjustments").append(adjustments);
   const properties=element("div","effect-properties");properties.dataset.control="properties";
   const title=element("h3"),page=element("select"),body=element("div","property-controls");page.dataset.propertiesPage="";page.onchange=()=>send({op:"select_page",layer:state().layer_properties.layer,page:page.value});properties.append(title,page,body);panels.get("properties").append(properties);
+  const resource=element("div","property-row property-resource"),resourceChoice=element("select"),resourceImport=button("",()=>{
+    const action=state().layer_properties.actions.find(a=>a.action.op==="import_lookup");if(action)send(action.action);
+  });
+  resourceChoice.dataset.propertyResource="";resourceImport.dataset.action="import-lookup";
+  resourceChoice.onchange=()=>{const action=state().layer_properties.actions[Number(resourceChoice.value)];if(action)send(action.action);};
+  resource.append(resourceChoice,resourceImport);properties.insertBefore(resource,body);
   const stats=element("div","renderer-stats");stats.dataset.control="stats";panels.get("stats").append(stats);
   const recordButton=button("Start stroke recording",()=>{}); stats.append(recordButton);
   const disposeRecording=strokeRecordingControl(app,recordButton,message);
@@ -188,6 +194,17 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
   function refresh(){
     refreshPicker();
     const view=state().layer_properties;title.textContent=view.title;title.title=view.description;
+    resource.hidden=view.resource_label==null;
+    if(!resource.hidden){
+      const choices=view.actions.flatMap((a,i)=>a.action.op==="lookup_preset"?[[i,a.label]]:[]);
+      if(view.resource_selection==null)choices.push([-1,view.resource_name]);
+      const key=JSON.stringify(choices);
+      if(resourceChoice.dataset.schema!==key){resourceChoice.dataset.schema=key;resourceChoice.replaceChildren(...choices.map(([i,label])=>{const option=element("option","",label);option.value=i;return option;}));}
+      resourceChoice.value=view.resource_selection??-1;resourceChoice.title=view.resource_name;resourceChoice.setAttribute("aria-label",view.resource_label);resourceChoice.disabled=!view.enabled;
+      const action=view.actions.find(a=>a.action.op==="import_lookup");resourceImport.title=action.label;resourceImport.setAttribute("aria-label",action.label);resourceImport.disabled=!view.enabled;
+      const glyph=action.icon.replace(/^layer-/,"").replace(/-symbolic$/,"");
+      if(resourceImport.firstChild?.dataset.asset!==glyph)resourceImport.replaceChildren(icon(glyph));
+    }
     const pages=JSON.stringify(view.pages.map(p=>p.id));
     if(page.dataset.schema!==pages){page.dataset.schema=pages;page.replaceChildren(...view.pages.map(p=>{const option=element("option","",()=>state().layer_properties.pages.find(v=>v.id===p.id)?.label??"");option.value=p.id;return option;}));}
     page.hidden=view.pages.length<2;page.value=view.page??"";page.disabled=!view.enabled;

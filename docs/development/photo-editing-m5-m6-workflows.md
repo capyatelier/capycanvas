@@ -238,9 +238,11 @@ Query only while Info is actually visible or a sampling gesture requires it; per
 do not cause continuous readback. Stationary points update on live artwork changes. Keys include
 sampler-definition generation to prevent late results being relabeled after deletion. Theme/monitor
 changes do not reinterpret points. Add Histogram/Info through Panel/PANEL_NAMES/ALL, customization and
-duplicate host view factories. In Photo place inactive tabs beside Navigator/Proof in the existing
-collapsed secondary strip; preserve custom layouts and starting active tabs. Reuse actual
-tab/column/drawer/floating/app visibility gating from renderer telemetry. Histogram command becomes
+duplicate host view factories. Photo opens Histogram with an adjacent RGB Waveform tab in the
+expanded column above Properties and Layers, replacing Color/Palettes. Window owns panel access;
+Color and Palettes remain available there. Info remains a secondary inactive tab beside
+Navigator/Proof. Preserve customized layouts. Reuse actual tab/column/drawer/floating/app visibility
+gating from renderer telemetry. Histogram command becomes
 show/focus panel, without ellipsis or second command.
 
 ## Before/After

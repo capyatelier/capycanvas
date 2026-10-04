@@ -255,7 +255,6 @@ pub struct MenuSpec {
 pub const VIEW_MENU: MenuSpec = MenuSpec {
     id: ApplicationMenu::View,
     sections: &[
-        &[CommandId::Histogram],
         &[CommandId::SoftProofSetup, CommandId::SoftProof, CommandId::GamutWarning, CommandId::SdrRendition, CommandId::PreviewSdr],
         &[CommandId::ZoomIn, CommandId::ZoomOut, CommandId::FitCanvas, CommandId::ActualPixels],
         &[CommandId::RotateLeft, CommandId::RotateRight],
@@ -389,6 +388,7 @@ command_ids! {
     SoftProof,
     GamutWarning,
     Histogram,
+    Waveform,
     ImportImage,
     PasteImage,
     DocumentProperties,
@@ -603,6 +603,7 @@ command_ids! {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::Waveform => Panel::Waveform.available_on(platform),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
             _ => true,
@@ -655,6 +656,7 @@ impl CommandId {
             Self::Sculpt => "sculpt",
             Self::SdrRendition | Self::PreviewSdr | Self::SoftProofSetup | Self::SoftProof | Self::GamutWarning => "image",
             Self::Histogram => "stats",
+            Self::Waveform => "waveform",
             Self::ImportImage | Self::RasterizeSource => "image",
             Self::AssignProfile | Self::ConvertColorSpace | Self::ChangeBitDepth | Self::DocumentProperties | Self::RepairSourceProfile => "info",
             Self::NewDocument => "new-document",
@@ -896,6 +898,7 @@ impl CommandId {
             Self::SoftProof => MessageId::COMMAND_SOFT_PROOF,
             Self::GamutWarning => MessageId::COMMAND_GAMUT_WARNING,
             Self::Histogram => MessageId::COMMAND_HISTOGRAM,
+            Self::Waveform => MessageId::COMMAND_WAVEFORM,
             Self::ImportImage => MessageId::COMMAND_IMPORT_IMAGE,
             Self::PasteImage => MessageId::COMMAND_PASTE_IMAGE,
             Self::DocumentProperties => MessageId::COMMAND_DOCUMENT_PROPERTIES,
@@ -1201,6 +1204,7 @@ pub struct UiState {
     #[serde(skip)]
     pub tool_slots: ToolSlotMemory,
     pub histogram: HistogramView,
+    pub waveform: HistogramView,
     pub tonal_histogram: HistogramView,
     #[serde(skip)]
     pub(crate) localization: std::sync::Arc<Localizer>,

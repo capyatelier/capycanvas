@@ -2,6 +2,17 @@ fn guide_normalized(value:FloatNumber,exponent:i32)->f32{
     if value.mantissa==0u{return 0.;}
     return select(1.,-1.,value.negative)*(f32(value.mantissa)/8388608.)*exp2(f32(value.exponent-exponent));
 }
+fn guide_mean(sum:vec3<f32>,sample:vec3<f32>,weight:f32)->vec3<f32>{
+    if sample.y<=0. || weight<=0. {return sum;}
+    let scaled=frexp(sample.y*weight);
+    let next=vec3(sample.x,scaled.fract,sample.z+f32(scaled.exp));
+    if sum.y==0. {return next;}
+    let exponent=max(sum.z,next.z);
+    let a=ldexp(sum.y,i32(max(sum.z-exponent,-126.)));
+    let b=ldexp(next.y,i32(max(next.z-exponent,-126.)));
+    let total=frexp(a+b);
+    return vec3(sum.x+(next.x-sum.x)*(b/(a+b)),total.fract,exponent+f32(total.exp));
+}
 fn guide_luminance(pixel:vec4<f32>,weights:vec3<f32>)->vec4<f32> {
     let bits=bitcast<vec4<u32>>(pixel);let absolute=bits&vec4<u32>(0x7fffffffu);
     if any(absolute>=vec4<u32>(0x7f800000u)) || absolute.a>0x3f800000u || (bits.a>>31u!=0u && absolute.a!=0u){return vec4(-24.,0.,0.,4.);}

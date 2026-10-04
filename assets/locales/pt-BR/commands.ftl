@@ -601,3 +601,5 @@ commands-transform-again-empty = Aplique primeiro uma transformação de camada
 commands-transform-again-whole-layer = Limpe a seleção de pixels e selecione uma camada inteira
 
 commands-show-histogram = Mostrar histograma
+command-waveform = Forma de onda
+commands-show-waveform = Mostrar forma de onda

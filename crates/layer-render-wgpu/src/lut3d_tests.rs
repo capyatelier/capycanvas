@@ -78,6 +78,46 @@ fn encoded_input(e:[f64;3],working:usize,selected:usize,alpha:f32)->[f32;4] {
 fn residency(r:&WgpuRasterizer)->(u64,u64) {
     let cache=r.device.effect_resources.lock().unwrap();(cache.uploads,cache.bytes())
 }
+
+#[test]
+fn builtin_looks_preserve_alpha_hdr_and_match_known_srgb_knots_in_every_working_profile() {
+    use layer_core::lut3d::Look;
+    let points=[[0.25,0.5,0.75],[0.;3],[1.;3],[-1.;3],[3.;3]];
+    for working in 0..4 {
+        let mut renderer=WgpuRasterizer::new_native_headless(DocumentColor{space:RgbSpace::ALL[working],depth:SampleDepth::F32}).unwrap();
+        let inputs=points.into_iter().flat_map(|p|[0.,8e-8,0.37,1.].map(|alpha|encoded_input(p,working,0,alpha))).collect::<Vec<_>>();
+        let original=pattern(&inputs);
+        for look in Look::ALL {
+            let generation=std::time::Instant::now();
+            let resource=look.resource();
+            if working==0 {println!("builtin {look:?} first-resource={:?} bytes={}",generation.elapsed(),resource.bytes());}
+            let started=std::time::Instant::now();
+            let first=render(&mut renderer,&[lookup(2,resource.clone(),0,100.,SampleDepth::F32),original.clone()]);
+            println!("builtin {look:?} working={working} first-render={:?}",started.elapsed());
+            for (index,input) in inputs.iter().copied().enumerate() {
+                let encoded=points[index/4];
+                let alpha=f64::from(input[3]);
+                let expected=if alpha==0. { input.map(f64::from) } else {
+                    let clamped=encoded.map(|value|value.clamp(0.,1.));
+                    let mapped=match look {
+                        Look::Warm=>[clamped[0]+0.16*clamped[0]*(1.-clamped[0]),clamped[1]+0.02*clamped[1]*(1.-clamped[1]),clamped[2]-0.16*clamped[2]*(1.-clamped[2])],
+                        Look::Cool=>[clamped[0]-0.16*clamped[0]*(1.-clamped[0]),clamped[1]-0.02*clamped[1]*(1.-clamped[1]),clamped[2]+0.16*clamped[2]*(1.-clamped[2])],
+                        Look::Monochrome=>{
+                            let gray=transfer(0.21263900587151036*transfer(clamped[0],0,true)+0.715168678767756*transfer(clamped[1],0,true)+0.07219231536073371*transfer(clamped[2],0,true),0,false);
+                            [gray;3]
+                        }
+                    };
+                    let edited=std::array::from_fn(|axis|encoded[axis]+mapped[axis]-clamped[axis]);
+                    let linear=convert(edited.map(|value|transfer(value,0,true)),0,working);
+                    [linear[0]*alpha,linear[1]*alpha,linear[2]*alpha,alpha]
+                };
+                close(first[index],expected,&format!("builtin {look:?} profile={working} sample={index}"));
+            }
+            let neutral=render(&mut renderer,&[lookup(2,resource,0,0.,SampleDepth::F32),original.clone()]);
+            assert_eq!(&neutral[..inputs.len()],inputs.as_slice());
+        }
+    }
+}
 fn capture(r:&mut WgpuRasterizer,scene:&mut scene::Scene,layers:&[Layer],output:scene::Output,crop:PixelRect)->Vec<[f32;4]> {
     let (target,_)=crate::create_color_target(&r.device,[crop.width(),crop.height()],"LUT checkpoint oracle");
     let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());

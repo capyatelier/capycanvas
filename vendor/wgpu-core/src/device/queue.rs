@@ -601,8 +601,8 @@ impl WebGpuError for QueueSubmitError {
 /// [`submit`]: `PendingSubmission::submit`
 pub(crate) struct PendingSubmission<'a> {
     queue: &'a Queue,
-    snatch_guard: SnatchGuard<'a>,
     command_index_guard: RwLockWriteGuard<'a, CommandIndices>,
+    snatch_guard: SnatchGuard<'a>,
     // Command buffers to be executed, along with trackers for the resources they use.
     pub executions: Vec<EncoderInFlight>,
     // Surface textures referenced by command buffers in this submission. These need to be

@@ -89,7 +89,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionSample(
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_inspectionStatistics(
     mut env: JNIEnv, _: JClass, handle: jlong, source: jni::objects::JString,
-    preview: jni::sys::jboolean, selection: jni::sys::jboolean,
+    preview: jni::sys::jboolean, selection: jni::sys::jboolean, waveform: jni::sys::jboolean,
 ) -> jstring {
     let job = unsafe { Box::from_raw(handle as *mut Inspection) };
     let result = (|| {
@@ -97,7 +97,7 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionStatistics(
         on_worker("capy-artwork-statistics", "Artwork statistics worker failed", move || {
             let mut query = layer_core::ArtworkQuery::new(&job.project.document, source);
             query.time = job.time;
-            let request = layer_core::ArtworkStatisticsRequest { query, preview: preview != 0, selection: selection != 0 };
+            let request = layer_core::ArtworkStatisticsRequest { query, preview: preview != 0, selection: selection != 0, waveform: waveform != 0 };
             let histogram = pollster::block_on(job.gpu.artwork_statistics(request, job.control))?;
             serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":job.project.document.revision,"time":job.time,"histogram":histogram})).map_err(error)
         })

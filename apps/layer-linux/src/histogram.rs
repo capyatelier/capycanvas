@@ -1,119 +1,174 @@
 use crate::workspace::Workspace;
 use gtk::prelude::*;
+use gtk::glib;
 use layer_ui::{HistogramAction, HistogramView, UiAction, UiState};
 use std::{cell::{Cell, RefCell}, rc::{Rc, Weak}};
+
+pub(crate) struct Footer {
+    pub root: gtk::Box,
+    status: gtk::Label,
+    clipping: [gtk::ToggleButton; 2],
+    updating: Rc<Cell<bool>>,
+    workspace: Rc<RefCell<Weak<Workspace>>>,
+}
+impl Footer {
+    pub fn new(prefix: &str) -> Self {
+        let root = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        let status = gtk::Label::builder().xalign(0.).hexpand(true).width_chars(1)
+            .ellipsize(gtk::pango::EllipsizeMode::End).build();
+        status.add_css_class("dim-label");status.set_widget_name(&format!("{prefix}-status"));root.append(&status);
+        let updating = Rc::new(Cell::new(false));
+        let workspace = Rc::new(RefCell::new(Weak::<Workspace>::new()));
+        let buttons=crate::panel_controls::action_row();buttons.set_spacing(0);buttons.add_css_class("linked");root.append(&buttons);
+        let clipping = std::array::from_fn(|index| {
+            let button = gtk::ToggleButton::new();button.add_css_class("flat");
+            let name = if index == 0 {"shadows"} else {"highlights"};
+            button.set_widget_name(&format!("{prefix}-{name}"));
+            crate::icons::set_button(&button,&format!("layer-tonal-{name}-symbolic"));
+            button.connect_toggled(glib::clone!(#[strong] updating, #[strong] workspace, move |button| {
+                let owner=workspace.borrow().upgrade();
+                if !updating.get() && let Some(w) = owner {
+                    w.dispatch(UiAction::Histogram {action: if index == 0 {HistogramAction::Shadows {enabled:button.is_active()}}
+                        else {HistogramAction::Highlights {enabled:button.is_active()}}});
+                }
+            }));buttons.append(&button);button
+        });
+        Self {root,status,clipping,updating,workspace}
+    }
+    pub fn refresh(&self,w:&Rc<Workspace>,state:&UiState,status:&str) {
+        *self.workspace.borrow_mut() = Rc::downgrade(w);self.updating.set(true);
+        self.status.set_label(status);self.status.set_tooltip_text(Some(status));
+        for (index,button) in self.clipping.iter().enumerate() {
+            if let Some(label) = state.histogram.labels.get(index+1) {
+                button.set_tooltip_text(Some(label));button.update_property(&[gtk::accessible::Property::Label(label)]);
+            }
+            button.set_active(if index == 0 {state.histogram.shadows} else {state.histogram.highlights});
+        }
+        self.updating.set(false);
+    }
+}
 
 pub(crate) struct Inspector {
     pub root: gtk::Box,
     source: gtk::DropDown,
     channel: gtk::DropDown,
     chart: gtk::DrawingArea,
-    status: gtk::Label,
-    description: gtk::Label,
-    range: gtk::Label,
+    toolbar: gtk::Box,
+    footer: Footer,
     axis: [gtk::Label; 2],
-    options: [gtk::CheckButton; 3],
+    logarithmic: gtk::CheckButton,
     view: RefCell<HistogramView>,
     colors: Cell<[[u8; 3]; 4]>,
     updating: Cell<bool>,
     workspace: RefCell<Weak<Workspace>>,
+    waveform: bool,
+    plot: RefCell<Option<gtk::cairo::ImageSurface>>,
 }
 impl Inspector {
-    pub fn new() -> Rc<Self> {
-        let root = crate::panel_controls::column();
-        root.set_widget_name("histogram-panel");
-        root.set_margin_top(8);root.set_margin_bottom(8);root.set_margin_start(8);root.set_margin_end(8);
-        let source = gtk::DropDown::from_strings(&[]);source.set_widget_name("histogram-source");
-        let channel = gtk::DropDown::from_strings(&[]);channel.set_widget_name("histogram-channel");
-        let chart = gtk::DrawingArea::builder().content_height(120).hexpand(true).build();chart.set_widget_name("histogram-chart");
-        let status = gtk::Label::builder().xalign(0.).wrap(true).build();status.set_widget_name("histogram-status");
-        let description = gtk::Label::builder().xalign(0.).wrap(true).build();description.set_widget_name("histogram-description");
-        description.add_css_class("dim-label");
-        let range = gtk::Label::builder().xalign(0.).wrap(true).build();range.set_widget_name("histogram-range");
+    pub fn new() -> Rc<Self> {Self::create(false)}
+    pub fn waveform() -> Rc<Self> {Self::create(true)}
+    fn create(waveform:bool) -> Rc<Self> {
+        let prefix=if waveform {"waveform"} else {"histogram"};
+        let root = crate::panel_controls::column();root.set_widget_name(&format!("{prefix}-panel"));
+        root.set_margin_top(6);root.set_margin_bottom(6);root.set_margin_start(6);root.set_margin_end(6);
+        let source = crate::panel_controls::dropdown(&[]);source.set_widget_name(&format!("{prefix}-source"));source.set_hexpand(true);
+        let channel = crate::panel_controls::dropdown(&[]);channel.set_widget_name(&format!("{prefix}-channel"));channel.set_hexpand(true);
+        let toolbar = crate::panel_controls::action_row();toolbar.set_homogeneous(true);toolbar.append(&source);toolbar.append(&channel);root.append(&toolbar);
+        let chart = gtk::DrawingArea::builder().content_height(160).hexpand(true).build();chart.set_widget_name(&format!("{prefix}-chart"));
         let axis = [gtk::Label::builder().xalign(0.).hexpand(true).build(),gtk::Label::builder().xalign(1.).build()];
-        let axis_row = gtk::Box::new(gtk::Orientation::Horizontal,0);for label in &axis {axis_row.append(label);}
-        let options = std::array::from_fn(|_| gtk::CheckButton::new());
-        root.append(&source);root.append(&channel);root.append(&chart);root.append(&axis_row);root.append(&status);
-        for (button, name) in options.iter().zip(["histogram-log", "histogram-shadows", "histogram-highlights"]) {button.set_widget_name(name);root.append(button);}
-        let details = gtk::Box::new(gtk::Orientation::Vertical,8);details.append(&range);details.append(&description);
-        let expander = gtk::Expander::builder().child(&details).build();expander.set_widget_name("histogram-details");root.append(&expander);
-        let panel = Rc::new(Self { root, source, channel, chart, status, description, range, axis, options, view: RefCell::default(),
-            colors: Cell::new([[0;3];4]), updating: Cell::new(false), workspace: RefCell::default() });
-        for (index, dropdown) in [&panel.source, &panel.channel].into_iter().enumerate() {
+        if waveform {
+            let graph=gtk::Overlay::new();graph.set_child(Some(&chart));
+            for (index,label) in axis.iter().enumerate() {
+                label.set_hexpand(false);label.set_halign(gtk::Align::Start);
+                label.set_valign(if index==0 {gtk::Align::End} else {gtk::Align::Start});
+                label.set_margin_start(3);label.set_can_target(false);graph.add_overlay(label);
+            }
+            root.append(&graph);
+        } else {
+            let axis_row = gtk::Box::new(gtk::Orientation::Horizontal,0);axis_row.add_css_class("dim-label");for label in &axis {axis_row.append(label);}
+            root.append(&chart);root.append(&axis_row);
+        }
+        let footer = Footer::new(prefix);root.append(&footer.root);
+        let logarithmic = gtk::CheckButton::new();logarithmic.set_widget_name(&format!("{prefix}-log"));
+        footer.root.insert_child_after(&logarithmic,Some(&footer.status));
+        let panel = Rc::new(Self {root,source,channel,chart,toolbar,footer,axis,logarithmic,
+            view:RefCell::default(),colors:Cell::new([[0;3];4]),updating:Cell::new(false),workspace:RefCell::default(),waveform,plot:RefCell::default()});
+        for (index,dropdown) in [&panel.source,&panel.channel].into_iter().enumerate() {
             let weak = Rc::downgrade(&panel);
             dropdown.connect_selected_notify(move |dropdown| {if let Some(panel) = weak.upgrade() {
-                panel.dispatch(if index == 0 { HistogramAction::Source { index: dropdown.selected() as u8 } }
-                    else { HistogramAction::Channel { index: dropdown.selected() as u8 } });
-            }});
-        }
-        for (index, button) in panel.options.iter().enumerate() {
-            let weak = Rc::downgrade(&panel);
-            button.connect_toggled(move |button| {if let Some(panel) = weak.upgrade() {
-                let enabled = button.is_active();panel.dispatch(match index {0 => HistogramAction::Logarithmic { enabled },
-                    1 => HistogramAction::Shadows { enabled }, _ => HistogramAction::Highlights { enabled }});
+                panel.dispatch(if index == 0 {HistogramAction::Source {index:dropdown.selected() as u8}}
+                    else if panel.waveform {HistogramAction::WaveformChannel {index:dropdown.selected() as u8}}
+                    else {HistogramAction::Channel {index:dropdown.selected() as u8}});
             }});
         }
         let weak = Rc::downgrade(&panel);
-        panel.chart.set_draw_func(move |_, cr, width, height| {if let Some(panel) = weak.upgrade() {
-            draw(cr, &panel.view.borrow(), panel.colors.get(), f64::from(width), f64::from(height));
+        panel.logarithmic.connect_toggled(move |button| {if let Some(panel) = weak.upgrade() {
+            panel.dispatch(if panel.waveform {HistogramAction::WaveformLogarithmic {enabled:button.is_active()}}
+                else {HistogramAction::Logarithmic {enabled:button.is_active()}});
+        }});
+        let weak = Rc::downgrade(&panel);
+        panel.chart.set_draw_func(move |_,cr,width,height| {if let Some(panel) = weak.upgrade() {
+            if panel.waveform {
+                if let Some(plot)=panel.plot.borrow().as_ref() {
+                    let _=cr.save();cr.scale(f64::from(width)/f64::from(plot.width()),f64::from(height)/f64::from(plot.height()));
+                    let _=cr.set_source_surface(plot,0.,0.);cr.source().set_filter(gtk::cairo::Filter::Nearest);let _=cr.paint();let _=cr.restore();
+                }
+            } else {draw(cr,&panel.view.borrow(),panel.colors.get(),f64::from(width),f64::from(height));}
         }});
         panel
     }
-    fn dispatch(&self, action: HistogramAction) {
-        if self.updating.get() {return;}
-        let workspace = self.workspace.borrow().upgrade();
-        if let Some(w) = workspace {w.dispatch(UiAction::Histogram { action });}
+    fn dispatch(&self,action:HistogramAction) {
+        let owner=self.workspace.borrow().upgrade();
+        if !self.updating.get() && let Some(w) = owner {w.dispatch(UiAction::Histogram {action});}
     }
-    pub fn duplicate(&self, w: &Rc<Workspace>) -> Rc<Self> {
-        let panel = Self::new();*panel.workspace.borrow_mut() = Rc::downgrade(w);panel
-    }
-    pub fn refresh(&self, w: &Rc<Workspace>, state: &UiState) {
-        *self.workspace.borrow_mut() = Rc::downgrade(w);
-        self.refresh_view(w,state,&state.histogram);
-    }
+    pub fn duplicate(&self,w:&Rc<Workspace>) -> Rc<Self> {let panel=Self::create(self.waveform);*panel.workspace.borrow_mut()=Rc::downgrade(w);panel}
+    pub fn refresh(&self,w:&Rc<Workspace>,state:&UiState) {self.refresh_view(w,state,if self.waveform {&state.waveform} else {&state.histogram});}
     pub fn refresh_tonal(&self,w:&Rc<Workspace>,state:&UiState) {
-        *self.workspace.borrow_mut()=Rc::downgrade(w);
-        let mut view=state.tonal_histogram.clone();
-        view.labels=state.histogram.labels.clone();view.shadows=state.histogram.shadows;view.highlights=state.histogram.highlights;
-        view.axis=["0".into(),"1".into()];
-        self.refresh_view(w,state,&view);
-        self.source.set_visible(false);self.channel.set_visible(false);self.options[0].set_visible(false);
-        if let Some(details)=self.root.last_child() {details.set_visible(false);}
+        self.refresh_view(w,state,&state.tonal_histogram);self.toolbar.set_visible(false);self.logarithmic.set_visible(false);self.chart.set_content_height(120);
+        self.root.set_margin_top(0);self.root.set_margin_bottom(0);self.root.set_margin_start(0);self.root.set_margin_end(0);
     }
     fn refresh_view(&self,w:&Rc<Workspace>,state:&UiState,view:&HistogramView) {
-        self.updating.set(true);
-        let source_changed = self.view.borrow().sources != view.sources;
-        let channel_changed = self.view.borrow().channels != view.channels;
-        for (dropdown, changed, after) in [(&self.source,source_changed,&view.sources),(&self.channel,channel_changed,&view.channels)] {
-            if changed {
-                let model = dropdown.model().unwrap().downcast::<gtk::StringList>().unwrap();
-                model.splice(0, model.n_items(), &after.iter().map(|s| s.as_ref()).collect::<Vec<_>>());
+        *self.workspace.borrow_mut()=Rc::downgrade(w);self.updating.set(true);
+        let previous=self.view.borrow();
+        let colors=state.palette.histogram_colors().map(|color|color.0);
+        if self.waveform && (previous.channel!=view.channel || previous.logarithmic!=view.logarithmic || self.colors.get()!=colors
+            || previous.data.as_ref().map(std::sync::Arc::as_ptr)!=view.data.as_ref().map(std::sync::Arc::as_ptr)) {
+            *self.plot.borrow_mut()=view.waveform_premultiplied_rgba(colors).and_then(|([width,height],mut rgba)| {
+                for pixel in rgba.chunks_exact_mut(4) {
+                    let packed=u32::from_be_bytes([pixel[3],pixel[0],pixel[1],pixel[2]]);pixel.copy_from_slice(&packed.to_ne_bytes());
+                }
+                gtk::cairo::ImageSurface::create_for_data(rgba,gtk::cairo::Format::ARgb32,width as i32,height as i32,width as i32*4).ok()
+            });
+        }
+        for (dropdown,before,after) in [(&self.source,&previous.sources,&view.sources),(&self.channel,&previous.channels,&view.channels)] {
+            if before!=after {
+                let model=dropdown.model().unwrap().downcast::<gtk::StringList>().unwrap();
+                model.splice(0,model.n_items(),&after.iter().map(|s|s.as_ref()).collect::<Vec<_>>());
             }
         }
+        drop(previous);
         self.source.set_selected(u32::from(view.source));self.channel.set_selected(u32::from(view.channel));
-        self.status.set_label(&view.status);self.description.set_label(&view.description);self.range.set_label(&view.range);
-        for (label,text) in self.axis.iter().zip(&view.axis) {label.set_label(text);}
-        for (index,button) in self.options.iter().enumerate() {
-            button.set_label(view.labels.get(index).map(|s|s.as_ref()));
-            button.set_active([view.logarithmic,view.shadows,view.highlights][index]);
+        for (control,id) in [(&self.source,layer_ui::MessageId::TOOLBAR_SOURCE),(&self.channel,layer_ui::MessageId::NATIVE_COLOR_CHANNEL)] {
+            let label=w.localization().text(id);control.set_tooltip_text(Some(&label));control.update_property(&[gtk::accessible::Property::Label(&label)]);
         }
-        if let Some(expander) = self.root.last_child().and_downcast::<gtk::Expander>() { expander.set_label(Some(&w.localization().text(layer_ui::MessageId::NATIVE_COLOR_DETAILS))); }
-        self.colors.set(state.palette.histogram_colors().map(|color| color.0));
-        *self.view.borrow_mut() = view.clone();self.chart.queue_draw();self.updating.set(false);
+        let details=format!("{}\n{}",view.description,view.range);self.chart.set_tooltip_text(Some(&details));
+        for (label,text) in self.axis.iter().zip(&view.axis) {label.set_label(text);}
+        self.logarithmic.set_label(view.labels.first().map(|s|s.as_ref()));self.logarithmic.set_active(view.logarithmic);
+        self.footer.refresh(w,state,&view.status);self.colors.set(colors);
+        *self.view.borrow_mut()=view.clone();self.chart.queue_draw();self.updating.set(false);
     }
 }
 
 pub(crate) fn draw(cr:&gtk::cairo::Context,view:&HistogramView,colors:[[u8;3];4],width:f64,height:f64) {
-    let Some(data) = &view.data else {return;};
-    let channels: &[usize] = match view.channel {1 => &[0],2 => &[1],3 => &[2],4 => &[3],_ => &[0,1,2]};
-    let plot = data.plot_bins();let scale = |v:u64| if view.logarithmic {(v as f64).ln_1p()} else {v as f64};
-    let maximum = channels.iter().flat_map(|i| &data.channels[*i].bins[plot.clone()]).copied().max().unwrap_or(1).max(1);
+    let Some(data)=&view.data else{return;};
+    let channels=view.plotted_channels();
+    let plot=data.plot_bins();let scale=|v:u64| if view.logarithmic {(v as f64).ln_1p()} else {v as f64};
+    let maximum=channels.iter().flat_map(|i|&data.channels[*i].bins[plot.clone()]).copied().max().unwrap_or(1).max(1);
     for &channel in channels {
-        let [r,g,b] = colors[channel].map(|v| f64::from(v)/255.);cr.set_source_rgba(r,g,b,0.55);
+        let [r,g,b]=colors[channel].map(|v|f64::from(v)/255.);cr.set_source_rgba(r,g,b,0.55);
         for (x,&count) in data.channels[channel].bins[plot.clone()].iter().enumerate() {
-            let h = height*scale(count)/scale(maximum);
-            cr.rectangle(x as f64*width/plot.len() as f64, height-h, width/plot.len() as f64+0.1, h);
+            let h=height*scale(count)/scale(maximum);cr.rectangle(x as f64*width/plot.len() as f64,height-h,width/plot.len() as f64+0.1,h);
         }
-        let _ = cr.fill();
+        let _=cr.fill();
     }
 }

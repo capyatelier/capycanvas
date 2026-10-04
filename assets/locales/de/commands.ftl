@@ -600,3 +600,5 @@ commands-transform-again-empty = Zuerst eine Ebenentransformation anwenden
 commands-transform-again-whole-layer = Die Pixelauswahl aufheben und eine ganze Ebene auswählen
 
 commands-show-histogram = Histogramm anzeigen
+command-waveform = Wellenform
+commands-show-waveform = Wellenform anzeigen

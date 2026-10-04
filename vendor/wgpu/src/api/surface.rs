@@ -105,9 +105,7 @@ impl Surface<'_> {
     /// If the surface is already configured, this will wait for the GPU to come idle
     /// before recreating the swapchain to prevent race conditions.
     ///
-    /// # Validation Errors
-    /// - Submissions that happen _during_ the configure may cause the
-    ///   internal wait-for-idle to fail, raising a validation error.
+    /// Native backends serialize queue submissions with surface reconfiguration.
     ///
     /// # Panics
     ///

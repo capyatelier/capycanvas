@@ -152,6 +152,7 @@ class AndroidCanvasBarBenchmarkTest {
                 } finally { Native.projectFree(task) }
                 val adopted = native { handle ->
                     val now = System.nanoTime(); Native.frame(handle, now, now + 16_666_667)
+                    Native.dispatch(handle, obj("type" to "close_settings").toString())
                     JSONObject(Native.snapshot(handle)!!).getJSONObject("state")
                 }
                 val adoptedEpoch = adopted.getJSONObject("document_file").getLong("epoch")
@@ -609,10 +610,11 @@ class AndroidCanvasBarBenchmarkTest {
                     "memory_after" to native { JSONObject(Native.rendererMemory(it)) }).toString(2))
             }
             if (wanted("effects") || wanted("spatial-effects")) {
-                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1)
+                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1, val radius: Double? = null)
                 val scrubs = if (wanted("spatial-effects")) listOf(
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
+                    Scrub("unsharp_mask", "amount", "Amount", "effect-unsharp-amount-drag", .3, span = .4, radius = args.getString("effectRadius")?.toDouble() ?: 85.0),
                 ) else listOf(
                     Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
                     Scrub("hue_saturation", "hue", "Hue", "effect-master-hue-drag", .55),
@@ -652,6 +654,7 @@ class AndroidCanvasBarBenchmarkTest {
                     if (lookup == null) effect(obj("op" to "insert", "effect" to scrub.id))
                     else action(obj("type" to "select_layer", "id" to lookup.second))
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
+                    scrub.radius?.let { radius -> effect(obj("op" to "set", "layer" to effectLayer, "key" to "sigma", "value" to obj("kind" to "number", "value" to radius))) }
                     val hasGuide = scrub.id in listOf("shadows_highlights", "clarity")
                     if (hasGuide) {
                         waitGuide("local guide published")
@@ -691,10 +694,15 @@ class AndroidCanvasBarBenchmarkTest {
                     drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
                     val warmupDownInjectionMs = lastDownInjectionNs / 1e6
                     host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
+                    if (wanted("spatial-effects")) invoke("undo")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
+                    if (wanted("spatial-effects")) waitGuide("spatial filter warmup settled")
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val effectRepeats = args.getString("effectRepeats", "1")!!.toInt().also { require(it > 0) }
                     repeat(effectRepeats) { index ->
+                        val settleBegan = SystemClock.elapsedRealtimeNanos()
+                        if (wanted("spatial-effects")) waitGuide("spatial filter contact settled")
+                        val settleMs = (SystemClock.elapsedRealtimeNanos() - settleBegan) / 1e6
                         val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
                         val firstChanged = java.util.concurrent.atomic.AtomicLong()
                         val label = scrub.label
@@ -716,14 +724,14 @@ class AndroidCanvasBarBenchmarkTest {
                         result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
                             .put("source_memory_before_effect", sourceMemoryBeforeEffect).put("source_display_before_effect", sourceDisplayBeforeEffect)
                             .put("guide_wait_ms", if (hasGuide) (guideReady - guideBegan) / 1e6 else JSONObject.NULL).put("guide_wait_begin_boot_ns", if (hasGuide) guideBegan else JSONObject.NULL).put("guide_ready_boot_ns", if (hasGuide) guideReady else JSONObject.NULL)
-                            .put("warmup_down_injection_ms", warmupDownInjectionMs).put("down_injection_ms", lastDownInjectionNs / 1e6).put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("theme", state().getString("theme"))
+                            .put("settle_before_contact_ms", settleMs).put("warmup_down_injection_ms", warmupDownInjectionMs).put("down_injection_ms", lastDownInjectionNs / 1e6).put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("effect_radius", scrub.radius).put("theme", state().getString("theme"))
                             .put("first_value_observed_ns", firstChanged.get().takeIf { it > 0 } ?: JSONObject.NULL)
                             .put("down_to_first_value_observed_ms", firstChanged.get().takeIf { it > 0 && gestureDown.get() > 0 }?.let { (it - gestureDown.get()) / 1e6 } ?: JSONObject.NULL)
                             .put("photo_fixture_visible_layer_ids", JSONArray(fixtureVisibleLayerIds)).put("photo_fixture_visible_layer_count", fixtureVisibleLayerIds.size).put("slider_bounds",
                             JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
                         if (effectRepeats > 1) result.copyTo(File(output, "$label-$index.json"), overwrite = true)
                         check(values.size > 1) { "$label did not change its value during motion" }
-                        if (scrub.span == .4) check(values.max() - values.min() > 25) { "$label did not traverse enough coarse numeric steps" }
+                        if (scrub.span == .4 && scrub.id == "color_lookup") check(values.max() - values.min() > 25) { "$label did not traverse enough coarse numeric steps" }
                         if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
                     }
                 }
@@ -738,7 +746,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("pointwise-navigation")) {
                 val selectedLabels = args.getString("labels")?.split(',')
-                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity")) {
+                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity", "gaussian_blur", "unsharp_mask")) {
                     val label = "effect-$id-pan"
                     if (selectedLabels != null && label !in selectedLabels) continue
                     val preparedAt = System.nanoTime()
@@ -747,6 +755,31 @@ class AndroidCanvasBarBenchmarkTest {
                     action(obj("type" to "select_layer", "id" to photoLayer))
                     val appliedAt = System.nanoTime()
                     if (id != "none" && lookup == null) action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+                    val radius = args.getString("effectRadius")?.toDouble()
+                    val radiusMemoryBefore = if (radius != null && id in listOf("gaussian_blur", "unsharp_mask")) native { JSONObject(Native.rendererMemory(it)) } else null
+                    val radiusBegan = SystemClock.elapsedRealtimeNanos()
+                    if (id in listOf("gaussian_blur", "unsharp_mask") && radius != null) {
+                        if (radius == 85.0) {
+                            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+                            val group = host.panelGroup("properties")
+                            action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                            if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                            waitFor("Radius value control") { findTag("number-value-sigma") != null }
+                            instrumentation.runOnMainSync { check(findTag("number-value-sigma")!!.second.config[SemanticsActions.OnClick].action!!.invoke()) }
+                            waitFor("Radius text field") { findTag("number-Radius") != null }
+                            instrumentation.runOnMainSync {
+                                val field = findTag("number-Radius")!!.second
+                                check(field.config[SemanticsActions.SetText].action!!.invoke(androidx.compose.ui.text.AnnotatedString("85")))
+                            }
+                            host.awaitMain("Radius text entered", 10_000, condition = { findTag("number-Radius")?.second?.config?.getOrNull(androidx.compose.ui.semantics.SemanticsProperties.EditableText)?.text == "85" })
+                            instrumentation.runOnMainSync { check(findTag("number-Radius")!!.second.config[SemanticsActions.OnImeAction].action!!.invoke()) }
+                            waitFor("Typed Radius applied") { state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == "sigma" }.getJSONObject("value").getDouble("value") == radius }
+                        } else action(obj("type" to "effect", "action" to obj("op" to "set",
+                            "layer" to state().getJSONObject("layer_properties").getLong("layer"), "key" to "sigma", "value" to obj("kind" to "number", "value" to radius))))
+                    }
+                    if (radiusMemoryBefore != null) waitGuide("radius change raster complete")
+                    val radiusCompleted = SystemClock.elapsedRealtimeNanos()
+                    val radiusMemoryAfter = if (radiusMemoryBefore != null) native { JSONObject(Native.rendererMemory(it)) } else null
                     val hasGuide = id in listOf("shadows_highlights", "clarity")
                     if (hasGuide) {
                         val layer = state().getJSONObject("layer_properties").getLong("layer")
@@ -760,11 +793,18 @@ class AndroidCanvasBarBenchmarkTest {
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val area = state().getJSONObject("camera").getJSONArray("work_area")
                     val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                    if (id in listOf("gaussian_blur", "unsharp_mask")) {
+                        drag(center,250) { t -> 120*sin(t*2) to 80*sin(t*3) }
+                        invoke("fit_canvas")
+                    }
                     repeat(args.getString("effectRepeats", "1")!!.toInt()) { index ->
                         measure(label) { drag(center, duration) { t -> 120 * sin(t * 2) to 80 * sin(t * 3) } }
                         val result = File(output, "$label.json")
                         result.writeText(JSONObject(result.readText()).put("effect_id", id)
-                            .put("theme", state().getString("theme")).put("preparation_ms", preparationMs)
+                            .put("theme", state().getString("theme")).put("effect_radius", radius).put("preparation_ms", preparationMs)
+                            .put("radius_input", if (radius == 85.0) "native text field" else "shared action")
+                            .put("radius_change_ms", if (radiusMemoryBefore != null) (radiusCompleted - radiusBegan) / 1e6 else JSONObject.NULL)
+                            .put("radius_memory_before", radiusMemoryBefore).put("radius_memory_after", radiusMemoryAfter)
                             .put("shared_application_and_drain_ms", applicationMs).toString(2))
                         result.copyTo(File(output, "$label-$index.json"), overwrite = true)
                     }

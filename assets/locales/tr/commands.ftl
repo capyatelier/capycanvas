@@ -600,3 +600,5 @@ commands-transform-again-empty = Önce bir katman dönüşümü uygulayın
 commands-transform-again-whole-layer = Piksel seçimini kaldırın ve bir katmanın tamamını seçin
 
 commands-show-histogram = Histogramı göster
+command-waveform = Dalga biçimi
+commands-show-waveform = Dalga biçimini göster

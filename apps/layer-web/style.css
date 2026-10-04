@@ -705,6 +705,8 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .property-row select { flex:1; width:0; min-width:min(150px,100%); max-width:100%; }
 .property-controls select, .effect-properties > select { background:var(--input); padding:4px 6px; }
 .effect-properties > select { width:100%; margin-bottom:6px; }
+.property-row.property-resource { flex-wrap:nowrap; margin-bottom:6px; }
+.property-resource select { min-width:0; background:var(--input); padding:4px 6px; text-overflow:ellipsis; }
 .property-controls.disabled { opacity:.4; pointer-events:none; }
 .curve-editor { display:block; width:100%; height:200px; background:color-mix(in srgb,var(--text) 12%,transparent); pointer-events:auto; touch-action:none; user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
 .curve-editor * { pointer-events:none; }

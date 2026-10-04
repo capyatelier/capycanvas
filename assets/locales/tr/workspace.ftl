@@ -595,3 +595,4 @@ workspace-storage-full = Çalışma alanı depolaması dolu. Diskte yer açıp t
 workspace-storage-unavailable = Çalışma alanı depolaması açılamadı. Tekrar deneyin.
 workspace-unreadable-name = Okunamayan çalışma alanı
 workspace-backup-saved = Çalışma alanı yedeği kaydedildi.
+workspace-tool-description-waveform = Rengi ve parlaklığı soldan sağa incele

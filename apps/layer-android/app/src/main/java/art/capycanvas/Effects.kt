@@ -165,7 +165,7 @@ private fun CanvasHost.effect(action: JSONObject) = dispatch(obj("type" to "effe
             SharedIcon("chevron-down", label)
         }
         DropdownMenu(open, ::close) {
-            options.forEachIndexed { index, text -> DropdownMenuItem(text = { Text(text) }, onClick = { close(); select(index) }) }
+            options.forEachIndexed { index, text -> DropdownMenuItem(text = { Text(text,maxLines=1,overflow=TextOverflow.Ellipsis) }, onClick = { close(); select(index) }) }
         }
     }
 }
@@ -181,6 +181,23 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
     key(state.getJSONObject("document_file").optLong("epoch"), layer) {
     Column(Modifier.fillMaxWidth().testTag("layer-properties").alpha(if(enabled) 1f else .4f), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(view.getString("title"), fontWeight = FontWeight.Bold)
+        if(!view.isNull("resource_label")) {
+            val actions=view.array("actions").objects()
+            val choices=actions.withIndex().filter { it.value.getJSONObject("action").getString("op")=="lookup_preset" }
+            val current=view.takeUnless {it.isNull("resource_selection")}?.getInt("resource_selection")
+            val labels=choices.map {it.value.getString("label")}+if(current==null)listOf(view.getString("resource_name"))else emptyList()
+            val importAction=actions.first {it.getJSONObject("action").getString("op")=="import_lookup"}
+            Row(Modifier.fillMaxWidth(),verticalAlignment=Alignment.CenterVertically,horizontalArrangement=Arrangement.spacedBy(6.dp)) {
+                HoverTip(view.getString("resource_name"),Modifier.weight(1f).testTag("property-resource-choice")) {
+                    PropertyChoice(view.getString("resource_label"),labels,choices.indexOfFirst {it.index==current}.let {if(it<0)choices.size else it},enabled) {
+                        choices.getOrNull(it)?.let {choice->host.effect(choice.value.getJSONObject("action"))}
+                    }
+                }
+                IconButton({host.effect(importAction.getJSONObject("action"))},enabled=enabled,modifier=Modifier.size(40.dp).testTag("import-lookup")) {
+                    SharedIcon(importAction.getString("icon").removePrefix("layer-").removeSuffix("-symbolic"),importAction.getString("label"))
+                }
+            }
+        }
         if (pages.size > 1) Box(Modifier.testTag("properties-page")) {
             PropertyChoice(view.getString("title"), pages.map { it.getString("label") }, pages.indexOfFirst { it.getString("id") == view.optString("page") }, enabled) {
                 host.effect(obj("op" to "select_page", "layer" to layer, "page" to pages[it].getString("id")))

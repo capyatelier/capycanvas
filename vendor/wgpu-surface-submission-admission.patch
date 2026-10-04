@@ -1,0 +1,445 @@
+diff --git a/wgpu-core/src/device/queue.rs b/wgpu-core/src/device/queue.rs
+index 1c0ac264a..c10b84f7f 100644
+--- a/wgpu-core/src/device/queue.rs
++++ b/wgpu-core/src/device/queue.rs
+@@ -601,8 +601,8 @@ impl WebGpuError for QueueSubmitError {
+ /// [`submit`]: `PendingSubmission::submit`
+ pub(crate) struct PendingSubmission<'a> {
+     queue: &'a Queue,
+-    snatch_guard: SnatchGuard<'a>,
+     command_index_guard: RwLockWriteGuard<'a, CommandIndices>,
++    snatch_guard: SnatchGuard<'a>,
+     // Command buffers to be executed, along with trackers for the resources they use.
+     pub executions: Vec<EncoderInFlight>,
+     // Surface textures referenced by command buffers in this submission. These need to be
+diff --git a/wgpu-core/src/device/resource.rs b/wgpu-core/src/device/resource.rs
+index 2e09f25f3..4962366a4 100644
+--- a/wgpu-core/src/device/resource.rs
++++ b/wgpu-core/src/device/resource.rs
+@@ -5264,10 +5264,11 @@ impl Device {
+
+         log::debug!("configuring surface with {config:?}");
+
+-        let error = 'error: {
+-            // User callbacks must not be called while we are holding locks.
+-            let user_callbacks;
+-            {
++        let mut user_callbacks = UserClosures::default();
++        let queue = self.get_queue();
++        let mut previous_presentation = None;
++        let configuration_error = 'error_return: {
++            let error = 'error: {
+                 if let Err(e) = self.check_is_valid() {
+                     break 'error e.into();
+                 }
+@@ -5335,51 +5336,38 @@ impl Device {
+                     break 'error error;
+                 }
+
+-                // Wait for all work to finish before configuring the surface.
+-                let snatch_guard = self.snatchable_lock.read();
+-
+-                let maintain_result;
+-                (user_callbacks, maintain_result) =
+-                    self.maintain(wgt::PollType::wait_indefinitely(), snatch_guard);
+-
+-                match maintain_result {
+-                    // We're happy
+-                    Ok(wgt::PollStatus::QueueEmpty) => {}
+-                    Ok(wgt::PollStatus::WaitSucceeded) => {
+-                        // After the wait, the queue should be empty. It can only be non-empty
+-                        // if another thread is submitting at the same time.
+-                        break 'error E::GpuWaitTimeout;
+-                    }
+-                    Ok(wgt::PollStatus::Poll) => {
+-                        unreachable!("Cannot get a Poll result from a Wait action.")
+-                    }
+-                    Err(WaitIdleError::Timeout) if cfg!(target_arch = "wasm32") => {
+-                        // On wasm, you cannot actually successfully wait for the surface.
+-                        // However WebGL does not actually require you do this, so ignoring
+-                        // the failure is totally fine. See
+-                        // https://github.com/gfx-rs/wgpu/issues/7363
+-                    }
+-                    Err(e) => {
+-                        break 'error e.into();
+-                    }
+-                }
+-
+-                // All textures must be destroyed before the surface can be re-configured.
+-                if let Some(present) = surface.presentation.lock().take() {
+-                    if present.acquired_texture.is_some() {
+-                        break 'error E::PreviousOutputExists;
+-                    }
++                let mut presentation = surface.presentation.lock();
++                if presentation.as_ref().is_some_and(|present| present.acquired_texture.is_some()) {
++                    break 'error E::PreviousOutputExists;
+                 }
+-
+-                // TODO: Texture views may still be alive that point to the texture.
+-                // this will allow the user to render to the surface texture, long after
+-                // it has been removed.
+-                //
+-                // https://github.com/gfx-rs/wgpu/issues/4105
+-
++                let snatch_guard = self.snatchable_lock.read();
++                let command_indices = self.command_indices.write();
+                 let surface_raw = surface.raw(self.backend()).unwrap();
+-                match unsafe { surface_raw.configure(self.raw(), &hal_config) } {
+-                    Ok(()) => (),
++                let configured = (|| -> Result<bool, hal::SurfaceError> {
++                    let index = self.last_successful_submission_index.load(Ordering::Acquire);
++                    let waited = unsafe { self.raw().wait(self.fence.as_ref(), index, None) }
++                        .map_err(hal::SurfaceError::Device)?;
++                    if !waited && !cfg!(target_arch = "wasm32") { return Ok(false); }
++                    let finished = unsafe { self.raw().get_fence_value(self.fence.as_ref()) }
++                        .map_err(hal::SurfaceError::Device)?;
++                    if let Some(queue) = &queue {
++                        user_callbacks.submissions = queue.lock_life().triage_submissions(finished);
++                    }
++                    previous_presentation = presentation.take();
++                    unsafe { surface_raw.configure(self.raw(), &hal_config) }?;
++                    *presentation = Some(present::Presentation {
++                        device: Arc::clone(self),
++                        config: config.clone(),
++                        acquired_texture: None,
++                    });
++                    Ok(true)
++                })();
++                drop(command_indices);
++                drop(snatch_guard);
++                drop(presentation);
++                match configured {
++                    Ok(true) => (),
++                    Ok(false) => break 'error E::GpuWaitTimeout,
+                     Err(error) => {
+                         break 'error match error {
+                             hal::SurfaceError::Outdated
+@@ -5396,20 +5384,15 @@ impl Device {
+                         }
+                     }
+                 }
+-
+-                let mut presentation = surface.presentation.lock();
+-                *presentation = Some(present::Presentation {
+-                    device: Arc::clone(self),
+-                    config: config.clone(),
+-                    acquired_texture: None,
+-                });
+-            }
+-
+-            user_callbacks.fire();
+-            return None;
++                break 'error_return None;
++            };
++            Some(error)
+         };
+-
+-        Some(error)
++        drop(previous_presentation);
++        let (callbacks, result) = self.maintain(wgt::PollType::Poll, self.snatchable_lock.read());
++        user_callbacks.extend(callbacks);
++        user_callbacks.fire();
++        configuration_error.or_else(|| result.err().map(Into::into))
+     }
+
+     fn lose(&self, message: &str) {
+@@ -5420,7 +5403,8 @@ impl Device {
+         self.valid.store(false, Ordering::Release);
+
+         // 1) Resolve the GPUDevice device.lost promise.
+-        if let Some(device_lost_closure) = self.device_lost_closure.lock().take() {
++        let device_lost_closure = self.device_lost_closure.lock().take();
++        if let Some(device_lost_closure) = device_lost_closure {
+             device_lost_closure(DeviceLostReason::Unknown, message.to_string());
+         }
+
+@@ -5477,3 +5461,7 @@ impl Device {
+ crate::impl_resource_type!(Device);
+ crate::impl_labeled!(Device);
+ crate::impl_storage_item!(Device);
++
++#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
++#[path = "surface_tests.rs"]
++mod surface_tests;
+diff --git a/wgpu-core/src/instance.rs b/wgpu-core/src/instance.rs
+index 26a3050a4..691274944 100644
+--- a/wgpu-core/src/instance.rs
++++ b/wgpu-core/src/instance.rs
+@@ -719,7 +719,8 @@ impl Surface {
+
+ impl Drop for Surface {
+     fn drop(&mut self) {
+-        if let Some(present) = self.presentation.lock().take() {
++        let presentation = self.presentation.lock().take();
++        if let Some(present) = presentation {
+             for (&backend, surface) in &self.surface_per_backend {
+                 if backend == present.device.backend() {
+                     unsafe { surface.unconfigure(present.device.raw()) };
+diff --git a/wgpu-core/src/lock/observing.rs b/wgpu-core/src/lock/observing.rs
+index 25c25185d..2b79b9406 100644
+--- a/wgpu-core/src/lock/observing.rs
++++ b/wgpu-core/src/lock/observing.rs
+@@ -163,6 +163,15 @@ impl<T> RwLock<T> {
+         }
+     }
+
++    #[cfg(test)]
++    #[track_caller]
++    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
++        self.inner.try_write().map(|inner| RwLockWriteGuard {
++            inner,
++            _state: LockStateGuard { saved: acquire(self.rank, Location::caller()) },
++        })
++    }
++
+     /// Force an read-unlock operation on this lock.
+     ///
+     /// Safety:
+diff --git a/wgpu-core/src/lock/rank.rs b/wgpu-core/src/lock/rank.rs
+index f177dc6c9..ff401821a 100644
+--- a/wgpu-core/src/lock/rank.rs
++++ b/wgpu-core/src/lock/rank.rs
+@@ -106,6 +106,11 @@ macro_rules! define_lock_ranks {
+
+ define_lock_ranks! {
+     // Non-leaf ranks, in topological order.
++    rank SURFACE_PRESENTATION "Surface::presentation" followed by {
++        DEVICE_SNATCHABLE_LOCK,
++        DEVICE_COMMAND_INDICES,
++        DEVICE_TRACKERS,
++    }
+     rank COMMAND_BUFFER_DATA "CommandBuffer::data" followed by {
+         DEVICE_SNATCHABLE_LOCK,
+         BUFFER_MAP_STATE,
+@@ -215,7 +220,6 @@ define_lock_ranks! {
+     rank DEVICE_LOST_CLOSURE "Device::device_lost_closure" followed by { }
+     rank IDENTITY_MANAGER_VALUES "IdentityManager::values" followed by { }
+     rank RESOURCE_POOL_INNER "ResourcePool::inner" followed by { }
+-    rank SURFACE_PRESENTATION "Surface::presentation" followed by { }
+     rank TLAS_BUILT_INDEX "Tlas::built_index" followed by { }
+     rank TLAS_DEPENDENCIES "Tlas::dependencies" followed by { }
+
+diff --git a/wgpu-core/src/lock/ranked.rs b/wgpu-core/src/lock/ranked.rs
+--- a/wgpu-core/src/lock/ranked.rs
++++ b/wgpu-core/src/lock/ranked.rs
+@@ -313,6 +313,12 @@
+         }
+     }
+
++    #[cfg(test)]
++    #[track_caller]
++    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
++        self.inner.try_write().map(|inner| RwLockWriteGuard { inner, _saved: LockStateGuard(acquire(self.rank, Location::caller())), })
++    }
++
+     /// Force an read-unlock operation on this lock.
+     ///
+     /// Safety:
+diff --git a/wgpu-core/src/lock/vanilla.rs b/wgpu-core/src/lock/vanilla.rs
+index 969996962..824b340aa 100644
+--- a/wgpu-core/src/lock/vanilla.rs
++++ b/wgpu-core/src/lock/vanilla.rs
+@@ -95,6 +95,12 @@ impl<T> RwLock<T> {
+         RwLockWriteGuard(self.0.write())
+     }
+
++    #[cfg(test)]
++    #[track_caller]
++    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
++        self.0.try_write().map(|inner| RwLockWriteGuard(inner))
++    }
++
+     /// Force an read-unlock operation on this lock.
+     ///
+     /// Safety:
+diff --git a/wgpu/src/api/surface.rs b/wgpu/src/api/surface.rs
+index 176d26f46..88a53ac7f 100644
+--- a/wgpu/src/api/surface.rs
++++ b/wgpu/src/api/surface.rs
+@@ -105,9 +105,7 @@ impl Surface<'_> {
+     /// If the surface is already configured, this will wait for the GPU to come idle
+     /// before recreating the swapchain to prevent race conditions.
+     ///
+-    /// # Validation Errors
+-    /// - Submissions that happen _during_ the configure may cause the
+-    ///   internal wait-for-idle to fail, raising a validation error.
++    /// Native backends serialize queue submissions with surface reconfiguration.
+     ///
+     /// # Panics
+     ///
+diff --git a/wgpu-core/src/device/surface_tests.rs b/wgpu-core/src/device/surface_tests.rs
+new file mode 100644
+index 000000000..431bce618
+--- /dev/null
++++ b/wgpu-core/src/device/surface_tests.rs
+@@ -0,0 +1,170 @@
++use super::Device;
++use alloc::{boxed::Box, sync::Arc, vec, vec::Vec};
++use core::{any::Any, sync::atomic::{AtomicBool, Ordering}, time::Duration};
++use crate::{instance::{Adapter, Surface}, lock::{rank, Mutex}};
++
++struct SurfaceAdapter(Box<dyn hal::DynAdapter>);
++impl hal::DynResource for SurfaceAdapter {
++    fn as_any(&self) -> &dyn Any { self }
++    fn as_any_mut(&mut self) -> &mut dyn Any { self }
++}
++impl hal::DynAdapter for SurfaceAdapter {
++    unsafe fn open(&self, features: wgt::Features, limits: &wgt::Limits, hints: &wgt::MemoryHints) -> Result<hal::DynOpenDevice, hal::DeviceError> {
++        unsafe { self.0.open(features, limits, hints) }
++    }
++    unsafe fn texture_format_capabilities(&self, format: wgt::TextureFormat) -> hal::TextureFormatCapabilities {
++        unsafe { self.0.texture_format_capabilities(format) }
++    }
++    unsafe fn surface_capabilities(&self, _: &dyn hal::DynSurface) -> Option<hal::SurfaceCapabilities> {
++        Some(hal::SurfaceCapabilities {
++            formats: vec![wgt::SurfaceFormatCapabilities { format: wgt::TextureFormat::Rgba8Unorm, color_spaces: wgt::SurfaceColorSpaces::SRGB }],
++            maximum_frame_latency: 1..=3, current_extent: None,
++            usage: wgt::TextureUses::COLOR_TARGET,
++            present_modes: vec![wgt::PresentMode::Fifo],
++            composite_alpha_modes: vec![wgt::CompositeAlphaMode::Opaque],
++        })
++    }
++    unsafe fn surface_display_hdr_info(&self, _: &dyn hal::DynSurface) -> Option<wgt::DisplayHdrInfo> { None }
++    unsafe fn get_presentation_timestamp(&self) -> wgt::PresentationTimestamp {
++        unsafe { self.0.get_presentation_timestamp() }
++    }
++    fn get_ordered_buffer_usages(&self) -> wgt::BufferUses { self.0.get_ordered_buffer_usages() }
++    fn get_ordered_texture_usages(&self) -> wgt::TextureUses { self.0.get_ordered_texture_usages() }
++}
++
++struct ProbeSurface(Box<dyn Fn() -> Result<(), hal::SurfaceError> + Send + Sync>);
++impl hal::DynResource for ProbeSurface {
++    fn as_any(&self) -> &dyn Any { self }
++    fn as_any_mut(&mut self) -> &mut dyn Any { self }
++}
++impl hal::DynSurface for ProbeSurface {
++    unsafe fn configure(&self, _: &dyn hal::DynDevice, _: &hal::SurfaceConfiguration) -> Result<(), hal::SurfaceError> { (self.0)() }
++    unsafe fn unconfigure(&self, _: &dyn hal::DynDevice) {}
++    unsafe fn acquire_texture(&self, _: Option<Duration>, _: &dyn hal::DynFence) -> Result<hal::DynAcquiredSurfaceTexture, hal::SurfaceError> { Err(hal::SurfaceError::Timeout) }
++    unsafe fn discard_texture(&self, _: Box<dyn hal::DynSurfaceTexture>) {}
++}
++
++fn device() -> (Arc<Device>, Arc<crate::device::queue::Queue>) {
++    let mut options = wgt::BackendOptions::default();
++    options.noop.enable = true;
++    let instance = unsafe { <hal::noop::Context as hal::Instance>::init(&hal::InstanceDescriptor {
++        name: "surface admission test", flags: wgt::InstanceFlags::empty(),
++        memory_budget_thresholds: Default::default(), backend_options: options,
++        telemetry: None, display: None,
++    }) }.unwrap();
++    let exposed = unsafe { <hal::noop::Context as hal::Instance>::enumerate_adapters(&instance, None) }.remove(0);
++    let mut exposed: hal::DynExposedAdapter = exposed.into();
++    exposed.adapter = Box::new(SurfaceAdapter(exposed.adapter));
++    Arc::new(Adapter::new(exposed)).create_device_and_queue(&Default::default(), wgt::InstanceFlags::empty()).unwrap()
++}
++
++fn configuration() -> wgt::SurfaceConfiguration<Vec<wgt::TextureFormat>> {
++    wgt::SurfaceConfiguration {
++        usage: wgt::TextureUsages::RENDER_ATTACHMENT, format: wgt::TextureFormat::Rgba8Unorm,
++        width: 16, height: 16, present_mode: wgt::PresentMode::Fifo,
++        desired_maximum_frame_latency: 2, alpha_mode: wgt::CompositeAlphaMode::Opaque,
++        view_formats: vec![], color_space: wgt::SurfaceColorSpace::Srgb,
++    }
++}
++
++fn surface(probe: impl Fn() -> Result<(), hal::SurfaceError> + Send + Sync + 'static) -> Arc<Surface> {
++    let raw: Box<dyn hal::DynSurface> = Box::new(ProbeSurface(Box::new(probe)));
++    Arc::new(Surface {
++        presentation: Mutex::new(rank::SURFACE_PRESENTATION, None),
++        surface_per_backend: [(wgt::Backend::Noop, raw)].into_iter().collect(),
++    })
++}
++
++#[test]
++fn configure_excludes_background_submission_and_fires_reentrant_callbacks_on_both_outcomes() {
++    for fail in [false, true] {
++        let (device, queue) = device();
++        queue.submit(&[]).unwrap();
++        let called = Arc::new(AtomicBool::new(false));
++        let probe_device = device.clone();
++        let probe_called = called.clone();
++        let surface = surface(move || {
++                assert!(!probe_called.load(Ordering::Acquire));
++                let concurrent = probe_device.clone();
++                let admitted = std::thread::spawn(move || concurrent.command_indices.try_write().is_some()).join().unwrap();
++                assert!(!admitted, "a background submission can enter during HAL surface configuration");
++                if fail { Err(hal::SurfaceError::Lost) } else { Ok(()) }
++        });
++        let callback_queue = queue.clone();
++        let callback_surface = surface.clone();
++        let callback_called = called.clone();
++        queue.on_submitted_work_done(Box::new(move || {
++            drop(callback_surface.presentation.lock());
++            callback_queue.submit(&[]).unwrap();
++            callback_called.store(true, Ordering::Release);
++        }));
++        let result = device.configure_surface(&surface, &configuration());
++        assert_eq!(result.is_some(), fail);
++        assert!(called.load(Ordering::Acquire), "configure dropped a pending work-done callback");
++        assert!(device.command_indices.try_write().is_some());
++    }
++}
++
++#[test]
++fn rejected_live_output_and_invalid_configuration_preserve_presentation_and_callbacks() {
++    let (device, queue) = device();
++    let surface = surface(|| panic!("invalid configure reached HAL"));
++    let (texture, _) = device.create_texture(&wgt::TextureDescriptor {
++        label: None, size: wgt::Extent3d { width: 16, height: 16, depth_or_array_layers: 1 },
++        mip_level_count: 1, sample_count: 1, dimension: wgt::TextureDimension::D2,
++        format: wgt::TextureFormat::Rgba8Unorm, usage: wgt::TextureUsages::COPY_DST,
++        view_formats: vec![],
++    });
++    *surface.presentation.lock() = Some(crate::present::Presentation {
++        device: device.clone(), config: configuration(), acquired_texture: Some(texture.clone()),
++    });
++    for invalid_size in [false, true] {
++        let called = Arc::new(AtomicBool::new(false));
++        let callback_called = called.clone();
++        queue.on_submitted_work_done(Box::new(move || callback_called.store(true, Ordering::Release)));
++        let mut config = configuration();
++        if invalid_size { config.width = 0; }
++        let result = device.configure_surface(&surface, &config);
++        assert!(result.is_some());
++        assert!(called.load(Ordering::Acquire));
++        let presentation = surface.presentation.lock();
++        let retained = presentation.as_ref().unwrap();
++        assert!(Arc::ptr_eq(retained.acquired_texture.as_ref().unwrap(), &texture));
++        assert_eq!(retained.config.width, 16);
++    }
++}
++
++#[test]
++fn configure_device_error_releases_guards_before_synchronous_device_lost_callback() {
++    let (device, queue) = device();
++    let surface = surface(|| Err(hal::SurfaceError::Device(hal::DeviceError::Lost)));
++    let called = Arc::new(AtomicBool::new(false));
++    let callback_called = called.clone();
++    let callback_device = device.clone();
++    let callback_surface = surface.clone();
++    *device.device_lost_closure.lock() = Some(Box::new(move |_, _| {
++        assert!(callback_device.command_indices.try_write().is_some());
++        drop(callback_surface.presentation.lock());
++        callback_called.store(true, Ordering::Release);
++    }));
++    let submitted = Arc::new(AtomicBool::new(false));
++    let callback_submitted = submitted.clone();
++    queue.on_submitted_work_done(Box::new(move || callback_submitted.store(true, Ordering::Release)));
++    assert!(device.configure_surface(&surface, &configuration()).is_some());
++    assert!(called.load(Ordering::Acquire));
++    assert!(submitted.load(Ordering::Acquire));
++    assert!(surface.presentation.lock().is_none());
++}
++
++#[test]
++fn configure_preserves_ranked_presentation_snatch_submission_order() {
++    let (device, _queue) = device();
++    let probe_device = device.clone();
++    let surface = surface(move || {
++        let concurrent = probe_device.clone();
++        assert!(!std::thread::spawn(move || concurrent.command_indices.try_write().is_some()).join().unwrap());
++        Ok(())
++    });
++    assert!(device.configure_surface(&surface, &configuration()).is_none());
++    assert!(surface.presentation.lock().is_some());
++}

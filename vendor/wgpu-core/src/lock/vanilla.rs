@@ -95,6 +95,12 @@ impl<T> RwLock<T> {
         RwLockWriteGuard(self.0.write())
     }
 
+    #[cfg(test)]
+    #[track_caller]
+    pub(crate) fn try_write(&self) -> Option<RwLockWriteGuard<'_, T>> {
+        self.0.try_write().map(|inner| RwLockWriteGuard(inner))
+    }
+
     /// Force an read-unlock operation on this lock.
     ///
     /// Safety:

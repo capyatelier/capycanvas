@@ -191,7 +191,7 @@ struct CustomizationCopy {
 /// worker's message boundary. It never creates threads or calls UI callbacks.
 pub struct UiSession<R: CanvasRenderer> {
     screen_headroom: std::cell::RefCell<Option<(UiLanguage, u32, std::sync::Arc<str>)>>,
-    histogram_captions: [Option<histogram::HistogramCaptionKey>; 2],
+    histogram_captions: [Option<histogram::HistogramCaptionKey>; 3],
     histogram: histogram::Statistics,
     effect_analyses: effect_analysis::Analyses,
     tonal_histogram: histogram::Statistics,
@@ -445,6 +445,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 screen: Default::default(),
                 gamut_warning: false,
                 histogram: HistogramView::default(),
+                waveform: {let mut view=HistogramView::default();view.logarithmic=true;view},
                 tonal_histogram: HistogramView::default(),
                 revision: 0,
                 fullscreen: false,
@@ -4463,6 +4464,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.state.gamut_warning = !self.state.gamut_warning;
                 Ok((COMMANDS, true))
             }
+            CommandId::Waveform => {
+                let change = self.reveal_panel(Panel::Waveform)?;
+                Ok((change.regions, true))
+            }
             CommandId::Histogram => {
                 if self.state.platform == Platform::Gtk {
                     let change = self.reveal_panel(Panel::Histogram)?;
@@ -5767,7 +5772,10 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.auto_levels.is_some() {
             for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
         }
-        if self.state.platform != Platform::Gtk { self.state.layer_properties.actions.clear(); }
+        if self.state.platform != Platform::Gtk {
+            self.state.layer_properties.actions.retain(|action| matches!(self.state.platform,Platform::Web|Platform::Android)
+                && matches!(action.action,EffectAction::ImportLookup {..}|EffectAction::LookupPreset {..}));
+        }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
         self.state.layer_tools.tool = self.layer_interaction.tool;
@@ -15024,7 +15032,6 @@ mod tests {
         assert_eq!(
             serde_json::to_value(VIEW_MENU.sections).unwrap(),
             serde_json::json!([
-                ["histogram"],
                 ["soft_proof_setup", "soft_proof", "gamut_warning", "sdr_rendition", "preview_sdr"],
                 ["zoom_in", "zoom_out", "fit_canvas", "actual_pixels"],
                 ["rotate_left", "rotate_right"],

@@ -1,8 +1,8 @@
 //! Bounded, coverage-aware fast local-Laplacian illumination analysis.
 //!
 //! Independent implementation of sampled range remapping and Laplacian
-//! reconstruction (Paris et al. 2011, Aubry et al. 2014). All arithmetic and
-//! stored guide samples are Float32. Analysis is fixed in document space; it
+//! reconstruction (Paris et al. 2011, Aubry et al. 2014). Guide samples are
+//! Float32 with scaled coverage. Analysis is fixed in document space; it
 //! never depends on the canvas zoom, viewport, export dimensions or monitor.
 //! The bounded guide is an explicit spatial approximation, not pixel storage.
 use super::sdr_luminance_weights;
@@ -16,7 +16,7 @@ const SIGMA: f32 = 1.5;
 pub struct LocalToneGuide {
     pub extent: [u32; 2],
     pub document_extent: [u32; 2],
-    /// log luminance, local illumination, coverage, reserved. GPU-compatible.
+    /// Log luminance, local illumination, coverage mantissa and base-two exponent.
     pub samples: Vec<[f32; 4]>,
     pub peak: f32,
 }
@@ -25,7 +25,7 @@ pub struct LocalToneBuilder {
     document: [u32; 2],
     extent: [u32; 2],
     weights: [f32; 3],
-    sums: Vec<[f32; 3]>,
+    sums: Vec<[f64; 2]>,
     next_row: u32,
     peak: f32,
 }
@@ -40,7 +40,7 @@ impl LocalToneBuilder {
             document,
             extent,
             weights: sdr_luminance_weights(space),
-            sums: vec![[0.; 3]; (extent[0] * extent[1]) as usize],
+            sums: vec![[0.; 2]; (extent[0] * extent[1]) as usize],
             next_row: 0,
             peak: 1.,
         })
@@ -49,32 +49,28 @@ impl LocalToneBuilder {
         if row.len() != self.document[0] as usize || self.next_row >= self.document[1] {
             return Err("Invalid local tone-map row".into());
         }
-        let sy = self.extent[1] as f32 / self.document[1] as f32;
-        let ya = self.next_row as f32 * sy;
-        let yb = (self.next_row + 1) as f32 * sy;
-        let sx = self.extent[0] as f32 / self.document[0] as f32;
+        let ya = self.next_row * self.extent[1];
+        let yb = (self.next_row + 1) * self.extent[1];
         for (x, p) in row.iter().enumerate() {
             if p.iter().any(|v| !v.is_finite()) {
                 return Err("Non-finite HDR sample in local tone analysis".into());
             }
             if !(0. ..=1.).contains(&p[3]) {return Err("Invalid coverage in local tone analysis".into());}
-            if p[3] <= 0. {
-                continue;
-            }
-            let y =
-                (p[0] * self.weights[0] + p[1] * self.weights[1] + p[2] * self.weights[2]) / p[3];
-            self.peak = self.peak.max(y);
-            let value = y.max(2f32.powi(-24)).log2();
-            let xa = x as f32 * sx;
-            let xb = (x + 1) as f32 * sx;
-            for gy in ya.floor() as u32..(yb.ceil() as u32).min(self.extent[1]) {
-                let wy = (yb.min((gy + 1) as f32) - ya.max(gy as f32)).max(0.);
-                for gx in xa.floor() as u32..(xb.ceil() as u32).min(self.extent[0]) {
-                    let weight = wy * (xb.min((gx + 1) as f32) - xa.max(gx as f32)).max(0.);
+            let alpha = f64::from(p[3]);
+            if alpha == 0. || p[..3].iter().any(|v| f64::from(v.abs()) / alpha > f64::from(f32::MAX)) {continue;}
+            let y = p[..3].iter().zip(self.weights).map(|(&v,w)| f64::from(v) * f64::from(w)).sum::<f64>() / alpha;
+            self.peak = self.peak.max(y.min(f64::from(f32::MAX)) as f32);
+            let value = y.max(2f64.powi(-24)).log2();
+            let xa = x as u32 * self.extent[0];
+            let xb = (x as u32 + 1) * self.extent[0];
+            for gy in ya / self.document[1]..yb.div_ceil(self.document[1]).min(self.extent[1]) {
+                let wy = yb.min((gy + 1) * self.document[1]) - ya.max(gy * self.document[1]);
+                for gx in xa / self.document[0]..xb.div_ceil(self.document[0]).min(self.extent[0]) {
+                    let wx = xb.min((gx + 1) * self.document[0]) - xa.max(gx * self.document[0]);
+                    let weight = f64::from(wx) * f64::from(wy) / (f64::from(self.document[0]) * f64::from(self.document[1])) * alpha;
                     let s = &mut self.sums[(gy * self.extent[0] + gx) as usize];
-                    s[0] += value * weight * p[3];
-                    s[1] += weight * p[3];
-                    s[2] += weight;
+                    s[0] += value * weight;
+                    s[1] += weight;
                 }
             }
         }
@@ -85,13 +81,13 @@ impl LocalToneBuilder {
         if self.next_row != self.document[1] {
             return Err("Incomplete local tone analysis".into());
         }
-        let mut low = f32::INFINITY;
-        let mut high = f32::NEG_INFINITY;
+        let mut low = f64::INFINITY;
+        let mut high = f64::NEG_INFINITY;
         let pixels: Vec<_> = self
             .sums
             .iter()
             .map(|s| {
-                let v = if s[1] > 0. { s[0] / s[1] } else { FLOOR };
+                let v = if s[1] > 0. { s[0] / s[1] } else { f64::from(FLOOR) };
                 if s[1] > 0. {
                     low = low.min(v);
                     high = high.max(v);
@@ -100,8 +96,8 @@ impl LocalToneBuilder {
             })
             .collect();
         if !low.is_finite() {
-            low = FLOOR;
-            high = FLOOR;
+            low = f64::from(FLOOR);
+            high = f64::from(FLOOR);
         }
         let original = pyramid(
             Plane {
@@ -110,22 +106,22 @@ impl LocalToneBuilder {
             },
             &cancelled,
         )?;
-        let mut detail: Vec<Vec<f32>> = original.iter().map(|p| vec![0.; p.pixels.len()]).collect();
+        let mut detail: Vec<Vec<f64>> = original.iter().map(|p| vec![0.; p.pixels.len()]).collect();
         // At most half an EV between samples over the occupied HDR
         // range. Retain one remapped pyramid at a time, not N full pyramids.
         let intervals = ((high - low) / 0.5).ceil().max(1.) as u32;
-        let step = ((high - low) / intervals as f32).max(0.00001);
+        let step = ((high - low) / intervals as f64).max(0.00001);
         for index in 0..=intervals {
             check(&cancelled)?;
-            let anchor = low + index as f32 * step;
+            let anchor = low + index as f64 * step;
             let pixels = original[0]
                 .pixels
                 .iter()
                 .map(|p| {
-                    let d = (p[0] - anchor) / SIGMA;
+                    let d = (p[0] - anchor) / f64::from(SIGMA);
                     // Smooth bounded detail remapping; unit slope at zero,
                     // tending to +/-sigma at strong edges. Avoid hard thresholds.
-                    [SIGMA * d / (1. + d.abs()), p[1]]
+                    [f64::from(SIGMA) * d / (1. + d.abs()), p[1]]
                 })
                 .collect();
             let remapped = pyramid(
@@ -141,8 +137,8 @@ impl LocalToneBuilder {
                     check(&cancelled)?;
                     for x in 0..plane.extent[0] {
                         let i = (y * plane.extent[0] + x) as usize;
-                        let q = ((plane.pixels[i][0] - low) / step).clamp(0., intervals as f32);
-                        let weight = (1. - (q - index as f32).abs()).max(0.);
+                        let q = ((plane.pixels[i][0] - low) / step).clamp(0., intervals as f64);
+                        let weight = (1. - (q - index as f64).abs()).max(0.);
                         if weight == 0. {
                             continue;
                         }
@@ -174,7 +170,10 @@ impl LocalToneBuilder {
             .pixels
             .iter()
             .zip(&detail[0])
-            .map(|(p, d)| [p[0], p[0] - d, p[1], 0.])
+            .map(|(p, d)| {
+                let exponent = if p[1] > 0. {p[1].log2().floor() as i32} else {0};
+                [p[0] as f32, (p[0] - d) as f32, (p[1] * 2f64.powi(-exponent)) as f32, exponent as f32]
+            })
             .collect();
         Ok(LocalToneGuide {
             extent: self.extent,
@@ -205,22 +204,22 @@ impl LocalToneGuide {
                 let x = (low[0] + dx).min(self.extent[0] - 1);
                 let y = (low[1] + dy).min(self.extent[1] - 1);
                 let p = self.samples[(y * self.extent[0] + x) as usize];
-                let delta = (p[0] - log_y) / SIGMA;
-                let weight = (if dx == 0 { 1. - t[0] } else { t[0] })
-                    * (if dy == 0 { 1. - t[1] } else { t[1] })
-                    * p[2]
+                let delta = f64::from(p[0] - log_y) / f64::from(SIGMA);
+                let weight = f64::from(if dx == 0 { 1. - t[0] } else { t[0] })
+                    * f64::from(if dy == 0 { 1. - t[1] } else { t[1] })
+                    * f64::from(p[2]) * 2f64.powi(p[3] as i32)
                     / (1. + delta * delta * delta * delta);
                 total += weight;
-                value += weight * p[1];
+                value += weight * f64::from(p[1]);
             }
         }
-        if total > 1e-12 { value / total } else { log_y }
+        if total > 0. { (value / total) as f32 } else { log_y }
     }
 }
 
 struct Plane {
     extent: [u32; 2],
-    pixels: Vec<[f32; 2]>,
+    pixels: Vec<[f64; 2]>,
 }
 fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
     if cancelled() {
@@ -229,7 +228,7 @@ fn check(cancelled: &impl Fn() -> bool) -> Result<(), String> {
         Ok(())
     }
 }
-fn sample(p: &Plane, q: [f32; 2]) -> f32 {
+fn sample(p: &Plane, q: [f32; 2]) -> f64 {
     let q: [f32; 2] = std::array::from_fn(|c| q[c].clamp(0., (p.extent[c] - 1) as f32));
     let low = q.map(|v| v.floor() as u32);
     let t = [q[0] - low[0] as f32, q[1] - low[1] as f32];
@@ -239,8 +238,8 @@ fn sample(p: &Plane, q: [f32; 2]) -> f32 {
         for dx in 0..2 {
             let v = p.pixels[((low[1] + dy).min(p.extent[1] - 1) * p.extent[0]
                 + (low[0] + dx).min(p.extent[0] - 1)) as usize];
-            let w = (if dx == 0 { 1. - t[0] } else { t[0] })
-                * (if dy == 0 { 1. - t[1] } else { t[1] })
+            let w = f64::from(if dx == 0 { 1. - t[0] } else { t[0] })
+                * f64::from(if dy == 0 { 1. - t[1] } else { t[1] })
                 * v[1];
             value += w * v[0];
             total += w;
@@ -322,5 +321,46 @@ mod tests {
         }
         assert!(builder.finish(|| true).unwrap_err().contains("cancelled"));
         assert!(LocalToneBuilder::new([0, 16], RgbSpace::Srgb).is_err());
+    }
+    #[test]
+    fn sampling_preserves_relative_coverage_below_float32_area() {
+        for exponent in [0., -149., -250.] {
+            let guide = LocalToneGuide {
+                document_extent: [1, 1], extent: [2, 1], peak: 1.,
+                samples: vec![[0., -0.75, 1., exponent - 1.], [0., 0.75, 1., exponent]],
+            };
+            assert!((guide.illumination([0.5, 0.5], 0.) - 0.25).abs() < 1e-6);
+        }
+        let ordinary = LocalToneGuide {
+            document_extent: [1, 1], extent: [2, 1], peak: 1.,
+            samples: vec![[0., -0.75, 0.25, 0.], [0., 0.75, 0.5, 0.]],
+        };
+        assert!((ordinary.illumination([0.5, 0.5], 0.) - 0.25).abs() < 1e-6);
+        let guide = LocalToneGuide {
+            document_extent: [1, 1], extent: [1, 1], peak: 1.,
+            samples: vec![[0., 0.75, 0., -250.]],
+        };
+        assert_eq!(guide.illumination([0.5, 0.5], 0.), 0.);
+    }
+    #[test]
+    fn builder_preserves_sparse_coverage_below_float32_area() {
+        let tiny = f32::from_bits(1);
+        let mut pixels = vec![[0.; 4]; 32768];
+        pixels[0] = [tiny; 4];
+        let actual = guide([32768, 1], &pixels);
+        let sample = actual.samples[0];
+        let coverage = f64::from(sample[2]) * 2f64.powi(sample[3] as i32);
+        let expected = f64::from(tiny) * f64::from(actual.extent[0]) / 32768.;
+        assert!(coverage > 0. && coverage < f64::from(tiny));
+        assert!((coverage / expected - 1.).abs() < 1e-7);
+        assert!(sample[0].abs() < 1e-5);
+        assert!(actual.samples[1..].iter().all(|p| p[2] == 0.));
+        for pixel in &mut pixels { *pixel = [tiny; 4]; }
+        let actual = guide([32768, 1], &pixels);
+        for sample in actual.samples {
+            let coverage = f64::from(sample[2]) * 2f64.powi(sample[3] as i32);
+            assert!((coverage / f64::from(tiny) - 1.).abs() < 1e-7);
+            assert!(sample[0].abs() < 1e-5);
+        }
     }
 }

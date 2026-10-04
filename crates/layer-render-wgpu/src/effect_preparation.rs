@@ -135,6 +135,7 @@ impl Preparation {
             || x > device.limits().max_compute_workgroup_size_x
             || y > device.limits().max_compute_workgroup_size_y
             || z > device.limits().max_compute_workgroup_size_z
+            || u64::from(x) * u64::from(y) * u64::from(z) > u64::from(device.limits().max_compute_invocations_per_workgroup)
         {
             return Err(GpuRasterError::Effect(
                 "Preparation exceeds device workgroup limits".into(),
@@ -165,5 +166,24 @@ impl Preparation {
             pass.dispatch_workgroups(x, y, z);
             self.executions += 1;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn preparation_refuses_aggregate_workgroup_overflow_before_dispatch() {
+        let r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let mut definition=crate::tests::fixture("gaussian_blur").program().lookups[0].clone();
+        let limits=r.device.limits();let x=256.min(limits.max_compute_workgroup_size_x);
+        let y=limits.max_compute_invocations_per_workgroup/x+1;
+        assert!(y<=limits.max_compute_workgroup_size_y);
+        definition.workgroup_size=[x,y,1];
+        let key=Key{definition,inputs:vec![[0,1]],output:2,geometry:1};
+        let mut preparation=Preparation::new(&r.device);
+        let error=preparation.pipeline(&r.device,&key).err().unwrap();
+        assert!(error.to_string().contains("Preparation exceeds device workgroup limits"),"{error}");
+        assert!(preparation.pipelines.is_empty());
     }
 }

@@ -127,7 +127,7 @@ internal object Native {
     @JvmStatic external fun captureFree(control: Long)
     @JvmStatic external fun inspectionTask(handle: Long, control: Long): Long
     @JvmStatic external fun inspectionSample(task: Long, source: String, x: Float, y: Float, width: Int): String
-    @JvmStatic external fun inspectionStatistics(task: Long, source: String, preview: Boolean, selection: Boolean): String
+    @JvmStatic external fun inspectionStatistics(task: Long, source: String, preview: Boolean, selection: Boolean, waveform: Boolean = false): String
     @JvmStatic external fun inspectionLevelsStatistics(task: Long, source: String): String
     @JvmStatic external fun inspectionOutput(task: Long, recipe: String): Array<Any>
     @JvmStatic external fun inspectionHistogram(task: Long): String

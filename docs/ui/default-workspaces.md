@@ -55,7 +55,7 @@ arrangement and its initial working state, shared by all hosts.
 | --- | --- |
 | Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and opacity sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. Starts with Brush. |
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
-| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Color/Palettes, Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. Starts with Move, so a drag over a selection moves its pixels. |
+| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (GTK; Color/Palettes on hosts awaiting the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. Starts with Move, so a drag over a selection moves its pixels. |
 
 On GTK, Web, Android and Windows, Paint keeps 17 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
@@ -91,7 +91,8 @@ In Paint, the Color and Navigator groups take their content height: Color
 follows its SDR or HDR wheel and footer, and Navigator follows the document
 shape, from a 4:1 strip up to a square. Tool Set and Tool share the rest of the
 left column evenly, and Properties and Layers keep their 30:45 split. Windows
-keeps proportional columns.
+keeps proportional columns. In GTK Photo, Histogram/Waveform takes its content
+height; Properties and Layers share the remaining space in a 60:40 split.
 
 Sketch's Brush button opens **Brushes → Tools → Tool**: Brushes lists the
 drawing sets (Paint, Pencil, Pastel and the other media), Tools lists the chosen

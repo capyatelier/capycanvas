@@ -599,3 +599,5 @@ commands-transform-snapping-help = キャンバス、他のレイヤー、定規
 commands-transform-again-empty = 先にレイヤーの変形を適用してください
 commands-transform-again-whole-layer = ピクセルの選択を解除して、レイヤー全体を選択してください
 commands-show-histogram = ヒストグラムを表示
+command-waveform = 波形
+commands-show-waveform = 波形を表示

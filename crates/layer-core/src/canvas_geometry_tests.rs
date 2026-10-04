@@ -586,7 +586,7 @@ fn image_size_scales_layers_placements_selections_guides_and_pixel_distances() {
         Some(EffectValue::Number(v)) => *v,
         _ => panic!("a number"),
     };
-    for (size, expected) in [([256, 128], 1.5), ([2048, 1024], 12.), ([5120, 2560], 21.)] {
+    for (size, expected) in [([256, 128], 1.5), ([2048, 1024], 12.), ([5120, 2560], 30.)] {
         let geometry = CanvasGeometry::resize([512, 256], size, Interpolation::Lanczos);
         let to_canvas = geometry.to_canvas();
         let plan = doc.canvas_geometry_plan(&geometry, limits()).unwrap();

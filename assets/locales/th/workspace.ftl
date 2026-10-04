@@ -583,3 +583,4 @@ workspace-storage-full = ที่เก็บพื้นที่ทำงา�
 workspace-storage-unavailable = เปิดที่เก็บพื้นที่ทำงานไม่ได้ ลองอีกครั้ง
 workspace-unreadable-name = พื้นที่ทำงานที่อ่านไม่ได้
 workspace-backup-saved = บันทึกสำรองพื้นที่ทำงานแล้ว
+workspace-tool-description-waveform = ตรวจสอบสีและความสว่างจากซ้ายไปขวา

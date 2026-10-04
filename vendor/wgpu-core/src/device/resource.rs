@@ -5264,10 +5264,11 @@ impl Device {
 
         log::debug!("configuring surface with {config:?}");
 
-        let error = 'error: {
-            // User callbacks must not be called while we are holding locks.
-            let user_callbacks;
-            {
+        let mut user_callbacks = UserClosures::default();
+        let queue = self.get_queue();
+        let mut previous_presentation = None;
+        let configuration_error = 'error_return: {
+            let error = 'error: {
                 if let Err(e) = self.check_is_valid() {
                     break 'error e.into();
                 }
@@ -5335,51 +5336,38 @@ impl Device {
                     break 'error error;
                 }
 
-                // Wait for all work to finish before configuring the surface.
+                let mut presentation = surface.presentation.lock();
+                if presentation.as_ref().is_some_and(|present| present.acquired_texture.is_some()) {
+                    break 'error E::PreviousOutputExists;
+                }
                 let snatch_guard = self.snatchable_lock.read();
-
-                let maintain_result;
-                (user_callbacks, maintain_result) =
-                    self.maintain(wgt::PollType::wait_indefinitely(), snatch_guard);
-
-                match maintain_result {
-                    // We're happy
-                    Ok(wgt::PollStatus::QueueEmpty) => {}
-                    Ok(wgt::PollStatus::WaitSucceeded) => {
-                        // After the wait, the queue should be empty. It can only be non-empty
-                        // if another thread is submitting at the same time.
-                        break 'error E::GpuWaitTimeout;
-                    }
-                    Ok(wgt::PollStatus::Poll) => {
-                        unreachable!("Cannot get a Poll result from a Wait action.")
-                    }
-                    Err(WaitIdleError::Timeout) if cfg!(target_arch = "wasm32") => {
-                        // On wasm, you cannot actually successfully wait for the surface.
-                        // However WebGL does not actually require you do this, so ignoring
-                        // the failure is totally fine. See
-                        // https://github.com/gfx-rs/wgpu/issues/7363
-                    }
-                    Err(e) => {
-                        break 'error e.into();
-                    }
-                }
-
-                // All textures must be destroyed before the surface can be re-configured.
-                if let Some(present) = surface.presentation.lock().take() {
-                    if present.acquired_texture.is_some() {
-                        break 'error E::PreviousOutputExists;
-                    }
-                }
-
-                // TODO: Texture views may still be alive that point to the texture.
-                // this will allow the user to render to the surface texture, long after
-                // it has been removed.
-                //
-                // https://github.com/gfx-rs/wgpu/issues/4105
-
+                let command_indices = self.command_indices.write();
                 let surface_raw = surface.raw(self.backend()).unwrap();
-                match unsafe { surface_raw.configure(self.raw(), &hal_config) } {
-                    Ok(()) => (),
+                let configured = (|| -> Result<bool, hal::SurfaceError> {
+                    let index = self.last_successful_submission_index.load(Ordering::Acquire);
+                    let waited = unsafe { self.raw().wait(self.fence.as_ref(), index, None) }
+                        .map_err(hal::SurfaceError::Device)?;
+                    if !waited && !cfg!(target_arch = "wasm32") { return Ok(false); }
+                    let finished = unsafe { self.raw().get_fence_value(self.fence.as_ref()) }
+                        .map_err(hal::SurfaceError::Device)?;
+                    if let Some(queue) = &queue {
+                        user_callbacks.submissions = queue.lock_life().triage_submissions(finished);
+                    }
+                    previous_presentation = presentation.take();
+                    unsafe { surface_raw.configure(self.raw(), &hal_config) }?;
+                    *presentation = Some(present::Presentation {
+                        device: Arc::clone(self),
+                        config: config.clone(),
+                        acquired_texture: None,
+                    });
+                    Ok(true)
+                })();
+                drop(command_indices);
+                drop(snatch_guard);
+                drop(presentation);
+                match configured {
+                    Ok(true) => (),
+                    Ok(false) => break 'error E::GpuWaitTimeout,
                     Err(error) => {
                         break 'error match error {
                             hal::SurfaceError::Outdated
@@ -5396,20 +5384,15 @@ impl Device {
                         }
                     }
                 }
-
-                let mut presentation = surface.presentation.lock();
-                *presentation = Some(present::Presentation {
-                    device: Arc::clone(self),
-                    config: config.clone(),
-                    acquired_texture: None,
-                });
-            }
-
-            user_callbacks.fire();
-            return None;
+                break 'error_return None;
+            };
+            Some(error)
         };
-
-        Some(error)
+        drop(previous_presentation);
+        let (callbacks, result) = self.maintain(wgt::PollType::Poll, self.snatchable_lock.read());
+        user_callbacks.extend(callbacks);
+        user_callbacks.fire();
+        configuration_error.or_else(|| result.err().map(Into::into))
     }
 
     fn lose(&self, message: &str) {
@@ -5420,7 +5403,8 @@ impl Device {
         self.valid.store(false, Ordering::Release);
 
         // 1) Resolve the GPUDevice device.lost promise.
-        if let Some(device_lost_closure) = self.device_lost_closure.lock().take() {
+        let device_lost_closure = self.device_lost_closure.lock().take();
+        if let Some(device_lost_closure) = device_lost_closure {
             device_lost_closure(DeviceLostReason::Unknown, message.to_string());
         }
 
@@ -5477,3 +5461,7 @@ impl Device {
 crate::impl_resource_type!(Device);
 crate::impl_labeled!(Device);
 crate::impl_storage_item!(Device);
+
+#[cfg(all(test, feature = "std", not(target_arch = "wasm32")))]
+#[path = "surface_tests.rs"]
+mod surface_tests;

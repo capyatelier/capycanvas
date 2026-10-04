@@ -3382,7 +3382,8 @@ impl WgpuRasterizer {
             && native_commit.is_none() && self.transform_preview.is_none()
             && self.moving_layer.is_none() && self.moving_pixels.is_none()
             && self.artwork_frame.as_ref().is_some_and(|frame|
-                frame.view == packet.view && frame.same_artwork(packet, packet.view.background_rgba_linear))
+                frame.view == layer_render::ViewState { background_rgba_linear: frame.view.background_rgba_linear, ..packet.view }
+                    && frame.same_artwork(packet, packet.view.background_rgba_linear))
         { return Ok(()); }
         let display_request = scene::scale::request(self, packet)?;
         let mut trace_phase = performance_trace::Span::new(c"capy.prepare");

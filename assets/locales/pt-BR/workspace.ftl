@@ -598,3 +598,4 @@ workspace-storage-full = O armazenamento de áreas de trabalho está cheio. Libe
 workspace-storage-unavailable = Não foi possível abrir o armazenamento de áreas de trabalho. Tente novamente.
 workspace-unreadable-name = Área de trabalho ilegível
 workspace-backup-saved = Cópia de segurança da área de trabalho salva.
+workspace-tool-description-waveform = Inspecionar cor e brilho da esquerda para a direita

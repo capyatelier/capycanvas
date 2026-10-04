@@ -150,6 +150,9 @@ view transformations do not change those pages.
 unassociation, interpolation and perceptual conversion across scene composition,
 effects and materials. Positive alpha is divided directly; only zero coverage
 returns black. Native scene/image interpolation uses explicit Float32 texel loads.
+Before interpolating extreme components, the sampler scales both endpoints by
+one binary exponent and bounds the result to their interval before restoring
+that scale. Opposite finite HDR endpoints cannot overflow their difference.
 Layer pixels are **linear document RGB**, independently of bit depth. Layers
 combine in the document's [blend space](#blend-space): linear document RGB, or
 the document's encoded values in a Perceptual document. Each blend mode states
@@ -626,6 +629,12 @@ are rejected before a frame changes the document. See
 [display composition](../rendering/display-composition.md) for admission, moving
 previews and exact idle refinement.
 
+Native filter windows admit output sections up to 2048 pixels per side against
+the complete halo and image-storage bound, falling back to smaller page-aligned
+sections when needed. Each section retires its temporary images after queue
+completion. Larger admitted sections reduce overlapping halo work and repeated
+source composition without raising the memory allowance.
+
 The native [snapshot renderer](../../crates/layer-render-wgpu/src/snapshot.rs)
 prepares document metadata independently of the live display cache. A file or
 inspection worker owns an immutable project snapshot and a native Float32
@@ -662,6 +671,13 @@ no full-resolution image reaches the panel. Positive alpha counts once, includin
 subnormal coverage. Nonfinite color rejects the result. RGB bin boundaries use
 exact ratio comparisons, and ambiguous luminance boundaries use a separate wide
 integer reduction so ordinary pixels avoid its register cost.
+
+Waveform optionally extends that same scan with four 256-by-256 count planes.
+Columns preserve document x; rows use the histogram's existing RGB and luminance
+bins. Eight GPU counter shards add 8 MiB of scratch, and their final fold adds a
+1 MiB summary. Histogram-only requests allocate neither. The immutable result
+shares its histogram with both panels; only Waveform's changed result, channel,
+scale or theme regenerates its small display image. No source pixels are read back.
 
 Auto Levels has a separate two-pass GPU summary: encoded extrema and 4096 bins
 per channel over each channel's observed range. Both summaries share bounded

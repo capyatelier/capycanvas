@@ -7,6 +7,8 @@ use std::sync::Arc;
 pub enum HistogramAction {
     Source { index: u8 },
     Channel { index: u8 },
+    WaveformChannel { index: u8 },
+    WaveformLogarithmic { enabled: bool },
     Logarithmic { enabled: bool },
     Shadows { enabled: bool },
     Highlights { enabled: bool },
@@ -72,8 +74,12 @@ impl HistogramView {
         }.message(l)).unwrap_or_default();
         let axis = self.data.as_ref().map_or_else(|| ["0".into(),"1".into()], |data| {
             let bins = data.plot_bins();
-            if data.color.depth.is_float() { [format!("{:+.0} EV",data.hdr_bin_stops(bins.start)),format!("{:+.0} EV",data.hdr_bin_stops(bins.end-1))] }
-            else { ["0".into(),"1".into()] }
+            match data.domain {
+                layer_core::color::histogram::HistogramDomain::CurveLog {stops} => ["0".into(),format!("{}",stops.exp2())],
+                layer_core::color::histogram::HistogramDomain::Artwork if data.color.depth.is_float() =>
+                    [format!("{:+.0} EV",data.hdr_bin_stops(bins.start)),format!("{:+.0} EV",data.hdr_bin_stops(bins.end-1))],
+                _ => ["0".into(),"1".into()],
+            }
         });
         let range = self.data.as_ref().map(|data| {
             let indices: &[usize] = match self.channel {1=>&[0],2=>&[1],3=>&[2],4=>&[3],_=>&[0,1,2]};
@@ -90,6 +96,31 @@ impl HistogramView {
         *cached = Some(HistogramCaptionKey { language: l.language(), sample: self.data.as_ref().map(Arc::downgrade), channel: self.channel, float });
     }
     pub(crate) fn clear(&mut self) {self.data=None;self.captured_time=None;self.captured_source=None;self.status=Arc::from("");self.status_message=None;self.status_language=None;}
+    pub fn plotted_channels(&self) -> &'static [usize] {
+        match self.channel {1=>&[0],2=>&[1],3=>&[2],4=>&[3],_=>&[0,1,2]}
+    }
+    pub fn waveform_premultiplied_rgba(&self, colors:[[u8;3];4]) -> Option<([u32;2], Vec<u8>)> {
+        let data=self.data.as_ref()?;let waveform=data.waveform.as_ref()?;
+        let bins=data.plot_bins();let height=bins.len();let channels=self.plotted_channels();
+        let mut counts=vec![[0u32;3];256*height];
+        for (component,&channel) in channels.iter().enumerate() {
+            for (i,&count) in waveform.channel(channel).iter().enumerate() {
+                let row=height-1-((i/256).clamp(bins.start,bins.end-1)-bins.start);
+                counts[row*256+i%256][component]+=count;
+            }
+        }
+        let scale=|count:u32| if self.logarithmic {f64::from(count).ln_1p()} else {f64::from(count)};
+        let maximum=scale(counts.iter().flatten().copied().max().unwrap_or(1).max(1));
+        let rgba=counts.into_iter().flat_map(|counts| {
+            let mut rgb=[0.;3];let mut alpha:f64=0.;
+            for (component,&channel) in channels.iter().enumerate() {
+                let density=scale(counts[component])/maximum;alpha=alpha.max(density);
+                for c in 0..3 {rgb[c]+=f64::from(colors[channel][c])*density;}
+            }
+            [rgb[0].min(255.*alpha).round() as u8,rgb[1].min(255.*alpha).round() as u8,rgb[2].min(255.*alpha).round() as u8,(alpha*255.).round() as u8]
+        }).collect();
+        Some(([256,height as u32],rgba))
+    }
 }
 
 #[derive(Default)]
@@ -104,6 +135,7 @@ pub(super) struct Statistics {
     epoch: u64,
     pub demand: bool,
     pub settled: bool,
+    waveform: bool,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -120,13 +152,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.state.platform!=Platform::Gtk {return false;}
         let tonal=self.engine.document().layer(self.engine.document().active_layer).and_then(|layer|layer.effect.as_ref())
             .is_some_and(|effect|matches!(effect.program.id.as_ref(),"curves"|"levels"));
-        self.histogram.demand!=self.panel_is_presented(Panel::Histogram)
+        let waveform=self.panel_is_presented(Panel::Waveform);
+        self.histogram.demand!=(self.panel_is_presented(Panel::Histogram) || waveform) || self.histogram.waveform!=waveform
             || self.tonal_histogram.demand!=(tonal && self.panel_is_presented(Panel::Properties))
     }
     pub(super) fn cancel_histogram(&mut self) {
         if self.histogram.active || self.tonal_histogram.active { self.engine.backend_mut().cancel_snapshot(); }
         self.histogram = Statistics::default();self.tonal_histogram = Statistics::default();
-        self.state.histogram.clear();self.state.tonal_histogram.clear();
+        self.state.histogram.clear();self.state.waveform.clear();self.state.tonal_histogram.clear();
         self.histogram_copy();
     }
     pub(super) fn histogram_action(&mut self, action: HistogramAction) -> Result<(), String> {
@@ -135,6 +168,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.cancel_histogram();self.state.histogram.source = index;self.state.histogram.clear();
             }
             HistogramAction::Channel { index } if index < 5 => self.state.histogram.channel = index,
+            HistogramAction::WaveformChannel { index } if index < 5 => self.state.waveform.channel = index,
+            HistogramAction::WaveformLogarithmic { enabled } => self.state.waveform.logarithmic = enabled,
             HistogramAction::Logarithmic { enabled } => self.state.histogram.logarithmic = enabled,
             HistogramAction::Shadows { enabled } => self.state.histogram.shadows = enabled,
             HistogramAction::Highlights { enabled } => self.state.histogram.highlights = enabled,
@@ -147,9 +182,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub(super) fn histogram_copy(&mut self) {
         let l = &self.state.localization;
         let float = self.engine.document().color.depth.is_float();
-        for (view, cached) in [&mut self.state.histogram, &mut self.state.tonal_histogram].into_iter().zip(&mut self.histogram_captions) {
-            view.refresh_copy(cached, l, float);
-        }
+        self.state.histogram.refresh_copy(&mut self.histogram_captions[0],l,float);
+        self.state.tonal_histogram.refresh_copy(&mut self.histogram_captions[1],l,float);
+        let waveform=&mut self.state.waveform;let histogram=&self.state.histogram;
+        waveform.data=histogram.data.clone();waveform.source=histogram.source;
+        waveform.status=histogram.status.clone();waveform.status_message=histogram.status_message;waveform.status_language=histogram.status_language;
+        waveform.captured_time=histogram.captured_time;waveform.captured_source=histogram.captured_source.clone();
+        waveform.shadows=histogram.shadows;waveform.highlights=histogram.highlights;
+        if !self.histogram.waveform {waveform.clear();}
+        waveform.refresh_copy(&mut self.histogram_captions[2],l,float);
     }
     pub(super) fn poll_histogram(&mut self, now:u64) -> u32 {
         let properties = &self.state.layer_properties;
@@ -165,21 +206,22 @@ impl<R: CanvasRenderer> UiSession<R> {
         if demand && !task.settled && self.histogram.active {
             self.engine.backend_mut().cancel_snapshot();self.histogram.active=false;self.histogram.query=None;
         }
-        let mut updates=self.poll_statistics(now,source.unwrap_or(ArtworkSource::Visible),false,demand,!self.histogram.active,(&mut task,&mut view));
+        let mut updates=self.poll_statistics(now,source.unwrap_or(ArtworkSource::Visible),false,demand,!self.histogram.active,(false,&mut task,&mut view));
         self.tonal_histogram=task;self.state.tonal_histogram=view;
         let mut task=std::mem::take(&mut self.histogram);
         let mut view=std::mem::take(&mut self.state.histogram);
         let source = match view.source {1=>ArtworkSource::LayerContent(self.engine.document().active_layer),2=>ArtworkSource::Reference,_=>ArtworkSource::Visible};
-        let demand=self.state.platform==Platform::Gtk && self.panel_is_presented(Panel::Histogram);
+        let waveform=self.state.platform==Platform::Gtk && self.panel_is_presented(Panel::Waveform);
+        let demand=self.state.platform==Platform::Gtk && (self.panel_is_presented(Panel::Histogram) || waveform);
         let admitted=!self.tonal_histogram.active && (!self.tonal_histogram.demand || self.tonal_histogram.settled);
-        updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,(&mut task,&mut view));
+        updates|=self.poll_statistics(now,source,view.source==3,demand,admitted,(waveform,&mut task,&mut view));
         self.histogram=task;self.state.histogram=view;
         if updates!=0 || self.state.histogram.sources.is_empty() {self.histogram_copy();}
         updates
     }
     fn poll_statistics(&mut self, now:u64, source:ArtworkSource, selection:bool, demand:bool, admitted:bool,
-        state:(&mut Statistics, &mut HistogramView)) -> u32 {
-        let (task, view) = state;
+        state:(bool, &mut Statistics, &mut HistogramView)) -> u32 {
+        let (waveform, task, view) = state;
         if !demand || self.targeted_curve.is_some() || self.auto_levels.is_some() || self.eyedropper.calibration.is_some() || self.content_bounds.busy() || self.state.host_error.is_some() {
             if task.demand || task.active {
                 if task.active {self.engine.backend_mut().cancel_snapshot();}
@@ -191,7 +233,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let document = self.engine.document();
         let matches = |query:&ArtworkQuery, document:&Document| query.source==source && query.matches_source(document)
             && (!selection || query.document.selection==document.selection);
-        let identity_changed = task.epoch != self.state.document_file.epoch
+        let identity_changed = task.waveform!=waveform || task.epoch != self.state.document_file.epoch
             || task.observed.as_ref().is_some_and(|query| query.source != source || !query.matches_source_identity(document)
                 || (selection && query.document.selection != document.selection)
                 || match source {
@@ -207,7 +249,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             || (animated && query.time != self.engine.animation_time()));
         if identity_changed {
             if task.active {self.engine.backend_mut().cancel_snapshot();}
-            *task = Statistics::default();task.demand = true;view.clear();
+            *task = Statistics::default();task.demand = true;task.waveform=waveform;view.clear();
         }
         let mut updates = 0;
         if changed || identity_changed {
@@ -247,7 +289,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             && !self.engine.has_pending_document_edits() {
             let mut query = task.observed.as_ref().unwrap().clone();query.time = self.engine.animation_time();
             task.preview = !task.preview_ready;
-            let request = ArtworkStatisticsRequest { query: query.clone(), preview: task.preview, selection };
+            let request = ArtworkStatisticsRequest { waveform, query: query.clone(), preview: task.preview, selection };
             if query.validate().is_err() || (request.selection && query.document.selection.is_none()) {
                 task.settled = true;view.set_status(MessageId::RESOURCES_HISTOGRAM_UNAVAILABLE,self.localization());
                 updates = regions::HISTOGRAM;

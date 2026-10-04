@@ -621,3 +621,4 @@ workspace-storage-full = 工作區儲存空間已滿。請釋放磁碟空間後�
 workspace-storage-unavailable = 無法開啟工作區儲存資料。請重試。
 workspace-unreadable-name = 無法讀取的工作區
 workspace-backup-saved = 已儲存工作區備份。
+workspace-tool-description-waveform = 從左到右檢視色彩和亮度

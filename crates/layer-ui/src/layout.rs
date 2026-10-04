@@ -640,10 +640,11 @@ pub enum Panel {
     Navigator,
     Proof,
     Histogram,
+    Waveform,
     CustomToolbar(u32),
 }
 
-const PANEL_NAMES: [(Panel, &str); 18] = [
+const PANEL_NAMES: [(Panel, &str); 19] = [
     (Panel::Toolbar, "toolbar"),
     (Panel::Commands, "commands"),
     (Panel::Brushes, "brushes"),
@@ -662,6 +663,7 @@ const PANEL_NAMES: [(Panel, &str); 18] = [
     (Panel::Navigator, "navigator"),
     (Panel::Proof, "proof"),
     (Panel::Histogram, "histogram"),
+    (Panel::Waveform, "waveform"),
 ];
 impl From<Panel> for String {
     fn from(panel: Panel) -> Self {
@@ -697,14 +699,14 @@ pub enum PanelKind {
 }
 
 impl Panel {
-    pub fn available_on(self, platform: crate::Platform) -> bool { self != Self::Histogram || platform == crate::Platform::Gtk }
+    pub fn available_on(self, platform: crate::Platform) -> bool { !matches!(self, Self::Histogram | Self::Waveform) || platform == crate::Platform::Gtk }
     /// Normal starting column width, excluding its divider. Allocation may
     /// raise this to a measured minimum or fit it into a smaller viewport.
     pub fn default_width(self) -> f32 {
         match self {
             Self::BrushSets | Self::SculptSets | Self::FilterTypes => 160.,
             Self::Tools | Self::Brushes | Self::ToolSettings | Self::Color | Self::Sizes => 242.,
-            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator | Self::Histogram => {
+            Self::Layers | Self::Adjustments | Self::Properties | Self::Stats | Self::Navigator | Self::Histogram | Self::Waveform => {
                 254.
             }
             Self::Palettes => 280.,
@@ -723,7 +725,7 @@ impl Panel {
             PanelKind::Content
         }
     }
-    pub const ALL: [Self; 18] = [
+    pub const ALL: [Self; 19] = [
         Self::Toolbar,
         Self::Commands,
         Self::Brushes,
@@ -738,6 +740,7 @@ impl Panel {
         Self::Navigator,
         Self::Proof,
         Self::Histogram,
+        Self::Waveform,
         Self::BrushSets,
         Self::Tools,
         Self::SculptSets,
@@ -766,6 +769,7 @@ impl Panel {
             Self::Navigator => "navigator",
             Self::Proof => "image",
             Self::Histogram => "stats",
+            Self::Waveform => "waveform",
         }
     }
 }
@@ -2011,13 +2015,8 @@ impl DockLayout {
             | Panel::Color
             | Panel::Palettes
             | Panel::Sizes => Edge::Left,
-            Panel::Layers
-            | Panel::Adjustments
-            | Panel::Properties
-            | Panel::Stats
-            | Panel::Navigator
-            | Panel::Proof => Edge::Right,
-            _ => Edge::Top,
+            _ if panel.kind() == PanelKind::Tiles => Edge::Top,
+            _ => Edge::Right,
         };
         next.bands.push(DockBand {
             alignment: None,
@@ -4601,6 +4600,17 @@ fn resolve_node(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reopened_panels_have_legal_docks_and_monitors_default_to_right() {
+        for panel in Panel::ALL {
+            let mut layout=DockLayout::editor_default();layout.set_panel_visible(panel,false).unwrap();layout.set_panel_visible(panel,true).unwrap();layout.validate().unwrap();
+            let group=layout.panel_group(panel).unwrap();let band=layout.bands.iter().find(|b|b.root.group_for(panel).is_some()).unwrap();
+            if panel.kind()==PanelKind::Content {assert!(matches!(band.edge,Edge::Left|Edge::Right),"{panel:?}");}
+            if matches!(panel,Panel::Histogram|Panel::Waveform) {assert_eq!(band.edge,Edge::Right);layout.move_panel([1000.,800.],panel,DockTarget::Tab{group,index:None}).unwrap();}
+        }
+    }
+
 
     #[test]
     fn editor_default_has_complete_tools_and_independent_command_ribbon() {

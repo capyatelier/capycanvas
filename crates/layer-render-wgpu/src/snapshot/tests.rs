@@ -17,6 +17,39 @@ fn capture(project: Project) -> Result<SnapshotRenderer, GpuRasterError> {
 }
 
 #[test]
+fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
+    let extent=[33,17];
+    let input=SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F32,
+        profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+    let target=SourceInterpretation{depth:SampleDepth::U16,..input.clone()};
+    for depth in [SampleDepth::U16,SampleDepth::F32] {
+    for c in [[0.25_f32,0.5,0.75,1.],[4.,-2.,8.,1.],[0.1,0.2,0.4,0.5]] {
+        let mut document=Document::new("Gaussian coverage",extent[0],extent[1],
+            layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
+        document.color.depth=depth;document.layers[1].visible=false;
+        let mut source=SourceBuilder::new(extent,input.clone(),1<<20).unwrap();
+        let row=(0..extent[0]).flat_map(|_|c).flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+        for _ in 0..extent[1]{source.push_row(&row).unwrap();}
+        document.layers[0].source=Some(Arc::new(source.finish().unwrap()));
+        let id=document.allocate_layer_id();let mut filter=Layer::paint(id,"Gaussian Blur");filter.kind=LayerKind::Effect;
+        filter.effect=Some(Arc::new(EffectInstance::new(crate::tests::fixture("gaussian_blur").program())));
+        document.layers.insert(0,filter);
+        for sigma in [0.,0.1,1.,3.,21.,21.1,64.,85.] {
+            Arc::make_mut(document.layers[0].effect.as_mut().unwrap()).set("sigma",layer_core::EffectValue::Number(sigma)).unwrap();
+            let mut reader=capture(Project{document:document.clone()}).unwrap();let mut png=Vec::new();
+            reader.write_png(&mut png,&target,Default::default(),None)
+                .unwrap_or_else(|error|panic!("depth={depth:?} sigma={sigma} original={c:?}: {error}"));
+            let decoded=layer_color::photo::read_photo(Cursor::new(png),Default::default()).unwrap();
+            assert_eq!(decoded.extent,extent);assert_eq!(decoded.interpretation.depth,SampleDepth::U16);
+            let mut bytes=vec![0;decoded.row_bytes()];decoded.rows().read(0,&mut bytes).unwrap();
+            let alpha=(c[3]*65535.).round() as u16;
+            assert!(bytes.chunks_exact(8).all(|p|u16::from_le_bytes(p[6..8].try_into().unwrap()).abs_diff(alpha)<=1));
+        }
+    }
+    }
+}
+
+#[test]
 fn read_only_capture_does_not_compile_paint_publication_pipelines() {
     let document = Document::new("Read-only capture", 33, 17, layer_core::DocumentNames { paint: "Current ink".into(), paper: "Paper".into() });
     let color = [0.25, 0.5, 0.75, 1.];
@@ -681,7 +714,9 @@ fn gpu_tone_snapshot_matches_composited_masked_filtered_document() {
     let actual = capture.local_tone_guide().unwrap();
     assert_eq!(actual.extent,expected.extent);
     for (a,b) in actual.samples.iter().zip(&expected.samples) {
-        for c in 0..3 { assert!((a[c]-b[c]).abs() < 0.0003,"masked/filter guide: {a:?} != {b:?}"); }
+        for c in 0..2 { assert!((a[c]-b[c]).abs() < 0.0003,"masked/filter guide: {a:?} != {b:?}"); }
+        let coverage = |p: &[f32; 4]| f64::from(p[2]) * 2f64.powi(p[3] as i32);
+        assert!((coverage(a)-coverage(b)).abs() < 0.0003,"masked/filter coverage: {a:?} != {b:?}");
     }
     capture.control().cancel();
     assert!(capture.gpu_local_tone_guide().is_err(),"cancellation also rejects cached output");

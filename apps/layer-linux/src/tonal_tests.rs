@@ -32,14 +32,15 @@ fn start(app: &NativeTestApp, effect: &str) -> (Rc<Workspace>, std::path::PathBu
     w.dispatch(UiAction::MovePanel {panel:Panel::Properties,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[w.window.width() as f32,800.]});
     w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}});ready(&w);
     w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});pump(200);
-    let output = artifact_dir("../../artifacts/photo-editing-color/p17-p18-gtk");std::fs::create_dir_all(&output).unwrap();
+    let output = artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk");std::fs::create_dir_all(&output).unwrap();
     (w,output.into())
 }
 
-fn action_button(w: &Workspace, accepts: impl Fn(&EffectAction)->bool) -> gtk::Button {
-    let label = state(w).layer_properties.actions.iter().find(|action| accepts(&action.action)).unwrap().label.clone();
+fn action_button(w: &Workspace, input: &mut RemoteInput, accepts: impl Fn(&EffectAction)->bool) -> gtk::Button {
+    let action = state(w).layer_properties.actions.iter().find(|action| accepts(&action.action)).unwrap().clone();let label = action.label;
+    if action.group.is_some() {let menu=named::<gtk::MenuButton>(w.effects.properties.upcast_ref(),"property-picker-menu");scroll_to(menu.upcast_ref());input.click(screen_point(menu.upcast_ref(),&w.window,[0.5,0.5]));until(|| menu.popover().is_some_and(|p|p.is_mapped()),"native grouped picker choices");}
     let button = widgets(w.effects.properties.upcast_ref()).filter_map(|widget|widget.downcast::<gtk::Button>().ok())
-        .find(|button|button.is_mapped() && button.widget_name()=="property-picker" && button.label().as_deref()==Some(label.as_str())).unwrap();
+        .find(|button|button.is_mapped() && button.widget_name()=="property-picker" && (button.label().as_deref()==Some(label.as_str()) || button.tooltip_text().as_deref()==Some(label.as_str()))).unwrap();
     scroll_to(button.upcast_ref());button
 }
 
@@ -79,10 +80,11 @@ fn tonal_calibration(effect: &str) {
     let (w,output) = start(&app,effect);input.ready();
         let width=w.window.width();
         for theme in [Theme::Light,Theme::Dark] {
+            if std::env::var("LAYER_TONAL_THEME").is_ok_and(|wanted| wanted != format!("{theme:?}")) {continue;}
             w.dispatch(UiAction::SetTheme {theme:Some(theme)});pump(150);
             if effect=="levels" {
                 let before=document(&w);let foreground=state(&w).colors.clone();let pixel=shown(&w,[128.,128.]);
-                let button=action_button(&w,|action|matches!(action,EffectAction::AutoLevels {..}));
+                let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::AutoLevels {..}));
                 crate::snapshot(&w).save_to_png(output.join(format!("levels-actions-{width}-{theme:?}.png"))).unwrap();
                 input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                 until(||document(&w).layers!=before.layers,"native Auto Levels publishes correction");ready(&w);
@@ -92,11 +94,16 @@ fn tonal_calibration(effect: &str) {
                 w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores Auto Levels");
             }
             for role in [CalibrationRole::Black,CalibrationRole::Gray,CalibrationRole::White] {
+                if std::env::var("LAYER_TONAL_ROLE").is_ok_and(|wanted|wanted!=format!("{role:?}")) {continue;}
                 for kind in ["mouse","pen","touch"] {
+                    if std::env::var("LAYER_TONAL_CONTACT").unwrap_or_else(|_|"mouse".into())!=kind {continue;}
+                    if kind!="mouse" {assert!(std::env::var("LAYER_TONAL_ROLE").is_ok() && std::env::var("LAYER_TONAL_THEME").is_ok(),"tablet popup journeys require one role/theme per private input stream");}
                     let before=document(&w);let foreground=state(&w).colors.clone();let tool=state(&w).layer_tools.tool;
                     let at=[match role {CalibrationRole::Black=>30.,CalibrationRole::White=>220.,_=>128.},128.];
                     let pixel=shown(&w,at);
-                    let button=action_button(&w,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
+                    let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
+                    input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));input.key(0xff1b);assert_eq!(document(&w).layers,before.layers);assert_eq!(state(&w).colors,foreground);
+                    let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
                     input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                     until(||state(&w).canvas_bar.as_ref().is_some_and(|bar|bar.context.kind==CanvasBarKind::Picker),"calibration picker armed");
                     sample(&mut input,kind,canvas_point(&w,at));
@@ -107,9 +114,7 @@ fn tonal_calibration(effect: &str) {
                     crate::snapshot(&w).save_to_png(output.join(format!("{effect}-{role:?}-{kind}-{width}-{theme:?}.png"))).unwrap();
                     if kind=="mouse" {assert_persisted(&w,&output.join(format!("{effect}-{role:?}-{width}-{theme:?}.capy")));}
                     w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores complete correction");
-                    let button=action_button(&w,|action|matches!(action,EffectAction::Calibrate {role:current,..} if *current==role));
-                    input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));input.key(0xff1b);
-                    assert_eq!(document(&w).layers,before.layers);assert_eq!(state(&w).colors,foreground);
+
                 }
             }
         }
@@ -133,7 +138,7 @@ fn targeted_curves(page: u32) {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});
             for kind in ["mouse","pen","touch"] {
                 let before=document(&w);let foreground=state(&w).colors.clone();let pixel=shown(&w,[128.,128.]);
-                let button=action_button(&w,|action|matches!(action,EffectAction::TargetCurve {..}));
+                let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
                 crate::snapshot(&w).save_to_png(output.join(format!("curves-actions-{page}-{width}-{theme:?}.png"))).unwrap();
                 input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                 let point=canvas_point(&w,[128.,128.]);let end=[point[0],point[1]-30.];
@@ -149,7 +154,7 @@ fn targeted_curves(page: u32) {
                 crate::snapshot(&w).save_to_png(output.join(format!("targeted-{page}-{kind}-{width}-{theme:?}.png"))).unwrap();
                 if kind=="mouse" {assert_persisted(&w,&output.join(format!("targeted-{page}-{width}-{theme:?}.capy")));}
                 input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before.layers,"one Undo restores targeted drag");
-                let button=action_button(&w,|action|matches!(action,EffectAction::TargetCurve {..}));
+                let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
                 input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
                 let point=canvas_point(&w,[128.,128.]);input.perform(json!([{"point":point,"down":true},{"point":[point[0],point[1]+25.]},{"wait_ms":500}]));
                 until(||document(&w).layers!=before.layers,"targeted preview before Escape");
@@ -179,14 +184,14 @@ fn native_targeted_curves_motion_and_latency() {
     let mut reports=Vec::new();
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});
-        let button=action_button(&w,|action|matches!(action,EffectAction::TargetCurve {..}));
+        let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
         input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
         let point=canvas_point(&w,[128.,128.]);
         input.perform(json!([{"point":point,"down":true},{"point":[point[0],point[1]-20.]},{"wait_ms":400},{"down":false}]));
         until(||document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().value("curve_0").is_some_and(|value|matches!(value,EffectValue::Curve(points) if points.len()==3)),"priming targeted gesture applies");
         input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);
         for gesture in 0..3 {
-            let button=action_button(&w,|action|matches!(action,EffectAction::TargetCurve {..}));
+            let button=action_button(&w,&mut input,|action|matches!(action,EffectAction::TargetCurve {..}));
             input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
             until(||ui_session(&w).engine().backend().frames_idle() && w.frame_timer.borrow().is_none(),"preceding targeted frames settle");pump(100);
             let baseline=stats.lock().unwrap().camera_views.last().map(|entry|entry.2);

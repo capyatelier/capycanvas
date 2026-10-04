@@ -52,18 +52,28 @@ while file dialogs, focus and accessibility follow the platform.
 - [Color picking](color-picker.md), [color palettes](color-palettes.md) and the
   [color-management journeys](color-management.md).
 
-## Histogram
+## Histogram and Waveform
 
-GTK Histogram is a normal dockable panel, initially an inactive Photo workspace
-tab. Its command reveals the existing panel wherever it was placed. Visible,
-Selected layer, Reference and Selection choose the source; RGB, individual
-channels and luminance choose the plotted counts. Log counts changes only the
-vertical scale. Details reports covered and transparent pixels and clipping.
+GTK Photo opens Histogram above Properties and Layers, with Waveform in the
+adjacent tab. Both are ordinary dockable panels, shown or hidden through Window.
+Their command-search actions reveal the existing panel wherever it was placed. Both panels share the inspected source:
+Visible, Selected layer, Reference or Selection. Their channel menus independently
+choose RGB, individual channels or luminance. Waveform retains the image's
+left-to-right position, with brighter values toward the top; it initially shows
+RGB. Histogram shows how often each value occurs.
+
+Source and channel selectors occupy one toolbar above the graph. Log counts
+changes Histogram's height or Waveform's trace brightness; its toggle and
+clipping buttons sit beside the status below the graph. The graph's tooltip
+contains detailed counts. In floating documents, Waveform includes nonpositive
+values on its bottom rail. Its scale labels overlay the graph so the trace uses
+the full panel width.
 
 Preview uses estimated counts while input changes; Exact scans the frozen source
-after it settles. Updating keeps that distinction visible. Hiding every view
-retires its work and data. Levels and Curves have embedded input statistics in
-Properties, sharing the same query and display rules.
+after it settles. Updating keeps that distinction visible. Both panels use the
+same frozen query; Waveform's spatial counters are allocated only while it is
+presented. Hiding every view retires its work and data. Levels and Curves have
+embedded input statistics in Properties, sharing the same query and display rules.
 
 Shadows and Highlights mark pixels at or beyond zero and one. Floating documents
 label these SDR thresholds. The overlays apply to the canvas after proof and
@@ -86,7 +96,17 @@ those habits while keeping the underlying commands consistent. These workflows
 are arrangements of a common editor rather than separate applications. Tool
 Settings follows the active tool, and Properties exposes the relevant effect
 parameters. Shared Properties pages choose which parameter controls are shown;
-hidden values remain active. Curves uses these pages for RGB and channel
+hidden values remain active. Channel selection, automatic adjustment and sampling
+share one toolbar. Levels and Curves offer black, neutral and white points through
+one sampling menu; White Balance uses the same sampling icon for its neutral point.
+Number fields sit beside their labels; Curves coordinates use two labeled
+columns below the graph. Color Lookup (LUT) has a single selector
+for Original, Warm, Cool, Monochrome and the current imported LUT, with a separate
+Import LUT button. Long names truncate in the selector and remain available on
+hover and to accessibility. Presets use sRGB; imported LUTs expose their color
+space. Intensity blends either kind with the original. Presets and imported
+tables share the same saved resource, renderer and undo path.
+Curves uses these pages for RGB and channel
 selection, with [precise point controls](numeric-controls.md#properties-and-curves).
 The [Sketch, Paint and Photo defaults](default-workspaces.md)
 provide initial arrangements and remain editable workspaces.

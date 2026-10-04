@@ -253,6 +253,7 @@ impl View {
                     }
                     Panel::Proof => Body::Proof(w.proof_panel.duplicate(w)),
                     Panel::Histogram => Body::Histogram(w.histogram.duplicate(w)),
+                    Panel::Waveform => Body::Histogram(w.waveform.duplicate(w)),
                     Panel::Sizes => Body::Sizes(crate::tool_panels::SizePanel::new(w)),
                     Panel::Navigator => {
                         let v = crate::navigator::Navigator::new(&w.navigator_overviews);

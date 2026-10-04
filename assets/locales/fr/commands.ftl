@@ -600,3 +600,5 @@ commands-transform-again-empty = Appliquer d’abord une transformation de calqu
 commands-transform-again-whole-layer = Annuler la sélection de pixels et sélectionner un calque entier
 
 commands-show-histogram = Afficher l’histogramme
+command-waveform = Forme d’onde
+commands-show-waveform = Afficher la forme d’onde

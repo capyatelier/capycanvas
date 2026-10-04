@@ -375,6 +375,66 @@ fn bakes_run_their_filters_in_bounded_windows_with_the_same_pixels() {
     }
 }
 
+#[test]
+fn frequency_separation_at_sigma_85_bakes_discrete_gaussian_and_survives_history_and_archive() {
+    use layer_core::{BlendSpace, Document, Project, SeparationFilters};
+    use layer_engine::{CanvasEngine, ViewTransform, input_queue};
+    let extent=[65,33];
+    let mut document=Document::new("Frequency Separation",extent[0],extent[1],
+        layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
+    document.color=DocumentColor{space:RgbSpace::Srgb,depth:SampleDepth::U16};
+    document.blend_space=BlendSpace::Perceptual;
+    document.layers[1].visible=false;
+    document.layers[0].source=Some(layer_core::color::source::rgba8_source(extent,|x,_|{
+        let v=if x<32 {64}else{192};[v,v,v,255]
+    }));
+    let original=document.layers[0].id;
+    let gpu=WgpuRasterizer::new_native_headless(document.color).unwrap();
+    let (_,consumer)=input_queue(8);
+    let mut engine=CanvasEngine::new(gpu,document,consumer,crate::test_support::view(extent),ViewTransform::IDENTITY).unwrap();
+    let finish=|engine:&mut CanvasEngine<WgpuRasterizer>| {
+        engine.render_frame_at(0).unwrap();
+        for _ in 0..1000 {
+            if !engine.has_pending_document_edits(){return;}
+            engine.render_frame_at(0).unwrap();
+        }
+        panic!("Frequency Separation did not publish its raster results");
+    };
+    finish(&mut engine);
+    let before=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    let filters=SeparationFilters::new(layer_core::bundled_effect_catalog(),85.).unwrap();
+    let ids=std::array::from_fn(|_|engine.allocate_layer_id());
+    let plan=engine.document().separation_plan(original,&filters,ids,
+        ["Frequency Separation","Low","High"].map(Arc::from)).unwrap();
+    engine.insert_with_operations(plan.edits,plan.operations,None).unwrap();finish(&mut engine);
+    let low=engine.document().layer(ids[1]).unwrap().raster.wait_data().unwrap();
+    let tile=low.tiles.values().next().unwrap().wait_backing().unwrap().decode().unwrap();
+    let weights=(-255..=255).map(|k|(-0.5*(f64::from(k)/85.).powi(2)).exp()).collect::<Vec<_>>();
+    let sum=weights.iter().sum::<f64>();
+    for x in [0,1,31,32,63,64] {
+        let expected=(-255..=255).zip(&weights).map(|(k,w)|{
+            let v=if (x+k).clamp(0,64)<32 {64.}else{192.};v/255.*w/sum
+        }).sum::<f64>();
+        let offset=(16*256+x as usize)*8;
+        let actual=f64::from(u16::from_le_bytes(tile[offset..offset+2].try_into().unwrap()))/65535.;
+        assert!((actual-expected).abs()<2e-5,"Low x={x}: {actual} != {expected}");
+    }
+    let separated=engine.backend_mut().readback_srgb_rgba8().unwrap();
+    assert!(before.iter().zip(&separated).all(|(a,b)|a.abs_diff(*b)<=1),"Low and High reconstruct the original");
+    assert!(engine.undo().unwrap());finish(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),before);
+    assert!(engine.redo().unwrap());finish(&mut engine);
+    assert_eq!(engine.backend_mut().readback_srgb_rgba8().unwrap(),separated);
+    let mut archive=Vec::new();Project{document:engine.document().clone()}.write(&mut archive).unwrap();
+    let reopened=Project::read(archive.as_slice(),Default::default()).unwrap();
+    assert_eq!(reopened.document.color.depth,SampleDepth::U16);
+    assert_eq!(reopened.document.layers.iter().find(|l|l.id==ids[1]).unwrap().name.as_ref(),"Low");
+    let gpu=WgpuRasterizer::new_native_headless(reopened.document.color).unwrap();
+    let (_,consumer)=input_queue(8);
+    let mut fresh=CanvasEngine::new(gpu,reopened.document,consumer,crate::test_support::view(extent),ViewTransform::IDENTITY).unwrap();
+    finish(&mut fresh);assert_eq!(fresh.backend_mut().readback_srgb_rgba8().unwrap(),separated);
+}
+
 fn compose_region(r: &mut WgpuRasterizer, layers: &[Layer], extent: [u32; 2], damage: PixelRect) {
     let mut scene = r.scene.take().unwrap();
     let mut encoder = submission::CommandEncoder::new(&r.device, &Default::default());

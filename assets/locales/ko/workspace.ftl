@@ -621,3 +621,4 @@ workspace-storage-full = 작업 영역 저장소가 가득 찼습니다. 디스�
 workspace-storage-unavailable = 작업 영역 저장소를 열지 못했습니다. 다시 시도하세요.
 workspace-unreadable-name = 읽을 수 없는 작업 영역
 workspace-backup-saved = 작업 공간 백업을 저장했습니다.
+workspace-tool-description-waveform = 왼쪽부터 오른쪽까지 색상과 밝기 확인

@@ -1172,3 +1172,4 @@ workspace-storage-unavailable = Penyimpanan ruang kerja tidak dapat dibuka. Coba
 workspace-unreadable-name = Ruang kerja tidak dapat dibaca
 
 workspace-backup-saved = Cadangan ruang kerja disimpan.
+workspace-tool-description-waveform = Periksa warna dan kecerahan dari kiri ke kanan

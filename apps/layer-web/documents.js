@@ -169,13 +169,13 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
     if(!files.length)throw deliveryFailure("clipboard_empty");
     return files;
   }
-  function chooseFile(placing=false) {
-    const formats=app.photo_formats(),accept=Object.fromEntries(formats.flatMap(f=>f.mime_types.map(m=>[m,f.extensions.map(e=>'.'+e)])));
-    if(!placing)accept['application/octet-stream']=['.capy'];
-    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:true,types:[{description:placing?delivery.images:delivery.drawing_or_photo,accept}]})
+  function chooseFile(placing=false,filter=null) {
+    const formats=app.photo_formats(),accept=filter?{'application/octet-stream':['.'+filter[1]]}:Object.fromEntries(formats.flatMap(f=>f.mime_types.map(m=>[m,f.extensions.map(e=>'.'+e)])));
+    if(!placing&&!filter)accept['application/octet-stream']=['.capy'];
+    if(window.showOpenFilePicker) return window.showOpenFilePicker({multiple:!filter,...(filter?{id:filter[1],startIn:"downloads"}:{}),types:[{description:filter?.[0]??(placing?delivery.images:delivery.drawing_or_photo),accept}]})
       .then(async handles=>Promise.all(handles.map(async handle=>({file:await handle.getFile(),handle}))));
     return new Promise(resolve=>{
-      const input=element("input");input.type="file";input.multiple=true;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
+      const input=element("input");input.type="file";input.multiple=!filter;input.accept=Object.values(accept).flat().join(',');input.hidden=true;document.body.append(input);
       const done=value=>{input.remove();resolve(value);};
       input.onchange=()=>done([...input.files].map(file=>({file})));input.oncancel=()=>done(null);input.click();
     });
@@ -257,6 +257,12 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           finally{progress.remove();}
         } else if(candidate){const prepared=candidate;candidate=null;applyChange(["repair_source_profile","rasterize_source"].includes(r.type)?app.adopt_source(prepared):app.adopt_color(prepared));wake();}
         else applyChange(app.finish_document(id,false));
+      } else if(r.type==="import_lookup") {
+        const file=(await chooseFile(false,app.document_file_filter(id)))?.[0]?.file;
+        if(!file){applyChange(app.finish_document(id,false));return;}
+        const bytes=new Uint8Array(await file.slice(0,app.lookup_text_limit()+1).arrayBuffer());
+        candidate=await app.prepare_lookup(id,bytes,file.name);
+        const prepared=candidate;candidate=null;applyChange(app.adopt_lookup(prepared));wake();
       } else if(r.type==="copy") {
         await copyClip(id);
       } else if(r.type==="paste") {

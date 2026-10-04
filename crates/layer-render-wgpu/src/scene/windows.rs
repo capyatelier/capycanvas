@@ -38,7 +38,7 @@ impl Plan {
             )))?;
         // Bounded recording as well as bounded textures. Whole output pages
         // preserve the existing compositor's tile ownership at window seams.
-        for side in [1024u32, 512, PAGE_SIZE] {
+        for side in [2048u32, 1024, 512, PAGE_SIZE] {
             let window = PixelRect::full(
                 extent.map(|v| v.min(side.saturating_add(radius.saturating_mul(2)))),
             );
@@ -128,6 +128,42 @@ mod tests {
             }
             assert_eq!(covered, extent[0] as u64 * extent[1] as u64);
         }
+    }
+
+    #[test]
+    fn gaussian_window_admission_covers_stacked_support_and_real_pixel_cost() {
+        use layer_core::EffectValue;
+        let extent=[9504,6336];
+        for sigma in [21f32,85.] {for count in [1u32,3,6] {for limit in [256u64<<20,512<<20] {
+            let layers:Vec<_>=(0..count).map(|i| {
+                let mut layer=Layer::paint(LayerId(u64::from(i)+1),"Gaussian");layer.kind=LayerKind::Effect;
+                let mut effect=EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
+                effect.set("sigma",EffectValue::Number(sigma)).unwrap();layer.effect=Some(std::sync::Arc::new(effect));layer
+            }).collect();
+            let radius=2*(sigma*3.).ceil() as u32*count;
+            let bytes_per_pixel=u64::from(2*count+1)*16;
+            let smallest=extent.map(|v|v.min(PAGE_SIZE+2*radius));
+            let minimum=u64::from(smallest[0])*u64::from(smallest[1])*bytes_per_pixel;
+            let plan=Plan::new(&layers,extent,limit);
+            if minimum>limit {assert!(plan.is_err(),"sigma={sigma} depth={count} minimum={minimum} cap={limit}");continue;}
+            let plan=plan.unwrap().unwrap();let mut covered=0;let mut halo_pixels=0;let mut windows=0;
+            for (output,input) in plan.regions(PixelRect::full(extent)) {
+                assert_eq!(input,output.expand(radius,extent));
+                let bytes=input.area()*bytes_per_pixel;
+                assert!(bytes<=limit,"sigma={sigma} depth={count} actual input={input:?} bytes={bytes} cap={limit}");
+                assert_eq!(bytes,Scene::capture_image_bound(&layers,input));
+                covered+=output.area();halo_pixels+=input.area();windows+=1;
+            }
+            assert_eq!(covered,u64::from(extent[0])*u64::from(extent[1]));
+            if sigma==21.&&count==1&&limit==256<<20 {
+                assert_eq!(windows,20,"the admitted61MP composition must use20 large windows");
+                let old=Plan{side:1024,radius,extent};
+                let old_inputs:u64=old.regions(PixelRect::full(extent)).map(|(_,input)|input.area()).sum();
+                assert_eq!(old.regions(PixelRect::full(extent)).count(),70);
+                assert!(halo_pixels<old_inputs,"larger admitted windows reduce duplicated support pixels");
+                println!("61MP sigma21 windows={windows} input pixels={halo_pixels} prior1024 input pixels={old_inputs}");
+            }
+        }}}
     }
 
     #[test]

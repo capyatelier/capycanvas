@@ -71,7 +71,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
         const shot=await call('Page.captureScreenshot',{format:'png'});
         return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=image.width;canvas.height=image.height;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return ${JSON.stringify(points)}.map(([x,y])=>{if(x<0||y<0||x>=image.width||y>=image.height)throw Error('Artwork probe outside screenshot '+[x,y,image.width,image.height]);return Array.from(context.getImageData(Math.floor(x),Math.floor(y),1,1).data)})})()`);
       };
-      const analyzed=async()=>{await wait(`layerApp.state().layer_properties.description!=='Updating…'`);assert.notEqual((await properties()).description,'Could not update this adjustment.');await evaluate('layerApp.app.wait_for_canvas()');await settle();};
+      const analyzed=async()=>{const owner=(await properties()).layer,end=Date.now()+120000;while(Date.now()<end){await evaluate('new Promise(resolve=>setTimeout(resolve,100))');const current=await properties();assert.equal(current.layer,owner);assert.notEqual(current.description,'Could not update this adjustment.');if(current.description==='Updating…')continue;await evaluate('layerApp.app.wait_for_canvas()');await settle();if((await properties()).description!=='Updating…')return;}throw Error('Local adjustment did not publish a ready canvas: '+JSON.stringify(await properties()));};
       const layers=async()=>(await save()).document.layers;
       for(const width of widths) {
         await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
@@ -89,6 +89,9 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await invoke('undo');await analyzed();assert.equal((await value('amount')).value,55);await invoke('redo');await analyzed();assert.equal((await value('amount')).value,-55);
           await send({type:'effect',action:{op:'set',layer:lower,key:'lightness',value:{kind:'number',value:-20}}});await analyzed();const changed=await sample();assert.notDeepEqual(changed,negative);await capture(`clarity-stacked-${width}-${theme}`);
           await reopen(`local-adjustments-${width}-${theme}`);await analyzed();assert.deepEqual(await sample(),changed);
+          const tabs=await evaluate('JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==="bigint"?Number(v):v))'),other=tabs.tabs.find(tab=>tab.id!==tabs.selected);
+          assert.ok(other);await evaluate(`layerApp.documents.select(BigInt(${other.id}))`);await idle();await wait('layerApp.app.document_park_ready()');
+          await evaluate(`layerApp.documents.select(BigInt(${tabs.selected}))`);await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();
           await evaluate('layerApp.restartGpu()');await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();await capture(`local-recreated-${width}-${theme}`);
           samples.push({width,theme,original,adjusted,positive,negative,changed});for(const id of [clarity,shadows,lower]){await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
           await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:true}});
@@ -242,6 +245,55 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   await idle();await install();
   await evaluate(`window.lookupFixture=new Uint8Array(${JSON.stringify(Array.from(fixture))});window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);
   await invoke('open_document');await idle();await invoke('fit_canvas');
+  const click=async selector=>{
+    const point=await evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();
+  };
+  const key=async(name,code)=>{for(const type of ['keyDown','keyUp'])await call('Input.dispatchKeyEvent',{type,key:name,windowsVirtualKeyCode:code});await settle();};
+  const select=async index=>{await click('[data-property-resource]');await key('Home',36);for(let i=0;i<index;i++)await key('ArrowDown',40);await key('Enter',13);await idle();};
+  const originalArchive=await save(),originalSources=sourceIdentity(originalArchive);
+  const lookupLayer=originalArchive.document.layers.find(layer=>layer.effect?.program.id==='color_lookup').id;await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(String(lookupLayer))})})`);await settle();
+  const cube='TITLE "Imported inverse"\nLUT_3D_SIZE 2\n'+Array.from({length:8},(_,i)=>`${1-(i&1)} ${1-((i>>1)&1)} ${1-((i>>2)&1)}`).join('\n');
+  for(const width of [640,1100])for(const theme of ['light','dark']) {
+    await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();await invoke('fit_canvas');
+    await wait(`!!document.querySelector('[data-property-resource]')&&!document.querySelector('[data-property-resource]').closest('[hidden]')`);
+    await select(0);const original=await pixel();
+    for(const index of [1,2,3]) {
+      await select(index);
+      const changed=await pixel();await writeFile(`${directory}/lookup-selection-${index}-${width}-${theme}.json`,JSON.stringify(await evaluate('JSON.parse(JSON.stringify({properties:layerApp.state().layer_properties,host_error:layerApp.state().host_error,camera:layerApp.app.camera()},(_,v)=>typeof v==="bigint"?String(v):v))'),null,2));
+      const diagnostic=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-selection-${index}-${width}-${theme}.png`,Buffer.from(diagnostic.data,'base64'));assert.equal(await evaluate('Number(layerApp.state().layer_properties.resource_selection)'),index,'Native selector commits the requested preset');assert.notDeepEqual(changed,original,'Built-in Look changes visible artwork');
+      assert.equal(await evaluate(`layerApp.state().layer_properties.controls.some(c=>c.key==='color_space')`),false);
+      assert.equal(await evaluate(`document.querySelector('[data-property-resource]').selectedOptions[0].textContent.includes(String.fromCharCode(10))`),false);
+      const edited=await save();assert.deepEqual(sourceIdentity(edited),originalSources);
+      await invoke('undo');assert.deepEqual(await pixel(),original);await invoke('redo');assert.deepEqual(await pixel(),changed);
+      const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-preset-${index}-${width}-${theme}.png`,Buffer.from(shot.data,'base64'));
+      await select(0);
+    }
+    await select(1);const beforeAmount=await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount=beforeAmount===50?65:50;
+    await click('[data-property-key="intensity"] .number-value');await evaluate(`(()=>{const n=document.querySelector('[data-property-key="intensity"] .number-entry');n.value=${JSON.stringify(String(nextAmount))};n.dispatchEvent(new Event('input',{bubbles:true}))})()`);await key('Enter',13);
+    assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount);await invoke('undo');assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),beforeAmount);await invoke('redo');assert.equal(await evaluate("layerApp.state().layer_properties.controls.find(c=>c.key==='intensity').value.value"),nextAmount);await select(0);
+    const cancelled=await save();await evaluate(`window.showOpenFilePicker=async()=>{throw new DOMException('Cancelled','AbortError')}`);await click('[data-action="import-lookup"]');await idle();assert.deepEqual((await save()).document.layers,cancelled.document.layers);
+    for(const oversized of [false,true]) {
+      const beforeFailure=await save();
+      await evaluate(`window.showOpenFilePicker=async()=>[{name:'invalid.cube',getFile:async()=>new File([${oversized?"' '.repeat(layerApp.app.lookup_text_limit()+1)":"'LUT_3D_SIZE 2\\n0 0 0'"}],'invalid.cube')}];`);
+      await click('[data-action="import-lookup"]');await idle();assert.ok(await evaluate('layerApp.state().host_error'),'Rejected LUT reports a shared localized error');
+      assert.deepEqual((await save()).document.layers,beforeFailure.document.layers,'Rejected LUT creates no history edit');
+    }
+    const owner=await evaluate('String(layerApp.state().layer_properties.layer)'),other=await evaluate(`String(layerApp.state().layers.find(l=>String(l.id)!==${JSON.stringify(owner)}).id)`),beforeStale=await save();
+    await evaluate(`window.showOpenFilePicker=()=>new Promise(resolve=>window.lookupPickerRelease=resolve)`);await click('[data-action="import-lookup"]');await wait('layerApp.state().document_file.busy');
+    await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(other)})});lookupPickerRelease([{name:'stale.cube',getFile:async()=>new File([${JSON.stringify(cube)}],'stale.cube')}])`);await idle();
+    assert.deepEqual((await save()).document.layers,beforeStale.document.layers,'Deferred import cannot mutate a retired property owner');
+    await evaluate(`layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(owner)})})`);await settle();
+    await evaluate(`window.showOpenFilePicker=async()=>[{name:'inverse.cube',getFile:async()=>new File([${JSON.stringify(cube)}],'inverse.cube')}];`);await click('[data-action="import-lookup"]');await idle();
+    assert.equal(await evaluate('layerApp.state().layer_properties.resource_name'),'Imported inverse');assert.equal(await evaluate('layerApp.state().layer_properties.resource_selection??null'),null);
+    assert.ok(await evaluate(`layerApp.state().layer_properties.controls.some(c=>c.key==='color_space')`));
+    const imported=await save();assert.deepEqual(sourceIdentity(imported),originalSources);
+    const importedPixel=await pixel();assert.notDeepEqual(importedPixel,original);
+    await evaluate(`window.showOpenFilePicker=async()=>[{name:'imported.capy',getFile:async()=>new File([placementTest.saved],'imported.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');assert.deepEqual(await pixel(),importedPixel,'Archive owns imported resource after file picker is replaced');assert.deepEqual((await save()).resources,imported.resources);
+    const shot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/lookup-import-${width}-${theme}.png`,Buffer.from(shot.data,'base64'));
+  }
+  await evaluate(`window.showOpenFilePicker=async()=>[{name:'loaded-lookup.capy',getFile:async()=>new File([lookupFixture],'loaded-lookup.capy')}];`);await invoke('open_document');await idle();await invoke('fit_canvas');
   const expected=await save();assert.equal(expected.resources.bindings.length,1);assert.equal(expected.resources.payloads.length,1);assert.ok(expected.resources.payloads[0].bytes>96);
   const compare=async()=>{const actual=await save();assert.deepEqual(actual.resources,expected.resources,'Worker archives retain LUT descriptors and immutable payload digest');assert.deepEqual(actual.document.layers,expected.document.layers);assert.deepEqual(sourceIdentity(actual),sourceIdentity(expected));};
   const samples=[];
@@ -258,5 +310,5 @@ export async function checkLookupTransport({call,evaluate,settle}) {
   await evaluate(`[...document.querySelectorAll('.document-dialog button')].find(n=>n.textContent==='Recover').click()`);await idle();
   assert.equal(await evaluate('layerApp.state().document_file.modified'),true);assert.equal(await evaluate('layerApp.state().document_file.location??null'),null);
   await install();await invoke('fit_canvas');await compare();assert.deepEqual(await pixel(),samples.at(-1).pixel,'IndexedDB recovery retains resolved LUT pixels');
-  await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: loaded LUT resource worker save/open, GPU recreation and IndexedDB reload recovery preserve descriptors, payload, source and visible pixels');
+  await writeFile(`${directory}/lookup-worker-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: native LUT selector/picker presets, cancel/error/stale-owner rejection and four layout/theme imports preserve source/history; worker save/open, GPU recreation and IndexedDB recovery retain resource payload and visible pixels');
 }

@@ -95,6 +95,12 @@ pixels fail analysis; unrepresentable straight RGB has no guide coverage and is
 preserved by the consumer. Nonpositive luminance keeps its coverage at the log
 floor and passes unchanged through the adjustment. An overflowing adjusted result
 preserves its source; subnormal outputs use explicit nearest-even packing.
+Guide samples contain log luminance, illumination, coverage mantissa and its
+base-two exponent. GPU reductions and gathers combine scaled weighted means, so
+positive coverage survives fractional areas below Float32's minimum value.
+CPU delivery decodes the same representation; row analysis accumulates in Float64
+before packing the bounded Float32 guide. Sampling uses the source value only
+when every neighboring weight is zero.
 
 The [local-adjustment contract](../development/photo-editing-m5-m6-color.md#local-adjustments-and-source-aware-analysis)
 defines the equations and photographic acceptance. The guide is a fixed spatial
@@ -102,8 +108,21 @@ approximation, independent of zoom; effects retain native-resolution evaluation.
 
 ## Imported color lookup tables
 
-Color Lookup imports a bounded 3D `.cube` table. GTK Properties has Import/Replace,
-Color space and Intensity; TITLE or the selected filename identifies the table.
+Color Lookup (LUT) applies a saved color look. Its selector offers Original,
+Warm, Cool and Monochrome, with a separate Import LUT button for 3D `.cube` tables
+on GTK, Web and Android.
+The original presets are 17-point sRGB tables; choosing one changes the table
+and its color space in one undo step and preserves Intensity. Original removes
+the table. Imported tables expose LUT color space; TITLE or the selected filename
+identifies the table. The chooser initially opens Downloads and remembers the
+LUT location separately from artwork where the host supports it.
+The parser accepts 2–65 points per axis, including common 17-, 33- and 65-point
+tables, with either IRIDAS `DOMAIN_MIN`/`DOMAIN_MAX` or Resolve
+`LUT_3D_INPUT_RANGE`. It rejects mixed domains, 1D/shaper tables and invalid values.
+`.cube` does not identify the intended color space: use creative photo LUTs;
+camera Log conversion LUTs require a transform outside this adjustment.
+
+Other editors can export standalone 3D CUBE tables; no Capy-specific file is needed.
 The chosen space describes both encoded table input and output, independently
 of document primaries. Empty tables and zero Intensity preserve input exactly.
 Imported tables retain native-resolution previews: sharp adjacent vertices
@@ -391,9 +410,16 @@ per group and 256 groups. Device workgroup dimensions/storage limits are checked
 Generic Rust packs values and offsets; preparation WGSL owns the mathematics.
 
 Gaussian Blur, Unsharp Mask, High Pass, Bloom, Soft Focus and Pencil share the
-Gaussian preparation definition. It generates normalized, bilinear-paired taps;
-consuming pixels perform table lookups, not coefficient calculations. The
+Gaussian preparation definition. It generates normalized, bilinear-paired taps
+with a tree reduction. Consumers accumulate half-weighted samples with explicit
+fused multiply-adds, then restore the scale within the finite Float32 range.
+Kernels without effective side taps return the center sample unchanged. Coverage
+is clamped to its valid range after accumulation. Coefficients are prepared once, outside pixel evaluation. The
 standalone Tent Blur example demonstrates a different kernel using the same ABI.
+Radius stores sigma from 0 to 85 px, with a 0–21 px soft slider range and
+square-root mapping for finer low values. Preparation uses 256 lanes and 129
+records for support up to `ceil(3*sigma) = 255` pixels. Frequency Separation
+uses the same admitted Gaussian range.
 
 Every pass of an effect chain at one resolution shares a persistent
 parameter/table buffer. Resolution variants retain separate buffers and reuse
@@ -404,9 +430,6 @@ wait or intermediate table copy. Pointwise prepared filters still fuse. Ordinary
 warm cache lookup reuses its CPU key storage and updates cached time scalars in
 place rather than constructing three temporary vectors per frame. Parameter
 repacking uses small CPU temporaries; it does not allocate fresh GPU lookup storage.
-
-A two-pass Unsharp Mask uses 624 parameter/table bytes versus 1,248 previously.
-Large canvas/image caches are unchanged; slider edits do not grow lookup storage.
 
 | Change | Preparation | Image work |
 | --- | --- | --- |

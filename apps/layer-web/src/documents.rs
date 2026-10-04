@@ -39,7 +39,31 @@ pub struct WebProject {
 }
 
 #[wasm_bindgen]
+pub struct WebLookup { request:u32, resource:std::sync::Arc<layer_core::Lut3d> }
+
+#[wasm_bindgen]
 impl WebApp {
+    pub fn document_file_filter(&self,id:u32)->Result<JsValue,JsValue> {
+        serialize(&self.session.document_request(id).map_err(js)?.filter(self.session.localization()))
+    }
+    pub fn lookup_text_limit(&self)->usize {layer_core::Lut3d::MAX_TEXT_BYTES}
+    pub fn prepare_lookup(&self,id:u32,bytes:js_sys::Uint8Array,name:String)->Result<js_sys::Promise,JsValue> {
+        if !matches!(self.session.document_request(id).map_err(js)?,DocumentRequest::ImportLookup {..}) {return Err(js("Invalid lookup request"));}
+        let buffers=js_sys::Array::of1(&bytes);
+        let pending=raster_worker::call("lookup",&name,&buffers)?;
+        Ok(future_to_promise(async move {
+            let result=JsFuture::from(pending).await?;
+            let metadata=js_sys::Reflect::get(&result,&js("metadata"))?.as_string().ok_or_else(||js("Invalid lookup metadata"))?;
+            let (descriptor,spaces):(layer_core::Lut3d,u8)=serde_json::from_str(&metadata).map_err(js)?;
+            let bytes=js_sys::Uint8Array::new(&js_sys::Reflect::get(&result,&js("bytes"))?).to_vec();
+            let resource=std::sync::Arc::new(descriptor.from_verified_worker(bytes.into(),spaces).map_err(js)?);
+            Ok(WebLookup {request:id,resource}.into())
+        }))
+    }
+    pub fn adopt_lookup(&mut self,lookup:WebLookup)->Result<JsValue,JsValue> {
+        let result=self.session.apply_lookup(lookup.request,lookup.resource);
+        serialize(&self.session.complete_document_request(lookup.request,result).map_err(js)?)
+    }
     pub fn document_request_title(&self, id: u32) -> Option<String> {
         self.session.document_request(id).ok().map(|request|request.title(self.session.localization()).to_string())
     }

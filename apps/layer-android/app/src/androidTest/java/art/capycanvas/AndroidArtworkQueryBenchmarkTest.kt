@@ -40,6 +40,8 @@ class AndroidArtworkQueryBenchmarkTest {
         val args = InstrumentationRegistry.getArguments()
         assumeTrue(args.getString("artworkStatisticsBenchmark") == "true")
         val mode = args.getString("statisticsMode", "preview")!!
+        val waveform = args.getString("statisticsWaveform", "false") == "true"
+        val uniform = args.getString("statisticsUniform", "false") == "true"
         check(mode in listOf("preview", "exact", "auto"))
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
             lateinit var activity: MainActivity
@@ -51,7 +53,7 @@ class AndroidArtworkQueryBenchmarkTest {
                 while (!test()) { assertNull(host.failure); check(SystemClock.uptimeMillis() < deadline) { "Statistics fixture timeout: ${host.actionError}" }; SystemClock.sleep(20) }
             }
             waitFor { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true }
-            host.openQueryPhoto(File(args.getString("photo", "/data/local/tmp/capy-brush-photo.jpg")!!))
+            host.openQueryPhoto(File(args.getString("photo", if (uniform) "/data/local/tmp/capycanvas4-waveform-white-61mp.jpg" else "/data/local/tmp/capy-brush-photo.jpg")!!))
             scenario.onActivity { host.invoke("fit_canvas") }
             waitFor { host.snapshot?.getJSONObject("state")?.array("tabs")?.objects()?.any { it.optInt("width") == 9504 } == true && host.snapshot?.optBoolean("shaders_ready") == true }
             waitFor { !native { Native.renderingPending(it) } }
@@ -60,13 +62,18 @@ class AndroidArtworkQueryBenchmarkTest {
                 waitFor { !native { Native.renderingPending(it) } }
             }
             val source = if (mode == "auto") obj("EffectChannels" to host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").getLong("layer")).toString() else "\"Visible\""
-            fun query(job: Long) = if (mode == "auto") Native.inspectionLevelsStatistics(job, source) else Native.inspectionStatistics(job, source, mode == "preview", false)
+            fun query(job: Long) = if (mode == "auto") Native.inspectionLevelsStatistics(job, source) else Native.inspectionStatistics(job, source, mode == "preview", false, waveform)
             val output = File(activity.getExternalFilesDir(null), "artwork-statistics-benchmark").apply { mkdirs() }
             File(output, "info.json").writeText(obj("state" to host.snapshot!!.getJSONObject("state"),
-                "display" to native { JSONObject(Native.displayStatus(it)) }).toString(2))
+                "display" to native { JSONObject(Native.displayStatus(it)) }, "waveform" to waveform, "fixture" to if (uniform) "uniform-white" else "reference-photo").toString(2))
             val rows = JSONArray()
             val memory = JSONArray()
-            fun observe(phase: String) { memory.put(obj("phase" to phase, "allocator" to native { JSONObject(Native.rendererMemory(it)) })) }
+            fun observe(phase: String) {
+                val available = File("/proc/meminfo").useLines { lines -> lines.first { it.startsWith("MemAvailable:") }.split(Regex("\\s+")).get(1).toLong() * 1024 }
+                memory.put(obj("phase" to phase, "allocator" to native { JSONObject(Native.rendererMemory(it)) },
+                    "pss_bytes" to android.os.Debug.getPss().toLong() * 1024, "system_mem_available_bytes" to available,
+                    "observed_boot_ns" to SystemClock.elapsedRealtimeNanos()))
+            }
             observe("before")
             val preview = mode == "preview"
             repeat(args.getString("statisticsRepeats", "2")!!.toInt()) { run ->
@@ -94,7 +101,7 @@ class AndroidArtworkQueryBenchmarkTest {
                         assertEquals(pixels, (0 until bins.length()).sumOf { bins.getLong(it) })
                     }
                 }
-                rows.put(result.put("mode", mode).put("run", run).put("duration_ms", duration)
+                rows.put(result.put("mode", mode).put("waveform", waveform).put("uniform", uniform).put("run", run).put("duration_ms", duration)
                     .put("capture_ms", (captureEnd - captureBegin) / 1e6))
                 File(output, "$mode-samples.json").writeText(rows.toString(2))
                 observe("after-$mode-$run")
@@ -114,6 +121,13 @@ class AndroidArtworkQueryBenchmarkTest {
                     File(output, "$mode-allocation-observations.json").writeText(result.toString(2))
                     assertEquals(if (preview) 65536L else 9504L * 6336L, result.getJSONObject(if (mode == "auto") "statistics" else "histogram").getLong("pixels"))
                 } finally { Native.captureFree(tracked) }
+            }
+            repeat(args.getString("statisticsLifecycleRepeats", "0")!!.toInt()) { cycle ->
+                val job = native { Native.inspectionTask(it, 0) }
+                query(job)
+                observe("after-reopened-query-$cycle")
+                SystemClock.sleep(250)
+                observe("after-result-released-$cycle")
             }
             val pool = Executors.newSingleThreadExecutor()
             val control = Native.captureControl()
@@ -136,6 +150,8 @@ class AndroidArtworkQueryBenchmarkTest {
                 assertTrue(outcome.contains("cancelled", ignoreCase = true))
             } finally { Native.captureFree(control); pool.shutdownNow() }
             observe("after-cancel-$mode")
+            SystemClock.sleep(250)
+            observe("settled-after-cancel-$mode")
             File(output, "$mode-allocator-boundaries.json").writeText(memory.toString(2))
             assertNull(host.failure)
             assertNull(host.actionError)

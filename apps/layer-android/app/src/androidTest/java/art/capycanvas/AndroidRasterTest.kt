@@ -2556,6 +2556,53 @@ class AndroidRasterTest {
         }
     }
 
+    @Test fun gaussianRadius85ControlsRetainPixelsAndHistory() {
+        val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
+        val records = org.json.JSONArray()
+        fun properties() = native { state(it).getJSONObject("layer_properties") }
+        fun radius() = properties().array("controls").objects().first { it.getString("key") == "sigma" }
+        fun value() = radius().getJSONObject("value").getDouble("value")
+        fun ready() { compose.waitUntil(120_000) { tick(); host.snapshot?.optBoolean("shaders_ready") == true && !native { Native.renderingPending(it) } }; refresh() }
+        fun pixels(name: String) = hash(png(name, recipe))
+        for (portrait in listOf(false, true)) for (theme in listOf("light", "dark")) for (effect in listOf("gaussian_blur", "unsharp_mask")) {
+            if (portrait) device.portrait(scenario) else device.landscape(scenario)
+            val task = native { handle -> val (id, file) = request(handle, "new_document")
+                Native.projectTask(handle, id, "null", file.getLong("epoch"), file.getLong("revision")) }
+            try {
+                Native.projectOptions(task, obj("extent" to org.json.JSONArray(listOf(256,256)), "color" to obj("space" to "Srgb", "depth" to "U8"), "background" to "White").toString())
+                Native.projectWork(task,-1,256,256); native { Native.projectAdopt(it,task,"null") }
+            } finally { Native.projectFree(task) }
+            refresh(); action(obj("type" to "set_theme", "theme" to theme)); invoke("fit_canvas"); ready()
+            action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.08,.1,.15,1))))
+            invoke("select_all"); invoke("fill_selection"); invoke("deselect"); invoke("pen")
+            action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.8,.25,.08,1))))
+            action(obj("type" to "set_brush_size", "value" to 64)); stroke(0.0); ready()
+            pixels("p27-source.png")
+            send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to effect))); ready()
+            val initial = value(); val before = pixels("p27-before.png")
+            assertEquals("Radius", radius().getString("label"))
+            val numeric = radius().getJSONObject("kind").getJSONObject("numeric")
+            assertEquals(85.0,numeric.getDouble("max"),.0001); assertEquals(21.0,numeric.getDouble("soft_max"),.0001)
+            val memoryBefore = native { JSONObject(Native.rendererMemory(it)) }
+            val began = SystemClock.elapsedRealtimeNanos()
+            compose.onNodeWithTag("number-value-sigma").performScrollTo().performClick()
+            val field = compose.onNodeWithTag("number-Radius")
+            field.performTextReplacement("85"); field.performImeAction()
+            compose.waitUntil(30_000) { value() == 85.0 }; ready()
+            val completed = SystemClock.elapsedRealtimeNanos()
+            val adjusted = pixels("p27-adjusted.png"); assertNotEquals(before,adjusted)
+            invoke("undo"); ready(); assertEquals(initial,value(),.0001); assertEquals(before,pixels("p27-undo.png"))
+            invoke("redo"); ready(); assertEquals(85.0,value(),.0001); assertEquals(adjusted,pixels("p27-redo.png"))
+            val name = "p27-$effect-$theme-$portrait.capy"; val saved = manifest(save(name))
+            open(File(files,name)); ready(); assertEquals(85.0,value(),.0001); assertEquals(adjusted,pixels("p27-reopened.png"))
+            assertEquals(saved.getJSONObject("document").getJSONArray("layers").toString(),manifest(save("p27-reopened.capy")).getJSONObject("document").getJSONArray("layers").toString())
+            records.put(obj("effect" to effect,"theme" to theme,"portrait" to portrait,"typed_radius" to value(),"typed_completion_ms" to (completed-began)/1e6,
+                "memory_before" to memoryBefore,"memory_after" to native { JSONObject(Native.rendererMemory(it)) }))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+        File(activity.getExternalFilesDir(null),"p27-native-journey.json").writeText(records.toString(2))
+    }
+
     @Test fun localAdjustmentsUpdateStackedSourcesAndPersistExactOutput() {
         val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
         fun pixels(name: String) = hash(png(name, recipe))
@@ -2646,9 +2693,11 @@ class AndroidRasterTest {
         }
     }
 
-    @Test fun embeddedLookupRetainsPixelsAndResourcesWithoutAndroidImport() {
+    @Test fun colorLookupImportPresetsAndResourceLifetime() {
         val fixture = File(requireNotNull(InstrumentationRegistry.getArguments().getString("lutArchive")) { "lutArchive must identify the private embedded-LUT fixture" })
         assertTrue(fixture.isFile)
+        val measurements = org.json.JSONArray()
+        fun memory() = android.os.Debug.MemoryInfo().also { android.os.Debug.getMemoryInfo(it) }.let { obj("pss_kb" to it.totalPss, "private_dirty_kb" to it.totalPrivateDirty) }
         val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
         fun pixels(name: String) = hash(png(name, recipe))
         fun resources(bytes: ByteArray): String {
@@ -2671,28 +2720,105 @@ class AndroidRasterTest {
         val layer = original.getJSONObject("document").getJSONArray("layers").objects().first {
             it.optJSONObject("effect")?.optJSONObject("program")?.optString("id") == "color_lookup"
         }.getLong("id")
-        for (theme in listOf("light", "dark")) {
+        for (portrait in listOf(false, true)) for (theme in listOf("light", "dark")) {
+            if (portrait) device.portrait(scenario) else device.landscape(scenario)
             open(fixture); refresh(); invoke("fit_canvas")
             action(obj("type" to "set_theme", "theme" to theme))
             action(obj("type" to "select_layer", "id" to layer))
             fun properties() = native { state(it).getJSONObject("layer_properties") }
             fun value(key: String) = properties().getJSONArray("controls").objects().first { it.getString("key") == key }.getJSONObject("value").getDouble("value")
             assertEquals(listOf("color_space", "intensity"), properties().getJSONArray("controls").objects().map { it.getString("key") })
-            assertEquals(0, properties().getJSONArray("actions").length())
+            assertEquals(4, properties().getJSONArray("actions").objects().count { it.getJSONObject("action").getString("op") == "lookup_preset" })
             val baseline = pixels("p23-$theme-original.png")
             refresh()
             instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
-                try { File(files, "p23-$theme-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+                try { File(files, "p24-$theme-$portrait-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
             }
-            val fileBefore = native { state(it).getJSONObject("document_file").toString() }
-            val epoch = properties().getLong("epoch")
-            val rejected = runCatching {
-                native { Native.dispatch(it, obj("type" to "effect", "action" to obj("op" to "import_lookup", "layer" to layer, "epoch" to epoch)).toString()) }
-            }.exceptionOrNull()
-            assertNotNull("Unsupported import must reject", rejected)
-            assertTrue(rejected!!.message.orEmpty().contains("Color Lookup import is not available on this platform yet."))
-            assertEquals(fileBefore, native { state(it).getJSONObject("document_file").toString() })
-            assertEquals(baseline, pixels("p23-$theme-rejected.png"))
+            val retainedBefore = memory()
+            for (preset in properties().getJSONArray("actions").objects().filter { it.getJSONObject("action").getString("op") == "lookup_preset" }) {
+                val began = SystemClock.elapsedRealtimeNanos()
+                compose.onNodeWithTag("property-resource-choice").performScrollTo().performClick()
+                compose.onAllNodesWithText(preset.getString("label"), useUnmergedTree = true).onLast().performClick()
+                refresh()
+                assertFalse(properties().isNull("resource_selection"))
+                pixels("p24-$theme-preset.png")
+                measurements.put(obj("kind" to "preset", "preset" to preset.getString("label"), "portrait" to portrait, "theme" to theme, "completion_ms" to (SystemClock.elapsedRealtimeNanos()-began)/1e6))
+                invoke("undo"); refresh()
+                assertEquals(baseline, pixels("p24-$theme-preset-undo.png"))
+            }
+            val cube = File(files, "p24-native.cube").apply {
+                writeText("TITLE \"Native inverse\"\nLUT_3D_SIZE 2\n" + (0..1).flatMap { blue -> (0..1).flatMap { green -> (0..1).map { red -> "${1-red} ${1-green} ${1-blue}\n" } } }.joinToString(""))
+            }
+            val picked = java.util.concurrent.atomic.AtomicReference<android.content.Intent>()
+            var cancel = true
+            var chosen = cube
+            val monitor = object : android.app.Instrumentation.ActivityMonitor() {
+                override fun onStartActivity(intent: android.content.Intent): android.app.Instrumentation.ActivityResult? {
+                    if (intent.action != android.content.Intent.ACTION_OPEN_DOCUMENT) return null
+                    picked.set(android.content.Intent(intent))
+                    return if (cancel) android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_CANCELED, null)
+                    else android.app.Instrumentation.ActivityResult(android.app.Activity.RESULT_OK, android.content.Intent().setData(android.net.Uri.fromFile(chosen)))
+                }
+            }
+            instrumentation.addMonitor(monitor)
+            try {
+                DocumentController.nativeFileJobsForTest = false
+                compose.onNodeWithTag("import-lookup").performScrollTo().performClick()
+                compose.waitUntil(30_000) { picked.get() != null && !host.documents.working && host.documents.picker == null }
+                assertEquals("*/*", picked.get().type)
+                assertEquals(baseline, pixels("p24-$theme-cancel.png"))
+                cancel = false; picked.set(null)
+                chosen = File(files, "p24-picker-invalid.cube").apply { writeText("LUT_3D_SIZE 2\n0 0 0\n") }
+                compose.onNodeWithTag("import-lookup").performScrollTo().performClick()
+                compose.waitUntil(30_000) { picked.get() != null && !host.documents.working && host.hostError != null }
+                compose.onNodeWithText(host.hostError!!).assertIsDisplayed()
+                assertEquals(baseline, pixels("p24-$theme-picker-refused.png"))
+                compose.runOnUiThread { host.dismissHostError() }
+                chosen = cube; picked.set(null)
+                val importBegan = SystemClock.elapsedRealtimeNanos()
+                compose.onNodeWithTag("import-lookup").performScrollTo().performClick()
+                compose.waitUntil(30_000) { picked.get() != null && !host.documents.working && properties().optString("resource_name") == "Native inverse" }
+                DocumentController.nativeFileJobsForTest = true
+                val imported = pixels("p24-$theme-imported.png")
+                assertNotEquals(baseline, imported)
+                measurements.put(obj("kind" to "import", "portrait" to portrait, "theme" to theme, "completion_ms" to (SystemClock.elapsedRealtimeNanos()-importBegan)/1e6, "before" to retainedBefore, "after" to memory()))
+                File(activity.getExternalFilesDir(null), "p24-native-lut-timing.json").writeText(measurements.toString(2))
+                invoke("undo"); assertEquals(baseline, pixels("p24-$theme-import-undo.png"))
+                invoke("redo"); assertEquals(imported, pixels("p24-$theme-import-redo.png"))
+                val importedFile = save("p24-$theme-imported.capy")
+                open(File(files, "p24-$theme-imported.capy")); refresh()
+                assertEquals(imported, pixels("p24-$theme-imported-reopened.png"))
+                assertEquals(source, sourceIdentity(manifest(importedFile)))
+                open(fixture); refresh(); action(obj("type" to "select_layer", "id" to layer))
+            } finally {
+                DocumentController.nativeFileJobsForTest = true
+                instrumentation.removeMonitor(monitor)
+            }
+            for (stale in listOf(false, true)) {
+                val input = if (stale) cube else File(files, "p24-invalid.cube").apply { writeText("LUT_3D_SIZE 2\n0 0 0\n") }
+                var requestId = 0
+                val lookupTask = native { handle ->
+                    Native.dispatch(handle, state(handle).getJSONObject("layer_properties").getJSONArray("actions").objects().first { it.getJSONObject("action").getString("op") == "import_lookup" }.getJSONObject("action").let { obj("type" to "effect", "action" to it) }.toString())
+                    val pending = state(handle).array("requests").objects().first { it.getJSONObject("kind").optString("type") == "document" }
+                    requestId = pending.getInt("id")
+                    val file = state(handle).getJSONObject("document_file")
+                    Native.projectTask(handle, requestId, obj("uri" to "test:${input.name}", "name" to input.name).toString(), file.getLong("epoch"), file.getLong("revision"))
+                }
+                try {
+                    if (stale) {
+                        Native.projectWork(lookupTask, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0)
+                        action(obj("type" to "select_layer", "id" to original.getJSONObject("document").getJSONArray("layers").objects().first { it.getLong("id") != layer }.getLong("id")))
+                        val unchanged = native { state(it).getJSONObject("document_file").getLong("revision") }
+                        native { Native.projectAdopt(it, lookupTask, "null") }
+                        assertEquals(unchanged, native { state(it).getJSONObject("document_file").getLong("revision") })
+                        action(obj("type" to "select_layer", "id" to layer))
+                    } else {
+                        assertNotNull("Incomplete cube must reject", runCatching { Native.projectWork(lookupTask, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), 0, 0) }.exceptionOrNull())
+                        native { Native.documentComplete(it, requestId, false, "null") }
+                    }
+                } finally { Native.projectFree(lookupTask) }
+                assertEquals(baseline, pixels("p24-$theme-rejected-$stale.png"))
+            }
             val before = value("intensity")
             assertTrue("Fixture LUT must be active", before > 0)
             compose.onNodeWithTag("number-value-intensity").performScrollTo().performClick()
@@ -3132,7 +3258,7 @@ class AndroidRasterTest {
     }
     @Test fun frontBufferSurfaceLifecycle() {
         fun ready() {
-            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.optBoolean("brush_ready")==true }
+            compose.waitUntil(60_000) { host.surfaceReady && host.snapshot?.let { it.optBoolean("brush_ready") && it.optBoolean("shaders_ready") }==true }
             compose.waitUntil(10_000) { !tick() }
             assertNull(host.failure)
             val display=native { JSONObject(Native.displayStatus(it)) }
@@ -3150,6 +3276,7 @@ class AndroidRasterTest {
             assertEquals(submitted+1,display.getLong("submitted_frames"))
             transition(handle)
         }
+        ready()
         stroke(0.0)
         val painted=hash(png("front-painted.png"))
         pendingBufferedFrame { handle ->

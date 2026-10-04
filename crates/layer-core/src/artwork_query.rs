@@ -106,6 +106,7 @@ impl std::ops::DerefMut for ArtworkSampleRequest {
 
 #[derive(Clone, Debug)]
 pub struct ArtworkStatisticsRequest {
+    pub waveform: bool,
     pub query: ArtworkQuery,
     pub preview: bool,
     pub selection: bool,

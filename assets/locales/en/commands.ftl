@@ -600,3 +600,5 @@ commands-transform-snapping-help = Snap to the canvas, other layers and rulers
 commands-transform-again-empty = Apply a layer transform first
 commands-transform-again-whole-layer = Clear the pixel selection and select a whole layer
 commands-show-histogram = Show Histogram
+command-waveform = Waveform
+commands-show-waveform = Show Waveform

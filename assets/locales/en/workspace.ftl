@@ -595,3 +595,4 @@ workspace-storage-full = Workspace storage is full. Free disk space and try agai
 workspace-storage-unavailable = Workspace storage couldn't be opened. Try again.
 workspace-unreadable-name = Unreadable workspace
 workspace-backup-saved = Workspace backup saved.
+workspace-tool-description-waveform = Inspect color and brightness from left to right

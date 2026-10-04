@@ -520,6 +520,9 @@ impl Scene {
             self.images = ImageStages {
                 extent,
                 bounds,
+                input_updates: self.images.input_updates,
+                pass_updates: self.images.pass_updates,
+                pass_pixels: self.images.pass_pixels,
                 ..Default::default()
             };
         }

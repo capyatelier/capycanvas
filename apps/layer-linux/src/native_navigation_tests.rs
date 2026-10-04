@@ -505,7 +505,7 @@ fn native_spatial_filter_windows() {
     let app = native_test_app("art.capycanvas.SpatialFilterWindows");
     let mut project = photo([6000, 4000]);
     project.document.layers.retain(|layer| layer.source.is_some());
-    for sigma in [9., 21., 13.] {
+    for sigma in [9., 85., 13.] {
         let mut layer = layer_core::Layer::paint(project.document.allocate_layer_id(), "Gaussian Blur");
         layer.kind = layer_core::LayerKind::Effect;
         let mut effect = layer_core::EffectInstance::new(layer_core::bundled_effect_catalog().get("gaussian_blur").unwrap().program());
@@ -515,7 +515,7 @@ fn native_spatial_filter_windows() {
     }
     let filter = project.document.layers[0].id;
     let w = Workspace::with_project(&app, Some((project, None)));
-    w.window.set_default_size(1200, 900);
+    w.window.maximize();
     w.window.present();
     let wait = || {
         let deadline = Instant::now() + Duration::from_secs(60);
@@ -530,14 +530,42 @@ fn native_spatial_filter_windows() {
         }
     };
     wait();
+    assert!(matches!(w.window.width(),640|1100));
     w.dispatch(UiAction::SelectLayer { id: filter.0 });
+    super::pointwise::configure_properties(&w);
+    let mut input=RemoteInput::new().timeout_secs(30);input.ready();
     let dir = artifact_dir("../../artifacts/ui/spatial-filter-windows-gtk");
+    let pixel=|point:[f32;2]| {
+        let camera=state(&w).camera;let m=camera.document_to_surface();
+        let image=ui_session(&w).engine().backend().capture_in(w.view_color()).unwrap();
+        let x=((m[0]*point[0]+m[2]*point[1]+m[4])*image.width as f32/camera.viewport[0] as f32) as usize;
+        let y=((m[1]*point[0]+m[3]*point[1]+m[5])*image.height as f32/camera.viewport[1] as f32) as usize;
+        let offset=y*image.stride as usize+x*4;let value=&image.bytes[offset..offset+4];
+        assert_eq!(value[3],255,"opaque filtered photograph remains visible");
+        assert!(value[..3].iter().max().unwrap()-value[..3].iter().min().unwrap()>20,"filtered photograph retains color: {value:?}");
+        value.to_vec()
+    };
     for theme in [Theme::Dark, Theme::Light] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        w.dispatch(UiAction::SelectLayer {id:filter.0});wait();
+        let before=super::pointwise::value(&w,"sigma");
+        super::pointwise::edit(&w,&mut input,"sigma","85");
+        w.dispatch(UiAction::Invoke {command:CommandId::Undo});wait();
+        assert_eq!(super::pointwise::value(&w,"sigma"),before);
+        w.dispatch(UiAction::Invoke {command:CommandId::Redo});wait();
+        assert_eq!(super::pointwise::value(&w,"sigma"),layer_core::EffectValue::Number(85.));
+        let control=super::pointwise::number(&w,"sigma");
+        super::histogram::scroll_to(control.upcast_ref());
+        let display=find_css(control.upcast_ref(),"number-value").unwrap();
+        input.click(screen_point(&display,&w.window,[0.5,0.5]));
+        let entry=descendant::<gtk::Entry>(&control).unwrap();entry.set_text("64.");
+        let checkpoint=ui_session(&w).engine().checkpoint();input.key(0xff1b);wait();
+        assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
+        assert_eq!(super::pointwise::value(&w,"sigma"),layer_core::EffectValue::Number(85.));
         w.dispatch(UiAction::SetZoom { zoom: 0.5 });
         wait();
         assert!((state(&w).camera.zoom - 0.5).abs() < 1e-6);
-        for (step, (center, sigma)) in [([2400., 1600.], 13.), ([3300., 2100.], 21.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
+        for (step, (center, sigma)) in [([2400., 1600.], 85.), ([3300., 2100.], 85.), ([2400., 1600.], 0.), ([2400., 1600.], 7.)].into_iter().enumerate() {
             w.dispatch(UiAction::Effect { action: layer_ui::EffectAction::Set {
                 layer: filter.0, key: "sigma".into(), value: layer_core::EffectValue::Number(sigma),
             } });
@@ -547,10 +575,33 @@ fn native_spatial_filter_windows() {
             let change = ui_session_mut(&w).gesture(from, camera.viewport.map(|v| v as f32 * 0.5), 1., 0.);
             w.changed(change);
             wait();
-            assert_eq!(ui_session(&w).engine().document().layers[0].effect.as_ref().unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(sigma)));
-            crate::capture(&w, &format!("{dir}/{theme:?}-{step}.png"));
+            assert_eq!(ui_session(&w).engine().document().layer(filter).unwrap().effect.as_ref().unwrap().value("sigma"), Some(&layer_core::EffectValue::Number(sigma)));
+            pixel(center);
+            crate::capture(&w, &format!("{dir}/{}-{theme:?}-{step}.png",w.window.width()));
         }
+        w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:"unsharp_mask".into()}});wait();
+        super::pointwise::edit(&w,&mut input,"sigma","85");
+        pixel([2400.,1600.]);
+        let document=ui_session(&w).engine().document().clone();let unsharp=document.active_layer;
+        assert_eq!(document.layer(unsharp).unwrap().effect.as_ref().unwrap().program.id.to_string(),"unsharp_mask");
+        let bytes=super::place_source::snapshot(&w);
+        let reopened=layer_core::Project::read(std::io::Cursor::new(&bytes),Default::default()).unwrap();
+        assert_eq!(reopened.document.layers,document.layers);
+        std::fs::write(format!("{dir}/{}-{theme:?}.capy",w.window.width()),bytes).unwrap();
+        let activation=state(&w).document_file.epoch;
+        w.documents.enqueue(&w,(reopened,None,None));
+        until(||state(&w).document_file.epoch>activation,"spatial filter archive activation");wait();
+        assert_eq!(ui_session(&w).engine().document().layers,document.layers);
+        assert_eq!(super::pointwise::value(&w,"sigma"),layer_core::EffectValue::Number(85.));
+        pixel([3000.,2000.]);
+        crate::capture(&w,&format!("{dir}/{}-{theme:?}-unsharp85-reopened.png",w.window.width()));
+        w.dispatch(UiAction::SelectLayer {id:unsharp.0});wait();
+        assert_eq!(ui_session(&w).engine().document().active_layer,unsharp);
+        w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});wait();
+        assert!(ui_session(&w).engine().document().layer(unsharp).is_none());
+        assert!(ui_session(&w).engine().document().layer(filter).is_some());
     }
+    input.finish();
     w.window.destroy();
     pump(100);
 }

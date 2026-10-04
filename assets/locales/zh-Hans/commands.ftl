@@ -599,3 +599,5 @@ commands-transform-snapping-help = 吸附到画布、其他图层和标尺
 commands-transform-again-empty = 请先应用一次图层变换
 commands-transform-again-whole-layer = 请取消像素选区并选择整个图层
 commands-show-histogram = 显示直方图
+command-waveform = 波形
+commands-show-waveform = 显示波形

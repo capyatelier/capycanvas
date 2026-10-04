@@ -47,8 +47,11 @@ pub struct EffectPanels {
     recording_save_open: Cell<bool>,
     recording_was_active: Cell<bool>,
     page: gtk::DropDown,
-    property_actions: adw::WrapBox,
-    resource_name: gtk::Label,
+    property_actions: gtk::Box,
+    property_buttons: RefCell<Vec<(usize, gtk::Button)>>,
+    property_groups: RefCell<Vec<(usize, gtk::MenuButton)>>,
+    property_choice: RefCell<Option<gtk::DropDown>>,
+    property_toolbar: gtk::Box,
     tonal_histogram:Rc<crate::histogram::Inspector>,
     properties_updating: Cell<bool>,
     title: gtk::Label,
@@ -172,14 +175,10 @@ impl EffectPanels {
         let page = crate::panel_controls::dropdown(&[]);
         page.set_widget_name("properties-page");
         properties.append(&title);
-        properties.append(&page);
-        let property_actions = adw::WrapBox::new();
-        property_actions.set_child_spacing(6);property_actions.set_line_spacing(6);
-        let resource_name = gtk::Label::builder().xalign(0.).hexpand(true).width_chars(1)
-            .ellipsize(gtk::pango::EllipsizeMode::Middle).build();
-        resource_name.add_css_class("dim-label");resource_name.set_widget_name("property-resource-name");
-        properties.append(&resource_name);
-        properties.append(&property_actions);
+        let property_toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        page.set_hexpand(true);property_toolbar.append(&page);
+        let property_actions = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        property_toolbar.append(&property_actions);properties.append(&property_toolbar);
         let tonal_histogram=crate::histogram::Inspector::new();
         tonal_histogram.root.set_widget_name("levels-histogram");tonal_histogram.root.set_visible(false);
         properties.append(&tonal_histogram.root);
@@ -256,7 +255,10 @@ impl EffectPanels {
             recording_was_active: Cell::new(false),
             page,
             property_actions,
-            resource_name,
+            property_buttons: RefCell::default(),
+            property_groups: RefCell::default(),
+            property_choice: RefCell::default(),
+            property_toolbar,
             tonal_histogram,
             properties_updating: Cell::new(false),
             title,
@@ -627,7 +629,7 @@ impl EffectPanels {
     }
     pub fn refresh_histograms(&self,w:&Rc<Workspace>,state:&UiState) {
         if state.layer_properties.histogram {self.tonal_histogram.refresh_tonal(w,state);}
-        for field in self.fields.borrow().iter() {if let Field::Curve(editor)=field {editor.refresh_histogram(state);}}
+        for field in self.fields.borrow().iter() {if let Field::Curve(editor)=field {editor.refresh_histogram(w,state);}}
     }
     pub fn refresh(self: &Rc<Self>, w: &Rc<Workspace>, state: &UiState) {
         self.bind(w, state);
@@ -642,33 +644,97 @@ impl EffectPanels {
         *self.property_localization.borrow_mut() = Some(localization);
         let view = &state.layer_properties;
         let document_changed=self.property_document.replace(state.document_file.epoch)!=state.document_file.epoch;
-        if self.schema.borrow().as_ref().is_none_or(|old| old.actions.iter().map(|action| &action.action).ne(view.actions.iter().map(|action| &action.action))) {
+        self.properties_updating.set(true);
+        if self.schema.borrow().as_ref().is_none_or(|old| document_changed || old.layer!=view.layer || old.actions.len()!=view.actions.len() || old.resource_label.is_some()!=view.resource_label.is_some()
+            || old.actions.iter().zip(&view.actions).any(|(a,b)| a.action!=b.action || a.icon!=b.icon || a.group.as_ref().map(|g|g.id)!=b.group.as_ref().map(|g|g.id))) {
+            self.property_buttons.borrow_mut().clear();self.property_groups.borrow_mut().clear();self.property_choice.borrow_mut().take();
             while let Some(child) = self.property_actions.first_child() { self.property_actions.remove(&child); }
-            for action in &view.actions {
-                let button = gtk::Button::with_label(&action.label);
-                if let Some(label) = button.child().and_downcast::<gtk::Label>() {
-                    label.set_wrap(true);
-                    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+            if let Some(label)=&view.resource_label {
+                let actions:Vec<_>=view.actions.iter().enumerate().filter(|(_,action)|matches!(action.action,EffectAction::LookupPreset {..})).collect();
+                let mut labels:Vec<_>=actions.iter().map(|(_,action)|action.label.as_str()).collect();
+                let selected=view.resource_selection.and_then(|selected|actions.iter().position(|(index,_)|*index==selected)).unwrap_or(labels.len());
+                if selected==labels.len() {labels.push(view.resource_name.as_deref().unwrap_or(label));}
+                let choice=gtk::DropDown::from_strings(&labels);choice.set_selected(selected as u32);
+                choice.set_widget_name("property-resource-choice");choice.set_hexpand(true);
+                choice.set_tooltip_text(view.resource_name.as_deref());choice.update_property(&[gtk::accessible::Property::Label(label)]);
+                let factory=gtk::SignalListItemFactory::new();
+                factory.connect_setup(|_,item| {
+                    item.downcast_ref::<gtk::ListItem>().unwrap().set_child(Some(&gtk::Label::builder()
+                        .xalign(0.).hexpand(true).width_chars(1).ellipsize(gtk::pango::EllipsizeMode::Middle).build()));
+                });
+                factory.connect_bind(|_,item| {
+                    let item=item.downcast_ref::<gtk::ListItem>().unwrap();
+                    let value=item.item().and_downcast::<gtk::StringObject>().unwrap().string();
+                    let label=item.child().and_downcast::<gtk::Label>().unwrap();label.set_text(&value);label.set_tooltip_text(Some(&value));
+                });
+                choice.set_factory(Some(&factory));choice.set_list_factory(Some(&factory));
+                let actions:Vec<_>=actions.into_iter().map(|(_,action)|action.action.clone()).collect();
+                choice.connect_selected_notify(glib::clone!(#[weak] w, #[weak(rename_to = panel)] self, move |choice| {
+                    if !panel.properties_updating.get() && let Some(action)=actions.get(choice.selected() as usize) {w.dispatch(UiAction::Effect {action:action.clone()});}
+                }));self.property_actions.append(&choice);*self.property_choice.borrow_mut()=Some(choice);
+            }
+            let mut grouped = Vec::new();
+            for (index,action) in view.actions.iter().enumerate() {
+                if matches!(action.action,EffectAction::LookupPreset {..}) {continue;}
+                if let Some(group) = &action.group {
+                    if grouped.contains(&group.id) { continue; }
+                    grouped.push(group.id);
+                    let menu = gtk::MenuButton::new();menu.set_widget_name("property-picker-menu");
+                    if let Some(icon)=&action.icon {menu.set_child(Some(&crate::icons::image(icon)));}
+                    else {menu.set_label(&group.label);}
+                    menu.set_tooltip_text(Some(&group.label));menu.update_property(&[gtk::accessible::Property::Label(&group.label)]);
+                    let choices = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    let popover = gtk::Popover::builder().child(&choices).build();
+                    self.property_groups.borrow_mut().push((index,menu.clone()));
+                    for (index,choice) in view.actions.iter().enumerate().filter(|(_,choice)| choice.group.as_ref().map(|value|value.id) == Some(group.id)) {
+                        let button = gtk::Button::with_label(&choice.label);button.add_css_class("flat");
+                        button.set_widget_name("property-picker");self.property_buttons.borrow_mut().push((index,button.clone()));
+                        let action=choice.action.clone();
+                        button.connect_clicked(glib::clone!(#[weak] w, #[weak] popover, move |_| {
+                            popover.popdown();w.dispatch(UiAction::Effect {action:action.clone()});
+                        }));choices.append(&button);
+                    }
+                    menu.set_popover(Some(&popover));self.property_actions.append(&menu);
+                } else {
+                    let button = gtk::Button::new();button.set_widget_name("property-picker");
+                    self.property_buttons.borrow_mut().push((index,button.clone()));
+                    if let Some(icon) = &action.icon {
+                        crate::icons::set_button(&button,icon);button.set_tooltip_text(Some(&action.label));
+                    } else {button.set_label(&action.label);}
+                    button.update_property(&[gtk::accessible::Property::Label(&action.label)]);
+                    let action=action.action.clone();
+                    button.connect_clicked(glib::clone!(#[weak] w, move |_| {
+                        w.dispatch(UiAction::Effect {action:action.clone()});
+                    }));self.property_actions.append(&button);
                 }
-                button.set_widget_name("property-picker");
-                let action = action.action.clone();
-                button.connect_clicked(glib::clone!(#[weak] w, move |_| {
-                    w.dispatch(UiAction::Effect { action: action.clone() });
-                }));
-                self.property_actions.append(&button);
             }
         }
-        self.resource_name.set_label(view.resource_name.as_deref().unwrap_or(""));
-        self.resource_name.set_tooltip_text(view.resource_name.as_deref());
-        self.resource_name.set_visible(view.resource_name.is_some());
-        let mut child = self.property_actions.first_child();
-        for action in &view.actions {
-            if let Some(button) = child.take() {
-                if let Some(button) = button.downcast_ref::<gtk::Button>() { button.set_label(&action.label); button.set_tooltip_text(Some(&action.label)); }
-                child = button.next_sibling();
+        if let Some(choice)=self.property_choice.borrow().as_ref() {
+            let actions:Vec<_>=view.actions.iter().enumerate().filter(|(_,action)|matches!(action.action,EffectAction::LookupPreset {..})).collect();
+            let mut labels:Vec<_>=actions.iter().map(|(_,action)|action.label.as_str()).collect();
+            let selected=view.resource_selection.and_then(|selected|actions.iter().position(|(index,_)|*index==selected)).unwrap_or(labels.len());
+            if selected==labels.len() {labels.push(view.resource_name.as_deref().unwrap_or(""));}
+            let model=choice.model().unwrap().downcast::<gtk::StringList>().unwrap();
+            if model.n_items() as usize!=labels.len() || labels.iter().enumerate().any(|(i,label)|model.string(i as u32).as_deref()!=Some(*label)) {
+                model.splice(0,model.n_items(),&labels);
             }
+            choice.set_selected(selected as u32);choice.set_tooltip_text(view.resource_name.as_deref());
+            choice.update_property(&[gtk::accessible::Property::Label(view.resource_label.as_deref().unwrap_or(""))]);
         }
+        for (index,button) in self.property_buttons.borrow().iter() {
+            let action=&view.actions[*index];
+            if action.icon.is_none() || action.group.is_some() {button.set_label(&action.label);}
+            button.set_tooltip_text(Some(&action.label));button.update_property(&[gtk::accessible::Property::Label(&action.label)]);
+        }
+        for (index,button) in self.property_groups.borrow().iter() {
+            let action=&view.actions[*index];let group=action.group.as_ref().unwrap();
+            if action.icon.is_none() {button.set_label(&group.label);}
+            button.set_tooltip_text(Some(&group.label));button.update_property(&[gtk::accessible::Property::Label(&group.label)]);
+        }
+        self.properties_updating.set(false);
         self.property_actions.set_sensitive(view.enabled);
+        self.property_actions.set_hexpand(view.resource_label.is_some());
+        self.property_toolbar.set_visible(view.pages.len()>1 || !view.actions.is_empty());
         self.tonal_histogram.root.set_visible(view.histogram);
         self.title.set_text(&view.title);
         self.title.set_tooltip_text(Some(&view.description));
@@ -749,11 +815,11 @@ impl EffectPanels {
                     ));
                     let field = match &control.kind {
                         PropertyKind::Number { numeric } => {
-                            let input = NumberControl::new(numeric.clone(), &control.label, "", w.localization().clone());
+                            let input = NumberControl::inline(numeric.clone(), &control.label, w.localization().clone());
                             input.set_widget_name(&format!("property-{}", control.key));
                             let key = control.key.clone();
                             bind_number(&input, w, move |value| EffectAction::Set { layer, key: key.clone(), value: EffectValue::Number(value as f32) });
-                            self.body.append(&input);
+                            self.append_property_row(index, &control.label, &input);
                             Field::Number(input)
                         }
                         PropertyKind::Toggle => {
@@ -1245,20 +1311,19 @@ struct CurveEditor {
     reset: gtk::Button,
     view: Rc<RefCell<layer_ui::PropertyControl>>,
     coordinates: [NumberControl; 2],
+    coordinate_labels: [gtk::Label; 2],
     ev: [gtk::Label; 2],
     axes: [[gtk::Label; 3]; 2],
     histogram: Rc<RefCell<layer_ui::HistogramView>>,
     histogram_colors: Rc<Cell<[[u8;3];4]>>,
-    histogram_status: gtk::Label,
-    clipping: [gtk::CheckButton;2],
-    clipping_updating: Rc<Cell<bool>>,
+    footer: crate::histogram::Footer,
 }
 impl CurveEditor {
     fn new(w: &Rc<Workspace>, layer: u64, control: &layer_ui::PropertyControl) -> Self {
         let curve = control.curve.as_ref().expect("shared curve controls");
         let histogram=Rc::new(RefCell::new(layer_ui::HistogramView::default()));
         let histogram_colors=Rc::new(Cell::new([[0;3];4]));
-        let area = gtk::DrawingArea::builder().content_width(128).content_height(200)
+        let area = gtk::DrawingArea::builder().content_width(64).content_height(200)
             .hexpand(true).focusable(true).build();
         area.set_widget_name(&format!("property-{}-graph", control.key));
         area.add_css_class("customizable-target");
@@ -1382,7 +1447,7 @@ impl CurveEditor {
         reset.connect_clicked(glib::clone!(#[weak] w, #[strong] key, move |_| {
             w.dispatch(UiAction::Effect { action: EffectAction::Reset { layer, key: key.to_string() } });
         }));
-        let overlay = gtk::Overlay::builder().child(&area).build(); overlay.add_overlay(&reset);
+
         let root = gtk::Box::new(gtk::Orientation::Vertical, 6);
         root.set_vexpand(false); root.set_valign(gtk::Align::Start);
         let graph = gtk::Grid::builder().column_spacing(6).row_spacing(4).build();
@@ -1390,54 +1455,43 @@ impl CurveEditor {
         let maximum = gtk::Label::new(Some(&curve.axes[1].maximum));
         let title = gtk::Label::new(Some(&curve.axes[1].label)); title.set_vexpand(true);
         let minimum = gtk::Label::new(Some(&curve.axes[1].minimum));
+        title.set_text("");
         vertical.add_css_class("dim-label"); vertical.append(&maximum); vertical.append(&title); vertical.append(&minimum);
         let y_axis = [minimum.clone(), title.clone(), maximum.clone()];
-        graph.attach(&vertical, 0, 0, 1, 1); graph.attach(&overlay, 1, 0, 1, 1);
+        graph.attach(&vertical, 0, 0, 1, 1); graph.attach(&area, 1, 0, 1, 1);
         let horizontal = gtk::Box::new(gtk::Orientation::Horizontal, 4);
         let minimum = gtk::Label::new(Some(&curve.axes[0].minimum));
         let title = gtk::Label::new(Some(&curve.axes[0].label)); title.set_hexpand(true);
         let maximum = gtk::Label::new(Some(&curve.axes[0].maximum));
+        title.set_text("");
         horizontal.add_css_class("dim-label"); horizontal.append(&minimum); horizontal.append(&title); horizontal.append(&maximum);
         let axes = [[minimum.clone(), title.clone(), maximum.clone()], y_axis];
         graph.attach(&horizontal, 1, 1, 1, 1); root.append(&graph);
         let ev = std::array::from_fn(|_| { let label = gtk::Label::new(None); label.set_xalign(1.); label.add_css_class("dim-label"); label });
+        let coordinate_labels = std::array::from_fn(|index| gtk::Label::builder().label(&curve.axes[index].label).xalign(0.).ellipsize(gtk::pango::EllipsizeMode::End).build());
+        let coordinate_row = gtk::Box::new(gtk::Orientation::Horizontal, 6);coordinate_row.set_homogeneous(true);
         let coordinates = std::array::from_fn(|index| {
-            let input = NumberControl::new(curve.domain.numeric(), &curve.axes[index].label, "", w.localization().clone());
+            let input = NumberControl::value_only(curve.domain.numeric(), &curve.axes[index].label, w.localization().clone());
             input.set_widget_name(&format!("property-{}-{}", control.key, if index == 0 { "input" } else { "output" }));
             bind_number(&input, w, glib::clone!(#[strong] view, #[strong] key, move |value| {
                 EffectAction::CurveNumber { layer, key: key.to_string(), epoch: view.borrow().curve.as_ref().unwrap().epoch,
                     axis: if index == 0 { layer_ui::CurveAxis::Input } else { layer_ui::CurveAxis::Output },
                     operation: layer_ui::NumericOperation::Value { value } }
             }));
-            root.append(&input); root.append(&ev[index]); input
+            let column = gtk::Box::new(gtk::Orientation::Vertical, 0);
+            input.set_halign(gtk::Align::Fill);input.set_hexpand(true);
+            column.set_hexpand(true);column.append(&coordinate_labels[index]);column.append(&input);column.append(&ev[index]);
+            coordinate_row.append(&column);input
         });
-        let histogram_status=gtk::Label::builder().xalign(0.).wrap(true).build();histogram_status.set_widget_name("curve-statistics");
-        root.append(&histogram_status);
-        let clipping_updating=Rc::new(Cell::new(false));
-        let clipping=std::array::from_fn(|index| {
-            let button=gtk::CheckButton::new();button.set_widget_name(if index==0 {"curve-shadows"} else {"curve-highlights"});
-            button.connect_toggled(glib::clone!(#[weak] w, #[strong] clipping_updating, move |button| {
-                if !clipping_updating.get() {w.dispatch(UiAction::Histogram {action:if index==0 {layer_ui::HistogramAction::Shadows {enabled:button.is_active()}}
-                    else {layer_ui::HistogramAction::Highlights {enabled:button.is_active()}}});}
-            }));root.append(&button);button
-        });
-        let editor = Self { root, area, reset, view, coordinates, ev, axes, histogram, histogram_colors, histogram_status, clipping, clipping_updating }; editor.update(control, &w.localization()); editor
+        root.append(&coordinate_row);
+        let footer = crate::histogram::Footer::new("curve");footer.root.append(&reset);root.append(&footer.root);
+        let editor = Self { root, area, reset, view, coordinates, coordinate_labels, ev, axes, histogram, histogram_colors, footer };
+        editor.update(control, &w.localization());editor
     }
-    fn refresh_histogram(&self,state:&UiState) {
+    fn refresh_histogram(&self,w:&Rc<Workspace>,state:&UiState) {
         *self.histogram.borrow_mut()=state.tonal_histogram.clone();
         self.histogram_colors.set(state.palette.histogram_colors().map(|color|color.0));
-        self.histogram_status.set_label(&state.tonal_histogram.status);
-        self.clipping_updating.set(true);
-        for (index,button) in self.clipping.iter().enumerate() {
-            button.set_label(state.histogram.labels.get(index+1).map(|s|s.as_ref()));
-            if let Some(label) = button.child().and_downcast::<gtk::Label>() {
-                label.set_wrap(true);
-                label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-            }
-            button.set_tooltip_text(state.histogram.labels.get(index+1).map(|s|s.as_ref()));
-            button.set_active(if index==0 {state.histogram.shadows} else {state.histogram.highlights});
-        }
-        self.clipping_updating.set(false);self.area.queue_draw();
+        self.footer.refresh(w,state,&state.tonal_histogram.status);self.area.queue_draw();
     }
     fn update(&self, control: &layer_ui::PropertyControl, localization: &std::sync::Arc<layer_ui::Localizer>) {
         *self.view.borrow_mut() = control.clone();
@@ -1445,10 +1499,12 @@ impl CurveEditor {
         self.area.set_tooltip_text(Some(&curve.help));
         self.reset.set_tooltip_text(Some(&curve.reset_label));
         for (labels, axis) in self.axes.iter().zip(&curve.axes) {
-            for (label, text) in labels.iter().zip([&axis.minimum, &axis.label, &axis.maximum]) { label.set_label(text); }
+            for (label, text) in labels.iter().zip([axis.minimum.as_str(), "", axis.maximum.as_str()]) { label.set_label(text); }
         }
         for (index, coordinate) in [&curve.input, &curve.output].into_iter().enumerate() {
             let input = &self.coordinates[index];
+            self.coordinate_labels[index].set_label(&curve.axes[index].label);
+            self.coordinate_labels[index].set_tooltip_text(Some(&curve.axes[index].label));
             input.set_caption(&curve.axes[index].label, "", localization.clone());
             input.set_sensitive(coordinate.as_ref().is_some_and(|value| !value.read_only));
             let (value, text) = coordinate.as_ref().map_or((0., ""), |value| (value.value, value.text.as_str()));

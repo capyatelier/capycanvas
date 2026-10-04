@@ -146,42 +146,55 @@ fn idle_refinement_presents_completion_and_never_holds_new_input() {
 
 #[test]
 fn idle_refinement_batches_pages_and_yields_to_new_artwork() {
-    let doc = document_at([1537, 1025]);
-    let extent = [doc.width, doc.height];
-    let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
-    exact.test.reference = true;
-    let mut frame = packet(&doc.layers, extent);
-    frame.composite_all = false;
-    frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
-    for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
-    let work = r.metrics.composited_pixels;
-    let passes = r.metrics.command_passes;
-    r.submit(frame).unwrap();
-    let refined = r.metrics.composited_pixels - work;
-    assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
-    assert!(refined > 2 * u64::from(PAGE_SIZE).pow(2), "idle work must amortize submission and presentation across pages");
-    assert!(refined <= 4 * u64::from(PAGE_SIZE).pow(2), "an idle submission must leave room for new input");
-    assert!(r.has_pending_work());
-    let completed = r.background_ready.clone();
-    r.hold_background(false);
-    completed.store(true, std::sync::atomic::Ordering::Release);
-    assert!(!r.background_ready.load(std::sync::atomic::Ordering::Acquire),
-        "an earlier completion cannot release the latest background work");
-    r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    r.background_refinement = false;
-    assert!(!r.can_submit(), "mandatory raster work retains submission backpressure");
-    r.background_refinement = true;
-    assert!(r.can_submit(), "fresh artwork can queue behind unfinished refinement");
-    let submissions = r.metrics.submissions;
-    r.submit(frame).unwrap();
-    assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch");
-    let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
-    let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
-    let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
-    for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
-    r.background_ready.store(true, std::sync::atomic::Ordering::Release);
-    assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
+    for (visible,opacity) in [(true,1.),(false,1.),(true,0.35)] {
+        let mut doc = document_at([1537, 1025]);
+        let paper=doc.layers.iter_mut().find(|layer|layer.kind==layer_core::LayerKind::Background).unwrap();
+        paper.visible=visible;paper.opacity=opacity;
+        let extent = [doc.width, doc.height];
+        let mut r = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        let mut exact = WgpuRasterizer::new_native_headless(doc.color).unwrap();
+        exact.test.reference = true;
+        let mut frame = packet(&doc.layers, extent);
+        frame.composite_all = false;
+        frame.view.background_rgba_linear=[1.;4];
+        frame.view.document_to_surface = [0.125, 0., 0., 0.125, 0., 0.];
+        for renderer in [&mut r, &mut exact] { renderer.submit(frame).unwrap(); }
+        let work = r.metrics.composited_pixels;
+        let passes = r.metrics.command_passes;
+        r.submit(frame).unwrap();
+        let refined = r.metrics.composited_pixels - work;
+        assert!(r.metrics.command_passes - passes <= 5, "resident pages share one composition pass");
+        assert!(refined > 2 * u64::from(PAGE_SIZE).pow(2), "idle work must amortize submission and presentation across pages");
+        assert!(refined <= 4 * u64::from(PAGE_SIZE).pow(2), "an idle submission must leave room for new input");
+        assert!(r.has_pending_work());
+        let completed = r.background_ready.clone();
+        r.hold_background(false);
+        completed.store(true, std::sync::atomic::Ordering::Release);
+        assert!(!r.background_ready.load(std::sync::atomic::Ordering::Acquire),
+            "an earlier completion cannot release the latest background work");
+        r.background_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        r.background_refinement = false;
+        assert!(!r.can_submit(), "mandatory raster work retains submission backpressure");
+        r.background_refinement = true;
+        assert!(r.can_submit(), "fresh artwork can queue behind unfinished refinement");
+        let submissions = r.metrics.submissions;
+        r.submit(frame).unwrap();
+        assert_eq!(r.metrics.submissions, submissions, "unfinished refinement cannot queue another idle batch: paper visible={visible}, opacity={opacity}");
+        let dab = crate::tests::test_dab([90., 80.], [0.9, 0.1, 0.3, 1.], 0.8);
+        let batch = dab_batch(doc.layers[0].id, crate::layer_tests::preset_style(DefaultBrushPreset::GPen), dab.bounds());
+        let stroke = FramePacket { dabs: std::slice::from_ref(&dab), dab_batches: std::slice::from_ref(&batch), ..frame };
+        for renderer in [&mut r, &mut exact] { renderer.submit(stroke).unwrap(); }
+        assert!(r.metrics.submissions>submissions,"fresh artwork still submits: paper visible={visible}, opacity={opacity}");
+        r.background_ready.store(true, std::sync::atomic::Ordering::Release);
+        assert_settled(&mut r, frame, &pixels(&exact, crate::test_support::document_texture(&exact)));
+        let mut changed=doc.layers.clone();
+        changed.iter_mut().find(|layer|layer.kind==layer_core::LayerKind::Background).unwrap().visible=!visible;
+        r.background_ready=Arc::new(std::sync::atomic::AtomicBool::new(false));
+        r.background_refinement=true;
+        let submissions=r.metrics.submissions;
+        r.submit(FramePacket {layers:&changed,..frame}).unwrap();
+        assert!(r.metrics.submissions>submissions,"paper visibility edits bypass unfinished idle backpressure");
+    }
 }
 
 #[test]

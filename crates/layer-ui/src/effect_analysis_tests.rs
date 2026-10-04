@@ -150,3 +150,24 @@ fn effect_analysis_headings_publish_each_localized_status_once_on_every_host() {
         for _ in 0..3 {s.refresh_document();assert_eq!(s.state.layer_properties.title,format!("{title} · {failure}"));assert_eq!(s.state.layer_properties.title.matches(&failure).count(),1);assert_eq!(s.state.layer_properties.description,failure);}
     }}
 }
+
+#[test]
+fn effect_analysis_dead_renderer_can_suspend_and_recover_without_retirement_calls() {
+    let mut s=analysis_session();let document=s.engine.document().clone();let checkpoint=s.engine.checkpoint();s.engine.backend_mut().analysis_retain_fails=true;
+    s.suspend_renderer().unwrap();assert!(s.rendering_suspended());assert_eq!(s.engine.document(),&document);assert_eq!(s.engine.checkpoint(),checkpoint);
+    let retired=s.engine.backend().analysis_retained.len();s.frame(100_000_000,100_000_000).unwrap();assert!(s.rendering_suspended());assert_eq!(s.engine.backend().analysis_retained.len(),retired);
+    let (old,_)=s.replace_renderer(Recorder::default()).unwrap();assert!(old.analysis_retain_fails);assert!(!s.rendering_suspended());assert_eq!(s.engine.checkpoint(),checkpoint);
+}
+
+#[test]
+fn effect_analysis_dead_renderer_direct_replacement_does_not_retire_failed_backend() {
+    let mut s=analysis_session();s.engine.backend_mut().analysis_retain_fails=true;let checkpoint=s.engine.checkpoint();
+    s.replace_renderer(Recorder::default()).unwrap();assert_eq!(s.engine.checkpoint(),checkpoint);assert!(!s.rendering_suspended());
+}
+
+#[test]
+fn effect_analysis_parked_inheritance_and_replacement_preserve_history() {
+    let mut previous=analysis_session();previous.suspend_renderer().unwrap();let checkpoint=previous.engine.checkpoint();
+    let mut parked=UiSession::new(Recorder::default(),previous.engine.document().clone(),[800,800],Platform::Gtk).unwrap();parked.suspend_renderer().unwrap();parked.engine.backend_mut().analysis_retain_fails=true;
+    parked.inherit_window_state(&previous).unwrap();assert!(parked.rendering_suspended());parked.frame(100_000_000,100_000_000).unwrap();parked.replace_renderer(Recorder::default()).unwrap();assert_eq!(previous.engine.checkpoint(),checkpoint);assert!(!parked.rendering_suspended());
+}

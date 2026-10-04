@@ -601,3 +601,5 @@ commands-transform-again-empty = Trước tiên hãy áp dụng một phép bi�
 commands-transform-again-whole-layer = Bỏ vùng chọn pixel và chọn toàn bộ một lớp
 
 commands-show-histogram = Hiện biểu đồ phân bố
+command-waveform = Dạng sóng
+commands-show-waveform = Hiện dạng sóng

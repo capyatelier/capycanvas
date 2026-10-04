@@ -145,6 +145,11 @@ the channel-corrected input before master; individual pages display their input
 before correction. Curves uses its selected Encoded RGB or Log HDR domain.
 Statistics updates retain numerical drafts and focus. The same
 [calibration controls](color-picker.md#levels-and-curves) serve both adjustments.
+GTK keeps channel selection and actions in one row and places number fields
+beside their labels. Curves puts Input and Output in two equal columns below
+its graph, with labels above the fields so translations fit a narrow panel.
+Reset and clipping buttons share the status row. Unfinished numbers keep
+their editor and focus when statistics or the selected graph point changes.
 Changing the adjustment's mask, opacity or blend preserves these input
 statistics; changes below the adjustment update them.
 

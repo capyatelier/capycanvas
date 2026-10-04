@@ -24,10 +24,15 @@ fn fx_bright(c:vec4<f32>,threshold:f32)->vec4<f32> {
     let l=fx_luma(fx_straight(c));return c*max(l-threshold,0.)/max(l,.00001);
 }
 fn fx_blur(p:vec2<f32>,base:u32,axis:vec2<f32>,threshold:f32)->vec4<f32> {
-    let info=fx_lookup(base,0u,0u);var sum=fx_bright(fx_sample(p),threshold)*info.x;
+    let info=fx_lookup(base,0u,0u);let center=fx_bright(fx_sample(p),threshold);
+    if info.y==0. {return center;}
+    var sum=center*(info.x*.5);
     for(var i=1u;i<=u32(info.y);i+=1u){let tap=fx_lookup(base,0u,i);let offset=axis*tap.x;
-        sum+=(fx_bright(fx_sample(p-offset),threshold)+fx_bright(fx_sample(p+offset),threshold))*tap.y;
-    }return sum;
+        let weight=vec4(tap.y*.5);
+        sum+=fma(fx_bright(fx_sample(p-offset),threshold),weight,fx_bright(fx_sample(p+offset),threshold)*weight);
+    }
+    let result=ldexp(clamp(sum,vec4(-1.7014117e38),vec4(1.7014117e38)),vec4<i32>(1));
+    return vec4(result.rgb,clamp(result.a,0.,1.));
 }
 fn capy_blur_h(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_blur(p,b,vec2<f32>(1.,0.),-1.);}
 fn capy_gaussian_blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{return fx_blur(p,b,vec2<f32>(0.,1.),-1.);}

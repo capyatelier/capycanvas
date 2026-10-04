@@ -968,6 +968,7 @@ pub struct Workspace {
     pub(crate) workspaces: manager::NativeWorkspaces,
     pub(crate) servicing: Cell<bool>,
     pub(crate) histogram: Rc<crate::histogram::Inspector>,
+    pub(crate) waveform: Rc<crate::histogram::Inspector>,
     pub(crate) open_document: RefCell<Option<crate::files::OpenDocument>>,
     pub(crate) image_drop: RefCell<Option<crate::files::drop::Incoming>>,
     pub(crate) image_drop_label: gtk::Label,
@@ -1144,6 +1145,7 @@ impl Workspace {
         let local_tone=crate::local_tone_view::LocalToneView::new();
         let proof_panel = crate::files::proof::ProofPanel::new();
         let histogram = crate::histogram::Inspector::new();
+        let waveform = crate::histogram::Inspector::waveform();
         status_bar.append(&proof.label);
         status_bar.append(&local_tone.label);
         let screen = crate::screen_view::ScreenView::new();
@@ -1280,6 +1282,7 @@ impl Workspace {
                 (Panel::Navigator, navigator.root.clone().upcast()),
                 (Panel::Proof, proof_panel.root.clone().upcast()),
                 (Panel::Histogram, scroll(&histogram.root)),
+                (Panel::Waveform, scroll(&waveform.root)),
             ],
             commands: RefCell::new(Vec::new()),
             tool_set,
@@ -1320,7 +1323,7 @@ impl Workspace {
             command_bar: crate::command_bar::CommandBar::new(),
             workspaces,
             servicing: Cell::new(false),
-            histogram,
+            histogram, waveform,
             open_document: RefCell::new(None),
             initial_project: RefCell::new(project),
             initial_settings: RefCell::new(None),
@@ -1443,6 +1446,7 @@ impl Workspace {
         self.customization
             .track(Panel::Stats, PanelControl::Stats, &self.effects.stats);
         self.customization.track(Panel::Histogram, PanelControl::Histogram, &self.histogram.root);
+        self.customization.track(Panel::Waveform, PanelControl::Waveform, &self.waveform.root);
         self.customization.track(
             Panel::Layers,
             PanelControl::LayerActions,
@@ -2730,7 +2734,7 @@ impl Workspace {
             self.proof_panel.refresh(self, &state);
         }
         if regions & (regions::HISTOGRAM | regions::SETTINGS | regions::LAYOUT | regions::DOCUMENT) != 0 {
-            self.histogram.refresh(self, &state);self.effects.refresh_histograms(self,&state);
+            self.histogram.refresh(self, &state);self.waveform.refresh(self, &state);self.effects.refresh_histograms(self,&state);
         }
         self.documents.refresh(self);
         if regions != regions::CAMERA {
@@ -3019,7 +3023,7 @@ impl Workspace {
                     }
                     _ => (
                         content.measure(gtk::Orientation::Vertical, width).1 as f32,
-                        (!matches!(config.id, Panel::Color | Panel::Palettes)
+                        (!matches!(config.id, Panel::Color | Panel::Palettes | Panel::Histogram | Panel::Waveform)
                             && self.panel_widget(config.id).is::<gtk::ScrolledWindow>())
                         .then_some(layer_ui::PanelScrollMeasurement {
                             fixed_height: 0.0,

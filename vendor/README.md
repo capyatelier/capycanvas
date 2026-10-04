@@ -176,6 +176,17 @@ with `Cannot get non-existent resource`. Ordering and hashing include the owning
 instance too. WebGPU handles are unchanged. The `layer-host` test
 `a_restarted_gpu_is_never_mistaken_for_the_retired_one` covers the behavior.
 
+`wgpu-surface-submission-admission.patch` serializes native surface configuration
+with queue submissions and presentation using the existing command-index lock.
+It retires completed command resources before swapchain replacement and releases
+the locks before mapping, device-loss and work-done callbacks run. Configuration
+errors still deliver pending callbacks. A window-free core regression exercises
+concurrent admission and callback resubmission on successful and failed
+configuration, including ranked lock checks. Surface teardown releases its lock
+before destroying owned resources; pending submissions release their guards in
+reverse acquisition order. Android's `frontBufferSurfaceLifecycle` exercises
+native surfaces.
+
 Remove each patch when an upstream release supplies its equivalent fix, and
 remove these snapshots when no patch remains necessary.
 

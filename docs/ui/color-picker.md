@@ -163,7 +163,7 @@ preserve the saturation of arbitrary contrasting colors.
 
 ## White Balance
 
-GTK Properties offers **Pick neutral point** for White Balance. The canvas bar
+GTK Properties offers an eyedropper button, **Pick neutral point**, for White Balance. The canvas bar
 keeps Sample size and Cancel available; calibration starts at 5 pixels. A mouse
 or pen release samples the input before that adjustment, including its actual
 group and clipping scope. Touch uses the lifted contact point. Its glass shows
@@ -185,7 +185,8 @@ stays in the host; source selection, validation and the correction live in Rust.
 
 ## Levels and Curves
 
-GTK Properties offers black, neutral and white point calibration. These actions
+GTK Properties groups black, neutral and white point calibration in one
+eyedropper menu beside the channel selector. These actions
 use the same sample sizes, contact ownership and exact pre-adjustment input as
 White Balance. The RGB page corrects the three channels together while preserving
 master settings; a channel page changes only that channel. Black and white target

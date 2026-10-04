@@ -600,3 +600,5 @@ commands-transform-again-empty = Aplica primero una transformación de capa
 commands-transform-again-whole-layer = Borra la selección de píxeles y selecciona una capa completa
 
 commands-show-histogram = Mostrar histograma
+command-waveform = Forma de onda
+commands-show-waveform = Mostrar forma de onda

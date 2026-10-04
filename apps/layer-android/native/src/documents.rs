@@ -12,7 +12,7 @@ use layer_render_wgpu::WgpuRasterizer;
 use layer_ui::{DocumentLocation, DocumentRequest, UiSession};
 use std::{
     fs::File,
-    io::{BufWriter, Write},
+    io::{BufWriter, Read, Write},
     os::fd::FromRawFd,
 };
 
@@ -28,6 +28,7 @@ impl Environment {
     }
 }
 enum Payload {
+    Lookup { resource:Option<std::sync::Arc<layer_core::Lut3d>>, name:String },
     Save(Option<Project>),
     Export {
         export: Box<ExportTask>,
@@ -83,6 +84,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
         let place = matches!(request, DocumentRequest::Place | DocumentRequest::Paste { .. })
             .then_some(session.engine().document().active_target());
         let payload = match request {
+            DocumentRequest::ImportLookup {..} => Payload::Lookup {resource:None,
+                name:serde_json::from_str::<Option<DocumentLocation>>(&read(&mut env,&location)?).map_err(error)?.map(|location|location.name).unwrap_or_default()},
             DocumentRequest::Save { .. } => {
                 let location: DocumentLocation =
                     serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
@@ -283,6 +286,12 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
     let input = (fd >= 0).then(|| unsafe { File::from_raw_fd(fd) });
     let t = unsafe { crate::inspection::borrow::<Task>(handle) };
     let result = crate::inspection::on_worker("capy-project", "Project worker failed", move || match &mut t.payload {
+        Payload::Lookup {resource,name} => {
+            let mut bytes=Vec::new();
+            input.ok_or("Missing lookup input")?.take(layer_core::Lut3d::MAX_TEXT_BYTES as u64+1).read_to_end(&mut bytes).map_err(error)?;
+            *resource=Some(std::sync::Arc::new(layer_core::Lut3d::parse_cube_named(&bytes,name)?));
+            Ok(())
+        }
         Payload::Save(project) => {
             let project = project.take().ok_or("Save already encoded")?;
             let mut out = BufWriter::new(input.ok_or("Missing project output")?);
@@ -320,6 +329,13 @@ pub extern "system" fn Java_art_capycanvas_Native_projectAdopt(
         check_open(t)?;
         let location: Option<DocumentLocation> =
             serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
+        if let Payload::Lookup {resource,..}=&mut t.payload {
+            let previous=a.host.session.state().revision;
+            let result=a.host.session.apply_lookup(t.request,resource.take().ok_or("Lookup is not prepared")?);
+            let change=a.host.session.complete_document_request(t.request,result)?;
+            a.host.apply_change(previous,change);
+            return Ok(());
+        }
         if let Some(target) = t.place {
             let s = &mut a.host.session;
             if s.state().document_file.epoch != t.epoch

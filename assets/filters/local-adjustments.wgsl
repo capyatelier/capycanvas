@@ -17,16 +17,16 @@ fn fx_illumination(position:vec2<f32>,log_y:f32)->f32 {
     let remainder=(vec2<f32>(scaled%size.zw)+fract(p)*vec2<f32>(size.xy))/vec2<f32>(size.zw)-.5;
     let origin=vec2<i32>(scaled/size.zw)+vec2<i32>(floor(remainder));
     let fraction=fract(remainder);
-    var total=0.;var value=0.;
+    var mean=vec3(0.);
     for(var y=0u;y<2u;y++){for(var x=0u;x<2u;x++){
         let at=vec2<u32>(clamp(origin+vec2<i32>(i32(x),i32(y)),vec2<i32>(0),vec2<i32>(size.xy)-1));
         let sample=fx_auxiliary(1u+at.y*size.x+at.x);
         let difference=(sample.x-log_y)/1.5;
-        let weight=select(1.-fraction.x,fraction.x,x==1u)*select(1.-fraction.y,fraction.y,y==1u)*sample.z/(1.+difference*difference*difference*difference);
-        total+=weight;value+=sample.y*weight;
+        let weight=select(1.-fraction.x,fraction.x,x==1u)*select(1.-fraction.y,fraction.y,y==1u)/(1.+difference*difference*difference*difference);
+        mean=guide_mean(mean,sample.yzw,weight);
     }}
-    if total<=1e-12 {return log_y;}
-    return value/total;
+    if mean.y==0. {return log_y;}
+    return mean.x;
 }
 fn fx_local_adjustment(c:vec4<f32>,position:vec2<f32>,amounts:vec3<f32>,clarity:bool)->vec4<f32> {
     if (bitcast<u32>(c.a)&0x7fffffffu)==0u || all(amounts==vec3(0.)) || bitcast<vec4<u32>>(fx_auxiliary(0u)).x==0u {return c;}

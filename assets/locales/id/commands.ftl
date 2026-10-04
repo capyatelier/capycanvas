@@ -1187,3 +1187,5 @@ commands-transform-again-empty = Terapkan transformasi lapisan terlebih dahulu
 commands-transform-again-whole-layer = Batalkan seleksi piksel dan pilih lapisan secara utuh
 
 commands-show-histogram = Tampilkan Histogram
+command-waveform = Bentuk gelombang
+commands-show-waveform = Tampilkan bentuk gelombang

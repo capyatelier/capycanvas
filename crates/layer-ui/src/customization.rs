@@ -213,6 +213,7 @@ pub enum PanelControl {
     Stats,
     Navigator,
     Histogram,
+    Waveform,
 }
 impl PanelControl {
     pub fn canonical_label(self) -> std::sync::Arc<str> {
@@ -239,6 +240,7 @@ impl PanelControl {
             Self::Stats => localization.text(MessageId::WORKSPACE_CONTROL_STATS),
             Self::Navigator => localization.text(MessageId::WORKSPACE_CONTROL_NAVIGATOR),
             Self::Histogram => localization.text(MessageId::NATIVE_COLOR_HISTOGRAM),
+            Self::Waveform => localization.text(MessageId::RESOURCES_WAVEFORM),
         }
     }
     pub fn available(panel: Panel) -> &'static [Self] {
@@ -267,6 +269,7 @@ impl PanelControl {
             Panel::Stats => &[Self::Stats],
             Panel::Navigator => &[Self::Navigator],
             Panel::Histogram => &[Self::Histogram],
+            Panel::Waveform => &[Self::Waveform],
             _ => &[],
         }
     }
@@ -280,6 +283,7 @@ impl PanelControl {
             | Panel::Stats
             | Panel::Navigator
             | Panel::Histogram
+            | Panel::Waveform
             | Panel::ToolSettings
             | Panel::BrushSets
             | Panel::FilterTypes
@@ -339,6 +343,7 @@ impl Panel {
             Self::Navigator => localization.text(MessageId::WORKSPACE_PANEL_NAVIGATOR),
             Self::Proof => localization.text(MessageId::WORKSPACE_PANEL_PROOF),
             Self::Histogram => localization.text(MessageId::NATIVE_COLOR_HISTOGRAM),
+            Self::Waveform => localization.text(MessageId::RESOURCES_WAVEFORM),
             Self::CustomToolbar(_) => localization.text(MessageId::WORKSPACE_PANEL_CUSTOM_TOOLBAR),
         }
     }
@@ -1079,6 +1084,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::SoftProof => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SOFT_PROOF).to_string(),
                 CommandId::GamutWarning => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_GAMUT_WARNING).to_string(),
                 CommandId::Histogram => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_HISTOGRAM).to_string(),
+                CommandId::Waveform => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_WAVEFORM).to_string(),
                 CommandId::AssignProfile => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ASSIGN_PROFILE).to_string(),
                 CommandId::ConvertColorSpace => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CONVERT_COLOR_SPACE).to_string(),
                 CommandId::ChangeBitDepth => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CHANGE_BIT_DEPTH).to_string(),

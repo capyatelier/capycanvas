@@ -14,6 +14,7 @@ async function execute({id,request}) {
     switch(request.operation) {
       case "color-field": result = wasm.raster_worker_color_field(request.metadata); break;
       case "encode": result = wasm.raster_worker_encode(request.metadata,request.buffers[0]); break;
+      case "lookup": result = wasm.raster_worker_lookup(request.metadata,request.buffers[0]); break;
       case "profile-library": result=await navigator.locks.request("capy-profile-library",()=>profileLibrary(JSON.parse(request.metadata),request.buffers[0]));break;
       case "export-presets": result=await navigator.locks.request("capy-export-presets",async()=>{
         const bytes=await colorPreferences("readonly",store=>store.get("export-presets"));

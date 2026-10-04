@@ -599,3 +599,5 @@ commands-transform-again-empty = Applica prima una trasformazione a un livello
 commands-transform-again-whole-layer = Deseleziona i pixel e seleziona un livello intero
 
 commands-show-histogram = Mostra istogramma
+command-waveform = Forma d’onda
+commands-show-waveform = Mostra forma d’onda

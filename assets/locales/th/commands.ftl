@@ -599,3 +599,5 @@ commands-transform-again-empty = แปลงรูปเลเยอร์ก�
 commands-transform-again-whole-layer = ยกเลิกการเลือกพิกเซล แล้วเลือกทั้งเลเยอร์
 
 commands-show-histogram = แสดงฮิสโตแกรม
+command-waveform = รูปคลื่น
+commands-show-waveform = แสดงรูปคลื่น

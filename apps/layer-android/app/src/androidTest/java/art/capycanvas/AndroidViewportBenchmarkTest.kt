@@ -43,6 +43,7 @@ class AndroidViewportBenchmarkTest {
         val artworkQueries = args.getString("artworkQueries", "false") == "true"
         val statisticsPreview = args.getString("statisticsPreview", "false") == "true"
         val statisticsExact = args.getString("statisticsExact", "false") == "true"
+        val statisticsWaveform = args.getString("statisticsWaveform", "false") == "true"
         val levelsStatistics = args.getString("levelsStatistics", "false") == "true"
         val clippingPreview = args.getString("clippingPreview", "false") == "true"
         ActivityScenario.launch(MainActivity::class.java).use { scenario ->
@@ -237,7 +238,7 @@ class AndroidViewportBenchmarkTest {
                     queryJobs.forEach { job ->
                         val start = System.nanoTime()
                         val result = JSONObject(if (levelsStatistics) Native.inspectionLevelsStatistics(job, querySource)
-                            else if (statisticsPreview || statisticsExact) Native.inspectionStatistics(job, querySource, !statisticsExact, false)
+                            else if (statisticsPreview || statisticsExact) Native.inspectionStatistics(job, querySource, !statisticsExact, false, statisticsWaveform)
                             else Native.inspectionSample(job, "\"Visible\"", 4752f, 3168f, 101))
                         queryResults.put(result.put("begin_ns", start).put("end_ns", System.nanoTime()))
                     }
@@ -265,6 +266,7 @@ class AndroidViewportBenchmarkTest {
                     .put("artwork_queries", queryResults)
                     .put("statistics_preview", statisticsPreview)
                     .put("statistics_exact", statisticsExact)
+                    .put("statistics_waveform", statisticsWaveform)
                     .put("levels_statistics", levelsStatistics)
                     .put("clipping_preview", clippingPreview)
                     .put("query_capture_ms", (captureEnd - captureBegin) / 1e6)

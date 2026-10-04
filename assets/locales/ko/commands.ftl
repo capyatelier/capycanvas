@@ -599,3 +599,5 @@ commands-transform-snapping-help = 캔버스, 다른 레이어, 자에 맞춥니
 commands-transform-again-empty = 먼저 레이어 변형을 적용하세요
 commands-transform-again-whole-layer = 픽셀 선택을 해제하고 레이어 전체를 선택하세요
 commands-show-histogram = 히스토그램 표시
+command-waveform = 파형
+commands-show-waveform = 파형 표시

@@ -15,26 +15,29 @@ fn start(app: &NativeTestApp) -> Rc<Workspace> {
     let w = Workspace::with_project(app, Some((project, None)));
     w.window.maximize();w.window.present();ready(&w);
     assert!(matches!(w.window.width(),640|1100));
+    configure_properties(&w);w
+}
+pub(super) fn configure_properties(w:&Rc<Workspace>) {
     for panel in Panel::ALL.into_iter().filter(|panel|!matches!(panel,Panel::Toolbar|Panel::Commands|Panel::Properties)) {
         w.customize(CustomizationAction::SetPanelVisible {panel,visible:false});
     }
     w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Properties,visible:true});
     w.customize(CustomizationAction::CloseExpanded);
     w.dispatch(UiAction::MovePanel {panel:Panel::Properties,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[w.window.width() as f32,800.]});
-    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});ready(&w);w
+    w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});ready(w);
 }
 fn insert(w: &Rc<Workspace>, effect: &str) {
     assert!(layer_core::bundled_effect_catalog().filters().iter().any(|filter|filter.id()==effect));
     w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}});ready(w);
 }
-fn value(w: &Rc<Workspace>, key: &str) -> EffectValue {
+pub(super) fn value(w: &Rc<Workspace>, key: &str) -> EffectValue {
     let doc=document(w);doc.layer(doc.active_layer).unwrap().effect.as_ref().unwrap().value(key).unwrap().clone()
 }
-fn number(w: &Rc<Workspace>, key: &str) -> crate::number_control::NumberControl {
+pub(super) fn number(w: &Rc<Workspace>, key: &str) -> crate::number_control::NumberControl {
     widgets(w.window.upcast_ref()).find(|widget|widget.widget_name()==format!("property-{key}") && widget.is_mapped())
         .unwrap_or_else(||panic!("mapped generic number {key}")).downcast().unwrap()
 }
-fn edit(w: &Rc<Workspace>, input: &mut RemoteInput, key: &str, text: &str) {
+pub(super) fn edit(w: &Rc<Workspace>, input: &mut RemoteInput, key: &str, text: &str) {
     let control=number(w,key);scroll_to(control.upcast_ref());
     if let Some(spin)=descendant::<gtk::SpinButton>(&control) {
         input.click(screen_point(spin.upcast_ref(),&w.window,[0.4,0.5]));spin.set_text(text);input.key(0xff0d);
@@ -308,6 +311,60 @@ fn native_pointwise_filters_controls_and_persistence() {
     input.finish();w.window.destroy();pump(100);
 }
 
+#[allow(deprecated)]
+pub(super) fn import_lookup(w: &Rc<Workspace>, path: Option<&std::path::Path>, input: &mut RemoteInput) {
+    if let Some(notice)=state(w).notice {w.dispatch(UiAction::Notice {id:notice.id,accept:false});pump(100);}
+    lookup_action(w,input,|action|matches!(action,EffectAction::ImportLookup {..}));let dialog=super::new_photo::chooser();assert!(state(w).host_error.is_none(),"new native import clears preceding error");
+    if let Some(path)=path {dialog.set_file(&gtk::gio::File::for_path(path)).unwrap();pump(250);dialog.response(gtk::ResponseType::Accept);} else {dialog.response(gtk::ResponseType::Cancel);}
+    until(||!state(w).document_file.busy,"lookup worker finishes");if state(w).host_error.is_none() {ready(w);}
+}
+
+fn lookup_action(w:&Rc<Workspace>,input:&mut RemoteInput,select:impl Fn(&EffectAction)->bool) {
+    let view=state(w).layer_properties;
+    let index=view.actions.iter().position(|action|select(&action.action)).unwrap();
+    if matches!(view.actions[index].action,EffectAction::LookupPreset {..}) {
+        let item=view.actions[..index].iter().filter(|action|matches!(action.action,EffectAction::LookupPreset {..})).count();
+        choose(w,input,"property-resource-choice",item as u32);
+    } else {
+        let button=named::<gtk::Button>(w.effects.properties.upcast_ref(),"property-picker");scroll_to(button.upcast_ref());input.click(screen_point(button.upcast_ref(),&w.window,[0.5,0.5]));
+    }
+}
+
+#[test]
+#[ignore = "private display, native input and hardware GPU"]
+fn native_lookup_builtin_looks_and_discoverable_import() {
+    use layer_core::lut3d::Look;
+    let app=native_test_app("art.capycanvas.LookupLooks");let w=super::histogram::photo_workspace(&app);w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState {layout:layer_ui::WorkspacePreset::Photographer.layout(Platform::Gtk),..Default::default()})});ready(&w);w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});
+    let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk"));let width=w.window.width();let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);let source=document(&w);let original=canvas_pixel(&w);insert(&w,"color_lookup");
+        assert_eq!(state(&w).layer_properties.resource_name.as_deref(),Some("Original"));assert!(!state(&w).layer_properties.controls.iter().any(|control|control.key=="color_space"));assert_eq!(canvas_pixel(&w),original);
+        capture(&w,output,&format!("lookup-original-{width}-{theme:?}"));
+        let choice=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice");assert_eq!(choice.model().unwrap().n_items(),4);assert_eq!(choice.selected(),0);
+        let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Properties)).unwrap().root.clone();
+        for name in ["property-resource-choice","property-picker","property-intensity"] {let widget=find_named(w.effects.properties.upcast_ref(),name).unwrap();let bounds=widget.compute_bounds(&group).unwrap();assert!(bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1. && bounds.y()+bounds.height()<=group.height() as f32+1.,"Photo workspace {name} is fully visible: {bounds:?} in {}x{}",group.width(),group.height());}
+
+        assert!(!widgets(w.effects.properties.upcast_ref()).any(|widget|widget.widget_name()=="property-resource-help" || widget.widget_name()=="property-picker-menu"));
+        for look in Look::ALL {
+            let before=document(&w).layers;lookup_action(&w,&mut input,|action|matches!(action,EffectAction::LookupPreset {preset:Some(value),..} if *value==look));ready(&w);
+            let after=document(&w).layers;let doc=document(&w);let resource=doc.layer(doc.active_layer).unwrap().effect.as_ref().unwrap().lut3d().unwrap();assert_eq!(Look::for_resource(resource),Some(look));let choice=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice");let label=choice.selected_item().unwrap().downcast::<gtk::StringObject>().unwrap().string();assert_eq!(label.lines().count(),1,"preset label stays on one line");assert!(choice.height()<=40,"ordinary LUT selector has one-row height");assert_ne!(canvas_pixel(&w),original);assert!(!state(&w).layer_properties.controls.iter().any(|control|control.key=="color_space"));
+            let checkpoint=ui_session(&w).engine().checkpoint();lookup_action(&w,&mut input,|action|matches!(action,EffectAction::LookupPreset {preset:Some(value),..} if *value==look));ready(&w);assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint,"choosing the current Look is inert");
+            w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before);w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(document(&w).layers,after);unchanged_sources(&w,&source);
+            capture(&w,output,&format!("lookup-{look:?}-{width}-{theme:?}"));
+        }
+        edit(&w,&mut input,"intensity","50");let adjusted=canvas_pixel(&w);let bytes=super::place_source::snapshot(&w);let reopened=layer_core::Project::read(std::io::Cursor::new(bytes),Default::default()).unwrap();assert_eq!(reopened.document.layers,document(&w).layers);w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),adjusted);
+        lookup_action(&w,&mut input,|action|matches!(action,EffectAction::LookupPreset {preset:None,..}));ready(&w);assert_eq!(canvas_pixel(&w),original);assert_eq!(value(&w,"intensity"),EffectValue::Number(50.));
+        import_lookup(&w,None,&mut input);assert_eq!(canvas_pixel(&w),original);assert!(state(&w).host_error.is_none());capture(&w,output,&format!("lookup-original-reopened-{width}-{theme:?}"));
+        w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);
+    }
+    input.finish();w.window.destroy();pump(100);
+}
+
+pub(super) fn lookup_cube(title:&str,swap:bool) -> String {
+        let mut text=format!("TITLE \"{title}\"\nLUT_3D_SIZE 2\n");
+        for b in 0..2 {for g in 0..2 {for r in 0..2 {let v=if swap {[b,g,r]} else {[1-r,1-g,1-b]};text.push_str(&format!("{} {} {}\n",v[0],v[1],v[2]));}}}text
+}
+
 #[test]
 #[ignore = "private display, native file chooser and hardware GPU"]
 #[allow(deprecated)]
@@ -316,27 +373,9 @@ fn native_color_lookup_import_replace_and_persistence() {
     let app=native_test_app("art.capycanvas.ColorLookup");let w=start(&app);
     let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p23-gtk")).canonicalize().unwrap();
     let mut input=RemoteInput::new().timeout_secs(30);input.ready();
-    let chooser=|| {
-        let end=Instant::now()+Duration::from_secs(10);
-        loop {
-            pump(30);
-            if let Some(dialog)=gtk::Window::list_toplevels().into_iter().find_map(|window|window.downcast::<gtk::FileChooserDialog>().ok()).filter(|dialog|dialog.is_visible()) {pump(500);return dialog;}
-            assert!(Instant::now()<end,"lookup file chooser not shown");
-        }
-    };
-    let import=|path:Option<&std::path::Path>,input:&mut RemoteInput| {
-        if let Some(notice)=state(&w).notice {w.dispatch(UiAction::Notice {id:notice.id,accept:false});pump(100);}
-        let button=find_named(w.effects.properties.upcast_ref(),"property-picker").unwrap();scroll_to(&button);assert!(button.is_mapped());let bounds=button.compute_bounds(&w.window).unwrap();let picked=w.window.pick((bounds.x()+bounds.width()/2.) as f64,(bounds.y()+bounds.height()/2.) as f64,gtk::PickFlags::DEFAULT).unwrap();assert!(picked==button||picked.is_ancestor(&button),"Import button is covered by {picked:?}");
-        input.click(screen_point(&button,&w.window,[0.5,0.5]));let dialog=chooser();assert!(state(&w).host_error.is_none(),"new native import clears preceding error");
-        if let Some(path)=path {dialog.set_file(&gtk::gio::File::for_path(path)).unwrap();pump(250);dialog.response(gtk::ResponseType::Accept);} else {dialog.response(gtk::ResponseType::Cancel);}
-        until(||!state(&w).document_file.busy,"lookup worker finishes");
-        if state(&w).host_error.is_none() {ready(&w);}
-    };
+    let import=|path:Option<&std::path::Path>,input:&mut RemoteInput| import_lookup(&w,path,input);
     let lut=||document(&w).layer(document(&w).active_layer).unwrap().effect.as_ref().unwrap().lut3d().cloned();
-    let cube=|title:&str,swap:bool| {
-        let mut text=format!("TITLE \"{title}\"\nLUT_3D_SIZE 2\n");
-        for b in 0..2 {for g in 0..2 {for r in 0..2 {let v=if swap {[b,g,r]} else {[1-r,1-g,1-b]};text.push_str(&format!("{} {} {}\n",v[0],v[1],v[2]));}}}text
-    };
+    let cube=lookup_cube;
     let mut pixels=Vec::new();
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);let source=document(&w);let original=canvas_pixel(&w);insert(&w,"color_lookup");
@@ -347,19 +386,19 @@ fn native_color_lookup_import_replace_and_persistence() {
         let oversized=output.join("oversized.cube");std::fs::File::create(&oversized).unwrap().set_len(layer_core::Lut3d::MAX_TEXT_BYTES as u64+1).unwrap();
         import(Some(&oversized),&mut input);assert!(state(&w).host_error.is_some());assert_eq!(document(&w).layers,unchanged);std::fs::remove_file(oversized).unwrap();assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint,"cancelled and rejected imports create no undo entry");
         let title="夕空の色彩調整と深い青の階調".repeat(10);let first=output.join("first.cube");let second=output.join("second.cube");std::fs::write(&first,cube("Inverse gradient",false)).unwrap();std::fs::write(&second,cube(&title,true)).unwrap();
-        import(Some(&first),&mut input);let inverse=lut().unwrap();assert!(inverse.payload().is_some());assert_eq!(state(&w).layer_properties.description,"Inverse gradient");let name=named::<gtk::Label>(w.window.upcast_ref(),"property-resource-name");assert!(name.is_mapped());assert_eq!(name.text(),"Inverse gradient");
-        assert!(state(&w).layer_properties.actions.iter().any(|action|action.label.contains("Replace")));
+        import(Some(&first),&mut input);let inverse=lut().unwrap();assert!(inverse.payload().is_some());assert_eq!(state(&w).layer_properties.description,"Inverse gradient");let choice=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice");assert!(choice.is_mapped());assert_eq!(choice.selected_item().unwrap().downcast::<gtk::StringObject>().unwrap().string(),"Inverse gradient");assert_eq!(choice.tooltip_text().as_deref(),Some("Inverse gradient"));
+        assert!(state(&w).layer_properties.actions.iter().any(|action|matches!(action.action,EffectAction::ImportLookup {..})));
         let first_pixel=canvas_pixel(&w);assert_ne!(first_pixel,original);assert_eq!(first_pixel[3],255);
         edit(&w,&mut input,"intensity","65");choose(&w,&mut input,"property-color_space",1);assert_eq!(value(&w,"color_space"),EffectValue::Choice(1));capture(&w,&output,&format!("lookup-import-{}-{theme:?}",w.window.width()));
         let before=document(&w).layers;import(Some(&second),&mut input);let replacement=lut().unwrap();assert_ne!(replacement.digest(),inverse.digest());let after=document(&w).layers;
         w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(document(&w).layers,before);assert_eq!(lut().unwrap().digest(),inverse.digest());
         w.dispatch(UiAction::Invoke {command:CommandId::Redo});ready(&w);assert_eq!(document(&w).layers,after);assert_eq!(lut().unwrap().digest(),replacement.digest());
-        assert_eq!(state(&w).layer_properties.description,title);assert_eq!(name.text(),title);assert_eq!(name.tooltip_text().as_deref(),Some(title.as_str()));assert!(name.width()<=w.effects.properties.width());let replaced_pixel=canvas_pixel(&w);assert_ne!(replaced_pixel,first_pixel);
+        let choice=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice");assert_eq!(state(&w).layer_properties.description,title);assert_eq!(choice.selected_item().unwrap().downcast::<gtk::StringObject>().unwrap().string(),title);assert_eq!(choice.tooltip_text().as_deref(),Some(title.as_str()));assert!(choice.width()<=w.effects.properties.width());let replaced_pixel=canvas_pixel(&w);assert_ne!(replaced_pixel,first_pixel);
         std::fs::remove_file(first).unwrap();std::fs::remove_file(second).unwrap();unchanged_sources(&w,&source);
         let bytes=super::place_source::snapshot(&w);let archive=output.join(format!("lookup-{}-{theme:?}.capy",w.window.width()));std::fs::write(&archive,&bytes).unwrap();
         let reopened=layer_core::Project::read(std::io::Cursor::new(bytes),Default::default()).unwrap();assert_eq!(reopened.document.layers,document(&w).layers);
         let loaded=reopened.document.layer(reopened.document.active_layer).unwrap().effect.as_ref().unwrap().lut3d().unwrap();assert_eq!(loaded.payload(),replacement.payload());
-        w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),replaced_pixel);capture(&w,&output,&format!("lookup-reopened-{}-{theme:?}",w.window.width()));
+        w.documents.enqueue(&w,(reopened,None,None));ready(&w);assert_eq!(canvas_pixel(&w),replaced_pixel);ready(&w);capture(&w,&output,&format!("lookup-reopened-{}-{theme:?}",w.window.width()));
         pixels.push(json!({"theme":format!("{theme:?}"),"original":original,"inverse":first_pixel,"reopened":replaced_pixel}));
         w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);
     }
@@ -401,7 +440,10 @@ fn native_local_adjustments_analysis_history_and_recreation() {
         edit(&w,&mut input,"amount","-55");settled(&w);let negative=sample(&w);capture(&w,output,&format!("clarity-negative-{width}-{theme:?}"));assert_ne!(positive,negative);
         w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(55.));
         w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(-55.));
-        w.dispatch(UiAction::Effect {action:EffectAction::Set {layer:lower.0,key:"lightness".into(),value:EffectValue::Number(-20.)}});settled(&w);
+        w.dispatch(UiAction::Effect {action:EffectAction::Set {layer:lower.0,key:"lightness".into(),value:EffectValue::Number(-20.)}});
+        let resize_history=ui_session(&w).engine().checkpoint();w.window.unmaximize();
+        for index in 0..8 {w.window.set_default_size(width-80+(index%2)*40,700+(index%3)*20);pump(15);assert!(state(&w).host_error.is_none(),"surface resize during source-aware GPU publication");}
+        w.window.maximize();settled(&w);assert_eq!(ui_session(&w).engine().checkpoint(),resize_history,"surface reconfiguration never enters document history");
         let changed=sample(&w);assert_ne!(changed,negative);capture(&w,output,&format!("clarity-stacked-{width}-{theme:?}"));unchanged_sources(&w,&source);
         let bytes=super::place_source::snapshot(&w);std::fs::write(output.join(format!("local-adjustments-{width}-{theme:?}.capy")),&bytes).unwrap();
         let reopened=layer_core::Project::read(std::io::Cursor::new(bytes),Default::default()).unwrap();assert_eq!(reopened.document.layers,document(&w).layers);

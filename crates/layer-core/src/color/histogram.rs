@@ -35,6 +35,8 @@ impl Channel {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct Histogram {
+    #[serde(skip)]
+    pub waveform: Option<Waveform>,
     pub color: DocumentColor,
     pub domain: HistogramDomain,
     /// Profile-encoded document RGB followed by linear relative luminance Y.
@@ -42,6 +44,15 @@ pub struct Histogram {
     /// Each nontransparent pixel counts once, regardless of partial coverage.
     pub pixels: u64,
     pub transparent: u64,
+}
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Waveform { pub counts: Vec<u32> }
+impl Waveform {
+    pub const SIDE: usize = 256;
+    pub const WORDS: usize = 4 * Self::SIDE * Self::SIDE;
+    pub fn channel(&self, channel: usize) -> &[u32] {
+        &self.counts[channel*Self::SIDE*Self::SIDE..(channel+1)*Self::SIDE*Self::SIDE]
+    }
 }
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct HistogramAxis {
@@ -86,6 +97,7 @@ impl Histogram {
     pub fn new(color: DocumentColor) -> Self {
         Self {
             color,
+            waveform: None,
             domain: HistogramDomain::Artwork,
             channels: std::array::from_fn(|_| Channel::new()),
             pixels: 0,

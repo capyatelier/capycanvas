@@ -106,6 +106,11 @@ macro_rules! define_lock_ranks {
 
 define_lock_ranks! {
     // Non-leaf ranks, in topological order.
+    rank SURFACE_PRESENTATION "Surface::presentation" followed by {
+        DEVICE_SNATCHABLE_LOCK,
+        DEVICE_COMMAND_INDICES,
+        DEVICE_TRACKERS,
+    }
     rank COMMAND_BUFFER_DATA "CommandBuffer::data" followed by {
         DEVICE_SNATCHABLE_LOCK,
         BUFFER_MAP_STATE,
@@ -215,7 +220,6 @@ define_lock_ranks! {
     rank DEVICE_LOST_CLOSURE "Device::device_lost_closure" followed by { }
     rank IDENTITY_MANAGER_VALUES "IdentityManager::values" followed by { }
     rank RESOURCE_POOL_INNER "ResourcePool::inner" followed by { }
-    rank SURFACE_PRESENTATION "Surface::presentation" followed by { }
     rank TLAS_BUILT_INDEX "Tlas::built_index" followed by { }
     rank TLAS_DEPENDENCIES "Tlas::dependencies" followed by { }
 

@@ -592,3 +592,4 @@ workspace-storage-full = Bộ lưu trữ không gian làm việc đã đầy. Gi
 workspace-storage-unavailable = Không thể mở bộ lưu trữ không gian làm việc. Hãy thử lại.
 workspace-unreadable-name = Không gian làm việc không đọc được
 workspace-backup-saved = Đã lưu bản sao lưu không gian làm việc.
+workspace-tool-description-waveform = Kiểm tra màu và độ sáng từ trái sang phải

@@ -478,7 +478,7 @@ impl ViewportPresenter {
                     crate::view_color::shader(device.working_space(), color.primaries()),
                     include_str!("sdr_color.wgsl"),
                     crate::view_color::hdr_shader(device.working_space(), color.primaries()),
-                    include_str!("hdr_view.wgsl"),
+                    concat!(include_str!("float_number.wgsl"), "\n", include_str!("guide_luminance.wgsl"), "\n", include_str!("hdr_view.wgsl")),
                     concat!(include_str!("tetrahedron.wgsl"), "\n", include_str!("proof_view.wgsl")),
                     concat!(include_str!("area_sample.wgsl"), "\n", include_str!("mapped_sample.wgsl"), "\n", include_str!("present.wgsl")).replace("resample.", "camera.mapped."),
                     include_str!("present_screen.wgsl")

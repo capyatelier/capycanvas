@@ -211,4 +211,26 @@ mod retouch_layer_checks {
         assert!(s.engine.document().layer(id).is_none());
     }
 
+#[test]
+fn frequency_separation_accepts_sigma_85_in_one_undo_step_and_refuses_above_limit() {
+    let mut s=perceptual();let before=s.engine.document().clone();
+    invoke(&mut s,CommandId::FrequencySeparation);
+    let numeric=&s.state.layer_tools.frequency_separation.as_ref().unwrap().numeric;
+    assert_eq!((numeric.min,numeric.max,numeric.soft_min,numeric.soft_max,numeric.step),(0.,85.,0.,21.,f64::from(0.1_f32)));
+    assert_eq!(numeric.mapping,NumericMapping::Power{exponent:0.5});
+    separation(&mut s,FrequencySeparationAction::Radius{radius:85.}).unwrap();
+    assert_eq!(s.state.layer_tools.frequency_separation.as_ref().unwrap().radius,85.);
+    let checkpoint=s.engine.checkpoint();
+    assert!(separation(&mut s,FrequencySeparationAction::Radius{radius:85.1}).is_err());
+    assert_eq!(s.engine.checkpoint(),checkpoint);
+    separation(&mut s,FrequencySeparationAction::Apply).unwrap();
+    s.frame(1,1).unwrap();
+    let operation=s.renderer_mut().pending_operations.iter().find_map(|(_,op)|match &op.kind {
+        LayerOperationKind::Bake{members,..}=>Some(members[0].effect.as_ref().unwrap()),_=>None
+    }).unwrap();assert_eq!(operation.value("sigma"),Some(&layer_core::EffectValue::Number(85.)));
+    invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.document().layers,before.layers);
+    assert_eq!((s.engine.document().active_layer,s.engine.document().blend_space),(before.active_layer,before.blend_space));
+    invoke(&mut s,CommandId::Redo);assert_eq!(s.engine.document().layers[0].name.as_ref(),"Frequency Separation");
+}
+
 }

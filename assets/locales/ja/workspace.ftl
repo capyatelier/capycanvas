@@ -621,3 +621,4 @@ workspace-storage-full = ワークスペースの保存領域がいっぱいで�
 workspace-storage-unavailable = ワークスペースの保存データを開けませんでした。もう一度お試しください。
 workspace-unreadable-name = 読み取れないワークスペース
 workspace-backup-saved = ワークスペースのバックアップを保存しました。
+workspace-tool-description-waveform = 画像の左右に沿って色と明るさを確認

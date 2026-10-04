@@ -6,6 +6,14 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
   await mkdir(directory,{recursive:true});
   const wait=expression=>evaluate(`new Promise((resolve,reject)=>{const end=performance.now()+120000;function check(){if(${expression})resolve(true);else if(performance.now()>end)reject(Error(${JSON.stringify(expression)}));else setTimeout(check,50);}check();})`);
   const send=async action=>{await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`);await settle();};
+  const radius=()=>evaluate('layerApp.state().layer_properties.controls.find(c=>c.key==="sigma")');
+  const editRadius=async(text,commit=true)=>{
+    const at=await evaluate(`(()=>{const field=document.querySelector('[data-property-key="sigma"]'),entry=field.querySelector('.number-entry'),n=entry.hidden?field.querySelector('.number-value'):entry;n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    await call('Input.dispatchMouseEvent',{type:'mousePressed',...at,button:'left',buttons:1,clickCount:1});await call('Input.dispatchMouseEvent',{type:'mouseReleased',...at,button:'left',buttons:0,clickCount:1});await settle();
+    await evaluate(`(()=>{const n=document.querySelector('[data-property-key="sigma"] .number-entry');n.value=${JSON.stringify(text)};n.dispatchEvent(new Event('input',{bubbles:true}))})()`);
+    const key=commit?'Enter':'Escape',code=commit?13:27;
+    await call('Input.dispatchKeyEvent',{type:'keyDown',key,code:key,windowsVirtualKeyCode:code});await call('Input.dispatchKeyEvent',{type:'keyUp',key,code:key,windowsVirtualKeyCode:code});await settle();await evaluate('layerApp.app.wait_for_canvas()');
+  };
   const histogram=()=>evaluate(`(async()=>{const control=layerApp.app.capture_control();try{return JSON.parse(JSON.stringify((await layerApp.app.histogram(control)).histogram,(_,v)=>typeof v==='bigint'?Number(v):v));}finally{control.free();}})()`);
   await wait('layerApp.startupTimes.complete!==null && !layerApp.documents.busy()');
   await send({type:'preferences',action:{type:'edit',id:'missing_profile',value:0}});
@@ -31,10 +39,21 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
       await send({type:'effect',action:{op:'set',layer,key:'sigma',value:{kind:'number',value:sigma}}});
     }
     const layer=await evaluate('Number(layerApp.state().layer_properties.layer)');
+    await evaluate(`for(const {id} of layerApp.state().workspace.layout.panels)layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:id,visible:['toolbar','commands','properties'].includes(id)}})`);await settle();
+    const width=await evaluate('innerWidth');
     for(const theme of ['dark','light']) {
       await send({type:'set_theme',theme});await send({type:'set_zoom',zoom:.5});
       assert.equal(await evaluate('layerApp.state().camera.zoom'),.5);
-      for(const [step,[center,sigma]] of [[[2400,1600],13],[[3300,2100],21],[[2400,1600],0],[[2400,1600],7]].entries()) {
+      const before=(await radius()).value.value;assert.equal((await radius()).kind.numeric.max,85);
+      await editRadius('85',false);assert.equal((await radius()).value.value,before,'Cancelling the generic Radius draft preserves its value');
+      await editRadius('85');assert.equal((await radius()).value.value,85);
+      await send({type:'invoke',command:'undo'});assert.equal((await radius()).value.value,before,'Radius85 is one undo step');
+      await send({type:'invoke',command:'redo'});assert.equal((await radius()).value.value,85);
+      await editRadius('86');assert.equal((await radius()).value.value,85,'Generic numeric input respects the shared Radius85 bound');
+      assert.equal(await evaluate('layerApp.state().host_error??null'),null);
+      const radiusShot=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/radius85-${width}-${theme}.png`,Buffer.from(radiusShot.data,'base64'));
+
+      for(const [step,[center,sigma]] of [[[2400,1600],85],[[3300,2100],85],[[2400,1600],0],[[2400,1600],7]].entries()) {
         await send({type:'effect',action:{op:'set',layer,key:'sigma',value:{kind:'number',value:sigma}}});
         await evaluate(`(()=>{const c=layerApp.app.camera(),p=${JSON.stringify(center)},m=c.document_to_surface??[c.zoom,0,0,c.zoom,...c.translation];
           layerApp.app.gesture(m[0]*p[0]+m[2]*p[1]+m[4],m[1]*p[0]+m[3]*p[1]+m[5],c.viewport[0]/2,c.viewport[1]/2,1,0);layerApp.wake();})()`);
@@ -45,10 +64,10 @@ export async function checkSpatialFilterWindows({call,evaluate,settle,canvasPixe
         const presented=await canvasPixels();
         assert.ok(presented.colored>presented.total*.2,'The presented canvas contains the filtered photo');
         const shot=await call('Page.captureScreenshot',{format:'png'});
-        await writeFile(`${directory}/${theme}-${step}.png`,Buffer.from(shot.data,'base64'));
+        await writeFile(`${directory}/${width}-${theme}-${step}.png`,Buffer.from(shot.data,'base64'));
       }
     }
-    console.log('PASS: 24 MP chained spatial filters at 50% zoom, pan round trips, support changes, light and dark themes');
+    console.log('PASS: generic Radius85 draft/cancel/bounds/undo, 24 MP chained spatial filters at 50% zoom, pan round trips and support changes, light and dark themes');
   } finally {
     await evaluate('window.showOpenFilePicker=spatialPicker;delete window.spatialPicker');
   }

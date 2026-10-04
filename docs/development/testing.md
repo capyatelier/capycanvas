@@ -78,8 +78,16 @@ with independent scalar references and real source codecs. GTK journeys are
 `native_curves_calibration_atomic_history`,
 `native_targeted_curves_rgb_contacts_and_cancel` and
 `native_targeted_curves_red_contacts_and_cancel`. Run the calibration and
-targeted journeys with `--tablet`
-for their pen contacts; run each at narrow and wide widths in both themes.
+targeted journeys with `--tablet` for their pen contacts. Calibration defaults
+to the mouse matrix. Use `LAYER_TONAL_CONTACT=pen` or `touch`,
+`LAYER_TONAL_ROLE=Black`, `Gray` or `White`, and `LAYER_TONAL_THEME=Light` or `Dark`
+for one calibration contact per process, so the grouped menu opens before any
+tablet contact. Run at narrow and wide widths in both themes.
+`native_compact_graphs_photo_review` checks the compact Properties controls on a
+real portrait; `native_waveform_photo_sources_channels_and_layout` checks the
+separate monitor's plotted traces, source/channel controls and dock/float/tab/hide
+lifecycle. GPU Waveform tests require spatial reversal, exact histogram count
+conservation, profile/HDR/tiny-alpha classification and odd-sized preview grids.
 `native_targeted_curves_motion_and_latency` measures mouse contacts on the
 private 120 Hz display. Run it with `LAYER_NATIVE_INPUT_TRACE=1` to record input,
 shared curve adoption and presentation times. Its small desktop fixture does
@@ -99,6 +107,11 @@ Source-aware Shadows/Highlights and Clarity use `effect_analysis_tests` in
 in `layer-render-wgpu`. Exercise first use without a settled preview, two stacked
 effects, noncontiguous group storage, clipped input, retained geometry, hidden
 failed backing, animated frozen phases, cancellation and renderer replacement.
+Suspension, parked document activation and renderer replacement must succeed
+when the previous backend rejects analysis retention. Suspended frames must not
+retire resources on that backend; active retention failures still propagate.
+GTK `native_diagnostics_and_gpu_failure_recovery` and `native_document_tab_input`
+exercise the corresponding recovery and parked-document journeys.
 Exact consumers include merge, Frequency Separation, color conversion and Clone
 reference sampling. The existing `local_tone` GPU fixtures compare fractional
 area reduction, finite/subnormal input and actual consumers against independent
@@ -112,9 +125,10 @@ history ownership, stale imports, independent tetrahedral/profile references,
 stacked resources, native-resolution output and buffer reuse during edits.
 Run GTK `native_color_lookup_import_replace_and_persistence` at narrow and wide
 widths. Web `--lookup-transport` and Android
-`embeddedLookupRetainsPixelsAndResourcesWithoutAndroidImport` verify loaded
-resources through save/reopen and renderer or Activity recreation. Their current
-scope preserves imported tables; GTK supplies the Import/Replace controls.
+`colorLookupImportPresetsAndResourceLifetime` exercise the preset selector and
+native file picker, worker parsing, cancellation and stale imports, replacement,
+save/reopen and renderer or Activity recreation. All three hosts embed imported
+tables in the drawing and use the same shared import/history actions.
 
 Renderer tests create and destroy their own GPU device, so
 [`.cargo/config.toml`](../../.cargo/config.toml) runs four test threads unless
@@ -266,10 +280,6 @@ are your task, and remove an entry when you fix it.
   choosing sRGB in Proof Setup after the drawing is saved and reopened).
 - iPad XCTest `testCompactMenuShortcutAcrossPages` and
   `testSettingsTextSelectionShortcut`: XCTest keys don't reach UIKit key commands.
-- Apple Rust `apple_photo_corrections_masks_and_original_samples_remain_revisable_after_worker_reopen`
-  expects controls outside the selected Properties page, and
-  `apple_current_main_drawers_paper_and_zen_use_shared_actions` compares the
-  transient Properties epoch across undo/redo. Both also fail at `b886ccf6b`.
 - Headless Web `--toolbar-components`, `--tonal-selection`, `--editor`, `--hdr`,
   `--proof`, `--raster`, `--selection-tools` and `--shared-workflows`.
 - Tablet Chrome `--workspace-manager` cannot find its new-workspace name input

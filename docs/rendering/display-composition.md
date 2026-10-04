@@ -269,8 +269,12 @@ per idle submission through the same region executor used by exact queries.
 It reduces the exact composite into the retained display window and overview,
 then updates the adjacent presentation mip. When a native hierarchy is resident,
 composition writes directly into it, batching pages that share a prepared source
-window into one command sequence. Only one refinement batch may remain in
-flight. Fresh artwork can prepare and submit behind that batch without waiting
+window into one command sequence. Neighborhood filters prepare the batch's
+combined halo once; the image allowance can reduce the batch below four pages.
+Only one refinement batch may remain in flight. Idle comparisons separate the
+requested paper color from its visibility-adjusted composition color, so hidden
+or translucent paper cannot enqueue empty work behind that batch.
+Fresh artwork can prepare and submit behind that batch without waiting
 for its completion. Required raster work keeps submission backpressure, and
 each held batch owns its completion token. Dependent painting still waits for
 Healing publication.

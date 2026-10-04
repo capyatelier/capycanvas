@@ -71,8 +71,27 @@ pub(super) fn choose(w: &Workspace, input: &mut RemoteInput, name: &str, index: 
         && widget.downcast_ref::<gtk::Label>().is_some_and(|l| l.text() == label);
     until(|| widgets(dropdown.upcast_ref()).any(|widget| visible_option(&widget)), &format!("native {name} popup choice {label}"));
     let item = widgets(dropdown.upcast_ref()).find(visible_option).unwrap();
-    input.click(screen_point(&item, &w.window, [0.5, 0.5]));
-    assert_eq!(dropdown.selected(), index);
+    let mut point=screen_point(&item,&w.window,[0.5,0.5]);
+    let mut parent=item.native().and_downcast::<gtk::Popover>().and_then(|popup|popup.surface()).and_downcast::<gtk::gdk::Popup>().and_then(|popup|popup.parent());
+    while let Some(popup)=parent.and_downcast::<gtk::gdk::Popup>() {
+        point[0]+=popup.position_x() as f32;point[1]+=popup.position_y() as f32;parent=popup.parent();
+    }
+    input.click(point);
+    assert_eq!(dropdown.selected(), index, "native {name} choice {label}; histogram source/channel {}/{}, waveform source/channel {}/{}", state(w).histogram.source, state(w).histogram.channel, state(w).waveform.source, state(w).waveform.channel);
+}
+
+fn precision_label(w:&Workspace,output:&std::path::Path,prefix:&str,width:i32,theme:Theme) {
+    pump(100);let label=histogram_widget::<gtk::Label>(w,&format!("{prefix}-status"));
+    let (_,natural,_,_)=label.measure(gtk::Orientation::Horizontal,-1);let layout=label.layout();
+    let preview=w.localization().text(layer_ui::MessageId::RESOURCES_HISTOGRAM_PREVIEW);let preview_width=label.create_pango_layout(Some(&preview)).pixel_size().0;
+    let footer=label.parent().unwrap();let children=widgets(&footer).map(|widget| {let (minimum,natural,_,_)=widget.measure(gtk::Orientation::Horizontal,-1);let bounds=widget.compute_bounds(&footer).unwrap();serde_json::json!({"name":widget.widget_name().to_string(),"type":widget.type_().name(),"css":widget.css_classes().iter().map(|class|class.to_string()).collect::<Vec<_>>(),"bounds":[bounds.x(),bounds.y(),bounds.width(),bounds.height()],"minimum_width":minimum,"natural_width":natural})}).collect::<Vec<_>>();
+    let measurement=serde_json::json!({"text":label.text().to_string(),"allocated_width":label.width(),"natural_width":natural,"layout_pixels":layout.pixel_size(),"ellipsized":layout.is_ellipsized(),"preview_text":preview,"preview_width":preview_width,"footer_width":footer.width(),"widgets":children});
+    std::fs::write(output.join(format!("{prefix}-precision-{width}-{theme:?}.json")),serde_json::to_vec_pretty(&measurement).unwrap()).unwrap();
+    assert!(label.is_mapped() && !layout.is_ellipsized(),"precision status must be fully readable: {measurement}");
+    assert!(label.width()>=preview_width,"Preview precision must fit the same status allocation: {measurement}");
+    let panel=histogram_widget::<gtk::Box>(w,&format!("{prefix}-panel"));let bounds=footer.compute_bounds(&panel).unwrap();assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=panel.width() as f32+1.,"footer remains inside panel: {measurement}");let bounds=panel.compute_bounds(&w.window).unwrap();assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=w.window.width() as f32+1.,"precision minimum does not overflow the private window: {measurement}");
+    let kind=if prefix=="waveform" {Panel::Waveform} else {Panel::Histogram};let group=w.groups.borrow().iter().find(|group|group.panels.contains(&kind) && group.root.is_mapped()).unwrap().root.clone();let bounds=label.compute_bounds(&group).unwrap();assert!(bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1. && bounds.y()+bounds.height()<=group.height() as f32+1.,"precision status is not clipped by its dock group: {bounds:?} in {}x{}; {measurement}",group.width(),group.height());
+    let view=state(w);let expected=if prefix=="waveform" {view.waveform.status.as_ref()} else {view.histogram.status.as_ref()};assert_eq!(label.text().as_str(),expected);
 }
 
 fn tab(w: &Workspace, input: &mut RemoteInput, panel: Panel) {
@@ -94,7 +113,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         w.customize(CustomizationAction::SetPanelVisible { panel, visible: false });
     }
     w.dispatch(UiAction::Customize { action: CustomizationAction::CloseExpanded });
-    let output = artifact_dir("../../artifacts/photo-editing-color/p16-gtk");
+    let output = artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk");
     std::fs::create_dir_all(&output).unwrap();
     let mut before = super::place_source::snapshot(&w);
     for theme in [Theme::Light, Theme::Dark] {
@@ -108,6 +127,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         assert!(w.histogram.root.is_mapped());
         choose(&w, &mut input, "histogram-channel", 4);
         assert_eq!(state(&w).histogram.channel, 4);
+        let chart = histogram_widget::<gtk::DrawingArea>(&w, "histogram-chart");assert!(chart.height() >= 120 && chart.width() as f32 >= w.histogram.root.width() as f32 * 0.8);
         let logarithmic = histogram_widget::<gtk::CheckButton>(&w, "histogram-log");
         input.click(screen_point(logarithmic.upcast_ref(), &w.window, [0.5, 0.5]));
         assert!(state(&w).histogram.logarithmic);
@@ -141,7 +161,7 @@ fn native_composite_histogram_updates_without_changing_the_drawing() {
         assert_eq!(*completed(&w), *initial);
         before = super::place_source::snapshot(&w);
         let unmarked = super::photo_edit::shown(&w, [8., 8.]);
-        let shadows = histogram_widget::<gtk::CheckButton>(&w, "histogram-shadows");
+        let shadows = histogram_widget::<gtk::ToggleButton>(&w, "histogram-shadows");
         input.click(screen_point(shadows.upcast_ref(), &w.window, [0.5, 0.5]));
         assert!(state(&w).histogram.shadows);
         pump(200);
@@ -241,7 +261,7 @@ fn native_curves_histogram_preserves_numeric_focus() {
     let layer = state(&w).layer_properties.layer.unwrap();
     let set = |key: &str, value| w.dispatch(UiAction::Effect { action: EffectAction::Set { layer, key: key.into(), value } });
     set("curve_0", EffectValue::Curve(vec![[0., 0.], [0.5, 0.5], [1., 1.]]));
-    let output = artifact_dir("../../artifacts/photo-editing-color/p16-gtk");
+    let output = artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk");
     std::fs::create_dir_all(&output).unwrap();
     for theme in [Theme::Light, Theme::Dark] {
         w.dispatch(UiAction::SetTheme { theme: Some(theme) });
@@ -251,16 +271,25 @@ fn native_curves_histogram_preserves_numeric_focus() {
         let graph = histogram_widget::<gtk::DrawingArea>(&w, "property-curve_0-graph");
         scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(), &w.window, [0.5, 0.5]));
         let field = histogram_widget::<gtk::Widget>(&w, "property-curve_0-output");
-        let spin = descendant::<gtk::SpinButton>(&field).unwrap();spin.grab_focus();pump(50);
-        let text = spin.text();
+        let control = field.clone().downcast::<crate::number_control::NumberControl>().unwrap();
+        let display = find_css(control.upcast_ref(), "number-value").unwrap();input.click(screen_point(&display, &w.window, [0.5, 0.5]));
+        let entry = descendant::<gtk::Entry>(&control).unwrap();let scroll=widgets(w.effects.properties.upcast_ref()).find_map(|widget|widget.downcast::<gtk::ScrolledWindow>().ok());let horizontal=scroll.as_ref().map(|scroll|scroll.hadjustment().value());entry.set_text("0.12345678901234567890123456789");let text = entry.text();pump(150);
+        let focus = gtk::prelude::RootExt::focus(&w.window);
+        for widget in widgets(w.effects.properties.upcast_ref()).filter(|widget|widget.is_mapped()) {
+            let bounds=widget.compute_bounds(&w.window).unwrap();let (minimum,natural,_,_)=widget.measure(gtk::Orientation::Horizontal,-1);
+            if minimum>100 || widget==control || widget==entry {eprintln!("HDR layout type={} name={} css={:?} min={} natural={} bounds={:?} entry={:?}",widget.type_().name(),widget.widget_name(),widget.css_classes(),minimum,natural,bounds,widget.downcast_ref::<gtk::Entry>().map(|entry|(entry.width_chars(),entry.max_width_chars())));}
+        }
+        crate::snapshot(&w).save_to_png(std::path::Path::new(output).join(format!("curves-long-draft-{}-{theme:?}.png",w.window.width()))).unwrap();
+        assert!(graph.width() >= 200 && graph.height() >= 200, "compact curve keeps its drawable graph visible");let graph_bounds=graph.compute_bounds(&w.window).unwrap();assert!(graph_bounds.x()>=0. && graph_bounds.x()+graph_bounds.width()<=w.window.width() as f32,"HDR draft cannot overflow the graph");if let Some(scroll)=scroll {assert_eq!(Some(scroll.hadjustment().value()),horizontal,"long exact draft scrolls within its editor, not the panel");}
         set("curve_1", EffectValue::Curve(vec![[0., 0.], [0.5, 0.25], [1., 1.]]));
         let checkpoint = ui_session(&w).engine().checkpoint();
         until(|| state(&w).tonal_histogram.data.as_ref().is_some_and(|data| **data != *initial), "channel edit publishes new embedded statistics");
         let updated = tonal_completed(&w);
         assert_ne!(*updated, *initial, "RGB page reads the nonneutral channel stages");
-        assert_eq!(descendant::<gtk::SpinButton>(&histogram_widget::<gtk::Widget>(&w, "property-curve_0-output")).unwrap(), spin);
-        assert_eq!(spin.text(), text);
-        assert!(spin.has_focus() || descendant::<gtk::Text>(&spin).unwrap().has_focus(), "statistics publication preserves numeric focus");
+        assert_eq!(histogram_widget::<gtk::Widget>(&w, "property-curve_0-output"), field);
+        assert_eq!(entry.text(), text);
+        assert_eq!(gtk::prelude::RootExt::focus(&w.window), focus, "statistics publication preserves numeric focus");
+        input.key(0xff1b);
         assert_eq!(ui_session(&w).engine().checkpoint(), checkpoint, "statistics do not enter undo history");
         for page in 1..=3 {
             choose(&w, &mut input, "properties-page", page);
@@ -271,13 +300,21 @@ fn native_curves_histogram_preserves_numeric_focus() {
         choose(&w, &mut input, "properties-page", 0);
         choose(&w, &mut input, "property-domain", 1);
         assert!(matches!(tonal_completed(&w).domain, HistogramDomain::CurveLog { .. }));
+        let controls=state(&w).layer_properties.controls;let control=controls.iter().find(|control|control.key=="curve_0").unwrap();let curve=control.curve.as_ref().unwrap();let EffectValue::Curve(points)=&control.value else {panic!("curve value")};let point=points[1];let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(),&w.window,[curve.domain.encode(point[0] as f64) as f32,1.-curve.domain.encode(point[1] as f64) as f32]));pump(150);
+        assert!(state(&w).layer_properties.controls.iter().find(|control|control.key=="curve_0").unwrap().curve.as_ref().unwrap().output.as_ref().unwrap().ev.is_some());
+
+        for widget in widgets(w.effects.properties.upcast_ref()).filter(|widget|widget.is_mapped()) {
+            let (minimum,natural,_,_)=widget.measure(gtk::Orientation::Horizontal,-1);
+            if minimum>100 || widget.downcast_ref::<gtk::Label>().is_some() {eprintln!("HDR Log type={} name={} min={} natural={} bounds={:?} text={:?}",widget.type_().name(),widget.widget_name(),minimum,natural,widget.compute_bounds(&w.window),widget.downcast_ref::<gtk::Label>().map(|label|label.text()));}
+        }
+
         let before = super::place_source::snapshot(&w);
-        let shadows = histogram_widget::<gtk::CheckButton>(&w, "curve-shadows");
+        let shadows = histogram_widget::<gtk::ToggleButton>(&w, "curve-shadows");
         scroll_to(shadows.upcast_ref());input.click(screen_point(shadows.upcast_ref(), &w.window, [0.5, 0.5]));
         assert!(state(&w).histogram.shadows);assert_eq!(super::place_source::snapshot(&w), before);
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("curves-log-{width}-{theme:?}.png"))).unwrap();
         input.click(screen_point(shadows.upcast_ref(), &w.window, [0.5, 0.5]));
-        let highlights = histogram_widget::<gtk::CheckButton>(&w, "curve-highlights");
+        let highlights = histogram_widget::<gtk::ToggleButton>(&w, "curve-highlights");
         scroll_to(highlights.upcast_ref());input.click(screen_point(highlights.upcast_ref(), &w.window, [0.5, 0.5]));
         assert!(state(&w).histogram.highlights);assert_eq!(super::place_source::snapshot(&w), before);
         input.click(screen_point(highlights.upcast_ref(), &w.window, [0.5, 0.5]));
@@ -292,6 +329,107 @@ fn native_curves_histogram_preserves_numeric_focus() {
         crate::snapshot(&w).save_to_png(std::path::Path::new(&output).join(format!("curves-encoded-{width}-{theme:?}.png"))).unwrap();
     }
     input.finish();w.window.close();pump(100);
+}
+
+#[allow(deprecated)]
+pub(super) fn photo_workspace(app: &NativeTestApp) -> Rc<Workspace> {
+    let w=Workspace::with_project(app,Some((new_drawing(512,512,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+    w.window.maximize();w.window.present();ready(&w);
+    let weak=Rc::downgrade(&w);
+    *w.open_document.borrow_mut()=Some(Rc::new(move |project,location,origin| {if let Some(w)=weak.upgrade() {w.documents.enqueue(&w,(project,location,origin));}}));
+    invoke(&w,CommandId::OpenDocument);let dialog=super::new_photo::chooser();
+    let photo=std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../artifacts/photo-editing-color/g2-inputs/portrait.png");
+    dialog.set_file(&gtk::gio::File::for_path(photo)).unwrap();pump(200);dialog.response(gtk::ResponseType::Accept);
+    super::new_photo::finish(&w);ready(&w);
+    assert!(super::photo_edit::document(&w).layers.iter().any(|layer|layer.source.is_some()));w
+}
+
+#[test]
+#[ignore = "private compositor, hardware GPU and native input"]
+fn native_compact_graphs_photo_review() {
+    let app=native_test_app("art.capycanvas.CompactGraphs");let w=photo_workspace(&app);
+    let width=w.window.width();assert!(matches!(width,640|1100));
+    let output=std::path::PathBuf::from(artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk"));
+    let mut input=RemoteInput::new().settle_ms(150).timeout_secs(30);input.ready();
+    for panel in Panel::ALL {w.customize(CustomizationAction::SetPanelVisible {panel,visible:matches!(panel,Panel::Toolbar|Panel::Commands|Panel::Properties)});}
+    w.customize(CustomizationAction::CloseExpanded);w.dispatch(UiAction::MovePanel {panel:Panel::Properties,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[width as f32,800.]});
+    invoke(&w,CommandId::FitCanvas);let original=super::photo_edit::document(&w);
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);
+        for effect in ["levels","curves","white_balance","color_lookup"] {
+            w.dispatch(UiAction::Effect {action:layer_ui::EffectAction::Insert {effect:effect.into()}});ready(&w);pump(200);
+            if effect=="curves" {
+                let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");let bounds=graph.compute_bounds(&w.window).unwrap();assert!(bounds.width()>=200. && bounds.height()>=200.);assert!(bounds.y()>=0. && bounds.y()+bounds.height()<=800.);assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"curve chart remains inside the private viewport");for axis in ["input","output"] {let field=histogram_widget::<gtk::Widget>(&w,&format!("property-curve_0-{axis}"));let bounds=field.compute_bounds(&w.window).unwrap();assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"paired coordinate {axis} remains visible");}
+                input.perform(serde_json::json!([{"point":screen_point(graph.upcast_ref(),&w.window,[0.5,0.5]),"down":true},{"point":screen_point(graph.upcast_ref(),&w.window,[0.5,0.65])},{"down":false}]));ready(&w);
+            }
+            if effect=="color_lookup" {
+                let cube=output.join("photo-review.cube");std::fs::write(&cube,super::pointwise::lookup_cube("Inverse gradient",false)).unwrap();super::pointwise::import_lookup(&w,Some(&cube),&mut input);let choice=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice");assert_eq!(choice.selected_item().unwrap().downcast::<gtk::StringObject>().unwrap().string(),"Inverse gradient");crate::snapshot(&w).save_to_png(output.join(format!("photo-lookup-loaded-{width}-{theme:?}.png"))).unwrap();
+                let title="夕空の色彩調整と深い青の階調".repeat(8);std::fs::write(&cube,super::pointwise::lookup_cube(&title,true)).unwrap();super::pointwise::import_lookup(&w,Some(&cube),&mut input);assert_eq!(named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"property-resource-choice").selected_item().unwrap().downcast::<gtk::StringObject>().unwrap().string(),title);
+            }
+            if matches!(effect,"levels"|"curves") {
+                crate::snapshot(&w).save_to_png(output.join(format!("photo-{effect}-{width}-{theme:?}.png"))).unwrap();
+                let menu=named::<gtk::MenuButton>(w.effects.properties.upcast_ref(),"property-picker-menu");assert!(menu.is_mapped());let actions=state(&w).layer_properties.actions;let before_focus=gtk::prelude::RootExt::focus(&w.window);let bounds=menu.compute_bounds(&w.window).unwrap();assert!(bounds.x()>=0. && bounds.x()+bounds.width()<=width as f32,"grouped picker is fully inside the panel");let point=screen_point(menu.upcast_ref(),&w.window,[0.5,0.5]);let hit=w.window.pick(point[0] as f64,point[1] as f64,gtk::PickFlags::DEFAULT).unwrap();assert!(hit==menu || hit.is_ancestor(&menu),"native grouped picker contact hits {hit:?}");input.click(screen_point(menu.upcast_ref(),&w.window,[0.5,0.5]));assert_eq!(named::<gtk::MenuButton>(w.effects.properties.upcast_ref(),"property-picker-menu"),menu,"graph focus-leave retains grouped picker widget");assert!(menu.root().is_some());
+                let opened=std::panic::catch_unwind(std::panic::AssertUnwindSafe(||until(||menu.popover().is_some_and(|p|p.is_mapped()),"compact calibration choices")));if let Err(error)=opened {crate::snapshot(&w).save_to_png(output.join(format!("menu-failed-{effect}-{width}-{theme:?}.png"))).unwrap();eprintln!("compact menu timeout: old mapped {} parent {:?} focus before {:?} after {:?}, actions before {:?} after {:?}",menu.is_mapped(),menu.parent(),before_focus,gtk::prelude::RootExt::focus(&w.window),actions,state(&w).layer_properties.actions);std::panic::resume_unwind(error);}
+                assert_eq!(widgets(menu.upcast_ref()).filter(|widget|widget.is_mapped() && widget.widget_name()=="property-picker").count(),3);input.key(0xff1b);
+            }
+            crate::snapshot(&w).save_to_png(output.join(format!("photo-{effect}-{width}-{theme:?}.png"))).unwrap();
+            let edited=super::photo_edit::document(&w);for layer in &original.layers {assert_eq!(edited.layer(layer.id).unwrap().source,layer.source);assert_eq!(edited.layer(layer.id).unwrap().raster,layer.raster);}
+            w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);assert_eq!(super::photo_edit::document(&w).layers,original.layers);
+        }
+    }
+    input.finish();w.window.destroy();pump(100);
+}
+
+#[test]
+#[ignore = "private compositor, hardware GPU and native input"]
+fn native_waveform_photo_sources_channels_and_layout() {
+    let app=native_test_app("art.capycanvas.WaveformReview");let w=photo_workspace(&app);let width=w.window.width();assert!(matches!(width,640|1100));
+    let output=std::path::PathBuf::from(artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk"));let mut input=RemoteInput::new().settle_ms(150).timeout_secs(30);input.ready();
+    let before=super::place_source::snapshot(&w);
+    let done=|| {until(||state(&w).waveform.status.as_ref()=="Exact" && state(&w).waveform.data.as_ref().is_some_and(|data|data.waveform.is_some()),"exact spatial waveform");state(&w).waveform.data.unwrap()};
+    for theme in [Theme::Light,Theme::Dark] {
+        w.dispatch(UiAction::RestoreWorkspace {workspace:Box::new(layer_ui::WorkspaceState {layout:layer_ui::WorkspacePreset::Photographer.layout(Platform::Gtk),..Default::default()})});
+        w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);invoke(&w,CommandId::FitCanvas);
+        let layout=state(&w).workspace.layout;let group=layout.panel_group(Panel::Histogram).unwrap();assert_eq!(group,14);assert_eq!(layout.panel_group(Panel::Waveform),Some(group));
+        assert!(w.groups.borrow().iter().any(|group|group.panels==[Panel::Histogram,Panel::Waveform]));assert!(named::<gtk::DrawingArea>(w.window.upcast_ref(),"histogram-chart").is_mapped());completed(&w);
+        precision_label(&w,&output,"histogram",width,theme);
+        crate::snapshot(&w).save_to_png(output.join(format!("photo-default-scopes-{width}-{theme:?}.png"))).unwrap();
+        std::fs::write(output.join(format!("photo-default-measurements-{width}-{theme:?}.json")),serde_json::to_vec_pretty(&serde_json::json!({"layout":state(&w).workspace.layout,"measurements":state(&w).workspace.layout.measurements})).unwrap()).unwrap();
+
+        let menu=named::<gtk::PopoverMenu>(w.window.upcast_ref(),"workspace-menu");menu.popup();pump(150);let model=ui_session(&w).application_menu(layer_ui::ApplicationMenu::Window);let label=model.sections.iter().flatten().find(|item|matches!(item.action,Some(UiAction::Customize {action:CustomizationAction::SetPanelVisible {panel:Panel::Waveform,..}}))).unwrap().label.clone();assert!(menu_action(&menu.menu_model().unwrap(),&label).is_some());menu.popdown();pump(100);
+        tab(&w,&mut input,Panel::Waveform);assert_eq!(state(&w).waveform.channel,0);
+        let initial=done();precision_label(&w,&output,"waveform",width,theme);assert!(initial.pixels>0);let chart=histogram_widget::<gtk::DrawingArea>(&w,"waveform-chart");assert!((160..=240).contains(&chart.height()));assert!(chart.width()>=histogram_widget::<gtk::Box>(&w,"waveform-panel").width()-2);
+        let colors=state(&w).palette.histogram_colors().map(|color|color.0);let mut timings=Vec::new();
+        for channel in [0,4] {for logarithmic in [false,true] {
+            let mut view=state(&w).waveform;view.channel=channel;view.logarithmic=logarithmic;
+            for _ in 0..3 {std::hint::black_box(view.waveform_premultiplied_rgba(colors).unwrap());}
+            let mut samples=Vec::new();let mut dimensions=[0,0];
+            for _ in 0..20 {let started=std::time::Instant::now();let rgba=std::hint::black_box(view.waveform_premultiplied_rgba(colors).unwrap());samples.push(started.elapsed().as_secs_f64()*1000.);dimensions=rgba.0;}
+            samples.sort_by(f64::total_cmp);timings.push(serde_json::json!({"channel":channel,"logarithmic":logarithmic,"dimensions":dimensions,"warmup_iterations":3,"sample_count":20,"min_ms":samples[0],"median_ms":(samples[9]+samples[10])/2.,"p99_ms":samples[19],"samples_ms":samples}));
+        }}
+        std::fs::write(output.join(format!("waveform-rgba-timing-{width}-{theme:?}.json")),serde_json::to_vec_pretty(&serde_json::json!({"source_pixels":initial.pixels,"reference_tier_qualification":false,"timings":timings})).unwrap()).unwrap();
+        choose(&w,&mut input,"waveform-channel",4);pump(200);crate::snapshot(&w).save_to_png(output.join(format!("waveform-luma-{width}-{theme:?}.png"))).unwrap();
+        for channel in [0,1,2,3,4] {choose(&w,&mut input,"waveform-channel",channel);assert_eq!(state(&w).waveform.channel,channel as u8);assert_eq!(*done(),*initial);}
+        choose(&w,&mut input,"waveform-source",1);assert_eq!(state(&w).waveform.source,1);done();choose(&w,&mut input,"waveform-source",0);
+        let log=histogram_widget::<gtk::CheckButton>(&w,"waveform-log");let logarithmic=state(&w).waveform.logarithmic;input.click(screen_point(log.upcast_ref(),&w.window,[0.5,0.5]));assert_eq!(state(&w).waveform.logarithmic,!logarithmic);
+        input.click(screen_point(log.upcast_ref(),&w.window,[0.5,0.5]));assert_eq!(state(&w).waveform.logarithmic,logarithmic);
+        choose(&w,&mut input,"waveform-channel",0);pump(200);let bounds=chart.compute_bounds(&w.window).unwrap();let texture=crate::snapshot(&w);let mut pixels=vec![0;texture.width() as usize*texture.height() as usize*4];texture.download(&mut pixels,texture.width() as usize*4);let sx=texture.width() as f32/w.window.width() as f32;let sy=texture.height() as f32/w.window.height() as f32;
+        let colored=(bounds.y() as u32..(bounds.y()+bounds.height()) as u32).any(|y|(bounds.x() as u32..(bounds.x()+bounds.width()) as u32).any(|x| {let at=((y as f32*sy) as usize*texture.width() as usize+(x as f32*sx) as usize)*4;let pixel=&pixels[at..at+3];pixel.iter().max().unwrap()-pixel.iter().min().unwrap()>20}));assert!(colored,"native RGB waveform plot contains drawn channel traces");
+        texture.save_to_png(output.join(format!("waveform-photo-{width}-{theme:?}.png"))).unwrap();std::fs::write(output.join(format!("waveform-layout-{width}-{theme:?}.json")),serde_json::to_vec_pretty(&serde_json::json!({"window":[w.window.width(),w.window.height()],"chart":[bounds.x(),bounds.y(),bounds.width(),bounds.height()],"pixels":initial.pixels})).unwrap()).unwrap();
+        w.dispatch(UiAction::MovePanel {panel:Panel::Waveform,target:DockTarget::Float {position:[70.,150.]},viewport:[width as f32,800.]});done();pump(200);
+        let group=w.groups.borrow().iter().find(|group|group.floating && group.panels.contains(&Panel::Waveform)).unwrap().root.clone();
+        crate::snapshot(&w).save_to_png(output.join(format!("waveform-floating-{width}-{theme:?}.png"))).unwrap();
+        for name in ["waveform-source","waveform-channel","waveform-log","waveform-chart","waveform-status","waveform-shadows","waveform-highlights"] {
+            let widget=histogram_widget::<gtk::Widget>(&w,name);let bounds=widget.compute_bounds(&group).unwrap();
+            assert!(bounds.x()>=-1. && bounds.y()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1. && bounds.y()+bounds.height()<=group.height() as f32+1.,"floating {name} bounds {bounds:?} within {}x{}",group.width(),group.height());
+        }
+        let clipping=histogram_widget::<gtk::ToggleButton>(&w,"waveform-shadows");clipping.grab_focus();let focus=gtk::prelude::RootExt::focus(&w.window);let active=state(&w).histogram.shadows;input.key(0x20);assert_eq!(state(&w).histogram.shadows,!active);assert_eq!(gtk::prelude::RootExt::focus(&w.window),focus);input.key(0x20);assert_eq!(state(&w).histogram.shadows,active);
+        invoke(&w,CommandId::Histogram);completed(&w);pump(200);crate::snapshot(&w).save_to_png(output.join(format!("histogram-photo-{width}-{theme:?}.png"))).unwrap();let group=state(&w).workspace.layout.panel_group(Panel::Histogram).unwrap();w.dispatch(UiAction::MovePanel {panel:Panel::Waveform,target:DockTarget::Tab {group,index:None},viewport:[width as f32,800.]});pump(200);tab(&w,&mut input,Panel::Histogram);until(||state(&w).waveform.data.is_none(),"inactive Waveform tab releases its plot");assert!(completed(&w).pixels>0);tab(&w,&mut input,Panel::Waveform);done();w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::Channel {index:4}});assert_eq!(state(&w).waveform.channel,0,"monitor channels are independent");
+        w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Histogram,visible:false});w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"hidden Waveform releases demand");assert_eq!(super::place_source::snapshot(&w),before);
+        invoke(&w,CommandId::Waveform);done();w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Waveform,visible:false});until(||state(&w).waveform.data.is_none(),"Waveform closes");
+        w.dispatch(UiAction::Histogram {action:layer_ui::HistogramAction::WaveformLogarithmic {enabled:true}});
+    }
+    input.finish();w.window.destroy();pump(100);
 }
 
 #[test]
@@ -325,14 +463,10 @@ fn native_histogram_live_language() {
     let channel = histogram_widget::<gtk::DropDown>(&w, "histogram-channel");
     let models = [source.model().unwrap(), channel.model().unwrap()];
     let status = histogram_widget::<gtk::Label>(&w, "histogram-status");
-    let details = histogram_widget::<gtk::Expander>(&w,"histogram-details");
-    scroll_to(details.upcast_ref());input.click(screen_point(details.upcast_ref(),&w.window,[0.5,0.5]));
-    until(||details.is_expanded(),"native histogram Details expansion");
-    let description = histogram_widget::<gtk::Label>(&w, "histogram-description");
-    let range = histogram_widget::<gtk::Label>(&w, "histogram-range");
     let chart = histogram_widget::<gtk::DrawingArea>(&w, "histogram-chart");
-    let options = ["histogram-log", "histogram-shadows", "histogram-highlights"]
-        .map(|name| histogram_widget::<gtk::CheckButton>(&w, name));
+    let logarithmic = histogram_widget::<gtk::CheckButton>(&w, "histogram-log");
+    let histogram_clipping = ["histogram-shadows", "histogram-highlights"]
+        .map(|name| histogram_widget::<gtk::ToggleButton>(&w, name));
     let switch = |language| {
         let index = 1 + layer_ui::localization::SHIPPED_LANGUAGES.iter().position(|candidate| *candidate == language).unwrap() as u32;
         w.dispatch(UiAction::Preferences { action:PreferenceAction::Edit { id:PreferenceId::Language, value:PreferenceValue::Choice(index) } });
@@ -387,14 +521,20 @@ fn native_histogram_live_language() {
                 assert_eq!(histogram_widget::<gtk::DrawingArea>(&w,"histogram-chart"),chart);
                 assert_eq!(histogram_widget::<gtk::Label>(&w,"histogram-status"),status);
                 assert_eq!(status.text(),w.localization().text(MessageId::RESOURCES_HISTOGRAM_EXACT).as_ref());
-                assert_eq!(description.text(),view.description);assert_eq!(range.text(),view.range);
+                assert_eq!(chart.tooltip_text().as_deref(),Some(format!("{}\n{}",view.description,view.range).as_str()));
+                assert_eq!(status.tooltip_text().as_deref(),Some(view.status.as_ref()));
+                assert_eq!(histogram_widget::<gtk::DropDown>(&w,"histogram-source"),source);
+                assert_eq!(histogram_widget::<gtk::DropDown>(&w,"histogram-channel"),channel);
                 for (dropdown,labels) in [(&source,&view.sources),(&channel,&view.channels)] {
                     let model=dropdown.model().unwrap().downcast::<gtk::StringList>().unwrap();
                     assert_eq!(model.n_items(),labels.len() as u32);
                     for (index,label) in labels.iter().enumerate() {assert_eq!(model.string(index as u32).unwrap(),label.as_ref());}
                 }
-                for (index,option) in options.iter().enumerate() {
-                    assert!(option.is_active());assert_eq!(option.label().as_deref(),Some(view.labels[index].as_ref()));
+                assert_eq!(histogram_widget::<gtk::CheckButton>(&w,"histogram-log"),logarithmic);
+                assert!(logarithmic.is_active());assert_eq!(logarithmic.label().as_deref(),Some(view.labels[0].as_ref()));
+                for (index,button) in histogram_clipping.iter().enumerate() {
+                    assert_eq!(histogram_widget::<gtk::ToggleButton>(&w,if index==0 {"histogram-shadows"}else{"histogram-highlights"}),*button);
+                    assert!(button.is_active());assert_eq!(button.tooltip_text().as_deref(),Some(view.labels[index+1].as_ref()));
                 }
                 assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);
                 assert_eq!(super::place_source::snapshot(&w),persisted,"source ICC bytes, selection, artwork and undo state survive histogram publication");
@@ -415,31 +555,39 @@ fn native_histogram_live_language() {
     let graph=histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph");
     scroll_to(graph.upcast_ref());input.click(screen_point(graph.upcast_ref(),&w.window,[0.5,0.5]));
     let field=histogram_widget::<gtk::Widget>(&w,"property-curve_0-output");
-    let spin=descendant::<gtk::SpinButton>(&field).unwrap();
-    let actions:Vec<_>=widgets(w.effects.properties.upcast_ref())
-        .filter(|widget|widget.is_mapped() && widget.widget_name()=="property-picker")
+    let control=field.clone().downcast::<crate::number_control::NumberControl>().unwrap();
+    let display=find_css(control.upcast_ref(),"number-value").unwrap();input.click(screen_point(&display,&w.window,[0.5,0.5]));
+    let entry=descendant::<gtk::Entry>(&control).unwrap();
+    let picker=histogram_widget::<gtk::MenuButton>(&w,"property-picker-menu");let choices=picker.popover().unwrap();
+    let target=histogram_widget::<gtk::Button>(&w,"property-picker");
+    let actions:Vec<_>=widgets(choices.upcast_ref())
+        .filter(|widget|widget.widget_name()=="property-picker")
         .map(|widget|widget.downcast::<gtk::Button>().unwrap()).collect();
     assert!(!actions.is_empty(),"actual Target adjustment action");
     let page=histogram_widget::<gtk::DropDown>(&w,"properties-page");let page_model=page.model().unwrap();
     let domain=histogram_widget::<gtk::DropDown>(&w,"property-domain");let domain_model=domain.model().unwrap();
-    let statistics=histogram_widget::<gtk::Label>(&w,"curve-statistics");
-    let clipping=["curve-shadows","curve-highlights"].map(|name|histogram_widget::<gtk::CheckButton>(&w,name));
+    let statistics=histogram_widget::<gtk::Label>(&w,"curve-status");
+    let clipping=["curve-shadows","curve-highlights"].map(|name|histogram_widget::<gtk::ToggleButton>(&w,name));
     let scroller=w.effects.properties.ancestor(gtk::ScrolledWindow::static_type()).unwrap().downcast::<gtk::ScrolledWindow>().unwrap();
-    let wrapped_available_width=scroller.width();
     let assert_bounds=|| {
+        let group=w.groups.borrow().iter().find(|group|group.panels.contains(&Panel::Properties) && group.root.is_mapped()).unwrap().root.clone();
+        let outer=scroller.compute_bounds(&group).unwrap();
+        eprintln!("GTK Properties visible {}: group {}x{}, scroller {outer:?}",w.localization().language().tag(),group.width(),group.height());
+        assert!(outer.x()>=-1. && outer.x()+outer.width()<=group.width() as f32+1.,"Properties scroller fits its visible dock group: {outer:?}, {}",group.width());
         let viewport=scroller.width() as f32;
-        assert!(w.effects.properties.measure(gtk::Orientation::Horizontal,-1).0<=wrapped_available_width,"wrapped Properties minimum fits its retained available width");
+        assert!(w.effects.properties.measure(gtk::Orientation::Horizontal,-1).0<=scroller.width(),"compact Properties minimum fits its native viewport");
         let properties=w.effects.properties.compute_bounds(&scroller).unwrap();
         eprintln!("GTK Properties {}: viewport {}, minimum {}, natural {}, bounds {:?}, horizontal adjustment {} / {} / {}",w.localization().language().tag(),viewport,
             w.effects.properties.measure(gtk::Orientation::Horizontal,-1).0,w.effects.properties.measure(gtk::Orientation::Horizontal,-1).1,
             properties,scroller.hadjustment().value(),scroller.hadjustment().upper(),scroller.hadjustment().page_size());
         assert!(properties.x()>=-1. && properties.x()+properties.width()<=viewport+1.,"Properties content fits its native viewport: {properties:?}, {viewport}");
-        let controls=actions.iter().map(|button|button.clone().upcast::<gtk::Widget>())
-            .chain([graph.clone().upcast(),spin.clone().upcast(),page.clone().upcast(),domain.clone().upcast()])
-            .chain(clipping.iter().map(|button|button.clone().upcast()));
+        let controls=[graph.clone().upcast::<gtk::Widget>(),control.clone().upcast(),entry.clone().upcast(),page.clone().upcast(),domain.clone().upcast(),picker.clone().upcast(),target.clone().upcast(),statistics.clone().upcast()]
+            .into_iter().chain(clipping.iter().map(|button|button.clone().upcast()));
         for widget in controls {
             let bounds=widget.compute_bounds(&scroller).unwrap();
             assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=viewport+1.,"{} fits Properties viewport: {bounds:?}, {viewport}",widget.widget_name());
+            let bounds=widget.compute_bounds(&group).unwrap();
+            assert!(bounds.x()>=-1. && bounds.x()+bounds.width()<=group.width() as f32+1.,"{} fits visible Properties dock: {bounds:?}, {}",widget.widget_name(),group.width());
         }
         for label in widgets(w.effects.properties.upcast_ref()).filter(|widget|widget.is_mapped()).filter_map(|widget|widget.downcast::<gtk::Label>().ok()) {
             let bounds=label.compute_bounds(&scroller).unwrap();
@@ -450,8 +598,8 @@ fn native_histogram_live_language() {
     for theme in [Theme::Light,Theme::Dark] {
         w.dispatch(UiAction::SetTheme {theme:Some(theme)});ready(&w);
         let initial=tonal_completed(&w);
-        spin.grab_focus();pump(50);spin.select_region(0,-1);
-        let text=spin.text();let selection=spin.selection_bounds();
+        entry.grab_focus();entry.set_text("0.543210987654321");pump(50);entry.select_region(0,-1);
+        let text=entry.text();let selection=entry.selection_bounds();let focus=gtk::prelude::RootExt::focus(&w.window);
         let checkpoint=ui_session(&w).engine().checkpoint();let persisted=super::place_source::snapshot(&w);
         for &language in layer_ui::localization::SHIPPED_LANGUAGES {
             switch(language);
@@ -460,15 +608,26 @@ fn native_histogram_live_language() {
             assert_eq!(recording_button.tooltip_text().as_deref(),Some(layer_ui::NativeCopy::new(&w.localization()).color.record_tablet.as_ref()));
             assert!(std::sync::Arc::ptr_eq(view.data.as_ref().unwrap(),&initial));
             assert_eq!(histogram_widget::<gtk::DrawingArea>(&w,"property-curve_0-graph"),graph);
-            assert_eq!(descendant::<gtk::SpinButton>(&histogram_widget::<gtk::Widget>(&w,"property-curve_0-output")).unwrap(),spin);
-            let current:Vec<_>=widgets(w.effects.properties.upcast_ref())
-                .filter(|widget|widget.is_mapped() && widget.widget_name()=="property-picker")
+            assert_eq!(histogram_widget::<gtk::Widget>(&w,"property-curve_0-output"),field);
+            assert_eq!(descendant::<gtk::Entry>(&control).unwrap(),entry);
+            assert_eq!(histogram_widget::<gtk::MenuButton>(&w,"property-picker-menu"),picker);
+            assert_eq!(picker.popover().unwrap(),choices);
+            let current:Vec<_>=widgets(choices.upcast_ref())
+                .filter(|widget|widget.widget_name()=="property-picker")
                 .map(|widget|widget.downcast::<gtk::Button>().unwrap()).collect();
-            assert_eq!(current,actions);assert_eq!(current.len(),state(&w).layer_properties.actions.len());
-            for (button,action) in current.iter().zip(&state(&w).layer_properties.actions) {
+            let properties=state(&w).layer_properties;
+            let calibration:Vec<_>=properties.actions.iter().filter(|action|action.group.as_ref().is_some_and(|group|group.id=="calibration")).collect();
+            assert_eq!(current,actions);assert_eq!(current.len(),calibration.len());
+            for (button,action) in current.iter().zip(&calibration) {
                 assert_eq!(button.label().as_deref(),Some(action.label.as_str()));
-                assert_eq!(button.tooltip_text().as_deref(),Some(action.label.as_str()));
             }
+            let targeted=properties.actions.iter().find(|action|matches!(action.action,layer_ui::EffectAction::TargetCurve {..})).unwrap();
+            assert_eq!(histogram_widget::<gtk::Button>(&w,"property-picker"),target);
+            assert_eq!(target.tooltip_text().as_deref(),Some(targeted.label.as_str()));
+            let group=calibration.first().unwrap().group.as_ref().unwrap();
+            assert_eq!(picker.tooltip_text().as_deref(),Some(group.label.as_str()));
+            assert_eq!(histogram_widget::<gtk::DropDown>(&w,"properties-page"),page);
+            assert_eq!(histogram_widget::<gtk::DropDown>(&w,"property-domain"),domain);
             assert_eq!(page.model().unwrap(),page_model);assert_eq!(domain.model().unwrap(),domain_model);
             assert_eq!((page.selected(),domain.selected()),(0,0));
             for dropdown in [&page,&domain] {
@@ -476,24 +635,17 @@ fn native_histogram_live_language() {
                 let label=widgets(dropdown.upcast_ref()).filter(|widget|widget.is_mapped()).filter_map(|widget|widget.downcast::<gtk::Label>().ok()).find(|label|label.text()==selected).unwrap();
                 assert_eq!(label.tooltip_text().as_deref(),Some(selected.as_str()));
             }
-            assert_eq!(spin.text(),text);assert_eq!(spin.selection_bounds(),selection);
-            assert!(spin.has_focus() || descendant::<gtk::Text>(&spin).unwrap().has_focus());
+            assert_eq!(entry.text(),text);assert_eq!(entry.selection_bounds(),selection);
+            assert_eq!(gtk::prelude::RootExt::focus(&w.window),focus,"language publication retains exact numeric draft focus");
             assert_eq!(statistics.text(),w.localization().text(MessageId::RESOURCES_HISTOGRAM_EXACT).as_ref());
-            for (index,button) in clipping.iter().enumerate() {assert_eq!(button.label().as_deref(),Some(state(&w).histogram.labels[index+1].as_ref()));}
-            assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);assert_eq!(super::place_source::snapshot(&w),persisted);
-            if language==UiLanguage::Russian {
-                assert_bounds();
-                let wrapped_viewport=scroller.width();
-                for button in &actions {button.child().and_downcast::<gtk::Label>().unwrap().set_wrap(false);}
-                pump(60);
-                let minimum=w.effects.properties.measure(gtk::Orientation::Horizontal,-1).0;
-                let bounds=w.effects.properties.compute_bounds(&scroller).unwrap();
-                eprintln!("GTK Properties nowrap counterfactual: minimum {minimum}, retained wrapped viewport {wrapped_viewport}, actual viewport {}, bounds {:?}, horizontal adjustment {}",scroller.width(),bounds,scroller.hadjustment().value());
-                assert!(minimum>wrapped_viewport,"old native nowrap labels exceed the retained available width");
-                assert!(scroller.width()>wrapped_viewport || bounds.x()< -1. || bounds.x()+bounds.width()>wrapped_viewport as f32+1.,"actual nowrap labels grow the panel or exceed its retained viewport");
-                save_snapshot(&w,50,||output.join(format!("properties-nowrap-counterfactual-{}-{theme:?}.png",language.tag())));
-                for button in &actions {button.child().and_downcast::<gtk::Label>().unwrap().set_wrap(true);}
+            assert_eq!(histogram_widget::<gtk::Label>(&w,"curve-status"),statistics);
+            assert_eq!(statistics.tooltip_text().as_deref(),Some(view.status.as_ref()));
+            for (index,button) in clipping.iter().enumerate() {
+                assert_eq!(histogram_widget::<gtk::ToggleButton>(&w,if index==0 {"curve-shadows"}else{"curve-highlights"}),*button);
+                assert_eq!(button.is_active(),if index==0 {state(&w).histogram.shadows}else{state(&w).histogram.highlights});
+                assert_eq!(button.tooltip_text().as_deref(),Some(state(&w).histogram.labels[index+1].as_ref()));
             }
+            assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint);assert_eq!(super::place_source::snapshot(&w),persisted);
             pump(60);assert_bounds();
             save_snapshot(&w,50,||output.join(format!("curves-histogram-{}-{theme:?}.png",language.tag())));
             if matches!(language,UiLanguage::French|UiLanguage::German) {
@@ -501,11 +653,12 @@ fn native_histogram_live_language() {
                 let maximized=w.window.is_maximized();let initial_width=w.window.width();
                 let target_width=initial_width.min(744);
                 if maximized {w.window.unmaximize();}
+                until(||!w.window.is_maximized(),"unmaximized Properties window");pump(120);
                 settings.set_property("gtk-font-name","Sans 16");w.window.set_default_size(target_width,780);
-                until(||!w.window.is_maximized() && w.window.width()<=target_width+20 && if initial_width>744 {w.window.width()<initial_width} else {w.window.width()<=initial_width},"actual narrow Properties window");
+                until(||!w.window.is_maximized() && (target_width-20..=target_width+20).contains(&w.window.width()) && (760..=800).contains(&w.window.height()),"actual narrow Properties window");
                 pump(200);assert_bounds();
                 assert!((target_width-20..=target_width+20).contains(&w.window.width()) && (760..=800).contains(&w.window.height()),"actual narrow Properties allocation {} × {}",w.window.width(),w.window.height());
-                assert_eq!(spin.text(),text);assert_eq!(spin.selection_bounds(),selection);
+                assert_eq!(entry.text(),text);assert_eq!(entry.selection_bounds(),selection);
                 save_snapshot(&w,50,||output.join(format!("curves-histogram-large-narrow-{}-{theme:?}.png",language.tag())));
                 eprintln!("GTK Properties {} {theme:?}: actual {} × {}, Sans 16",language.tag(),w.window.width(),w.window.height());
                 settings.set_property("gtk-font-name",font);w.window.set_default_size(size.0,size.1);

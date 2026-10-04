@@ -260,6 +260,7 @@ fn point_between(value: f32, lower: f32, upper: f32) -> f32 {
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum EffectAction {
     ImportLookup {layer:u64,epoch:u64},
+    LookupPreset {layer:u64,epoch:u64,preset:Option<layer_core::lut3d::Look>},
     AutoLevels {layer:u64,epoch:u64},
     TargetCurve {layer:u64,epoch:u64},
     Calibrate { layer: u64, epoch: u64, role:layer_core::levels::CalibrationRole },
@@ -313,7 +314,7 @@ pub enum EffectAction {
 impl EffectAction {
     pub(super) fn property_owner(&self)->Option<(u64,u64)> {
         match self {
-            Self::ImportLookup {layer,epoch}|Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
+            Self::ImportLookup {layer,epoch}|Self::LookupPreset {layer,epoch,..}|Self::AutoLevels {layer,epoch}|Self::TargetCurve {layer,epoch}|Self::Calibrate {layer,epoch,..}
             |Self::CurveSelectPoint {layer,epoch,..}|Self::CurveRemoveAt {layer,epoch,..}
             |Self::CurveContact {layer,epoch,..}|Self::CurveKey {layer,epoch,..}|Self::CurveNumber {layer,epoch,..}=>Some((*layer,*epoch)),
             Self::Gesture {action,..}=>action.property_owner(),
@@ -396,6 +397,8 @@ pub struct LayerPropertiesView {
     pub title: String,
     pub description: String,
     pub resource_name: Option<String>,
+    pub resource_label: Option<String>,
+    pub resource_selection: Option<usize>,
     pub enabled: bool,
     pub controls: Vec<PropertyControl>,
     /// Linear input/output range for HDR curve axes; absent for encoded curves.
@@ -403,7 +406,9 @@ pub struct LayerPropertiesView {
     pub curve_white: Option<f32>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize)]
-pub struct PropertyActionView { pub label: String, pub action: EffectAction }
+pub struct PropertyActionView { pub label: String, pub icon: Option<String>, pub group: Option<PropertyActionGroup>, pub action: EffectAction }
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct PropertyActionGroup { pub id: &'static str, pub label: String }
 #[derive(Clone,Debug,PartialEq,Serialize)]
 pub struct PropertyPageView { pub id:String, pub label:String }
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -605,22 +610,42 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
         let roles:&[_]=match effect.program.id.as_ref() {"white_balance"=>&[CalibrationRole::Gray],"levels"|"curves"=>&[CalibrationRole::Black,CalibrationRole::Gray,CalibrationRole::White],_=>&[]};
         roles.iter().map(|role|PropertyActionView {
             label:l.text(match role {CalibrationRole::Black=>MessageId::RESOURCES_PICKER_BLACK,CalibrationRole::Gray=>MessageId::RESOURCES_PICKER_NEUTRAL,CalibrationRole::White=>MessageId::RESOURCES_PICKER_WHITE}).to_string(),
+            icon:Some("layer-eyedropper-symbolic".into()),
+            group:(roles.len()>1).then(||PropertyActionGroup {id:"calibration",label:l.text(MessageId::RESOURCES_PICKER_POINTS).to_string()}),
             action:EffectAction::Calibrate {layer:view.layer.unwrap(),epoch:view.epoch,role:*role},
         }).collect()
     });
     if let Some(effect) = effect.filter(|effect| matches!(effect.program.auxiliary, Some(layer_core::EffectAuxiliary::Lut3d {..}))) {
+        view.resource_label = Some(l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string());
+        if let Some(layer_core::EffectAuxiliary::Lut3d {color_space,..})=&effect.program.auxiliary {
+            if effect.lut3d().is_none_or(|resource|layer_core::lut3d::Look::for_resource(resource).is_some()
+                && effect.value(color_space)==Some(&EffectValue::Choice(0))) {view.controls.retain(|control|control.key!=color_space.as_ref());}
+        }
         if let Some(resource) = effect.lut3d() {
-            let name = if resource.title().is_empty() {l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string()} else {resource.title().to_string()};
+            let name = layer_core::lut3d::Look::for_resource(resource).map(|look|lookup_preset_label(Some(look),l))
+                .unwrap_or_else(|| if resource.title().is_empty() {l.text(MessageId::RESOURCES_LOOKUP_TABLE).to_string()} else {resource.title().to_string()});
             view.description = name.clone(); view.resource_name = Some(name);
         }
-        view.actions.push(PropertyActionView {label:l.text(if effect.lut3d().is_some() {MessageId::RESOURCES_LOOKUP_REPLACE} else {MessageId::RESOURCES_LOOKUP_IMPORT}).to_string(),
-            action:EffectAction::ImportLookup {layer:view.layer.unwrap(),epoch:view.epoch}});
+        if view.resource_name.is_none() {view.resource_name=Some(lookup_preset_label(None,l));}
+        for preset in [None].into_iter().chain(layer_core::lut3d::Look::ALL.into_iter().map(Some)) {
+            let selected=match (preset,effect.lut3d()) {
+                (None,None)=>true,
+                (Some(look),Some(resource))=>layer_core::lut3d::Look::for_resource(resource)==Some(look)
+                    && matches!(&effect.program.auxiliary,Some(layer_core::EffectAuxiliary::Lut3d {color_space,..}) if effect.value(color_space)==Some(&EffectValue::Choice(0))),
+                _=>false,
+            };
+            if selected {view.resource_selection=Some(view.actions.len());}
+            view.actions.push(PropertyActionView {label:lookup_preset_label(preset,l),icon:None,group:None,
+                action:EffectAction::LookupPreset {layer:view.layer.unwrap(),epoch:view.epoch,preset}});
+        }
+        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_LOOKUP_IMPORT).to_string(),
+            icon:Some("layer-folder-open-symbolic".into()),group:None,action:EffectAction::ImportLookup {layer:view.layer.unwrap(),epoch:view.epoch}});
     }
     if effect.is_some_and(|effect|effect.program.id.as_ref()=="levels") {
-        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_LEVELS_AUTO).to_string(),action:EffectAction::AutoLevels {layer:view.layer.unwrap(),epoch:view.epoch}});
+        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_LEVELS_AUTO).to_string(),icon:None,group:None,action:EffectAction::AutoLevels {layer:view.layer.unwrap(),epoch:view.epoch}});
     }
     if effect.is_some_and(|effect|effect.program.id.as_ref()=="curves") {
-        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_CURVE_TARGETED).to_string(),action:EffectAction::TargetCurve {layer:view.layer.unwrap(),epoch:view.epoch}});
+        view.actions.push(PropertyActionView {label:l.text(MessageId::RESOURCES_CURVE_TARGETED).to_string(),icon:Some("layer-cursor-sight-symbolic".into()),group:None,action:EffectAction::TargetCurve {layer:view.layer.unwrap(),epoch:view.epoch}});
     }
     view.controls.retain(|control|control.page.as_deref().is_none_or(|page|Some(page)==state.page()));
     let domain=effect.filter(|effect|effect.choice("domain")==Some("Log HDR")).and_then(|effect|match effect.value("hdr_stops"){Some(EffectValue::Number(stops))=>Some(CurveDomain::LogHdr{stops:*stops}),_=>None}).unwrap_or(CurveDomain::Encoded);
@@ -637,6 +662,12 @@ pub(super) fn publish_properties(view:&mut LayerPropertiesView,doc:&Document,sta
             axes:[axis(MessageId::RESOURCES_SECTION_LEVELS_INPUT),axis(MessageId::RESOURCES_SECTION_LEVELS_OUTPUT)],domain,
             help:l.text(MessageId::RESOURCES_CURVES_HELP).to_string(),reset_label:l.text(MessageId::RESOURCES_CURVES_RESET).to_string()});
     }
+}
+
+fn lookup_preset_label(preset:Option<layer_core::lut3d::Look>,l:&Localizer)->String {
+    use layer_core::lut3d::Look;
+    l.text(match preset {None=>MessageId::RESOURCES_LOOKUP_ORIGINAL,Some(Look::Warm)=>MessageId::RESOURCES_LOOKUP_WARM,
+        Some(Look::Cool)=>MessageId::RESOURCES_LOOKUP_COOL,Some(Look::Monochrome)=>MessageId::RESOURCES_LOOKUP_MONOCHROME}).to_string()
 }
 pub(super) struct EffectGesture {
     original: Layer,
@@ -772,8 +803,23 @@ impl<R: CanvasRenderer> UiSession<R> {
 
         if self.selection_masks.target().is_some() && !matches!(action, EffectAction::Gesture { .. }) {return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_ARTWORK_REQUIRED).to_string());}
         match action {
+            EffectAction::LookupPreset {layer,epoch,preset} => {
+                if !self.property_editor.accepts(layer,epoch) {return Ok(());}
+                self.cancel_effect_gesture()?;
+                let mut target=self.editable_layer(layer)?;
+                let Some(effect)=&mut target.effect else {return Ok(());};
+                let Some(layer_core::EffectAuxiliary::Lut3d {resource,color_space})=effect.program.auxiliary.clone() else {return Ok(());};
+                let effect=Arc::make_mut(effect);
+                effect.set(&resource,EffectValue::Lut3d(None)).map_err(str::to_string)?;
+                if let Some(preset)=preset {
+                    effect.set(&color_space,EffectValue::Choice(0)).map_err(str::to_string)?;
+                    effect.set(&resource,EffectValue::Lut3d(Some(preset.resource()))).map_err(str::to_string)?;
+                }
+                if self.engine.document().layer(target.id)==Some(&target) {return Ok(());}
+                self.layer_edit(Edit::ReplaceLayer(Box::new(target)))?;
+            }
             EffectAction::ImportLookup {layer,epoch} => {
-                if self.state.platform != Platform::Gtk { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
+                if !matches!(self.state.platform,Platform::Gtk|Platform::Web|Platform::Android) { return Err(self.localization().text(MessageId::RESOURCES_LOOKUP_UNAVAILABLE).to_string()); }
                 if !self.property_editor.accepts(layer,epoch) {return Ok(());}
                 self.cancel_effect_gesture()?;
                 let Some(effect) = self.engine.document().layer(LayerId(layer)).and_then(|layer| layer.effect.as_ref()) else {return Ok(());};

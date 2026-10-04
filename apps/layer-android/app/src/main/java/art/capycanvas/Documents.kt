@@ -49,6 +49,8 @@ internal class DocumentController(private val host: CanvasHost, private val appl
     }
     var picker by mutableStateOf<DocumentPicker?>(null)
         private set
+    var lookupLocation:Uri?=null
+        private set
     var working by mutableStateOf(false)
         private set
     var exportRequest by mutableStateOf<JSONObject?>(null)
@@ -116,6 +118,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val document = request.getJSONObject("kind").getJSONObject("request")
         when (document.getString("type")) {
             "open" -> if (queuedOpen.isEmpty()) picker = DocumentPicker(request, approval.first, approval.second) else transfer(request, queuedOpen.removeFirst(), approval)
+            "import_lookup" -> picker = DocumentPicker(request, approval.first, approval.second)
             "place" -> images.start(request, false)
             "paste" -> host.viewModelScope.launch { if (!clipboard.paste(request)) images.start(request, true) }
             "copy" -> clipboard.copy(request)
@@ -150,6 +153,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         val pending = picker ?: return
         picker = null
         if (uri == null) { complete(pending.request.getInt("id"), false); return }
+        if(pending.request.getJSONObject("kind").getJSONObject("request").getString("type")=="import_lookup")lookupLocation=uri
         val grant = flags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         if (grant != 0) try { application.contentResolver.takePersistableUriPermission(uri, grant) } catch (_: SecurityException) { /* Some providers grant access only for this session. */ }
         transfer(pending.request, uri, pending.epoch to pending.revision)
@@ -355,12 +359,14 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         if (picker != null && !picker.launched) {
             picker.launched = true
             val document = picker.request.getJSONObject("kind").getJSONObject("request")
-            val opening = document.getString("type") in listOf("open", "place")
+            val lookup=document.getString("type")=="import_lookup"
+            val opening = lookup || document.getString("type") in listOf("open", "place")
             val intent = Intent(if (opening) Intent.ACTION_OPEN_DOCUMENT else Intent.ACTION_CREATE_DOCUMENT).apply {
                 addCategory(Intent.CATEGORY_OPENABLE)
                 type = if (opening) "*/*" else if (document.getString("type") == "export") controller.exportMime() else "application/octet-stream"
                 addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
-                if (opening) putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes + "application/octet-stream")
+                if (opening && !lookup) putExtra(Intent.EXTRA_MIME_TYPES, controller.images.mimeTypes + "application/octet-stream")
+                if(lookup) putExtra(android.provider.DocumentsContract.EXTRA_INITIAL_URI,controller.lookupLocation ?: android.provider.DocumentsContract.buildRootUri("com.android.providers.downloads.documents","downloads"))
                 if (document.getString("type") == "open") putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true)
                 if (!opening) putExtra(Intent.EXTRA_TITLE, document.getString("name"))
             }

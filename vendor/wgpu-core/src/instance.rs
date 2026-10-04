@@ -719,7 +719,8 @@ impl Surface {
 
 impl Drop for Surface {
     fn drop(&mut self) {
-        if let Some(present) = self.presentation.lock().take() {
+        let presentation = self.presentation.lock().take();
+        if let Some(present) = presentation {
             for (&backend, surface) in &self.surface_per_backend {
                 if backend == present.device.backend() {
                     unsafe { surface.unconfigure(present.device.raw()) };

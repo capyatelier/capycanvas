@@ -732,6 +732,7 @@ mod tests {
         wait(&r.device, &r.queue)?;
         Ok(guide)
     }
+    fn logical_coverage(sample: &[f32; 4]) -> f64 { f64::from(sample[2]) * 2f64.powi(sample[3] as i32) }
     #[test]
     fn gpu_guide_matches_cpu_for_coverage_range_odd_sizes_and_tiled_reduction() {
         for space in RgbSpace::ALL {
@@ -789,10 +790,11 @@ mod tests {
                 assert!((actual.peak - expected.peak).abs() <= 2e-6 * expected.peak);
                 let mut errors = [0f32; 3];
                 for (a, b) in actual.samples.iter().zip(&expected.samples) {
-                    for c in 0..3 {
+                    for c in 0..2 {
                         assert!(a[c].is_finite());
                         errors[c] = errors[c].max((a[c] - b[c]).abs());
                     }
+                    errors[2] = errors[2].max((logical_coverage(a) - logical_coverage(b)).abs() as f32);
                 }
                 eprintln!("GPU_TONE_ORACLE {space:?} {extent:?} maximum_error={errors:?}");
                 assert!(
@@ -859,7 +861,7 @@ mod tests {
                     }
                     let sample = actual.samples[(gy * actual.extent[0] + gx) as usize];
                     error[0] = error[0].max((sample[0] as f64 - sum[0] / sum[1]).abs());
-                    error[1] = error[1].max((sample[2] as f64 - sum[1]).abs());
+                    error[1] = error[1].max((logical_coverage(&sample) - sum[1]).abs());
                 }
             }
             eprintln!("P25_AREA_EDGE_ORACLE {extent:?} maximum_log_coverage_error={error:?}");
@@ -899,8 +901,8 @@ mod tests {
             for sample in actual.samples {
                 assert!(sample.iter().all(|v| v.is_finite()), "{pixel:?} {sample:?}");
                 let coverage = if representable { f64::from(pixel[3]) } else { 0. };
-                assert!((f64::from(sample[2]) - coverage).abs() <= 2e-7, "{pixel:?} {sample:?}");
-                let expected = if sample[2] > 0. { y.max(2f64.powi(-24)).log2() } else { -24. };
+                assert!((logical_coverage(&sample) - coverage).abs() <= 2e-7, "{pixel:?} {sample:?}");
+                let expected = if coverage > 0. { y.max(2f64.powi(-24)).log2() } else { -24. };
                 assert!((f64::from(sample[0]) - expected).abs() <= 1e-5, "{pixel:?} {sample:?} expected={expected}");
             }
         }
@@ -909,9 +911,9 @@ mod tests {
         let gpu = build(&renderer, [7, 3], &mixed, 127).unwrap();
         let actual = pollster::block_on(gpu.download_async(&renderer.queue)).unwrap();
         for (index, sample) in actual.samples.iter().enumerate() {
-            if (7..14).contains(&index) { assert_eq!(sample[2], 0.); }
+            if (7..14).contains(&index) { assert_eq!(logical_coverage(sample), 0.); }
             else {
-                assert_eq!(sample[2], 1.);
+                assert_eq!(logical_coverage(sample), 1.);
                 assert!((f64::from(sample[0]) - f64::from(0.18_f32).log2()).abs() <= 1e-5);
             }
         }
@@ -975,8 +977,8 @@ fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
                 let reference_y = (f64::from(pixel[0]) * 0.2126390058715104 + f64::from(pixel[1]) * 0.715168678767756
                     + f64::from(pixel[2]) * 0.07219231536073371) / f64::from(pixel[3]);
                 let log_y = reference_y.max(2f64.powi(-24)).log2() as f32;
-                let mut custom_bytes = [1u32; 4].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
-                custom_bytes.extend([log_y, log_y - 0.75, 1., 0.].into_iter().flat_map(f32::to_le_bytes));
+                let mut custom_bytes = [2u32, 1, 1, 1].into_iter().flat_map(u32::to_le_bytes).collect::<Vec<_>>();
+                custom_bytes.extend([log_y, log_y - 0.75, 1., -150., log_y, log_y + 0.75, 1., -149.].into_iter().flat_map(f32::to_le_bytes));
                 let custom = renderer.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: Some("independent clarity guide"), contents: &custom_bytes, usage: wgpu::BufferUsages::STORAGE,
                 });
@@ -999,7 +1001,7 @@ fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
                     / f64::from(pixel[3]) } else { 0. };
                 let smooth = |low: f64, high: f64, value: f64| { let t = ((value - low) / (high - low)).clamp(0., 1.); t * t * (3. - 2. * t) };
                 let log = y.max(2f64.powi(-24)).log2(); let middle = 0.18_f64.log2();
-                let delta = if amounts[2] != 0. { f64::from(amounts[2]) * 0.0075 } else { 2. * f64::from(amounts[0]) * 0.01 * (1. - smooth(middle - 4., middle, log))
+                let delta = if amounts[2] != 0. { f64::from(amounts[2]) * -0.0025 } else { 2. * f64::from(amounts[0]) * 0.01 * (1. - smooth(middle - 4., middle, log))
                     - 2. * f64::from(amounts[1]) * 0.01 * smooth(middle, middle + 4., log) };
                 let requested = delta.exp2();
                 let gain = if !representable || y <= 0. || pixel[..3].iter().any(|v|
@@ -1013,4 +1015,48 @@ fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
             }
         }
     }
+#[test]
+fn gpu_guide_preserves_positive_coverage_below_float32_area() {
+    let renderer = crate::WgpuRasterizer::new_native_headless(DocumentColor { space: RgbSpace::Srgb, depth: SampleDepth::F32 }).unwrap();
+    let tiny = f32::from_bits(1);
+    let normal = f32::MIN_POSITIVE;
+    let fixtures = [
+        ("uniform-minimum-alpha", [7,3], vec![[tiny,tiny,tiny,tiny];21]),
+        ("ordinary-alpha-subnormal-rgb", [7,3], vec![[tiny,tiny,tiny,1.];21]),
+        ("minimum-normal-alpha-quarter-rgb", [7,3], vec![[normal*0.25,normal*0.25,normal*0.25,normal];21]),
+        ("mixed-near-minimum-normal", [769,3], (0..2307).map(|i| { let a=if i%2==0 {normal} else {normal*0.5}; let y=if i%3==0 {0.25} else {0.75}; [a*y,a*y,a*y,a] }).collect()),
+        ("unrepresentable-minimum-alpha", [7,3], vec![[1.,1.,1.,tiny];21]),
+        ("minimum-normal-control", [7,3], vec![[normal;4];21]),
+        ("sparse-below-float32-area", [32768,1], (0..32768).map(|i| if i==0 {[tiny;4]} else {[0.;4]}).collect()),
+    ];
+    let mut rows=Vec::new();let mut failed=Vec::new();
+    for (name,extent,pixels) in fixtures {
+        let gpu=build(&renderer,extent,&pixels,127).unwrap();
+        let actual=pollster::block_on(gpu.download_async(&renderer.queue)).unwrap();
+        let mut log_error=0f64;let mut coverage_error=0f64;let mut positive_lost=0usize;
+        for gy in 0..actual.extent[1] { for gx in 0..actual.extent[0] {
+            let first=[gx*extent[0],gy*extent[1]];let last=[(gx+1)*extent[0],(gy+1)*extent[1]];
+            let mut numerator=0f64;let mut coverage=0f64;
+            for y in first[1]/actual.extent[1]..last[1].div_ceil(actual.extent[1]) {
+                let wy=((y+1)*actual.extent[1]).min(last[1])-(y*actual.extent[1]).max(first[1]);
+                for x in first[0]/actual.extent[0]..last[0].div_ceil(actual.extent[0]) {
+                    let p=pixels[(y*extent[0]+x) as usize];let alpha=f64::from(p[3]);
+                    if alpha==0. || p[..3].iter().any(|v| f64::from(v.abs())/alpha>f64::from(f32::MAX)) {continue;}
+                    let wx=((x+1)*actual.extent[0]).min(last[0])-(x*actual.extent[0]).max(first[0]);
+                    let w=f64::from(wx)*f64::from(wy)/(f64::from(extent[0])*f64::from(extent[1]))*alpha;
+                    let y=(f64::from(p[0])*0.2126390058715104+f64::from(p[1])*0.715168678767756+f64::from(p[2])*0.07219231536073371)/alpha;
+                    numerator+=w*y.max(2f64.powi(-24)).log2();coverage+=w;
+                }
+            }
+            let expected=if coverage>0. {numerator/coverage} else {-24.};
+            let sample=actual.samples[(gy*actual.extent[0]+gx) as usize];
+            log_error=log_error.max((f64::from(sample[0])-expected).abs());coverage_error=coverage_error.max((logical_coverage(&sample)-coverage).abs());
+            if coverage>0. && logical_coverage(&sample)==0. {positive_lost+=1;}
+        }}
+        if log_error>1e-5 || coverage_error>2e-7 || positive_lost>0 {failed.push(name);}
+        rows.push(format!("{{\"name\":\"{name}\",\"max_log_error\":{log_error},\"max_coverage_error\":{coverage_error},\"positive_coverage_cells_lost\":{positive_lost},\"guide_extent\":{:?}}}",actual.extent));
+    }
+    eprintln!("P25_SUBNORMAL_COVERAGE {}",rows.join(","));
+    assert!(failed.is_empty(),"actual source-guide invariants failed: {failed:?}");
+}
 }

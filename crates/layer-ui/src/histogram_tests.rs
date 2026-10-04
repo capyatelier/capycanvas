@@ -511,3 +511,122 @@ fn histogram_embedded_own_composition_changes_preserve_completed_data_while_lowe
         }
     }}}
 }
+
+fn waveform_reply(s:&mut UiSession<Recorder>,now:u64) {
+    let mut value=histogram_value(s,3);let mut waveform=layer_core::color::histogram::Waveform{counts:vec![0;layer_core::color::histogram::Waveform::WORDS]};waveform.counts[12*256+34]=3;value.waveform=Some(waveform);
+    s.engine.backend_mut().snapshot_reply=Some(Ok(layer_render::SnapshotResult::ArtworkStatistics(value)));s.frame(now,now).unwrap();
+}
+#[test]
+fn waveform_retained_captions_keep_preferences_and_sample_across_status_and_language_updates() {
+    let buffers=|v:&crate::HistogramView|[v.description.as_ptr(),v.range.as_ptr(),v.axis[0].as_ptr(),v.axis[1].as_ptr()];
+    let mut s=session(Platform::Gtk);
+    s.dispatch(UiAction::Effect{action:EffectAction::Insert{effect:"film_grain".into()}}).unwrap();
+    s.dispatch(UiAction::Effect{action:EffectAction::Set{layer:s.engine.document().active_layer.0,key:"animate".into(),value:layer_core::EffectValue::Toggle(true)}}).unwrap();
+    s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();waveform_reply(&mut s,150_000_000);
+    s.frame(350_000_000,350_000_000).unwrap();waveform_reply(&mut s,400_000_000);
+    histogram_control(&mut s,HistogramAction::WaveformChannel{index:4});histogram_control(&mut s,HistogramAction::WaveformLogarithmic{enabled:true});
+    let sample=s.state.waveform.data.clone().unwrap();let source=s.state.waveform.captured_source.clone();let time=s.state.waveform.captured_time;
+    assert_ne!(s.state.waveform.range,s.state.histogram.range);let retained=buffers(&s.state.waveform);
+    s.histogram_copy();assert_eq!(buffers(&s.state.waveform),retained);
+    s.frame(500_000_000,500_000_000).unwrap();assert_eq!(s.state.waveform.status,s.localization().text(MessageId::RESOURCES_HISTOGRAM_UPDATING));
+    assert_eq!(buffers(&s.state.waveform),retained);assert!(std::sync::Arc::ptr_eq(s.state.waveform.data.as_ref().unwrap(),&sample));
+    let requests=s.engine.backend().snapshot_requests.len();let cancels=s.engine.backend().snapshot_cancels;let checkpoint=s.engine.checkpoint();
+    s.set_localization(Localizer::shared(UiLanguage::Japanese));
+    assert_eq!((s.state.waveform.channel,s.state.waveform.logarithmic),(4,true));assert_ne!(s.state.waveform.range,s.state.histogram.range);
+    assert_eq!(s.state.waveform.captured_source,source);assert_eq!(s.state.waveform.captured_time,time);assert!(std::sync::Arc::ptr_eq(s.state.waveform.data.as_ref().unwrap(),&sample));
+    assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert_eq!(s.engine.backend().snapshot_cancels,cancels);assert_eq!(s.engine.checkpoint(),checkpoint);
+    let retained=buffers(&s.state.waveform);s.histogram_copy();assert_eq!(buffers(&s.state.waveform),retained);
+}
+
+#[test]
+fn waveform_and_histogram_share_one_query_but_keep_independent_channel_preferences() {
+    let mut s=histogram_session();let count=s.engine.backend().snapshot_requests.len();let cancellations=s.engine.backend().snapshot_cancels;
+    s.reveal_panel(Panel::Waveform).unwrap();s.frame(200_000_000,200_000_000).unwrap();
+    assert_eq!(s.engine.backend().snapshot_cancels,cancellations+1);assert_eq!(s.engine.backend().snapshot_requests.len(),count+1);
+    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));
+    waveform_reply(&mut s,210_000_000);assert!(std::sync::Arc::ptr_eq(s.state.histogram.data.as_ref().unwrap(),s.state.waveform.data.as_ref().unwrap()));
+    let count=s.engine.backend().snapshot_requests.len();let checkpoint=s.engine.checkpoint();
+    histogram_control(&mut s,HistogramAction::Channel{index:1});histogram_control(&mut s,HistogramAction::WaveformChannel{index:4});histogram_control(&mut s,HistogramAction::WaveformLogarithmic{enabled:true});
+    assert_eq!((s.state.histogram.channel,s.state.waveform.channel),(1,4));assert!(!s.state.histogram.logarithmic);assert!(s.state.waveform.logarithmic);assert_eq!(s.engine.backend().snapshot_requests.len(),count);assert_eq!(s.engine.checkpoint(),checkpoint);
+    customize(&mut s,CustomizationAction::SetPanelVisible{panel:Panel::Waveform,visible:false});s.frame(300_000_000,300_000_000).unwrap();assert!(s.state.waveform.data.is_none());
+    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if !r.waveform));
+    histogram_reply(&mut s,7,310_000_000);assert!(s.state.histogram.data.is_some());assert!(s.state.waveform.data.is_none());
+}
+
+#[test]
+fn waveform_source_mutation_and_suspension_retire_shared_data_and_query() {
+    let mut s=session(Platform::Gtk);s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();waveform_reply(&mut s,110_000_000);
+    assert!(s.state.waveform.data.is_some());histogram_control(&mut s,HistogramAction::Source{index:1});assert!(s.state.waveform.data.is_none());
+    s.frame(200_000_000,200_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform && r.query.source==layer_core::ArtworkSource::LayerContent(s.engine.document().active_layer)));
+    waveform_reply(&mut s,210_000_000);s.suspend_renderer().unwrap();assert!(s.state.waveform.data.is_none());assert!(s.state.histogram.data.is_none());
+}
+
+#[test]
+fn waveform_dedicated_command_is_localized_and_cannot_start_queries_off_gtk() {
+    for platform in Platform::ALL {for language in UiLanguage::ALL {
+        let mut s=session(platform);s.set_localization(Localizer::shared(language));
+        assert_eq!(CommandId::Waveform.localized_label(s.localization()),s.localization().text(MessageId::COMMAND_WAVEFORM));
+        let config=s.state.workspace.layout.panel(Panel::Waveform).unwrap();assert_eq!(crate::customization::PanelCopy::new(&s.state,config).title,s.localization().text(MessageId::RESOURCES_WAVEFORM));
+        if platform==Platform::Gtk {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
+        else {let requests=s.engine.backend().snapshot_requests.len();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert!(s.state.waveform.data.is_none());assert!(!Panel::Waveform.available_on(platform));}
+    }}
+}
+
+#[test]
+fn waveform_rgba_maps_hdr_endpoints_and_tiny_counts_to_premultiplied_pixels() {
+    use layer_core::color::{DocumentColor,SampleDepth,histogram::{Histogram,Waveform}};
+    let color=DocumentColor{depth:SampleDepth::F32,..Default::default()};let mut data=Histogram::new(color);let bins=data.plot_bins();
+    let mut counts=vec![0;Waveform::WORDS];counts[0*256+7]=1;counts[255*256+9]=1;counts[((bins.start+bins.end)/2)*256+11]=1000;data.waveform=Some(Waveform{counts});
+    let mut view=crate::HistogramView::default();view.data=Some(std::sync::Arc::new(data));view.channel=1;view.logarithmic=true;
+    let (size,rgba)=view.waveform_premultiplied_rgba([[255,0,0],[0,255,0],[0,0,255],[255,255,255]]).unwrap();assert_eq!(size,[256,bins.len() as u32]);
+    let pixel=|x:usize,y:usize|&rgba[(y*256+x)*4..(y*256+x+1)*4];assert!(pixel(7,bins.len()-1)[3]>0);assert!(pixel(9,0)[3]>0);assert_eq!(pixel(11,bins.len()-1-((bins.start+bins.end)/2-bins.start)),[255,0,0,255]);
+    for pixel in rgba.chunks_exact(4) {assert!(pixel[..3].iter().all(|c|*c<=pixel[3]));}
+    view.data=None;assert!(view.waveform_premultiplied_rgba([[0;3];4]).is_none());
+}
+
+#[test]
+fn tonal_histogram_axis_uses_captured_domain_instead_of_document_hdr_depth() {
+    use layer_core::color::{SampleDepth,histogram::HistogramDomain};
+    for id in ["levels","curves"] {
+        let original=color_adjustment_session(id);let mut document=original.engine.document().clone();document.color.depth=SampleDepth::F32;document.blend_space=layer_core::BlendSpace::Linear;let mut s=UiSession::new(Recorder{color:document.color,..Default::default()},document,[800,800],Platform::Gtk).unwrap();s.reveal_panel(Panel::Properties).unwrap();s.frame(100_000_000,100_000_000).unwrap();
+        histogram_reply(&mut s,7,110_000_000);let data=s.state.tonal_histogram.data.as_ref().unwrap();assert_eq!(data.domain,HistogramDomain::Encoded);assert_eq!(data.axis().bins,[0,256]);assert!(data.axis().stops.is_none());assert!(data.axis().white.is_none());
+        if id=="levels" {continue;}
+        color_adjustment_set(&mut s,"domain",layer_core::EffectValue::Choice(1));s.frame(200_000_000,200_000_000).unwrap();histogram_reply(&mut s,7,210_000_000);
+        let data=s.state.tonal_histogram.data.as_ref().unwrap();assert!(matches!(data.domain,HistogramDomain::CurveLog{..}));assert_eq!(data.axis().bins,[0,256]);
+    }
+}
+
+#[test]
+fn waveform_floating_tab_retires_demand_when_histogram_becomes_active() {
+    let mut s=histogram_session();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();waveform_reply(&mut s,110_000_000);
+    let group=s.state.workspace.layout.panel_group(Panel::Histogram).unwrap();
+    s.dispatch(UiAction::MovePanel{panel:Panel::Waveform,target:DockTarget::Float{position:[300.,200.]},viewport:[1000.,800.]}).unwrap();
+    s.dispatch(UiAction::MovePanel{panel:Panel::Waveform,target:DockTarget::Tab{group,index:None},viewport:[1000.,800.]}).unwrap();
+    s.dispatch(UiAction::SelectPanelTab{group,panel:Panel::Histogram}).unwrap();s.frame(200_000_000,200_000_000).unwrap();
+    assert!(s.histogram.demand);assert!(s.state.waveform.data.is_none());
+    assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if !request.waveform));
+}
+
+#[test]
+fn photo_monitors_share_default_tabs_and_remain_accessible_through_window_items() {
+    let mut s=session(Platform::Gtk);s.state.workspace.layout=crate::WorkspacePreset::Photographer.layout(Platform::Gtk);let initial=s.state.workspace.layout.clone();
+    let group=initial.panel_group(Panel::Histogram).unwrap();assert_eq!(initial.panel_group(Panel::Waveform),Some(group));assert_eq!(initial.active_panel(Panel::Waveform),Some(Panel::Histogram));assert_eq!(s.state.waveform.channel,0);
+    for panel in [Panel::Color,Panel::Palettes] {assert!(initial.panel(panel).is_ok());assert!(initial.panel_group(panel).is_none());}
+    let items=s.workspace_panel_items(PanelKind::Content);for panel in [Panel::Histogram,Panel::Waveform,Panel::Color,Panel::Palettes] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
+    assert!(!VIEW_MENU.sections.iter().flat_map(|section|section.iter()).any(|id|matches!(id,CommandId::Histogram|CommandId::Waveform)));
+    s.dispatch(UiAction::MovePanel{panel:Panel::Waveform,target:DockTarget::Float{position:[280.,180.]},viewport:[1000.,800.]}).unwrap();let customized=s.state.workspace.layout.clone();assert_ne!(customized,initial);
+    let mut parked=session(Platform::Gtk);parked.inherit_window_state(&s).unwrap();assert_eq!(parked.state.workspace.layout,customized);parked.reveal_panel(Panel::Waveform).unwrap();assert_eq!(parked.state.workspace.layout,customized);
+}
+
+#[test]
+fn window_menu_routes_monitor_panels_and_preserves_legacy_histogram_on_other_hosts() {
+    for platform in Platform::ALL {
+        let s=session(platform);let menu=s.application_menu(ApplicationMenu::Window);let items=menu.sections.iter().flatten().collect::<Vec<_>>();
+        if platform==Platform::Gtk {
+            for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
+        } else {
+            assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
+            assert!(!items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:Panel::Histogram|Panel::Waveform,..}}))));
+        }
+    }
+}

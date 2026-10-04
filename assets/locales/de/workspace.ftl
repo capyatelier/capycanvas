@@ -595,3 +595,4 @@ workspace-storage-full = Arbeitsbereichsspeicher ist voll. Speicherplatz freigeb
 workspace-storage-unavailable = Arbeitsbereichsspeicher konnte nicht geöffnet werden. Erneut versuchen.
 workspace-unreadable-name = Unlesbarer Arbeitsbereich
 workspace-backup-saved = Arbeitsbereichssicherung gespeichert.
+workspace-tool-description-waveform = Farbe und Helligkeit von links nach rechts prüfen

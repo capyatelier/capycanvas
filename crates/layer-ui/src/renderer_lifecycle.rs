@@ -44,7 +44,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         self.return_to_artwork()?;
         self.release_idle_document_buffers();
-        self.cancel_auto_levels();self.cancel_histogram();self.clear_effect_analyses()?;
+        self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
         self.refresh_commands();
         Ok(tiles)
@@ -117,7 +117,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.customization = Default::default();
         self.state.document_file.epoch = previous.state.document_file.epoch.checked_add(1)
             .ok_or("Document activation generation exhausted")?;
-        self.clear_effect_analyses()?;
+        if self.rendering_suspended { self.cancel_effect_analyses(); } else { self.clear_effect_analyses()?; }
         self.state.revision = self.state.revision.max(previous.state.revision);
         self.next_request = self.next_request.max(previous.next_request);
         self.inherit_notice_ids(previous);
@@ -205,7 +205,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.state.filter_load.error =
                 Some("Filter validation stopped because painting is unavailable".into());
         }
-        self.cancel_auto_levels();self.cancel_histogram();self.clear_effect_analyses()?;
+        self.cancel_auto_levels();self.cancel_histogram();self.cancel_effect_analyses();
         self.rendering_suspended = true;
         let recovered = self.engine.recover_failed_rasters().map_err(error);
         self.refresh_document();
@@ -246,7 +246,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.engine.recover_failed_rasters().map_err(error)?;
         }
         self.discard_render_requests();
-        self.clear_effect_analyses()?;
+        self.cancel_effect_analyses();
         let previous = self.engine.replace_backend(renderer).map_err(error)?;
         self.input_pending = self.engine.has_pending_input();
         self.refresh_file_state();

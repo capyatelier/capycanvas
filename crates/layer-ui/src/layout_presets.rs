@@ -47,13 +47,6 @@ impl WorkspacePreset {
             }
             Self::Photographer => Self::photo_layout(platform),
         };
-        if self == Self::Photographer && platform == crate::Platform::Gtk
-            && let Some(group) = layout.panel_group(Panel::Navigator)
-        {
-            layout.set_panel_visible(Panel::Histogram, true).expect("registered panel");
-            layout.move_panel([1600., 1000.], Panel::Histogram, DockTarget::Tab { group, index: None }).expect("histogram tab");
-            layout.select_tab(group, Panel::Navigator).expect("navigator tab");
-        }
         for (panel, anchor) in [
             (Panel::Palettes, Panel::Color),
             (Panel::Proof, Panel::Navigator),
@@ -88,9 +81,16 @@ impl WorkspacePreset {
         if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Windows) {
             self.group_tools(&mut layout);
         }
-        let color = layout.panel_group(Panel::Color).unwrap();
-        if !layout.fit_height_groups.contains(&color) {
-            layout.fit_height_groups.push(color);
+        let group = layout.panel_group(Panel::Color).unwrap();
+        if !layout.fit_height_groups.contains(&group) {
+            layout.fit_height_groups.push(group);
+        }
+        if self == Self::Photographer && platform == crate::Platform::Gtk {
+            if let Some(DockNode::Tabs {panels,active,..})=layout.node_mut(group) {
+                *panels=vec![Panel::Histogram,Panel::Waveform];
+                *active=Panel::Histogram;
+            }
+            fit_right_column(&mut layout, 0.6);
         }
         layout
     }
@@ -361,11 +361,16 @@ fn fit_paint_columns(layout: &mut DockLayout) {
         second: Box::new(second),
     };
     let left = stack(4, 0.6528, stack(5, 0.5, group(6), group(7)), group(10));
-    let right = stack(12, 0.25, group(14), stack(13, 0.4, group(15), group(16)));
-    for (band, root) in [(3, left), (11, right)] {
-        layout.bands.iter_mut().find(|b| b.id == band).expect("Paint default column").root = root;
-    }
+    layout.bands.iter_mut().find(|b| b.id == 3).expect("Paint default column").root = left;
+    fit_right_column(layout, 0.4);
     layout.fit_height_groups = vec![10, 14];
+}
+
+fn fit_right_column(layout: &mut DockLayout, properties_fraction: f32) {
+    let group = |id| Box::new(layout.node(id).cloned().expect("default primary panel"));
+    let root = DockNode::Split {id:12,axis:Axis::Vertical,fraction:0.25,first:group(14),
+        second:Box::new(DockNode::Split {id:13,axis:Axis::Vertical,fraction:properties_fraction,first:group(15),second:group(16)})};
+    layout.bands.iter_mut().find(|b| b.id == 11).expect("default primary column").root = root;
 }
 
 #[cfg(test)]
@@ -487,12 +492,12 @@ mod tests {
             assert_eq!(layout.bands.iter().map(|b| b.edge).collect::<Vec<_>>(),
                 [Edge::Top, Edge::Left, Edge::Right, Edge::Right]);
             for (id, expected) in [
-                (14, vec![Panel::Color, Panel::Palettes]),
+                (14, if platform==Platform::Gtk {vec![Panel::Histogram,Panel::Waveform]}else{vec![Panel::Color,Panel::Palettes]}),
                 (15, vec![Panel::Properties, Panel::Adjustments]),
                 (16, vec![Panel::Layers]),
                 (6, vec![Panel::Brushes, Panel::Stats]),
                 (7, vec![Panel::ToolSettings, Panel::Sizes]),
-                (10, if platform==crate::Platform::Gtk {vec![Panel::Navigator, Panel::Proof,Panel::Histogram]}else{vec![Panel::Navigator, Panel::Proof]}),
+                (10, vec![Panel::Navigator, Panel::Proof]),
             ] {
                 let DockNode::Tabs { panels, active, .. } = layout.node(id).unwrap() else {
                     panic!("default tab group");
@@ -503,7 +508,7 @@ mod tests {
             for [width, height] in [[1600., 1200.], [1200., 800.], [640., 480.]] {
                 let resolved = layout.workspace(width, height, crate::HEADER_HEIGHT, crate::STATUS_HEIGHT);
                 let group = |panel| resolved.groups.iter().find(|g| g.panels.contains(&panel)).unwrap().bounds;
-                let color = group(Panel::Color);
+                let color = group(if platform==Platform::Gtk {Panel::Histogram}else{Panel::Color});
                 let properties = group(Panel::Properties);
                 let layers = group(Panel::Layers);
                 assert_eq!(properties, group(Panel::Adjustments));
@@ -568,8 +573,13 @@ mod tests {
             let mut layout = preset.layout(platform);
             layout.open_default_columns(platform);
             layout.validate().unwrap();
+            let scopes=preset==WorkspacePreset::Photographer && platform==Platform::Gtk;
+            let (anchor,selected,minimum_width)=if scopes {
+                for panel in [Panel::Color,Panel::Palettes] {assert!(layout.panel(panel).is_ok());assert!(layout.panel_group(panel).is_none());}
+                (Panel::Histogram,Panel::Waveform,254.)
+            } else {(Panel::Color,Panel::Palettes,280.)};
             for (panel, anchor) in [
-                (Panel::Palettes, Panel::Color),
+                (selected, anchor),
                 (Panel::Proof, Panel::Navigator),
                 (Panel::Stats, Panel::Brushes),
             ] {
@@ -579,8 +589,8 @@ mod tests {
                 assert_eq!(panels[index + 1], panel);
                 assert_eq!(layout.active_panel(panel), Some(anchor));
             }
-            let group = layout.panel_group(Panel::Color).unwrap();
-            layout.select_tab(group, Panel::Palettes).unwrap();
+            let group = layout.panel_group(anchor).unwrap();
+            layout.select_tab(group, selected).unwrap();
             let colors = layout
                 .resolve(1600., 1000.)
                 .groups
@@ -588,7 +598,7 @@ mod tests {
                 .find(|g| g.id == group)
                 .unwrap()
                 .bounds;
-            assert!(colors.width >= 280.);
+            assert!(colors.width >= minimum_width);
             let restored: DockLayout =
                 serde_json::from_slice(&serde_json::to_vec(&layout).unwrap()).unwrap();
             assert_eq!(
@@ -603,7 +613,8 @@ mod tests {
         for preset in [WorkspacePreset::Illustrator, WorkspacePreset::Photographer] {
             let mut layout = preset.layout(Platform::Gtk);
             layout.open_default_columns(Platform::Gtk);
-            layout.measurements = [(Panel::Color, 300.), (Panel::Palettes, 200.)]
+            let [first,second]=if preset==WorkspacePreset::Photographer {[Panel::Histogram,Panel::Waveform]}else{[Panel::Color,Panel::Palettes]};
+            layout.measurements = [(first, 300.), (second, 200.)]
                 .map(|(panel, content_height)| PanelMeasurement {
                     panel,
                     tab_width: 0.,
@@ -611,7 +622,7 @@ mod tests {
                     scroll: None,
                 })
                 .to_vec();
-            let group = layout.panel_group(Panel::Color).unwrap();
+            let group = layout.panel_group(first).unwrap();
             let bounds = |l: &DockLayout| {
                 l.resolve(1400., 1000.)
                     .groups
@@ -622,7 +633,7 @@ mod tests {
             };
             let fitted = bounds(&layout);
             assert_eq!(fitted.height, 300. + TAB_BAR_HEIGHT);
-            for panel in [Panel::Palettes, Panel::Color, Panel::Palettes] {
+            for panel in [second, first, second] {
                 layout.select_tab(group, panel).unwrap();
                 assert_eq!(bounds(&layout), fitted);
             }
@@ -645,6 +656,25 @@ mod tests {
                 340. + TAB_BAR_HEIGHT,
                 "scrolling rows do not inflate the group"
             );
+        }
+    }
+
+    #[test]
+    fn photo_scopes_fit_natural_height_and_properties_receive_sixty_percent_of_remainder() {
+        let mut layout=WorkspacePreset::Photographer.layout(Platform::Gtk);layout.open_default_columns(Platform::Gtk);
+        layout.measurements=[
+            PanelMeasurement{panel:Panel::Histogram,content_height:265.,tab_width:111.,scroll:None},
+            PanelMeasurement{panel:Panel::Waveform,content_height:241.,tab_width:110.,scroll:None},
+            PanelMeasurement{panel:Panel::Properties,content_height:99.,tab_width:111.,scroll:Some(PanelScrollMeasurement{fixed_height:0.,unit_height:0.})},
+            PanelMeasurement{panel:Panel::Layers,content_height:170.,tab_width:85.,scroll:Some(PanelScrollMeasurement{fixed_height:90.,unit_height:40.})},
+        ].to_vec();
+        for width in [640.,1100.] {
+            let resolved=layout.workspace(width,800.,crate::HEADER_HEIGHT,crate::STATUS_HEIGHT);
+            let bounds=|panel|resolved.groups.iter().find(|g|g.panels.contains(&panel)).unwrap().bounds;
+            let scopes=bounds(Panel::Histogram);let properties=bounds(Panel::Properties);let layers=bounds(Panel::Layers);
+            assert_eq!(scopes.height,265.+TAB_BAR_HEIGHT);assert_eq!(scopes,bounds(Panel::Waveform));
+            assert!((properties.height/(properties.height+layers.height)-0.6).abs()<0.01,"width {width}: {properties:?} {layers:?}");
+            assert!(properties.height>200.,"width {width}: {properties:?}");assert!(properties.height-TAB_BAR_HEIGHT>=99.);assert!(scopes.y+scopes.height<properties.y);assert!(properties.y+properties.height<layers.y);assert_eq!(properties.x,layers.x);
         }
     }
 

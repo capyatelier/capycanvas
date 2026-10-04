@@ -592,3 +592,4 @@ workspace-storage-full = L'archivio delle aree di lavoro è pieno. Libera spazio
 workspace-storage-unavailable = Impossibile aprire l'archivio delle aree di lavoro. Riprova.
 workspace-unreadable-name = Area di lavoro illeggibile
 workspace-backup-saved = Backup dell'area di lavoro salvato.
+workspace-tool-description-waveform = Esamina colore e luminosità da sinistra a destra

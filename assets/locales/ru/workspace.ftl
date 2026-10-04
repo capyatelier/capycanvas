@@ -601,3 +601,4 @@ workspace-storage-full = Хранилище рабочих пространст�
 workspace-storage-unavailable = Не удалось открыть хранилище рабочих пространств. Повторите попытку.
 workspace-unreadable-name = Нечитаемое рабочее пространство
 workspace-backup-saved = Резервная копия рабочего пространства сохранена.
+workspace-tool-description-waveform = Проверить цвет и яркость слева направо

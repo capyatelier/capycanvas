@@ -1,4 +1,4 @@
-struct Area { region:vec4<u32>, flags:vec4<u32>, weights:vec4<f32> }
+struct Area { region:vec4<u32>, flags:vec4<u32>, weights:vec2<f32>, waveform:u32, padding:u32 }
 struct Selection { rect:vec4<u32>, info:vec4<u32>, values:array<u32> }
 @group(0) @binding(0) var pixels:texture_2d<f32>;
 @group(0) @binding(1) var<uniform> area:Area;
@@ -7,6 +7,11 @@ struct Selection { rect:vec4<u32>, info:vec4<u32>, values:array<u32> }
 @group(0) @binding(4) var<storage,read_write> summary:array<u32>;
 @group(0) @binding(5) var<storage,read> selection:Selection;
 const PENDING:u32=66752u;
+const WAVE_OFFSET:u32=132289u;
+const WAVE_WORDS:u32=262144u;
+fn waveform(index:u32,channel:u32,shard:u32,amount:u32) {
+    if amount!=0u {atomicAdd(&shards[WAVE_OFFSET+(shard%8u)*WAVE_WORDS+channel*65536u+index],amount);}
+}
 var<workgroup> counts:array<atomic<u32>,1043>;
 
 fn product(a:u32,b:u32)->vec2<u32> {
@@ -154,6 +159,7 @@ fn count(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:
     workgroupBarrier();
     var size=area.region.zw;var begin=vec2(0u);
     if area.flags.z!=0u {begin=grid_begin(area.region.xy);size=grid_begin(area.region.xy+area.region.zw)-begin;}
+    var wave_keys=vec4(0u);var wave_counts=vec4(0u);
     for(var index=group.x*64u+lane;index<size.x*size.y;index+=4096u) {
         var world=area.region.xy+vec2(index%size.x,index/size.x);
         if area.flags.z!=0u {world=((2u*(begin+vec2(index%size.x,index/size.x))+1u)*area.flags.xy)/(2u*min(area.flags.xy,vec2(256u)));}
@@ -176,9 +182,15 @@ fn count(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) group:
                 }
             } else {classified=classification(rgb[min(channel,2u)],alpha,channel);}
             atomicAdd(&counts[channel*256u+classified.x],1u);
+            if area.waveform!=0u {
+                let key=classified.x*256u+min(world.x*256u/area.flags.x,255u);
+                if key!=wave_keys[channel] {waveform(wave_keys[channel],channel,group.x,wave_counts[channel]);wave_counts[channel]=0u;}
+                wave_keys[channel]=key;wave_counts[channel]++;
+            }
             for(var counter=0u;counter<4u;counter++) {if (classified.y&(1u<<counter))!=0u {atomicAdd(&counts[1024u+channel*4u+counter],1u);}}
         }
     }
+    if area.waveform!=0u {for(var channel=0u;channel<4u;channel++) {waveform(wave_keys[channel],channel,group.x,wave_counts[channel]);}}
     workgroupBarrier();
     for(var i=lane;i<1043u;i+=64u) {let value=atomicLoad(&counts[i]);if value!=0u {atomicAdd(&shards[offset+i],value);}}
 }
@@ -197,13 +209,21 @@ fn resolve(@builtin(local_invocation_index) lane:u32,@builtin(workgroup_id) grou
         var zero:Wide;let black=value.negative || wide_compare(value,zero)==0;
         let relation=wide_compare(value,boundary_product(alpha,vec4<u32>(0u,0x100000u,0u,0u)));
         let flags=u32(value.negative)|(u32(!black && relation>0)<<1u)|(u32(black)<<2u)|(u32(!black && relation>=0)<<3u);
-        atomicAdd(&shards[offset+768u+luminance_bin(value,alpha)],1u);
+        let bin=luminance_bin(value,alpha);
+        atomicAdd(&shards[offset+768u+bin],1u);
+        if area.waveform!=0u {waveform(bin*256u+min(world.x*256u/area.flags.x,255u),3u,group.x,1u);}
         for(var counter=0u;counter<4u;counter++) {if (flags&(1u<<counter))!=0u {atomicAdd(&shards[offset+1036u+counter],1u);}}
     }
 }
 @compute @workgroup_size(64)
 fn fold(@builtin(global_invocation_id) id:vec3<u32>) {
-    if id.x>=1043u {return;}
+    if id.x>=1043u {
+        let index=id.x-1043u;
+        if area.waveform==0u || index>=WAVE_WORDS {return;}
+        var count=0u;
+        for(var shard=0u;shard<8u;shard++) {count+=atomicLoad(&shards[WAVE_OFFSET+shard*WAVE_WORDS+index]);}
+        summary[id.x]=count;return;
+    }
     var count=0u;
     for(var shard=0u;shard<64u;shard++) {count+=atomicLoad(&shards[shard*1043u+id.x]);}
     summary[id.x]=count;

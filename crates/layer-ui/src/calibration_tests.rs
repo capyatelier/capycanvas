@@ -315,6 +315,22 @@ fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editi
 }
 
 #[test]
+fn calibration_picker_groups_publish_stable_localized_identity_in_every_language() {
+    for language in UiLanguage::ALL {for id in ["white_balance","levels","curves"] {
+        let mut s=color_adjustment_session(id);s.set_localization(Localizer::shared(language));
+        let actions:Vec<_>=s.state.layer_properties.actions.iter().filter(|a|matches!(a.action,EffectAction::Calibrate{..})).collect();
+        assert_eq!(actions.len(),if id=="white_balance"{1}else{3});
+        for action in actions {
+            assert_eq!(action.icon.as_deref(),Some("layer-eyedropper-symbolic"));
+            let EffectAction::Calibrate{role,..}=action.action else {unreachable!()};
+            let label=match role {layer_core::levels::CalibrationRole::Black=>MessageId::RESOURCES_PICKER_BLACK,layer_core::levels::CalibrationRole::Gray=>MessageId::RESOURCES_PICKER_NEUTRAL,layer_core::levels::CalibrationRole::White=>MessageId::RESOURCES_PICKER_WHITE};
+            assert_eq!(action.label,s.localization().text(label).as_ref());
+            if id=="white_balance" {assert!(action.group.is_none());} else {let group=action.group.as_ref().unwrap();assert_eq!(group.id,"calibration");assert_eq!(group.label,s.localization().text(MessageId::RESOURCES_PICKER_POINTS).as_ref());}
+        }
+    }}
+}
+
+#[test]
 fn calibration_failed_notice_language_refresh_preserves_picker_request_document_and_history() {
     for (sample, message) in [
         (Err(layer_render::BackendError("sample failed { $name } 🖌")), None),

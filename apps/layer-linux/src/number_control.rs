@@ -334,19 +334,21 @@ impl NumberControl {
         control.imp().inline_caption.set(label).unwrap();
         control
     }
-    /// Fit a grouped value to its current readout; the editor shares that width.
+    /// A bounded editable value without a slider or step buttons.
     pub fn value_only(spec: NumericControl, title: &str, localization: std::sync::Arc<layer_ui::Localizer>) -> Self {
-        let control = Self::inline(spec, title, localization);
+        let number = spec.kind == NumericKind::Number;
+        let control = Self::build(spec, title, "", true, number, localization);
         control.set_halign(gtk::Align::Center);
         let imp = control.imp();
         if let Some(reserve) = imp.width_reserve.get() { reserve.set_visible(false); }
         if let Some(label) = imp.value_label.get() {
-            label.set_width_chars(0);
-            label.set_max_width_chars(-1);
+            label.set_width_chars(if number {7} else {0});
+            label.set_max_width_chars(if number {7} else {-1});
+            label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
         }
         if let Some(entry) = imp.entry.get() {
-            entry.set_width_chars(1);
-            entry.set_max_width_chars(1);
+            entry.set_width_chars(if number {7} else {1});
+            entry.set_max_width_chars(if number {7} else {1});
         }
         if let Some(slider) = control.imp().slider.get() {
             slider.set_visible(false);

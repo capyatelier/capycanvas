@@ -365,7 +365,8 @@ async fn choose_file(
     dialog.set_filters(Some(&filters));
     dialog.set_default_filter(Some(&filter));
     let result = match request {
-        DocumentRequest::Open | DocumentRequest::ImportLookup {..} => chooser::open(&dialog, &w.window, chooser::Folder::Artwork).await,
+        DocumentRequest::Open => chooser::open(&dialog, &w.window, chooser::Folder::Artwork).await,
+        DocumentRequest::ImportLookup {..} => chooser::open(&dialog, &w.window, chooser::Folder::Lookup).await,
         DocumentRequest::Save { name, .. } => {
             dialog.set_initial_name(Some(name));
             chooser::save(&dialog, &w.window, chooser::Folder::Save).await

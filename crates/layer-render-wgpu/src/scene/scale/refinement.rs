@@ -120,28 +120,24 @@ impl Cache {
         };
         let texture = image.texture.clone();
         let mut seen = BTreeSet::new();
-        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).collect();
+        let budget = r.native_edit.as_ref().map_or(windows::DEFAULT_IMAGE_PIXEL_BYTES, |n| n.image_pixel_budget(self.resident_bytes()));
+        let mut bounds = PixelRect::EMPTY;
+        let pages: Vec<_> = self.missing_pages().filter(|c| seen.insert(*c)).take(4).take_while(|c| {
+            let combined = bounds.union(page_rect(*c)).intersect(PixelRect::full(self.plan.extent));
+            let window = Scene::capture_window(packet.layers, combined, packet.document_extent);
+            if !bounds.is_empty() && Scene::capture_image_bound(packet.layers, window) > budget { return false; }
+            bounds = combined;
+            true
+        }).collect();
         let regions: Vec<_> = pages.iter().map(|c| page_rect(*c).intersect(PixelRect::full(self.plan.extent))).collect();
         r.ensure_exact_preview(encoder)?;
-        let mut prepared = if bounded(packet.layers) {
-            pages.first().map(|coordinate| {
-                    PixelRect::new(coordinate[0] * PAGE_SIZE, coordinate[1] * PAGE_SIZE,
-                        (coordinate[0] + pages.len() as u32) * PAGE_SIZE, (coordinate[1] + 1) * PAGE_SIZE)
-                        .intersect(PixelRect::full(self.plan.extent))
-                })
-        } else { None };
-        if let Some(region) = prepared {
-            scene.prepare_region(r, packet, Scene::capture_window(packet.layers, region, packet.document_extent), PixelRect::EMPTY, encoder)?;
+        if !bounds.is_empty() {
+            scene.prepare_region(r, packet, Scene::capture_window(packet.layers, bounds, packet.document_extent), PixelRect::EMPTY, encoder)?;
         }
-        let batched = self.hierarchy.is_some()
-            && prepared.is_some_and(|prepared| regions.iter().all(|r| r.intersect(prepared) == *r));
+        let batched = self.hierarchy.is_some();
         if batched { scene.capture_prepared_regions(r, packet, &image, &regions, scene::Output::Display, false, encoder)?; }
         let mut changed = PixelRect::EMPTY;
         for (coordinate, region) in pages.into_iter().zip(regions) {
-            if !prepared.is_some_and(|prepared| region.intersect(prepared) == region) {
-                prepared = None;
-                scene.prepare_region(r, packet, Scene::capture_window(packet.layers, region, packet.document_extent), PixelRect::EMPTY, encoder)?;
-            }
             if self.hierarchy.is_none() { image.plan = display_mips::Plan::window(packet.document_extent, 0, region); }
             if !batched { scene.capture_prepared_region(r, packet, &image, region, scene::Output::Display, encoder)?; }
             if let Some(hierarchy) = &mut self.hierarchy { hierarchy.write(encoder, &texture, coordinate, region); }

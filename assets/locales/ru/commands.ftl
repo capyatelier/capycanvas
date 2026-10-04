@@ -601,3 +601,5 @@ commands-transform-again-empty = Сначала трансформируйте �
 commands-transform-again-whole-layer = Снимите выделение пикселей и выберите слой целиком
 
 commands-show-histogram = Показать гистограмму
+command-waveform = Волновая форма
+commands-show-waveform = Показать волновую форму
