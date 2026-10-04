@@ -265,9 +265,13 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
         self.editor.document()
     }
 
+    pub fn raster_edit_pending(&self) -> bool {
+        self.rebuild_completed || self.batches.iter().any(|batch| matches!(batch.kind, DabBatchKind::RasterOperation(_))
+            || self.pending_frame.is_some() && batch.stroke_end)
+    }
+
     pub fn capture_artwork(&self, session_generation: u64) -> Result<layer_core::authored::ArtworkCapture, DocumentError> {
-        if self.rebuild_completed || self.batches.iter().any(|batch| matches!(batch.kind, DabBatchKind::RasterOperation(_))
-            || self.pending_frame.is_some() && batch.stroke_end) {
+        if self.raster_edit_pending() {
             return Err(DocumentError::InvalidLayerOperation("Wait for the preceding raster edit"));
         }
         self.editor.capture(session_generation, self.evaluation_context.clone())

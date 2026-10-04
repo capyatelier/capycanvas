@@ -66,7 +66,7 @@ impl RecoveryState {
 impl<R:layer_render::CanvasRenderer> crate::UiSession<R> {
     pub fn recovery_document(&self)->RecoveryDocument {
         RecoveryDocument {epoch:self.state().document_file.epoch,revision:self.engine().document().revision,
-            modified:self.state().document_file.modified,busy:self.recovery_file_busy() || self.require_raster_snapshot().is_err(),session:self.session_stamp()}
+            modified:self.state().document_file.modified,busy:self.recovery_file_busy() || self.require_raster_snapshot().is_err() || self.engine().raster_edit_pending(),session:self.session_stamp()}
     }
 }
 

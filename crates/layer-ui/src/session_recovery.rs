@@ -537,6 +537,17 @@ mod tests {
         invoke(&mut source,CommandId::ExportDocument);assert!(source.state.document_file.busy);assert!(source.recovery_document().busy);
     }
     #[test]
+    fn checkpoints_wait_until_a_raster_edit_is_submitted() {
+        let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();
+        crate::session::test_support::select(&mut source,crate::session::test_support::rectangle([4.,4.,20.,20.]));
+        assert!(!source.recovery_document().busy);
+        source.dispatch(UiAction::Layer {action:LayerAction::FillSelection}).unwrap();
+        assert!(source.engine.raster_edit_pending());
+        assert!(source.recovery_document().busy);assert!(source.capture_session().is_err());
+        source.frame(1,1).unwrap();
+        assert!(!source.recovery_document().busy);assert!(source.capture_session().is_ok());
+    }
+    #[test]
     fn session_history_preserves_manual_save_checkpoint_and_recovered_label_until_success() {
         let mut source=session(Platform::Gtk);source.frame(0,0).unwrap();
         layer(&mut source,LayerAction::New{group:false,clipped:false});source.frame(1,1).unwrap();save(&mut source,true);
