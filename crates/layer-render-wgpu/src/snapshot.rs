@@ -181,7 +181,7 @@ impl SnapshotRenderer {
     fn construct(scene: Arc<SceneSnapshot>, scope: SceneScope, control: CaptureControl, gpu: &SnapshotGpu) -> Result<Self, GpuRasterError> {
         control.check()?;
         let time = scene.context.elapsed;
-        if !time.is_finite() {
+        if !time.is_finite() || scene.context.phases.iter().any(|(_,phase)|!phase.is_finite()) {
             return Err(GpuRasterError::Color("Invalid snapshot viewing state".into()));
         }
         let view = scene.view().with_scope(&scope);

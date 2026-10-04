@@ -18,6 +18,16 @@ fn capture(document: Document) -> Result<SnapshotRenderer, GpuRasterError> {
     gpu().capture_scene(document.snapshot(),SceneScope::All,Default::default())
 }
 
+#[test]
+fn scene_captures_reject_nonfinite_effect_phases_before_preparing_pixels() {
+    let document=Document::new(PortableId::random(),16,16,layer_core::DocumentNames {paint:"Layer".into(),paper:"Paper".into()});
+    let effect=document.artwork.effects.iter().next().unwrap().0;
+    for phase in [f32::NAN,f32::INFINITY,f32::NEG_INFINITY] {
+        let context=EvaluationContext {elapsed:1.,phases:vec![(effect,phase)].into()};
+        assert!(matches!(gpu().capture_scene(document.snapshot_with_context(context),SceneScope::All,Default::default()),Err(GpuRasterError::Color(message)) if message=="Invalid snapshot viewing state"));
+    }
+}
+
 fn hide_paper(document:&mut Document) {
     let paper=document.scene().children(None)[1];document.artwork.occurrences.get_mut(paper).unwrap().visible=false;
 }

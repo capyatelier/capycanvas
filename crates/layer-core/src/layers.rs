@@ -500,6 +500,34 @@ impl RasterOperation {
     }
 }
 
+impl SceneView<'_> {
+    pub fn relationship_roots(self,roots:&[OccurrenceHandle])->Vec<OccurrenceHandle> {
+        let scene=self;let mut selected:BTreeSet<_>=roots.iter().copied().collect();
+        loop {let count=selected.len();for &h in scene.order(){if selected.contains(&h){selected.extend(scene.attached_effects(h).iter().copied());}
+            if scene.clipping_base(h).is_some_and(|base|selected.contains(&base)){selected.insert(h);}}if count==selected.len(){break;}}
+        scene.order().iter().copied().filter(|h|selected.contains(h)).collect()
+    }
+    pub fn layer_subtrees(self, roots: &[OccurrenceHandle]) -> BTreeSet<OccurrenceHandle> {
+        let scene=self;
+        scene.order().iter().copied().filter(|h|roots.contains(h)||roots.iter().any(|r|descends_from(scene,*h,Some(*r)))||scene.effect_owner(*h).is_some_and(|owner|roots.contains(&owner)||roots.iter().any(|r|descends_from(scene,owner,Some(*r))))).collect()
+    }
+    pub fn composition_members(self,roots:&[OccurrenceHandle])->BTreeSet<OccurrenceHandle> {
+        let scene=self;let mut members:BTreeSet<_>=roots.iter().copied().collect();
+        loop {
+            let count=members.len();members=self.layer_subtrees(&self.relationship_roots(&members.iter().copied().collect::<Vec<_>>()));
+            for h in members.iter().copied().collect::<Vec<_>>() {
+                if let Some(base)=scene.clipping_base(h){members.insert(base);}
+                if let Some(owner)=scene.effect_owner(h){members.insert(owner);}
+                if scene.effect(h).is_some_and(|e|e.program.kind==EffectKind::Adjustment) {members.extend(composite_input_layers(scene,h));}
+            }
+            if count==members.len(){break;}
+        }
+        for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
+        members
+    }
+    pub fn reference_scope(self)->SceneScope {SceneScope::Members(self.composition_members(&self.references().into_iter().collect::<Vec<_>>()).into_iter().collect::<Vec<_>>().into())}
+}
+
 impl Document {
     pub fn ordered_layers(&self) -> &[OccurrenceHandle] {
         self.scene().order()
@@ -523,16 +551,8 @@ impl Document {
             })
             .collect()
     }
-    pub fn relationship_roots(&self,roots:&[OccurrenceHandle])->Vec<OccurrenceHandle> {
-        let scene=self.scene();let mut selected:BTreeSet<_>=roots.iter().copied().collect();
-        loop {let count=selected.len();for &h in scene.order(){if selected.contains(&h){selected.extend(scene.attached_effects(h).iter().copied());}
-            if scene.clipping_base(h).is_some_and(|base|selected.contains(&base)){selected.insert(h);}}if count==selected.len(){break;}}
-        scene.order().iter().copied().filter(|h|selected.contains(h)).collect()
-    }
-    pub fn layer_subtrees(&self, roots: &[OccurrenceHandle]) -> BTreeSet<OccurrenceHandle> {
-        let scene=self.scene();
-        scene.order().iter().copied().filter(|h|roots.contains(h)||roots.iter().any(|r|descends_from(scene,*h,Some(*r)))||scene.effect_owner(*h).is_some_and(|owner|roots.contains(&owner)||roots.iter().any(|r|descends_from(scene,owner,Some(*r))))).collect()
-    }
+    pub fn relationship_roots(&self,roots:&[OccurrenceHandle])->Vec<OccurrenceHandle> {self.scene().relationship_roots(roots)}
+    pub fn layer_subtrees(&self,roots:&[OccurrenceHandle])->BTreeSet<OccurrenceHandle> {self.scene().layer_subtrees(roots)}
     pub fn effect_target(&self,id:OccurrenceHandle)->Option<OccurrenceHandle> {
         self.attachment_target_below(id,false).filter(|h|self.scene().eligible_target(*h))
     }
@@ -680,9 +700,7 @@ impl Document {
         }
         true
     }
-    pub fn reference_scope(&self) -> SceneScope {
-        SceneScope::Members(self.reference_members(|_| true).into_iter().collect::<Vec<_>>().into())
-    }
+    pub fn reference_scope(&self)->SceneScope {self.scene().reference_scope()}
     pub fn references_below(&self, target: OccurrenceHandle) -> BTreeSet<OccurrenceHandle> {
         let scene = self.scene();
         let Some(index) = scene.position(target) else {
@@ -690,20 +708,7 @@ impl Document {
         };
         self.reference_members(|h| scene.position(h).is_some_and(|i| i > index))
     }
-    pub fn composition_members(&self,roots:&[OccurrenceHandle])->BTreeSet<OccurrenceHandle> {
-        let scene=self.scene();let mut members:BTreeSet<_>=roots.iter().copied().collect();
-        loop {
-            let count=members.len();members=self.layer_subtrees(&self.relationship_roots(&members.iter().copied().collect::<Vec<_>>()));
-            for h in members.iter().copied().collect::<Vec<_>>() {
-                if let Some(base)=scene.clipping_base(h){members.insert(base);}
-                if let Some(owner)=scene.effect_owner(h){members.insert(owner);}
-                if scene.effect(h).is_some_and(|e|e.program.kind==EffectKind::Adjustment) {members.extend(composite_input_layers(scene,h));}
-            }
-            if count==members.len(){break;}
-        }
-        for h in members.iter().copied().collect::<Vec<_>>() {let mut parent=scene.parent(h);while let Some(h)=parent{members.insert(h);parent=scene.parent(h);}}
-        members
-    }
+    pub fn composition_members(&self,roots:&[OccurrenceHandle])->BTreeSet<OccurrenceHandle> {self.scene().composition_members(roots)}
     fn reference_members(&self,keep:impl Fn(OccurrenceHandle)->bool)->BTreeSet<OccurrenceHandle> {
         let scene=self.scene();let roots:Vec<_>=scene.order().iter().copied().filter(|h|scene.occurrence(*h).is_some_and(|o|o.reference)).collect();
         let mut members=self.composition_members(&roots);members.retain(|h|keep(*h));

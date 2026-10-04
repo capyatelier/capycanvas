@@ -36,6 +36,9 @@ from this bank directly; no fullscreen button is added to GTK.
 The Color panel uses the original `color-square`, `color-triangle` and
 `color-swap` symbols: rounded geometry and consistent 1.5 px strokes, shared
 directly by GTK and Web.
+The upright `effect-link` chain has inset artwork that adds one pixel of space
+at each end when rendered at 12px between thumbnails. Hosts keep the existing
+icon box, thumbnail spacing and row dimensions.
 
 Draw new icons on a 16×16 viewBox. A few older icons use 24×24, and the capybara
 marks keep their own square viewBoxes.

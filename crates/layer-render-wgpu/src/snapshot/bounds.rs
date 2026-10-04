@@ -137,15 +137,18 @@ impl SnapshotGpu {
                 let parent_stack = view.stack(handle).unwrap();
                 let world = scene::world_offset(view, handle, false);
                 let offset = Point {x:owner.translation.x-world.x,y:owner.translation.y-world.y};
+                let attachment = owner.attachment;
                 let child = scene.artwork.stacks.insert(layer_core::authored::PortableId::random(), layer_core::authored::Stack {entries:vec![handle]}).map_err(str::to_owned)?;
                 let coverage = scene.artwork.coverage.insert(layer_core::authored::PortableId::random(), layer_core::authored::CoverageSource {
                     domain:original_extent,raster:Default::default(),initial:Some(layer_core::Selection::polygon(Rect::from_extent(original_extent).corners().to_vec()).map_err(|e|e.to_string())?),default_coverage:0.,operations:Arc::default()
                 }).map_err(str::to_owned)?;
                 let mut group = layer_core::authored::Occurrence::new(OccurrenceContent::Stack(child), "");
+                group.attachment = attachment;
                 group.mask = Some(layer_core::authored::MaskUse {source:coverage,linked:false,enabled:true,inverted:false,translation:offset,placement:layer_core::Projective::IDENTITY});
                 let group = scene.artwork.occurrences.insert(layer_core::authored::PortableId::random(),group).map_err(str::to_owned)?;
                 let entries = &mut scene.artwork.stacks.get_mut(parent_stack).unwrap().entries;
                 let entry = entries.iter_mut().find(|h| **h == handle).ok_or("Missing generator occurrence")?; *entry = group;
+                scene.artwork.occurrences.get_mut(handle).unwrap().attachment = layer_core::Attachment::None;
                 if let SceneScope::Members(members) = &mut scene.scope { let mut updated = members.to_vec(); updated.push(group); *members = updated.into(); }
                 scene.index = Arc::new(SceneIndex::build(&scene.artwork)?);
             }

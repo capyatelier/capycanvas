@@ -469,9 +469,19 @@ The preview reports the actual insertion target after accounting for attached
 effects and clipping runs. Moving an owner carries its effects, and moving a
 clipping base carries the run. A Pass Through thumbnail cannot silently become
 an isolated effect owner.
+Row gaps join a chain only between its remaining members and its owner or base.
+Drops above the top member, below the owner or base, between independent chains,
+or at the beginning of a group stay outside that relationship. This also applies
+to imported images. Effect gaps use adjacent rows; saved Selections cannot be
+skipped to infer an effect attachment. Moves that would split an existing
+clipping run with a standalone adjustment are refused.
 Dropping a saved Selection inside an effect chain previews and inserts it above
 the top effect. Attaching across saved Selections moves them above the resulting
 chain atomically. A drop below the owner remains a separate valid position.
+Creating a standalone adjustment also places it above the complete clipping and
+effect stack. In the filter drawer, adding an adjustment to a clipped paint layer
+or isolated group instead places it nearest that owner, before its existing
+effects. Its preview uses the owner's masked content at that insertion point.
 
 ### Layer blend menu
 

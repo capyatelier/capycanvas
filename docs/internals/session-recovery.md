@@ -40,6 +40,13 @@ input thread. Encoding, validation, decoding, storage and resource preparation r
 on workers. `capture_artwork` captures portable artwork; session persistence
 requires the distinct `capture_session` type, which includes private history.
 
+The current artwork retains the last submitted frame's evaluation context.
+History restores the corresponding authored output context before an artwork
+transition, so removing an effect cannot leave a captured phase pointing to it.
+Working-only undo and redo retain the captured context and the same artwork
+checkpoint. This distinction applies to both archived sessions and worker
+transfers without adding an undo step or changing the live editor.
+
 Adding persistent state requires an explicit classification. Capture boundaries
 destructure `UiSession`, `CanvasEngine`, `Editor`, `Document`, `WorkingState`, `UiState`, `DocumentFiles`,
 `DocumentFileState` and `Camera` without a rest pattern. New fields therefore fail
@@ -171,6 +178,11 @@ kill subprocess writers, corrupt resources and heads, exercise lock contention,
 retain live readers during collection and check bounded generations over repeated
 edits. UI tests cover manual-save checkpoints, title state, camera, strict records,
 membership staging/remapping, stale completion and interrupted restore batches.
+
+Captured-frame context tests retain finite filter phases while removing and
+restoring their effects through undo and redo, with a working-only entry first
+in each history direction. Both archives and direct worker transfers preserve
+the current view, history length and artwork checkpoints across these transitions.
 
 Keep these tests when adding features. A new edit needs meaningful semantic
 assertions for both sides of its undo/redo boundary; a shutdown/restart smoke test

@@ -288,6 +288,51 @@ fn dependent_effect_definition_and_output_phase_removal_survive_restart_and_undo
 }
 
 #[test]
+fn captured_output_phases_remain_reversible_across_session_history() {
+    for navigation in [false,true] {
+    let mut original=Editor::new(Document::new(PortableId::random(),32,32,DocumentNames {paint:"Layer".into(),paper:"Paper".into()}));
+    let document=original.document();let art=&document.artwork;let owner=document.working.occurrence.unwrap();let stack=document.composition().result;
+    let definition=crate::RecordChange::insert(&art.definitions,Definition {program:crate::bundled_effect_catalog().get("motion_blur").unwrap().program()});
+    let values=EffectInstance::new(definition.value.as_ref().unwrap().program.clone()).values;
+    let application=crate::RecordChange::insert(&art.effects,EffectApplication {definition:definition.handle,values,domain:[32,32]});
+    let effect=application.handle;let mut occurrence=Occurrence::new(OccurrenceContent::Effect(effect),"Motion blur");occurrence.attachment=Attachment::Effect;
+    let occurrence=crate::RecordChange::insert(&art.occurrences,occurrence);
+    let mut scratch=art.occurrences.clone();scratch.change(occurrence.handle,occurrence.id,occurrence.value.clone()).unwrap();
+    let paint=crate::RecordChange::insert(&art.paint,PaintSource {domain:[32,32],original:None,raster:Default::default(),operations:Default::default()});
+    let base=crate::RecordChange::insert(&scratch,Occurrence::new(OccurrenceContent::Paint(paint.handle),"Base"));
+    let mut placed=art.occurrences.get(owner).unwrap().clone();placed.attachment=Attachment::Clip;
+    let mut entries=art.stacks.get(stack).unwrap().clone();entries.entries.insert(0,occurrence.handle);entries.entries.insert(2,base.handle);
+    original.perform(Edit::Batch(vec![Edit::Definition(definition),Edit::Effect(application),Edit::Occurrence(occurrence),Edit::Paint(paint),Edit::Occurrence(base),
+        Edit::Occurrence(crate::RecordChange::replace(&art.occurrences,owner,Some(placed)).unwrap()),Edit::Stack(crate::RecordChange::replace(&art.stacks,stack,Some(entries)).unwrap())])).unwrap();
+    let art=&original.document().artwork;let mut named=art.occurrences.get(owner).unwrap().clone();named.name="Renamed".into();
+    original.perform(Edit::Occurrence(crate::RecordChange::replace(&art.occurrences,owner,Some(named)).unwrap())).unwrap();original.undo().unwrap();
+    if navigation {
+        original.redo().unwrap();let mut selected=original.document().working.clone();selected.selection=Some(Selection::empty());
+        original.perform(Edit::Working(selected.clone())).unwrap();selected.selection=None;original.perform(Edit::Working(selected)).unwrap();original.undo().unwrap();
+    }
+    let context=EvaluationContext {elapsed:13.,phases:original.document().scene().order().iter().filter_map(|h|original.document().scene().effect_handle(*h).map(|e|(e,3.25))).collect::<Vec<_>>().into()};
+    let authored=original.document().output().context.clone();let checkpoint=original.checkpoint();let cancel=AtomicBool::new(false);
+    let capture=original.capture_session(original.capture(11,context.clone()).unwrap()).unwrap();
+    let archive=PreparedSession::prepare(&capture,json!({}),&cancel).unwrap();let mut bytes=Vec::new();archive.write(&mut bytes,&cancel).unwrap();
+    let archived=open(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap(),ProjectLimits::default(),&cancel).unwrap().editor;
+    let transferred=PreparedSessionTransfer::capture(&capture,json!({}),&cancel).unwrap().adopt_verified(ProjectLimits::default(),&cancel).unwrap().editor;
+    for mut restored in [archived,transferred] {
+        assert_eq!(restored.checkpoint(),checkpoint);assert_eq!(restored.document().output().context,context);
+        assert!(restored.redo().unwrap());assert_eq!(&restored.document().output().context,if navigation{&context}else{&authored});
+        assert!(restored.undo().unwrap());assert_eq!(restored.document().output().context,context);
+        if navigation {
+            assert!(restored.undo().unwrap());assert_eq!(restored.document().output().context,context);assert_eq!(restored.checkpoint(),checkpoint);
+            assert!(restored.undo().unwrap());assert_eq!(restored.document().output().context,authored);
+        }
+        assert!(restored.undo().unwrap());assert!(restored.document().artwork.effects.get(effect).is_none());assert_eq!(restored.document().output().context,authored);
+        assert!(restored.redo().unwrap());assert!(restored.document().artwork.effects.get(effect).is_some());assert_eq!(&restored.document().output().context,if navigation{&authored}else{&context});
+        if navigation {assert!(restored.redo().unwrap());assert_eq!(restored.document().output().context,context);assert!(restored.redo().unwrap());assert_eq!(restored.checkpoint(),checkpoint);}
+    }
+    assert_eq!(original.checkpoint(),checkpoint);assert_eq!(original.document().output().context,authored);
+    }
+}
+
+#[test]
 fn attachment_chains_common_clip_bases_and_isolated_blends_survive_restart_and_history() {
     use crate::operation_test_support as f;
     let mut document=f::document([32,32],&["Top","Curves","Saved","Blur","Shade","Base blur","Base","Backdrop","Group","Member"]);
@@ -318,8 +363,7 @@ fn attachment_chains_common_clip_bases_and_isolated_blends_survive_restart_and_h
     assert!(!restored.redo().unwrap());
     assert!(original.undo().unwrap());assert!(restored.undo().unwrap());
     for editor in [&mut original,&mut restored] {
-        let at=editor.document().scene().children(None).iter().position(|handle|*handle==curves).unwrap();
-        editor.perform(editor.document().reparent_occurrence_edit(blur,None,at).unwrap()).unwrap();
+        editor.perform(editor.document().attach_effect_edit(blur,shade,1,false).unwrap()).unwrap();
         assert!(!editor.can_redo());assert_eq!(editor.document().scene().attached_effects(shade),[curves,blur]);
     }
     let restored=reopen(&restored);assert_editor(&original,&restored);

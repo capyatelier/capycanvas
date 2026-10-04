@@ -403,6 +403,9 @@ result enters ordinary blending or common-base clipping once. An unattached
 adjustment receives the lower stack through Pass Through groups up to the nearest
 isolated scope. Only an unattached completed spatial result can checkpoint a stack
 prefix; a local result belongs to its owner.
+Filter-picker previews and their analysis candidates use this same input scope
+when replacing an attached adjustment. Owner opacity, blending and outer clipping
+apply after that input, just as they do on the canvas.
 
 Cache dependencies use occurrence handles and local chain inputs. Moving an
 unrelated row retains valid spatial stages; a downstream parameter edit keeps
@@ -417,7 +420,8 @@ pixels without allocating another full-size intermediate image.
 operations that need reusable image inputs. A blur needs pixels outside its output
 rectangle, so filter definitions describe their sampling footprint. Global effects,
 layer reordering and invalidated caches can require much larger updates than a
-single brush mark. Animated effects also need updates without new pen input.
+single brush mark. Visible animated effects also need updates without new pen
+input; hiding an attached effect's owner stops those animation requests.
 
 Pointwise filters declaring display-resolution support use effect nodes in the
 shared region graph. These nodes reuse the same fused shaders as native tiles;
@@ -669,6 +673,9 @@ after region preparation, which resets composition state. Raw layer content skip
 its mask, opacity and effect stack. A request retains immutable backing and a
 frozen animation time; native snapshot handles also retain effect clocks, while
 Web serializes the captured phases to its worker.
+Reference composition uses the shared relationship closure, retaining referenced
+group contents, clipping bases and attached effect chains. Selection, color
+sampling and histogram queries resolve the same reference membership.
 
 The GPU reduces a circular footprint in two passes: covered RGB/alpha maxima and
 normalized sums. Only a 32-byte summary reaches the CPU, which unscales it in

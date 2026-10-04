@@ -346,6 +346,173 @@ fn native_layer_relationship_review() {
         assert_eq!(order(),before_order,"completed native drop is one undo");
         relationship(curves,R::Effect,shadows);
     }
+    let show_layers = || {
+        let group = state(&w).workspace.layout.panel_group(Panel::Layers).unwrap();
+        w.dispatch(UiAction::SelectPanelTab { group, panel: Panel::Layers });
+        pump(180);
+        assert!(w.layer_panel.root.is_mapped());
+    };
+    let mouse_drop = |input: &mut RemoteInput, id, target, at| {
+        select(id);
+        show_layers();
+        super::histogram::scroll_to(&row(id));
+        super::histogram::scroll_to(&row(target));
+        let source = row(id);
+        let start = point(&find_css(&source,"layer-name").unwrap(),[0.5,0.5]);
+        let end = point(&row(target),at);
+        assert!(source.is_mapped() && view(id).can_drop_below, "boundary source is mapped and draggable");
+        input.perform(serde_json::json!([contact("mouse","down",start)]));
+        input.perform(serde_json::json!([contact("mouse","move",[start[0]-30.,start[1]])]));
+        let controllers = source.observe_controllers();
+        let drag = (0..controllers.n_items()).find_map(|i| controllers.item(i).and_downcast::<gtk::DragSource>()).unwrap();
+        assert!(drag.drag().is_some(), "boundary pickup starts native DND");
+        input.perform(serde_json::json!([contact("mouse","move",end),contact("mouse","move",[end[0]+1.,end[1]]),contact("mouse","up",end)]));
+        assert!(state(&w).host_error.is_none(), "{:?}", state(&w).host_error);
+        assert!(!w.status.is_visible(), "{}", w.status.text());
+    };
+    relationship_action(&w, A::Clip { id: highlights, value: false });
+    select(highlights);
+    relationship_action(&w, A::New { group: false, clipped: false });
+    let standalone = current();
+    name(standalone,"Boundary layer");
+    for previously_clipped in [false,true] {
+        if previously_clipped { relationship_action(&w,A::Clip { id:standalone,value:true });relationship(standalone,R::Clip,highlights); }
+        let before = order();
+        mouse_drop(&mut input,standalone,curves,[0.7,0.05]);
+        assert!(view(standalone).relationship.is_none(), "above the complete FX/clip chain detaches every previous target");
+        let rows = order();
+        let at = rows.iter().position(|id| *id == standalone).unwrap();
+        assert_eq!(&rows[at..at+5], &[standalone,curves,blur,shadows,base]);
+        relationship(shadows,R::Clip,base);
+        for id in [curves,blur] { relationship(id,R::Effect,shadows); }
+        undo();
+        assert_eq!(order(),before);
+        if previously_clipped { relationship(standalone,R::Clip,highlights); }
+        else { assert!(view(standalone).relationship.is_none()); }
+    }
+    relationship_action(&w,A::Clip { id:standalone,value:false });
+    select(standalone);
+    w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "gaussian_blur".into() } });
+    pump(160);
+    let inserted = current();
+    relationship_action(&w, A::Clip { id: inserted, value: false });
+    let before = order();
+    mouse_drop(&mut input,inserted,curves,[0.7,0.95]);
+    relationship(inserted,R::Effect,shadows);
+    let rows = order();
+    let at = rows.iter().position(|id| *id == curves).unwrap();
+    assert_eq!(&rows[at..at+4], &[curves,inserted,blur,shadows], "an internal FX gap remains joined to its owner");
+    undo();
+    assert_eq!(order(),before);
+    assert!(view(inserted).relationship.is_none());
+    select(isolated);
+    relationship_action(&w, A::New { group: false, clipped: false });
+    let group_base = current();
+    relationship_action(&w, A::New { group: false, clipped: true });
+    let group_owner = current();
+    w.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "gaussian_blur".into() } });
+    pump(160);
+    let group_effect = current();
+    relationship_action(&w, A::AttachEffect { id: group_effect, owner: group_owner });
+    let before = order();
+    mouse_drop(&mut input,standalone,isolated,[0.7,0.5]);
+    assert!(view(standalone).relationship.is_none(), "entering a group starts outside its first FX/clip chain");
+    assert_eq!(view(standalone).depth,view(group_base).depth);
+    let rows = order();
+    let at = rows.iter().position(|id| *id == isolated).unwrap();
+    assert_eq!(&rows[at..at+5], &[isolated,standalone,group_effect,group_owner,group_base]);
+    relationship(group_owner,R::Clip,group_base);
+    relationship(group_effect,R::Effect,group_owner);
+    undo();
+    assert_eq!(order(),before);
+    assert!(view(standalone).relationship.is_none());
+    let mut idle_scenes = Vec::new();
+    while let Some(id) = order().into_iter().find(|id| *id != 1 && *id != 2) {
+        relationship_action(&w,A::Delete { id });
+    }
+    name(1,"Layer");
+    select(1);
+    relationship_action(&w,A::New { group:false,clipped:true });
+    let motion_owner = current();
+    name(motion_owner,"Layer");
+    let before_frames = ui_session(&w).engine().metrics().frames;
+    w.dispatch(UiAction::Effect { action:EffectAction::Insert { effect:"motion_blur".into() } });
+    pump(160);
+    let motion = current();
+    name(motion,"Motion blur");
+    relationship_action(&w,A::AttachEffect { id:motion,owner:motion_owner });
+    show_layers();
+    assert!(std::env::var_os("CAPY_RECOVERY_DIR").is_some(), "idle reproduction requires private recovery storage");
+    let idle_scene = |input:&mut RemoteInput,label:&str| {
+        super::new_photo::ready(&w);
+        let start = Instant::now();
+        while start.elapsed() < Duration::from_millis(6200) {
+            pump(20);
+            assert!(state(&w).host_error.is_none(), "{label}: {:?}",state(&w).host_error);
+            assert!(!ui_session(&w).rendering_suspended(), "{label}: canvas stopped: {}",w.status.text());
+            assert!(!w.status.is_visible(), "{label}: {}",w.status.text());
+        }
+        let context = glib::MainContext::default();
+        context.block_on(w.recovery().flush()).unwrap();
+        let restored = context.block_on(w.recovery().read_snapshot()).unwrap();
+        let expected = ui_session(&w).engine().document().artwork.clone();
+        let mut restored_artwork = restored.document().artwork.clone();
+        for (handle,_,output) in expected.outputs.iter() {
+            let saved = restored_artwork.outputs.get_mut(handle).unwrap();
+            assert!(saved.context.elapsed.is_finite());
+            for (effect,phase) in saved.context.phases.iter() {
+                assert!(phase.is_finite() && restored.document().artwork.effects.get(*effect).is_some(), "{label}: captured phases reference current effects");
+            }
+            saved.context = output.context.clone();
+        }
+        assert_eq!(restored_artwork,expected, "{label}: recovery preserves exact authored state outside live evaluation context");
+        let image = context.block_on(read_canvas_pixels(&w,9821)).unwrap();
+        let at = (image.height/2*image.stride+image.width/2*4) as usize;
+        let pixel = &image.bytes[at..at+4];
+        assert!(pixel.iter().all(|v| *v >= 245), "{label}: empty layers retain rendered Paper: {pixel:?}");
+        assert!(ui_session(&w).engine().metrics().frames > before_frames, "{label}: native renderer published the changed scene");
+        input.perform(serde_json::json!([{"capture":label}]));
+        serde_json::json!({"scene":label,"rows":state(&w).layers,"frames":ui_session(&w).engine().metrics().frames,"paper_pixel":pixel,"recovery":w.recovery().published_path()})
+    };
+    assert_eq!(order(),[motion,motion_owner,1,2]);
+    relationship(motion,R::Effect,motion_owner);
+    relationship(motion_owner,R::Clip,1);
+    idle_scenes.push(idle_scene(&mut input,"relationships-motion-blur-clipped-owner-idle"));
+    relationship_action(&w,A::Clip { id:motion_owner,value:false });
+    select(1);
+    relationship_action(&w,A::New { group:false,clipped:true });
+    let separate_clip = current();
+    assert_eq!(order(),[motion,motion_owner,separate_clip,1,2]);
+    assert!(view(motion_owner).relationship.is_none());
+    relationship(motion,R::Effect,motion_owner);
+    relationship(separate_clip,R::Clip,1);
+    idle_scenes.push(idle_scene(&mut input,"relationships-motion-blur-separate-clip-idle"));
+    undo();
+    undo();
+    assert_eq!(order(),[motion,motion_owner,1,2]);
+    relationship(motion_owner,R::Clip,1);
+    relationship_action(&w,A::Delete { id:motion });
+    relationship_action(&w,A::Clip { id:motion_owner,value:false });
+    assert_eq!(order(),[motion_owner,1,2]);
+    assert!(view(motion_owner).relationship.is_none());
+    idle_scenes.push(idle_scene(&mut input,"relationships-motion-blur-removed-idle"));
+    undo();
+    undo();
+    assert_eq!(order(),[motion,motion_owner,1,2]);
+    relationship(motion,R::Effect,motion_owner);
+    relationship(motion_owner,R::Clip,1);
+    idle_scenes.push(idle_scene(&mut input,"relationships-motion-blur-undo-idle"));
+    for _ in 0..2 {
+        w.dispatch(UiAction::Invoke { command:CommandId::Redo });
+        pump(160);
+    }
+    assert_eq!(order(),[motion_owner,1,2]);
+    assert!(view(motion_owner).relationship.is_none());
+    idle_scenes.push(idle_scene(&mut input,"relationships-motion-blur-redo-idle"));
+    super::new_photo::ready(&w);
+    assert!(state(&w).host_error.is_none() && !ui_session(&w).rendering_suspended());
+    assert!(!w.status.is_visible(), "{}",w.status.text());
+    std::fs::write(std::path::Path::new(&captures).join("idle-scenes.json"),serde_json::to_vec_pretty(&idle_scenes).unwrap()).unwrap();
     input.finish();
     w.window.destroy();
     pump(100);

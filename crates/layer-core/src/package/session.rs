@@ -50,8 +50,16 @@ impl Editor {
         if checkpoint.document!=artwork.id || checkpoint.owner!=*owner
             || checkpoint.artwork_generation!=*revision || checkpoint.working_generation!=working.generation
             || checkpoint.edit_checkpoint!=*edit_checkpoint {return Err(crate::DocumentError::InvalidLayerOperation("Session capture is stale"));}
-        Ok(EditorCapture {artwork:capture,document:document.clone(),undo:undo.iter().map(|e|(e.edit.clone(),e.checkpoint)).collect(),
-            redo:redo.iter().map(|e|(e.edit.clone(),e.checkpoint)).collect(),next_checkpoint:*next_checkpoint,captured_checkpoint:checkpoint})
+        let history=|entries:&[HistoryEntry]|->Result<Vec<(Edit,u64)>,crate::DocumentError> {
+            let mut history:Vec<_>=entries.iter().map(|e|(e.edit.clone(),e.checkpoint)).collect();
+            if capture.output().context!=document.output().context && let Some((edit,_))=history.iter_mut().rev().find(|(edit,_)|edit.changes_project()) {
+                let output=crate::RecordChange::replace(&artwork.outputs,artwork.default_output,Some(document.output().clone()))?;
+                *edit=Edit::Batch(vec![Edit::Output(output),edit.clone()]);
+            }
+            Ok(history)
+        };
+        let undo=history(undo)?;let redo=history(redo)?;
+        Ok(EditorCapture {artwork:capture,document:document.clone(),undo,redo,next_checkpoint:*next_checkpoint,captured_checkpoint:checkpoint})
     }
 }
 fn active(cancel:&AtomicBool)->Result<(),String> {if cancel.load(Ordering::Relaxed) {Err("Session operation cancelled".into())}else{Ok(())}}

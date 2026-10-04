@@ -101,6 +101,29 @@ fn cold_noncontiguous_local_adjustments_prepare_lower_before_upper_for_regions_a
 }
 
 #[test]
+fn reference_samples_include_group_children_and_attached_clipping_relationships() {
+    let mut project=constant_document(RgbSpace::Srgb,0.5);
+    let group=occurrence(&project,"Lower root");let upper=occurrence(&project,"Upper");
+    project.artwork.occurrences.get_mut(group).unwrap().reference=true;
+    let sample=|project:&Document,source|pollster::block_on(gpu().artwork_sample(ArtworkSampleRequest::new(project,source,[8.,6.],1),Default::default())).unwrap();
+    let ArtworkSample::Color(pixel)=sample(&project,ArtworkSource::Reference) else {panic!("referenced group has pixels")};
+    close(pixel,f64::from(0.01125_f32)*shadow_gain(f64::from(0.01125_f32),0.5),0.5,false);
+    let paint=project.artwork.paint.insert(PortableId::random(),project.scene().paint_source(paint_occurrence(&project)).unwrap().clone()).unwrap();
+    let base=project.artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Paint(paint),"Base")).unwrap();
+    project.artwork.stacks.get_mut(project.composition().result).unwrap().entries.insert(2,base);
+    project.artwork.occurrences.get_mut(group).unwrap().attachment=Attachment::Clip;
+    project.artwork.occurrences.get_mut(group).unwrap().reference=false;
+    project.artwork.occurrences.get_mut(upper).unwrap().attachment=Attachment::Effect;refresh(&mut project);
+    let visible=sample(&project,ArtworkSource::Visible);
+    assert!(matches!(visible,ArtworkSample::Color(_)));
+    for reference in [group,upper,base] {
+        project.artwork.occurrences.get_mut(reference).unwrap().reference=true;
+        assert_eq!(sample(&project,ArtworkSource::Reference),visible,"reference {reference:?}");
+        project.artwork.occurrences.get_mut(reference).unwrap().reference=false;
+    }
+}
+
+#[test]
 fn local_analysis_reuses_own_amount_lease_and_invalidates_upper_after_lower_edits() {
     let mut project=constant_document(RgbSpace::Srgb,1.);let y=f64::from(0.01125_f32);
     let mut reader=capture(project.clone()).unwrap();reader.read_region([0,0,1,1]).unwrap();

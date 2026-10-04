@@ -11,6 +11,33 @@ fn assert_adjacent_effect_connections(s: &UiSession<Recorder>) {
 }
 
 #[test]
+fn layer_relationship_drop_previews_keep_outer_gaps_unattached() {
+    let mut s=session(Platform::Gtk);
+    let base=occurrence_token(s.engine.document().working.occurrence.unwrap());
+    layer(&mut s,LayerAction::New{group:false,clipped:true});
+    let owner=occurrence_token(s.engine.document().working.occurrence.unwrap());
+    insert_effect(&mut s,"motion_blur");
+    let effect=occurrence_token(s.engine.document().working.occurrence.unwrap());
+    layer(&mut s,LayerAction::Clip{id:effect,value:true});
+    layer(&mut s,LayerAction::New{group:false,clipped:false});
+    let paint=occurrence_token(s.engine.document().working.occurrence.unwrap());
+    layer(&mut s,LayerAction::Drop{id:paint,target:base,fraction:1.,surface:LayerDropSurface::Row});
+    for target in [effect,owner] {
+        let before=s.engine.document().clone();
+        assert_eq!(s.layer_drop_preview(paint,target,0.,LayerDropSurface::Row),Some(LayerDropHint{target:effect,position:LayerDropPosition::Above}));
+        assert_eq!(s.engine.document(),&before);
+        layer(&mut s,LayerAction::Drop{id:paint,target,fraction:0.,surface:LayerDropSurface::Row});
+        assert_eq!(relationship_row(&s,paint).relationship,None);
+        assert_eq!(relationship_row(&s,effect).relationship,Some(LayerRelation{kind:LayerRelationKind::Effect,target:owner}));
+        assert_eq!(relationship_row(&s,owner).relationship,Some(LayerRelation{kind:LayerRelationKind::Clip,target:base}));
+        invoke(&mut s,CommandId::Undo);
+        assert_live_artwork_eq(s.engine.document(),&before);
+    }
+    layer(&mut s,LayerAction::Drop{id:paint,target:base,fraction:0.,surface:LayerDropSurface::Row});
+    assert_eq!(relationship_row(&s,paint).relationship,Some(LayerRelation{kind:LayerRelationKind::Clip,target:base}));
+}
+
+#[test]
 fn layer_relationships_publish_owner_chains_and_clipping_from_the_top_effect() {
     let mut s = session(Platform::Gtk);
     let base = occurrence_token(s.engine.document().working.occurrence.unwrap());

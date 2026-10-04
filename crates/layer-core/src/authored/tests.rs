@@ -208,3 +208,22 @@ fn captured_integrated_phase_survives_rate_edits_and_a_new_host_time_origin() {
     }
     assert_ne!(clock.advance(effect.view(), 9.), effect.time_seconds(9.), "elapsed alone does not identify saved output");
 }
+
+#[test]
+fn animation_activity_follows_attached_owner_and_ancestor_visibility() {
+    use crate::{EffectInstance, EffectValue, operation_test_support as fixture};
+    let mut doc=fixture::document([32,32],&["FX","Owner","Group"]);
+    fixture::effect(&mut doc,"FX","domain_warp");
+    let fx=fixture::id(&doc,"FX");let owner=fixture::id(&doc,"Owner");
+    let effect=doc.scene().effect_handle(fx).unwrap();
+    let mut draft=EffectInstance::new(doc.artwork.definitions.get(doc.artwork.effects.get(effect).unwrap().definition).unwrap().program.clone());
+    draft.set("animate",EffectValue::Toggle(true)).unwrap();doc.artwork.effects.get_mut(effect).unwrap().values=draft.values;
+    doc.artwork.occurrences.get_mut(fx).unwrap().attachment=Attachment::Effect;
+    let group=fixture::nest(&mut doc,"Group",&["FX","Owner"]);
+    for hidden in [fx,owner,group] {
+        assert!(doc.has_animated_effects());
+        doc.artwork.occurrences.get_mut(hidden).unwrap().visible=false;
+        assert!(!doc.has_animated_effects());
+        doc.artwork.occurrences.get_mut(hidden).unwrap().visible=true;
+    }
+}

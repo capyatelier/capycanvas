@@ -119,7 +119,7 @@ fn composite_color(r: &WgpuRasterizer, packet: FramePacket<'_>, [red, green, blu
     wgpu::Color { r: f64::from(red), g: f64::from(green), b: f64::from(blue), a: f64::from(alpha) }
 }
 #[derive(Clone, Copy)]
-pub(super) enum Output { Artwork(Option<OccurrenceHandle>), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), Source(SourceTarget), Display }
+pub(super) enum Output { Artwork(Option<OccurrenceHandle>), OwnerContent(OccurrenceHandle), EffectInput(OccurrenceHandle), EffectChannels(OccurrenceHandle), Source(SourceTarget), Display }
 
 pub(super) struct Scene {
     valid: Arc<std::sync::atomic::AtomicBool>,
@@ -1479,6 +1479,12 @@ impl Scene {
             let image = match output {
                 Output::Artwork(parent) => {
                     let image = self.group(r, packet, parent, tile)?;
+                    self.converted(r, image, Convert::linear(packet))
+                }
+                Output::OwnerContent(id) => {
+                    if !packet.scene.eligible_target(id) { return Err(GpuRasterError::InvalidExtent); }
+                    let image = if packet.scene.visible(id) { self.layer(r, packet, id, tile)? }
+                        else { self.alloc(r, wgpu::Color::TRANSPARENT) };
                     self.converted(r, image, Convert::linear(packet))
                 }
                 Output::EffectInput(id) | Output::EffectChannels(id) => {

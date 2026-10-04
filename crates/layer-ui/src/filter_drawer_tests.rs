@@ -17,13 +17,13 @@ fn filters() -> (UiSession<Recorder>, u32) {
     (s, id)
 }
 #[test]
-fn replacing_the_bottom_fill_previews_its_empty_input() {
+fn adding_an_adjustment_above_a_fill_previews_the_fill() {
     let (mut s, _) = filters();
     s.dispatch(UiAction::SelectLayer { id: 2 }).unwrap();
     s.frame(0, 0).unwrap();
     assert!(s.request_filter_previews(1, vec!["exposure".into()], [120, 40]).unwrap());
     let request = s.engine.backend().filter_preview.as_ref().unwrap();
-    assert_eq!(request.source, layer_render::FilterPreviewSource::EffectInput(occurrence_handle(2).unwrap()));
+    assert_eq!(request.source, layer_render::FilterPreviewSource::LayerStack(occurrence_handle(2).unwrap()));
     assert_eq!(request.snapshot.view().order().len(), 2);
 }
 #[test]
@@ -456,6 +456,25 @@ fn replacing_fill_generators_preserves_the_presence_or_absence_of_a_mask() {
 }
 
 #[test]
+fn new_adjustments_from_an_existing_owner_stay_above_its_relationships() {
+    let (mut s,_) = filters();let base=s.engine.document().working.occurrence.unwrap();
+    insert_effect(&mut s,"motion_blur");let blur=s.engine.document().working.occurrence.unwrap();
+    layer(&mut s,LayerAction::Clip{id:occurrence_token(blur),value:true});
+    for clipped in [false,true] {
+        layer(&mut s,LayerAction::Select{id:occurrence_token(base),mask:false});
+        if clipped {layer(&mut s,LayerAction::New{group:false,clipped:true});}
+        let top=s.engine.document().scene().children(None)[0];
+        layer(&mut s,LayerAction::Select{id:occurrence_token(base),mask:false});let before=s.engine.document().clone();
+        s.frame(0,0).unwrap();assert!(s.request_filter_previews(1,vec!["curves".into()],[120,40]).unwrap());
+        assert_eq!(s.engine.backend().filter_preview.as_ref().unwrap().source,layer_render::FilterPreviewSource::LayerStack(top));s.renderer_mut().cancel_filter_previews();
+        insert_effect(&mut s,"curves");let doc=s.engine.document();let added=doc.working.occurrence.unwrap();
+        assert_eq!(&doc.scene().children(None)[..2],&[added,top]);assert_eq!(doc.scene().occurrence(added).unwrap().attachment,layer_core::Attachment::None);
+        assert_eq!(doc.scene().effect_owner(blur),Some(base));
+        invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
+    }
+}
+
+#[test]
 fn fill_insertion_preserves_existing_effect_owners_and_common_base() {
     let (mut s, _) = filters();let base=s.engine.document().working.occurrence.unwrap();
     layer(&mut s,LayerAction::New{group:false,clipped:true});let owner=s.engine.document().working.occurrence.unwrap();
@@ -471,6 +490,18 @@ fn fill_insertion_preserves_existing_effect_owners_and_common_base() {
         if selected!=base{assert!(doc.scene().position(fill)<doc.scene().position(curves));}
         invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
     }
+    layer(&mut s,LayerAction::Select{id:occurrence_token(owner),mask:false});let before=s.engine.document().clone();
+    s.frame(0,0).unwrap();assert!(s.request_filter_previews(1,vec!["exposure".into()],[120,40]).unwrap());
+    assert_eq!(s.engine.backend().filter_preview.as_ref().unwrap().source,layer_render::FilterPreviewSource::OwnerContent(owner));
+    insert_effect(&mut s,"exposure");let added=s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().attached_effects(owner),[added,blur,curves]);
+    invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
+    insert_effect(&mut s,"gradient_fill");let fill=s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().clipping_base(fill),Some(base));
+    let before=s.engine.document().clone();insert_effect(&mut s,"curves");let added=s.engine.document().working.occurrence.unwrap();
+    assert_eq!(s.engine.document().scene().children(None)[0],added);assert_eq!(s.engine.document().scene().effect_owner(added),None);
+    assert_eq!(s.engine.document().scene().clipping_base(fill),Some(base));
+    invoke(&mut s,CommandId::Undo);assert_live_artwork_eq(s.engine.document(),&before);
 }
 
 #[test]

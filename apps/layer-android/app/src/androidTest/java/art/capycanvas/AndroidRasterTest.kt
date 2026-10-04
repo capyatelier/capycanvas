@@ -187,7 +187,8 @@ class AndroidRasterTest {
         point(3,90.0,dy);tick()
     }
     private fun captureSession(directory: File) {
-        val capture = native {Native.sessionCapture(it,tabs().getLong("selected"))}
+        val selected = tabs().getLong("selected")
+        val capture = native {Native.sessionCapture(it,selected)}
         assertNotEquals("Session capture ready",0L,capture)
         val store = Native.sessionStoreOpen(directory.absolutePath)
         try {Native.sessionCommit(capture,store)} finally {Native.sessionFree(capture);Native.sessionStoreFree(store)}
@@ -2353,6 +2354,139 @@ class AndroidRasterTest {
             invoke("undo")
         }
         photo.delete()
+    }
+
+    @Test fun attachedFilterPreviewsReferenceAndRecoveryKeepOwnerInput() {
+        compose.runOnUiThread { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:painter")) }
+        compose.waitUntil(30_000) { host.workspaceManager?.optString("id") == "builtin:workspace:painter" && host.workspaceManager?.optBoolean("busy") == false }
+        compose.runOnUiThread { host.workspaceInput(obj("type" to "form", "action" to obj("type" to "reset", "value" to "builtin:workspace:painter"))) }
+        compose.waitUntil(10_000) { host.workspaceManager?.isNull("prompt") == false }
+        compose.runOnUiThread { host.workspaceInput(obj("type" to "submit")) }
+        compose.waitUntil(30_000) { host.workspaceManager?.isNull("prompt") == true && host.workspaceManager?.optBoolean("busy") == false }
+        fun image(name: String, color: Int, stripe: Boolean = false) = File(files, name).also { file ->
+            val bitmap = android.graphics.Bitmap.createBitmap(64, 64, android.graphics.Bitmap.Config.ARGB_8888)
+            try {
+                bitmap.eraseColor(color)
+                if (stripe) android.graphics.Canvas(bitmap).drawRect(30f, 0f, 34f, 64f, android.graphics.Paint().apply {
+                    this.color = android.graphics.Color.argb(128, 20, 40, 230)
+                    xfermode = android.graphics.PorterDuffXfermode(android.graphics.PorterDuff.Mode.SRC)
+                })
+                file.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+            } finally { bitmap.recycle() }
+        }
+        open(image("reference-base.png", android.graphics.Color.rgb(20, 240, 30)))
+        val input = image("reference-owner.png", android.graphics.Color.argb(128, 230, 40, 20), true)
+        val control = Native.captureControl()
+        val task = native { handle ->
+            val id = request(handle, "import_image").first
+            Native.imageImportTask(handle, id, Native.imageImportContext(handle, "null", "null"), control)
+        }
+        try {
+            Native.imageImportRead(task, ParcelFileDescriptor.open(input, ParcelFileDescriptor.MODE_READ_ONLY).detachFd(), input.name)
+            native { Native.imageImportAdopt(it, task) }
+        } finally { Native.imageImportFree(task); Native.captureFree(control) }
+        refresh(); pressCanvasBar("apply_transform")
+        fun current() = native { state(it).getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id") }
+        fun layer(value: JSONObject) = action(obj("type" to "layer", "action" to value))
+        fun row(id: Long) = native { state(it).array("layers").objects().first { row -> row.getLong("id") == id } }
+        val owner = current()
+        layer(obj("op" to "rename", "id" to owner, "name" to "Clipped owner"))
+        layer(obj("op" to "clip", "id" to owner, "value" to true))
+        action(obj("type" to "set_layer_opacity", "opacity" to .35))
+        layer(obj("op" to "reference", "id" to owner))
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "motion_blur")))
+        val blur = current()
+        layer(obj("op" to "attach_effect", "id" to blur, "owner" to owner))
+        fun sample(source: String): org.json.JSONArray {
+            val capture = Native.captureControl()
+            try {
+                val query = native { Native.inspectionTask(it, capture) }
+                return JSONObject(Native.inspectionSample(query, source, 32.5f, 32.5f, 1)).getJSONObject("sample").getJSONArray("Color")
+            } finally { Native.captureFree(capture) }
+        }
+        fun referencesMatch(): org.json.JSONArray {
+            val visible = sample(sourceVisible)
+            assertEquals("Clipped output includes its opaque base", 1.0, visible.getDouble(3), 1e-5)
+            assertTrue("Attached blur spreads red across the blue stripe", visible.getDouble(0) > visible.getDouble(2))
+            val expected = jsonValue(histogram())
+            compose.runOnUiThread { host.dispatch(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "histogram", "visible" to true))) }; compose.waitForIdle()
+            compose.waitUntil(10_000) { host.snapshot?.getJSONObject("layout")?.array("groups")?.objects()
+                ?.any { "histogram" in it.array("panels").values() } == true }
+            val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+                .first { "histogram" in it.array("panels").values() }.getInt("id")
+            compose.runOnUiThread {
+                host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to "histogram"))
+                host.dispatch(obj("type" to "histogram", "action" to obj("type" to "source", "index" to 2)))
+            }
+            compose.waitUntil(30_000) { host.snapshot?.getJSONObject("state")?.getJSONObject("histogram")?.let {
+                !it.isNull("data") && it.optString("status") == "Exact" && it.optString("captured_source") == "Reference"
+            } == true }
+            assertEquals("Reference statistics retain the clipped owner, attached blur and base", expected,
+                jsonValue(host.snapshot!!.getJSONObject("state").getJSONObject("histogram").getJSONObject("data")))
+            compose.runOnUiThread { host.dispatch(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "histogram", "visible" to false))) }; compose.waitForIdle()
+            return visible
+        }
+        val ownerInput = sample(snapshotSource("EffectInput", blur))
+        assertEquals("Attached input excludes outer owner opacity", 128.0 / 255.0, ownerInput.getDouble(3), 1e-5)
+        assertTrue("Attached input retains the unblurred blue stripe", ownerInput.getDouble(2) > ownerInput.getDouble(0))
+        val expected = referencesMatch()
+        val results = org.json.JSONArray()
+        for ((theme, target) in listOf("light" to owner, "light" to blur, "dark" to owner, "dark" to blur)) {
+            val previous = host.filterPreviewCache.images["curves"]?.key
+            action(obj("type" to "set_theme", "theme" to theme))
+            layer(obj("op" to "select", "id" to target, "mask" to false))
+            val header = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values()
+                .flatMap { (it as org.json.JSONArray).objects() }.first {
+                it.getJSONObject("item").objectOrNull("control")?.optString("panel") == "adjustments"
+            }.getInt("id")
+            action(obj("type" to "activate_header_item", "id" to header))
+            action(obj("type" to "filter_picker", "action" to obj("op" to "category", "category" to null)))
+            action(obj("type" to "filter_picker", "action" to obj("op" to "search", "query" to "Curves")))
+            val started = SystemClock.uptimeMillis()
+            compose.waitUntil(30_000) { host.filterPreviewCache.images["curves"]?.let { it.key != previous } == true }
+            val preview = host.filterPreviewCache.images.getValue("curves").image.toPixelMap()
+            val pixel = preview[preview.width / 2, preview.height / 2]
+            assertEquals("Attached replacement preview retains owner-local alpha", 128f / 255f, pixel.alpha, .02f)
+            assertTrue("Owner preview excludes the green clipping base", maxOf(pixel.red, pixel.blue) > pixel.green)
+            results.put(obj("theme" to theme, "target" to target, "preview_elapsed_ms" to SystemClock.uptimeMillis() - started,
+                "preview_alpha" to pixel.alpha, "visible_sample" to sample(sourceVisible)))
+            instrumentation.uiAutomation.takeScreenshot()?.let { bitmap ->
+                try { File(activity.getExternalFilesDir(null), "attached-motion-blur-preview-$theme-$target.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { bitmap.recycle() }
+            }
+            action(obj("type" to "activate_header_item", "id" to header))
+        }
+        layer(obj("op" to "select", "id" to owner, "mask" to false))
+        println("PASS attached previews in both themes and Reference statistics")
+        val ripple = native { handle ->
+            Native.dispatch(handle, obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "ripple")).toString())
+            val id = state(handle).getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id")
+            Native.dispatch(handle, obj("type" to "layer", "action" to obj("op" to "attach_effect", "id" to id, "owner" to owner)).toString())
+            Native.dispatch(handle, obj("type" to "layer", "action" to obj("op" to "visibility", "id" to owner, "value" to false)).toString())
+            id
+        }
+        refresh()
+        assertTrue(row(ripple).getBoolean("visibility_blocked"))
+        compose.waitUntil(30_000) { !tick() }
+        SystemClock.sleep(100)
+        assertFalse("An animated effect on a hidden owner stays idle", tick())
+        layer(obj("op" to "delete", "id" to ripple))
+        layer(obj("op" to "visibility", "id" to owner, "value" to true))
+        layer(obj("op" to "rename", "id" to owner, "name" to "Renamed owner"))
+        invoke("undo")
+        println("PASS hidden attached animation is idle")
+        val recovery = File(files, "attached-motion-blur-session")
+        captureSession(recovery)
+        val restore = restoreSessionTask(recovery)
+        try { adoptSession(restore) } finally { Native.sessionFree(restore) }
+        assertEquals(owner, row(blur).getJSONObject("relationship").getLong("target"))
+        invoke("redo"); assertEquals("Renamed owner", row(owner).getString("label"))
+        invoke("undo"); assertEquals("Clipped owner", row(owner).getString("label"))
+        val restored = referencesMatch()
+        for (channel in 0..3) assertEquals("Recovery sample channel $channel", expected.getDouble(channel), restored.getDouble(channel), 1e-5)
+        assertNull(host.failure); assertNull(host.actionError)
+        File(activity.getExternalFilesDir(null), "attached-filter-owner-journey.json").writeText(obj("previews" to results,
+            "visible_sample" to restored, "reference_statistics" to "PASS", "owner" to row(owner), "effect" to row(blur), "recovery_history" to "PASS").toString(2))
     }
 
     @Test fun largePhotoFilterPreviews() {

@@ -1379,21 +1379,7 @@ impl Document {
     }
     pub fn has_animated_effects(&self) -> bool {
         let scene = self.scene();
-        scene.order().iter().copied().any(|h| {
-            if !scene.occurrence(h).is_some_and(|o| o.visible)
-                || !scene.effect(h).is_some_and(|e| e.animated())
-            {
-                return false;
-            }
-            let mut parent = scene.parent(h);
-            while let Some(h) = parent {
-                if !scene.occurrence(h).is_some_and(|o| o.visible) {
-                    return false;
-                }
-                parent = scene.parent(h);
-            }
-            true
-        })
+        scene.order().iter().copied().any(|h| scene.visible(h) && scene.effect(h).is_some_and(|e| e.animated()))
     }
     pub fn allocate_stroke_id(&mut self) -> StrokeId {
         let id = StrokeId(self.next_stroke_id);

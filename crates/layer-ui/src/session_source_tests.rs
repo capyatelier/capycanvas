@@ -157,6 +157,11 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
     assert_eq!(session.image_layer_drop_hint(occurrence_token(clipped_id), 0.1), Some(LayerDropPosition::Above));
     assert!(session.image_placement_context(None,Some(ImageLayerDestination{target:group_id,position:LayerDropPosition::Attach})).is_err());
     let original = session.engine.document().clone();
+    session.place_layer_sources(vec![("Outside import".into(), source.clone())], None,
+        Some(ImageLayerDestination { target: clipped_id, position: LayerDropPosition::Above })).unwrap();
+    assert_eq!(session.engine.document().scene().occurrence(session.engine.document().working.occurrence.unwrap()).unwrap().attachment, layer_core::Attachment::None);
+    invoke(&mut session, CommandId::CancelTransform);
+    assert_live_artwork_eq(session.engine.document(), &original);
     session.place_layer_sources(vec![("Clipped import".into(), source.clone())], None,
         Some(ImageLayerDestination { target: ink, position: LayerDropPosition::Above })).unwrap();
     let imported = session.engine.document().working.occurrence.unwrap();
@@ -174,6 +179,7 @@ fn photo_drop_destination_respects_groups_locks_clipping_and_parent_offsets() {
         session.place_layer_sources(vec![("Photo".into(), source.clone())], None,
             Some(ImageLayerDestination { target: group_id, position })).unwrap();
         let doc = session.engine.document();
+        assert_eq!(doc.scene().occurrence(doc.working.occurrence.unwrap()).unwrap().attachment, layer_core::Attachment::None);
         assert_eq!(doc.scene().parent(doc.working.occurrence.unwrap()), (position == LayerDropPosition::Into).then_some(group_id));
         assert_eq!(doc.affine_edit_transform(doc.working.target.unwrap()).unwrap().map(Point { x: 1., y: 0.5 }), Point { x: 100., y: 75. });
         assert_eq!(doc.scene().position(doc.working.occurrence.unwrap()).unwrap(),

@@ -188,3 +188,24 @@ fn snapshot_export_does_not_bypass_placement_when_source_matches_canvas_extent()
     );
     assert_eq!(alpha(15, 8), 65535, "the placed image remains visible");
 }
+
+#[test]
+fn snapshot_bounds_preserve_clipped_fills_when_the_capture_domain_expands() {
+    let mut document = Document::new(PortableId::random(), 128, 128,
+        layer_core::DocumentNames {paint:"Layer".into(),paper:"Paper".into()});
+    hide_paper(&mut document);
+    paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source([16;2], |_,_| [255;4]));
+    let base = paint_occurrence(&document);
+    document.artwork.occurrences.get_mut(base).unwrap().translation = Point {x:-8.,y:-8.};
+    let fill = insert_effect(&mut document, EffectInstance::new(crate::tests::fixture("solid_color").program()), 0);
+    document.artwork.occurrences.get_mut(fill).unwrap().attachment = layer_core::Attachment::Clip;
+    refresh(&mut document);
+    assert_eq!(document.scene().clipping_base(fill), Some(base));
+    let expected = layer_core::Rect {min:Point {x:-8.,y:-8.},max:Point {x:8.,y:8.}};
+    let bounds = |document:&Document,scope| pollster::block_on(gpu().content_bounds(
+        layer_core::ContentBoundsRequest::new(document,scope),Default::default())).unwrap();
+    assert_eq!(bounds(&document,layer_core::ContentScope::Visible),expected);
+    let group = add_group(&mut document,vec![fill,base],0);
+    assert_eq!(document.scene().clipping_base(fill), Some(base));
+    assert_eq!(bounds(&document,layer_core::ContentScope::PlacedTarget(group)),expected);
+}

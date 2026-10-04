@@ -131,12 +131,15 @@ impl<B: CanvasRenderer> UiSession<B> {
         let doc = self.engine.document();
         let scene = doc.scene();
         let Some(current) = doc.working.occurrence else { return Ok(false); };
-        let replacing = self.filter_drawer_open() && scene.effect(current).is_some();
+        let replacing = self.filter_drawer_open() && scene.effect(current).is_some_and(|e|e.program.kind==layer_core::EffectKind::Adjustment);
         let source = if replacing {
             layer_render::FilterPreviewSource::EffectInput(current)
+        } else if self.filter_drawer_open() && scene.eligible_target(current)
+            && scene.occurrence(current).is_some_and(|o|o.attachment==layer_core::Attachment::Clip) {
+            layer_render::FilterPreviewSource::OwnerContent(current)
         } else {
-            layer_render::FilterPreviewSource::LayerStack(if self.filter_drawer_open() { current }
-                else { doc.clipping_stack_top(current).ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())? })
+            layer_render::FilterPreviewSource::LayerStack(doc.clipping_stack_top(current)
+                .ok_or_else(|| self.state.localization.text(MessageId::RESOURCES_ERROR_SELECT_LAYER).to_string())?)
         };
         let scope = SceneScope::All;
         let request = layer_render::FilterPreviewRequest {
@@ -1083,7 +1086,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let masked = !replacing && doc.working.selection.is_some();
                 if replacing && doc.is_locked(current) { return Err(self.state.localization.text(MessageId::RESOURCES_ERROR_LAYER_LOCKED).to_string()); }
                 if replacing && scene.effect(current).is_some_and(|effect| effect.program.id == catalog.program.id) { return Ok(()); }
-                let top = if choosing { current } else { doc.clipping_stack_top(current).ok_or("Missing clipping stack")? };
+                let attaches=choosing && scene.eligible_target(current) && occurrence.attachment==layer_core::Attachment::Clip;
+                let top = if choosing && (replacing || generator || attaches) { current }
+                    else { doc.clipping_stack_top(current).ok_or("Missing clipping stack")? };
                 let parent = scene.parent(current);
                 let stack_handle = scene.stack(top).ok_or("Missing containing stack")?;
                 let mut stack = doc.artwork.stacks.get(stack_handle).ok_or("Missing containing stack")?.clone();
@@ -1113,7 +1118,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let mut occurrence = if replacing { occurrence.clone() } else {
                     let mut value = Occurrence::new(OccurrenceContent::Effect(effect_handle), resource_label(catalog.label(), &self.state.localization));
-                    value.attachment = if choosing && generator {insertion_attachment} else if choosing && occurrence.attachment != layer_core::Attachment::None {
+                    value.attachment = if choosing && generator {insertion_attachment} else if attaches {
                         layer_core::Attachment::Effect
                     } else { layer_core::Attachment::None }; value
                 };

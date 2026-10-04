@@ -178,9 +178,20 @@ export async function checkLayerRelationships({call,evaluate,settle}) {
     await evaluate("document.querySelector('.workspace-form[open] .suggested-action').click()");
     await wait("!document.querySelector('.workspace-form[open]')&&!JSON.parse(layerApp.app.workspace_view()).busy");
   }
+  await layer({op:'select',id:await evaluate('Number(layerApp.state().layers[0].id)'),mask:false});
   await layer({op:'new',group:false,clipped:false});const base=await active();
   await layer({op:'rename',id:base,name:'Base {ink} 🎨'});
   const blur=await insert('gaussian_blur');await attach();
+  const outer=await insert('curves');await attach();
+  const sourceBox=await rect(`${row(blur)} .layer-name`),outerBox=await rect(row(outer));
+  await mouse('mousePressed',{x:sourceBox.x+sourceBox.width/2,y:sourceBox.y+sourceBox.height/2});
+  await mouse('mouseMoved',{x:outerBox.x+outerBox.width/2,y:outerBox.y+1});
+  assert.equal(await evaluate(`document.querySelector('${row(outer)}').classList.contains('layer-drop-before')`),true);
+  await mouse('mouseReleased',{x:outerBox.x+outerBox.width/2,y:outerBox.y+1});
+  assert.equal(await evaluate(`layerApp.state().layers.find(l=>Number(l.id)===${blur}).relationship??null`),null,'outer drop above the first FX chain detaches');
+  await invoke('undo');
+  assert.equal(await evaluate(`Number(layerApp.state().layers.find(l=>Number(l.id)===${blur}).relationship.target)`),base,'one Undo restores the effect owner');
+  await layer({op:'delete',id:outer});
   await layer({op:'select',id:base,mask:false});
   await layer({op:'new',group:false,clipped:true});const owner=await active();
   await layer({op:'rename',id:owner,name:'Shadows'});

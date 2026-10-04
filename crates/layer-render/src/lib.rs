@@ -333,6 +333,7 @@ impl ThumbnailTarget {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterPreviewSource {
     LayerStack(OccurrenceHandle),
+    OwnerContent(OccurrenceHandle),
     EffectInput(OccurrenceHandle),
 }
 

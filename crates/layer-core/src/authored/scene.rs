@@ -334,7 +334,7 @@ mod tests {
         assert_eq!(doc.scene().clipping_base(top),Some(base));assert_eq!(doc.scene().clipping_base(shade),Some(base));
         assert_eq!(doc.scene().attached_effects(shade),[blur,curves]);assert_eq!(doc.scene().effect_owner(curves),Some(shade));
         assert_eq!(crate::composite_input_layers(doc.scene(),blur),[shade]);assert_eq!(crate::composite_input_layers(doc.scene(),curves),[blur,shade]);assert_eq!(crate::composite_input_layers(doc.scene(),base_blur),[base]);
-        let at=doc.scene().children(None).iter().position(|h|*h==curves).unwrap();let undo=doc.apply(doc.reparent_occurrence_edit(blur,None,at).unwrap()).unwrap();assert_eq!(doc.scene().attached_effects(shade),[curves,blur]);doc.apply(undo).unwrap();
+        let at=doc.scene().children(None).iter().position(|h|*h==curves).unwrap();let undo=doc.apply(doc.attach_effect_edit(blur,shade,1,false).unwrap()).unwrap();assert_eq!(doc.scene().attached_effects(shade),[curves,blur]);doc.apply(undo).unwrap();
         assert_eq!(doc.content_insertion(None,doc.scene().children(None).iter().position(|h|*h==shade).unwrap()).0,at);
         for name in ["Blur","Shade"] {let h=f::id(&doc,name);let mut o=doc.scene().occurrence(h).unwrap().clone();o.visible=false;doc.apply(crate::Edit::Occurrence(RecordChange::replace(&doc.artwork.occurrences,h,Some(o)).unwrap())).unwrap();}
         assert_eq!(doc.scene().effect_owner(curves),Some(shade));assert!(!doc.scene().visible(curves));assert_eq!(doc.scene().clipping_base(top),Some(base));

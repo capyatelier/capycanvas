@@ -287,6 +287,12 @@ manual save checkpoints and undo/redo after an actual process death.
     `p3-grid-8bit.heic`, `p3-gray-10bit.heic` and `p3-12bit.avif` fixtures, plus
     `web-hdr.jpg` and `web-hdr.avif` produced by Web's `--portable-photo` test,
     into that directory.
+  - `#attachedFilterPreviewsReferenceAndRecoveryKeepOwnerInput` checks Filters
+    drawer previews for a clipped owner and its attached Motion Blur in both
+    themes, exact Histogram Reference statistics, hidden-owner animation idle,
+    and captured-session undo/redo. It generates private translucent fixtures
+    and writes screenshots and `attached-filter-owner-journey.json` to the
+    app's external-files directory.
   - `#largePhotoFilterPreviews` and `#largePhotoFilterPreviewLifecycle` opt in
     with `-e filterPhoto true`, `#largePhotoFilterPreviewDrawing` with
     `-e filterDrawing true`. They read the app's private

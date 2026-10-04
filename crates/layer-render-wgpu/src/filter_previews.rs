@@ -239,6 +239,10 @@ impl FilterPreviews {
             if self.analyses.iter().any(|entry|entry.layer()==handle){continue;}
             let mut snapshot=self.program_snapshot.as_ref().unwrap().as_ref().clone();
             let target=source_target(request.source);let source_scene=source.view();let stack=source_scene.stack(target).ok_or(GpuRasterError::InvalidExtent)?;
+            if matches!(request.source,FilterPreviewSource::OwnerContent(_))
+                ||matches!(request.source,FilterPreviewSource::EffectInput(_))&&source_scene.effect_owner(target).is_some(){
+                snapshot.artwork.occurrences.get_mut(handle).unwrap().attachment=layer_core::Attachment::Effect;
+            }
             let entries=&mut snapshot.artwork.stacks.get_mut(stack).unwrap().entries;
             let position=entries.iter().position(|h|*h==target).ok_or(GpuRasterError::InvalidExtent)?;
             entries.insert(position,handle);
@@ -775,19 +779,28 @@ fn preview_space(effect: layer_core::EffectView<'_>, blend: layer_core::BlendSpa
 // and what composites below it, through Pass Through groups. An excluded
 // global effect above the target must not force a full-document dependency.
 fn source_target(source: FilterPreviewSource) -> OccurrenceHandle {
-    match source { FilterPreviewSource::LayerStack(h) | FilterPreviewSource::EffectInput(h) => h }
+    match source { FilterPreviewSource::LayerStack(h) | FilterPreviewSource::EffectInput(h) | FilterPreviewSource::OwnerContent(h) => h }
 }
 fn source_scope(scene:SceneView<'_>,source:FilterPreviewSource)->Option<(Option<OccurrenceHandle>,Vec<OccurrenceHandle>)>{
     let target=source_target(source);
     scene.occurrence(target)?;
-    let mut members=layer_core::backdrop_layers(scene,target);
-    if matches!(source,FilterPreviewSource::LayerStack(_)) {
+    let mut members=match source {
+        FilterPreviewSource::LayerStack(_)=>layer_core::backdrop_layers(scene,target),
+        FilterPreviewSource::EffectInput(_)=>layer_core::composite_input_layers(scene,target),
+        FilterPreviewSource::OwnerContent(_)=>Vec::new(),
+    };
+    if matches!(source,FilterPreviewSource::LayerStack(_)|FilterPreviewSource::OwnerContent(_)) {
         members.extend(scene.order().iter().copied().filter(|h|*h==target||layer_core::descends_from(scene,*h,Some(target))));
     }
     let mut parent=scene.parent(target);
     while let Some(h)=parent{if !scene.occurrence(h)?.passes_through(){members.push(h);}parent=scene.parent(h);}
     members.retain(|h|scene.includes(*h));members.sort_by_key(|h|scene.position(*h));members.dedup();
-    Some((layer_core::isolated_scope(scene,scene.parent(target)),members))
+    let parent=match source {
+        FilterPreviewSource::LayerStack(_)=>layer_core::isolated_scope(scene,scene.parent(target)),
+        FilterPreviewSource::EffectInput(_)=>layer_core::composite_input_scope(scene,target),
+        FilterPreviewSource::OwnerContent(_)=>Some(target),
+    };
+    Some((parent,members))
 }
 fn source_snapshot(request:&FilterPreviewRequest)->Result<Arc<SceneSnapshot>,GpuRasterError>{
     let (_,members)=source_scope(request.snapshot.view().with_scope(&request.scope),request.source).ok_or_else(||GpuRasterError::Effect("Missing filter insertion layer".into()))?;
@@ -799,7 +812,12 @@ impl Scene {
         let (parent,_)=source_scope(request.snapshot.view(),request.source).ok_or(GpuRasterError::InvalidExtent)?;
         self.jobs.clear();self.used.fill(false);
         let packet=FramePacket{commit_rasters:true,time_seconds:snapshot.context.elapsed,view:request.view,document_extent:scene.composition().size,scene,selection_visibility:None,inspect_mask:None,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:false,composite_all:false,blend_space:scene.composition().blend};
-        self.capture_region(r,packet,destination,region,scene::Output::Artwork(parent),encoder)
+        let output=match request.source {
+            FilterPreviewSource::LayerStack(_)=>scene::Output::Artwork(parent),
+            FilterPreviewSource::EffectInput(target)=>scene::Output::EffectInput(target),
+            FilterPreviewSource::OwnerContent(target)=>scene::Output::OwnerContent(target),
+        };
+        self.capture_region(r,packet,destination,region,output,encoder)
     }
 }
 impl WgpuRasterizer {
@@ -940,6 +958,96 @@ mod tests {
     fn occurrence_edit(document: &mut Document, handle: OccurrenceHandle, f: impl FnOnce(&mut Occurrence)) {
         let mut value=document.artwork.occurrences.get(handle).unwrap().clone();f(&mut value);
         document.apply(Edit::Occurrence(RecordChange::replace(&document.artwork.occurrences,handle,Some(value)).unwrap())).unwrap();
+    }
+    #[test]
+    fn attached_motion_blur_preview_reads_its_clipped_owner_before_outer_composition() {
+        let extent=[32;2];
+        let mut artwork=Artwork::new(extent).unwrap();
+        let owner=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[230,40,20,128])));
+        let occurrence=artwork.occurrences.get_mut(owner).unwrap();
+        occurrence.attachment=layer_core::Attachment::Clip;occurrence.opacity=0.35;
+        let base=paint(&mut artwork,Some(layer_core::color::source::rgba8_source(extent,|_,_|[20,240,30,255])));
+        let paper=effect(&mut artwork,fixture("solid_color").preview().unwrap());
+        let target=effect(&mut artwork,fixture("motion_blur").preview().unwrap());
+        artwork.occurrences.get_mut(target).unwrap().attachment=layer_core::Attachment::Effect;
+        let mut doc=document(artwork,vec![target,owner,base,paper]);
+        let owner_source=doc.scene().source_target(owner).unwrap();
+        let mut r=WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        r.submit(crate::test_support::packet(doc.scene(),extent)).unwrap();
+        let capture=|r:&mut WgpuRasterizer,doc:&Document,source:Option<FilterPreviewSource>,output:scene::Output|{
+            let (texture,_)=create_color_target(&r.device,extent,"preview input regression");
+            let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+            let mut scene=Scene::new(r);
+            if let Some(source)=source {
+                let mut request=request(doc,owner,1,extent,crate::test_support::view(extent),vec![Arc::new(fixture("exposure").preview().unwrap())]);
+                request.source=source;
+                scene.capture_filter_source(r,&request,&texture,PixelRect::full(extent),&mut encoder).unwrap();
+            } else {
+                scene.capture_region(r,crate::test_support::packet(doc.scene(),extent),&texture,PixelRect::full(extent),output,&mut encoder).unwrap();
+            }
+            r.uploads.finish(&encoder);encoder.submit(&r.queue);
+            crate::test_support::float_pixels(r,&texture)
+        };
+        let raw=capture(&mut r,&doc,None,scene::Output::Source(owner_source));
+        let preview=capture(&mut r,&doc,Some(FilterPreviewSource::EffectInput(target)),scene::Output::Artwork(None));
+        assert!(crate::test_support::max_error(&preview,&raw)<1e-6,"attached input preserves owner pixels and alpha");
+        assert!((preview[0][3]-128./255.).abs()<1e-6);
+        let analysis=Arc::new(fixture("shadows_highlights").preview().unwrap());
+        let mut artwork=doc.artwork.clone();let candidate=effect(&mut artwork,analysis.as_ref().clone());
+        let index=Arc::new(SceneIndex::build(&artwork).unwrap());
+        let mut previews=FilterPreviews::new(&mut r).unwrap();
+        previews.program_snapshot=Some(Arc::new(SceneSnapshot::new(artwork,index,doc.scene().owner(),doc.scene().revision(),Default::default())));
+        previews.programs.insert(analysis.program.id.clone(),candidate);
+        let mut analysis_request=request(&doc,owner,2,extent,crate::test_support::view(extent),vec![analysis]);
+        analysis_request.source=FilterPreviewSource::EffectInput(target);previews.request=Some(analysis_request);
+        previews.queue_analyses(&r).unwrap();
+        let query=previews.analysis_queries.last().unwrap();
+        let (texture,_)=create_color_target(&r.device,extent,"preview analysis input regression");
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        Scene::new(&r).capture_region(&mut r,FramePacket{scene:query.snapshot.view(),..crate::test_support::packet(doc.scene(),extent)},
+            &texture,PixelRect::full(extent),scene::Output::EffectInput(candidate),&mut encoder).unwrap();
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        assert!(crate::test_support::max_error(&crate::test_support::float_pixels(&r,&texture),&raw)<1e-6,
+            "replacement analysis reads the same owner input");
+        occurrence_edit(&mut doc,target,|o|o.attachment=layer_core::Attachment::None);
+        let preview=capture(&mut r,&doc,Some(FilterPreviewSource::EffectInput(target)),scene::Output::Artwork(None));
+        occurrence_edit(&mut doc,target,|o|o.visible=false);
+        let backdrop=capture(&mut r,&doc,None,scene::Output::Artwork(None));
+        assert!(crate::test_support::max_error(&preview,&backdrop)<1e-6,"standalone replacement reads the composed backdrop");
+        assert!(crate::test_support::max_error(&raw,&backdrop)>0.1);
+        let mut artwork=doc.artwork.clone();
+        let mask=artwork.coverage.insert(PortableId::random(),layer_core::authored::CoverageSource {
+            domain:extent,raster:Default::default(),initial:None,default_coverage:0.5,operations:Default::default(),
+        }).unwrap();
+        artwork.occurrences.get_mut(owner).unwrap().mask=Some(layer_core::authored::MaskUse {
+            source:mask,enabled:true,linked:true,inverted:false,translation:Default::default(),placement:layer_core::Projective::IDENTITY,
+        });
+        let existing=effect(&mut artwork,fixture("exposure").preview().unwrap());
+        artwork.occurrences.get_mut(existing).unwrap().attachment=layer_core::Attachment::Effect;
+        let stack=artwork.compositions.get(artwork.root).unwrap().result;
+        artwork.stacks.get_mut(stack).unwrap().entries.insert(1,existing);
+        let doc=Document::from_artwork(artwork).unwrap();
+        let expected:Vec<_>=raw.iter().map(|pixel|pixel.map(|v|v*0.5)).collect();
+        let preview=capture(&mut r,&doc,Some(FilterPreviewSource::OwnerContent(owner)),scene::Output::Artwork(None));
+        assert!(crate::test_support::max_error(&preview,&expected)<1e-6,"new attached filter reads masked owner before opacity and existing effects");
+        let exposed=capture(&mut r,&doc,None,scene::Output::Artwork(None));
+        assert!(crate::test_support::max_error(&preview,&exposed)>0.1);
+        let analysis=Arc::new(fixture("shadows_highlights").preview().unwrap());
+        let mut artwork=doc.artwork.clone();let candidate=effect(&mut artwork,analysis.as_ref().clone());
+        let index=Arc::new(SceneIndex::build(&artwork).unwrap());
+        previews.program_snapshot=Some(Arc::new(SceneSnapshot::new(artwork,index,doc.owner,doc.revision,Default::default())));
+        previews.programs.insert(analysis.program.id.clone(),candidate);previews.analysis_queries.clear();
+        let mut analysis_request=request(&doc,owner,3,extent,crate::test_support::view(extent),vec![analysis]);
+        analysis_request.source=FilterPreviewSource::OwnerContent(owner);previews.request=Some(analysis_request);
+        previews.queue_analyses(&r).unwrap();
+        let query=previews.analysis_queries.last().unwrap();
+        let (texture,_)=create_color_target(&r.device,extent,"new attached analysis input regression");
+        let mut encoder=crate::submission::CommandEncoder::new(&r.device,&Default::default());
+        Scene::new(&r).capture_region(&mut r,FramePacket{scene:query.snapshot.view(),..crate::test_support::packet(doc.scene(),extent)},
+            &texture,PixelRect::full(extent),scene::Output::EffectInput(candidate),&mut encoder).unwrap();
+        r.uploads.finish(&encoder);encoder.submit(&r.queue);
+        assert!(crate::test_support::max_error(&crate::test_support::float_pixels(&r,&texture),&expected)<1e-6,
+            "new attached analysis bypasses the owner's existing effects");
     }
     #[test]
     fn replacing_the_bottom_fill_captures_transparent_input() {

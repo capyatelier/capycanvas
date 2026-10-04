@@ -63,7 +63,7 @@ impl SnapshotGpu {
         let view = snapshot.view();
         let (scope, output) = match &request.source {
             ArtworkSource::Visible => (snapshot.scope.clone(), scene::Output::Artwork(None)),
-            ArtworkSource::Reference => (SceneScope::Members(view.references().into_iter().collect::<Vec<_>>().into()), scene::Output::Artwork(None)),
+            ArtworkSource::Reference => (view.reference_scope(), scene::Output::Artwork(None)),
             ArtworkSource::EffectBaseline(baseline) => {
                 *Arc::make_mut(&mut snapshot).artwork.effects.get_mut(baseline.effect).ok_or("Missing effect baseline")? = baseline.application.clone();
                 (snapshot.scope.clone(), scene::Output::Artwork(None))
