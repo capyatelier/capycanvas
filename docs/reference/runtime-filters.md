@@ -287,7 +287,10 @@ declaration is an execution contract; its shader must produce the same color.
 Every generator thumbnail renders its program with the current parameters in
 document coordinates, including all passes. The result fits inside 32 × 32 pixels
 over the transparency checker, independent of layer opacity, visibility and masks.
-Parameter edits, filter replacement and undo refresh the thumbnail.
+Parameter edits, filter replacement and undo refresh the thumbnail. Fill thumbnails
+carry the filter catalog icon in the bottom-right corner: a bucket for Solid Color
+and a gradient for Gradient Fill. Shared layer state supplies thumbnail availability
+and the icon independently; hosts keep the symbol above the preview.
 
 The Filter menu and the selection bar's Adjust menu list
 adjustments only; the effect browser lists both. The Filter menu ends with

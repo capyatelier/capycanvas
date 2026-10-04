@@ -254,9 +254,12 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       if (layer.group) r.content.b.replaceChildren(icon(layer.collapsed ? "folder" : "folder-open"));
       else if(layer.content_icon && !layer.selection_layer) {
         const glyph = icon(nameIcon(layer.content_icon));
-        r.content.b.replaceChildren(glyph);
+        if (layer.has_thumbnail) {
+          glyph.classList.add("layer-type-symbol");
+          r.content.b.replaceChildren(r.content.image, glyph);
+        } else r.content.b.replaceChildren(glyph);
       }
-      else if (!r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
+      else if (r.content.b.childElementCount !== 1 || !r.content.image.isConnected) r.content.b.replaceChildren(r.content.image);
       r.mask.b.hidden = r.link.hidden = !layer.has_mask; r.mask.image.style.opacity = layer.mask_enabled ? 1 : .4;
       r.link.style.opacity = layer.mask_linked ? 1 : .35; r.link.title = r.link.ariaLabel = layer.mask_linked ? copy.unlink_mask : copy.link_mask_to_layer;
       r.name.textContent = layer.label; r.name.title = layer.label;
@@ -299,7 +302,7 @@ export function createLayerPanel({ app, catalog, state, panel, element, button, 
       for (const [id, r] of records) {
         const rect = r.row.getBoundingClientRect(); if (rect.bottom < Math.max(0,viewport.top) || rect.top > innerHeight || rect.height === 0) continue;
         for (const mask of [false,true]) {
-          if (mask ? !r.layer.has_mask : r.layer.group || (r.layer.content_icon && !r.layer.selection_layer)) continue;
+          if (mask ? !r.layer.has_mask : !r.layer.has_thumbnail) continue;
           const key = `${id}:${mask}`, revision = documentEpoch + ":" + String(mask ? r.layer.mask_revision : r.layer.paint_revision);
           if (revisions.get(key) === revision || pending.size >= 8) continue;
           const token = ++thumbnailRequest;

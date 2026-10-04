@@ -1356,7 +1356,8 @@ class AndroidTitleBarTest {
         action(obj("type" to "set_color","rgba" to JSONArray(listOf(1.0,0.0,0.0,1.0))))
         tap("color-bucket")
         val paper=state().array("layers").objects().first { it.getLong("id")==2L }
-        assertTrue(paper.isNull("content_icon"))
+        assertTrue(paper.getBoolean("has_thumbnail"))
+        assertEquals("layer-fill-symbolic",paper.getString("content_icon"))
         assertFalse(paper.getBoolean("has_mask"))
         assertFalse(paper.getString("description").contains("Protected"))
         assertTrue(state().getJSONObject("layer_tools").getJSONObject("controls").getBoolean("opacity"))
@@ -1376,7 +1377,7 @@ class AndroidTitleBarTest {
             while(true) {
                 val bounds=screenBounds("layer-thumbnail-2-false")
                 val image=instrumentation.uiAutomation.takeScreenshot()
-                val colors=listOf(.2f,.5f,.8f).map { image.getPixel((bounds.left+bounds.width*it).toInt(),bounds.center.y.toInt()) }
+                val colors=listOf(.2f,.5f,.8f).map { image.getPixel((bounds.left+bounds.width*it).toInt(),(bounds.top+bounds.height*.35f).toInt()) }
                 image.recycle()
                 if(matches(colors)) return
                 assertTrue("$label: $colors", SystemClock.uptimeMillis()<deadline)
@@ -1390,15 +1391,19 @@ class AndroidTitleBarTest {
                 val color=colors[1]
                 android.graphics.Color.red(color)>240 && android.graphics.Color.green(color)<10 && android.graphics.Color.blue(color)<10
             }
+            waitFor("Fill type symbol") { node("layer-type-symbol-2") != null }
+            assertNull(node("layer-type-symbol-1"))
             shot("fill-thumbnail-$theme")
         }
         tap(filters)
         tap("filter-type-fill")
         tap("adjustment-gradient_fill")
         action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "angle", "value" to obj("kind" to "number", "value" to 0))))
+        assertEquals("layer-gradient-symbolic",state().array("layers").objects().first { it.getLong("id")==2L }.getString("content_icon"))
         tap(header("layers"))
         for(theme in listOf("light","dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
+            waitFor("Gradient type symbol") { node("layer-type-symbol-2") != null }
             for((step, reverse) in listOf(false,true,false).withIndex()) {
                 if(reverse) action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to 2, "key" to "reverse", "value" to obj("kind" to "toggle", "value" to true))))
                 else if(step==2) action(obj("type" to "invoke", "command" to "undo"))

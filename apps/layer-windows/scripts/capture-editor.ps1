@@ -109,7 +109,7 @@ function Settle {
             $layer=$m.state.layers | Where-Object {$_.id.ToString() -eq $layerId}
             if(!$layer){return $false}
             $required=@()
-            if(!$layer.group -and !$layer.content_icon){$required+='thumbnail'}
+            if($layer.has_thumbnail){$required+='thumbnail'}
             if($layer.has_mask){$required+='mask-thumbnail'}
             foreach($kind in $required){
                 $preview=$row.FindFirst([System.Windows.Automation.TreeScope]::Descendants,

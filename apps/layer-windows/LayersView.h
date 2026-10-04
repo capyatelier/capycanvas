@@ -26,7 +26,7 @@ struct LayerRow : std::enable_shared_from_this<LayerRow> {
     double swipeOffset=0;
     void swipe(double offset);
     Button eye{nullptr},check{nullptr},content{nullptr},load{nullptr},mask{nullptr},link{nullptr},name{nullptr},grip{nullptr};
-    Border indent,clip,dropMark;
+    Border indent,clip,dropMark,contentSymbol;
     Grid contentTile,maskTile;
     Image contentImage,maskImage,lockImage;
     Canvas contentCorners,maskCorners;

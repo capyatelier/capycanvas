@@ -462,7 +462,9 @@ impl LayerPanel {
                 let effect_icon = gtk::Image::new();
                 effect_icon.set_pixel_size(24);
                 effect_icon.set_can_target(false);
+                content_preview.remove_overlay(&content_frame);
                 content_preview.add_overlay(&effect_icon);
+                content_preview.add_overlay(&content_frame);
                 thumbnails.append(&content);
                 let link = button("layer-link-symbolic", copy.borrow().layer.link_mask_to_layer.as_ref());
                 link.add_css_class("layer-link");
@@ -1410,7 +1412,7 @@ impl LayerPanel {
             for (mask, target, revision, picture) in [
                 (
                     false,
-                    (state.selection_layer || state.content_icon.is_none()).then_some(state.id),
+                    state.has_thumbnail.then_some(state.id),
                     state.paint_revision,
                     &row.content_image,
                 ),
@@ -1430,11 +1432,7 @@ impl LayerPanel {
                 self.next_preview.set(request + 1);
                 if g.session
                     .renderer_mut()
-                    .request_thumbnail(request, if mask {
-                        layer_render::ThumbnailTarget::Source(layer_core::authored::SourceTarget::from_wire_id(target).expect("Published mask source"))
-                    } else if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
-                        layer_render::ThumbnailTarget::Occurrence(layer_ui::occurrence_handle(target).expect("Published occurrence"))
-                    })
+                    .request_thumbnail(request, layer_render::ThumbnailTarget::from_wire_id(target).expect("Published thumbnail target"))
                     .is_ok()
                 {
                     self.requested.borrow_mut().insert(key, revision);
@@ -1498,7 +1496,12 @@ impl Row {
         self.root.set_widget_name(&format!("art-layer-{}", s.id));
         self.swipe.set_actions(s.can_delete, s.can_alpha_lock);
         self.effect_icon.set_visible(s.content_icon.is_some() && !s.selection_layer);
-        self.content_image.set_visible(s.selection_layer || s.content_icon.is_none());
+        self.content_image.set_visible(s.has_thumbnail);
+        self.effect_icon.set_pixel_size(if s.has_thumbnail { 12 } else { 24 });
+        self.effect_icon.set_halign(if s.has_thumbnail { gtk::Align::End } else { gtk::Align::Center });
+        self.effect_icon.set_valign(if s.has_thumbnail { gtk::Align::End } else { gtk::Align::Center });
+        if s.has_thumbnail && self.effect_icon.is_visible() { self.effect_icon.add_css_class("layer-type-symbol"); }
+        else { self.effect_icon.remove_css_class("layer-type-symbol"); }
         crate::icons::set(&self.effect_icon, s.content_icon.as_deref());
         self.load_selection.set_visible(s.selection_layer);
         caption(&self.load_selection, copy.load_selection.as_ref());

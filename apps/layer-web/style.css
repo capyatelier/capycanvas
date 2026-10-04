@@ -383,6 +383,7 @@ svg { width: 16px; height: 16px; flex: none; display: block; }
 .layer-clipping { width: 3px; height: 28px; background: #e999a5; border-radius: 1px; }
 .panel .layer-thumbnail { width: 30px; height: 30px; border: 1px solid transparent; border-radius: 3px; background: var(--input); position: relative; }
 .layer-thumbnail canvas { width: 28px; height: 28px; pointer-events: none; }
+.layer-thumbnail .layer-type-symbol { position: absolute; right: 0; bottom: 0; width: 14px; height: 14px; padding: 1px; border-radius: 2px; background: var(--input); color: var(--text); pointer-events: none; }
 .panel .layer-thumbnail.layer-folder { background: transparent; }
 .layer-folder svg { width: 28px; height: 28px; }
 .panel .layer-link { width: 12px; }

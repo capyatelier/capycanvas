@@ -297,9 +297,7 @@ impl NativeHost {
             && self.session.engine().backend().0.as_ref().is_some_and(|gpu| gpu.ui_readback_ready())
         {
             for (request, target) in requests.into_iter().take(1) {
-                let target = if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
-                    layer_render::ThumbnailTarget::Occurrence(layer_core::OccurrenceHandle::from_index(u32::try_from(target - 1).map_err(|_| "Invalid thumbnail identity")?))
-                };
+                let target = layer_render::ThumbnailTarget::from_wire_id(target).ok_or("Invalid thumbnail identity")?;
                 // Match GTK's bounded cold-photo work. The UI retries requests
                 // that are not yet accepted, leaving input/frame opportunities
                 // between batches instead of scanning an entire photo here.
@@ -1231,7 +1229,17 @@ mod tests {
         loop {
             let (_, images) = host.layer_thumbnails([(1, fill)]).unwrap();
             if let Some(image) = images.first() {
-                assert!(image.bytes.chunks_exact(4).all(|pixel| pixel == [255, 0, 0, 255]));
+                assert!(image.bytes.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255, 0, 0, 255]));
+                break;
+            }
+            frame_step(&mut host, &clock, deadline);
+        }
+        host.dispatch(serde_json::from_value(json!({"type":"layer","action":{"op":"add_mask","id":fill,"replace":false}})).unwrap()).unwrap();
+        let mask = host.session.state().layers.iter().find(|layer| layer.id == fill).unwrap().mask_id.unwrap();
+        loop {
+            let (_, images) = host.layer_thumbnails([(2, mask)]).unwrap();
+            if let Some(image) = images.first() {
+                assert!(image.bytes.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255; 4]));
                 break;
             }
             frame_step(&mut host, &clock, deadline);

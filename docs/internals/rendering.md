@@ -736,7 +736,9 @@ original contributions. Generator thumbnails share the filter-picker
 preview execution path, sampling document coordinates on a grid of at most
 32 × 32 pixels. They compile asynchronously and retain at most two temporary
 images per request. Shared layer revisions include generator parameters, so all
-hosts request new pixels after a parameter edit or undo.
+hosts request new pixels after a parameter edit or undo. Content requests use
+occurrence IDs; mask requests use encoded coverage source IDs. GTK, Web and
+native bridges share `ThumbnailTarget::from_wire_id` to decode both targets.
 
 On unified-memory hardware, CPU and GPU share physical RAM. Keeping separate
 copies solely to move an image between processors can waste both memory and

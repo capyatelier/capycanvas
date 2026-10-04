@@ -53,7 +53,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   assert.equal(await evaluate('layerApp.state().customization.drawer'),undefined);
   await contact(filters);await send({type:'layer',action:{op:'select',id:2,mask:false}});await wait('Number(layerApp.state().layer_properties.layer)===2');
   await send({type:'set_color',rgba:[1,0,0,1]});await contact('.content-drawer [data-action="color-bucket"]','touch');
-  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),undefined);
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-fill-symbolic');
   assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).has_mask'),false);
   assert.equal(await evaluate('layerApp.state().layer_tools.controls.opacity'),true);
   for(const theme of ['light','dark']) {
@@ -70,16 +70,19 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
     await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const p=c.getContext('2d').getImageData(16,16,1,1).data;return p[0]>240&&p[1]<10&&p[2]<10&&p[3]===255;})()`);
+    assert.equal(await evaluate(`document.querySelector('${row(2)} .layer-type-symbol')?.getAttribute('aria-hidden')`),'true');
+    assert.equal(await evaluate(`document.querySelector('${row(1)} .layer-type-symbol')`),null);
     await capture(`fill-thumbnail-${theme}`);
   }
   await contact(filters);
   await send({type:'effect',action:{op:'insert',effect:'gradient_fill'}});
   await send({type:'effect',action:{op:'set',layer:2,key:'angle',value:{kind:'number',value:0}}});
-  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),undefined);
+  assert.equal(await evaluate('layerApp.state().layers.find(l=>Number(l.id)===2).content_icon'),'layer-gradient-symbolic');
   await contact(layers);
   for(const theme of ['light','dark']) {
     await send({type:'set_theme',theme});
     await wait(`(()=>{const c=document.querySelector('${row(2)} .layer-thumbnail canvas');if(!c)return false;const d=c.getContext('2d');return d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);
+    assert.equal(await evaluate(`document.querySelector('${row(2)} .layer-type-symbol')?.getBoundingClientRect().width`),14);
     await capture(`gradient-thumbnail-${theme}`);
   }
   await send({type:'effect',action:{op:'set',layer:2,key:'reverse',value:{kind:'toggle',value:true}}});

@@ -152,13 +152,14 @@ try {
     }
     if(!(Model).state.layer_properties.controls){throw 'Paper properties missing'}
     $fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0]
-    if($fill.has_mask -or $fill.content_icon -or !(Model).state.layer_tools.controls.opacity){throw 'Paper is not an ordinary maskless fill'}
+    if($fill.has_mask -or !$fill.has_thumbnail -or $fill.content_icon -ne 'layer-fill-symbolic' -or !(Model).state.layer_tools.controls.opacity){throw 'Paper is not an ordinary maskless fill'}
     Write-Output 'PASS: Filter replacement/reopen/cancel, drawing target, paper color'
     Tap $layers;Drawer @('layers')
     Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Paper thumbnail did not finish' 30
     foreach($theme in @('Light','Dark')){
         Set-Theme $theme;if(!(Model).state.customization.drawer){Tap $layers};Drawer @('layers')
         Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Fill thumbnail did not finish' 30
+        if(!(Find ('layer-'+$paper.id+'-type-symbol'))){throw 'Fill thumbnail has no type symbol'}
         Capture ('fill-thumbnail-'+$theme.ToLowerInvariant()) -WithModel
     }
     Tap $filters;Drawer @('filter_types','adjustments','properties')
@@ -170,7 +171,7 @@ try {
         Set-Theme $theme;if(!(Model).state.customization.drawer){Tap $layers};Drawer @('layers')
         Wait-Until {$image=Find ('layer-'+$paper.id+'-thumbnail');$image -and $image.Current.ItemStatus -eq 'Ready'} 'Gradient thumbnail did not finish' 30
         $fill=@((Model).state.layers|Where-Object id -eq $paper.id)[0]
-        if($fill.content_icon){throw 'Gradient has a glyph instead of a thumbnail'}
+        if(!$fill.has_thumbnail -or $fill.content_icon -ne 'layer-gradient-symbolic' -or !(Find ('layer-'+$paper.id+'-type-symbol'))){throw 'Gradient thumbnail has no type symbol'}
         Capture ('gradient-thumbnail-'+$theme.ToLowerInvariant()) -WithModel
     }
     Write-Output 'PASS: Gradient thumbnails in both themes'

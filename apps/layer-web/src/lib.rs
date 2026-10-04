@@ -259,9 +259,7 @@ impl WebApp {
         if !self.rasterizer()?.ui_readback_ready() {
             return Ok(false);
         }
-        let target = if target == 0 { layer_render::ThumbnailTarget::QuickMask } else {
-            layer_render::ThumbnailTarget::Occurrence(layer_core::OccurrenceHandle::from_index(u32::try_from(target - 1).map_err(js)?))
-        };
+        let target = layer_render::ThumbnailTarget::from_wire_id(target).ok_or_else(|| js("Invalid thumbnail identity"))?;
         match self.rasterizer()?.prepare_thumbnail_batch(target) {
             Ok(true) => (),
             Ok(false) | Err(layer_render_wgpu::GpuRasterError::ThumbnailUnavailable(_)) => return Ok(false),

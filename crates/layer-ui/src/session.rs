@@ -5688,7 +5688,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             selection_layer: l.kind() == LayerKind::Selection,
             quick_mask: false,
             can_rename: !doc.is_locked(id),
-            content_icon: scene.effect(id).filter(|fx| fx.program.kind != layer_core::EffectKind::Generator).map(|fx| {
+            has_thumbnail: matches!(l.kind(), LayerKind::Paint | LayerKind::Selection)
+                || scene.effect(id).is_some_and(|fx| fx.program.kind == layer_core::EffectKind::Generator),
+            content_icon: scene.effect(id).map(|fx| {
                 format!(
                     "layer-{}-symbolic",
                     self.effect_catalog
@@ -5760,7 +5762,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.layers = doc.ordered_layers().iter().copied().filter(|id| !self.layer_interaction.hidden_by_group(doc, *id)).map(layer_state).collect();
         if self.selection_masks.quick() {
             let row = LayerState {
-                id: 0, selection_layer: true, quick_mask: true, can_rename: false,
+                id: 0, selection_layer: true, quick_mask: true, can_rename: false, has_thumbnail: true,
                 content_icon: Some("layer-selection-brush-symbolic".into()),
                 label: self.localization().text(MessageId::COMMAND_QUICK_MASK).to_string(), description: String::new(),
                 can_delete: true, can_alpha_lock: false, visible: self.selection_masks.quick_visible,
@@ -9933,7 +9935,9 @@ mod tests {
         assert_eq!(s.engine.document().scene().effect(paper_handle).unwrap().constant_color(), Some(layer_core::color::RgbColor::WHITE));
         let controls = s.state.layer_tools.controls;
         assert!(controls.opacity && controls.mask && controls.blend && controls.edit_lock);
-        assert!(s.state.layers.iter().find(|l| l.id == 2).unwrap().content_icon.is_none());
+        let row = s.state.layers.iter().find(|l| l.id == 2).unwrap();
+        assert!(row.has_thumbnail);
+        assert_eq!(row.content_icon.as_deref(), Some("layer-fill-symbolic"));
         assert_eq!(s.engine.document().try_drawing_target(), Err(layer_core::DrawingRefusal::Fill));
         layer(&mut s, LayerAction::Drop { id: 2, target: 1, fraction: 0. });
         assert_eq!(s.state.layers[0].id, 2);

@@ -411,7 +411,7 @@ fn estimated_input_abi_matches_final_sensor_oracle_pixels_and_history_on_both_pl
                 // the contact delivered with final pressure, tilt and twist.
                 let document = engine.document();
                 let samples =
-                    raster_samples(document.target_raster(document.active_target()).unwrap());
+                    raster_samples(document.target_raster(document.active_target().unwrap()).unwrap());
                 app.invoke("undo");
                 app.draw_until_idle();
                 assert_eq!(app.pixels(), baseline);

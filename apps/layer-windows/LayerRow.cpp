@@ -99,6 +99,7 @@ void LayerRow::init(){
     for(auto pair:{std::pair{contentImage,contentTile},std::pair{maskImage,maskTile}}){
         pair.first.Width(28);pair.first.Height(28);pair.first.Stretch(Stretch::Fill);pair.first.IsHitTestVisible(false);pair.second.Children().Append(pair.first);
     }
+    contentSymbol.IsHitTestVisible(false);contentTile.Children().Append(contentSymbol);
     corners(contentCorners);corners(maskCorners);contentTile.Children().Append(contentCorners);maskTile.Children().Append(maskCorners);
     content.Content(contentTile);mask.Content(maskTile);
     content.CornerRadius({3,3,3,3});mask.CornerRadius({3,3,3,3});
@@ -188,13 +189,23 @@ void LayerRow::refresh(){
     auto nextTitle=str(layer,L"label");if(nextTitle!=captionTitle){captionTitle=nextTitle;AutomationProperties::SetName(root,data->caption(O({{L"type",S(L"layer_row")},{L"title",S(nextTitle)}})));}
     auto shown=flag(layer,L"visible")?L"eye":L"eye-hidden";
     auto icons=hstring(shown)+L":"+str(layer,L"selection_icon")+L":"+str(layer,L"content_icon")+L":"+
-        to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
+        to_hstring(flag(layer,L"group"))+L":"+to_hstring(flag(layer,L"has_thumbnail"))+L":"+to_hstring(flag(layer,L"collapsed"))+L":"+to_hstring(flag(layer,L"locked"));
     if(icons!=iconKey){
         iconKey=icons;eye.Content(icon(shown,data->theme()));check.Content(icon(str(layer,L"selection_icon"),data->theme()));
         auto contentIcon=flag(layer,L"group")?(flag(layer,L"collapsed")?L"folder":L"folder-open"):str(layer,L"content_icon");
-        if(flag(layer,L"selection_layer"))contentImage.Source(nullptr);
-        else if(!contentIcon.empty())contentImage.Source(icon(contentIcon,data->theme(),28).Source());
-        else contentImage.Source(nullptr);
+        bool preview=flag(layer,L"has_thumbnail"),symbol=!contentIcon.empty()&&!flag(layer,L"selection_layer");
+        contentImage.Visibility(preview?Visibility::Visible:Visibility::Collapsed);
+        contentSymbol.Visibility(symbol?Visibility::Visible:Visibility::Collapsed);
+        contentSymbol.Width(preview?14:28);contentSymbol.Height(preview?14:28);
+        contentSymbol.Padding({preview?1.:0.});contentSymbol.CornerRadius({2,2,2,2});
+        contentSymbol.HorizontalAlignment(preview?HorizontalAlignment::Right:HorizontalAlignment::Center);
+        contentSymbol.VerticalAlignment(preview?VerticalAlignment::Bottom:VerticalAlignment::Center);
+        contentSymbol.Background(preview?data->brush(L"input"):clear());
+        if(symbol){
+            auto glyph=icon(contentIcon,data->theme(),preview?12:28);
+            if(preview)AutomationProperties::SetAutomationId(glyph,L"layer-"+to_hstring(uint64_t(id))+L"-type-symbol");
+            contentSymbol.Child(glyph);
+        }
         lockImage.Source(icon(flag(layer,L"locked")?L"lock":L"alpha-lock",data->theme(),12).Source());
     }
     bool selectionLayer=flag(layer,L"selection_layer");
@@ -246,7 +257,7 @@ void LayerRow::focusRename(){
 void LayerRow::thumbnails(std::vector<LayerThumbnail>& visible){
     if(!current())return;auto layer=model();
     for(bool isMask:{false,true}){
-        if(isMask?!flag(layer,L"has_mask"):(flag(layer,L"group")||(!flag(layer,L"selection_layer")&&!str(layer,L"content_icon").empty())))continue;
+        if(isMask?!flag(layer,L"has_mask"):!flag(layer,L"has_thumbnail"))continue;
         auto item=thumbnail(layer,isMask);visible.push_back(item);
         auto source=LayerThumbnailSource(data->thumbnails,epoch,item);auto image=isMask?maskImage:contentImage;
         if(image.Source()!=source)image.Source(source);AutomationProperties::SetItemStatus(image,source?data->caption(L"header",L"ready"):data->caption(L"layers",L"pending"));

@@ -320,6 +320,13 @@ pub struct ReadbackImage {
 
 #[derive(Clone,Copy,Debug,PartialEq,Eq)]
 pub enum ThumbnailTarget {Occurrence(OccurrenceHandle),Source(SourceTarget),QuickMask}
+impl ThumbnailTarget {
+    pub fn from_wire_id(id: u64) -> Option<Self> {
+        Some(if id == 0 { Self::QuickMask } else if id >> 32 == 0 {
+            Self::Occurrence(OccurrenceHandle::from_index(u32::try_from(id - 1).ok()?))
+        } else { Self::Source(SourceTarget::from_wire_id(id)?) })
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FilterPreviewSource {
@@ -870,6 +877,15 @@ impl std::error::Error for BackendError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn thumbnail_wire_ids_distinguish_occurrences_and_mask_sources() {
+        assert_eq!(ThumbnailTarget::from_wire_id(0), Some(ThumbnailTarget::QuickMask));
+        assert_eq!(ThumbnailTarget::from_wire_id(2), Some(ThumbnailTarget::Occurrence(OccurrenceHandle::from_index(1))));
+        let source = SourceTarget::Coverage(layer_core::authored::CoverageHandle::from_index(3));
+        assert_eq!(ThumbnailTarget::from_wire_id(source.wire_id()), Some(ThumbnailTarget::Source(source)));
+        assert_eq!(ThumbnailTarget::from_wire_id(3u64 << 32 | 1), None);
+    }
 
     #[test]
     fn linked_transform_maps_both_origins_into_the_same_world_motion() {

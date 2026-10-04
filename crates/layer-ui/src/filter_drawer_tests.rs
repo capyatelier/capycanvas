@@ -1,5 +1,6 @@
 fn paper_color(document:&layer_core::Document)->Option<layer_core::color::RgbColor> {
-    document.scene().effect(occurrence_handle(2).unwrap())?.constant_color()
+    let scene = document.scene();
+    scene.order().iter().rev().find_map(|id| scene.effect(*id)?.constant_color())
 }
 fn filters() -> (UiSession<Recorder>, u32) {
     let mut s = session(Platform::Gtk);
@@ -202,12 +203,41 @@ fn fill_color_lock_history_and_blocked_cursor_share_document_policy() {
 }
 
 #[test]
+fn layer_thumbnails_and_type_icons_are_independent_on_every_host() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        let paint = s.state.layers.iter().find(|l| l.id == 1).unwrap();
+        assert!(paint.has_thumbnail);
+        assert!(paint.content_icon.is_none());
+        let paper = s.state.layers.iter().find(|l| l.id == 2).unwrap();
+        assert!(paper.has_thumbnail);
+        assert_eq!(paper.content_icon.as_deref(), Some("layer-fill-symbolic"));
+        insert_effect(&mut s, "gradient_fill");
+        let fill = s.state.layer_tools.editing_layer.as_ref().unwrap();
+        assert!(fill.has_thumbnail);
+        assert_eq!(fill.content_icon.as_deref(), Some("layer-gradient-symbolic"));
+        insert_effect(&mut s, "brightness_contrast");
+        let adjustment = s.state.layer_tools.editing_layer.as_ref().unwrap();
+        assert!(!adjustment.has_thumbnail);
+        assert!(adjustment.content_icon.is_some());
+        s.dispatch(UiAction::Layer { action: LayerAction::New { group: true, clipped: false } }).unwrap();
+        assert!(!s.state.layer_tools.editing_layer.as_ref().unwrap().has_thumbnail);
+        invoke(&mut s, CommandId::SelectAll);
+        invoke(&mut s, CommandId::SaveSelectionLayer);
+        let selection = s.state.layers.iter().find(|l| l.selection_layer).unwrap();
+        assert!(selection.has_thumbnail);
+        assert_eq!(selection.content_icon.as_deref(), Some("layer-selection-brush-symbolic"));
+    }
+}
+
+#[test]
 fn every_generator_has_a_thumbnail_revision_for_its_parameters_and_history() {
     let mut s = session(Platform::Gtk);
     insert_effect(&mut s, "gradient_fill");
     let id = s.engine.document().working.occurrence.unwrap();
     let row = |s: &UiSession<Recorder>| s.state.layers.iter().find(|layer| layer.id == occurrence_token(id)).unwrap().clone();
-    assert!(row(&s).content_icon.is_none());
+    assert!(row(&s).has_thumbnail);
+    assert_eq!(row(&s).content_icon.as_deref(), Some("layer-gradient-symbolic"));
     let original = row(&s).paint_revision;
     s.dispatch(UiAction::Effect { action: EffectAction::Set { layer: occurrence_token(id), key: "angle".into(), value: layer_core::EffectValue::Number(30.) } }).unwrap();
     let changed = row(&s).paint_revision;
@@ -217,11 +247,14 @@ fn every_generator_has_a_thumbnail_revision_for_its_parameters_and_history() {
     let undone = row(&s).paint_revision;
     invoke(&mut s, CommandId::Redo);
     assert_ne!(row(&s).paint_revision, undone);
+    let redone = row(&s).paint_revision;
     let mut future = effects::effect_draft(s.engine.document(), id).unwrap();
     Arc::make_mut(&mut future.program).id = "future_fill".into();
     s.layer_edit(effects::effect_edit(s.engine.document(), id, future).unwrap()).unwrap();
-    assert!(row(&s).content_icon.is_none());
-    assert_ne!(row(&s).paint_revision, changed);
+    s.refresh_document();
+    assert!(row(&s).has_thumbnail);
+    assert_eq!(row(&s).content_icon.as_deref(), Some("layer-adjustments-symbolic"));
+    assert_ne!(row(&s).paint_revision, redone);
     let mut document = s.engine.document().clone();
     let mut revisions = art_layers::PreviewRevisions::default();
     revisions.update(&document);

@@ -1545,6 +1545,10 @@ fn native_filter_drawer_input() {
         let _warm = crate::snapshot(&d.w); pump(120);
         let shot = crate::snapshot(&d.w);
         let row = d.named("art-layer-2");
+        let symbol = find_css(&row, "layer-type-symbol").unwrap().downcast::<gtk::Image>().unwrap();
+        assert!(symbol.is_visible());
+        assert_eq!(crate::icons::name(&symbol).as_deref(), Some("layer-fill-symbolic"));
+        assert!(find_css(&d.named("art-layer-1"), "layer-type-symbol").is_none());
         let thumb = find_css(&row, "layer-thumbnail").unwrap();
         let p = thumb.compute_bounds(&d.w.surface).unwrap();
         let mut download = gdk::TextureDownloader::new(&shot);
@@ -1552,7 +1556,7 @@ fn native_filter_drawer_input() {
         let (bytes, stride) = download.download_bytes();
         let scale = shot.width() as f32 / d.w.surface.width() as f32;
         let x = ((p.x() + p.width() * 0.5) * scale) as usize;
-        let y = ((p.y() + p.height() * 0.5) * scale) as usize;
+        let y = ((p.y() + p.height() * 0.35) * scale) as usize;
         let pixel = &bytes[y * stride + x * 4..][..4];
         assert!(pixel[1] > 240 && pixel[0] < 10 && pixel[2] < 10, "{theme:?}: fill thumbnail {pixel:?}");
         shot.save_to_png(output.join(format!("fill-thumbnail-{theme:?}.png"))).unwrap();
@@ -1574,6 +1578,9 @@ fn native_filter_drawer_input() {
             pump(350);
             let shot = crate::snapshot(&d.w);
             let row = d.named("art-layer-2");
+            let symbol = find_css(&row, "layer-type-symbol").unwrap().downcast::<gtk::Image>().unwrap();
+            assert!(symbol.is_visible());
+            assert_eq!(crate::icons::name(&symbol).as_deref(), Some("layer-gradient-symbolic"));
             let thumb = find_css(&row, "layer-thumbnail").unwrap();
             let p = thumb.compute_bounds(&d.w.surface).unwrap();
             let mut download = gdk::TextureDownloader::new(&shot);
@@ -1582,7 +1589,7 @@ fn native_filter_drawer_input() {
             let scale = shot.width() as f32 / d.w.surface.width() as f32;
             let sample = |fraction| {
                 let x = ((p.x() + p.width() * fraction) * scale) as usize;
-                let y = ((p.y() + p.height() * 0.5) * scale) as usize;
+                let y = ((p.y() + p.height() * 0.35) * scale) as usize;
                 bytes[y * stride + x * 4]
             };
             let (left, right) = (sample(0.2), sample(0.8));

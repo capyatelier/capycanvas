@@ -286,14 +286,18 @@ private struct LayerRow: View {
             ZStack {
                 if !mask && layer["group"].bool { SharedIcon(name: layer["collapsed"].bool ? "folder" : "folder-open", size: 28) }
                 else {
-                    if mask || layer["content_icon"].isNull || layer["selection_layer"].bool,
+                    if mask || layer["has_thumbnail"].bool,
                        let image = previews.images[LayerThumbnails.key(id, mask)] {
                         Image(decorative: image, scale: 1).resizable().frame(width: 28, height: 28)
                             .opacity(mask && !layer["mask_enabled"].bool ? 0.4 : 1)
                     }
                     if !mask && !layer["content_icon"].isNull && !layer["selection_layer"].bool {
-                        SharedIcon(name: layer["content_icon"].string, size: 28)
+                        SharedIcon(name: layer["content_icon"].string, size: layer["has_thumbnail"].bool ? 12 : 28)
                             .foregroundStyle(palette["text"])
+                            .padding(layer["has_thumbnail"].bool ? 1 : 0)
+                            .background(layer["has_thumbnail"].bool ? palette["input"] : Color.clear, in: SquircleShape(2))
+                            .frame(width: 28, height: 28, alignment: layer["has_thumbnail"].bool ? .bottomTrailing : .center)
+                            .allowsHitTesting(false).accessibilityHidden(true)
                     }
                 }
             }.frame(width: 30, height: 30)
@@ -320,7 +324,7 @@ private struct LayerRow: View {
     private func thumbnailCaptureStatus(mask: Bool) -> String {
         #if DEBUG
         if ProcessInfo.processInfo.environment["CAPY_CAPTURE_PROBE"] == "1" {
-            let symbolic = !mask && (layer["group"].bool || (!layer["content_icon"].isNull && !layer["selection_layer"].bool))
+            let symbolic = !mask && !layer["has_thumbnail"].bool
             return symbolic || previews.images[LayerThumbnails.key(id, mask)] != nil ? "Preview ready" : "Preview pending"
         }
         #endif

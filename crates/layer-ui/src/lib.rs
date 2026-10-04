@@ -1179,6 +1179,7 @@ pub struct LayerState {
     pub selection_layer: bool,
     pub quick_mask: bool,
     pub can_rename: bool,
+    pub has_thumbnail: bool,
     pub content_icon: Option<String>,
     pub label: String,
     pub description: String,
