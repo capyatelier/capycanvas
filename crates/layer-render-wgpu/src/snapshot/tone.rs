@@ -2,6 +2,14 @@
 use super::*;
 
 impl SnapshotRenderer {
+    pub(super) async fn build_effect_guide_async(&mut self, kind: layer_core::EffectAnalysisKind, output: scene::Output)
+        -> Result<crate::effects::resources::Resource, String> {
+        match kind {
+            layer_core::EffectAnalysisKind::LocalIllumination => self.build_tone_guide_async(output).await
+                .map(|guide| crate::effects::resources::Resource {buffer: guide.buffer.clone(), _analysis: guide.analysis_lease.clone()}),
+            layer_core::EffectAnalysisKind::Dehaze => self.build_dehaze_guide_async(output).await,
+        }
+    }
     #[cfg(not(target_arch = "wasm32"))]
     pub fn local_tone_guide(
         &mut self,
@@ -51,55 +59,13 @@ impl SnapshotRenderer {
         -> Result<Arc<crate::local_tone::GpuToneGuide>, String> {
         use crate::local_tone::{Builder, range_async, wait_async};
         let reserved = Builder::allocation_bound(self.extent)?;
-        if reserved.saturating_add(self.renderer.analysis_bytes()) > self.planned_pixel_bytes {
-            return Err(GpuRasterError::CaptureBudget {
-                required: reserved.saturating_add(self.renderer.analysis_bytes()),
-                limit: self.planned_pixel_bytes,
-            }
-            .to_string());
-        }
-        let mut lease = if matches!(output, scene::Output::EffectInput(_)) {
-            Some(crate::effect_analysis::Lease::reserve(&self.renderer.device, reserved)?)
-        } else { None };
+        let mut lease = self.reserve_analysis(output, reserved)?;
         Builder::prepare_pipelines(&self.renderer.device).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         let builder = Builder::new(&self.renderer.device, self.extent, self.color().space)?;
         let device = self.renderer.device.clone();
         let queue = self.renderer.queue.clone();
-        // Tile-aligned windows bound transient composite storage and queue work.
-        // Existing scene capture supplies masks, blend modes and filter halos.
-        for y in (0..self.extent[1]).step_by(512) {
-            for x in (0..self.extent[0]).step_by(512) {
-                let mut regions = vec![[
-                    x,
-                    y,
-                    512.min(self.extent[0] - x),
-                    512.min(self.extent[1] - y),
-                ]];
-                while let Some(region) = regions.pop() {
-                    self.check_cancelled().map_err(|e| e.to_string())?;
-                    match self.capture_output_region_gpu(region, output, reserved, |_, texture, encoder| {
-                        builder.reduce(encoder, texture, [region[0], region[1]])
-                    }) {
-                        Err(GpuRasterError::CaptureBudget { .. })
-                            if region[2].max(region[3]) > 16 =>
-                        {
-                            let axis = if region[2] > region[3] { 0 } else { 1 };
-                            let mut first = region;
-                            first[axis + 2] /= 2;
-                            let mut second = region;
-                            second[axis] += first[axis + 2];
-                            second[axis + 2] -= first[axis + 2];
-                            regions.push(second);
-                            regions.push(first);
-                        }
-                        Err(e) => return Err(e.to_string()),
-                        Ok(()) => wait_async(&device, &queue).await?,
-                    }
-                }
-            }
-        }
-        self.check_cancelled().map_err(|e| e.to_string())?;
+        self.reduce_analysis(output, reserved, |encoder, texture, origin| builder.reduce(encoder, texture, origin)).await?;
         let mut encoder = submission::CommandEncoder::new(&device, &Default::default());
         let statistics = builder.statistics(&mut encoder);
         builder.prepare(&mut encoder);
@@ -123,5 +89,69 @@ impl SnapshotRenderer {
         wait_async(&device, &queue).await?;
         self.check_cancelled().map_err(|e| e.to_string())?;
         Ok(guide)
+    }
+    fn reserve_analysis(&self, output: scene::Output, reserved: u64) -> Result<Option<crate::effect_analysis::Lease>, String> {
+        if reserved.saturating_add(self.renderer.analysis_bytes()) > self.planned_pixel_bytes {
+            return Err(GpuRasterError::CaptureBudget {
+                required: reserved.saturating_add(self.renderer.analysis_bytes()),
+                limit: self.planned_pixel_bytes,
+            }
+            .to_string());
+        }
+        let lease = if matches!(output, scene::Output::EffectInput(_)) {
+            Some(crate::effect_analysis::Lease::reserve(&self.renderer.device, reserved)?)
+        } else { None };
+        Ok(lease)
+    }
+    async fn reduce_analysis(&mut self, output: scene::Output, reserved: u64,
+        mut reduce: impl FnMut(&mut submission::CommandEncoder, &wgpu::Texture, [u32;2])) -> Result<(), String> {
+        let device = self.renderer.device.clone();
+        let queue = self.renderer.queue.clone();
+        for y in (0..self.extent[1]).step_by(512) {
+            for x in (0..self.extent[0]).step_by(512) {
+                let mut regions = vec![[
+                    x,
+                    y,
+                    512.min(self.extent[0] - x),
+                    512.min(self.extent[1] - y),
+                ]];
+                while let Some(region) = regions.pop() {
+                    self.check_cancelled().map_err(|e| e.to_string())?;
+                    match self.capture_output_region_gpu(region, output, reserved, |_, texture, encoder| {
+                        reduce(encoder, texture, [region[0], region[1]])
+                    }) {
+                        Err(GpuRasterError::CaptureBudget { .. })
+                            if region[2].max(region[3]) > 16 =>
+                        {
+                            let axis = if region[2] > region[3] { 0 } else { 1 };
+                            let mut first = region;
+                            first[axis + 2] /= 2;
+                            let mut second = region;
+                            second[axis] += first[axis + 2];
+                            second[axis + 2] -= first[axis + 2];
+                            regions.push(second);
+                            regions.push(first);
+                        }
+                        Err(e) => return Err(e.to_string()),
+                        Ok(()) => crate::local_tone::wait_async(&device, &queue).await?,
+                    }
+                }
+            }
+        }
+        self.check_cancelled().map_err(|e| e.to_string())?;
+        Ok(())
+    }
+    pub(super) async fn build_dehaze_guide_async(&mut self, output: scene::Output)
+        -> Result<crate::effects::resources::Resource, String> {
+        use crate::dehaze::Builder;
+        let reserved = Builder::allocation_bound(self.extent)?;
+        let mut lease = self.reserve_analysis(output, reserved)?;
+        Builder::prepare_pipelines(&self.renderer.device).await?;
+        self.check_cancelled().map_err(|e| e.to_string())?;
+        let builder = Builder::new(&self.renderer.device, self.extent, self.color().space)?;
+        self.reduce_analysis(output, reserved, |encoder, texture, origin| builder.reduce(encoder, texture, origin)).await?;
+        let buffer = builder.finish(&self.renderer.queue, || self.check_cancelled().map_err(|e| e.to_string())).await?;
+        let retained = lease.as_mut().map(|lease| lease.split(buffer.size()));
+        Ok(crate::effects::resources::Resource {buffer, _analysis: retained})
     }
 }

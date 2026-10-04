@@ -198,11 +198,33 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                 }
             }
         }
-        if (pages.size > 1) Box(Modifier.testTag("properties-page")) {
-            PropertyChoice(view.getString("title"), pages.map { it.getString("label") }, pages.indexOfFirst { it.getString("id") == view.optString("page") }, enabled) {
-                host.effect(obj("op" to "select_page", "layer" to layer, "page" to pages[it].getString("id")))
+        val actions = view.array("actions").objects().filter { it.getJSONObject("action").getString("op") !in listOf("lookup_preset", "import_lookup") }
+        if (pages.size > 1 || actions.isNotEmpty()) Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (pages.size > 1) Box(Modifier.weight(1f).testTag("properties-page")) {
+                PropertyChoice(view.getString("title"), pages.map { it.getString("label") }, pages.indexOfFirst { it.getString("id") == view.optString("page") }, enabled) {
+                    host.effect(obj("op" to "select_page", "layer" to layer, "page" to pages[it].getString("id")))
+                }
+            }
+            actions.groupBy { it.objectOrNull("group")?.getString("id") ?: it.getJSONObject("action").getString("op") }.forEach { (id, choices) ->
+                val action = choices.first()
+                val group = action.objectOrNull("group")
+                val label = group?.getString("label") ?: action.getString("label")
+                var open by remember(layer, view.optString("page"), view.optLong("epoch"), id) { mutableStateOf(false) }
+                Box {
+                    val click = { if (group != null) open = true else host.effect(action.getJSONObject("action")) }
+                    if (!action.isNull("icon")) IconButton(click, enabled = enabled, modifier = Modifier.size(32.dp).testTag(if (group == null) "property-action-$id" else "property-action-group-$id")) {
+                        SharedIcon(action.getString("icon").removePrefix("layer-").removeSuffix("-symbolic"), label)
+                    } else TextButton(click, enabled = enabled, contentPadding = PaddingValues(horizontal = 6.dp), modifier = Modifier.height(32.dp).testTag("property-action-$id")) { Text(label, maxLines = 1) }
+                    DropdownMenu(open, { open = false }) {
+                        choices.forEach { choice ->
+                            val request = choice.getJSONObject("action")
+                            DropdownMenuItem(text = { Text(choice.getString("label")) }, onClick = { open = false; host.effect(request) }, modifier = Modifier.testTag("property-${request.getString("op")}-${request.optString("role")}"))
+                        }
+                    }
+                }
             }
         }
+        if (view.optBoolean("histogram")) ScopeControl(host, state, "tonal_histogram", tonal = true)
         controls.forEachIndexed { index, control ->
             val section = control.takeUnless { it.isNull("section") }?.getString("section")
             val sectionId = propertySectionId(control)
@@ -221,7 +243,7 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
                 "number" -> key(layer, key, kind.toString()) {
                     EffectNumber(host, label, (value as Number).toDouble(), kind.getJSONObject("numeric"), enabled, key) { obj("op" to "number", "layer" to layer, "key" to key) }
                 }
-                "curve" -> key(layer, key, control.getJSONObject("curve").getJSONObject("domain").toString()) { CurveControl(host, layer, control, enabled) }
+                "curve" -> key(layer, key, control.getJSONObject("curve").getJSONObject("domain").toString()) { CurveControl(host, state, layer, control, enabled) }
                 "toggle" -> Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                     Text(label, Modifier.weight(1f)); Switch(value as Boolean, { change(it) }, enabled = enabled)
                 }
@@ -274,13 +296,15 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
 }
 
 @Composable private fun EffectNumber(host: CanvasHost, label: String, value: Double, numeric: JSONObject,
-    enabled: Boolean, id: String, text: String? = null, request: () -> JSONObject) {
+    enabled: Boolean, id: String, text: String? = null, valueOnly: Boolean = false, request: () -> JSONObject) {
     val currentRequest by rememberUpdatedState(request)
     var owner by remember { mutableStateOf<JSONObject?>(null) }
     var latest by remember { mutableDoubleStateOf(value) }
     SideEffect { if (owner == null) latest = value }
     fun action(value: Double) = JSONObject((owner ?: currentRequest()).toString()).put("operation", obj("type" to "value", "value" to value))
-    NumericSetting(label, value, numeric, enabled = enabled, id = id, presentedText = text, onEditPhase = { phase ->
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+    if (!valueOnly) Text(label, Modifier.weight(1f), maxLines = 1, overflow = TextOverflow.Ellipsis)
+    NumericSetting(label, value, numeric, Modifier.weight(if (valueOnly) 1f else 2f), enabled = enabled, id = id, inline = true, valueOnly = valueOnly, showSlider = !valueOnly, presentedText = text, onEditPhase = { phase ->
         if (phase == "down") { owner = currentRequest(); latest = value }
         val action = action(latest)
         if (phase != "down") owner = null
@@ -290,11 +314,12 @@ internal fun propertySectionId(control: JSONObject): String = JSONArray().put(co
         val action = action(next)
         host.effect(if (owner == null) action else obj("op" to "gesture", "phase" to "move", "action" to action))
     }
+    }
 }
 
 private data class CurveTap(val position: Offset, val time: Long, val epoch: Long, val points: Int)
 
-@Composable private fun CurveControl(host: CanvasHost, layer: Long, control: JSONObject, enabled: Boolean) {
+@Composable private fun CurveControl(host: CanvasHost, state: JSONObject, layer: Long, control: JSONObject, enabled: Boolean) {
     val colors = LocalPalette.current
     val density = LocalDensity.current.density
     val current by rememberUpdatedState(control)
@@ -325,8 +350,9 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                 Text(axes[1].getString("minimum"), color = colors.secondary)
             }
             Column(Modifier.weight(1f)) {
-                Box(Modifier.fillMaxWidth().height(200.dp)) {
-                    Canvas(Modifier.fillMaxSize().testTag("effect-curve").semantics { contentDescription = control.getString("label") }.background(colors.input)
+                Box(Modifier.fillMaxWidth().height(200.dp).background(colors.input)) {
+                    ScopeGraph(host, state, "tonal_histogram", Modifier.fillMaxSize())
+                    Canvas(Modifier.fillMaxSize().testTag("effect-curve").semantics { contentDescription = control.getString("label") }
                         .onGloballyPositioned { origin = it.positionInRoot() }.focusRequester(focus)
                         .onFocusChanged {
                             if (it.isFocused) host.curveControlFocus = focus
@@ -412,14 +438,20 @@ private data class CurveTap(val position: Offset, val time: Long, val epoch: Lon
                 }
             }
         }
-        listOf("input", "output").forEachIndexed { index, axis ->
-            val coordinate = curve.optJSONObject(axis)
-            EffectNumber(host, axes[index].getString("label"), coordinate?.getDouble("value") ?: 0.0, curve.getJSONObject("numeric"),
-                enabled && coordinate != null && !coordinate.getBoolean("read_only"), "curve-$key-$axis", coordinate?.getString("text") ?: "") {
-                obj("op" to "curve_number", "layer" to layer, "key" to key, "epoch" to current.getJSONObject("curve").getLong("epoch"), "axis" to axis)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            listOf("input", "output").forEachIndexed { index, axis ->
+                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    val coordinate = curve.optJSONObject(axis)
+                    Text(axes[index].getString("label"), maxLines = 1)
+                    EffectNumber(host, axes[index].getString("label"), coordinate?.getDouble("value") ?: 0.0, curve.getJSONObject("numeric"),
+                        enabled && coordinate != null && !coordinate.getBoolean("read_only"), "curve-$key-$axis", coordinate?.getString("text") ?: "", valueOnly = true) {
+                        obj("op" to "curve_number", "layer" to layer, "key" to key, "epoch" to current.getJSONObject("curve").getLong("epoch"), "axis" to axis)
+                    }
+                    if (curve.getJSONObject("domain").getString("kind") == "log_hdr") Text(coordinate?.optString("ev") ?: "", Modifier.fillMaxWidth().heightIn(min = 18.dp).testTag("curve-$key-$axis-ev"), color = colors.secondary, textAlign = androidx.compose.ui.text.style.TextAlign.End)
+                }
             }
-            if (curve.getJSONObject("domain").getString("kind") == "log_hdr") Text(coordinate?.optString("ev") ?: "", Modifier.fillMaxWidth().heightIn(min = 18.dp).testTag("curve-$key-$axis-ev"), color = colors.secondary, textAlign = androidx.compose.ui.text.style.TextAlign.End)
         }
+        ScopeFooter(host, state, "tonal_histogram")
     }
 }
 

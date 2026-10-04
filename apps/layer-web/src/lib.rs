@@ -570,13 +570,7 @@ impl WebApp {
 #[wasm_bindgen]
 impl WebApp {
     pub fn state(&self) -> Result<JsValue, JsValue> {
-        let state=self.session.state();
-        let value=serialize(state)?;
-        for (name,view) in [("histogram",&state.histogram),("waveform",&state.waveform),("tonal_histogram",&state.tonal_histogram)] {
-            let scope=js_sys::Reflect::get(&value,&js(name))?;
-            scopes::publish_source(view,&scope)?;
-        }
-        Ok(value)
+        serialize(self.session.state())
     }
     /// Search-only publications avoid serializing unchanged editor controls.
     pub fn command_search(&self) -> Result<JsValue, JsValue> {

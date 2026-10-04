@@ -30,7 +30,8 @@ pub(crate) struct PipelineDevice {
     hdr: bool,
     pub source_samples: std::sync::Arc<layer_core::raster::DecodedTileCache>,
     pub blend_pipelines: std::sync::Arc<std::sync::Mutex<std::sync::Weak<super::portable_blend::Pipelines>>>,
-    pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::local_tone::Pipelines>>>,
+    pub tone_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
+    pub dehaze_pipelines: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::analysis_compute::Pipelines>>>,
     pub bounds_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<super::thumbnails::BoundsPipeline>>>,
     pub levels_pipeline:std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::levels::LevelsPipeline>>>,
     pub statistics_pipeline: std::sync::Arc<std::sync::OnceLock<std::sync::Arc<crate::snapshot::statistics::StatisticsPipeline>>>,
@@ -46,6 +47,7 @@ impl From<wgpu::Device> for PipelineDevice {
         Self {
             device,
             tone_pipelines: Default::default(),
+            dehaze_pipelines: Default::default(),
             bounds_pipeline: Default::default(),
             sample_pipeline: Default::default(),
             statistics_pipeline: Default::default(),
@@ -71,6 +73,11 @@ impl std::ops::Deref for PipelineDevice {
     }
 }
 impl PipelineDevice {
+    pub fn for_recipe(&self) -> Self {
+        Self { working_space: self.working_space, hdr: self.hdr,
+            #[cfg(not(target_arch = "wasm32"))]
+            cache: self.cache.clone(), ..Self::from(self.device.clone()) }
+    }
     /// A working attachment choice, independent of native integer backing and
     /// document primaries. All deferred recipes retain this same choice.
     pub fn working_format(&self) -> wgpu::TextureFormat {

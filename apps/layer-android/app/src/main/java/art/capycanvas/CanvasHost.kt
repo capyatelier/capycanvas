@@ -81,6 +81,9 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
     }
     var snapshot by mutableStateOf<JSONObject?>(null)
         private set
+    internal var scopes by mutableStateOf<Map<String, ScopePlot>>(emptyMap())
+        private set
+    private var scopePublication: Map<String, ScopePlot> = emptyMap()
     internal var workspaceManager by mutableStateOf<JSONObject?>(null)
         private set
     private var workspaceManagerKey: String? = null
@@ -843,6 +846,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         val localization = next.objectOrNull("bootstrap")
         if (localization != null) bootstrapForOwner = localization
         val state = next.getJSONObject("state")
+        val plots = Native.takeScopes(handle)?.let { scopePlots(it, scopePublication).also { scopePublication = it } }
         val epoch = state.getJSONObject("document_file").optLong("epoch")
         if (epoch != documentEpoch) {
             documentEpoch = epoch
@@ -866,6 +870,7 @@ class CanvasHost(application: Application) : AndroidViewModel(application) {
         if (measuredPublications != null && contentChanged(previousModel, next)) panelContentChanges++
         recordPublication()
         main.post { androidx.compose.runtime.snapshots.Snapshot.withMutableSnapshot {
+            plots?.let { scopes = it }
             localization?.let { bootstrap = it }
             next.objectOrNull("catalog")?.let { catalog = it }
             colorPreview = next.objectOrNull("color_preview")

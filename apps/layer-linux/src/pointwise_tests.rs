@@ -167,15 +167,16 @@ fn assert_source_scene(w: &Rc<Workspace>, before: &layer_core::Document) {
     let before_order: Vec<_> = before.scene().order().iter().map(|h| before.artwork.occurrences.id(*h).unwrap()).collect();
     let after_order: Vec<_> = after.scene().order().iter().map(|h| after.artwork.occurrences.id(*h).unwrap()).collect();
     assert_eq!(before_order,after_order);
-    for id in before_order {
-        let original = before.artwork.occurrences.get(before.artwork.occurrences.resolve(id).unwrap()).unwrap();
-        let current = after.artwork.occurrences.get(after.artwork.occurrences.resolve(id).unwrap()).unwrap();
-        assert_eq!(current,original);
+    let original:serde_json::Value=serde_json::from_slice(&artwork_manifest(before)).unwrap();
+    let current:serde_json::Value=serde_json::from_slice(&artwork_manifest(&after)).unwrap();
+    for object in original["objects"].as_array().unwrap().iter().filter(|object|object["type"]!="capy.output/1") {
+        assert_eq!(current["objects"].as_array().unwrap().iter().find(|entry|entry["id"]==object["id"]),Some(object),"original authored source/scene object retains exact portable content");
     }
     assert_eq!(after.artwork.paint.iter().count(),before.artwork.paint.iter().count());
     for (_, id, original) in before.artwork.paint.iter() {
         let current=after.artwork.paint.get(after.artwork.paint.resolve(id).unwrap()).unwrap();
-        assert_eq!(current,original);
+        if let (Some(current),Some(original))=(&current.original,&original.original) {assert_source_samples(current,original);} else {assert_eq!(current.original,original.original);}
+        assert_eq!(super::editing_tools::pixels(&current.raster),super::editing_tools::pixels(&original.raster),"original authored raster payload is unchanged");
     }
 }
 fn persist(w: &Rc<Workspace>, output: &std::path::Path, name: &str) {
@@ -458,7 +459,7 @@ fn native_color_lookup_import_replace_and_persistence() {
 #[ignore = "private display and hardware GPU"]
 fn native_local_adjustments_analysis_history_and_recreation() {
     let app=native_test_app("art.capycanvas.LocalAdjustments");let w=start(&app);
-    let output=std::path::Path::new(artifact_dir("../../artifacts/photo-editing-color/p25-gtk"));
+    let output=std::path::PathBuf::from(std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|"../../artifacts/photo-editing-color/p26-gtk".into()));std::fs::create_dir_all(&output).unwrap();let output=output.as_path();
     let sample=|w:&Rc<Workspace>| {let camera=state(w).camera;let m=camera.document_to_surface();let mut published=None;until(||{match ui_session(w).engine().backend().capture_in(w.view_color()) {Ok(image)=>{published=Some(image);true},Err(error) if error=="Canvas has not rendered"=>false,Err(error)=>panic!("local-analysis readback: {error}")}},"local-analysis artwork frame publication");let image=published.unwrap();let scale=[image.width as f32/camera.viewport[0] as f32,image.height as f32/camera.viewport[1] as f32];std::fs::write(output.join("readback-extent.json"),serde_json::to_vec_pretty(&json!({"image":[image.width,image.height],"viewport":camera.viewport,"scale":scale})).unwrap()).unwrap();[[32.,32.],[64.,192.],[192.,64.],[224.,224.]].map(|[dx,dy]| {let x=((m[0]*dx+m[2]*dy+m[4])*scale[0]) as usize;let y=((m[1]*dx+m[3]*dy+m[5])*scale[1]) as usize;let offset=y*image.stride as usize+x*4;image.bytes[offset..offset+4].to_vec()})};
     let width=w.window.width();let mut input=RemoteInput::new().timeout_secs(30);input.ready();let mut samples=Vec::new();
     let settled=|w:&Rc<Workspace>| {
@@ -488,22 +489,31 @@ fn native_local_adjustments_analysis_history_and_recreation() {
         edit(&w,&mut input,"amount","-55");settled(&w);let negative=sample(&w);capture(&w,output,&format!("clarity-negative-{width}-{theme:?}"));assert_ne!(positive,negative);
         w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(55.));
         w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(-55.));
+        insert(&w,"dehaze");let dehaze=document(&w).working.occurrence.unwrap();settled(&w);
+        assert_eq!(state(&w).layer_properties.controls.iter().map(|c|c.key.as_str()).collect::<Vec<_>>(),["amount"]);
+        assert_eq!(value(&w,"amount"),EffectValue::Number(0.));assert_eq!(sample(&w),negative,"zero Dehaze preserves the composed source");
+        let amount=number(&w,"amount");scroll_to(amount.upcast_ref());let bounds=amount.compute_bounds(&w.effects.properties).unwrap();assert!(bounds.width()>50. && bounds.x()>=-1. && bounds.x()+bounds.width()<=w.effects.properties.width() as f32+1.,"Dehaze ordinary Amount fits Properties: {bounds:?}");
+        edit(&w,&mut input,"amount","55");settled(&w);let dehaze_positive=sample(&w);assert_ne!(dehaze_positive,negative);capture(&w,output,&format!("dehaze-positive-{width}-{theme:?}"));
+        edit(&w,&mut input,"amount","-55");settled(&w);let dehaze_negative=sample(&w);assert_ne!(dehaze_negative,dehaze_positive);capture(&w,output,&format!("dehaze-negative-{width}-{theme:?}"));
+        w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(55.));assert_eq!(sample(&w),dehaze_positive);
+        w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(value(&w,"amount"),EffectValue::Number(-55.));assert_eq!(sample(&w),dehaze_negative);
         w.dispatch(UiAction::Effect {action:EffectAction::Set {layer:layer_ui::occurrence_token(lower),key:"lightness".into(),value:EffectValue::Number(-20.)}});
         let resize_history=ui_session(&w).engine().checkpoint();w.window.unmaximize();
         for index in 0..8 {w.window.set_default_size(width-80+(index%2)*40,700+(index%3)*20);pump(15);assert!(state(&w).host_error.is_none(),"surface resize during source-aware GPU publication");}
         w.window.maximize();settled(&w);assert_eq!(ui_session(&w).engine().checkpoint(),resize_history,"surface reconfiguration never enters document history");
-        let changed=sample(&w);assert_ne!(changed,negative);capture(&w,output,&format!("clarity-stacked-{width}-{theme:?}"));unchanged_sources(&w,&source);
-        let deleted=[clarity,shadows,lower].map(|h|document(&w).artwork.occurrences.id(h).unwrap());
+        let changed=sample(&w);assert_ne!(changed,dehaze_negative);capture(&w,output,&format!("dehaze-stacked-{width}-{theme:?}"));unchanged_sources(&w,&source);
+        w.dispatch(UiAction::Invoke {command:CommandId::Undo});settled(&w);assert_eq!(sample(&w),dehaze_negative,"Undo lower source edit restores Dehaze analysis");w.dispatch(UiAction::Invoke {command:CommandId::Redo});settled(&w);assert_eq!(sample(&w),changed);
+        let deleted=[dehaze,clarity,shadows,lower].map(|h|document(&w).artwork.occurrences.id(h).unwrap());
         let (saved,bytes)=saved_artwork(&w);std::fs::write(output.join(format!("local-adjustments-{width}-{theme:?}.capy")),&bytes).unwrap();
         let reopened=open_native_document(std::io::Cursor::new(bytes));assert_saved_artwork(&saved,&reopened);
-        w.documents.enqueue(&w,(reopened,None,None));ready(&w);settled(&w);assert_eq!(sample(&w),changed);
+        let epoch=state(&w).document_file.epoch;w.documents.enqueue(&w,(reopened,None,None));until(||state(&w).document_file.epoch!=epoch,"local-adjustment archive owner replacement");ready(&w);settled(&w);assert_eq!(sample(&w),changed);
         w.restart_gpu();ready(&w);settled(&w);assert_eq!(sample(&w),changed,"recreated GPU rebuilds live analysis");capture(&w,output,&format!("local-recreated-{width}-{theme:?}"));
-        samples.push(json!({"theme":format!("{theme:?}"),"original":original,"shadows_highlights":adjusted,"clarity_positive":positive,"clarity_negative":negative,"lower_changed":changed}));
-        for id in deleted {let handle=document(&w).artwork.occurrences.resolve(id).unwrap();w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:u64::from(handle.index()) + 1,mask:false}});w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);}assert_source_scene(&w,&source);
+        samples.push(json!({"theme":format!("{theme:?}"),"original":original,"shadows_highlights":adjusted,"clarity_positive":positive,"clarity_negative":negative,"dehaze_positive":dehaze_positive,"dehaze_negative":dehaze_negative,"lower_changed":changed}));
+        for id in deleted {let handle=document(&w).artwork.occurrences.resolve(id).unwrap();w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::Select {id:layer_ui::occurrence_token(handle),mask:false}});w.dispatch(UiAction::Invoke {command:CommandId::DeleteLayer});ready(&w);}assert_source_scene(&w,&source);
         w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Adjustments,visible:true});w.customize(CustomizationAction::CloseExpanded);
         w.dispatch(UiAction::MovePanel {panel:Panel::Adjustments,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[width as f32,800.]});
         w.dispatch(UiAction::FilterPicker {action:layer_ui::FilterPickerAction::Category {category:None}});
-        for (id,query) in [("shadows_highlights","Shadows"),("clarity","Clarity")] {
+        for (id,query) in [("shadows_highlights","Shadows"),("clarity","Clarity"),("dehaze","Dehaze")] {
             w.dispatch(UiAction::FilterPicker {action:layer_ui::FilterPickerAction::Search {query:query.into()}});pump(100);
             let row=named::<gtk::Button>(w.window.upcast_ref(),&format!("adjustment-{id}"));scroll_to(row.upcast_ref());
             let picture=descendant::<gtk::Picture>(&row).unwrap();until(||picture.paintable().is_some(),"local adjustment catalog thumbnail");

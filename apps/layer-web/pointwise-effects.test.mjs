@@ -95,18 +95,25 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await click(`${selector('amount')} .number-value`);await evaluate(`document.querySelector('${selector('amount')} .number-entry').value='99.'`);const beforeCancel=await authored();await key('Escape',27);assert.deepEqual(await authored(),beforeCancel);
           await edit('amount','-55');await analyzed();const negative=await sample();assert.notDeepEqual(positive,negative);
           await invoke('undo');await analyzed();assert.equal((await value('amount')).value,55);await invoke('redo');await analyzed();assert.equal((await value('amount')).value,-55);
-          await send({type:'effect',action:{op:'set',layer:lower,key:'lightness',value:{kind:'number',value:-20}}});await analyzed();const changed=await sample();assert.notDeepEqual(changed,negative);await capture(`clarity-stacked-${width}-${theme}`);
+          await send({type:'effect',action:{op:'insert',effect:'dehaze'}});const dehaze=(await properties()).layer;await analyzed();assert.deepEqual((await properties()).controls.map(c=>c.key),['amount']);assert.equal((await value('amount')).value,0);assert.deepEqual(await sample(),negative,'Zero Dehaze preserves the composed source');
+          assert.ok(await evaluate(`(()=>{const n=document.querySelector('${selector('amount')}'),r=n.getBoundingClientRect(),p=n.closest('.dock-group,.floating-panel').getBoundingClientRect();return r.width>50&&r.left>=p.left-1&&r.right<=p.right+1&&r.top>=p.top-1&&r.bottom<=p.bottom+1})()`),'Dehaze ordinary Amount fits the visible Properties panel');
+          await edit('amount','55');await analyzed();const dehazePositive=await sample();assert.notDeepEqual(dehazePositive,negative);await capture(`dehaze-positive-${width}-${theme}`);
+          await edit('amount','-55');await analyzed();const dehazeNegative=await sample();assert.notDeepEqual(dehazeNegative,dehazePositive);await capture(`dehaze-negative-${width}-${theme}`);
+          await invoke('undo');await analyzed();assert.equal((await value('amount')).value,55);assert.deepEqual(await sample(),dehazePositive);
+          await invoke('redo');await analyzed();assert.equal((await value('amount')).value,-55);assert.deepEqual(await sample(),dehazeNegative);
+          await send({type:'effect',action:{op:'set',layer:lower,key:'lightness',value:{kind:'number',value:-20}}});await analyzed();const changed=await sample();assert.notDeepEqual(changed,dehazeNegative);await capture(`dehaze-stacked-${width}-${theme}`);
+          await invoke('undo');await analyzed();assert.deepEqual(await sample(),dehazeNegative,'Undo lower source edit restores Dehaze analysis');await invoke('redo');await analyzed();assert.deepEqual(await sample(),changed);
           const deleted=packageOccurrences(await save()).filter(o=>o.data.content.effect).map(o=>o.id);
           await reopen(`local-adjustments-${width}-${theme}`);await analyzed();assert.deepEqual(await sample(),changed);
           const tabs=await evaluate('JSON.parse(JSON.stringify(layerApp.app.document_tabs(0),(_,v)=>typeof v==="bigint"?Number(v):v))'),other=tabs.tabs.find(tab=>tab.id!==tabs.selected);
           assert.ok(other);await evaluate(`layerApp.documents.select(BigInt(${other.id}))`);await idle();await wait('layerApp.app.document_park_ready()');
           await evaluate(`layerApp.documents.select(BigInt(${tabs.selected}))`);await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();
           await evaluate('layerApp.restartGpu()');await idle();await analyzed();assert.deepEqual(await sample(),changed);await unchanged();await capture(`local-recreated-${width}-${theme}`);
-          samples.push({width,theme,original,adjusted,positive,negative,changed});for(const portable of deleted){const manifest=await save(),rows=await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers,(_,v)=>typeof v==="bigint"?Number(v):v))'),id=rows[packageOccurrences(manifest).findIndex(o=>o.id===portable)].id;await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
+          samples.push({width,theme,original,adjusted,positive,negative,dehazePositive,dehazeNegative,changed});for(const portable of deleted){const manifest=await save(),rows=await evaluate('JSON.parse(JSON.stringify(layerApp.state().layers,(_,v)=>typeof v==="bigint"?Number(v):v))'),id=rows[packageOccurrences(manifest).findIndex(o=>o.id===portable)].id;await send({type:'layer',action:{op:'select',id,mask:false}});await send({type:'layer',action:{op:'delete_selected'}});}await unchanged();
           await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:true}});
           await send({type:'move_panel',panel:'adjustments',target:{kind:'edge',edge:'right',outer:false},viewport:[width,800]});
           await send({type:'filter_picker',action:{op:'category',category:null}});
-          for(const [id,query] of [['shadows_highlights','Shadows'],['clarity','Clarity']]) {
+          for(const [id,query] of [['shadows_highlights','Shadows'],['clarity','Clarity'],['dehaze','Dehaze']]) {
             await send({type:'filter_picker',action:{op:'search',query}});
             await wait(`(()=>{const c=[...document.querySelectorAll('[data-effect="${id}"] canvas')].find(c=>c.getBoundingClientRect().height>0);return c?.width>0&&c.getContext('2d').getImageData(0,0,c.width,c.height).data.some((v,i,a)=>i%4===0&&Math.max(a[i],a[i+1],a[i+2])-Math.min(a[i],a[i+1],a[i+2])>20)})()`);
             await capture(`catalog-${id}-${width}-${theme}`);
@@ -114,7 +121,7 @@ export async function checkPointwiseEffects({call,evaluate,settle,motion=true,wi
           await send({type:'customize',action:{type:'set_panel_visible',panel:'adjustments',visible:false}});await unchanged();
         }
       }
-      await writeFile(`${directory}/local-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: Shadows/Highlights and Clarity generic controls, stacked live analysis, Undo/source/archive/recreation in both themes and widths');return;
+      await writeFile(`${directory}/local-pixels.json`,JSON.stringify(samples,null,2));console.log('PASS: Shadows/Highlights, Clarity and Dehaze generic controls, stacked live analysis, Undo/source/archive/recreation in both themes and widths');return;
     }
     if(colorPages) {
       const samples=[];

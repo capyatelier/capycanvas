@@ -23,7 +23,7 @@ pub struct HistogramView {
     pub highlights: bool,
     pub data: Option<Arc<Histogram>>,
     pub captured_time: Option<f32>,
-    #[serde(skip)]
+    #[serde(serialize_with = "serialize_captured_source")]
     pub captured_source: Option<ArtworkSource>,
     pub status: Arc<str>,
     #[serde(skip)]
@@ -36,6 +36,19 @@ pub struct HistogramView {
     pub sources: Vec<Arc<str>>,
     pub channels: Vec<Arc<str>>,
     pub labels: Vec<Arc<str>>,
+}
+
+fn serialize_captured_source<S: serde::Serializer>(source: &Option<ArtworkSource>, serializer: S) -> Result<S::Ok, S::Error> {
+    #[derive(Serialize)]
+    enum Source<'a> { Visible, Reference, Source(&'a layer_core::authored::SourceTarget), EffectInput(u64), EffectChannels(u64), EffectBaseline(u64) }
+    source.as_ref().map(|source| match source {
+        ArtworkSource::Visible => Source::Visible,
+        ArtworkSource::Reference => Source::Reference,
+        ArtworkSource::Source(target) => Source::Source(target),
+        ArtworkSource::EffectInput(handle) => Source::EffectInput(occurrence_token(*handle)),
+        ArtworkSource::EffectChannels(handle) => Source::EffectChannels(occurrence_token(*handle)),
+        ArtworkSource::EffectBaseline(baseline) => Source::EffectBaseline(occurrence_token(baseline.occurrence)),
+    }).serialize(serializer)
 }
 
 pub(super) struct HistogramCaptionKey {
@@ -178,10 +191,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             || self.tonal_histogram.demand!=(tonal && self.panel_is_presented(Panel::Properties))
     }
     pub(super) fn cancel_histogram(&mut self) {
-        if self.histogram.active || self.tonal_histogram.active { self.engine.backend_mut().cancel_snapshot(); }
+        self.yield_histogram();
         self.histogram = Statistics::default();self.tonal_histogram = Statistics::default();
         self.state.histogram.clear();self.state.waveform.clear();self.state.tonal_histogram.clear();
         self.histogram_copy();
+    }
+    pub(super) fn yield_histogram(&mut self) {
+        if self.histogram.active || self.tonal_histogram.active {self.engine.backend_mut().cancel_snapshot();}
+        for task in [&mut self.histogram,&mut self.tonal_histogram] {task.active=false;task.query=None;}
     }
     pub(super) fn histogram_action(&mut self, action: HistogramAction) -> Result<(), String> {
         match action {
@@ -243,13 +260,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn poll_statistics(&mut self, now:u64, source:ArtworkSource, selection:bool, demand:bool, admitted:bool,
         state:(bool, &mut Statistics, &mut HistogramView)) -> u32 {
         let (waveform, task, view) = state;
-        if !demand || self.targeted_curve.is_some() || self.auto_levels.is_some() || self.eyedropper.calibration.is_some() || self.content_bounds.busy() || self.state.host_error.is_some() {
+        if !demand || self.state.host_error.is_some() {
             if task.demand || task.active {
                 if task.active {self.engine.backend_mut().cancel_snapshot();}
                 *task = Statistics::default();view.clear();return regions::HISTOGRAM;
             }
             return 0;
         }
+        let paused=self.targeted_curve.is_some() || self.auto_levels.is_some() || self.eyedropper.calibration.is_some() || self.content_bounds.busy();
+        if paused && task.active {self.engine.backend_mut().cancel_snapshot();task.active=false;task.query=None;}
         task.demand = true;
         let document = self.engine.document();
         let matches = |query:&ArtworkQuery, document:&Document| query.source==source && query.matches_source(document)
@@ -305,7 +324,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             task.query = None;updates = regions::HISTOGRAM;
         }
-        if admitted && !task.active && !task.settled && now.saturating_sub(task.started) >= 100_000_000
+        if admitted && !paused && !task.active && !task.settled && now.saturating_sub(task.started) >= 100_000_000
             && (!task.preview_ready || now.saturating_sub(task.changed) >= 200_000_000)
             && !self.engine.has_pending_document_edits() {
             let mut query = task.observed.as_ref().unwrap().clone();Arc::make_mut(&mut query.snapshot).context.elapsed = self.engine.animation_time();

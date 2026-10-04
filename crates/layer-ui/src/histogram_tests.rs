@@ -3,6 +3,22 @@ fn histogram_open(s: &mut UiSession<Recorder>) {
     s.frame(100_000_000, 100_000_000).unwrap();
     assert!(matches!(s.engine.backend().snapshot_requests.last(), Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview));
 }
+
+#[test]
+fn histogram_controls_have_captions_before_the_first_frame() {
+    for platform in [Platform::Gtk, Platform::Web, Platform::Android] {
+        let s = session(platform);
+        for view in [&s.state.histogram, &s.state.waveform, &s.state.tonal_histogram] {
+            assert_eq!(view.sources.len(), 4);
+            assert_eq!(view.channels.len(), 5);
+            assert_eq!(view.labels.len(), 3);
+            assert!(view.sources.iter().chain(&view.channels).chain(&view.labels).all(|label| !label.is_empty()));
+            assert_eq!(view.axis, ["0", "1"]);
+            assert!(view.data.is_none());
+        }
+        assert!(s.engine.backend().snapshot_requests.is_empty());
+    }
+}
 fn histogram_session() -> UiSession<Recorder> {
     let mut s = session(Platform::Gtk);
     histogram_open(&mut s);
@@ -111,7 +127,7 @@ fn histogram_retained_panel_configurations_publish_only_supported_host_controls(
             let actual:Vec<_>=view.controls.iter().map(|control|control.control).collect();
             let expected=if config.id.available_on(platform) {PanelControl::available(config.id)} else {&[]};
             assert_eq!(actual,expected,"{platform:?} {:?}",config.id);
-            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!matches!(platform,Platform::Gtk|Platform::Web));}
+            if config.id==Panel::Histogram {assert_eq!(actual.is_empty(),!matches!(platform,Platform::Gtk|Platform::Web|Platform::Android));}
         }
         assert_eq!(serde_json::to_vec(&s.state.workspace).unwrap(),serialized);
     }
@@ -380,10 +396,11 @@ fn histogram_embedded_and_independent_owners_yield_to_explicit_picker_or_bounds(
         }
         assert!(s.engine.backend().snapshot_cancels>cancels);
         assert!(s.engine.backend().snapshot_reply.is_none());
+        let requests=s.engine.backend().snapshot_requests.len();
         s.frame(200_000_000,200_000_000).unwrap();
         assert!(s.state.histogram.data.is_none());
         assert!(s.state.tonal_histogram.data.is_none());
-        assert!(!s.histogram.demand && !s.tonal_histogram.demand);
+        assert_eq!(s.engine.backend().snapshot_requests.len(),requests);
     }
 }
 
@@ -438,6 +455,38 @@ fn histogram_embedded_ignores_edits_excluded_from_its_source() {
             assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(request)) if request.preview));
         }
     }
+}
+
+#[test]
+fn targeted_sampling_retains_settled_tonal_statistics_for_unchanged_input() {
+    let mut s=tonal_histogram_session();
+    histogram_reply(&mut s,7,150_000_000);
+    s.frame(350_000_000,350_000_000).unwrap();
+    histogram_reply(&mut s,11,400_000_000);
+    let data=s.state.tonal_histogram.data.clone().unwrap();
+    let requests=s.engine.backend().snapshot_requests.len();
+    let layer=occurrence_token(s.engine.document().working.occurrence.unwrap());
+    s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
+    s.frame(500_000_000,500_000_000).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::Set {layer,key:"curve_0".into(),value:layer_core::EffectValue::Curve(vec![[0.,0.],[1.,0.5]])}}).unwrap();
+    s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
+    s.frame(800_000_000,800_000_000).unwrap();
+    assert!(s.tonal_histogram.settled);
+    assert!(std::sync::Arc::ptr_eq(&data,s.state.tonal_histogram.data.as_ref().unwrap()));
+    assert_eq!(s.engine.backend().snapshot_requests.len(),requests);
+    s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
+    let lower_handle=s.engine.document().scene().order()[1];
+    let mut lower=s.engine.document().scene().occurrence(lower_handle).unwrap().clone();lower.opacity=0.5;
+    let edit=layer_core::authored::RecordChange::replace(&s.engine.document().artwork.occurrences,lower_handle,Some(lower)).unwrap();
+    s.engine.apply_edit(layer_core::Edit::Occurrence(edit)).unwrap();s.refresh_document();
+    assert!(s.targeted_curve.is_none());
+    s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
+    s.frame(900_000_000,900_000_000).unwrap();
+    assert!(!s.tonal_histogram.settled);
+    assert_eq!(s.engine.backend().snapshot_requests.len(),requests);
+    s.dispatch(UiAction::Effect {action:EffectAction::TargetCurve {layer,epoch:s.state.layer_properties.epoch}}).unwrap();
+    s.frame(1_100_000_000,1_100_000_000).unwrap();
+    assert_eq!(s.engine.backend().snapshot_requests.len(),requests+1);
 }
 
 #[test]
@@ -567,7 +616,7 @@ fn waveform_dedicated_command_is_localized_and_queries_only_supported_hosts() {
         let mut s=session(platform);s.set_localization(Localizer::shared(language));
         assert_eq!(CommandId::Waveform.localized_label(s.localization()),s.localization().text(MessageId::COMMAND_WAVEFORM));
         let config=s.state.workspace.layout.panel(Panel::Waveform).unwrap();assert_eq!(crate::customization::PanelCopy::new(&s.state,config).title,s.localization().text(MessageId::RESOURCES_WAVEFORM));
-        if matches!(platform,Platform::Gtk|Platform::Web) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
+        if matches!(platform,Platform::Gtk|Platform::Web|Platform::Android) {invoke(&mut s,CommandId::Waveform);s.frame(100_000_000,100_000_000).unwrap();assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkStatistics(r)) if r.waveform));}
         else {let requests=s.engine.backend().snapshot_requests.len();s.reveal_panel(Panel::Waveform).unwrap();s.frame(100_000_000,100_000_000).unwrap();assert_eq!(s.engine.backend().snapshot_requests.len(),requests);assert!(s.state.waveform.data.is_none());assert!(!Panel::Waveform.available_on(platform));}
     }}
 }
@@ -622,7 +671,7 @@ fn photo_monitors_share_default_tabs_and_remain_accessible_through_window_items(
 fn window_menu_routes_monitor_panels_and_preserves_legacy_histogram_on_other_hosts() {
     for platform in Platform::ALL {
         let s=session(platform);let menu=s.application_menu(ApplicationMenu::Window);let items=menu.sections.iter().flatten().collect::<Vec<_>>();
-        if matches!(platform,Platform::Gtk|Platform::Web) {
+        if matches!(platform,Platform::Gtk|Platform::Web|Platform::Android) {
             for panel in [Panel::Histogram,Panel::Waveform] {assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Customize{action:CustomizationAction::SetPanelVisible{panel:p,..}}) if p==panel)));}
         } else {
             assert!(items.iter().any(|item|matches!(item.action,Some(UiAction::Invoke{command:CommandId::Histogram}))));
@@ -670,7 +719,7 @@ fn waveform_straight_rgba_preserves_palette_chroma_and_transparent_background() 
 
 #[test]
 fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
-    for platform in [Platform::Gtk,Platform::Web] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {
         let mut s=session(platform);s.set_viewport([640.,800.],[640,800]).unwrap();
         s.state.workspace.layout=crate::WorkspacePreset::Photographer.layout(platform);
         let document=s.engine.document().clone();
@@ -692,5 +741,27 @@ fn reopened_photo_content_panels_remain_usable_in_narrow_viewports() {
         customize(&mut s,CustomizationAction::SetPanelVisible{panel:Panel::Histogram,visible:true});
         assert_eq!(s.state.workspace.layout,before);
         assert_eq!(s.engine.document(),&document);
+    }
+}
+
+#[test]
+fn histogram_captured_source_serializes_compact_public_identity_without_records(){
+    use layer_core::{ArtworkSource as S,authored::{SourceTarget,PaintHandle,CoverageHandle,SelectionHandle}};
+    let app=tonal_histogram_session();let occurrence=app.engine.document().working.occurrence.unwrap();
+    let token=u64::from(occurrence.index())+1;
+    let baseline=effects::effect_baseline(app.engine.document(),occurrence).unwrap();
+    let mut cases=vec![(None,serde_json::Value::Null),(Some(S::Visible),serde_json::json!("Visible")),(Some(S::Reference),serde_json::json!("Reference")),
+        (Some(S::EffectInput(occurrence)),serde_json::json!({"EffectInput":token})),
+        (Some(S::EffectChannels(occurrence)),serde_json::json!({"EffectChannels":token})),
+        (Some(S::EffectBaseline(baseline)),serde_json::json!({"EffectBaseline":token}))];
+    for target in [SourceTarget::Paint(PaintHandle::from_index(3)),SourceTarget::Coverage(CoverageHandle::from_index(4)),SourceTarget::Selection(SelectionHandle::from_index(5))]{
+        cases.push((Some(S::Source(target)),serde_json::json!({"Source":target})));
+    }
+    for (source,expected) in cases{
+        let mut view=app.state.histogram.clone();view.captured_source=source;
+        let published=serde_json::to_value(&view).unwrap();
+        assert_eq!(published.get("captured_source"),Some(&expected));
+        let compact=serde_json::to_string(&published["captured_source"]).unwrap();
+        assert!(compact.len()<80);assert!(!compact.contains("application"));assert!(!compact.contains("values"));
     }
 }

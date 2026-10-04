@@ -2,6 +2,7 @@
 pub(crate) struct App {
     pub window: crate::document_tabs::Window,
     pub tone: layer_host::tone::ToneService,
+    pub scopes: crate::scopes::Cache,
     pub host: layer_host::NativeHost,
     pub language: layer_ui::LanguageTransition,
     pub published_language: u64,
@@ -41,6 +42,7 @@ impl App {
         Ok(Self {
             window: crate::document_tabs::Window::localized(host.session.localization()),
             tone: Default::default(),
+            scopes: Default::default(),
             language: layer_ui::LanguageTransition::new(host.session.localization().clone()),
             published_language: u64::MAX,
             language_preference: host.session.state().settings.language,

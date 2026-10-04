@@ -515,3 +515,5 @@ resources-lookup-monochrome = Monochrome
 resources-layer-type-group = Group
 resources-layer-type-selection = Selection
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Dehaze

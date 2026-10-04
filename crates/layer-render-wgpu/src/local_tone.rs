@@ -1,9 +1,9 @@
 //! Shared Float32 local-Laplacian compute engine. Hosts own idle scheduling and
 //! cancellation; the output is immutable and may be retained across edits.
-use crate::deferred::Deferred;
+use crate::analysis_compute::{Pipelines, Params, buffer, dims, groups, guide_extent};
 use crate::{PipelineDevice, submission::CommandEncoder};
 use layer_core::color::hdr::LocalToneGuide;
-use layer_core::color::{RgbSpace, hdr::LOCAL_GUIDE_EDGE};
+use layer_core::color::RgbSpace;
 use std::sync::Arc;
 
 /// A completed document-space illumination guide on its originating device.
@@ -85,83 +85,9 @@ const ENTRIES: [&str; 9] = [
     "finish",
     "init_detail",
 ];
-pub(crate) struct Pipelines {
-    layout: wgpu::BindGroupLayout,
-    pipelines: Vec<Deferred<wgpu::ComputePipeline>>,
-    #[cfg(target_arch = "wasm32")]
-    ready: std::cell::OnceCell<
-        futures_util::future::Shared<
-            futures_util::future::LocalBoxFuture<'static, Result<(), String>>,
-        >,
-    >,
-}
-impl Pipelines {
-    fn new(device: &PipelineDevice) -> Self {
-        let mut entries = vec![crate::bindings::buffer(
-            0,
-            wgpu::ShaderStages::COMPUTE,
-            wgpu::BufferBindingType::Uniform,
-            false,
-            None,
-        )];
-        for binding in 1..=4 {
-            entries.push(crate::bindings::buffer(
-                binding,
-                wgpu::ShaderStages::COMPUTE,
-                wgpu::BufferBindingType::Storage { read_only: binding != 4, },
-                false,
-                None,
-            ));
-        }
-        entries.push(crate::bindings::texture(5, wgpu::ShaderStages::COMPUTE, false));
-        let layout = crate::bindings::layout(device, "local tone compute", &entries);
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("local tone compute"),
-            bind_group_layouts: &[Some(&layout)],
-            immediate_size: 0,
-        });
-        let module = Deferred::wgsl(device, "local tone compute", concat!(include_str!("float_number.wgsl"),"\n",include_str!("guide_luminance.wgsl"),"\n",include_str!("local_tone.wgsl")));
-        let pipelines = ENTRIES
-            .iter()
-            .map(|entry| Deferred::compute(device, entry, &pipeline_layout, &module, entry))
-            .collect();
-        Self {
-            layout,
-            pipelines,
-            #[cfg(target_arch = "wasm32")]
-            ready: Default::default(),
-        }
-    }
-
-    /// Concurrent proof and export captures await the same compilation. Browser
-    /// drivers compile asynchronously; no synchronous shader build on input owner.
-    async fn prepare(&self) -> Result<(), String> {
-        #[cfg(target_arch = "wasm32")]
-        {
-            use futures_util::FutureExt;
-            self.ready
-                .get_or_init(|| {
-                    let pipelines = self.pipelines.clone();
-                    async move {
-                        for pipeline in pipelines {
-                            pipeline.compile_async().await?;
-                        }
-                        Ok(())
-                    }
-                    .boxed_local()
-                    .shared()
-                })
-                .clone()
-                .await
-        }
-        #[cfg(not(target_arch = "wasm32"))]
-        {
-            for pipeline in &self.pipelines {
-                pipeline.compile();
-            }
-            Ok(())
-        }
-    }
+fn pipelines(device: &PipelineDevice) -> &Arc<Pipelines> {
+    device.tone_pipelines.get_or_init(|| Arc::new(Pipelines::new(device, "local tone compute",
+        concat!(include_str!("float_number.wgsl"), "\n", include_str!("guide_luminance.wgsl"), "\n", include_str!("local_tone.wgsl")), &ENTRIES)))
 }
 
 struct Plane {
@@ -180,24 +106,6 @@ impl Plane {
         }
     }
 }
-fn buffer(device: &wgpu::Device, size: u64, label: &str) -> wgpu::Buffer {
-    device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some(label),
-        size,
-        usage: wgpu::BufferUsages::STORAGE
-            | wgpu::BufferUsages::COPY_SRC
-            | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    })
-}
-#[derive(Default)]
-struct Params {
-    size: [u32; 4],
-    aux: [u32; 4],
-    values: [f32; 4],
-    weights: [f32; 4],
-}
-
 /// Encoding is platform independent. Native workers wait between bounded
 /// batches; browser hosts can await the same submissions without device.poll.
 pub(crate) struct Builder {
@@ -210,8 +118,6 @@ pub(crate) struct Builder {
     remapped: Vec<Plane>,
     horizontal: Vec<Plane>,
     detail: Vec<Plane>,
-    dummy: wgpu::Buffer,
-    texture: wgpu::TextureView,
 }
 impl Builder {
     /// All private image buffers, final output and a conservative allowance for
@@ -232,11 +138,7 @@ impl Builder {
         Ok(cells * 16 + 64 * 1024)
     }
     pub(crate) async fn prepare_pipelines(device: &PipelineDevice) -> Result<(), String> {
-        device
-            .tone_pipelines
-            .get_or_init(|| Arc::new(Pipelines::new(device)))
-            .prepare()
-            .await
+        pipelines(device).prepare().await
     }
     pub(crate) fn new(
         device: &PipelineDevice,
@@ -249,31 +151,12 @@ impl Builder {
         {
             return Err("Local tone guide exceeds GPU buffer limit".into());
         }
-        let pipelines = device
-            .tone_pipelines
-            .get_or_init(|| Arc::new(Pipelines::new(device)))
-            .clone();
+        let pipelines = pipelines(device).clone();
         let mut extents = vec![extent];
         while extents.last() != Some(&[1, 1]) {
             extents.push(extents.last().unwrap().map(|n| n.div_ceil(2)));
         }
         let planes = || extents.iter().map(|&e| Plane::new(device, e)).collect();
-        let texture = device
-            .create_texture(&wgpu::TextureDescriptor {
-                label: Some("local tone unused source"),
-                size: wgpu::Extent3d {
-                    width: 1,
-                    height: 1,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba32Float,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING,
-                view_formats: &[],
-            })
-            .create_view(&Default::default());
         Ok(Self {
             device: device.clone(),
             pipelines,
@@ -287,8 +170,6 @@ impl Builder {
                 .iter()
                 .map(|e| Plane::new(device, [e[0].div_ceil(2), e[1]]))
                 .collect(),
-            dummy: buffer(device, 16, "local tone unused input"),
-            texture,
         })
     }
     #[expect(clippy::too_many_arguments, reason = "Local tone stages pass uniforms, buffers, texture targets, and dispatch size explicitly")]
@@ -302,40 +183,7 @@ impl Builder {
         texture: Option<&wgpu::TextureView>,
         groups: [u32; 2],
     ) {
-        let uniform = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("local tone parameters"),
-            size: 64,
-            usage: wgpu::BufferUsages::UNIFORM,
-            mapped_at_creation: true,
-        });
-        {
-            let mut bytes = uniform
-                .slice(..)
-                .get_mapped_range_mut()
-                .expect("new mapped uniform");
-            let mut packed = [0u8; 64];
-            packed[..16].copy_from_slice(params.size.map(u32::to_ne_bytes).as_flattened());
-            packed[16..32].copy_from_slice(params.aux.map(u32::to_ne_bytes).as_flattened());
-            packed[32..48].copy_from_slice(params.values.map(f32::to_ne_bytes).as_flattened());
-            packed[48..].copy_from_slice(params.weights.map(f32::to_ne_bytes).as_flattened());
-            bytes.copy_from_slice(&packed);
-        }
-        uniform.unmap();
-        let group = crate::bindings::group(&self.device, ENTRIES[entry], &self.pipelines.layout, [
-            uniform.as_entire_binding(),
-            inputs[0].unwrap_or(&self.dummy).as_entire_binding(),
-            inputs[1].unwrap_or(&self.dummy).as_entire_binding(),
-            inputs[2].unwrap_or(&self.dummy).as_entire_binding(),
-            output.as_entire_binding(),
-            wgpu::BindingResource::TextureView(texture.unwrap_or(&self.texture)),
-        ]);
-        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-            label: Some(ENTRIES[entry]),
-            timestamp_writes: None,
-        });
-        pass.set_pipeline(&self.pipelines.pipelines[entry]);
-        pass.set_bind_group(0, &group, &[]);
-        pass.dispatch_workgroups(groups[0], groups[1], 1);
+        self.pipelines.encode(&self.device, encoder, entry, params, inputs, output, texture, groups);
     }
     pub(crate) fn reduce(
         &self,
@@ -556,23 +404,6 @@ impl Builder {
         })
     }
 }
-fn guide_extent(document: [u32; 2]) -> Result<[u32; 2], String> {
-    if document.contains(&0) || document.iter().any(|&n| n > 32768) {
-        return Err("Invalid local tone-map dimensions".into());
-    }
-    let scale = (document[0].max(document[1]) as f32 / LOCAL_GUIDE_EDGE as f32).max(1.);
-    Ok(document.map(|n| (n as f32 / scale).ceil() as u32))
-}
-fn dims(e: [u32; 2]) -> Params {
-    Params {
-        size: [e[0], e[1], 0, 0],
-        ..Default::default()
-    }
-}
-fn groups(e: [u32; 2]) -> [u32; 2] {
-    e.map(|n| n.div_ceil(8))
-}
-
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn wait(device: &wgpu::Device, queue: &wgpu::Queue) -> Result<(), String> {
     let (tx, rx) = std::sync::mpsc::channel();
@@ -928,10 +759,11 @@ mod tests {
 struct Params { kind:vec4<u32>, amounts:vec4<f32> }
 @group(0) @binding(0) var<uniform> params:Params;
 @group(0) @binding(1) var<storage,read> input:array<vec4<f32>>;
-@group(0) @binding(2) var<storage,read> auxiliary:array<vec4<f32>>;
+@group(0) @binding(2) var<storage,read> auxiliary:array<vec4<u32>>;
 @group(0) @binding(3) var<storage,read_write> output:array<vec4<f32>>;
 const FX_LUMA:vec3<f32> =vec3(0.2126390058715104,0.715168678767756,0.07219231536073371);
-fn fx_auxiliary(index:u32)->vec4<f32>{return auxiliary[index];}
+fn fx_auxiliary_words(index:u32)->vec4<u32>{return auxiliary[index];}
+fn fx_auxiliary(index:u32)->vec4<f32>{return bitcast<vec4<f32>>(auxiliary[index]);}
 fn fx_parameter(base:u32,index:u32)->vec4<f32>{return vec4(0.);}
 @compute @workgroup_size(1) fn consume(){output[0]=fx_local_adjustment(input[0],vec2(.5),params.amounts.xyz*.01,params.kind.x==1u);}
 "#;

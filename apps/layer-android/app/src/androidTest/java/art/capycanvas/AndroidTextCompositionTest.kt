@@ -122,6 +122,15 @@ class AndroidTextCompositionTest {
 
     @Test fun curveCoordinatesKeepNativeCompositionAndUnchangedPrecision() {
         launchCapy(compose = compose).use { scenario ->
+            val arguments = androidx.test.platform.app.InstrumentationRegistry.getArguments()
+            if (arguments.getString("presentationNarrow") == "true") {
+                device.portrait(scenario)
+                assertTrue(scenario.activity().resources.configuration.screenWidthDp <= 640)
+                scenario.activity().host.narrowPhotoPanels(compose)
+            } else if (arguments.getString("presentationWide") == "true") {
+                device.landscape(scenario)
+                assertTrue(scenario.activity().resources.configuration.screenWidthDp > 640)
+            }
             val host = scenario.activity().host
             host.drain(obj("type" to "close_settings"))
             compose.waitUntil(60_000) { host.snapshot?.getJSONObject("state")?.getJSONObject("filter_load")?.optBoolean("pending") == false }
@@ -134,6 +143,8 @@ class AndroidTextCompositionTest {
             fun field(axis: String) = "number-curve-${control().getString("key")}-$axis"
             fun literal(axis: String) = findTag(field(axis))!!.second.config.getOrNull(SemanticsProperties.EditableText)!!.text
             fun open(axis: String): android.view.inputmethod.InputConnection {
+                if (findTag(field(axis)) == null)
+                    compose.onNodeWithTag("number-value-curve-${control().getString("key")}-$axis").performScrollTo().performClick()
                 compose.onNodeWithTag(field(axis)).performScrollTo().assertIsDisplayed()
                 compose.onNodeWithTag(field(axis)).performTouchInput { click(center) }
                 compose.onNodeWithTag(field(axis)).assertIsFocused()
@@ -186,10 +197,43 @@ class AndroidTextCompositionTest {
                 connection = open("output")
                 compose.runOnIdle {
                     assertTrue(connection.setSelection(0, literal("output").length))
+                    assertTrue(connection.commitText("123.4567890123", 1))
+                    assertTrue(connection.setSelection(3, 8))
+                }
+                compose.waitForIdle()
+                compose.onNodeWithTag(field("output")).assertIsFocused()
+                assertEquals("A valid dirty field has not committed before Escape", original, points())
+                assertEquals("123.4567890123", literal("output"))
+                assertEquals(androidx.compose.ui.text.TextRange(3, 8), findTag(field("output"))!!.second.config[SemanticsProperties.TextSelectionRange])
+                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) compose.runOnIdle {
+                    val time = android.os.SystemClock.uptimeMillis()
+                    connection.sendKeyEvent(KeyEvent(time, time, phase, KeyEvent.KEYCODE_ESCAPE, 0))
+                }
+                compose.waitForIdle()
+                assertEquals("Native Escape cancels valid dirty text; composition=${host.textComposition.active}", original, points())
+                connection = open("output")
+                compose.runOnIdle {
+                    assertTrue(connection.setSelection(0, literal("output").length))
+                    assertTrue(connection.commitText("123.4567890123", 1))
+                    assertTrue(connection.setSelection(3, 8))
+                }
+                compose.waitForIdle()
+                compose.onNodeWithTag(field("output")).assertIsFocused()
+                assertEquals("Valid dirty text is uncommitted before a hardware key", original, points())
+                for (phase in listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP)) {
+                    val time = android.os.SystemClock.uptimeMillis()
+                    assertTrue(instrumentation.uiAutomation.injectInputEvent(KeyEvent(time, time, phase, KeyEvent.KEYCODE_ESCAPE, 0), true))
+                    compose.waitForIdle()
+                }
+                assertEquals("Hardware Escape cancels valid dirty text; composition=${host.textComposition.active}", original, points())
+                connection = open("output")
+                compose.runOnIdle {
+                    assertTrue(connection.setSelection(0, literal("output").length))
                     assertTrue(connection.commitText("1e-", 1))
                 }
                 nativeEnter(connection)
                 assertEquals("A partial expression cannot publish an earlier draft", original, points())
+                compose.onNodeWithTag("number-error-curve-$key-output").assertIsDisplayed()
                 val retired = connection
                 scenario.recreate()
                 assertSame("Activity recreation retains the authoritative session", host, scenario.activity().host)
@@ -207,6 +251,7 @@ class AndroidTextCompositionTest {
                 }
                 compose.waitForIdle()
                 assertEquals(original, points())
+                compose.onNodeWithTag("number-error-curve-$key-output").assertDoesNotExist()
                 assertNull(host.failure); assertNull(host.actionError)
             }
         }

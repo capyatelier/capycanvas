@@ -25,13 +25,14 @@ impl SnapshotRenderer {
             }
             let query = ArtworkQuery::from_snapshot(self.scene.clone(), ArtworkSource::EffectInput(layer), None);
             let previous = std::mem::replace(&mut self.scope, SceneScope::Prefix {before:layer,clipped:self.scene.view().occurrence(layer).unwrap().clipped});
-            let result = self.build_tone_guide_async(scene::Output::EffectInput(layer)).await;
+            let output = scene::Output::EffectInput(layer);
+            let result = self.build_effect_guide_async(kind, output).await;
             self.scope = previous;
-            let guide = result?;
+            let resource = result?;
             self.check_cancelled().map_err(|e| e.to_string())?;
             self.renderer.effect_analyses.retain(|analysis| analysis.layer() != layer);
             self.renderer.effect_analyses.push(Arc::new(Prepared { query, kind,
-                resource: Arc::new(crate::effects::resources::Resource {buffer: guide.buffer.clone(), _analysis: guide.analysis_lease.clone()}) }));
+                resource: Arc::new(resource) }));
             if let Some(scene) = &mut self.renderer.scene { scene.analysis_changed(); }
             self.analysis_ready.insert(layer);
         }
@@ -51,11 +52,9 @@ impl SnapshotGpu {
         let kind = snapshot.scene.view().effect(target).unwrap().program.analysis().ok_or("Missing effect analysis")?;
         if !snapshot.renderer.effect_analyses.iter().any(|entry|
             entry.layer() == target && entry.kind == kind && entry.matches(&snapshot.scene, &snapshot.renderer)) {
-            let guide = snapshot.build_tone_guide_async(scene::Output::EffectInput(target)).await?;
+            let resource = snapshot.build_effect_guide_async(kind, scene::Output::EffectInput(target)).await?;
             snapshot.renderer.effect_analyses.retain(|entry| entry.layer() != target);
-            snapshot.renderer.effect_analyses.push(Arc::new(Prepared {query,kind,resource: Arc::new(crate::effects::resources::Resource {
-                buffer: guide.buffer.clone(), _analysis: guide.analysis_lease.clone()
-            })}));
+            snapshot.renderer.effect_analyses.push(Arc::new(Prepared {query,kind,resource: Arc::new(resource)}));
         }
         snapshot.analysis_ready.insert(target);
         control.check().map_err(|e| e.to_string())?;

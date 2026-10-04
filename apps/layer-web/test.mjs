@@ -261,7 +261,7 @@ try {
     [process.argv.includes("--title-bar-state"), () => checkTitleBarState({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--title-bar"), () => checkTitleBar({call,evaluate,settle,reload}), checkErrors],
     [process.argv.includes("--zen"), () => checkZen({call,evaluate,settle}), checkErrors],
-    [process.argv.includes("--local-adjustment-icons"), () => checkIcons({call,evaluate,settle,only:["layer-shadows-highlights-symbolic.svg","layer-clarity-symbolic.svg"]}), checkErrors],
+    [process.argv.includes("--local-adjustment-icons"), () => checkIcons({call,evaluate,settle,only:["layer-shadows-highlights-symbolic.svg","layer-clarity-symbolic.svg","layer-dehaze-symbolic.svg"]}), checkErrors],
     [process.argv.includes("--lookup-icon"), () => checkIcons({call,evaluate,settle,only:"layer-color_lookup-symbolic.svg"}), checkErrors],
     [process.argv.includes("--icons"), () => checkIcons({call,evaluate,settle}), checkErrors],
     [process.argv.includes("--header-controls"), () => checkHeaderControls({call,evaluate,settle}), checkErrors],

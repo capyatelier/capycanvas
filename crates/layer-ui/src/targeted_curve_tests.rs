@@ -37,7 +37,7 @@ fn targeted_curve_publishes_only_fixed_sample_size_and_restores_picker_preferenc
 
 #[test]
 fn targeted_curve_pending_release_commits_one_undo_with_fixed_x_and_logical_screen_delta() {
-    for platform in [Platform::Gtk,Platform::Web] {for scale in [1.,2.] {for zoom in [0.5,3.] {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {for scale in [1.,2.] {for zoom in [0.5,3.] {
         let mut s=targeted_session_on(platform);s.state.camera.zoom=zoom;s.state.camera.rotation=0.7;
         s.logical_viewport=Some([s.state.camera.viewport[0] as f32/scale,s.state.camera.viewport[1] as f32/scale]);
         let before=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();
@@ -153,4 +153,44 @@ fn targeted_curve_retired_failure_reprojects_typed_notice_without_resampling_or_
             assert_eq!((s.engine.backend().snapshot_requests.len(),s.engine.backend().snapshot_cancels,s.engine.backend().dabs),rendering);
         }
     }
+}
+
+fn targeted_published_points(s:&UiSession<Recorder>)->Vec<[f32;2]> {
+    match &s.state.layer_properties.controls.iter().find(|control|control.key=="curve_0").unwrap().value {
+        layer_core::EffectValue::Curve(points)=>points.clone(),_=>panic!("missing published curve")
+    }
+}
+
+#[test]
+fn targeted_curve_ready_move_publishes_controls_before_next_frame() {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {for kind in [PointerKind::Touch,PointerKind::Pen] {
+        let mut s=targeted_session_on(platform);
+        s.input(pointer_input(17,ContactPhase::Down,kind,PointerButton::Primary,[400.,400.],0)).unwrap();
+        s.frame(2,2).unwrap();targeted_reply(&mut s);
+        let previous=targeted_published_points(&s);let revision=s.engine.document().revision;
+        s.input(pointer_input(17,ContactPhase::Move,kind,PointerButton::Primary,[400.,370.],0)).unwrap();
+        let expected=targeted_points(&s,0);
+        assert_ne!(expected,previous);assert!(s.engine.document().revision>revision);
+        assert_eq!(targeted_published_points(&s),expected,"published ready Move {platform:?} {kind:?}");
+    }}
+}
+
+#[test]
+fn targeted_curve_ready_move_release_and_cancel_publish_controls_on_next_frame() {
+    for platform in [Platform::Gtk,Platform::Web,Platform::Android] {for kind in [PointerKind::Touch,PointerKind::Pen] {for end in [ContactPhase::Up,ContactPhase::Cancel] {
+        let mut s=targeted_session_on(platform);let original=targeted_published_points(&s);
+        s.input(pointer_input(17,ContactPhase::Down,kind,PointerButton::Primary,[400.,400.],0)).unwrap();
+        s.frame(2,2).unwrap();targeted_reply(&mut s);
+        let requests=s.engine.backend().snapshot_requests.len();
+        s.input(pointer_input(17,ContactPhase::Move,kind,PointerButton::Primary,[400.,370.],0)).unwrap();
+        s.frame(40,40).unwrap();
+        let moved=targeted_points(&s,0);assert_ne!(moved,original);
+        assert_eq!(targeted_published_points(&s),moved,"published nextframe Move {platform:?} {kind:?}");
+        s.input(pointer_input(17,end,kind,PointerButton::Primary,[400.,350.],0)).unwrap();
+        s.frame(50,50).unwrap();
+        let expected=targeted_points(&s,0);
+        assert_eq!(targeted_published_points(&s),expected,"published nextframe end {platform:?} {kind:?} {end:?}");
+        if end==ContactPhase::Cancel{assert_eq!(expected,original);}else{assert_ne!(expected,moved);}
+        assert!(!s.targeted_curve_busy());assert_eq!(s.engine.backend().snapshot_requests.len(),requests);
+    }}}
 }

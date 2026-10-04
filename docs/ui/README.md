@@ -54,7 +54,7 @@ while file dialogs, focus and accessibility follow the platform.
 
 ## Histogram and Waveform
 
-GTK and Web Photo open Histogram above Properties and Layers, with Waveform in the
+GTK, Web and Android Photo open Histogram above Properties and Layers, with Waveform in the
 adjacent tab. Both are ordinary dockable panels, shown or hidden through Window.
 Their command-search actions reveal the existing panel wherever it was placed. Both panels share the inspected source:
 Visible, Selected layer, Reference or Selection. Their channel menus independently
@@ -74,6 +74,8 @@ after it settles. Updating keeps that distinction visible. Both panels use the
 same frozen query; Waveform's spatial counters are allocated only while it is
 presented. Hiding every view retires its work and data. Levels and Curves have
 embedded input statistics in Properties, sharing the same query and display rules.
+Sampling, Auto and geometry queries pause scans without discarding valid results.
+Source changes still invalidate those results while scanning is paused.
 
 Shadows and Highlights mark pixels at or beyond zero and one. Floating documents
 label these SDR thresholds. The overlays apply to the canvas after proof and

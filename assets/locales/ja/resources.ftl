@@ -631,3 +631,5 @@ resources-lookup-monochrome = モノクロ
 resources-layer-type-group = グループ
 resources-layer-type-selection = 選択範囲
 resources-properties-layer-title = { $name }（{ $type }）
+
+resources-filter-dehaze = かすみの除去

@@ -48,6 +48,7 @@ internal object Native {
     @JvmStatic external fun navigatorPlacements(handle: Long, placements: String)
     @JvmStatic external fun glassRegions(handle: Long, glass: String)
     @JvmStatic external fun takeFilterPreviews(handle: Long): Array<Any>?
+    @JvmStatic external fun takeScopes(handle: Long): Array<Any>?
     @JvmStatic external fun documentTabs(handle: Long, request: String): String
     @JvmStatic external fun documentSwitch(handle: Long, id: Long, close: Boolean): Long
     @JvmStatic external fun documentResumeWork(task: Long)
@@ -133,7 +134,6 @@ internal object Native {
     @JvmStatic external fun inspectionStatistics(task: Long, source: String, preview: Boolean, selection: Boolean, waveform: Boolean = false): String
     @JvmStatic external fun inspectionLevelsStatistics(task: Long, source: String): String
     @JvmStatic external fun inspectionOutput(task: Long, recipe: String): Array<Any>
-    @JvmStatic external fun inspectionHistogram(task: Long): String
     @JvmStatic external fun projectExportOptions(task: Long, recipe: String)
     @JvmStatic external fun projectExportTask(handle: Long, request: Int, now: Long, cancel: Long = 0): Long
     /** Pure shared number-field math; no native session handle or GPU work. */

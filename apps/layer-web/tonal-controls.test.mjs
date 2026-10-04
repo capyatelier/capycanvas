@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 import {scopesFixture} from './scopes-fixture.mjs';
+import {packageOccurrences,packageObject} from './package-fixture.test.mjs';
 
 export async function checkTonalControls({call,evaluate,settle}) {
   const fixture=await scopesFixture({call,evaluate,settle});const {checkpoint,documentPoint,visibleSamples}=fixture;
@@ -65,10 +66,12 @@ export async function checkTonalControls({call,evaluate,settle}) {
     const bins = result => result.data.channels.map(c=>c.bins);
     const initial = await input();
     assert.ok(initial.data.channels.every(c=>c.bins.filter(n=>n>0).length>1), 'Nested fixture has nonconstant input bins');
-    const ancestry = (await fixture.save()).document.layers;
-    assert.equal(ancestry.find(l=>Number(l.id)===source).properties.parent, inner);
-    assert.equal(ancestry.find(l=>Number(l.id)===inner).properties.parent, outer);
-    assert.equal(ancestry.find(l=>Number(l.id)===target).properties.parent, inner);
+    const manifest=await fixture.save(),rows=await fixture.json('layerApp.state().layers'),occurrences=packageOccurrences(manifest);
+    const occurrence=id=>occurrences[rows.findIndex(row=>Number(row.id)===id)];
+    const children=id=>packageObject(manifest,occurrence(id).data.content.stack).data.entries.map(entry=>entry.ref);
+    assert.ok(children(inner).includes(occurrence(source).id));
+    assert.ok(children(outer).includes(occurrence(inner).id));
+    assert.ok(children(inner).includes(occurrence(target).id));
     for (const position of ['inside', 'outside']) {
       const before = await visibleSamples();
       await select(position==='inside' ? target : outer);
@@ -90,14 +93,14 @@ export async function checkTonalControls({call,evaluate,settle}) {
     await evaluate('new Promise(resolve=>setTimeout(resolve,500))');await ready();
     const retained = await input();
     assert.deepEqual(bins(retained), bins(frozen), 'Fixed animation phase retains exact target-input bins');
-    assert.deepEqual((await checkpoint()).layers, frozenDocument.layers, 'Host time passage does not change fixed-phase source');
+    assert.deepEqual((await checkpoint()).authored, frozenDocument.authored, 'Host time passage does not change fixed-phase source');
     const beforeRetirement = await checkpoint();
     await action(a=>a.action.op==='target_curve');
     await select(source);
     await fixture.poll("layerApp.state().layer_tools.tool!=='target_curve' && layerApp.state().tonal_histogram.data==null");
     await evaluate('new Promise(resolve=>setTimeout(resolve,300))');await settle();
     assert.equal(await evaluate('layerApp.state().tonal_histogram.data==null'), true, 'Retired target cannot publish late embedded data');
-    assert.deepEqual((await checkpoint()).layers, beforeRetirement.layers, 'Changing calibration target retires without correction');
+    assert.deepEqual((await checkpoint()).authored, beforeRetirement.authored, 'Changing calibration target retires without correction');
     await evaluate(`window.showOpenFilePicker=async()=>[{name:'scope-baseline.capy', getFile:async()=>new File([nestedScopeSaved],'scope-baseline.capy')}];`);
     const epoch = await evaluate('String(layerApp.state().document_file.epoch)');
     await fixture.invoke('open_document');
@@ -110,16 +113,16 @@ export async function checkTonalControls({call,evaluate,settle}) {
     await fixture.reopen();await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});await send({type:'set_theme',theme});await send({type:'effect',action:{op:'insert',effect}});await send({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:true}});const propertiesActive=await evaluate("layerApp.app.layout(innerWidth,innerHeight).groups.find(g=>g.panels.includes('properties'))?.active==='properties'");if(!propertiesActive)await fixture.click('.dock-group[data-panel=properties] .dock-tab[data-panel=properties]');if(await evaluate("layerApp.state().customization.expanded==='properties'"))await fixture.click('.dock-group[data-panel=properties] .dock-tab[data-panel=properties]');await fixture.poll("layerApp.state().customization.expanded==null&&!document.querySelector('.dock-group[data-panel=properties] .panel-configuration')?.checkVisibility()");await ready();await fixture.invoke('fit_canvas');await ready();
     if(effect==='levels'&&enabled('auto')){
       const before=await checkpoint(),pixelsBefore=await visibleSamples();await action(a=>a.action.op==='auto_levels');await ready();const after=await checkpoint();assert.deepEqual(after.source,before.source);
-      assert.notDeepEqual(after.layers,before.layers,'Valid Auto changes the uncorrected bounded-range fixture');assert.notDeepEqual(await visibleSamples(),pixelsBefore,'Auto changes actual rendered artwork pixels');{await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).layers,before.layers);await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).layers,after.layers);await send({type:'invoke',command:'undo'});await ready();}
+      assert.notDeepEqual(after.authored,before.authored,'Valid Auto changes the uncorrected bounded-range fixture');assert.notDeepEqual(await visibleSamples(),pixelsBefore,'Auto changes actual rendered artwork pixels');{await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).authored,before.authored);await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).authored,after.authored);await send({type:'invoke',command:'undo'});await ready();}
     }
     if(enabled('calibration'))for(const role of effect==='white_balance'||width===1100?['gray']:['black','gray','white'])for(const device of width===1100?['pen']:['pen','touch'])for(const cancel of [true,false]){console.log(`Calibration ${effect}/${width}/${theme}/${role}/${device}/${cancel?'cancel':'commit'}`);
       const before=await checkpoint(),pixelsBefore=await visibleSamples();await action(a=>a.action.op==='calibrate'&&a.action.role.toLowerCase()===role);await contact(device,cancel,false,role);const after=await checkpoint();assert.deepEqual(after.source,before.source);
-      if(cancel)assert.deepEqual(after.layers,before.layers,'Cancelled calibration has no edit');
-      else {assert.notDeepEqual(after.layers,before.layers,'Valid calibration commits a correction');assert.notDeepEqual(await visibleSamples(),pixelsBefore,'Calibration changes actual rendered artwork pixels');await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).layers,before.layers,'One Undo restores calibration');await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).layers,after.layers);await send({type:'invoke',command:'undo'});await ready();}
+      if(cancel)assert.deepEqual(after.authored,before.authored,'Cancelled calibration has no edit');
+      else {assert.notDeepEqual(after.authored,before.authored,'Valid calibration commits a correction');assert.notDeepEqual(await visibleSamples(),pixelsBefore,'Calibration changes actual rendered artwork pixels');await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).authored,before.authored,'One Undo restores calibration');await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).authored,after.authored);await send({type:'invoke',command:'undo'});await ready();}
     }
     if(effect==='curves'&&enabled('targeted'))for(const page of ['rgb','red']){
       const available=(await view()).pages;const selected=available.find(p=>p.id===page);assert.ok(selected,'Shared Master/Red page exists');await send({type:'effect',action:{op:'select_page',layer:(await view()).layer,page:selected.id}});
-      for(const device of ['pen','touch'])for(const cancel of [true,false]){const before=await checkpoint();await action(a=>a.action.op==='target_curve');await contact(device,cancel,true);const after=await checkpoint();assert.deepEqual(after.source,before.source);if(cancel)assert.deepEqual(after.layers,before.layers);else{assert.notDeepEqual(after.layers,before.layers);await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).layers,before.layers);await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).layers,after.layers);await send({type:'invoke',command:'undo'});await ready();}}
+      for(const device of ['pen','touch'])for(const cancel of [true,false]){const before=await checkpoint();await action(a=>a.action.op==='target_curve');await contact(device,cancel,true);const after=await checkpoint();assert.deepEqual(after.source,before.source);if(cancel)assert.deepEqual(after.authored,before.authored);else{assert.notDeepEqual(after.authored,before.authored);await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).authored,before.authored);await send({type:'invoke',command:'redo'});await ready();assert.deepEqual((await checkpoint()).authored,after.authored);await send({type:'invoke',command:'undo'});await ready();}}
     }
     if(effect==='curves'&&enabled('focus')){
       const v=await view();await send({type:'effect',action:{op:'select_page',layer:v.layer,page:'rgb'}});await ready();
@@ -133,13 +136,13 @@ export async function checkTonalControls({call,evaluate,settle}) {
       await fixture.poll(`JSON.stringify(layerApp.state().tonal_histogram.data,(_,v)=>typeof v==='bigint'?Number(v):v)!==${JSON.stringify(binsBefore)}&&layerApp.state().tonal_histogram.data!=null`);await ready();
       assert.ok(await evaluate(`document.activeElement===scopeDraft&&scopeDraft===document.querySelector('[data-curve-axis="input"] .number-entry')`),'Analysis refresh retains the exact numeric field and focus');
       assert.deepEqual(await evaluate('[scopeDraft.value,scopeDraft.selectionStart,scopeDraft.selectionEnd]'),['0.4123456789012345',3,9]);
-      await escape();await ready();await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).layers,before.layers,'Escape cancels the draft; one Undo restores the sibling curve edit');
+      await escape();await ready();await send({type:'invoke',command:'undo'});await ready();assert.deepEqual((await checkpoint()).authored,before.authored,'Escape cancels the draft; one Undo restores the sibling curve edit');
       const geometry=await evaluate(`(()=>{const root=document.querySelector('[data-curve-axis="input"]').closest('.dock-group'),r=root.getBoundingClientRect();return[...root.querySelectorAll('[data-curve-axis]')].map(n=>{const b=n.getBoundingClientRect();const value=n.querySelector('.number-value-box').getBoundingClientRect(),cell=n.closest('.curve-coordinate').getBoundingClientRect();return{left:b.left,right:b.right,containerLeft:r.left,containerRight:r.right,valueWidth:value.width,cellWidth:cell.width}})})()`);
       assert.ok(geometry.every(b=>b.left>=b.containerLeft-1&&b.right<=b.containerRight+1),'Precise coordinates stay inside actual dock bounds');assert.ok(geometry.every(b=>b.valueWidth>=b.cellWidth*.8),'Compact value boxes fill their coordinate columns');
     }
     if(phase==='capture'){await action(a=>a.action.op==='calibrate'&&a.action.role.toLowerCase()==='gray');await escape();await waitContact("layerApp.state().layer_tools.tool!=='pick_visible'");if(effect==='curves'){const p=await evaluate(`(()=>{const r=document.querySelector('.curve-editor').getBoundingClientRect();return{x:r.x+r.width*.4,y:r.y+r.height*.45}})()`);for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await ready();}}
     await fixture.reopen();await fixture.recover();await ready();
-    if(effect==='curves'){await press('.curve-editor circle:nth-child(2)');await ready();assert.ok(await evaluate(`Array.from(document.querySelectorAll('[data-curve-axis] .number-value')).every(n=>n.textContent.trim().length>0)`),'A selected real knot shows readable coordinate values');}
+    if(effect==='curves'&&phase!=='targeted'){await press('.curve-editor circle:nth-child(2)');await ready();assert.ok(await evaluate(`Array.from(document.querySelectorAll('[data-curve-axis] .number-value')).every(n=>n.textContent.trim().length>0)`),'A selected real knot shows readable coordinate values');}
     const png=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${effect}-${width}-${theme}.png`,Buffer.from(png.data,'base64'));
     if(effect==='curves'){await evaluate(`(()=>{let n=document.querySelector('.curve-editor');while(n){if(n.scrollHeight>n.clientHeight)n.scrollTop=0;n=n.parentElement}})()`);await settle();const main=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/curves-main-${width}-${theme}.png`,Buffer.from(main.data,'base64'));}
   }

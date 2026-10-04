@@ -365,13 +365,6 @@ internal class DocumentController(private val host: CanvasHost, private val appl
             TextButton({ recovery.dismiss(true) }, enabled = !recovery.working) { Text(recoveryCopy.getString("discard")) }
         } }
     )
-    var histogramOpen by remember { mutableStateOf(false) }
-    val histogramRequest = state.array("requests").objects().firstOrNull { it.getJSONObject("kind").getString("type") == "histogram" }
-    LaunchedEffect(histogramRequest?.getInt("id")) {
-        if (histogramRequest != null) { histogramOpen = true; host.dispatch(obj("type" to "complete_request", "id" to histogramRequest.getInt("id"))) }
-    }
-    LaunchedEffect(host.drawingTabs.switching) { if(host.drawingTabs.switching)histogramOpen=false }
-    if (histogramOpen) HistogramWindow(host) { histogramOpen = false }
     val controller = host.documents
     if ((controller.exporting || controller.opening) && controller.packagePrompt == null) androidx.compose.ui.window.Popup(alignment = androidx.compose.ui.Alignment.BottomCenter,
         properties = androidx.compose.ui.window.PopupProperties(focusable = false)) {

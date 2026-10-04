@@ -131,15 +131,16 @@ import kotlin.math.roundToInt
         val deficits = remember { FloatArray(2) }
         val hasNavigator = controls.any { it.getString("control") == "navigator" }
         val hasColor = controls.any { it.getString("control") == "color_wheel" }
+        val hasScope = controls.any { it.getString("control") in listOf("histogram", "waveform") }
         val displayedHeight = contentHeight
-        val measured = PanelContentSize(naturalHeight, fixedHeight = if (controls.size == 1 && (hasColor || hasNavigator)) null else 0f)
+        val measured = PanelContentSize(naturalHeight, fixedHeight = if (controls.size == 1 && (hasColor || hasNavigator || hasScope)) null else 0f)
         SideEffect {
             if (displayedHeight > 0f) { onHeight(displayedHeight); onContent(measured) }
         }
         Column(Modifier.fillMaxWidth().then(if (scrollable) Modifier.verticalScroll(rememberScrollState()) else Modifier).onGloballyPositioned {
             contentHeight = it.size.height / density
             naturalHeight = contentHeight + (if (hasColor) deficits[0] else 0f) + (if (hasNavigator) deficits[1] else 0f)
-        }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties" -> if (splitFilters) 8.dp else 6.dp; "stats" -> 6.dp; else -> 8.dp }),
+        }.padding(when(panel.getString("id")) { "adjustments" -> 4.dp; "properties" -> if (splitFilters) 8.dp else 6.dp; "stats", "histogram", "waveform" -> 6.dp; else -> 8.dp }),
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             controls.forEach { item ->
                 when (item.getString("control")) {
@@ -147,6 +148,7 @@ import kotlin.math.roundToInt
                     "tool_settings" -> ToolSettingsControls(host, state)
                     "color_wheel" -> ColorPanelControls(host, availableHeight - 16.dp) { natural, displayed -> deficits[0] = natural - displayed }
                     "navigator" -> NavigatorPanel(host, availableHeight) { natural, displayed -> deficits[1] = natural - displayed }
+                    "histogram", "waveform" -> ScopeControl(host, state, item.getString("control"))
                     "brush_size" -> NumericSetting("Brush size", state.getJSONObject("brush").number("diameter"), host.catalog.getJSONObject("brush_size")) {
                         host.dispatch(obj("type" to "set_brush_size", "value" to it))
                     }
@@ -236,6 +238,7 @@ import kotlin.math.roundToInt
         "tool_settings" -> ToolSettingsControls(host, state)
         "color_wheel" -> ColorPanelControls(host)
         "navigator" -> NavigatorPanel(host)
+        "histogram", "waveform" -> ScopeControl(host, state, control)
         "brush_size" -> NumericSetting(label, brush.number("diameter"), host.catalog.getJSONObject("brush_size")) {
             host.dispatch(obj("type" to "set_brush_size", "value" to it))
         }

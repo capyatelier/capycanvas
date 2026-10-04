@@ -32,7 +32,7 @@ fn start(app: &NativeTestApp, effect: &str) -> (Rc<Workspace>, std::path::PathBu
     w.dispatch(UiAction::MovePanel {panel:Panel::Properties,target:DockTarget::Edge {edge:Edge::Right,outer:false},viewport:[w.window.width() as f32,800.]});
     w.dispatch(UiAction::Effect {action:EffectAction::Insert {effect:effect.into()}});ready(&w);
     w.dispatch(UiAction::Invoke {command:CommandId::FitCanvas});pump(200);
-    let output = artifact_dir("../../artifacts/photo-editing-color/compact-ui/gtk");std::fs::create_dir_all(&output).unwrap();
+    let output = std::env::var("LAYER_TEST_ARTIFACTS").unwrap_or_else(|_|"../../artifacts/photo-editing-color/compact-ui/gtk".into());std::fs::create_dir_all(&output).unwrap();
     (w,output.into())
 }
 
@@ -169,6 +169,7 @@ fn targeted_curves(page: u32) {
                 assert_source_unchanged(&w,&before);assert_eq!(state(&w).colors,foreground);assert_ne!(shown(&w,[128.,128.]),pixel);
                 let after=document(&w);let key=format!("curve_{page}");
                 assert!(matches!(active_effect(&after).value(&key),Some(EffectValue::Curve(points)) if points.len()==3));
+                assert_eq!(super::pointwise::value(&w,&key),active_effect(&after).value(&key).unwrap().clone(),"targeted document edits publish current Properties points");
                 crate::snapshot(&w).save_to_png(output.join(format!("targeted-{page}-{kind}-{width}-{theme:?}.png"))).unwrap();
                 if kind=="mouse" {assert_persisted(&w,&output.join(format!("targeted-{page}-{width}-{theme:?}.capy")));}
                 input.key(0xff1b);w.dispatch(UiAction::Invoke {command:CommandId::Undo});ready(&w);assert_eq!(artwork_manifest(&document(&w)),artwork_manifest(&before),"one Undo restores targeted drag");

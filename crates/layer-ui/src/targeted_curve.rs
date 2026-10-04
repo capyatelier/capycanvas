@@ -44,7 +44,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         self.require_idle()?;
         let document=self.engine.document();
         if document.is_locked(occurrence_handle(layer)?) || document.scene().effect(occurrence_handle(layer)?).is_none_or(|e|e.program.id.as_ref()!="curves") {return Err("Choose a Curves adjustment".into());}
-        self.cancel_picker();self.cancel_auto_levels();self.cancel_histogram();self.start_picker()?;
+        self.cancel_picker();self.cancel_auto_levels();self.yield_histogram();self.start_picker()?;
         self.eyedropper.cancel();self.eyedropper.layer=false;
         self.targeted_curve=Some(TargetedCurve {layer:occurrence_handle(layer)?,epoch,document_epoch:self.state.document_file.epoch,page:0,contact:None});
         self.sync_targeted_page();self.refresh_tools();Ok(())
@@ -70,7 +70,9 @@ impl<R:CanvasRenderer> UiSession<R> {
                     if phase==ContactPhase::Cancel {self.cancel_targeted_contact()?;}
                     else if matches!(phase,ContactPhase::Move|ContactPhase::Up) {
                         let contact=self.targeted_curve.as_mut().unwrap().contact.as_mut().unwrap();contact.current=position[1];contact.released=phase==ContactPhase::Up;
+                        let revision=self.engine.document().revision;
                         self.advance_targeted_curve()?;
+                        if self.engine.document().revision!=revision {self.refresh_document();}
                     }
                 } else {return Ok(Some(UiChange::default()));}
             },

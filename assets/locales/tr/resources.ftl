@@ -514,3 +514,5 @@ resources-lookup-monochrome = Tek renk
 resources-layer-type-group = Grup
 resources-layer-type-selection = Seçim
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Sisi gider

@@ -362,3 +362,111 @@ fn scoped_worker_transfer_keeps_required_geometry_phases_and_handles_without_unr
     let error=match PreparedTransfer::capture(&failed,&cancel) {Ok(_)=>panic!("required backing was omitted"),Err(error)=>error};
     assert!(error.contains("required source failed"),"{error}");
 }
+
+fn mixed_dehaze_project(space:RgbSpace,alpha:f32,dehaze_below:bool,amount:f32)->Document {
+    let mut document=constant_document(space,alpha);
+    let target=occurrence(&document,if dehaze_below {"Lower"}else{"Upper"});
+    set_effect(&mut document,target,adjustment("dehaze","amount",amount));document
+}
+
+#[test]
+fn cold_mixed_dehaze_constant_airlight_preserves_exact_scoped_lower_order() {
+    for (space, alpha) in [(RgbSpace::Srgb, 0.5), (RgbSpace::DisplayP3, 1.),
+        (RgbSpace::AdobeRgb, 8e-8), (RgbSpace::ProPhoto, 0.5)] {
+            for dehaze_below in [false, true] {
+                for amount in [-100., 0., 100.] {
+                    let project = mixed_dehaze_project(space, alpha, dehaze_below, amount);
+                    let y = f64::from(0.01125_f32);
+                    let expected = y * shadow_gain(y, 0.5);
+                    let mut reader = capture(project.clone()).unwrap();
+                    assert!(reader.renderer.effect_analyses.is_empty());
+                    close(reader.read_region([7, 5, 1, 1]).unwrap()[0], expected, alpha, true);
+                    let kinds = reader.renderer.effect_analyses.iter().map(|entry| (entry.layer(), entry.kind)).collect::<Vec<_>>();
+                    let dehaze = layer_core::EffectAnalysisKind::Dehaze;
+                    let illumination = layer_core::EffectAnalysisKind::LocalIllumination;
+                    if amount != 0. {
+                        assert_eq!(kinds, vec![(occurrence(&project,"Lower"), if dehaze_below { dehaze } else { illumination }),
+                            (occurrence(&project,"Upper"), if dehaze_below { illumination } else { dehaze })]);
+                    }
+                    for entry in &reader.renderer.effect_analyses {
+                        assert_eq!(entry.query.source, ArtworkSource::EffectInput(entry.layer()));
+                    }
+                    let lower = if dehaze_below { y } else { expected };
+                    let request = ArtworkSampleRequest::new(&project, ArtworkSource::EffectInput(occurrence(&project,"Upper")), [8., 6.], 1);
+                    let ArtworkSample::Color(pixel) = pollster::block_on(gpu().artwork_sample(request, Default::default())).unwrap()
+                        else { panic!("mixed Dehaze source sample") };
+                    close(pixel, lower, alpha, false);
+                }
+            }
+    }
+}
+
+#[test]
+fn dehaze_own_amount_reuses_airlight_and_lower_edits_replace_upper_scoped_guide() {
+    for dehaze_below in [false, true] {
+        let mut project = mixed_dehaze_project(RgbSpace::Srgb, 0.5, dehaze_below, 75.);
+        let mut reader = capture(project.clone()).unwrap();
+        reader.read_region([0, 0, 1, 1]).unwrap();
+        let lower = resource(&reader,occurrence(&project,"Lower"));
+        let upper = resource(&reader,occurrence(&project,"Upper"));
+        let upper_key = if dehaze_below { "shadows" } else { "amount" };
+        let upper_handle=occurrence(&project,"Upper");let lower_handle=occurrence(&project,"Lower");
+        set(&mut project,upper_handle,upper_key,25.);
+        let mut own = reader.renderer.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
+        own.read_region([0, 0, 1, 1]).unwrap();
+        assert!(Arc::ptr_eq(&lower, &resource(&own,lower_handle)));
+        assert!(Arc::ptr_eq(&upper, &resource(&own,upper_handle)));
+        let lower_key = if dehaze_below { "amount" } else { "shadows" };
+        set(&mut project,lower_handle,lower_key,30.);
+        let mut contributing = own.renderer.snapshot_gpu().capture_scene(project.snapshot(),SceneScope::All,Default::default()).unwrap();
+        contributing.read_region([0, 0, 1, 1]).unwrap();
+        assert!(Arc::ptr_eq(&lower, &resource(&contributing,lower_handle)));
+        assert!(!Arc::ptr_eq(&upper, &resource(&contributing,upper_handle)));
+    }
+}
+
+#[test]
+fn dehaze_effect_input_excludes_unrelated_failed_upper_backing() {
+    let mut project = mixed_dehaze_project(RgbSpace::Srgb, 0.5, true, 100.);
+    let (upper,target)=crate::test_support::add_paint(&mut project.artwork,"Unrelated failed upper backing",[33,17]);
+    let root=project.composition().result;let entries=&mut project.artwork.stacks.get_mut(root).unwrap().entries;
+    entries.retain(|handle|*handle!=upper);entries.insert(0,upper);refresh(&mut project);
+    let raster=project.target_raster_mut(target).unwrap();*raster=RasterRevision::pending();
+    raster.publish(Err("upper unrelated backing failed".into())).unwrap();
+    let request = ArtworkSampleRequest::new(&project, ArtworkSource::EffectInput(occurrence(&project,"Upper")), [8., 6.], 1);
+    let ArtworkSample::Color(pixel) = pollster::block_on(gpu().artwork_sample(request, Default::default())).unwrap()
+        else { panic!("source-aware Dehaze sample") };
+    close(pixel, f64::from(0.01125_f32), 0.5, false);
+}
+
+#[test]
+fn registered_dehaze_nonconstant_material_matches_scalar_reconstruction() {
+    let extent=[2,1];
+    let pixels=[[0.4_f32,0.5,0.6,1.],[0.1,0.2,0.3,1.]];
+    let mut document=Document::new(PortableId::random(),extent[0],extent[1],
+        layer_core::DocumentNames{paint:"Original".into(),paper:"Paper".into()});
+    document.artwork.compositions.get_mut(document.artwork.root).unwrap().color=DocumentColor{space:RgbSpace::Srgb,depth:SampleDepth::F32};
+    let interpretation=SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F32,
+        profile:ColorProfile::Builtin(RgbSpace::Srgb),profile_assumed:false};
+    let mut source=SourceBuilder::new(extent,interpretation,1024*1024).unwrap();
+    let row=pixels.into_iter().flatten().flat_map(f32::to_le_bytes).collect::<Vec<_>>();
+    source.push_row(&row).unwrap();
+    paint_mut(&mut document).original=Some(Arc::new(source.finish().unwrap()));hide_paper(&mut document);
+    let target=insert_effect(&mut document,adjustment("dehaze","amount",0.),0);
+    for amount in [0_f32,50.,100.,-100.] {
+        set(&mut document,target,"amount",amount);
+        let mut reader=capture(document.clone()).unwrap();
+        let actual=reader.read_region([0,0,2,1]).unwrap();
+        let transmission=(1.-0.95*f64::from(amount.abs())*0.01*f64::from(pixels[1][0])/f64::from(pixels[0][0])).max(0.1);
+        for (index,pixel) in actual.iter().enumerate(){
+            assert_eq!(pixel[3],1.);
+            for channel in 0..3{
+                let input=f64::from(pixels[index][channel]);let air=f64::from(pixels[0][channel]);
+                let expected=if amount>=0.{(input-air)/transmission+air}else{input*transmission+air*(1.-transmission)};
+                assert!(pixel[channel].is_finite()&&(f64::from(pixel[channel])-expected).abs()<=1e-5,
+                    "amount {amount} pixel {index} channel {channel}: {} expected {expected}",pixel[channel]);
+            }
+        }
+        assert_eq!(reader.renderer.effect_analyses.len(),1);assert_eq!(reader.renderer.effect_analyses[0].query.source,ArtworkSource::EffectInput(target));
+    }
+}

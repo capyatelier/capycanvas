@@ -10,6 +10,8 @@ import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.Window
 import android.view.WindowManager
+import androidx.compose.ui.platform.ViewRootForTest
+import androidx.compose.ui.semantics.SemanticsNode
 import androidx.compose.ui.semantics.SemanticsActions
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.semantics.getOrNull
@@ -193,8 +195,13 @@ class AndroidCanvasBarBenchmarkTest {
                     (anchor.getDouble(1) + fraction * (anchor.getDouble(3) - anchor.getDouble(1))) * zoom + translation.getDouble(1)
             }
             fun corner() = anchorPoint(1.0)
+            var measuring = false
             var lastDownInjectionNs = 0L
+            var lastUpInjectionBootNs = 0L
+            var firstDownInjectionBootNs = 0L
             fun inject(action: Int, down: Long, x: Double, y: Double, pressure: Float) {
+                if (action == MotionEvent.ACTION_DOWN && measuring && firstDownInjectionBootNs == 0L) firstDownInjectionBootNs = SystemClock.elapsedRealtimeNanos()
+                if (action == MotionEvent.ACTION_UP) lastUpInjectionBootNs = SystemClock.elapsedRealtimeNanos()
                 val injectionBegan = System.nanoTime()
                 val properties = arrayOf(MotionEvent.PointerProperties().apply { id = 5; toolType = MotionEvent.TOOL_TYPE_STYLUS })
                 val coords = arrayOf(MotionEvent.PointerCoords().apply {
@@ -205,7 +212,6 @@ class AndroidCanvasBarBenchmarkTest {
                     "Stylus injection failed: $event"
                 } } finally { event.recycle(); if (action == MotionEvent.ACTION_DOWN) lastDownInjectionNs = System.nanoTime() - injectionBegan }
             }
-            var measuring = false
             var mark = 0L
             var dispatched = 0L
             val gestureDown = java.util.concurrent.atomic.AtomicLong()
@@ -367,6 +373,7 @@ class AndroidCanvasBarBenchmarkTest {
                 if (args.getString("labels")?.split(',')?.let { label !in it } == true) return
                 mark = 0L
                 gestureDown.set(0)
+                firstDownInjectionBootNs = 0L; lastUpInjectionBootNs = 0L
                 SystemClock.sleep(600)
                 host.measurementReport(true)
                 native { Native.completionTimings(it, true) }
@@ -416,10 +423,13 @@ class AndroidCanvasBarBenchmarkTest {
                     "visible_layer_ids_before" to JSONArray(visibleLayerIdsBefore), "visible_layer_count_before" to visibleLayerIdsBefore.size,
                     "photo" to (photoPath ?: "synthetic"), "renderer_profile" to (args.getString("rendererProfile") == "true"), "camera_before" to cameraBefore,
                     "motion" to obj("begin_ns" to began, "end_ns" to operated,
-                        "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot),
+                        "begin_boot_ns" to beganBoot, "end_boot_ns" to operatedBoot,
+                        "contact_begin_boot_ns" to (firstDownInjectionBootNs.takeIf { it > 0 } ?: JSONObject.NULL),
+                        "contact_end_boot_ns" to (lastUpInjectionBootNs.takeIf { it > 0 } ?: JSONObject.NULL)),
                     "drained_ns" to ended, "display_after_drain" to drained, "renderer_before" to rendererBefore,
                     "measurements" to metrics, "completions" to completions,
                     "memory_before" to memoryBefore,
+                    "process_pss_after_bytes" to if (memory) android.os.Debug.getPss().toLong() * 1024 else null,
                     "memory_after" to if (memory) native { JSONObject(Native.rendererMemory(it)) } else null,
                     "renderer_after" to native { JSONObject(Native.query(it, obj("type" to "renderer_stats").toString())) },
                     "display_before" to displayBefore, "display_after_input" to displayAfterInput,
@@ -460,6 +470,123 @@ class AndroidCanvasBarBenchmarkTest {
                 println("CANVAS BAR $label $result")
             }
             fun wanted(name: String) = only == null || name in only
+            fun controlState(tag: String): JSONObject {
+                val current = state()
+                val properties = current.getJSONObject("layer_properties")
+                val tonal = current.getJSONObject("tonal_histogram")
+                return obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "tag" to tag,
+                    "document" to current.getJSONObject("document_file"), "layer" to properties.optLong("layer"),
+                    "epoch" to properties.optLong("epoch"), "description" to properties.optString("description"),
+                    "actions" to properties.array("actions"),
+                    "controls" to JSONArray(properties.array("controls").objects().map { obj("key" to it.getString("key"), "value" to it.getJSONObject("value")) }),
+                    "sampler" to current.getJSONObject("color_picker"), "notice" to current.opt("notice"),
+                    "tonal_status" to tonal.optString("status"), "tonal_source" to tonal.opt("captured_source"))
+            }
+            fun controlGeometry(pair: Pair<ViewRootForTest, SemanticsNode>?): JSONObject {
+                if (pair == null) return obj("found" to false)
+                val node = pair.second
+                val origin = IntArray(2); pair.first.view.getLocationOnScreen(origin)
+                val r = node.boundsInRoot
+                val enabled = generateSequence(node) { it.parent }.none { it.config.getOrNull(SemanticsProperties.Disabled) != null }
+                return obj("found" to true, "enabled" to enabled,
+                    "visible" to (node.size.width > 0 && node.size.height > 0 && r.width >= node.size.width * .9f && r.height >= node.size.height * .9f),
+                    "screen_bounds" to JSONArray(listOf(r.left + origin[0], r.top + origin[1], r.right + origin[0], r.bottom + origin[1])),
+                    "node_size" to JSONArray(listOf(node.size.width, node.size.height)), "root_origin" to JSONArray(origin.toList()),
+                    "surface_origin" to JSONArray(listOf(host.surfaceOrigin.x, host.surfaceOrigin.y)),
+                    "text" to node.config.getOrNull(SemanticsProperties.Text)?.joinToString { it.text },
+                    "focused" to node.config.getOrNull(SemanticsProperties.Focused),
+                    "native_click" to (node.config.getOrNull(SemanticsActions.OnClick)?.action != null))
+            }
+            fun interactionSnapshot(label: String, tag: String, control: () -> Pair<ViewRootForTest, SemanticsNode>? = { findTag(tag) }) {
+                runCatching {
+                    var window = JSONObject()
+                    var snapshot = JSONObject()
+                    instrumentation.runOnMainSync {
+                        val decor = activity.window.decorView
+                        val power = activity.getSystemService(android.content.Context.POWER_SERVICE) as android.os.PowerManager
+                        val keyguard = activity.getSystemService(android.content.Context.KEYGUARD_SERVICE) as android.app.KeyguardManager
+                        window = obj("package" to activity.packageName, "window_focus" to activity.hasWindowFocus(),
+                            "visible" to decor.isShown, "attached" to decor.isAttachedToWindow, "view_focus" to decor.hasFocus(),
+                            "interactive" to power.isInteractive, "keyguard_locked" to keyguard.isKeyguardLocked,
+                            "device_locked" to keyguard.isDeviceLocked, "input_restricted" to keyguard.inKeyguardRestrictedInputMode())
+                        snapshot = controlState(tag).put("geometry", controlGeometry(control()))
+                    }
+                    val record = obj("window" to window, "state" to snapshot)
+                    File(output, "$label.json").writeText(record.toString(2))
+                    val bitmap = instrumentation.uiAutomation.takeScreenshot()
+                    try {
+                        check(bitmap != null) { "Private display screenshot unavailable" }
+                        File(output, "$label.png").outputStream().use { check(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+                    } finally { bitmap?.recycle() }
+                    record.put("display", native { JSONObject(Native.displayStatus(it)) })
+                    File(output, "$label.json").writeText(record.toString(2))
+                }.onFailure { File(output, "$label-diagnostic-error.json").writeText(obj("error" to it.toString()).toString(2)) }
+            }
+            fun settledControl(label: String, control: () -> Pair<ViewRootForTest, SemanticsNode>?,
+                observe: (JSONObject) -> Unit = {}): android.graphics.RectF {
+                host.awaitMain("$label ready", 10_000, condition = { control() != null })
+                runBlocking { kotlinx.coroutines.withContext(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
+                    val node = control()!!.second
+                    if (node.boundsInRoot.height < node.size.height * .9f) {
+                        val scroll = generateSequence(node.parent) { it.parent }.first { it.config.getOrNull(SemanticsActions.ScrollByOffset) != null }
+                        scroll.config[SemanticsActions.ScrollByOffset].invoke(androidx.compose.ui.geometry.Offset(0f, node.positionInRoot.y + node.size.height * .5f - scroll.boundsInRoot.center.y))
+                    }
+                } }
+                var previous: android.graphics.RectF? = null
+                var stable = 0
+                var bounds = android.graphics.RectF()
+                host.awaitMain("$label enabled and settled", 10_000, condition = {
+                    val geometry = controlGeometry(control()).put("boot_ns", SystemClock.elapsedRealtimeNanos())
+                    if (!geometry.getBoolean("found")) { stable = 0; observe(geometry); false }
+                    else {
+                        val r = geometry.getJSONArray("screen_bounds")
+                        val actual = android.graphics.RectF(r.getDouble(0).toFloat(), r.getDouble(1).toFloat(), r.getDouble(2).toFloat(), r.getDouble(3).toFloat())
+                        val enabled = geometry.getBoolean("enabled"); val visible = geometry.getBoolean("visible")
+                        stable = if (enabled && visible && actual == previous) stable + 1 else 0
+                        previous = actual; bounds = actual
+                        observe(geometry.put("stable_polls", stable))
+                        enabled && visible && stable >= 3
+                    }
+                })
+                return bounds
+            }
+            var clickIndex = 0
+            fun clickControl(tag: String) {
+                val geometry = JSONArray()
+                val index = clickIndex++
+                val before = controlState(tag)
+                var bounds: android.graphics.RectF? = null
+                var clicked = false
+                var failure: String? = null
+                try {
+                    fun sampleGeometry(value: JSONObject) { if (geometry.length() < 128) geometry.put(value) }
+                    settledControl(tag, { findTag(tag) }, ::sampleGeometry)
+                    interactionSnapshot("control-click-$index-$tag-before", tag)
+                    val actual = settledControl(tag, { findTag(tag) }, ::sampleGeometry)
+                    bounds = actual
+                    val point = actual.centerX() - host.surfaceOrigin.x.toDouble() to actual.centerY() - host.surfaceOrigin.y.toDouble()
+                    val down = SystemClock.uptimeMillis()
+                    inject(MotionEvent.ACTION_DOWN, down, point.first, point.second, .7f)
+                    inject(MotionEvent.ACTION_UP, down, point.first, point.second, 0f)
+                    clicked = true
+                } catch (error: Throwable) { failure = error.toString(); throw error }
+                finally {
+                    interactionSnapshot("control-click-$index-$tag-after", tag)
+                    File(output, "control-click-$index-$tag.json").writeText(obj("before" to before, "after" to controlState(tag),
+                        "geometry" to geometry, "clicked" to clicked, "failure" to failure,
+                        "click_screen_bounds" to bounds?.let { JSONArray(listOf(it.left, it.top, it.right, it.bottom)) }).toString(2))
+                }
+            }
+            fun precisionSettled(label: String) {
+                waitGuide(label)
+                waitFor("$label input statistics") {
+                    val view = state().getJSONObject("tonal_histogram")
+                    val layer = state().getJSONObject("layer_properties").getLong("layer")
+                    val source = view.optJSONObject("captured_source")
+                    view.optString("status") == "Exact" && !view.isNull("data") &&
+                        (source?.optLong("EffectChannels") == layer || source?.optLong("EffectInput") == layer)
+                }
+            }
             inject(MotionEvent.ACTION_CANCEL, SystemClock.uptimeMillis(), 0.0, 0.0, 0f)
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
             if (args.getString("defaultPhoto") == "true") {
@@ -608,14 +735,79 @@ class AndroidCanvasBarBenchmarkTest {
                     "status" to state().getJSONObject("layer_properties").optString("description"),
                     "memory_after" to native { JSONObject(Native.rendererMemory(it)) }).toString(2))
             }
+            if (wanted("scopes")) {
+                photoDocument(); invoke("hand"); invoke("fit_canvas")
+                fun visibility(kind: String, visible: Boolean) {
+                    action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to kind, "visible" to visible)))
+                    if (visible) {
+                        val g = host.panelGroup(kind)
+                        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to g.getInt("id"), "collapsed" to false)))
+                        if (g.optString("active") != kind) action(obj("type" to "select_panel_tab", "group" to g.getInt("id"), "panel" to kind))
+                        host.awaitMain("$kind active", 10_000, condition = { host.panelGroup(kind).optString("active") == kind })
+                    }
+                }
+                fun hide() {
+                    visibility("histogram", false); visibility("waveform", false)
+                    host.awaitMain("scopes retired", 10_000, condition = {
+                        state().getJSONObject("histogram").isNull("data") && state().getJSONObject("waveform").isNull("data")
+                    })
+                }
+                hide()
+                fun center(): Pair<Double, Double> {
+                    val area = state().getJSONObject("camera").getJSONArray("work_area")
+                    return area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
+                }
+                drag(center(), 600) { t -> 120 * sin(t * 2) to 80 * sin(t * 3) }; invoke("fit_canvas"); waitGuide("scope pan primed")
+                for (kind in listOf("histogram", "waveform")) {
+                    val shown = SystemClock.elapsedRealtimeNanos(); visibility(kind, true)
+                    host.awaitMain("$kind demand published", 10_000, condition = { state().getJSONObject(kind).optString("status").isNotEmpty() })
+                    waitFor("$kind first data") { !state().getJSONObject(kind).isNull("data") }
+                    val preview = SystemClock.elapsedRealtimeNanos()
+                    waitFor("$kind exact data") { state().getJSONObject(kind).optString("status") == "Exact" }
+                    check(host.scopes[kind]?.let { it.paths.isNotEmpty() || it.image != null } == true)
+                    File(output, "scope-$kind-readiness.json").writeText(obj("show_boot_ns" to shown, "first_data_boot_ns" to preview,
+                        "exact_boot_ns" to SystemClock.elapsedRealtimeNanos(), "state" to state().getJSONObject(kind),
+                        "memory" to native { JSONObject(Native.rendererMemory(it)) }).toString(2))
+                    for (phase in listOf("pending", "settled")) repeat(args.getString("effectRepeats", "3")!!.toInt()) { index ->
+                        if (phase == "pending") {
+                            hide(); visibility(kind, true)
+                            host.awaitMain("$kind pending demand published", 10_000, condition = { state().getJSONObject(kind).optString("status").isNotEmpty() })
+                        }
+                        val revision = state().getJSONObject("document_file").getLong("revision")
+                        val phases = java.util.Collections.synchronizedList(mutableListOf<JSONObject>())
+                        measure("scope-$kind-$phase-pan") {
+                            check((state().getJSONObject(kind).optString("status") == "Exact") == (phase == "settled")) { "$kind $phase admission was lost before contact" }
+                            val sampler = Thread {
+                                val until = SystemClock.uptimeMillis() + duration
+                                while (SystemClock.uptimeMillis() < until) {
+                                    phases += obj("boot_ns" to SystemClock.elapsedRealtimeNanos(), "status" to state().getJSONObject(kind).optString("status"))
+                                    SystemClock.sleep(8)
+                                }
+                            }.apply { start() }
+                            drag(center(), duration) { t -> 120 * sin(t * 2) to 80 * sin(t * 3) }; sampler.join()
+                        }
+                        val released = SystemClock.elapsedRealtimeNanos()
+                        waitFor("$kind contact exact") { state().getJSONObject(kind).optString("status") == "Exact" }
+                        check(state().getJSONObject("document_file").getLong("revision") == revision)
+                        val label = "scope-$kind-$phase-pan"
+                        val result = File(output, "$label.json")
+                        result.writeText(JSONObject(result.readText()).put("initial_scope_phase", phase).put("scope_status_samples", JSONArray(phases)).put("scope", kind)
+                            .put("exact_wait_after_raster_drain_ms", (SystemClock.elapsedRealtimeNanos() - released) / 1e6)
+                            .put("scope_state", state().getJSONObject(kind)).toString(2))
+                        result.copyTo(File(output, "$label-$index.json"), overwrite = true)
+                    }
+                    hide()
+                }
+            }
             if (wanted("effects") || wanted("spatial-effects")) {
-                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1, val radius: Double? = null)
+                data class Scrub(val id: String, val key: String, val title: String, val label: String, val start: Double, val chain: Boolean = false, val page: String? = null, val colorize: Boolean = false, val span: Double = .1, val radius: Double? = null, val primeSpan: Double = .1)
                 val scrubs = if (wanted("spatial-effects")) listOf(
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
                     Scrub("unsharp_mask", "amount", "Amount", "effect-unsharp-amount-drag", .3, span = .4, radius = args.getString("effectRadius")?.toDouble() ?: 85.0),
                 ) else listOf(
                     Scrub("solid_color", "opacity", "Opacity", "fill-opacity-drag", .35, span = .4),
+                    Scrub("levels", "black", "Black", "effect-levels-black-drag", .15, span = .4, primeSpan = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-exposure-drag", .45),
                     Scrub("hue_saturation", "hue", "Hue", "effect-master-hue-drag", .55),
                     Scrub("hue_saturation", "greens_hue", "Hue", "effect-range-hue-drag", .55, page = "greens"),
@@ -631,6 +823,7 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("shadows_highlights", "shadows", "Shadows", "effect-shadows-drag", .3, span = .4),
                     Scrub("shadows_highlights", "highlights", "Highlights", "effect-highlights-drag", .3, span = .4),
                     Scrub("clarity", "amount", "Amount", "effect-clarity-drag", .3, span = .4),
+                    Scrub("dehaze", "amount", "Amount", "effect-dehaze-amount-drag", .3, span = .4),
                     Scrub("exposure", "exposure", "Exposure", "effect-chain-exposure-drag", .45, true),
                 )
                 val selectedLabels = args.getString("labels")?.split(',')
@@ -638,8 +831,8 @@ class AndroidCanvasBarBenchmarkTest {
                     val preparedAt = System.nanoTime()
                     val lookup = if (scrub.id == "color_lookup") lookupDocument() else null
                     val photoLayer = lookup?.first ?: photoDocument()
-                    val sourceMemoryBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity")) native { JSONObject(Native.rendererMemory(it)) } else null
-                    val sourceDisplayBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity")) native { JSONObject(Native.displayStatus(it)) } else null
+                    val sourceMemoryBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity", "dehaze")) native { JSONObject(Native.rendererMemory(it)) } else null
+                    val sourceDisplayBeforeEffect = if (scrub.id in listOf("shadows_highlights", "clarity", "dehaze")) native { JSONObject(Native.displayStatus(it)) } else null
                     val fixtureVisibleLayerIds = state().array("layers").objects().filter { it.optBoolean("visible") }.map { it.getLong("id") }
                     check(fixtureVisibleLayerIds.size == (if (lookup == null) 2 else 3) && photoLayer in fixtureVisibleLayerIds) { "Effect fixture has unexpected visible layers" }
                     action(obj("type" to "select_layer", "id" to photoLayer))
@@ -656,7 +849,7 @@ class AndroidCanvasBarBenchmarkTest {
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
                     scrub.radius?.let { radius -> effect(obj("op" to "set", "layer" to effectLayer, "key" to "sigma", "value" to obj("kind" to "number", "value" to radius))) }
                     if (scrub.id == "solid_color") action(obj("type" to "layer", "action" to obj("op" to "delete_mask", "id" to effectLayer)))
-                    val hasGuide = scrub.id in listOf("shadows_highlights", "clarity")
+                    val hasGuide = scrub.id in listOf("shadows_highlights", "clarity", "dehaze")
                     if (hasGuide) {
                         waitGuide("local guide published")
                     }
@@ -672,42 +865,98 @@ class AndroidCanvasBarBenchmarkTest {
                     waitFor("panel configuration closed") { state().getJSONObject("customization").isNull("expanded") }
                     fun slider() = if (scrub.id == "solid_color") findTag("layer-opacity")?.let { (root, panel) ->
                         panel.find { it.config.getOrNull(SemanticsProperties.ProgressBarRangeInfo) != null }?.let { root to it }
-                    } else findTag("number-slider-${scrub.title}")
+                    } else findTag("number-value-${scrub.key}")?.let { (root, value) ->
+                        generateSequence(value.parent) { it.parent }.firstNotNullOfOrNull { row ->
+                            row.find(hasTag("number-slider-${scrub.title}"))?.let { root to it }
+                        }
+                    }
                     waitFor("${scrub.title} control") { slider() != null }
                     invoke("fit_canvas")
                     effectZoom?.let { action(obj("type" to "set_zoom", "zoom" to it)) }
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
-                    runBlocking { kotlinx.coroutines.withContext(androidx.compose.ui.platform.AndroidUiDispatcher.Main) {
-                        val node = slider()!!.second
-                        if (node.boundsInRoot.height < node.size.height * .9f) {
-                            val scroll = generateSequence(node.parent) { it.parent }.first { it.config.getOrNull(SemanticsActions.ScrollByOffset) != null }
-                            scroll.config[SemanticsActions.ScrollByOffset].invoke(androidx.compose.ui.geometry.Offset(0f, node.positionInRoot.y + node.size.height * .5f - scroll.boundsInRoot.center.y))
-                        }
-                    } }
-                    waitFor("${scrub.title} slider visible") { slider()!!.second.let { it.boundsInRoot.height >= it.size.height * .9f } }
                     var track = android.graphics.RectF()
-                    instrumentation.runOnMainSync {
-                        val (root, node) = slider()!!
-                        val origin = IntArray(2); root.view.getLocationOnScreen(origin)
-                        node.boundsInRoot.let { track = android.graphics.RectF(it.left + origin[0], it.top + origin[1], it.right + origin[0], it.bottom + origin[1]) }
+                    fun locateSlider() {
+                        track = settledControl("${scrub.title} slider", ::slider)
+                        check(track.width() > 40 && track.height() > 0)
                     }
-                    check(track.width() > 40 && track.height() > 0)
+                    locateSlider()
                     fun value() = if (scrub.id == "solid_color") state().array("layers").objects().first { it.getLong("id") == effectLayer }.getDouble("opacity") * 100
                         else state().getJSONObject("layer_properties").array("controls").objects()
                             .first { it.getString("key") == scrub.key }.getJSONObject("value").getDouble("value")
+                    if (scrub.id == "levels" && args.getString("precisionAuto") == "true") {
+                        precisionSettled("Levels input ready")
+                        effect(obj("op" to "set", "layer" to effectLayer, "key" to "gamma", "value" to obj("kind" to "number", "value" to 2)))
+                        check(state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == "gamma" }.getJSONObject("value").getDouble("value") == 2.0)
+                        val began = SystemClock.elapsedRealtimeNanos()
+                        val timeline = JSONArray()
+                        var sampledAt = 0L
+                        var lastState = ""
+                        var adopted: Long? = null
+                        var failure: String? = null
+                        fun sampleAuto(phase: String, force: Boolean = false) {
+                            val sample = controlState("property-action-auto_levels")
+                            val content = JSONObject(sample.toString()).apply { remove("boot_ns") }.toString()
+                            val now = sample.getLong("boot_ns")
+                            if (force || content != lastState || now - sampledAt >= 250_000_000) {
+                                if (timeline.length() < 512) timeline.put(sample.put("phase", phase))
+                                sampledAt = now; lastState = content
+                            }
+                        }
+                        try {
+                            sampleAuto("before_click", true)
+                            clickControl("property-action-auto_levels")
+                            sampleAuto("after_click", true)
+                            waitFor("Auto adopted") {
+                                sampleAuto("adoption")
+                                val p = state().getJSONObject("layer_properties")
+                                p.array("controls").objects().first { it.getString("key") == "gamma" }.getJSONObject("value").getDouble("value") == 1.0 &&
+                                    p.array("actions").objects().first { it.getJSONObject("action").getString("op") == "auto_levels" }.getString("label") != "Cancel"
+                            }
+                            adopted = SystemClock.elapsedRealtimeNanos()
+                            invoke("undo")
+                            check(state().getJSONObject("layer_properties").array("controls").objects().first { it.getString("key") == "gamma" }.getJSONObject("value").getDouble("value") == 2.0)
+                            File(output, "levels-auto-adoption.json").writeText(obj("begin_boot_ns" to began, "adopted_boot_ns" to adopted,
+                                "elapsed_ms" to (adopted!! - began) / 1e6, "undo_gamma" to 2, "memory" to native { JSONObject(Native.rendererMemory(it)) }).toString(2))
+                        } catch (error: Throwable) { failure = error.toString(); throw error }
+                        finally {
+                            interactionSnapshot("levels-auto-terminal", "property-action-auto_levels")
+                            File(output, "levels-auto-timeline.json").writeText(obj("begin_boot_ns" to began, "adopted_boot_ns" to adopted,
+                                "failure" to failure, "timeline" to timeline, "final" to controlState("property-action-auto_levels")).toString(2))
+                        }
+                        effect(obj("op" to "set", "layer" to effectLayer, "key" to "gamma", "value" to obj("kind" to "number", "value" to 1)))
+                        precisionSettled("Levels after Auto settled")
+                        locateSlider()
+                    }
                     val start = track.left + track.width() * scrub.start - host.surfaceOrigin.x to track.centerY() - host.surfaceOrigin.y.toDouble()
                     val before = value()
-                    drag(start, 250) { t -> track.width() * .1 * t / .25 to 0.0 }
+                    val touchSlop = android.view.ViewConfiguration.get(activity).scaledTouchSlop
+                    val primeSpan = minOf(scrub.primeSpan, .95 - scrub.start)
+                    if (scrub.id == "levels") check(track.width() * primeSpan > touchSlop * 2)
+                    if (scrub.id == "levels") File(output, "levels-preprime-geometry.json").writeText(obj(
+                        "boot_ns" to SystemClock.elapsedRealtimeNanos(), "slider_bounds" to JSONArray(listOf(track.left, track.top, track.right, track.bottom)),
+                        "surface_origin" to JSONArray(listOf(host.surfaceOrigin.x, host.surfaceOrigin.y)), "down_surface_point" to JSONArray(listOf(start.first, start.second)),
+                        "scaled_touch_slop_px" to touchSlop, "density" to activity.resources.displayMetrics.density,
+                        "prime_travel_px" to track.width() * primeSpan, "motion_travel_px" to track.width() * scrub.span,
+                        "initial_value" to before, "layer_properties" to state().getJSONObject("layer_properties"), "camera" to state().getJSONObject("camera")).toString(2))
+                    val sliderTag = if (scrub.id == "solid_color") "layer-opacity" else "number-slider-${scrub.title}"
+                    interactionSnapshot("${scrub.label}-prime-before", sliderTag, ::slider)
+                    try {
+                        drag(start, 250) { t -> track.width() * primeSpan * t / .25 to 0.0 }
+                        host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
+                    } finally { interactionSnapshot("${scrub.label}-prime-after", sliderTag, ::slider) }
                     val warmupDownInjectionMs = lastDownInjectionNs / 1e6
-                    host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
                     invoke("undo")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     if (wanted("spatial-effects")) waitGuide("spatial filter warmup settled")
+                    if (scrub.id == "levels") precisionSettled("Levels warmup settled")
+                    if (scrub.id == "dehaze") waitGuide("Dehaze warmup settled")
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val effectRepeats = args.getString("effectRepeats", "1")!!.toInt().also { require(it > 0) }
                     repeat(effectRepeats) { index ->
                         val settleBegan = SystemClock.elapsedRealtimeNanos()
                         if (wanted("spatial-effects")) waitGuide("spatial filter contact settled")
+                        if (scrub.id == "levels") precisionSettled("Levels contact settled")
+                        if (scrub.id == "dehaze") waitGuide("Dehaze contact settled")
                         val settleMs = (SystemClock.elapsedRealtimeNanos() - settleBegan) / 1e6
                         val values = java.util.Collections.synchronizedSet(mutableSetOf<Double>())
                         val firstChanged = java.util.concurrent.atomic.AtomicLong()
@@ -752,13 +1001,16 @@ class AndroidCanvasBarBenchmarkTest {
             }
             if (wanted("pointwise-navigation")) {
                 val selectedLabels = args.getString("labels")?.split(',')
-                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity", "gaussian_blur", "unsharp_mask")) {
+                for (id in listOf("none", "invert", "desaturate", "threshold", "photo_filter", "color_lookup", "shadows_highlights", "clarity", "dehaze", "gaussian_blur", "unsharp_mask")) {
                     val label = "effect-$id-pan"
                     if (selectedLabels != null && label !in selectedLabels) continue
                     val preparedAt = System.nanoTime()
                     val lookup = if (id == "color_lookup") lookupDocument() else null
                     val photoLayer = lookup?.first ?: photoDocument()
                     action(obj("type" to "select_layer", "id" to photoLayer))
+                    val sourceMemoryBeforeEffect = if (id in listOf("shadows_highlights", "clarity", "dehaze")) native { JSONObject(Native.rendererMemory(it)) } else null
+                    val sourceDisplayBeforeEffect = if (sourceMemoryBeforeEffect != null) native { JSONObject(Native.displayStatus(it)) } else null
+                    val guideBeganBoot = SystemClock.elapsedRealtimeNanos()
                     val appliedAt = System.nanoTime()
                     if (id != "none" && lookup == null) action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
                     val radius = args.getString("effectRadius")?.toDouble()
@@ -786,24 +1038,27 @@ class AndroidCanvasBarBenchmarkTest {
                     if (radiusMemoryBefore != null) waitGuide("radius change raster complete")
                     val radiusCompleted = SystemClock.elapsedRealtimeNanos()
                     val radiusMemoryAfter = if (radiusMemoryBefore != null) native { JSONObject(Native.rendererMemory(it)) } else null
-                    val hasGuide = id in listOf("shadows_highlights", "clarity")
+                    val hasGuide = id in listOf("shadows_highlights", "clarity", "dehaze")
                     if (hasGuide) {
                         val layer = state().getJSONObject("layer_properties").getLong("layer")
                         action(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer,
-                            "key" to if (id == "clarity") "amount" else "shadows", "value" to obj("kind" to "number", "value" to if (id == "clarity") 28 else 63))))
+                            "key" to if (id in listOf("clarity", "dehaze")) "amount" else "shadows", "value" to obj("kind" to "number", "value" to if (id in listOf("clarity", "dehaze")) 28 else 63))))
                         waitGuide("navigation guide published")
                     }
+                    val guideReadyBoot = SystemClock.elapsedRealtimeNanos()
                     val applicationMs = (System.nanoTime() - appliedAt) / 1e6
                     invoke("hand"); invoke("fit_canvas")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val area = state().getJSONObject("camera").getJSONArray("work_area")
                     val center = area.getDouble(0) + area.getDouble(2) / 2 to area.getDouble(1) + area.getDouble(3) / 2
-                    if (id in listOf("gaussian_blur", "unsharp_mask")) {
+                    if (id in listOf("gaussian_blur", "unsharp_mask", "dehaze")) {
                         drag(center,250) { t -> 120*sin(t*2) to 80*sin(t*3) }
                         invoke("fit_canvas")
+                        if (id == "dehaze") waitGuide("Dehaze navigation warmup settled")
                     }
                     repeat(args.getString("effectRepeats", "1")!!.toInt()) { index ->
+                        if (id == "dehaze") waitGuide("Dehaze navigation contact settled")
                         measure(label) { drag(center, duration) { t -> 120 * sin(t * 2) to 80 * sin(t * 3) } }
                         val result = File(output, "$label.json")
                         result.writeText(JSONObject(result.readText()).put("effect_id", id)
@@ -811,9 +1066,77 @@ class AndroidCanvasBarBenchmarkTest {
                             .put("radius_input", if (radius == 85.0) "native text field" else "shared action")
                             .put("radius_change_ms", if (radiusMemoryBefore != null) (radiusCompleted - radiusBegan) / 1e6 else JSONObject.NULL)
                             .put("radius_memory_before", radiusMemoryBefore).put("radius_memory_after", radiusMemoryAfter)
+                            .put("source_memory_before_effect", sourceMemoryBeforeEffect).put("source_display_before_effect", sourceDisplayBeforeEffect)
+                            .put("guide_wait_begin_boot_ns", if (hasGuide) guideBeganBoot else JSONObject.NULL)
+                            .put("guide_ready_boot_ns", if (hasGuide) guideReadyBoot else JSONObject.NULL)
+                            .put("guide_wait_ms", if (hasGuide) (guideReadyBoot - guideBeganBoot) / 1e6 else JSONObject.NULL)
                             .put("shared_application_and_drain_ms", applicationMs).toString(2))
                         result.copyTo(File(output, "$label-$index.json"), overwrite = true)
                     }
+                }
+            }
+            if (wanted("targeted")) {
+                val photoLayer = photoDocument(); action(obj("type" to "select_layer", "id" to photoLayer))
+                action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "curves")))
+                action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+                val group = host.panelGroup("properties")
+                action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+                if (group.optString("active") != "properties") action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+                invoke("fit_canvas"); precisionSettled("Targeted input ready")
+                val camera = state().getJSONObject("camera"); val translation = camera.getJSONArray("translation")
+                val center = translation.getDouble(0) + width * .5 * camera.getDouble("zoom") to translation.getDouble(1) + height * .5 * camera.getDouble("zoom")
+                fun controls() = state().getJSONObject("layer_properties").array("controls").objects().map { it.getJSONObject("value").toString() }
+                fun arm() {
+                    clickControl("property-action-target_curve")
+                    try { host.awaitMain("Targeted sampler armed", 10_000, condition = { state().getJSONObject("color_picker").optBoolean("calibrating") }) }
+                    finally {
+                        interactionSnapshot("targeted-arm-terminal", "property-action-target_curve")
+                        File(output, "targeted-arm-state.json").writeText(controlState("property-action-target_curve").toString(2))
+                    }
+                }
+                fun retire() {
+                    clickControl("property-action-target_curve")
+                    try { host.awaitMain("Targeted sampler retired", 10_000, condition = { !state().getJSONObject("color_picker").optBoolean("calibrating") }) }
+                    finally {
+                        interactionSnapshot("targeted-retire-terminal", "property-action-target_curve")
+                        File(output, "targeted-retire-state.json").writeText(controlState("property-action-target_curve").toString(2))
+                    }
+                }
+                val initial = controls(); arm()
+                drag(center, 250) { t -> 0.0 to -24 * t / .25 }
+                host.awaitMain("Targeted warmup adopted", 10_000, condition = { controls() != initial })
+                retire(); invoke("undo"); check(controls() == initial); precisionSettled("Targeted warmup settled")
+                repeat(args.getString("effectRepeats", "3")!!.toInt()) { index ->
+                    precisionSettled("Targeted contact settled"); val before = controls(); arm()
+                    val samples = java.util.Collections.synchronizedList(mutableListOf<JSONObject>())
+                    val inputBegan = java.util.concurrent.atomic.AtomicLong()
+                    val firstChanged = java.util.concurrent.atomic.AtomicLong()
+                    measure("effect-targeted-curves-drag") {
+                        val sampler = Thread {
+                            val until = SystemClock.uptimeMillis() + duration
+                            while (SystemClock.uptimeMillis() < until) {
+                                val now = SystemClock.elapsedRealtimeNanos()
+                                val picker = state().getJSONObject("color_picker")
+                                if (!picker.isNull("preview")) samples += obj("boot_ns" to now, "preview" to JSONObject(picker.getJSONObject("preview").toString()))
+                                if (controls() != before) firstChanged.compareAndSet(0, now)
+                                SystemClock.sleep(8)
+                            }
+                        }.apply { start() }
+                        inputBegan.set(SystemClock.elapsedRealtimeNanos())
+                        drag(center, duration) { t -> 0.0 to -24 * (1 - cos(2 * PI * t)) - 6 * kotlin.math.min(t / .1, 1.0) }
+                        sampler.join()
+                    }
+                    val afterMeasure = SystemClock.elapsedRealtimeNanos()
+                    val up = lastUpInjectionBootNs
+                    host.awaitMain("Targeted correction adopted", 10_000, condition = { controls() != before })
+                    retire(); val retired = SystemClock.elapsedRealtimeNanos(); precisionSettled("Targeted Exact restored")
+                    val result = File(output, "effect-targeted-curves-drag.json")
+                    result.writeText(JSONObject(result.readText()).put("sample_previews", JSONArray(samples))
+                        .put("first_parameter_change_boot_ns", firstChanged.get().takeIf { it > 0 } ?: JSONObject.NULL)
+                        .put("contact_begin_boot_ns", inputBegan.get()).put("up_injection_boot_ns", up).put("after_measure_boot_ns", afterMeasure).put("retired_boot_ns", retired)
+                        .put("restored_exact_boot_ns", SystemClock.elapsedRealtimeNanos()).toString(2))
+                    result.copyTo(File(output, "effect-targeted-curves-drag-$index.json"), overwrite = true)
+                    invoke("undo"); check(controls() == before); precisionSettled("Targeted Undo settled")
                 }
             }
             if (wanted("curves") && args.getString("labels")?.split(',')?.let { "effect-curves-drag" in it } != false) {
@@ -849,8 +1172,18 @@ class AndroidCanvasBarBenchmarkTest {
                     val visible = node.boundsInRoot
                     middle > visible.top + visible.height * .25f && middle < visible.bottom - visible.height * .25f
                 }
+                precisionSettled("Curves input ready")
+                var prime = 0.0 to 0.0
+                instrumentation.runOnMainSync {
+                    val (root, node) = findTag("effect-curve")!!
+                    val origin = IntArray(2); root.view.getLocationOnScreen(origin)
+                    prime = node.positionInRoot.x + node.size.width * .5 + origin[0] - host.surfaceOrigin.x to
+                        node.positionInRoot.y + node.size.height * .5 + origin[1] - host.surfaceOrigin.y
+                }
+                drag(prime, 250) { t -> -20 * t / .25 to -20 * t / .25 }; invoke("undo"); precisionSettled("Curves warmup settled")
                 val repeats = args.getString("translationRepeats", "1")!!.toInt().also { require(it > 0) }
                 repeat(repeats) { index ->
+                    precisionSettled("Curves contact settled")
                     instrumentation.runOnMainSync {
                         val (root, node) = findTag("effect-curve")!!
                         val origin = IntArray(2); root.view.getLocationOnScreen(origin)

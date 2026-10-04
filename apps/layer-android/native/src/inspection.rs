@@ -153,26 +153,6 @@ pub extern "system" fn Java_art_capycanvas_Native_inspectionTask(
     or_throw(&mut env, result, 0)
 }
 
-/// Consumes the private job. The Kotlin caller invokes this exactly once on IO.
-#[unsafe(no_mangle)]
-pub extern "system" fn Java_art_capycanvas_Native_inspectionHistogram(
-    mut env: JNIEnv,
-    _: JClass,
-    handle: jlong,
-) -> jstring {
-    let job = unsafe { Box::from_raw(handle as *mut Inspection) };
-    let result = (|| {
-        crate::inspection::on_worker("capy-inspection", "Histogram worker failed", move || {
-            let revision = job.snapshot.revision;
-            let sampled_time = job.snapshot.view().order().iter().any(|h| job.snapshot.view().effect(*h).is_some_and(|e| e.animated())).then_some(job.snapshot.context.elapsed);
-            let mut renderer = job.gpu.capture(job.capture, job.control).map_err(error)?;
-            let histogram = renderer.histogram().map_err(error)?;
-            serde_json::to_string(&serde_json::json!({"epoch":job.epoch,"revision":revision,"axis":histogram.axis(),"histogram":histogram,"sampled_time":sampled_time})).map_err(error)
-        })
-    })();
-    string(&mut env, result)
-}
-
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_art_capycanvas_Native_documentInfoTask(
     _: JNIEnv,

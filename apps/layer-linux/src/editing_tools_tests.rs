@@ -10,7 +10,7 @@ fn raster(w: &Workspace) -> RasterRevision {
     let document = gpu.as_ref().unwrap().session.engine().document();
     active_raster(document).clone()
 }
-fn pixels(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
+pub(super) fn pixels(root: &RasterRevision) -> BTreeMap<TileKey, Vec<u8>> {
     root.wait_data().unwrap().tiles.iter().map(|(key, tile)| {
         (*key, tile.wait_backing().unwrap().decode().unwrap())
     }).collect()

@@ -1,6 +1,5 @@
 use super::*;
 use layer_ui::HistogramView;
-use layer_core::ArtworkSource;
 
 #[derive(Default)]
 pub(super) struct Cache {
@@ -22,7 +21,6 @@ pub(super) fn publish(state: &layer_ui::UiState, cache: &mut Cache, result: &js_
         let redraw=color_changed || cache.views[index].as_ref().is_none_or(|old| old.channel!=view.channel || old.logarithmic!=view.logarithmic
             || old.data.as_ref().map(std::sync::Arc::as_ptr)!=view.data.as_ref().map(std::sync::Arc::as_ptr));
         let value = serialize(view)?;
-        publish_source(view,&value)?;
         if redraw { cache.plots[index]=Some(serialize(&view.histogram_plot())?); }
         js_sys::Reflect::set(&value, &js("plot"), cache.plots[index].as_ref().unwrap())?;
         if index == 1 {
@@ -40,19 +38,5 @@ pub(super) fn publish(state: &layer_ui::UiState, cache: &mut Cache, result: &js_
         js_sys::Reflect::set(result, &js(name), &value)?;
         cache.views[index] = Some(view.clone());
     }
-    Ok(())
-}
-
-pub(super) fn publish_source(view:&HistogramView, value:&JsValue) -> Result<(),JsValue> {
-    let source=match view.captured_source.as_ref() {
-        Some(ArtworkSource::Visible)=>serde_json::json!("Visible"),
-        Some(ArtworkSource::Reference)=>serde_json::json!("Reference"),
-        Some(ArtworkSource::Source(target))=>serde_json::json!({"Source":target}),
-        Some(ArtworkSource::EffectInput(handle))=>serde_json::json!({"EffectInput":layer_ui::occurrence_token(*handle)}),
-        Some(ArtworkSource::EffectChannels(handle))=>serde_json::json!({"EffectChannels":layer_ui::occurrence_token(*handle)}),
-        Some(ArtworkSource::EffectBaseline(baseline))=>serde_json::json!({"EffectBaseline":layer_ui::occurrence_token(baseline.occurrence)}),
-        None=>serde_json::Value::Null,
-    };
-    js_sys::Reflect::set(value,&js("captured_source"),&serialize(&source)?)?;
     Ok(())
 }

@@ -657,8 +657,9 @@ fn shader_source(
     source.push_str(
         r#"
 @group(2) @binding(0) var<storage,read> effect_data:array<vec4<f32>>;
-@group(2) @binding(1) var<storage,read> effect_auxiliary:array<vec4<f32>>;
-fn fx_auxiliary(index:u32)->vec4<f32> {return effect_auxiliary[index];}
+@group(2) @binding(1) var<storage,read> effect_auxiliary:array<vec4<u32>>;
+fn fx_auxiliary_words(index:u32)->vec4<u32>{return effect_auxiliary[index];}
+fn fx_auxiliary(index:u32)->vec4<f32> {return bitcast<vec4<f32>>(effect_auxiliary[index]);}
 fn fx_parameter(base:u32,index:u32)->vec4<f32> { return effect_data[base+1u+index]; }
 fn fx_lookup(base:u32,table:u32,index:u32)->vec4<f32> {
     let directory=base+u32(effect_data[base].x);let entry=effect_data[directory+table];

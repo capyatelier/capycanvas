@@ -37,6 +37,10 @@ class AndroidRasterTest {
             device.portrait(scenario)
             assertTrue(activity.resources.configuration.screenWidthDp <= 640)
             host.narrowPhotoPanels(compose)
+        } else if (InstrumentationRegistry.getArguments().getString("presentationWide") == "true") {
+            device.landscape(scenario)
+            scenario.onActivity { activity = it; it.window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
+            assertTrue(activity.resources.configuration.screenWidthDp > 640)
         }
         compose.waitUntil(60_000) {host.snapshot?.optBoolean("brush_ready")==true || host.failure!=null}
         assertNull(host.failure)
@@ -85,9 +89,13 @@ class AndroidRasterTest {
     private fun action(command: String) { compose.runOnUiThread { host.invoke(command) }; compose.waitForIdle() }
     private fun tabs() = native { JSONObject(Native.documentTabs(it, obj("op" to "view").toString())) }
     private fun ids() = tabs().array("tabs").objects().map { it.getLong("id") }
+    private val sourceVisible = JSONObject.quote("Visible")
     private fun histogram(): JSONObject {
         val control = Native.captureControl()
-        try { return JSONObject(Native.inspectionHistogram(native { Native.inspectionTask(it, control) })).getJSONObject("histogram") }
+        try {
+            val task = native { Native.inspectionTask(it, control) }
+            return JSONObject(Native.inspectionStatistics(task, sourceVisible, false, false, false)).getJSONObject("histogram")
+        }
         finally { Native.captureFree(control) }
     }
     @Test fun diagnosticsSampleInOpenColumns() {
@@ -993,7 +1001,14 @@ class AndroidRasterTest {
         val automation=instrumentation.uiAutomation
         val input=File(files,"hdr-input.png").apply{writeBytes(ParcelFileDescriptor.AutoCloseInputStream(automation.executeShellCommand("cat $sourcePath")).use{it.readBytes()})}
         fun action(command:String){native{Native.dispatch(it,obj("type" to "invoke","command" to command).toString())};refresh()}
-        fun histogram():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        fun histogram(): String {
+            val control = Native.captureControl()
+            try {
+                val task = native { Native.inspectionTask(it, control) }
+                return JSONObject(Native.inspectionStatistics(task, sourceVisible, false, false, false))
+                    .getJSONObject("histogram").toString()
+            } finally { Native.captureFree(control) }
+        }
         fun form()=native{JSONObject(Native.query(it,obj("type" to "proof_form").toString()))}
         fun ready(){compose.waitUntil(120_000){native{JSONObject(Native.toneStatus(it)).getBoolean("ready")}};assertNull(host.failure)}
         open(input);refresh();ready()
@@ -1382,7 +1397,14 @@ class AndroidRasterTest {
         }
         fun current()=native{JSONObject(Native.query(it,obj("type" to "proof_form").toString())).getJSONObject("recipe")}
         fun status()=native{JSONObject(Native.query(it,obj("type" to "proof_status").toString()))}
-        fun hist():String {val flag=Native.captureControl();try{val task=native{Native.inspectionTask(it,flag)};return JSONObject(Native.inspectionHistogram(task)).getJSONObject("histogram").toString()}finally{Native.captureFree(flag)}}
+        fun hist(): String {
+            val control = Native.captureControl()
+            try {
+                val task = native { Native.inspectionTask(it, control) }
+                return JSONObject(Native.inspectionStatistics(task, sourceVisible, false, false, false))
+                    .getJSONObject("histogram").toString()
+            } finally { Native.captureFree(control) }
+        }
         // Real first-use dialog, cancellation, sensible defaults.
         setup("soft_proof");assertFalse(native{state(it).getBoolean("soft_proof")})
         compose.onNodeWithText("Black ink").assertExists()
@@ -2685,44 +2707,49 @@ class AndroidRasterTest {
             for ((index, color) in listOf(listOf(.12,.08,.2,1), listOf(.7,.4,.18,1), listOf(.25,.7,.45,1)).withIndex()) {
                 action(obj("type" to "set_color", "rgba" to org.json.JSONArray(color))); paint(96.0 + index * 32)
             }
-            val original = pixels("p25-$theme-source.png")
+            val original = pixels("local-$theme-source.png")
             val layers = mutableListOf<Long>()
-            for ((effect, keys) in listOf("shadows_highlights" to listOf("shadows", "highlights"), "clarity" to listOf("amount"))) {
+            for ((effect, keys) in listOf("shadows_highlights" to listOf("shadows", "highlights"), "clarity" to listOf("amount"), "dehaze" to listOf("amount"))) {
                 send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to effect))); refresh(); ready()
                 layers += properties().getLong("layer")
                 assertEquals(keys, properties().getJSONArray("controls").objects().map { it.getString("key") })
-                val before = pixels("p25-$theme-$effect-before.png")
+                val before = pixels("local-$theme-$effect-before.png")
                 edit(keys.first(), "63")
-                val adjusted = pixels("p25-$theme-$effect-adjusted.png")
+                val adjusted = pixels("local-$theme-$effect-adjusted.png")
                 assertNotEquals("$effect must change source pixels", before, adjusted)
                 invoke("undo"); ready(); assertEquals(0.0, value(keys.first()), .0001)
-                assertEquals(before, pixels("p25-$theme-$effect-undo.png"))
+                assertEquals(before, pixels("local-$theme-$effect-undo.png"))
                 invoke("redo"); ready(); assertEquals(63.0, value(keys.first()), .0001)
-                assertEquals(adjusted, pixels("p25-$theme-$effect-redo.png"))
+                assertEquals(adjusted, pixels("local-$theme-$effect-redo.png"))
                 if (effect == "shadows_highlights") edit("highlights", "39")
-                if (effect == "clarity") { edit("amount", "-28"); edit("amount", "63") }
+                if (effect in listOf("clarity", "dehaze")) {
+                    edit("amount", "-28")
+                    assertNotEquals("Negative $effect changes the correction", adjusted, pixels("local-$theme-$effect-negative.png"))
+                    edit("amount", "63")
+                    assertEquals(adjusted, pixels("local-$theme-$effect-positive.png"))
+                }
                 SystemClock.sleep(300)
                 instrumentation.uiAutomation.takeScreenshot().let { bitmap ->
-                    try { File(files, "p25-$theme-$effect-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
+                    try { File(files, "local-$theme-$effect-controls.png").outputStream().use { bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } } finally { bitmap.recycle() }
                 }
             }
-            val stacked = pixels("p25-$theme-stacked.png"); assertNotEquals(original, stacked)
+            val stacked = pixels("local-$theme-stacked.png"); assertNotEquals(original, stacked)
             select(sourceLayer); action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(.9,.15,.08,1)))); paint(144.0)
             for (layer in layers) select(layer)
-            val painted = pixels("p25-$theme-painted.png"); assertNotEquals(stacked, painted)
+            val painted = pixels("local-$theme-painted.png"); assertNotEquals(stacked, painted)
             invoke("undo"); for (layer in layers) select(layer)
-            assertEquals(stacked, pixels("p25-$theme-source-undo.png"))
+            assertEquals(stacked, pixels("local-$theme-source-undo.png"))
             invoke("redo"); for (layer in layers) select(layer)
-            assertEquals(painted, pixels("p25-$theme-source-redo.png"))
-            val name = "p25-$theme.capy"; val saved = manifest(save(name))
+            assertEquals(painted, pixels("local-$theme-source-redo.png"))
+            val name = "local-$theme.capy"; val saved = manifest(save(name))
             open(File(files, name)); refresh(); for (layer in layers) select(layer)
-            assertEquals(painted, pixels("p25-$theme-reopened.png"))
-            val reopened = manifest(save("p25-$theme-reopened.capy"))
+            assertEquals(painted, pixels("local-$theme-reopened.png"))
+            val reopened = manifest(save("local-$theme-reopened.capy"))
             assertEquals(saved.artworkRecords().toString(), reopened.artworkRecords().toString())
             scenario.recreate(); scenario.onActivity { activity = it }
             compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
             refresh(); for (layer in layers) select(layer)
-            assertEquals(painted, pixels("p25-$theme-recreated.png"))
+            assertEquals(painted, pixels("local-$theme-recreated.png"))
             assertNull(host.failure); assertNull(host.actionError)
         }
     }
@@ -3253,17 +3280,117 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
 
+    @Test fun boundedStatisticsKeepFrozenSourcesAcrossEditsAndRecreation() {
+        val input = File(files, "precision-sources.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(257, 129, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            val pixels = IntArray(257 * 129) { index ->
+                val x = index % 257
+                android.graphics.Color.argb(if (x < 32) 0 else 255, x % 256, (x * 3) % 256, (index / 257 * 7) % 256)
+            }
+            bitmap.setPixels(pixels, 0, 257, 0, 0, 257, 129)
+            input.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+        } finally { bitmap.recycle() }
+        open(input); refresh()
+        fun ready() { compose.waitUntil(60_000) { !tick() }; refresh() }
+        fun inspect(source: String, waveform: Boolean = false): JSONObject {
+            val control = Native.captureControl()
+            try {
+                val task = native { Native.inspectionTask(it, control) }
+                return JSONObject(Native.inspectionStatistics(task, source, false, false, waveform))
+            } finally { Native.captureFree(control) }
+        }
+        fun properties() = native { state(it).getJSONObject("layer_properties") }
+        fun waveformPresented() {
+            val chart = hasTestTag("scope-waveform-chart")
+            compose.onNode(chart and hasAnyAncestor(hasTestTag("panel-body-waveform"))).assertIsDisplayed()
+            val customization = host.snapshot!!.getJSONObject("state").getJSONObject("customization")
+            val drawers = customization.array("column_drawers").objects().map {
+                "column-drawer-${it.getJSONObject("anchor").getInt("column")}" to it
+            } + listOfNotNull(customization.objectOrNull("drawer")?.let { "tool-drawer" to it })
+            for ((tag, drawer) in drawers) if (drawer.array("columns").values().any { "waveform" in (it as org.json.JSONArray).values() }) {
+                val node = compose.onNode(chart and hasAnyAncestor(hasTestTag(tag))).performScrollTo().assertIsDisplayed()
+                val bounds = compose.onNodeWithTag(tag).fetchSemanticsNode().boundsInRoot
+                val plot = node.fetchSemanticsNode().boundsInRoot
+                assertTrue("The live Waveform fits its shared $tag owner", bounds.contains(plot.topLeft)
+                    && bounds.contains(plot.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+            }
+        }
+        fun exposure(value: Double) = action(obj("type" to "effect", "action" to obj(
+            "op" to "set", "layer" to properties().getLong("layer"), "key" to "exposure",
+            "value" to obj("kind" to "number", "value" to value))))
+        ready()
+        val paintTarget = native { JSONObject(Native.imageImportContext(it, "null", "null")).getJSONObject("placement").getJSONObject("target") }
+        assertTrue("The imported original has its own paint source", paintTarget.has("Paint"))
+        val layerSource = snapshotSource(paintTarget)
+        val source = sourceIdentity(manifest(save("precision-source.capy")))
+        val layerHistogram = inspect(layerSource).getJSONObject("histogram").toString()
+        val lower = inspect(sourceVisible).getJSONObject("histogram").toString()
+        action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "exposure")))
+        val effect = properties().getLong("layer")
+        val inputSource = snapshotSource("EffectInput", effect)
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme)); exposure(0.0); ready()
+            val committed = native { state(it).getJSONObject("document_file") }
+            val control = Native.captureControl()
+            try {
+                val frozen = native { Native.inspectionTask(it, control) }
+                exposure(1.0); ready()
+                val result = JSONObject(Native.inspectionStatistics(frozen, sourceVisible, false, false, false))
+                assertEquals(committed.getLong("epoch"), result.getLong("epoch"))
+                assertEquals(committed.getLong("revision"), result.getLong("revision"))
+                assertTrue(result.getDouble("time").isFinite())
+                assertEquals(lower, result.getJSONObject("histogram").toString())
+            } finally { Native.captureFree(control) }
+            assertEquals(lower, inspect(inputSource).getJSONObject("histogram").toString())
+            assertEquals(layerHistogram, inspect(layerSource).getJSONObject("histogram").toString())
+            assertNotEquals(lower, inspect(sourceVisible).getJSONObject("histogram").toString())
+            val exact = jsonValue(inspect(sourceVisible, true).getJSONObject("histogram"))
+            action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "waveform", "visible" to true)))
+            val scopeGroup = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+                .single { "waveform" in it.array("panels").values() }.getInt("id")
+            action(obj("type" to "select_panel_tab", "group" to scopeGroup, "panel" to "waveform"))
+            action(obj("type" to "histogram", "action" to obj("type" to "source", "index" to 0)))
+            ready()
+            waveformPresented()
+            compose.waitUntil(60_000) {
+                host.snapshot?.getJSONObject("state")?.getJSONObject("waveform")?.let { it.optJSONObject("data") != null && it.optString("status") == "Exact" } == true
+            }
+            assertEquals("Live Waveform preserves every independent exact count", exact,
+                jsonValue(host.snapshot!!.getJSONObject("state").getJSONObject("waveform").getJSONObject("data")))
+            waveformPresented()
+            scenario.recreate(); scenario.onActivity { activity = it }
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            ready()
+            compose.waitUntil(60_000) {
+                host.snapshot?.getJSONObject("state")?.getJSONObject("waveform")?.let { it.optJSONObject("data") != null && it.optString("status") == "Exact" } == true
+            }
+            assertEquals("Live Waveform preserves every independent exact count", exact,
+                jsonValue(host.snapshot!!.getJSONObject("state").getJSONObject("waveform").getJSONObject("data")))
+            waveformPresented()
+            assertEquals(exact, jsonValue(inspect(sourceVisible, true).getJSONObject("histogram")))
+            assertEquals(source, sourceIdentity(manifest(save("precision-$theme-recreated.capy"))))
+            assertNull(host.failure); assertNull(host.actionError)
+        }
+    }
+
     @Test fun histogramCapturesCommittedDocumentAndCancelsIndependently() {
         val epoch = native { state(it).getJSONObject("document_file").getLong("epoch") }
         for (cancelled in listOf(true, false)) {
             val control = Native.captureControl()
             try {
                 if (cancelled) Native.captureCancel(control)
+                val committed = native { state(it).getJSONObject("document_file") }
+                val color = native { JSONObject(Native.query(it, obj("type" to "document_color").toString())) }
                 val task = native { Native.inspectionTask(it, control) }
                 try {
-                    val result = JSONObject(Native.inspectionHistogram(task))
+                    val result = JSONObject(Native.inspectionStatistics(task, sourceVisible, false, false, false))
                     if (cancelled) fail("Cancelled histogram completed")
+                    assertEquals(committed.getLong("epoch"), result.getLong("epoch"))
+                    assertEquals(committed.getLong("revision"), result.getLong("revision"))
+                    assertTrue(result.getDouble("time").isFinite())
                     val histogram = result.getJSONObject("histogram")
+                    assertEquals(color.toString(), histogram.getJSONObject("color").toString())
                     assertEquals(2048L*1536L, histogram.getLong("pixels"))
                     assertEquals(0L, histogram.getLong("transparent"))
                     for (channel in histogram.getJSONArray("channels").objects()) {
@@ -3311,11 +3438,43 @@ class AndroidRasterTest {
         compose.waitUntil(10_000) {host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.optBoolean("busy")==false}
         DocumentController.nativeFileJobsForTest=true
         assertEquals(epoch,native {state(it).getJSONObject("document_file").getLong("epoch")})
-        native { Native.dispatch(it, obj("type" to "invoke", "command" to "histogram").toString()) }
-        compose.runOnUiThread { host.documentChanged() }
-        compose.onNodeWithText("Histogram").assertIsDisplayed()
-        compose.waitUntil(30_000) { compose.onAllNodesWithText("Current committed drawing").fetchSemanticsNodes().isNotEmpty() }
-        compose.onNodeWithText("Close").performClick()
+        fun scopeVisible(panel: String, visible: Boolean) {
+            compose.runOnUiThread {
+                host.dispatch(obj("type" to "customize", "action" to obj(
+                    "type" to "set_panel_visible", "panel" to panel, "visible" to visible)))
+            }
+            compose.waitForIdle()
+        }
+        fun revealHistogram() {
+            scopeVisible("histogram", true)
+            compose.waitUntil(10_000) {
+                host.snapshot?.getJSONObject("layout")?.array("groups")?.objects()
+                    ?.any { "histogram" in it.array("panels").values() } == true
+            }
+            val group = host.snapshot!!.getJSONObject("layout").array("groups").objects()
+                .first { "histogram" in it.array("panels").values() }.getInt("id")
+            compose.runOnUiThread {
+                host.dispatch(obj("type" to "select_panel_tab", "group" to group, "panel" to "histogram"))
+                host.dispatch(obj("type" to "histogram", "action" to obj("type" to "source", "index" to 0)))
+            }
+        }
+        fun scope() = host.snapshot?.getJSONObject("state")?.getJSONObject("histogram")
+        revealHistogram()
+        compose.waitUntil(60_000) {
+            scope()?.let { !it.isNull("data") && it.optString("status") == "Exact"
+                && it.optString("captured_source") == "Visible" } == true
+        }
+        val exact = jsonValue(scope()!!.getJSONObject("data"))
+        assertEquals(jsonValue(histogram()), exact)
+        scopeVisible("waveform", false)
+        scopeVisible("histogram", false)
+        compose.waitUntil(10_000) { scope()?.isNull("data") == true }
+        SystemClock.sleep(300)
+        assertTrue("Hidden monitor consumers reject late data", scope()!!.isNull("data"))
+        assertEquals(epoch, host.snapshot!!.getJSONObject("state").getJSONObject("document_file").getLong("epoch"))
+        revealHistogram()
+        compose.waitUntil(60_000) { scope()?.optString("status") == "Exact" && scope()?.isNull("data") == false }
+        assertEquals(exact, jsonValue(scope()!!.getJSONObject("data")))
         assertNull(host.failure)
     }
     @Test fun navigationBuffersAndPenReturnsToFrontBuffer() {
@@ -3739,6 +3898,61 @@ class AndroidRasterTest {
         // result or replacing the initiating editor.
         assertNull(host.failure)
         activity.getExternalFilesDir(null)!!.resolve("drawing-tabs-files.txt").writeText("PASS serial URI batch; corrupt middle file reported and skipped; repeated URI creates independent clean owners; last successful drawing selected")
+    }
+
+    @Test fun registeredDehazeMatchesIndependentTwoPixelAirlightTie() {
+        val colors = listOf(listOf(160, 190, 220), listOf(100, 130, 160))
+        fun linear(byte: Int): Double {
+            val value = byte / 255.0
+            return if (value <= 0.04045) value / 12.92 else Math.pow((value + 0.055) / 1.055, 2.4)
+        }
+        for (reverse in listOf(false, true)) {
+            val source = if (reverse) colors.reversed() else colors
+            val file = File(files, "dehaze-tie-$reverse.png")
+            val bitmap = android.graphics.Bitmap.createBitmap(2, 1, android.graphics.Bitmap.Config.ARGB_8888)
+            try {
+                for (x in 0..1) bitmap.setPixel(x, 0, android.graphics.Color.rgb(source[x][0], source[x][1], source[x][2]))
+                file.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+            } finally { bitmap.recycle() }
+            open(file); refresh()
+            send(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "dehaze")))
+            refresh()
+            val layer = native { state(it).getJSONObject("layer_properties").getLong("layer") }
+            fun sample(source: String, x: Float): JSONObject {
+                val control = Native.captureControl()
+                try {
+                    val task = native { Native.inspectionTask(it, control) }
+                    val result = JSONObject(Native.inspectionSample(task, source, x, 0.5f, 1))
+                    val document = native { state(it).getJSONObject("document_file") }
+                    assertEquals(document.getLong("epoch"), result.getLong("epoch"))
+                    assertEquals(document.getLong("revision"), result.getLong("revision"))
+                    return result
+                } finally { Native.captureFree(control) }
+            }
+            val input = source.map { rgb -> rgb.map(::linear) }
+            val air = input[0]
+            val darkness = (0..2).minOf { channel -> input.minOf { it[channel] } / air[channel] }
+            for (amount in listOf(0.0, 50.0, 100.0, -100.0)) {
+                send(obj("type" to "effect", "action" to obj("op" to "set", "layer" to layer,
+                    "key" to "amount", "value" to obj("kind" to "number", "value" to amount))))
+                refresh()
+                val transmission = maxOf(0.1, 1.0 - 0.95 * kotlin.math.abs(amount) * 0.01 * darkness)
+                for (x in 0..1) {
+                    val captured = sample(snapshotSource("EffectInput", layer), x + 0.5f).getJSONObject("sample").getJSONArray("Color")
+                    val actual = sample(sourceVisible, x + 0.5f).getJSONObject("sample").getJSONArray("Color")
+                    assertEquals(1.0, actual.getDouble(3), 0.0)
+                    for (channel in 0..2) {
+                        assertEquals(input[x][channel], captured.getDouble(channel), 1e-5)
+                        val expected = if (amount >= 0.0) (input[x][channel] - air[channel]) / transmission + air[channel]
+                            else input[x][channel] * transmission + air[channel] * (1.0 - transmission)
+                        assertTrue(actual.getDouble(channel).isFinite())
+                        assertEquals("UInt tie/header reverse=$reverse amount=$amount x=$x channel=$channel",
+                            expected, actual.getDouble(channel), 1e-5)
+                    }
+                }
+            }
+            assertNull(host.failure); assertNull(host.actionError)
+        }
     }
 
 }

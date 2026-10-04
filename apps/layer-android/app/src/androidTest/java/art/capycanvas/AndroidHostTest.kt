@@ -58,6 +58,9 @@ class AndroidHostTest {
             device.portrait(compose.activityRule.scenario)
             assertTrue(compose.activity.resources.configuration.screenWidthDp <= 640)
             host.narrowPhotoPanels(compose)
+        } else if (androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("presentationWide") == "true") {
+            device.landscape(compose.activityRule.scenario)
+            assertTrue(compose.activity.resources.configuration.screenWidthDp > 640)
         }
         compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
         host.awaitReady()
@@ -698,6 +701,7 @@ class AndroidHostTest {
         penStroke(12)
         waitState { it.array("commands").objects().first { c -> c.getString("id") == "undo" }.getBoolean("enabled")
             && !it.getJSONObject("filter_load").getBoolean("pending") }
+        val paintLayer = state().getJSONObject("layer_properties").getLong("layer")
         action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "curves")))
         for (panel in listOf("navigator", "proof", "layers")) action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to panel, "visible" to false)))
         fun properties() = state().getJSONObject("layer_properties")
@@ -714,8 +718,13 @@ class AndroidHostTest {
         }
         fun coordinate(axis: String) = control().getJSONObject("curve").getJSONObject(axis)
         fun numberTag(axis: String) = "number-curve-${control().getString("key")}-$axis"
+        fun focusNumber(axis: String): SemanticsNodeInteraction {
+            if (compose.onAllNodesWithTag(numberTag(axis)).fetchSemanticsNodes().isEmpty())
+                compose.onNodeWithTag("number-value-curve-${control().getString("key")}-$axis").performScrollTo().performClick()
+            return compose.onNodeWithTag(numberTag(axis)).performScrollTo().performClick()
+        }
         fun edit(axis: String, text: String, wanted: Double = text.toDouble()) {
-            val field = compose.onNodeWithTag(numberTag(axis)).performScrollTo()
+            val field = focusNumber(axis)
             field.performClick().performTextReplacement(text)
             field.performImeAction()
             waitState {
@@ -729,6 +738,7 @@ class AndroidHostTest {
             val slider = compose.onNodeWithTag("number-slider-${number().getString("label")}")
             slider.performScrollTo()
             slider.performTouchInput { swipe(androidx.compose.ui.geometry.Offset(width * .2f, height * .5f), androidx.compose.ui.geometry.Offset(width * .45f, height * .5f), 250) }
+            native { Native.documentTabs(it, obj("op" to "view").toString()) }; compose.waitForIdle()
             waitState { number().getJSONObject("value").getDouble("value") != before }
             val after = number().getJSONObject("value").getDouble("value")
             assertNotEquals("Native generic $key slider changes its value", before, after)
@@ -740,10 +750,156 @@ class AndroidHostTest {
             val page = properties().array("pages").getJSONObject(index)
             if (properties().getString("page") == page.getString("id")) return
             compose.onNodeWithTag("properties-page").performScrollTo().performTouchInput { click(center) }
-            compose.onNodeWithText(page.getString("label")).performTouchInput { click(center) }
+            compose.onNode(hasText(page.getString("label")) and hasAnyAncestor(isPopup())).performTouchInput { click(center) }
             waitState { it.getJSONObject("layer_properties").getString("page") == page.getString("id") }
         }
         val curvesLayer = properties().getLong("layer")
+        val effectKeys = mutableMapOf(curvesLayer to "curves")
+        var themeArchive = "setup"
+        fun propertyAction(op: String, role: String? = null) {
+            val item = properties().array("actions").objects().single {
+                val a = it.getJSONObject("action")
+                a.getString("op") == op && (role == null || a.optString("role") == role)
+            }
+            val a = item.getJSONObject("action")
+            assertEquals(properties().getLong("layer"), a.getLong("layer"))
+            assertEquals(properties().getLong("epoch"), a.getLong("epoch"))
+            val tag = if (role == null) "property-action-$op" else {
+                val group = item.getJSONObject("group")
+                assertEquals("calibration", group.getString("id"))
+                compose.onNodeWithTag("property-action-group-calibration").performScrollTo()
+                    .assert(hasText(group.getString("label")) or hasContentDescription(group.getString("label"))).performClick()
+                "property-calibrate-$role"
+            }
+            val button = compose.onNodeWithTag(tag)
+            if (role == null) button.performScrollTo()
+            button.assert(hasText(item.getString("label")) or hasContentDescription(item.getString("label"))).performClick()
+        }
+        fun archive(name: String): Pair<JSONObject, ByteArray> {
+            val selected = native { JSONObject(Native.documentTabs(it, obj("op" to "view").toString())).getLong("selected") }
+            var task = 0L
+            compose.waitUntil(10_000) {
+                task = native { Native.projectRecoveryFor(it, selected) }
+                task != 0L
+            }
+            val file = File(device.root, "precision-$themeArchive-$name.capy")
+            try { Native.projectPublish(task, file.absolutePath) } finally { Native.projectFree(task) }
+            val bytes = file.readBytes()
+            return packageManifest(bytes) to bytes
+        }
+        fun backing(saved: Pair<JSONObject, ByteArray>): Pair<Any?, List<List<Byte>>> {
+            val (index, bytes) = saved
+            val paint = JSONArray(index.paintRecords().objects().filter {
+                val data = it.getJSONObject("data")
+                data.optJSONArray("tiles")?.length()?.let { it > 0 } == true || data.has("material") || data.has("original")
+            })
+            val resourceIndex = index.getJSONArray("resources").objects().associateBy { it.getString("id") }
+            val referenced = mutableSetOf<String>()
+            fun visit(value: Any?) {
+                when (value) {
+                    is JSONObject -> {
+                        value.optString("ref").takeIf { it in resourceIndex }?.let { id ->
+                            if (referenced.add(id)) visit(resourceIndex.getValue(id))
+                        }
+                        value.keys().forEach { visit(value.get(it)) }
+                    }
+                    is JSONArray -> for (i in 0 until value.length()) visit(value.get(i))
+                }
+            }
+            visit(paint)
+            val resources = referenced.sorted().map { resourceIndex.getValue(it) }
+            val payloads = resources.map { resource ->
+                val location = resource.getJSONObject("location")
+                val pack = packageMember(bytes, location.getString("pack"))
+                val start = location.getString("offset").toInt()
+                val payload = pack.copyOfRange(start, start + resource.getString("bytes").toInt())
+                assertEquals(resource.getString("crc32"), java.util.zip.CRC32().apply { update(payload) }.value.toString(16).padStart(8, '0'))
+                object : AbstractList<Byte>() {
+                    override val size: Int get() = payload.size
+                    override fun get(index: Int): Byte = payload[index]
+                    override fun toString(): String = "${resource.getString("id")}: ${payload.size} exact bytes"
+                }
+            }
+            assertTrue("The painted fixture must have actual saved backing", paint.length() > 0 && resources.any { it.getString("type") == "capy.raster-tile/1" })
+            val paintIds = paint.objects().map { it.getString("id") }.toSet()
+            val occurrences = JSONArray(index.occurrenceRecords().objects().filter {
+                it.getJSONObject("data").getJSONObject("content").optJSONObject("paint")?.optString("ref") in paintIds
+            }.sortedBy { it.getString("id") })
+            val descriptors = JSONArray(resources.map { JSONObject(it.toString()).apply { remove("location") } })
+            return jsonValue(obj("paint" to paint, "occurrences" to occurrences, "resources" to descriptors)) to payloads
+        }
+        fun savedEffect(saved: Pair<JSONObject, ByteArray>, layer: Long = curvesLayer): Any? {
+            val index = saved.first
+            val application = index.getJSONArray("objects").objects().single {
+                it.getString("type") == "capy.effect/1" && index.packageData(it.getJSONObject("data").getJSONObject("definition").getString("ref")).getString("key") == effectKeys.getValue(layer)
+            }
+            return jsonValue(application)
+        }
+        fun samplePoint(): androidx.compose.ui.geometry.Offset {
+            invoke("fit_canvas")
+            val camera = state().getJSONObject("camera")
+            assertEquals(0.0, camera.getDouble("rotation"), 0.0)
+            assertEquals(listOf(false, false), camera.getJSONArray("flipped").values())
+            val t = camera.getJSONArray("translation"); val zoom = camera.getDouble("zoom")
+            val viewport = camera.getJSONArray("viewport")
+            return androidx.compose.ui.geometry.Offset(((t.getDouble(0) + 32 * zoom) / viewport.getDouble(0)).toFloat(),
+                ((t.getDouble(1) + 96 * zoom) / viewport.getDouble(1)).toFloat())
+        }
+        fun scopes(theme: String) {
+            val revision = state().getJSONObject("document_file").getLong("revision")
+            for (kind in listOf("histogram", "waveform")) {
+                customize(obj("type" to "set_panel_visible", "panel" to kind, "visible" to true))
+                floatPanel(kind, 12f, 120f)
+                val view = state().getJSONObject(kind)
+                compose.onNodeWithTag("scope-$kind-source").performTouchInput { click(center) }
+                compose.onNode(hasText(view.getJSONArray("sources").getString(3)) and hasAnyAncestor(isPopup())).performClick()
+                waitState { it.getJSONObject(kind).getInt("source") == 3 && it.getJSONObject(kind).isNull("data") }
+                compose.onNodeWithTag("scope-$kind-source").performTouchInput { click(center) }
+                compose.onNode(hasText(view.getJSONArray("sources").getString(0)) and hasAnyAncestor(isPopup())).performClick()
+                waitState { !it.getJSONObject(kind).isNull("data") && it.getJSONObject(kind).getInt("source") == 0 }
+                val channel = if (kind == "waveform") 2 else 1
+                compose.onNodeWithTag("scope-$kind-channel").performTouchInput { click(center) }
+                compose.onNode(hasText(view.getJSONArray("channels").getString(channel)) and hasAnyAncestor(isPopup())).performClick()
+                waitState { it.getJSONObject(kind).getInt("channel") == channel }
+                val histogramLog = state().getJSONObject("histogram").getBoolean("logarithmic")
+                val log = state().getJSONObject(kind).getBoolean("logarithmic")
+                compose.onNodeWithTag("scope-$kind-log").performClick()
+                waitState { it.getJSONObject(kind).getBoolean("logarithmic") != log }
+                if (kind == "waveform") {
+                    assertEquals(1, state().getJSONObject("histogram").getInt("channel"))
+                    assertEquals("Waveform Log is independent", histogramLog, state().getJSONObject("histogram").getBoolean("logarithmic"))
+                }
+                for (name in listOf("shadows", "highlights")) {
+                    val before = state().getJSONObject(kind).getBoolean(name)
+                    compose.onNodeWithTag("scope-$kind-$name").performClick()
+                    waitState { it.getJSONObject(kind).getBoolean(name) != before }
+                    compose.onNodeWithTag("scope-$kind-$name").performClick()
+                    waitState { it.getJSONObject(kind).getBoolean(name) == before }
+                }
+                val panel = screenBounds(compose.onNodeWithTag("scope-$kind"))
+                val chart = screenBounds(compose.onNodeWithTag("scope-$kind-chart"))
+                assertTrue("$kind plot fits the visible panel", chart.width > 0 && chart.height > 0 && panel.contains(chart.topLeft) && panel.contains(chart.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+                for (name in listOf("source", "channel", "log", "shadows", "highlights", "status")) {
+                    val child = screenBounds(compose.onNodeWithTag("scope-$kind-$name"))
+                    assertTrue("$kind $name fits the visible panel", panel.contains(child.topLeft) && panel.contains(child.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+                }
+                compose.onNodeWithTag("scope-$kind-status").assertTextContains(state().getJSONObject(kind).getString("status"))
+                val image = capture("precision-$theme-$kind")
+                try {
+                    var colored = 0
+                    for (y in chart.top.toInt().coerceAtLeast(0) until chart.bottom.toInt().coerceAtMost(image.height))
+                        for (x in chart.left.toInt().coerceAtLeast(0) until chart.right.toInt().coerceAtMost(image.width)) {
+                            val pixel = image.getPixel(x, y)
+                            val rgb = listOf(android.graphics.Color.red(pixel), android.graphics.Color.green(pixel), android.graphics.Color.blue(pixel))
+                            if (rgb.max() - rgb.min() > 20 && rgb.max() > 60) colored++
+                        }
+                    assertTrue("The actual $kind chart presents colored data", colored > 10)
+                } finally { image.recycle() }
+                customize(obj("type" to "set_panel_visible", "panel" to kind, "visible" to false))
+            }
+            assertEquals("Native scope choices are presentation only", revision, state().getJSONObject("document_file").getLong("revision"))
+            waitState { it.getJSONObject("histogram").isNull("data") && it.getJSONObject("waveform").isNull("data") }
+        }
         for (theme in listOf("light", "dark")) {
             action(obj("type" to "set_theme", "theme" to theme))
             selectPage(0)
@@ -817,7 +973,6 @@ class AndroidHostTest {
             assertEquals("Native double-click removes the knot", 2, control().getJSONObject("value").getJSONArray("value").length())
             invoke("undo"); assertEquals(original, points())
             graph().performTouchInput { click(center) }
-            fun focusNumber(axis: String) = compose.onNodeWithTag(numberTag(axis)).performScrollTo().performTouchInput { click(center) }
             focusNumber("output")
             key(KeyEvent.KEYCODE_DPAD_UP, true); key(KeyEvent.KEYCODE_DPAD_UP, true, 1)
             key(KeyEvent.KEYCODE_DPAD_LEFT, false); key(KeyEvent.KEYCODE_DPAD_UP, false)
@@ -845,29 +1000,6 @@ class AndroidHostTest {
             key(KeyEvent.KEYCODE_DPAD_UP, false)
             assertEquals("Focus loss accepts once before later key-up", blurValue, points())
             invoke("undo"); assertEquals(original, points())
-            val outputLabel = control().getJSONObject("curve").array("axes").getJSONObject(1).getString("label")
-            val captions = JSONObject(Native.numericLabels(outputLabel))
-            focusNumber("output")
-            key(KeyEvent.KEYCODE_DPAD_UP, true)
-            val heldBeforeStep = points()
-            compose.onNodeWithContentDescription(captions.getString("increase")).performScrollTo().performTouchInput { click(center) }
-            key(KeyEvent.KEYCODE_DPAD_UP, false)
-            assertNotEquals("A native step follows the held key", heldBeforeStep, points())
-            invoke("undo"); assertEquals("Native step has its own undo after committing the held key", heldBeforeStep, points())
-            invoke("undo"); assertEquals(original, points())
-            for (caption in listOf("increase", "decrease")) {
-                val before = points()
-                val button = compose.onNodeWithContentDescription(captions.getString(caption)).performScrollTo()
-                button.performTouchInput { down(center) }
-                SystemClock.sleep(700)
-                button.performTouchInput { up() }
-                waitState { points() != before }
-                val after = points()
-                assertNotEquals("Held native $caption changes the curve", before, after)
-                invoke("undo"); assertEquals("A held native button has one undo", before, points())
-                invoke("redo"); assertEquals(after, points())
-                invoke("undo")
-            }
             selectPage(1)
             graph().performTouchInput { click(center) }
             waitState { control().getJSONObject("value").getJSONArray("value").length() == 3 }
@@ -883,7 +1015,7 @@ class AndroidHostTest {
             capture("curves-$theme-encoded-precise")
             val domain = properties().array("controls").objects().first { it.getString("key") == "domain" }
             compose.onNodeWithTag("property-domain").performScrollTo().performTouchInput { click(androidx.compose.ui.geometry.Offset(width * .8f, height * .5f)) }
-            compose.onNodeWithText(domain.getJSONObject("kind").array("options").getString(1)).performClick()
+            compose.onNode(hasText(domain.getJSONObject("kind").array("options").getString(1)) and hasAnyAncestor(isPopup())).performClick()
             waitState { it.getJSONObject("layer_properties").array("controls").objects().first { c -> !c.isNull("curve") }.getJSONObject("curve").getJSONObject("domain").getString("kind") == "log_hdr" }
             genericNumberUndo("hdr_stops")
             for (literal in listOf("1e-20", "8", "0")) {
@@ -892,6 +1024,172 @@ class AndroidHostTest {
                 assertTrue("Exact physical HDR $literal: $actual", if (wanted == 0.0) actual == 0.0 else kotlin.math.abs(actual / wanted - 1.0) < 1e-5)
                 if (literal != "0") capture("curves-$theme-hdr-${if (literal == "8") "eight" else "tiny"}")
             }
+            themeArchive = theme
+            set("domain", "choice", 0)
+            selectPage(0)
+            set("curve_0", "curve", JSONArray("[[0,0],[0.5,0.5],[1,1]]"))
+            for (channel in 1..3) set("curve_$channel", "curve", JSONArray("[[0,0],[1,1]]"))
+            val sourceArchive = archive("before-actions")
+            val sourceBacking = backing(sourceArchive)
+            scopes(theme)
+            graph().performTouchInput { click(center) }
+            waitState { !control().getJSONObject("curve").isNull("selected") && !it.getJSONObject("tonal_histogram").isNull("data") }
+            val statistics = state().getJSONObject("tonal_histogram").getJSONObject("data").toString()
+            val draft = focusNumber("output")
+            draft.performTextReplacement("123.4567890123")
+            assertEquals("A valid native draft has not edited the master coordinate", "[[0,0],[0.5,0.5],[1,1]]", points())
+            draft.performTextInputSelection(androidx.compose.ui.text.TextRange(3, 8))
+            val fieldBounds = screenBounds(draft)
+            val propertiesBounds = screenBounds(compose.onNodeWithTag("panel-body-properties"))
+            assertTrue("The exact coordinate fits the visible Properties body", fieldBounds.width > 20 && propertiesBounds.contains(fieldBounds.topLeft)
+                && propertiesBounds.contains(fieldBounds.bottomRight - androidx.compose.ui.geometry.Offset(1f, 1f)))
+            val retained = draft.fetchSemanticsNode().config
+            set("curve_1", "curve", JSONArray("[[0,0],[1,0.7]]"))
+            waitState { !it.getJSONObject("tonal_histogram").isNull("data") && it.getJSONObject("tonal_histogram").getJSONObject("data").toString() != statistics }
+            draft.assertIsFocused()
+            assertEquals(retained[SemanticsProperties.EditableText], draft.fetchSemanticsNode().config[SemanticsProperties.EditableText])
+            assertEquals(retained[SemanticsProperties.TextSelectionRange], draft.fetchSemanticsNode().config[SemanticsProperties.TextSelectionRange])
+            assertEquals("A sibling edit leaves the focused valid master draft uncommitted", "[[0,0],[0.5,0.5],[1,1]]", points())
+            key(KeyEvent.KEYCODE_ESCAPE, true); key(KeyEvent.KEYCODE_ESCAPE, false)
+            assertEquals("A sibling channel edit did not commit the dirty master coordinate", "[[0,0],[0.5,0.5],[1,1]]", points())
+            selectPage(1)
+            val white = samplePoint()
+            val captureControl = Native.captureControl()
+            try {
+                val sampleTask = native { Native.inspectionTask(it, captureControl) }
+                val sampled = JSONObject(Native.inspectionSample(sampleTask, snapshotSource("EffectInput", curvesLayer), 32f, 96f, 5))
+                assertEquals(state().getJSONObject("document_file").getLong("epoch"), sampled.getLong("epoch"))
+                assertEquals(state().getJSONObject("document_file").getLong("revision"), sampled.getLong("revision"))
+                val input = sampled.getJSONObject("sample").getJSONArray("Color")
+                for (component in 0..3) assertEquals("Known original white input", 1.0, input.getDouble(component), 1e-6)
+            } finally { Native.captureFree(captureControl) }
+            val beforePick = archive("before-gray")
+            val beforePoints = points()
+            val beforePickRevision = state().getJSONObject("document_file").getLong("revision")
+            propertyAction("calibrate", "gray")
+            waitState { it.getJSONObject("color_picker").getBoolean("calibrating") }
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(white), MotionEvent.TOOL_TYPE_STYLUS)
+            assertEquals("Stylus Down does not change the curve", beforePoints, points())
+            assertEquals(beforePickRevision, state().getJSONObject("document_file").getLong("revision"))
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(white), MotionEvent.TOOL_TYPE_STYLUS)
+            assertEquals(beforePoints, points())
+            assertEquals(beforePickRevision, state().getJSONObject("document_file").getLong("revision"))
+            canvasEvent(MotionEvent.ACTION_UP, listOf(white), MotionEvent.TOOL_TYPE_STYLUS)
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") && points() != beforePoints }
+            val calibrated = JSONArray(points())
+            assertEquals("Gray calibration uses the original white input endpoint", 2, calibrated.length())
+            assertEquals(1.0, calibrated.getJSONArray(1).getDouble(0), 0.0)
+            val picked = archive("gray-release")
+            assertEquals(sourceBacking, backing(picked))
+            invoke("undo"); assertEquals("One release has one Undo", savedEffect(beforePick), savedEffect(archive("gray-undo")))
+            invoke("redo"); assertEquals(savedEffect(picked), savedEffect(archive("gray-redo")))
+            invoke("undo")
+            propertyAction("calibrate", "gray")
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(white))
+            SystemClock.sleep(550)
+            waitState { !it.getJSONObject("color_picker").isNull("preview") }
+            val preview = state().getJSONObject("color_picker").getJSONObject("preview").getJSONArray("rgba")
+            for (component in 0..2) assertEquals("Held touch previews the original white input", 1.0, preview.getDouble(component), 1e-5)
+            assertEquals("A held preview does not edit the curve", beforePoints, points())
+            canvasEvent(MotionEvent.ACTION_CANCEL, listOf(white))
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") }
+            canvasEvent(MotionEvent.ACTION_UP, listOf(white))
+            settle()
+            assertEquals("A canceled loupe and its late Up do not edit", savedEffect(beforePick), savedEffect(archive("gray-touch-cancel")))
+            val targetBefore = archive("target-before")
+            propertyAction("target_curve")
+            waitState { it.getJSONObject("color_picker").getBoolean("calibrating") }
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(white))
+            SystemClock.sleep(550)
+            val moved = white + androidx.compose.ui.geometry.Offset(0f, .04f)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(moved))
+            waitState { points() != beforePoints }
+            assertEquals("The targeted source is the white input endpoint", 2, JSONArray(points()).length())
+            canvasEvent(MotionEvent.ACTION_UP, listOf(moved))
+            settle()
+            assertTrue("Targeted mode stays armed after Up", state().getJSONObject("color_picker").getBoolean("calibrating"))
+            propertyAction("target_curve")
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") }
+            val targeted = archive("target-release")
+            assertEquals(sourceBacking, backing(targeted))
+            invoke("undo"); assertEquals("A held targeted contact has one Undo", savedEffect(targetBefore), savedEffect(archive("target-undo")))
+            invoke("redo"); assertEquals(savedEffect(targeted), savedEffect(archive("target-redo")))
+            invoke("undo")
+            propertyAction("target_curve")
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(white))
+            SystemClock.sleep(550)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(moved))
+            waitState { points() != beforePoints }
+            canvasEvent(MotionEvent.ACTION_CANCEL, listOf(moved))
+            waitState { points() == beforePoints }
+            canvasEvent(MotionEvent.ACTION_UP, listOf(moved))
+            settle(); assertEquals("A late Up after cancellation cannot edit", beforePoints, points())
+            assertTrue("Contact cancellation retains the armed targeted tool", state().getJSONObject("color_picker").getBoolean("calibrating"))
+            propertyAction("target_curve")
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") }
+            val cancelled = archive("target-cancel")
+            assertEquals(savedEffect(targetBefore), savedEffect(cancelled)); assertEquals(sourceBacking, backing(cancelled))
+            val retainedHost = host
+            propertyAction("target_curve")
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(white))
+            SystemClock.sleep(550)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(moved))
+            waitState { points() != beforePoints }
+            compose.activityRule.scenario.recreate()
+            assertSame("Recreation retains the authoritative drawing owner", retainedHost, host)
+            compose.waitUntil(60_000) { host.snapshot?.optBoolean("brush_ready") == true }
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") && points() == beforePoints }
+            canvasEvent(MotionEvent.ACTION_UP, listOf(moved))
+            settle()
+            val recreated = archive("target-recreated")
+            assertEquals("Surface destruction rolls back the unfinished gesture", savedEffect(targetBefore), savedEffect(recreated))
+            assertEquals(sourceBacking, backing(recreated))
+            effect(obj("op" to "insert", "effect" to "levels"))
+            val levelsLayer = properties().getLong("layer")
+            effectKeys[levelsLayer] = "levels"
+            set("gamma", "number", 2)
+            val beforeAuto = archive("auto-before")
+            propertyAction("auto_levels")
+            waitState { properties().array("controls").objects().first { c -> c.getString("key") == "gamma" }.getJSONObject("value").getDouble("value") == 1.0 }
+            val automatic = archive("auto-after")
+            assertEquals(sourceBacking, backing(automatic))
+            invoke("undo"); assertEquals("Native Auto has one Undo", savedEffect(beforeAuto, levelsLayer), savedEffect(archive("auto-undo"), levelsLayer))
+            invoke("redo"); assertEquals(savedEffect(automatic, levelsLayer), savedEffect(archive("auto-redo"), levelsLayer))
+            action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to levelsLayer)))
+            action(obj("type" to "select_layer", "id" to curvesLayer))
+            set("curve_1", "curve", JSONArray("[[0,0],[1,1]]"))
+            effect(obj("op" to "insert", "effect" to "white_balance"))
+            val balanceLayer = properties().getLong("layer")
+            effectKeys[balanceLayer] = "white_balance"
+            set("temperature", "number", 25); set("tint", "number", 10)
+            val beforeBalance = archive("balance-before")
+            val balanceRevision = state().getJSONObject("document_file").getLong("revision")
+            propertyAction("calibrate")
+            waitState { it.getJSONObject("color_picker").getBoolean("calibrating") }
+            val balancePoint = samplePoint()
+            canvasEvent(MotionEvent.ACTION_DOWN, listOf(balancePoint), MotionEvent.TOOL_TYPE_STYLUS)
+            canvasEvent(MotionEvent.ACTION_MOVE, listOf(balancePoint), MotionEvent.TOOL_TYPE_STYLUS)
+            assertEquals(balanceRevision, state().getJSONObject("document_file").getLong("revision"))
+            canvasEvent(MotionEvent.ACTION_UP, listOf(balancePoint), MotionEvent.TOOL_TYPE_STYLUS)
+            waitState { !it.getJSONObject("color_picker").getBoolean("calibrating") }
+            for (name in listOf("temperature", "tint")) {
+                val value = properties().array("controls").objects().first { it.getString("key") == name }.getJSONObject("value").getDouble("value")
+                assertEquals("Original white input neutralizes $name before the nonneutral White Balance", 0.0, value, 1e-5)
+            }
+            val balanced = archive("balance-release")
+            assertEquals(sourceBacking, backing(balanced))
+            invoke("undo"); assertEquals("Native White Balance release has one Undo", savedEffect(beforeBalance, balanceLayer), savedEffect(archive("balance-undo"), balanceLayer))
+            invoke("redo"); assertEquals(savedEffect(balanced, balanceLayer), savedEffect(archive("balance-redo"), balanceLayer))
+            action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to balanceLayer)))
+            action(obj("type" to "select_layer", "id" to curvesLayer))
+            set("curve_1", "curve", JSONArray("[[0,0],[1,0.7]]"))
+            action(obj("type" to "select_layer", "id" to paintLayer))
+            penStroke(12)
+            val resumed = backing(archive("resumed-pen"))
+            assertNotEquals("Fresh native pen input paints after cancellation and recreation", sourceBacking, resumed)
+            invoke("undo")
+            assertEquals("One normal pen stroke restores the original backing with Undo", sourceBacking, backing(archive("resumed-pen-undo")))
+            action(obj("type" to "select_layer", "id" to curvesLayer))
             action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to "exposure")))
             genericNumberUndo("exposure")
             action(obj("type" to "layer", "action" to obj("op" to "delete", "id" to properties().getLong("layer"))))

@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {placementSave,sourceIdentity} from './image-placement-motion.test.mjs';
+import {authoredIdentity,rasterIdentity} from './package-fixture.test.mjs';
 
 export async function scopesFixture({call,evaluate,settle}) {
   const poll=async condition=>{const end=Date.now()+150000;while(Date.now()<end){if(await evaluate(condition))return;await settle();await new Promise(r=>setTimeout(r,50));}throw Error(`${condition}: ${await evaluate('document.body.innerText.slice(-1500)')}`);};
@@ -19,7 +20,7 @@ export async function scopesFixture({call,evaluate,settle}) {
   const openingEpoch=await evaluate('String(layerApp.state().document_file.epoch)');
   await invoke('open_document');await poll(`String(layerApp.state().document_file.epoch)!==${JSON.stringify(openingEpoch)}`);await idle();await invoke('fit_canvas');
   const save=placementSave({evaluate,invoke,idle});
-  const checkpoint=async()=>{const m=await save();return{source:sourceIdentity(m),layers:m.document.layers,rasters:m.rasters};};
+  const checkpoint=async()=>{const m=await save();return{source:sourceIdentity(m),authored:authoredIdentity(m),rasters:rasterIdentity(m)};};
   const source=(await checkpoint()).source;assert.ok(source.length);
   const documentPoint=point=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${point[0]}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${point[1]}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
   const visibleSamples=async()=>{await idle();const points=await Promise.all([[32,32],[96,160],[224,224]].map(documentPoint));const {data}=await call('Page.captureScreenshot',{format:'png'});return evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,'+${JSON.stringify(data)};await image.decode();const c=document.createElement('canvas');c.width=image.width;c.height=image.height;const x=c.getContext('2d',{willReadFrequently:true});x.drawImage(image,0,0);return ${JSON.stringify(points)}.map(p=>Array.from(x.getImageData(Math.round(p.x*devicePixelRatio),Math.round(p.y*devicePixelRatio),1,1).data));})()`);};

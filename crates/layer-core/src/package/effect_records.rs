@@ -193,7 +193,7 @@ pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWrit
         .collect::<Result<_,String>>()?);}
     if let Some(auxiliary)=&program.auxiliary {data["auxiliary"]=match auxiliary {
         EffectAuxiliary::Lut3d {resource,color_space}=>json!({"kind":"lut3d","resource":resource,"color_space":color_space}),
-        EffectAuxiliary::Analysis {analysis:EffectAnalysisKind::LocalIllumination}=>json!({"kind":"analysis","analysis":"local_illumination"})};}
+        EffectAuxiliary::Analysis {analysis}=>json!({"kind":"analysis","analysis":analysis})};}
     if !program.pages.is_empty() {data["pages"]=json!(program.pages.iter().map(|page|json!({"id":page.id,"label":encode_label(&page.label)})).collect::<Vec<_>>());}
     if !program.constraints.is_empty() {data["constraints"]=json!(program.constraints.iter().map(|constraint|match constraint {
         EffectConstraint::OrderedNumbers {lower,upper,gap}=>json!({"kind":"ordered_numbers","lower":lower,"upper":upper,"gap":gap})}).collect::<Vec<_>>());}
@@ -229,6 +229,7 @@ fn decode_auxiliary(value: &Value) -> DecodeResult<EffectAuxiliary> {
             resource:text(required(fields,"resource")?)?,color_space:text(required(fields,"color_space")?)?}},
         "analysis"=>{object(value,&["kind","analysis"])?;
             match string(required(fields,"analysis")?)? {"local_illumination"=>EffectAuxiliary::Analysis {analysis:EffectAnalysisKind::LocalIllumination},
+                "dehaze"=>EffectAuxiliary::Analysis {analysis:EffectAnalysisKind::Dehaze},
                 _=>return Err(unsupported("analysis"))}},
         _=>return Err(unsupported("auxiliary")),
     })

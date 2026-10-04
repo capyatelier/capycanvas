@@ -68,6 +68,17 @@ export writes the retained PNG through a private spool to a new provider
 destination; source URI, document identity and file identity checks prevent it
 from replacing the original package.
 
+Histogram and RGB Waveform are shared dockable panels in the Photo workspace.
+Their selectors, status and clipping controls come from the shared views. The
+render owner projects changed statistics into normalized paths and a bounded
+waveform image; Compose presents those prepared values. Camera-only updates do
+not rebuild plots. Hiding the scopes retires their shared query and data.
+Levels and Curves embed their adjustment-input statistics and use compact fields
+beside the channel selector and calibration actions. White Balance, Auto and
+targeted Curves forward shared actions through the existing native contact and
+loupe path. Unfinished numeric text keeps its native focus and selection through
+statistics updates. Ending an edit retires its late native text callbacks.
+
 ## Prerequisites
 
 Install Java 17 or newer, Node.js, Rust, Android Studio or the Android command-line tools,

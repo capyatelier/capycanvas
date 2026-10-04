@@ -124,7 +124,7 @@ Channel Mixer's Monochrome switch changes between the stored RGB output rows and
 the Gray row. Switching pages or modes preserves hidden values and the common
 control's keyboard focus. Each scrub remains one undo step.
 
-GTK Levels has RGB, Red, Green and Blue pages. Channel stages run before RGB;
+GTK, Web and Android Levels have RGB, Red, Green and Blue pages. Channel stages run before RGB;
 the two clipping controls apply to every stage. Floating documents allow input
 and output anchors from −65504 to 65504, with the slider concentrated on 0–1.
 Input white must exceed black by at least .001, including after Float32 rounding.
@@ -140,12 +140,12 @@ other pages. Empty, constant or unrepresentable results leave the layer unchange
 The button becomes Cancel while analysis is pending. Switching pages, hiding
 Properties or changing the source retires that result.
 
-Levels and Curves show live input statistics in GTK Properties. RGB displays
+Levels and Curves show live input statistics in GTK, Web and Android Properties. RGB displays
 the channel-corrected input before master; individual pages display their input
 before correction. Curves uses its selected Encoded RGB or Log HDR domain.
 Statistics updates retain numerical drafts and focus. The same
 [calibration controls](color-picker.md#levels-and-curves) serve both adjustments.
-GTK keeps channel selection and actions in one row and places number fields
+These hosts keep channel selection and actions in one row and place number fields
 beside their labels. Curves puts Input and Output in two equal columns below
 its graph, with labels above the fields so translations fit a narrow panel.
 Reset and clipping buttons share the status row. Unfinished numbers keep

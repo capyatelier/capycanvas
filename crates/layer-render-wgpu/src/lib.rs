@@ -9,6 +9,8 @@
 pub mod native_tiles;
 pub mod snapshot;
 pub mod local_tone;
+mod analysis_compute;
+mod dehaze;
 pub mod effect_analysis;
 mod attached;
 pub use attached::AttachedRenderer;

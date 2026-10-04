@@ -515,3 +515,5 @@ resources-lookup-monochrome = Đơn sắc
 resources-layer-type-group = Nhóm
 resources-layer-type-selection = Vùng chọn
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Khử sương

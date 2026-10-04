@@ -511,6 +511,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         session.refresh_feedback_config();
         session.apply_brush()?;
         session.refresh_document();
+        session.histogram_copy();
         session.refresh_commands();
         session.refresh_shortcuts(true);
         session.update_toolbar_context();
@@ -5789,8 +5790,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             for action in &mut self.state.layer_properties.actions {if matches!(action.action,EffectAction::AutoLevels {..}) {action.label=self.state.localization.text(MessageId::TOOLBAR_CANCEL).to_string();}}
         }
         if !Panel::Histogram.available_on(self.state.platform) {
-            self.state.layer_properties.actions.retain(|action| matches!(self.state.platform,Platform::Web|Platform::Android)
-                && matches!(action.action,EffectAction::ImportLookup {..}|EffectAction::LookupPreset {..}));
+            self.state.layer_properties.actions.clear();
         }
         self.state.layer_tools.has_selection = self.current_selection().is_some();
         self.state.layer_tools.quick_mask = self.selection_masks.quick();
@@ -9369,7 +9369,7 @@ mod tests {
                 result: Ok(()),
             });
             s.frame(0, 0).unwrap();
-            assert_eq!(s.state.adjustments.len(), 52);
+            assert_eq!(s.state.adjustments.len(), 53);
             assert_eq!(
                 s.state.filter_categories.last().unwrap().label.as_ref(),
                 "Examples"

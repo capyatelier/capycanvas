@@ -295,7 +295,7 @@ fn calibration_touch_width_change_cancels_old_preview_and_resamples_latest_conta
 
 #[test]
 fn calibration_unported_hosts_hide_picker_and_refuse_direct_action_without_editing() {
-    for platform in [Platform::Android,Platform::Mac,Platform::Ios,Platform::Windows] {
+    for platform in [Platform::Mac,Platform::Ios,Platform::Windows] {
         let mut s = session(platform);
         s.dispatch(UiAction::Effect { action: EffectAction::Insert { effect: "white_balance".into() } }).unwrap();
         s.frame(1, 1).unwrap();
@@ -390,11 +390,13 @@ fn calibration_failed_notice_language_refresh_preserves_picker_request_document_
 }
 
 #[test]
-fn web_calibration_exposes_shared_action_and_commits_one_undo_without_changing_paint() {
-    let mut s=calibration_session();s.set_platform(Platform::Web);s.frame(1,1).unwrap();
+fn ported_calibration_exposes_shared_action_and_commits_one_undo_without_changing_paint() {
+    for platform in [Platform::Web,Platform::Android] {
+    let mut s=calibration_session();s.set_platform(platform);s.frame(1,1).unwrap();
     assert!(s.state.layer_properties.actions.iter().any(|a|matches!(a.action,EffectAction::Calibrate{..})));
     let before=s.engine.document().clone();let paint=s.state.preview_colors().into_owned();let checkpoint=s.engine.checkpoint();arm_calibration(&mut s);release_calibration(&mut s);
     assert!(matches!(s.engine.backend().snapshot_requests.last(),Some(layer_render::SnapshotRequest::ArtworkSample(_))));
     calibration_reply(&mut s,Ok(layer_core::ArtworkSample::Color([0.6,0.3,0.2,1.])));
     assert_ne!(s.engine.checkpoint(),checkpoint);assert_eq!(*s.state.preview_colors(),paint);invoke(&mut s,CommandId::Undo);assert_eq!(s.engine.document().artwork,before.artwork);
+    }
 }

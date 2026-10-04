@@ -23,6 +23,8 @@ mod clipboard;
 
 #[cfg(target_os = "android")]
 mod inspection;
+#[cfg(target_os = "android")]
+mod scopes;
 
 #[cfg(target_os = "android")]
 mod color_edit;

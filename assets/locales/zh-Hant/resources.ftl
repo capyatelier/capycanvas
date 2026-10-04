@@ -631,3 +631,5 @@ resources-lookup-monochrome = 黑白
 resources-layer-type-group = 圖層群組
 resources-layer-type-selection = 選取範圍
 resources-properties-layer-title = { $name }（{ $type }）
+
+resources-filter-dehaze = 去朦朧

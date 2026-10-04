@@ -514,3 +514,5 @@ resources-lookup-monochrome = Monochrome
 resources-layer-type-group = Groupe
 resources-layer-type-selection = Sélection
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Correction du voile

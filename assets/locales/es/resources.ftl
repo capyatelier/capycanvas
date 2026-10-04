@@ -514,3 +514,5 @@ resources-lookup-monochrome = Monocromo
 resources-layer-type-group = Grupo
 resources-layer-type-selection = Selección
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Borrar neblina

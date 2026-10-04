@@ -515,3 +515,5 @@ resources-lookup-monochrome = Monocromático
 resources-layer-type-group = Grupo
 resources-layer-type-selection = Seleção
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Desembaçar

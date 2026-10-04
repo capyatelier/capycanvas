@@ -106,6 +106,32 @@ The [local-adjustment contract](../development/photo-editing-m5-m6-color.md#loca
 defines the equations and photographic acceptance. The guide is a fixed spatial
 approximation, independent of zoom; effects retain native-resolution evaluation.
 
+## Dehaze
+
+Dehaze uses the same source ownership, bounded GPU reduction, cancellation and
+resource admission as local illumination. Its declaration is
+`auxiliary: {"kind":"analysis","analysis":"dehaze"}`. The guide contains
+refined dark-channel values, atmospheric color and coverage; it is not an
+illumination guide. Amount `[-100,100]%` removes haze at positive values and adds
+haze at negative values. Zero returns the input exactly. The ordinary Amount
+control is shared by GTK, Web and Android.
+
+Preparation reduces linear-sRGB input to a 768-pixel edge, then computes a
+15-pixel separable dark-channel minimum, deterministic top-.1% atmospheric
+selection and a coverage-weighted guided filter with radius 8 and epsilon .001.
+Weighted reductions preserve constant samples exactly and use weighted sums to
+retain small contributions across large coverage ratios.
+Rank passes remain on the GPU and yield between submissions. Amount changes
+reuse the result. Mixed Dehaze and illumination effects prepare lower dependencies
+before upper guides; queries and export use the same frozen source and consumer.
+
+The consumer protects bright neutral surfaces and neutral shadows, and applies a
+bounded linear-sRGB correction to the original premultiplied pixel. This retains
+alpha and extended signed/HDR values. The
+[local-adjustment contract](../development/photo-editing-m5-m6-color.md#local-adjustments-and-source-aware-analysis)
+owns the exact equations. It remains a fixed spatial approximation, independent
+of zoom and output size.
+
 ## Imported color lookup tables
 
 Color Lookup (LUT) applies a saved color look. Its selector offers Original,
@@ -136,7 +162,8 @@ A `lut3d` parameter stores an optional immutable resource. A program declares
 `auxiliary: {"kind":"lut3d","resource":"resource","color_space":"color_space"}`;
 the referenced choice lists sRGB, Display P3, Adobe RGB (1998), ProPhoto RGB in
 that order. The auxiliary binding is group 2, binding 1, read-only storage.
-`fx_auxiliary(index)` reads a vec4 record. Resource consumers stop fusion so each
+`fx_auxiliary(index)` reads a Float32 vec4 record;
+`fx_auxiliary_words(index)` reads its unsigned integer words without Float32 conversion. Resource consumers stop fusion so each
 stage owns one binding. Pointwise consumers retain tiled batching without a
 spatial image cache; ordinary pointwise fusion is unchanged. The empty binding holds one
 zero record. Parameter data contains only a presence flag, never table samples.

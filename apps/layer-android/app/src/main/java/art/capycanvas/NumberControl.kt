@@ -122,11 +122,11 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         true
         } catch (e: Exception) { error = e; false }
     }
-    fun finish(cancel: Boolean = false): Boolean {
+    fun finish(cancel: Boolean = false, keepEditing: Boolean = false): Boolean {
         if (!cancel && text.composition != null) return false
         if (!dirty && !editing) return true
         if (!cancel && dirty && text.text != shown.getString(displayKey) && !apply(obj("type" to "expression", "text" to text.text))) return false
-        editing = false; dirty = false
+        editing = keepEditing; dirty = false
         error = null; text = TextFieldValue(shown.getString(displayKey))
         host.textComposition.clear(requester)
         return true
@@ -173,11 +173,13 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     }
     val field: @Composable () -> Unit = {
         BasicTextField(text, {
-            if (it.text != text.text || it.composition != null) dirty = true
-            text = it
-            host.textComposition.update(requester, text, focused)
-            if (dirty) onText(it)
-        }, Modifier.then(if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
+            if (editing && active != 2) {
+                if (it.text != text.text || it.composition != null) dirty = true
+                text = it
+                host.textComposition.update(requester, text, focused)
+                if (dirty) onText(it)
+            }
+        }, Modifier.then(if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else if (ranged) Modifier.widthIn(min = 48.dp, max = 100.dp).width(IntrinsicSize.Min) else Modifier.width(if (presentedText != null || control.optString("unit").isNotEmpty()) 80.dp else 60.dp)).height(height)
             .onGloballyPositioned { fieldBounds = it.boundsInRoot(); if (toolbar && focused) host.toolbarEditorBounds = fieldBounds }
             .focusRequester(requester).onFocusChanged {
                 if (focused && !it.isFocused) { finish(); if (heldKey != null) endEdit() }
@@ -194,11 +196,11 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
                 else if (it.type == KeyEventType.KeyDown && it.key in listOf(Key.DirectionUp, Key.DirectionDown)) {
                     if (heldKey != null && heldKey != it.key) endEdit()
                     beginEdit(); heldKey = it.key
-                    if (finish()) apply(obj("type" to "step", "steps" to if (it.key == Key.DirectionUp) 1 else -1))
+                    if (finish(keepEditing = true)) apply(obj("type" to "step", "steps" to if (it.key == Key.DirectionUp) 1 else -1))
                     true
                 }
                 else if (it.type == KeyEventType.KeyDown && it.key == Key.Escape) {
-                    if (active == 1) { active = 2; phase?.invoke("cancel"); finish(true) }
+                    if (active == 1) { active = 2; phase?.invoke("cancel"); finish(true, keepEditing = true) }
                     else { finish(true); focus.clearFocus() }; true
                 }
                 else if (it.type == KeyEventType.KeyDown && it.key == Key.Enter) { if (finish()) focus.clearFocus(); true }
@@ -211,7 +213,7 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
     }
     val valueControl: @Composable () -> Unit = {
         if (editing) field()
-        else Box(Modifier.then(if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(shape)
+        else Box(Modifier.then(if (inline && valueOnly && !toolbar) Modifier.fillMaxWidth() else if (inline) Modifier.width(fixedWidth) else Modifier).height(height).clip(shape)
             .then(if (toolbar) Modifier.toolbarNumberScrub(control, shown.number("fill"), enabled,
                 { if (finish()) apply(obj("type" to "position", "position" to it)) },
                 { if (finish()) apply(obj("type" to "step", "steps" to it)) }) else Modifier)
@@ -220,10 +222,13 @@ internal fun numericFailureCopy(error: Exception, language: String, fallback: St
         }.padding(horizontal = valuePadding).testTag("number-value-$id"), contentAlignment = if (toolbar && !showUnits) Alignment.Center else Alignment.CenterEnd) { Text(shown.getString("text"), maxLines = 1, softWrap = false) }
     }
     if (inline) {
-        Row(modifier, verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-            if (showSlider) EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) }, Modifier.weight(1f).then(contact),
-                enabled = enabled, label = label, height = height, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
-            valueControl()
+        Column(modifier) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                if (showSlider) EditorSlider(shown.number("fill"), { if (finish()) apply(obj("type" to "position", "position" to it)) }, Modifier.weight(1f).then(contact).testTag(if (settings) "setting-slider-$id" else "number-slider-$label"),
+                    enabled = enabled, label = label, height = height, inactiveTrackColor = colors.input, showThumb = false, activeTrackColor = colors.sliderFill)
+                valueControl()
+            }
+            errorCaption?.let { Text(it, Modifier.testTag("number-error-$id"), color = colors.accent, fontSize = 12.sp) }
         }
         return
     }

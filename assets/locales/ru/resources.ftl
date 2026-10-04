@@ -515,3 +515,5 @@ resources-lookup-monochrome = Монохромный
 resources-layer-type-group = Группа
 resources-layer-type-selection = Выделение
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Удаление дымки

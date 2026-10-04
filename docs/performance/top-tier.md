@@ -68,6 +68,8 @@ current-source results.
 | Shadows and Highlights sliders, native | 120, soft | **Not met.** Shadows 2.99–3.99, Highlights 1.20–1.40 presents/s | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Clarity slider, native | 120, soft | **Not met.** 1.76–1.99 presents/s; interval p99 533.35–741.69 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
 | Navigation with Shadows/Highlights or Clarity | 120 | **Not met.** 40.14–44.71 presents/s; interval p99 25.00–33.33 ms | [Local guide adjustments](#local-guide-adjustments), 2026-10-03 |
+| Android targeted Curves and compact precision controls | 120, soft | Current port unmeasured on the reference tablet | [Android precision and Dehaze diagnostics](#android-precision-and-dehaze-diagnostics) |
+| Dehaze Amount | 120, soft | Unmeasured on the reference tablet; non-reference workload misses below | [Android precision and Dehaze diagnostics](#android-precision-and-dehaze-diagnostics) |
 | Curves point drag (61 MP) | 120, soft | **Not met.** 72.07–74.61 completed canvas updates/s; native UI 76.51–78.53 frames/s | [Curves editing](#curves-editing), 2026-10-02 |
 | Gaussian Blur Radius, soft range | 120, soft | **Not met.** 34.15–35.44 presents/s; interval p99 66.67–75.00 ms | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
 | Unsharp Mask Amount, native Radius 21 or 85 | 120, soft | **Not met.** No presents during three five-second contacts at either radius | [Gaussian Blur and Unsharp Mask](#gaussian-blur-and-unsharp-mask), 2026-10-03 |
@@ -1547,3 +1549,52 @@ The reference tablet was reserved by another owner during the 2026-10-01 PDT
 localization comparison. No commands were issued to it and no localization
 brush, numeric, header or toolbar row is qualified on this tier. Low/mid
 results and nonreference functional checks cannot fill this gap.
+
+## Android precision and Dehaze diagnostics
+
+On 2026-10-04, the non-reference 90 Hz Huion KP1202 ran the original
+9504 × 6336 photo in Photo, with its default display settings and physical
+density. The benchmark APK uses optimized release Rust and nondebuggable,
+unminified Kotlin. These measurements do not qualify the reference tablet's
+120 Hz target. Rates count SurfaceFlinger canvas presents during three
+five-second contacts, excluding setup, query waits and subsequent raster drain.
+
+| Motion | Canvas presents/s | Result scope |
+| --- | --- | --- |
+| Targeted Curves | 24.42 / 24.42 / 24.62 | Production tree `9b81f098`, app `d694fc92`, JNI `3ecaecb4` |
+| Dehaze Amount | 0.40 / 0.40 / 0.40 | Rebased tree `98bbf3ec` on `cf6db4f9e`, app `7e62db2d`, JNI `6806e582` |
+| Levels Input Black | 19.42 / 19.62 / 18.21 | Same rebased app, test-only native-contact fixture `037aa79c`, test APK `30348574` |
+
+Levels Auto adopts its exact result in 23.524 s; Undo restores Gamma 2. The
+98.8 px native prime changes only Input Black, and measured contacts vary it
+through approximately 0.005–0.482. The earlier 24.7 px prime did not change a
+control. Platform touch slop is 16 px, but slop alone is not established as that
+failure's cause; these different gesture ranges are not a before/after comparison.
+
+Retaining unchanged pre-effect statistics removes a second full-source scan
+when targeted adjustment ends: Exact returns 58 / 71 / 91 ms after retiring the
+contact, compared with a previous 27-second rescan. Up-to-Exact remains
+7.82–7.87 s including raster drain and retirement scheduling; it is not the
+query latency. Source edits still invalidate the retained result.
+
+Dehaze retains its 6.29 MB guide during Amount changes. A separate trace records
+four internal GPU waits occupying 2.456 s of 3.043 s composition wall time during
+the contact. Command finishing occupies 1.061 s across overlapping scopes;
+these spans are not additive CPU measurements. The ordinary final-submit
+completion of 16–19 ms excludes earlier internal work.
+
+Single-contact diagnostics on the same photo's 12/24 MP derivatives produce
+4.2 / 2.2 presents/s. They retain 258 / 513 MB native hierarchies; the 61 MP case
+uses a bounded 16 MiB strip without a resident hierarchy. Non-idle GPU timestamp
+history is approximately 210 / 420 / 1,250–1,420 ms, including scheduling gaps
+and warm-up/drain samples. The changed admission path prevents a linear
+per-pixel scaling conclusion. Coarse display-resolution Dehaze fails 6 of 84
+quality comparisons; a tested two-mip-finer policy reaches native resolution
+at this Fit scale. No hardware ceiling or soft-target waiver is established.
+
+Thermal status is 0 at the recorded boundaries. PSS after contacts is
+1.76–1.77 GB for Targeted and 1.73–1.77 GB for Dehaze; renderer allocation
+boundaries are about 1.02 GB and 790–796 MB. These are not continuous peaks.
+Raw APK identities, native contacts, retention timings and full traces are in
+`artifacts/photo-editing-color/p20-p26-android-performance/`;
+`performance/dehaze-final-calibration-attribution.json` separates each path.

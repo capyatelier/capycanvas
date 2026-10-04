@@ -943,3 +943,5 @@ resources-lookup-monochrome = Monokrom
 resources-layer-type-group = Grup
 resources-layer-type-selection = Seleksi
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Hilangkan kabut

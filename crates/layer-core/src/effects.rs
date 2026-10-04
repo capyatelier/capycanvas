@@ -210,7 +210,7 @@ pub enum EffectAuxiliary {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum EffectAnalysisKind { LocalIllumination }
+pub enum EffectAnalysisKind { LocalIllumination, Dehaze }
 
 impl EffectProgram {
     pub fn analysis(&self) -> Option<EffectAnalysisKind> {

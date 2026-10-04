@@ -31,7 +31,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         let original = effects::effect_baseline(doc, handle)?;
         self.cancel_picker();
-        self.cancel_auto_levels();self.cancel_histogram();
+        self.cancel_auto_levels();self.yield_histogram();
         self.start_picker()?;
         self.eyedropper.layer = false;
         let page=match self.state.layer_properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
@@ -157,7 +157,7 @@ impl<R:CanvasRenderer> UiSession<R> {
         let page=match self.state.layer_properties.page.as_deref() {Some("red")=>1,Some("green")=>2,Some("blue")=>3,_=>0};
         let mut query=layer_core::ArtworkQuery::new(document,if page==0 {ArtworkSource::EffectChannels(original.occurrence)} else {ArtworkSource::EffectInput(original.occurrence)});
         Arc::make_mut(&mut query.snapshot).context.elapsed=self.engine.animation_time();query.validate()?;
-        self.cancel_picker();self.cancel_histogram();
+        self.cancel_picker();self.yield_histogram();
         self.auto_levels=Some(AutoLevels {original,query,epoch,document_epoch:self.state.document_file.epoch,page,submitted:false});
         self.refresh_document();Ok(())
     }

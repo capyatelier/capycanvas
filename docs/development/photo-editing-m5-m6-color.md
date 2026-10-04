@@ -337,7 +337,36 @@ Dehaze requires a new bounded RGB/transmission analysis; it cannot reuse the sca
 
 For refinement use coverage-weighted guide luma normalized to `[0,1]`, radius 8, epsilon `.001`; `a=cov(I,p)/(var(I)+epsilon)`, `b=mean(p)-a*mean(I)`, output `mean(a)*I+mean(b)` clamped `[0,1]`. Bounded separable box passes avoid float atomics. Retain guide and coverage for the existing edge-aware four-point upsample pattern. Implement equations independently; do not copy research demo code. [Guided-filter equations](https://people.csail.mit.edu/kaiming/publications/eccv10guidedfilter.pdf)
 
-Dehaze Amount `[-100,100]%`, default 0. With `s=abs(amount)/100` and refined darkness `d`, `t=max(.1,1-.95*s*d)`. Positive amount returns `(I-A)/t+A`; negative amount adds haze with `I*t+A*(1-t)`; operate in linear sRGB and convert back, with exact zero bypass. Preserve source alpha, finite extended output and layer mask behavior. All-transparent/zero-airlight input yields unchanged input. Freeze analysis parameters to these values in M6; no atmospheric-picker panel or general auxiliary mask input.
+Dehaze Amount `[-100,100]%`, default 0. With `s=abs(amount)/100` and
+refined darkness `d`, `t=max(.1,1-.95*s*d)`. Let `B` be straight source RGB
+clamped to `[0,1]` in linear sRGB, `A` the atmospheric estimate, `Y` linear-sRGB
+luminance, and `chroma=max(B)-min(B)`. Negative amount adds haze with
+`C=B*t+A*(1-t)`. Positive amount uses the atmospheric reconstruction
+`J=(B-A)/t+A` with two fixed protections:
+
+- Preserve bright neutral surfaces with
+  `white=smoothstep(.5,.9,Y(B))*(1-smoothstep(.1,.35,chroma))` and
+  `C=B+(J-B)*(1-white)`.
+- Suppress color casts near the neutral black point with
+  `stable=(B/Y(B))*max(Y(C),0)` when `Y(B)>0`, otherwise `stable=B`;
+  `weight=(1-smoothstep(.02,.12,chroma))*(1-smoothstep(.05,.18,Y(J)))`;
+  then `C=C+weight*(stable-C)`.
+
+Convert the bounded correction `C-B` to document linear RGB, multiply by the
+original alpha and add it to the original premultiplied RGB. This preserves the
+signed/HDR residual and alpha instead of reconstructing extended highlights
+through the bounded atmospheric model. Amount zero, transparent input, inactive
+airlight, `t=1` and `B=A` return the original pixel exactly. Source alpha and
+representable subnormal results use the existing explicit Float32 packing rules.
+All-transparent/zero-airlight input yields unchanged input. Freeze these
+parameters in M6; no atmospheric-picker panel or general auxiliary mask input.
+
+This revises the raw reconstruction proposal: photographic fixtures exposed
+colored shadows near neutral black, damage to white surfaces and amplification
+of HDR highlights. The fixed protections address those failures while retaining
+the declared dark-channel analysis, atmospheric estimate, transmission and
+negative-amount behavior. Quality qualification must compare this final consumer
+with independent references and the original photographs.
 
 
 The Dehaze analysis choices are fixed as follows:
@@ -348,7 +377,7 @@ The Dehaze analysis choices are fixed as follows:
 - If there is no covered cell or selected airlight luminance is nonpositive, render identity. Otherwise floor each airlight component at 2^-16.
 - Guided-filter I is bounded guide linear-sRGB Y, with no image-dependent range normalization. Every box mean/moment is alpha-weighted; zero-weight boxes remain empty. Use valid covered a/b moments in the second box pass; radius 8 and epsilon .001 are fixed.
 - Store refined darkness clamped [0,1], original guide log-luminance with floor -24, and scaled coverage. Upsample using the current four-neighbor local-guide spatial/coverage weighting and range weight `1/(1+((guide_logY-source_logY)/1.5)^4)`; derive source_logY from the bounded analysis RGB. Only zero total weight produces the zero-darkness fallback.
-- Amount only consumes this guide; it does not rebuild it. Changing lower-source artwork does. Finite-input/intermediate validation and resource admission are shared with the other analyses.
+- Amount only consumes this guide; it does not rebuild it. Changing lower-source artwork does. Finite-input/intermediate validation and resource admission are shared with the other analyses. Store rank counts, coordinate indices and geometry as unsigned integers; do not carry integer metadata through denormal Float32 values.
 
 **Required quality gate:** Shadows/Highlights, Clarity and especially this Dehaze recipe are proposed algorithms, not code-proven photographic results. Before building host UI, produce independent GPU/CPU-oracle fixtures and a compact visual sheet of portrait, landscape, sky, snow/white wall, high-contrast edge, transparent edge and HDR highlight cases. Require exact neutral identity, unchanged constant fields for Clarity and unchanged atmospheric input `I=A` for Dehaze; Shadows/Highlights intentionally changes constant dark/bright fields. Reject halos, unintended hue shifts and gradient reversals, including a smooth-ramp oracle at maximum Shadows/Highlights. Keep this as an explicit quality checkpoint; any algorithm change requires a reviewed specification revision.
 

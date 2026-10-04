@@ -514,3 +514,5 @@ resources-lookup-monochrome = Monochrom
 resources-layer-type-group = Gruppe
 resources-layer-type-selection = Auswahl
 resources-properties-layer-title = { $name } ({ $type })
+
+resources-filter-dehaze = Dunst entfernen
