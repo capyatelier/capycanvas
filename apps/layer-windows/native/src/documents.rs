@@ -85,6 +85,7 @@ enum Job {
     DiscardOpening(Box<Opening>),
     Save {
         project: Box<ArtworkCapture>,
+        gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
         path: PathBuf,
         expected:Option<layer_ui::DestinationExpectation>,
         changed_message:String,
@@ -246,11 +247,13 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         Job::Spill { tiles } => layer_core::raster_storage::spill_to_directory(&tiles, layer_core::temp_files::directory()?).map(|_| Completed::Spilled),
         Job::Workflow { mut task, action } => { task.work(action); Ok(Completed::Workflow(task)) }
         Job::DiscardOpening(opening) => { drop(opening); Ok(Completed::Cancelled) }
-        Job::Save { project, path,expected,changed_message } => {
+        Job::Save { project, gpu, path,expected,changed_message } => {
+            let preview = gpu.and_then(|gpu| gpu.package_preview(&project, cancel));
+            let package = PreparedPackage::prepare(&project, preview, cancel)?;
             let mut fingerprint=None;
             crate::document_io::atomic_write_checked(&path,cancel,|file|{
                 let mut writer=layer_ui::FingerprintWriter::new(file);
-                PreparedPackage::prepare(&project,None,cancel)?.write(&mut writer,cancel)?;
+                package.write(&mut writer,cancel)?;
                 fingerprint=Some(writer.finish());Ok(())
             },||{
                 if let Some(expected)=&expected {
@@ -765,6 +768,7 @@ impl DocumentService {
                     (
                         Job::Save {
                             project: Box::new(project),
+                            gpu: host.session.engine().backend().0.as_ref().map(|renderer| renderer.snapshot_gpu()),
                             changed_message:layer_ui::DocumentDeliveryMessage::DestinationChanged.message(host.session.localization()),
                             expected:host.session.save_destination_expectation().filter(|expected|expected.location.uri==selected.uri),
                             path: PathBuf::from(path),
@@ -1496,6 +1500,9 @@ mod gpu_tests {
         finish(&mut service, &mut host, &done);
         assert!(!host.session.state().document_file.modified);
         let saved = std::fs::read(&source).unwrap();
+        let backing=layer_core::package::ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(saved.clone()))).unwrap();
+        let opened=layer_core::package::codec::open(backing,Default::default(),&AtomicBool::new(false)).unwrap();
+        assert!(matches!(opened,layer_core::package::codec::OpenOutcome::Candidate {preview:Some(ref p),..} if p.size()==[63,47]));
         host.dispatch(UiAction::SetLayerOpacity {
             id: None,
             opacity: 0.75,

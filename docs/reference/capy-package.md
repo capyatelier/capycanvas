@@ -527,6 +527,9 @@ represent that output's captured source roots and context exactly. A source save
 may omit both the representation and member when preview evaluation/encoding
 fails or exceeds its budget; never retain an older preview as current. Missing
 preview does not excuse failed source capture, resource integrity or publication.
+Normal save workers attempt this preview through the shared snapshot renderer,
+with a 128 MiB pixel-planning ceiling and bounded row readbacks. Unsupported output
+framing or unavailable GPU evaluation yields a source-only save.
 
 The codec returns `OpenOutcome::Candidate` for understood authored records and
 verified resources. Shared editor admission must validate color-system support,

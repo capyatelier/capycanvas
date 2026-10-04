@@ -31,7 +31,7 @@ impl Environment {
 }
 enum Payload {
     Lookup { resource:Option<std::sync::Arc<layer_core::Lut3d>>, name:String },
-    Save(Option<ArtworkCapture>),
+    Save { project: Option<ArtworkCapture>, gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu> },
     Package {view: layer_ui::PackageView, localization: std::sync::Arc<layer_ui::Localizer>},
     Export {
         export: Box<ExportTask>,
@@ -91,7 +91,8 @@ pub extern "system" fn Java_art_capycanvas_Native_projectTask(
             DocumentRequest::Save { .. } => {
                 let location: DocumentLocation =
                     serde_json::from_str(&read(&mut env, &location)?).map_err(error)?;
-                Payload::Save(Some(session.capture_project_save(id as u32, location)?))
+                Payload::Save { project: Some(session.capture_project_save(id as u32, location)?),
+                    gpu: session.engine().backend().0.as_ref().map(|renderer| renderer.snapshot_gpu()) }
             }
             DocumentRequest::Open
             | DocumentRequest::New
@@ -336,11 +337,12 @@ pub extern "system" fn Java_art_capycanvas_Native_projectWork(
             *resource=Some(std::sync::Arc::new(layer_core::Lut3d::parse_cube_named(&bytes,name)?));
             Ok(())
         }
-        Payload::Save(project) => {
+        Payload::Save { project, gpu } => {
             let project = project.take().ok_or("Save already encoded")?;
             let mut out = BufWriter::new(input.ok_or("Missing project output")?);
             let cancelled = AtomicBool::new(false);
-            PreparedPackage::prepare(&project, None, &cancelled)?.write(&mut out, &cancelled)?;
+            let preview = gpu.as_ref().and_then(|gpu| gpu.package_preview(&project, &cancelled));
+            PreparedPackage::prepare(&project, preview, &cancelled)?.write(&mut out, &cancelled)?;
             out.flush().map_err(error)?;
             out.get_ref().sync_all().map_err(error)
         }

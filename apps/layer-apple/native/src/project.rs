@@ -43,6 +43,7 @@ enum Payload {
     Save {
         snapshot: Option<ArtworkCapture>,
         project: Option<ArtworkCapture>,
+        gpu: Option<layer_render_wgpu::snapshot::SnapshotGpu>,
     },
     Open {
         environment: Option<OpenEnvironment>,
@@ -173,6 +174,7 @@ pub unsafe extern "C" fn capy_apple_project_task(
                     },
                 )?),
                 project: None,
+                gpu: session.engine().backend().0.as_ref().map(|renderer| renderer.snapshot_gpu()),
             }
         } else if opening == 4 {
             Payload::Color(Box::new(ColorTask::capture(session, None, DISPLAY_SPACE)?))
@@ -316,12 +318,13 @@ pub unsafe extern "C" fn capy_project_write(task: *const CapyProjectTask, fd: i3
         let stream = layer_core::Cancellable { inner: &*file, cancelled: || task.check_cancelled().is_err() };
         let localization = &task.localization;
         match payload {
-            Payload::Save { snapshot, project } => {
+            Payload::Save { snapshot, project, gpu } => {
                 if let Some(snapshot) = snapshot.take() {
                     *project = Some(snapshot);
                 }
                 let capture = project.as_ref().ok_or("Missing project snapshot")?;
-                let package = PreparedPackage::prepare(capture, None, task.control.cancellation_flag())?;
+                let preview = gpu.as_ref().and_then(|gpu| gpu.package_preview(capture, task.control.cancellation_flag()));
+                let package = PreparedPackage::prepare(capture, preview, task.control.cancellation_flag())?;
                 let mut writer = layer_ui::FingerprintWriter::new(stream);
                 package.write(&mut writer, task.control.cancellation_flag())?;
                 fingerprint = Some(writer.finish());

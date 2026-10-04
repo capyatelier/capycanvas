@@ -3922,12 +3922,21 @@ class AndroidRasterTest {
         stroke(0.0)
         val first=save("first.capy")
         assertTrue(manifest(first).rasterResources().length()>0)
-        assertTrue("Source-only save omits output Preview", manifest(first).outputData().isNull("representation"))
+        assertEquals("preview.png", manifest(first).outputData().getJSONObject("representation").getString("member"))
         java.util.zip.ZipInputStream(java.io.ByteArrayInputStream(first)).use { zip ->
+            var preview = false
             while (true) {
                 val entry = zip.nextEntry ?: break
-                assertNotEquals("Source-only save omits Preview pixels", "preview.png", entry.name)
+                if (entry.name == "preview.png") {
+                    val bytes = zip.readBytes()
+                    preview = true
+                    val image = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                    assertNotNull("Saved preview decodes", image)
+                    assertTrue(image.width <= 1024 && image.height <= 1024)
+                    image.recycle()
+                }
             }
+            assertTrue("Normal save includes preview pixels", preview)
         }
         val firstPng=png("first.png")
         point(1,0.0,120.0);point(2,40.0,120.0)

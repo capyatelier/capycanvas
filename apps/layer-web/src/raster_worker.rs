@@ -283,7 +283,7 @@ fn packed_parts(packed: &JsValue) -> Result<(String, js_sys::Array), JsValue> {
 thread_local! {
     static SNAPSHOT_GPU: RefCell<Option<(layer_core::color::DocumentColor, layer_render_wgpu::snapshot::SnapshotGpu)>> = const {RefCell::new(None)};
 }
-async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Result<layer_render_wgpu::snapshot::SnapshotGpu,JsValue> {
+pub(super) async fn snapshot_gpu(color:layer_core::color::DocumentColor) -> Result<layer_render_wgpu::snapshot::SnapshotGpu,JsValue> {
     if let Some(gpu)=SNAPSHOT_GPU.with(|cache|cache.borrow().as_ref().filter(|(cached,_)|*cached==color).map(|(_,gpu)|gpu.clone())) {return Ok(gpu);}
     SNAPSHOT_GPU.with(|cache|*cache.borrow_mut()=None);
     let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();

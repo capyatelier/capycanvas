@@ -138,8 +138,14 @@ pub async fn raster_worker_write(metadata:String,buffers:js_sys::Array,write:js_
         fn flush(&mut self)->std::io::Result<()>{Ok(())}
     }
     let capture=unpack_capture(&metadata,buffers).await?;let cancelled=AtomicBool::new(false);
+    let preview=if let Some(composition)=capture.artwork.compositions.get(capture.artwork.root) {
+        match raster_worker::snapshot_gpu(composition.color).await {
+            Ok(gpu)=>gpu.package_preview_async(&capture,&cancelled).await,
+            Err(_)=>None,
+        }
+    } else {None};
     let mut output=layer_ui::FingerprintWriter::new(Output{write,offset:0});
-    layer_core::package::codec::PreparedPackage::prepare(&capture,None,&cancelled).map_err(js)?.write(&mut output,&cancelled).map_err(js)?;
+    layer_core::package::codec::PreparedPackage::prepare(&capture,preview,&cancelled).map_err(js)?.write(&mut output,&cancelled).map_err(js)?;
     serialize(&output.finish())
 }
 

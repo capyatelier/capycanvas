@@ -301,18 +301,19 @@ async fn document_request(
             w.documents.enqueue_imported(w, project, location);
         }
         DocumentRequest::Save { .. } => {
-            let (mut project, context, expectation) = {
+            let (mut project, context, preview_gpu, expectation) = {
                 let mut gpu = w.gpu.borrow_mut();
                 let session = &mut gpu.as_mut().ok_or_else(|| w.localization().text(MessageId::DOCUMENTS_ERROR_CANVAS_UNAVAILABLE).to_string())?.session;
                 let expectation=session.save_destination_expectation().filter(|expected|!approved&&expected.location==location);
                 let capture = session.capture_project_save(id, location.clone())?;
-                (capture, session.engine().backend().capture_context()?, expectation)
+                (capture, session.engine().backend().capture_context()?, session.engine().backend().snapshot_gpu().ok(), expectation)
             };
             let destination_changed=DocumentDeliveryMessage::DestinationChanged.message(&w.localization());
             let fingerprint=gio::spawn_blocking(move || {
                 context.install(&mut project)?;
                 let cancelled = std::sync::atomic::AtomicBool::new(false);
-                let package = layer_core::package::codec::PreparedPackage::prepare(&project, None, &cancelled)?;
+                let preview = preview_gpu.and_then(|gpu| gpu.package_preview(&project, &cancelled));
+                let package = layer_core::package::codec::PreparedPackage::prepare(&project, preview, &cancelled)?;
                 let mut fingerprint=None;
                 layer_core::atomic_write_checked(&path,|file| {
                     let mut writer=layer_ui::FingerprintWriter::new(file);

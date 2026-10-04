@@ -27,11 +27,11 @@ Working selection, saved-selection overlay visibility/color/opacity, editing tar
 preferences, GPU handles, active
 contacts and undo history stay outside the portable manifest. Saved selection
 objects and initial mask coverage are authored data. Built-in effects save stable IDs, parameter-data versions and every keyed
-value, and resolve the current app implementation on open. Custom effects retain
-embedded code, literal labels and semantic parameter definitions independently
-of the installed catalog. Editor presentation and render optimizations stay in
-runtime packages; the [package contract](capy-package.md) defines the retained
-custom evaluation data. Output contexts preserve captured integrated effect phases.
+value, and resolve the current app implementation on open. Custom effects are
+development-only and retain embedded code in private sessions and worker transfers.
+Portable `.capy` saves refuse custom effects. Editor presentation and render
+optimizations stay in runtime packages; the [package contract](capy-package.md)
+defines the authored data. Output contexts preserve captured integrated effect phases.
 
 An original image retains its independent extent, channels, depth, profile and
 resolution. Rasterization replaces that original with document-space samples
@@ -51,7 +51,7 @@ Raster tiles use bounded raw LZ4 blocks. Multibyte channels use reversible byte
 shuffling before compression. Integer samples, finite float bit patterns, hidden
 RGB and scalar coverage remain exact; saving does not quantize image or channel
 data. Selection coverage uses binary compressed chunks instead of JSON arrays.
-ICC, photo metadata, shader code and LUT resources use lossless LZ4 when smaller.
+ICC, photo metadata and LUT resources use lossless LZ4 when smaller.
 
 Unchanged immutable resources retain their IDs, encoding and compressed bytes
 across snapshots and saves. GPU caches follow the
@@ -81,8 +81,9 @@ A manual save acknowledges only the captured checkpoint after successful host
 publication. Painting can continue during writing, and newer work stays modified.
 Undo/Redo compares exact checkpoint identity. Cancellation, failure and stale
 completion cannot acknowledge a different document or newer edits. Source-only
-saves are valid; an optional preview must match both the checkpoint and captured
-output context and is never required to preserve editable content.
+saves are valid. Normal saves attempt a bounded sRGB preview on the file worker
+using the same checkpoint and captured output context. Rendering, device or
+preview encoding failures omit the preview without discarding editable content.
 
 Hosts perform picker and storage operations. Local atomic writers publish through
 a temporary file and replacement; provider transports retain their actual

@@ -1,4 +1,4 @@
-import {packageManifest,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
+import {packageManifest,packageObjects,readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from "node:assert/strict";
 import {mkdir,writeFile} from "node:fs/promises";
 
@@ -33,6 +33,9 @@ export async function checkRaster({call,evaluate,settle,canvasPixels}) {
     window.showOpenFilePicker=async()=>[{name:'restored.capy',async getFile(){return new File([rasterOriginal],'restored.capy')}}];})()`);
   const originalPackage = await readPackage(evaluate, 'rasterOriginal');
   assert.ok(packageResourceIdentity(originalPackage).length>0);
+  const representation=packageObjects(originalPackage,'capy.output/1').find(output=>output.id===originalPackage.default_output.ref).data.representation;
+  assert.equal(representation.member,'preview.png');assert.equal(representation.color,'srgb');
+  assert.ok(representation.size.every(value=>value>0&&value<=1024));
   await invoke('export_document');await wait('!layerApp.documents.busy() && !layerApp.state().document_file.busy');
   await evaluate(`window.rasterPaintPng=[...rasterFiles].find(([name])=>name.endsWith('.png'))[1].slice();
     window.rasterHash=async bytes=>Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256',bytes))).join(',');`);

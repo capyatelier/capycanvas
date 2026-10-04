@@ -234,7 +234,8 @@ impl ColorTask {
     pub fn write_copy(&self, mut stream: impl Write, cancelled: bool) -> Result<(), String> {
         let capture = capture_document_at(self.workflow.copy_project(cancelled)?, self.workflow.context.clone());
         let cancel = std::sync::atomic::AtomicBool::new(cancelled);
-        layer_core::package::codec::PreparedPackage::prepare(&capture, None, &cancel)?.write(&mut stream, &cancel)
+        let preview = self.gpu.package_preview(&capture, &cancel);
+        layer_core::package::codec::PreparedPackage::prepare(&capture, preview, &cancel)?.write(&mut stream, &cancel)
     }
 
     /// Publishes the prepared renderer, document and history in one owner turn.

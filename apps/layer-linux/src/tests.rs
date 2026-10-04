@@ -743,6 +743,10 @@ fn native_document_files() {
     assert!(recovery_path.join("head.json").exists());
     let saved_session=glib::MainContext::default().block_on(w.recovery().read_snapshot()).unwrap();
     assert_eq!(saved_session.state.saved_checkpoint,saved_session.editor.checkpoint());
+    let bytes=std::sync::Arc::<[u8]>::from(std::fs::read(&path).unwrap());
+    let backing=layer_core::package::ImmutableBacking::new(std::sync::Arc::new(bytes)).unwrap();
+    let opened=layer_core::package::codec::open(backing,Default::default(),&std::sync::atomic::AtomicBool::new(false)).unwrap();
+    assert!(matches!(opened,layer_core::package::codec::OpenOutcome::Candidate {preview:Some(ref p),..} if p.size()==[384,256]));
     let project =
         open_native_document(std::fs::File::open(&path).unwrap());
     assert_eq!(sources(&project), 1);

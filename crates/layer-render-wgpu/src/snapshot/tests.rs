@@ -43,6 +43,46 @@ fn roundtrip(document:&Document)->Document {
 }
 
 #[test]
+fn package_previews_preserve_capture_color_alpha_sdr_and_source_only_fallback() {
+    use layer_core::package::{codec::{PreparedPackage, PreviewStatus, OpenOutcome, open}, ImmutableBacking};
+    let cancelled = AtomicBool::new(false);
+    for depth in [SampleDepth::U8, SampleDepth::F32] {
+        let extent = [2048, 8];
+        let mut document = Document::new(PortableId::random(), extent[0], extent[1], layer_core::DocumentNames {paint:"Paint".into(),paper:"Paper".into()});
+        document.artwork.compositions.get_mut(document.artwork.root).unwrap().color = DocumentColor {space:RgbSpace::DisplayP3,depth};
+        hide_paper(&mut document);
+        let mut fill = EffectInstance::new(crate::tests::fixture("solid_color").program());
+        let red = if depth.is_float() {4.} else {0.25};
+        fill.set("color", layer_core::EffectValue::Color(layer_core::color::RgbColor::from_linear(RgbSpace::DisplayP3,[red,0.125,0.5,0.5]).unwrap())).unwrap();
+        insert_effect(&mut document, fill, 0);
+        document.artwork.outputs.get_mut(document.artwork.default_output).unwrap().sdr.exposure = -1.;
+        refresh(&mut document);
+        let checkpoint = CaptureCheckpoint {document:document.artwork.id,owner:document.owner,session_generation:1,artwork_generation:2,working_generation:3,edit_checkpoint:4};
+        let saved = document.artwork.capture(checkpoint).unwrap();
+        let expected = capture(document).unwrap().preview_document([1024;2],RgbSpace::Srgb).unwrap().srgb_bytes().unwrap();
+        let preview = gpu().package_preview(&saved, &cancelled).unwrap();
+        assert_eq!(preview.checkpoint, checkpoint);
+        assert_eq!(preview.preview.size(), [1024,4]);
+        assert!(preview.preview.pixels().iter().zip(&expected).all(|(a,b)| a.abs_diff(*b)<=1));
+        assert!(preview.preview.pixels().chunks_exact(4).all(|p| p[3].abs_diff(128)<=1));
+        let package = PreparedPackage::prepare(&saved, Some(preview), &cancelled).unwrap();
+        assert_eq!(package.preview_status, PreviewStatus::Included);
+        let mut bytes = Vec::new(); package.write(&mut bytes, &cancelled).unwrap();
+        let source = ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap();
+        let OpenOutcome::Candidate {artwork, preview:Some(reopened),..} = open(source,Default::default(),&cancelled).unwrap() else {panic!("Expected editable artwork with preview")};
+        assert_eq!(reopened.size(),[1024,4]);
+        assert_eq!(artwork.outputs.get(artwork.default_output).unwrap().sdr.exposure,-1.);
+        assert!(gpu().package_preview(&saved,&AtomicBool::new(true)).is_none());
+        let mut unsupported = saved.clone();
+        let artwork = Arc::make_mut(&mut unsupported.artwork);
+        artwork.outputs.get_mut(artwork.default_output).unwrap().frame = Some((Point::default(),[7,3]));
+        let preview = gpu().package_preview(&unsupported, &cancelled);
+        assert!(preview.is_none());
+        assert_eq!(PreparedPackage::prepare(&unsupported,preview,&cancelled).unwrap().preview_status,PreviewStatus::Unavailable);
+    }
+}
+
+#[test]
 fn gaussian_all_sigmas_export_png_with_valid_opaque_and_partial_coverage() {
     let extent=[33,17];
     let input=SourceInterpretation{channels:SourceChannels::Rgba,depth:SampleDepth::F32,
@@ -125,6 +165,12 @@ fn animated_speed_edits_keep_canvas_exact_queries_and_export_in_phase() {
         assert_eq!(exported, phase);
         let sample = capture.preview_linear_document([32,32]).unwrap().pixels[0];
         assert!((sample[0] - phase/10.).abs()<0.01, "export phase {sample:?}");
+        let mut artwork = doc.artwork.clone();
+        artwork.outputs.get_mut(artwork.default_output).unwrap().context = live.evaluation_context();
+        let checkpoint = CaptureCheckpoint {document:artwork.id,owner:doc.owner,session_generation:0,artwork_generation:doc.revision,working_generation:0,edit_checkpoint:0};
+        let preview = live.snapshot_gpu().package_preview(&ArtworkCapture {artwork:Arc::new(artwork),checkpoint},&AtomicBool::new(false)).unwrap();
+        let expected = (RgbSpace::Srgb.encode(f64::from(phase/10.))*255.).round() as u8;
+        assert!(preview.preview.pixels()[0].abs_diff(expected)<=1);
         before=Some((elapsed,pixels));
     }
 }

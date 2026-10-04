@@ -858,6 +858,7 @@ mod flatten;
 #[cfg(not(target_arch = "wasm32"))]
 mod output;
 mod tone;
+mod package_preview;
 mod analysis;
 #[cfg(not(target_arch = "wasm32"))]
 mod preview;

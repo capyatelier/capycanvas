@@ -730,6 +730,10 @@ fn project_jobs_save_specific_revisions_and_adopt_only_unchanged_editors() {
         file.rewind().unwrap();
         let mut bytes = Vec::new();
         file.read_to_end(&mut bytes).unwrap();
+        let directory = layer_core::package::archive::Directory::read(&mut std::io::Cursor::new(&bytes),262144,64*1024*1024).unwrap();
+        let member = directory.member("preview.png").expect("Normal save includes its captured preview");
+        let preview = layer_core::package::preview::Preview::decode(directory.read_member(&mut std::io::Cursor::new(&bytes),member,8*1024*1024).unwrap().into()).unwrap();
+        assert!(preview.size().iter().all(|side| *side<=1024));
         let saved = read_document(std::io::Cursor::new(bytes));
         assert_saved_document(&saved, &original);
         let stale = ProjectJob::new(&app, true);
