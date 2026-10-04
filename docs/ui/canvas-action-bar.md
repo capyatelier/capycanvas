@@ -43,7 +43,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
   - **Copy to Layer ▾:** Copy Selection to New Layer (the primary command) and Cut Selection to New Layer.
   - **Copy ▾:** Copy (the primary command), Copy Merged and Cut; see [copy and paste](clipboard.md).
   - **Refine ▾:** Grow…, Shrink…, Feather… (the primary command), Border…, Smooth…, then Transform Outline. The first five open the [Refine dialog](#refine-dialog).
-  - **Adjust ▾:** the Filter menu's categories, which hold adjustments only. The new effect layer takes the selection as its mask and consumes it, in one undo step.
+  - **Adjust ▾:** the Filter menu's categories, including Fill. The new effect layer takes the selection as its mask and consumes it, in one undo step.
   - **Clear ▾:** Clear Selected Pixels (the primary command) and Clear Outside Selection.
 - **More:** lists the items that did not fit, then the context's own menu (the full Select menu for selections), then the bar toggle. Escape closes an open menu before cancelling the canvas edit.
 - **Copy Selection to New Layer** captures the placed layer and its mask into an
@@ -53,7 +53,7 @@ Every host presents the bar. Bar item menus open on GTK, Web, Android, Windows, 
   unlocked, affine target because it also erases the source.
 - **Crop:** Crop Canvas to Selection crops the canvas to the bounds of the selection's coverage, as metadata: pixels outside stay on their layers and reappear when the canvas grows. It is disabled, with a reason, for an inverted selection.
 - **Moving selected pixels:** a Move drag over a selection keeps the Selection context; the bar hides during the contact and returns beside the moved selection. Leave Copy is the Move toggle described in [Selections](selections.md#moving-selected-pixels).
-- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › Solid Color Fill and Gradient Fill (which also take the selection as their mask) and New Dodge & Burn Layer, Filter › Frequency Separation…, Revert to Original Photo, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
+- **Not on the bar:** Canvas Size…, Image Size…, the Rotate and Flip Image commands, Trim and Reveal All (Edit › Image; see [image commands](image-commands.md)), Layer › New › New Dodge & Burn Layer, Filter › Frequency Separation…, Revert to Original Photo, the merges (Merge Down, Merge Group, Merge Visible, Stamp Visible and Flatten Image) and Edit › Blending's Perceptual and Linear Light Blending have no bar item; menus and command search reach them.
 
 ## Placement
 

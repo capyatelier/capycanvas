@@ -85,9 +85,6 @@ impl ApplicationMenu {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
-    /// One submenu per filter category, shared by the Filter menu and the
-    /// selection bar's Adjust menu. It ignores the panel's search and category,
-    /// leaves fill generators to Layer › New and never requests thumbnails.
     pub(crate) fn filter_category_items(&self) -> Vec<ContextMenuItem> {
         let enabled = self.effect_insert_enabled();
         self.effect_catalog
@@ -96,7 +93,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter_map(|category| {
                 let items: Vec<_> = self.effect_catalog.filters()
                     .iter()
-                    .filter(|f| f.category == category.id && f.program.kind != layer_core::EffectKind::Generator)
+                    .filter(|f| f.category == category.id)
                     .map(|f| ContextMenuItem { enabled, ..ContextMenuItem::command(effects::resource_label(f.label(), self.localization()).to_string(), UiAction::Effect { action: EffectAction::Insert { effect: f.program.id.clone() } }) })
                     .collect();
                 (!items.is_empty()).then(|| ContextMenuItem::submenu(&effects::resource_label(&category.label, self.localization()), vec![items]))

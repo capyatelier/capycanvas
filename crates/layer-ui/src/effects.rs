@@ -1122,7 +1122,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     value.clipped = choosing && occurrence.clipped; value
                 };
                 occurrence.content = OccurrenceContent::Effect(effect_handle);
-                if masked || (generator && occurrence.mask.is_none()) {
+                if masked {
                     let (coverage, mask) = self.selection_mask(&occurrence, false, parent, if replacing { scene.local_extent(current) } else { doc.composition().size })?;
                     edits.push(Edit::Coverage(coverage)); occurrence.mask = Some(mask);
                 }

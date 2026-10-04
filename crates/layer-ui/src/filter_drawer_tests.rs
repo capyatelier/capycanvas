@@ -388,10 +388,9 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
     let effect=doc.scene().effect(handle).unwrap();
     assert_eq!(effect.program.kind, layer_core::EffectKind::Generator);
     assert_eq!(effect.value("color"), Some(&layer_core::EffectValue::Color(s.state.colors.definition())));
-    let (mask,source)=doc.scene().mask(handle).expect("painting on a fill goes to its mask");
-    assert_eq!((source.initial.as_ref(),source.default_coverage), (None, 1.), "a reveal-all mask");
+    assert!(doc.scene().mask(handle).is_none());
     assert_eq!(doc.scene().order().iter().position(|h|*h==handle).unwrap()+1,doc.scene().order().iter().position(|h|*h==base).unwrap());
-    assert_eq!(doc.drawing_target(), Some(layer_core::SourceTarget::Coverage(mask.source)));
+    assert_eq!(doc.drawing_target(), None);
     invoke(&mut s, CommandId::Undo);
     assert_live_artwork_eq(s.engine.document(),&before);
 
@@ -413,21 +412,46 @@ fn fill_layers_start_from_the_current_color_and_mask_to_the_selection() {
 }
 
 #[test]
-fn the_filter_menu_leaves_fill_generators_to_layer_new() {
-    let s = session(Platform::Gtk);
-    let generators: Vec<_> = s.effect_catalog.filters().iter()
-        .filter(|f| f.program.kind == layer_core::EffectKind::Generator)
-        .map(|f| effects::resource_label(f.label(), &s.state.localization).to_string())
-        .collect();
-    assert_eq!(generators, ["Solid Color", "Gradient Fill"]);
-    let menu = s.application_menu(ApplicationMenu::Filter);
-    assert!(menu.sections[0].iter().all(|c| c.label != "Fill" && !c.sections.is_empty()));
-    for label in &generators {
-        assert!(menu_item(&menu.sections, label).is_none(), "{label} is not a filter");
+fn the_filter_menu_inserts_fill_generators_without_default_masks_on_every_host() {
+    for platform in Platform::ALL {
+        let mut s = session(platform);
+        let menu = s.application_menu(ApplicationMenu::Filter);
+        let fill = menu_item(&menu.sections, "Fill").unwrap();
+        assert!(menu_item(&menu.sections, "Curves").is_some());
+        for label in ["Solid Color", "Gradient Fill"] {
+            let item = menu_item(&fill.sections, label).unwrap();
+            assert!(item.enabled);
+            let before = s.engine.document().clone();
+            s.dispatch(item.action.clone().unwrap()).unwrap();
+            let doc = s.engine.document();
+            let handle = doc.working.occurrence.unwrap();
+            assert_eq!(doc.scene().effect(handle).unwrap().program.kind, layer_core::EffectKind::Generator);
+            assert!(doc.scene().mask(handle).is_none());
+            assert!(package_roundtrip(doc).scene().mask(handle).is_none());
+            let created = doc.clone();
+            invoke(&mut s, CommandId::Undo);
+            assert_live_artwork_eq(s.engine.document(), &before);
+            invoke(&mut s, CommandId::Redo);
+            assert_live_artwork_eq(s.engine.document(), &created);
+            invoke(&mut s, CommandId::Undo);
+        }
     }
-    assert!(menu_item(&menu.sections, "Curves").is_some());
-    assert!(s.state.adjustments.iter().any(|c| c.id.as_ref() == "solid_color" && c.category_icon == "fill"),
-        "the effect browser still lists fills");
+}
+
+#[test]
+fn replacing_fill_generators_preserves_the_presence_or_absence_of_a_mask() {
+    let (mut s, _) = filters();
+    insert_effect(&mut s, "solid_color");
+    let id = s.engine.document().working.occurrence.unwrap();
+    assert!(s.engine.document().scene().mask(id).is_none());
+    insert_effect(&mut s, "gradient_fill");
+    assert_eq!(s.engine.document().working.occurrence, Some(id));
+    assert!(s.engine.document().scene().mask(id).is_none());
+    s.dispatch(UiAction::Layer { action: LayerAction::AddMask { id: occurrence_token(id), replace: false } }).unwrap();
+    let mask = s.engine.document().scene().mask(id).map(|(use_, source)| (use_.clone(), source.clone())).unwrap();
+    insert_effect(&mut s, "solid_color");
+    assert_eq!(s.engine.document().working.occurrence, Some(id));
+    assert_eq!(s.engine.document().scene().mask(id).map(|(use_, source)| (use_.clone(), source.clone())), Some(mask));
 }
 
 #[test]

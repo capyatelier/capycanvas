@@ -65,6 +65,26 @@ export async function checkPhotoEdit({call,evaluate,settle,device=false}) {
     const at=(x,y)=>({x:center.x+x,y:center.y+y});
     const inside=at(0,-10),outside=at(Math.min(260,c.a[2]*c.r.width/c.v[0]/2-40),-Math.min(160,c.a[3]*c.r.height/c.v[1]/2-40));
 
+    for(const name of ['light','dark']) {
+      await send({type:'set_theme',theme:name});
+      await send({type:'set_color',rgba:COLORS.mouse});
+      for(const label of ['Solid Color','Gradient Fill']) {
+        const before=await state();
+        await choose('filter',['Fill',label],'mouse');
+        await wait(`layerApp.state().layer_properties.title===${JSON.stringify(label)}`);
+        const after=await state(),fill=after.layers.find(l=>l.editing);
+        assert.equal(after.layers.length,before.layers.length+1,`${name}: ${label} adds one layer`);
+        assert.equal(fill.has_mask,false,`${name}: ${label} starts without a mask`);
+        if(label==='Solid Color')for(const point of [inside,outside])
+          await sample(point,p=>p.every((v,i)=>Math.abs(v-COLORS.mouse[i])<.02),`${name}: the unmasked fill covers the canvas`);
+        await invoke('undo');
+        assert.equal((await state()).layers.length,before.layers.length);
+        await invoke('redo');
+        assert.equal((await state()).layers.find(l=>l.editing).has_mask,false);
+        await invoke('undo');
+      }
+    }
+
     for(const kind of ['mouse','touch','pen']) {
       const rgba=COLORS[kind];
       await send({type:'set_color',rgba});
@@ -72,10 +92,10 @@ export async function checkPhotoEdit({call,evaluate,settle,device=false}) {
       await drag([at(-140,-100),at(0,-110),at(140,-100),at(150,0),at(140,90),at(0,100),at(-140,90),at(-140,-100)],kind==='touch'?'pen':kind);
       await wait('layerApp.state().layer_tools.has_selection');
       const before=await state(),base=before.layers.find(l=>l.editing);
-      await choose('layer',['New','Solid Color Fill'],kind);
+      await choose('filter',['Fill','Solid Color'],kind);
       await wait(`layerApp.state().layer_properties.title==='Solid Color'`);
       const after=await state(),fill=after.layers.find(l=>l.editing);
-      assert.equal(after.layers.length,before.layers.length+1,`${kind}: Layer › New › Solid Color Fill adds one layer`);
+      assert.equal(after.layers.length,before.layers.length+1,`${kind}: Filter › Fill › Solid Color adds one layer`);
       assert.equal(after.layers.indexOf(fill)+1,after.layers.findIndex(l=>l.id===base.id),`${kind}: the fill sits directly above the active layer`);
       assert.equal(fill.has_mask,true,`${kind}: the selection becomes the fill's mask`);
       assert.equal(after.layer_tools.has_selection,false,`${kind}: the selection moves into the mask`);
@@ -118,7 +138,7 @@ export async function checkPhotoEdit({call,evaluate,settle,device=false}) {
       await invoke('undo');
       assert.equal((await state()).layers.length,count,`${kind}: undo removes the Black & White layer`);
     }
-    console.log(`PASS photo edit (${device?'tablet':'desktop'}): Layer › New › Solid Color Fill masks a lasso selection in the current colour (sampled inside and outside) with one undo step, and Black & White's labelled Tint row applies the current colour, with mouse, touch and pen; screenshots in ${directory}`);
+    console.log(`PASS photo edit (${device?'tablet':'desktop'}): Filter › Fill creates maskless fills in both themes and masks a lasso selection in the current colour (sampled inside and outside) with one undo step, and Black & White's labelled Tint row applies the current colour, with mouse, touch and pen; screenshots in ${directory}`);
   } catch(error) {
     await writeFile(`${directory}/failure.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
     console.error('Photo edit state',await evaluate(`JSON.stringify({error:layerApp.state().host_error,status:document.querySelector('#status').textContent,title:layerApp.state().layer_properties.title,

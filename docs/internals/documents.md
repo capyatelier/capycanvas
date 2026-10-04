@@ -62,6 +62,11 @@ in layer order, forming an effect chain. A generator effect instead produces
 content that is composited as a layer. Masks and opacity control where and how
 strongly an effect applies.
 
+Solid Color and Gradient Fill appear in Filter › Fill and Layer › New. They
+start without a mask. An active selection becomes the new fill's mask and is
+consumed in the same undo step; undo restores the selection. Replacing a fill
+through the filter drawer preserves its existing mask or its absence.
+
 ### Groups and Pass Through
 
 A group is isolated by default: its layers composite over transparency, and that

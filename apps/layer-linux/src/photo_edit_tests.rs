@@ -1,5 +1,5 @@
 //! Photo-editing journeys with actual Mutter delivery: a fill layer from
-//! Layer › New, a Liquify Pinch stroke, and Revert to Original Photo.
+//! Filter › Fill, a Liquify Pinch stroke, and Revert to Original Photo.
 use super::*;
 use layer_core::{Document, LayerKind};
 use layer_core::authored::OccurrenceHandle;
@@ -67,39 +67,69 @@ pub(super) fn choose(w: &Workspace, input: &mut RemoteInput, menu: &str, path: &
 
 #[test]
 #[ignore = "isolated compositor, GPU and native mouse delivery"]
-fn native_layer_new_solid_color_fill_masks_to_the_selection() {
-    let (_app, w, mut input) = start("art.capycanvas.SolidColorFill");
+fn native_filter_fill_layers_and_selection_masks() {
+    let (_app, w, mut input) = start("art.capycanvas.FillLayers");
+    super::new_photo::ready(&w);
     w.dispatch(UiAction::SetColor { rgba: [0.85, 0.08, 0.05, 1.] });
-    w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
-    let (width, height) = {
-        let doc = document(&w);
-        (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
-    };
-    let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.55, height * 0.6];
-    native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
-    until(|| document(&w).working.selection.is_some(), "the lasso makes a selection");
-    let base = document(&w).working.occurrence.unwrap();
-    choose(&w, &mut input, "Layer", &["New", "Solid Color Fill"]);
-    until(
-        || {
+    for theme in [layer_ui::Theme::Light, layer_ui::Theme::Dark] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        pump(150);
+        for label in ["Solid Color", "Gradient Fill"] {
+            let before = document(&w);
+            choose(&w, &mut input, "Filter", &["Fill", label]);
+            until(|| document(&w).scene().order().len() == before.scene().order().len() + 1, "the fill is inserted");
+            super::new_photo::ready(&w);
             let doc = document(&w);
-            doc.scene().occurrence(doc.working.occurrence.unwrap()).is_some_and(|l| l.kind() == LayerKind::Effect && l.mask.is_some())
-        },
-        "Layer › New › Solid Color Fill inserts a fill layer",
-    );
-    let doc = document(&w);
-    let fill = doc.working.occurrence.unwrap();
-    assert_eq!(doc.scene().effect(fill).unwrap().program.id.as_ref(), "solid_color");
-    assert!(doc.scene().mask(fill).unwrap().1.initial.is_some(), "the selection becomes its mask");
-    assert!(doc.working.selection.is_none());
-    assert_eq!(doc.scene().position(fill).unwrap() + 1, doc.scene().position(base).unwrap());
-    pump(300);
-    let inside = shown(&w, [(x0 + x1) * 0.5, (y0 + y1) * 0.5]);
-    let outside = shown(&w, [width * 0.8, height * 0.8]);
-    assert!(inside[0] > 180 && inside[1] < 80 && inside[2] < 80, "the current colour fills the selection: {inside:?}");
-    assert!(outside.iter().take(3).all(|v| *v > 200), "the paper shows outside it: {outside:?}");
-    w.dispatch(UiAction::Invoke { command: CommandId::Undo });
-    until(|| document(&w).scene().order().len() + 1 == doc.scene().order().len(), "one undo step removes the fill");
+            let fill = doc.working.occurrence.unwrap();
+            assert!(doc.scene().mask(fill).is_none(), "{label} starts without a mask");
+            assert!(!state(&w).layers.iter().find(|row| row.editing).unwrap().has_mask);
+            if label == "Solid Color" {
+                pump(300);
+                for fraction in [0.2, 0.8] {
+                    let pixel = shown(&w, [doc.composition().size[0] as f32 * fraction, doc.composition().size[1] as f32 * fraction]);
+                    assert!(pixel[0] > 180 && pixel[1] < 80 && pixel[2] < 80, "the unmasked fill covers the canvas: {pixel:?}");
+                }
+            }
+            w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+            until(|| document(&w).scene().order().len() == before.scene().order().len(), "undo removes the fill");
+            w.dispatch(UiAction::Invoke { command: CommandId::Redo });
+            until(|| document(&w).scene().order().len() == doc.scene().order().len(), "redo restores the fill");
+            assert!(document(&w).scene().mask(fill).is_none());
+            w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        }
+        w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+        let (width, height) = {
+            let doc = document(&w);
+            (doc.composition().size[0] as f32, doc.composition().size[1] as f32)
+        };
+        let [x0, y0, x1, y1] = [width * 0.25, height * 0.25, width * 0.55, height * 0.6];
+        native_pen_path(&w, &[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]);
+        until(|| document(&w).working.selection.is_some(), "the lasso makes a selection");
+        let base = document(&w).working.occurrence.unwrap();
+        choose(&w, &mut input, "Filter", &["Fill", "Solid Color"]);
+        until(
+            || {
+                let doc = document(&w);
+                doc.scene().occurrence(doc.working.occurrence.unwrap()).is_some_and(|l| l.kind() == LayerKind::Effect && l.mask.is_some())
+            },
+            "Filter › Fill › Solid Color inserts a fill layer",
+        );
+        let doc = document(&w);
+        let fill = doc.working.occurrence.unwrap();
+        assert_eq!(doc.scene().effect(fill).unwrap().program.id.as_ref(), "solid_color");
+        assert!(doc.scene().mask(fill).unwrap().1.initial.is_some(), "the selection becomes its mask");
+        assert!(doc.working.selection.is_none());
+        assert_eq!(doc.scene().position(fill).unwrap() + 1, doc.scene().position(base).unwrap());
+        pump(300);
+        let inside = shown(&w, [(x0 + x1) * 0.5, (y0 + y1) * 0.5]);
+        let outside = shown(&w, [width * 0.8, height * 0.8]);
+        assert!(inside[0] > 180 && inside[1] < 80 && inside[2] < 80, "the current colour fills the selection: {inside:?}");
+        assert!(outside.iter().take(3).all(|v| *v > 200), "the paper shows outside it: {outside:?}");
+        w.dispatch(UiAction::Invoke { command: CommandId::Undo });
+        until(|| document(&w).scene().order().len() + 1 == doc.scene().order().len(), "one undo step removes the fill");
+        assert!(document(&w).working.selection.is_some(), "undo restores the selection");
+        w.dispatch(UiAction::Invoke { command: CommandId::Deselect });
+    }
     input.finish();
     w.window.close();
     pump(50);
