@@ -11,6 +11,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
@@ -180,35 +181,25 @@ import kotlin.math.roundToInt
 }
 @Composable private fun SizePresets(host: CanvasHost, current: Float) {
     val colors = LocalPalette.current
-    val view = host.catalog.getJSONObject("brush_size_grid")
-    val side = view.number("tile_size")
-    val gap = view.number("gap")
-    val presets = remember(view) { view.array("presets").objects() }
-    BoxWithConstraints(Modifier.fillMaxWidth()) {
-      val columns = ((maxWidth.value + gap) / (side + gap)).toInt().coerceIn(1, view.getInt("max_columns"))
-      Column(verticalArrangement = Arrangement.spacedBy(gap.dp)) {
-        presets.chunked(columns).forEach { sizes ->
-          Row(horizontalArrangement = Arrangement.spacedBy(gap.dp)) {
-           sizes.forEach { preset ->
+    val style = toolbarUi(host.languageTag, obj("type" to "style", "style" to "small"))
+    val tile = host.catalog.array("brush_size_tile")
+    val gap = style.number("gap")
+    val presets = remember(host.catalog) { host.catalog.array("brush_sizes").objects() }
+    FlowRow(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(gap.dp), verticalArrangement = Arrangement.spacedBy(gap.dp)) {
+        presets.forEach { preset ->
             val value = preset.number("value")
             val label = preset.getString("label")
-            val fill = if (current == value) colors.active else colors.panelFill
-            ActionTip(host, "$label px", obj("type" to "set_brush_size", "value" to value), Modifier.size(side.dp).testTag("size-preset-$label")) {
-              Box(Modifier.fillMaxWidth().height(side.dp).clip(ControlShape).background(fill)
+            ActionTip(host, "$label px", obj("type" to "set_brush_size", "value" to value), Modifier.size(tile.getDouble(0).dp, tile.getDouble(1).dp).testTag("size-preset-$label")) {
+              Box(Modifier.fillMaxSize().clip(TileShape).background(if (current == value) colors.active else Color.Transparent)
                 .clickable { host.dispatch(obj("type" to "set_brush_size", "value" to value)) }) {
                 Canvas(Modifier.fillMaxSize()) {
-                    drawCircle(colors.text, preset.number("preview_diameter").dp.toPx() / 2)
-                    drawRect(androidx.compose.ui.graphics.Brush.verticalGradient(listOf(Color.Transparent, fill),
-                        startY = size.height - view.number("fade_height").dp.toPx(), endY = size.height))
+                    drawCircle(androidx.compose.ui.graphics.Brush.verticalGradient(.4f to colors.text, .65f to colors.text.copy(alpha = .2f),
+                        1f to Color.Transparent, endY = size.height), preset.number("preview_diameter").dp.toPx() / 2, Offset(size.width / 2, size.width / 2))
                 }
-                Text(label, Modifier.align(Alignment.BottomCenter).padding(bottom = 1.dp),
-                    fontSize = LocalTextStyle.current.fontSize * .8f, maxLines = 1)
+                Text(label, Modifier.align(Alignment.BottomCenter).padding(bottom = 2.dp), fontWeight = FontWeight.Normal, maxLines = 1)
               }
             }
-           }
-          }
         }
-      }
     }
 }
 @Composable internal fun ColorControls(host: CanvasHost) {

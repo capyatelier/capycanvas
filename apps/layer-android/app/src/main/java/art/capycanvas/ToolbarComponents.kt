@@ -44,7 +44,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.math.abs
 
-private fun toolbarUi(language: String, request: JSONObject) = JSONObject(Native.toolbarUi(request.toString(), language))
+internal fun toolbarUi(language: String, request: JSONObject) = JSONObject(Native.toolbarUi(request.toString(), language))
 private fun formatted(language: String, control: JSONObject, value: Float, units: Boolean = true) = toolbarUi(language, obj("type" to "number",
     "request" to obj("control" to control, "value" to value, "operation" to obj("type" to "format")), "compact" to true, "units" to units))
 

@@ -38,10 +38,10 @@ struct PanelConfiguration::Impl:std::enable_shared_from_this<Impl>{
     Grid presets(){
         Grid grid;grid.ColumnSpacing(6);grid.RowSpacing(6);
         for(auto value:array(data->catalog,L"brush_sizes")){
-            double size=value.GetNumber();
-            auto pick=button(data,to_hstring(int(size)),[data=data,size]{data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(size)}}));});
+            auto preset=value.GetObject();double size=num(preset,L"value");
+            auto pick=button(data,str(preset,L"label"),[data=data,size]{data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(size)}}));});
             pick.Width(52);pick.Height(34);pick.Background(buttonBackground(data));grid.Children().Append(pick);
-            AutomationProperties::SetAutomationId(pick,L"configure-size-"+to_hstring(int(size)));
+            AutomationProperties::SetAutomationId(pick,L"configure-size-"+str(preset,L"label"));
         }
         auto last=std::make_shared<int>(0);auto weak=make_weak(grid);
         auto layout=[weak,last](double width){if(auto grid=weak.get()){

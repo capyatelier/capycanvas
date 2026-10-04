@@ -16,9 +16,9 @@ fn native_workspace_resize_input() {
     let saved = || serde_json::to_value(state(&w).workspace).unwrap();
     let mut reports = Vec::new();
     for touch in [false, true] {
-        for scenario in ["left", "right", "navigator"] {
+        for scenario in ["left", "sizes", "right", "navigator"] {
             let mut fixture = layer_ui::WorkspaceState::default();
-            let edge = if scenario == "left" {
+            let edge = if matches!(scenario, "left" | "sizes") {
                 Edge::Left
             } else {
                 Edge::Right
@@ -29,7 +29,7 @@ fn native_workspace_resize_input() {
                 .iter_mut()
                 .find(|b| b.edge == edge)
                 .unwrap();
-            band.extent = if scenario == "left" { 252. } else { 310. };
+            band.extent = if edge == Edge::Left { 252. } else { 310. };
             let divider = band.id;
             if scenario == "navigator" {
                 if let DockNode::Tabs { panels, active, .. } = &mut band.root {
@@ -37,11 +37,17 @@ fn native_workspace_resize_input() {
                     *active = Panel::Navigator;
                 }
             }
+            if scenario == "sizes" {
+                let group = fixture.layout.panel_group(Panel::Sizes).unwrap();
+                fixture.layout.select_tab(group, Panel::Sizes).unwrap();
+            }
             w.dispatch(UiAction::RestoreWorkspace {
                 workspace: Box::new(fixture),
             });
             pump(350);
-            let panel = if scenario == "left" {
+            let panel = if scenario == "sizes" {
+                Panel::Sizes
+            } else if scenario == "left" {
                 Panel::Brushes
             } else if scenario == "navigator" {
                 Panel::Navigator
@@ -67,7 +73,7 @@ fn native_workspace_resize_input() {
                 .bounds;
             let start = [b.x + b.width * 0.5, b.y + b.height * 0.5];
             let origin = [
-                start[0] + if scenario == "left" { 20. } else { -20. },
+                start[0] + if edge == Edge::Left { 20. } else { -20. },
                 start[1],
             ];
             let device = if touch { "touch" } else { "mouse" };
@@ -88,6 +94,8 @@ fn native_workspace_resize_input() {
             let geometry = Rc::new(RefCell::new(Vec::new()));
             let last = Rc::new(Cell::new(view.width()));
             let clock = w.surface.frame_clock().unwrap();
+            let paint_start = Rc::new(Cell::new(Instant::now()));
+            let before_paint = clock.connect_before_paint(glib::clone!(#[strong] paint_start, move |_| paint_start.set(Instant::now())));
             let after_paint = clock.connect_after_paint(glib::clone!(
                 #[strong]
                 geometry,
@@ -95,16 +103,18 @@ fn native_workspace_resize_input() {
                 last,
                 #[strong]
                 view,
+                #[strong]
+                paint_start,
                 move |clock| {
                     let width = view.width();
                     if last.replace(width) != width {
                         if let Some(timing) = clock.current_timings() {
-                            geometry.borrow_mut().push((timing, width));
+                            geometry.borrow_mut().push((timing, width, paint_start.get().elapsed().as_secs_f64() * 1000.));
                         }
                     }
                 }
             ));
-            let events: Vec<_> = (0..550)
+            let events: Vec<_> = (0..1250)
                 .map(|i| {
                     let p = (i as f32 * 0.004 * 5.) % 4.;
                     let triangle = if p < 1. {
@@ -120,13 +130,14 @@ fn native_workspace_resize_input() {
             input.perform(serde_json::to_value(events).unwrap());
             pump(50);
             clock.disconnect(after_paint);
+            clock.disconnect(before_paint);
             let mut cpu = w.publication.inputs.borrow().clone();
             cpu.sort_by(f64::total_cmp);
             let times: Vec<_> = geometry
                 .borrow()
                 .iter()
-                .filter(|(t, _)| t.is_complete() && t.presentation_time() > 0)
-                .map(|(t, _)| t.presentation_time())
+                .filter(|(t, _, _)| t.is_complete() && t.presentation_time() > 0)
+                .map(|(t, _, _)| t.presentation_time())
                 .collect();
             let hz = if times.len() > 1 {
                 (times.len() - 1) as f64 * 1_000_000. / (times.last().unwrap() - times[0]) as f64
@@ -151,6 +162,14 @@ fn native_workspace_resize_input() {
                 "native width matches Rust"
             );
             assert_eq!(content, w.panel_widget(panel), "retain panel resources");
+            if panel == Panel::Sizes {
+                let buttons = w.size_buttons.borrow();
+                let bounds: Vec<_> = buttons.iter().map(|(_, button)| button.compute_bounds(&content).unwrap()).collect();
+                assert_eq!(bounds[0].y(), bounds[6].y(), "wide panels fit more than six tiles");
+                for pair in bounds.windows(2).filter(|p| p[0].y() == p[1].y()) {
+                    assert_eq!(pair[1].x() - pair[0].x() - pair[0].width(), layer_ui::TileStyle::Small.gap());
+                }
+            }
             if std::env::var_os("LAYER_RESIZE_RETAINED").is_some() {
                 assert_eq!(refreshed, 0);
             }
@@ -160,7 +179,9 @@ fn native_workspace_resize_input() {
                     "{touch}/{scenario}: {hz} Hz"
                 );
             }
-            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":refreshed,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"geometry_hz":hz,"changed_presentations":times.len(),"width_range":[geometry.borrow().iter().map(|(_,w)|*w).min(),geometry.borrow().iter().map(|(_,w)|*w).max()]});
+            let mut paint: Vec<_> = geometry.borrow().iter().map(|(_, _, ms)| *ms).collect(); paint.sort_by(f64::total_cmp);
+            let mut gaps: Vec<_> = times.windows(2).map(|t| (t[1] - t[0]) as f64 / 1000.).collect(); gaps.sort_by(f64::total_cmp);
+            let report = serde_json::json!({"touch":touch,"scenario":scenario,"inputs":cpu.len(),"model_refreshes":refreshed,"dispatch_ms":{"p50":cpu[cpu.len()/2],"p95":cpu[cpu.len()*95/100]},"paint_ms":{"p50":paint[paint.len()/2],"p95":paint[paint.len()*95/100]},"geometry_hz":hz,"gap_p99_ms":gaps[gaps.len()*99/100],"changed_presentations":times.len(),"width_range":[geometry.borrow().iter().map(|(_,w,_)|*w).min(),geometry.borrow().iter().map(|(_,w,_)|*w).max()]});
             eprintln!("{report}");
             reports.push(report);
             input.perform(serde_json::json!([event("up", origin)]));

@@ -2670,14 +2670,14 @@ mod tests {
         assert_eq!(ToolbarControl::Size { tenths: 0 }.validate_admission(), Err(crate::WorkspaceValidationError::Numeric(expected)));
         let sizes = PanelConfig::defaults().into_iter().find(|panel| panel.id == Panel::Sizes).unwrap();
         assert!(sizes.shows(PanelControl::SizePresets) && !sizes.shows(PanelControl::BrushSize));
-        let grid = BrushSizeGrid::default();
-        assert_eq!((grid.presets.len(), grid.max_columns, grid.tile_size), (40, 6, TileStyle::Small.size()[0]));
-        for preset in grid.presets {
+        let presets = ui_catalog().brush_sizes;
+        assert_eq!(presets.len(), 40);
+        for preset in presets {
             let control = ToolbarControl::Size { tenths: (preset.value * 10.).round() as u16 };
             assert!(tool_available(control, Platform::Gtk));
             assert!(control.validate_admission().is_ok());
             assert!(matches!(control.action(), Some(UiAction::SetBrushSize { value }) if value == preset.value));
-            assert!(preset.preview_diameter <= grid.tile_size);
+            assert_eq!(preset.label.parse::<f32>().unwrap(), preset.value);
         }
         assert_eq!(panel.custom_name(), Some("literal {name} 🖌"));
         let mut named = panel.clone();

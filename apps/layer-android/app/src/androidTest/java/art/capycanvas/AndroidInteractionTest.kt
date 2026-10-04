@@ -374,7 +374,7 @@ class AndroidInteractionTest {
                 val before = workspace()
                 if (panel == "sizes") {
                     assertEquals(bounds("size-preset-0.7").top, bounds("size-preset-3").top, 1.1f)
-                    assertEquals(36 * density, bounds("size-preset-0.7").height, 1.1f)
+                    assertEquals(44 * density, bounds("size-preset-0.7").height, 1.1f)
                     tap(bounds("size-preset-1.5").center); settle(); assertEquals(1.5f, state().getJSONObject("brush").number("diameter"), .001f)
                 }
                 val press = bounds("divider-40").center
@@ -395,11 +395,11 @@ class AndroidInteractionTest {
                     assertEquals(allocation.number("height") * density, shown.height, 1.1f)
                     positions.add(shown)
                     if (panel == "sizes") {
-                        val presets = host.catalog.getJSONObject("brush_size_grid").array("presets").objects()
+                        val presets = host.catalog.array("brush_sizes").objects()
                         val firstPreset = bounds("size-preset-${presets[0].getString("label")}")
                         val thirdPreset = bounds("size-preset-${presets[2].getString("label")}")
                         if (index == 0) assertTrue("Narrow presets wrap live", thirdPreset.top > firstPreset.top)
-                        else assertEquals("Wide presets share a row", firstPreset.top, thirdPreset.top, 1.1f)
+                        else assertEquals("Wide panels fit more than six sizes", firstPreset.top, bounds("size-preset-4").top, 1.1f)
                     }
                     if (panel == "toolbar") {
                         val tiles = host.snapshot!!.array("panels").objects().first { it.getString("id") == panel }.array("tiles").objects()

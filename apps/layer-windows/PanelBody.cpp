@@ -23,8 +23,8 @@ Grid PanelBody::sizes(double width){
         auto choices=array(data->catalog,L"brush_sizes");
         for(uint32_t i=0;i<choices.Size();i++){
             int row=int(i)/columns;if(i%columns==0){RowDefinition def;def.Height({1,GridUnitType::Auto});grid.RowDefinitions().Append(def);}
-            double value=choices.GetNumberAt(i);
-            auto pick=button(data,to_hstring(int(value))+L" px",[data=data,value]{
+            auto preset=choices.GetObjectAt(i);double value=num(preset,L"value");
+            auto pick=button(data,str(preset,L"label")+L" px",[data=data,value]{
                 data->dispatch(O({{L"type",S(L"set_brush_size")},{L"value",N(value)}}));
             });
             pick.HorizontalAlignment(HorizontalAlignment::Stretch);pick.Margin(Thickness{1,2,1,2});pick.Padding(Thickness{2,2,2,2});
@@ -34,7 +34,7 @@ Grid PanelBody::sizes(double width){
             Microsoft::UI::Xaml::Shapes::Ellipse dot;double diameter=std::min(27.,2.+std::sqrt(value)*1.2);
             dot.Width(diameter);dot.Height(diameter);dot.Fill(data->brush(L"text"));
             dotBox.Children().Append(dot);content.Children().Append(dotBox);
-            auto text=label(data,to_hstring(int(value)));text.TextAlignment(TextAlignment::Center);content.Children().Append(text);
+            auto text=label(data,str(preset,L"label"));text.TextAlignment(TextAlignment::Center);content.Children().Append(text);
             pick.Content(content);Grid::SetColumn(pick,int(i)%columns);Grid::SetRow(pick,row);grid.Children().Append(pick);
             bindings.emplace_back([data=data,pick,value]{
                 pick.Background(num(object(data->state,L"brush"),L"diameter")==value?selected(data):clear());

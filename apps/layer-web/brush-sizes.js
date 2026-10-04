@@ -1,18 +1,18 @@
 export function brushSizeGrid({ app, catalog, state, dispatch, element, button }) {
-  const view = catalog.brush_size_grid, grid = element("div", "size-grid");
-  grid.style.setProperty("--size-tile", `${view.tile_size}px`);
-  grid.style.setProperty("--size-columns", view.max_columns);
-  grid.style.setProperty("--size-gap", `${view.gap}px`);
-  grid.style.setProperty("--size-fade", `${view.fade_height}px`);
-  const buttons = view.presets.map(({ value, label, preview_diameter }) => {
+  const style = app.toolbar_ui({ type: "style", style: "small" }), grid = element("div", "size-grid");
+  grid.style.setProperty("--size-tile", `${catalog.brush_size_tile[0]}px`);
+  grid.style.setProperty("--size-height", `${catalog.brush_size_tile[1]}px`);
+  grid.style.setProperty("--tile-radius", `${style.size[0] / 2}px`);
+  grid.style.setProperty("--size-gap", `${style.gap}px`);
+  const buttons = catalog.brush_sizes.map(({ value, label, preview_diameter }) => {
     const choice = button("", () => dispatch({ type: "set_brush_size", value }), "size-button");
     choice.title = `${label} px`;
     choice.setAttribute("aria-label", choice.title);
     choice.onpointerenter = () => { choice.title = app.action_tooltip(`${label} px`, { type: "set_brush_size", value }); };
     choice.dataset.size = label;
-    const dot = element("span", "size-dot");
+    const preview = element("span", "size-preview"), dot = element("span", "size-dot");
     dot.style.width = dot.style.height = `${preview_diameter}px`;
-    choice.append(dot, element("span", "size-label", label));
+    preview.append(dot); choice.append(preview, element("span", "size-label", label));
     grid.append(choice);
     return [value, choice];
   });

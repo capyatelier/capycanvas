@@ -400,7 +400,7 @@ fn native_default_workspace() {
                 for (_, button) in &buttons[..6] {
                     let bounds = button.compute_bounds(&w.panel_widget(panel)).unwrap();
                     assert_eq!(bounds.y(), first.y());
-                    assert_eq!(bounds.height(), layer_ui::TILE_SIZE);
+                    assert_eq!(bounds.height(), layer_ui::BRUSH_SIZE_TILE[1]);
                 }
                 for (value, button) in buttons.iter().filter(|(value, _)| [0.7, 1.5, 2.5, 2000.].contains(value)) {
                     click(button); assert_eq!(state(&w).brush.diameter, *value);

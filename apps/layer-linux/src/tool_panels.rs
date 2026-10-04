@@ -500,19 +500,13 @@ impl ToolSettings {
     }
 }
 
-pub fn size_grid(workspace: &Rc<Workspace>) -> (gtk::FlowBox, Vec<(f32, gtk::Button)>) {
-    let view = layer_ui::BrushSizeGrid::default();
-    let grid = gtk::FlowBox::builder()
-        .homogeneous(true)
-        .min_children_per_line(2)
-        .max_children_per_line(view.max_columns)
-        .selection_mode(gtk::SelectionMode::None)
-        .column_spacing(view.gap as u32)
-        .row_spacing(view.gap as u32)
+pub fn size_grid(workspace: &Rc<Workspace>) -> (adw::WrapBox, Vec<(f32, gtk::Button)>) {
+    let style = layer_ui::TileStyle::Small;
+    let grid = adw::WrapBox::builder()
+        .child_spacing(style.gap() as i32)
+        .line_spacing(style.gap() as i32)
         .build();
-    grid.add_css_class("size-grid");
-    grid.set_halign(gtk::Align::Start);
-    let buttons = view.presets.into_iter().map(|preset| {
+    let buttons = layer_ui::brush_size_presets().map(|preset| {
         let button = workspace.action_button("", UiAction::SetBrushSize { value: preset.value });
         button.add_css_class("flat");
         button.add_css_class("size-preset");
@@ -520,22 +514,26 @@ pub fn size_grid(workspace: &Rc<Workspace>) -> (gtk::FlowBox, Vec<(f32, gtk::But
         button.set_tooltip_text(Some(&format!("{} px", preset.label)));
         button.update_property(&[gtk::accessible::Property::Label(&format!("{} px", preset.label))]);
         let preview = gtk::Overlay::new();
-        let dot = gtk::DrawingArea::builder().width_request(view.tile_size as i32).height_request(view.tile_size as i32).build();
+        let dot = gtk::DrawingArea::builder().width_request(layer_ui::BRUSH_SIZE_TILE[0] as i32).height_request(layer_ui::BRUSH_SIZE_TILE[1] as i32).build();
         dot.set_draw_func(move |area, cr, width, height| {
             let color = area.color();
-            cr.set_source_rgba(color.red() as f64, color.green() as f64, color.blue() as f64, color.alpha() as f64);
-            cr.arc(width as f64 * 0.5, height as f64 * 0.5, preset.preview_diameter as f64 * 0.5, 0., std::f64::consts::TAU);
+            let fade = gtk::cairo::LinearGradient::new(0., 0., 0., height as f64);
+            for (position, alpha) in [(0.4, 1.), (0.65, 0.2), (1., 0.)] {
+                fade.add_color_stop_rgba(position, color.red() as f64, color.green() as f64, color.blue() as f64, color.alpha() as f64 * alpha);
+            }
+            let _ = cr.set_source(&fade);
+            cr.arc(width as f64 * 0.5, width as f64 * 0.5, preset.preview_diameter as f64 * 0.5, 0., std::f64::consts::TAU);
             let _ = cr.fill();
         });
         preview.set_child(Some(&dot));
         let label = gtk::Label::new(Some(&preset.label));
         label.add_css_class("size-label");
-        label.set_height_request(view.fade_height as i32);
         label.set_valign(gtk::Align::End);
+        label.set_margin_bottom(2);
         label.set_can_target(false);
         preview.add_overlay(&label);
         button.set_child(Some(&preview));
-        grid.insert(&button, -1);
+        grid.append(&button);
         (preset.value, button)
     }).collect();
     (grid, buttons)
@@ -544,7 +542,7 @@ pub fn size_grid(workspace: &Rc<Workspace>) -> (gtk::FlowBox, Vec<(f32, gtk::But
 pub struct SizePanel {
     pub root: gtk::Box,
     number: NumberControl,
-    grid: gtk::FlowBox,
+    grid: adw::WrapBox,
     buttons: Vec<(f32, gtk::Button)>,
 }
 impl SizePanel {

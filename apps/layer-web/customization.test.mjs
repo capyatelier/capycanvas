@@ -576,9 +576,14 @@ export async function checkCustomization({ call, evaluate, settle, canvasPixels 
     await send({ type: "restore_workspace", workspace: initial });
     await send({ type: "set_theme", theme }); await wait();
     assert.equal(await evaluate("document.querySelector('.sizes-panel [data-control=brush_size]').hidden"), true);
-    const tiles = await evaluate("[...document.querySelectorAll('.sizes-panel .size-button')].map(n=>{const b=n.getBoundingClientRect(),l=n.querySelector('.size-label').getBoundingClientRect();return{value:Number(n.dataset.size),height:b.height,top:b.top,overlap:l.top>=b.top&&l.bottom<=b.bottom+.1,fade:getComputedStyle(n.querySelector('.size-label')).backgroundImage}})");
-    assert.equal(tiles.length, 40); assert.ok(tiles.every(t=>t.height===36&&t.overlap&&t.fade.includes('linear-gradient'))); assert.ok(tiles.slice(0,6).every(t=>t.top===tiles[0].top)&&tiles[6].top>tiles[0].top);
+    const tiles = await evaluate("[...document.querySelectorAll('.sizes-panel .size-button')].map(n=>{const b=n.getBoundingClientRect(),l=n.querySelector('.size-label').getBoundingClientRect(),d=n.querySelector('.size-dot').getBoundingClientRect(),s=getComputedStyle(n);return{value:Number(n.dataset.size),height:b.height,top:b.top,overlap:l.top>=b.top&&l.bottom<=b.bottom,center:d.top+d.height/2-b.top,fullText:s.fontSize===getComputedStyle(n.closest('.panel')).fontSize&&s.fontWeight==='400',fade:getComputedStyle(n.querySelector('.size-preview')).maskImage}})");
+    assert.equal(tiles.length, 40); assert.ok(tiles.every(t=>t.height===44&&t.center===18&&t.overlap&&t.fullText&&t.fade.includes('linear-gradient'))); assert.ok(tiles.slice(0,6).every(t=>t.top===tiles[0].top)&&tiles[6].top>tiles[0].top);
     for (const value of [.7, 1.5, 2.5, 2000]) { await click(`.sizes-panel [data-size="${value}"]`); assert.ok(Math.abs(await evaluate('layerApp.state().brush.diameter')-value)<.001); }
+    const wide = structuredClone(initial); wide.layout.bands[0].extent = 420;
+    await send({ type: 'restore_workspace', workspace: wide }); await wait();
+    assert.equal(await evaluate("document.querySelector('.sizes-panel [data-size=\"4\"]').getBoundingClientRect().top===document.querySelector('.sizes-panel .size-button').getBoundingClientRect().top"), true, 'Widening the panel fits more than six columns');
+    await shot(`sizes-wide-${theme}`);
+    await send({ type: 'restore_workspace', workspace: initial }); await wait();
     await shot(`initial-${theme}`);
     assert.deepEqual(await context(tab("sizes")), ["Show tab bar", "Collapse column", "Configure Brush size panel…", "Hide Brush size panel"]);
     await shot(`panel-menu-${theme}`);

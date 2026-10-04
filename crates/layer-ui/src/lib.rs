@@ -195,6 +195,7 @@ pub const UI_TEXT_PT: u8 = 11;
 
 use serde::{Deserialize, Serialize};
 
+pub const BRUSH_SIZE_TILE: [f32; 2] = [TILE_SIZE, 44.];
 pub const BRUSH_SIZES: &[f32] = &[
     0.7, 1., 1.5, 2., 2.5, 3., 4., 5., 6., 7., 8., 10., 12., 15., 17., 20., 25.,
     30., 40., 50., 60., 70., 80., 100., 120., 150., 170., 200., 250., 300., 400.,
@@ -207,26 +208,10 @@ pub struct BrushSizePreset {
     pub label: String,
     pub preview_diameter: f32,
 }
-#[derive(Clone, Debug, Serialize)]
-pub struct BrushSizeGrid {
-    pub tile_size: f32,
-    pub gap: f32,
-    pub max_columns: u32,
-    pub fade_height: f32,
-    pub presets: Vec<BrushSizePreset>,
-}
-impl Default for BrushSizeGrid {
-    fn default() -> Self {
-        Self {
-            tile_size: TILE_SIZE,
-            gap: TILE_GAP,
-            max_columns: 6,
-            fade_height: TILE_SIZE / 2.,
-            presets: BRUSH_SIZES.iter().map(|&value| BrushSizePreset {
-                value, label: value.to_string(), preview_diameter: value.clamp(1., TILE_SIZE - 4.),
-            }).collect(),
-        }
-    }
+pub fn brush_size_presets() -> impl Iterator<Item = BrushSizePreset> {
+    BRUSH_SIZES.iter().map(|&value| BrushSizePreset {
+        value, label: value.to_string(), preview_diameter: value.clamp(1., TILE_SIZE - 4.),
+    })
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -348,8 +333,8 @@ pub struct UiCatalog {
     pub new_document: session::NewDocumentSpec,
     pub layer_commands: &'static [CommandId],
     pub brush_categories: Vec<BrushCategory>,
-    pub brush_sizes: &'static [f32],
-    pub brush_size_grid: BrushSizeGrid,
+    pub brush_sizes: Vec<BrushSizePreset>,
+    pub brush_size_tile: [f32; 2],
     pub brush_size: NumericControl,
     pub opacity: NumericControl,
     pub layer_opacity: NumericControl,
@@ -386,8 +371,8 @@ pub fn ui_catalog_localized(localization: &Localizer) -> UiCatalog {
         layer_commands: &CommandId::LAYERS,
         tool_commands: &CommandId::TOOLS,
         brush_categories: tools::brush_categories_localized(localization).collect(),
-        brush_sizes: BRUSH_SIZES,
-        brush_size_grid: BrushSizeGrid::default(),
+        brush_sizes: brush_size_presets().collect(),
+        brush_size_tile: BRUSH_SIZE_TILE,
         brush_size: NumericControl::brush_size(),
         opacity: NumericControl::percent(),
         layer_opacity: NumericControl::layer_opacity(),

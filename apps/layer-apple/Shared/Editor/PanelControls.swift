@@ -115,11 +115,11 @@ struct PanelControls: View {
         let lineHeight = max(1, store.catalog["text_size_pt"].number * 4 / 3) * 1.42
         return SizePresetsLayout(cellHeight: 42 + lineHeight) {
             ForEach(store.catalog["brush_sizes"].array.indices, id: \.self) { index in
-                let size = store.catalog["brush_sizes"][index].number
+                let preset = store.catalog["brush_sizes"][index], size = preset["value"].number
                 Button { store.dispatch(["type": "set_brush_size", "value": size]) } label: {
                     VStack(spacing: 4) {
                         Circle().frame(width: min(27, 2 + sqrt(size) * 1.2), height: min(27, 2 + sqrt(size) * 1.2)).frame(height: 28)
-                        Text(String(Int(size))).frame(height: lineHeight)
+                        Text(preset["label"].string).frame(height: lineHeight)
                     }.padding(2).frame(maxWidth: .infinity).frame(height: 36 + lineHeight)
                         .background(size == store.state["brush"]["diameter"].number ? surface.active : Color.clear, in: SquircleShape.control)
                 }.buttonStyle(.plain).padding(3)
