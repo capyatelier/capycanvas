@@ -87,6 +87,11 @@ through Open and Save panels, Finder, drag and drop and the clipboard. Its
 storage folders live in `~/Library/Containers/<bundle id>/Data`. The iPad app
 needs no entitlements.
 
+Both `Info.plist` files set `ITSAppUsesNonExemptEncryption` to false, so
+uploads skip the export-compliance question: the apps only hash data and make
+no network connections. The Mac app's category is
+`public.app-category.graphics-design`.
+
 `Shared/PrivacyInfo.xcprivacy` is copied into both apps. It declares no
 tracking and no collected data, matching the privacy policy: the apps make no
 network connections, and crash reports come only through Apple's own

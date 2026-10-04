@@ -22,6 +22,8 @@
     </array>
 	<key>CFBundleDisplayName</key>
 	<string>Capy Canvas</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>CFBundleIdentifier</key>
 	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 	<key>CFBundleExecutable</key>

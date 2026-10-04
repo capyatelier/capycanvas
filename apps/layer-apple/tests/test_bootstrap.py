@@ -47,6 +47,11 @@ class BootstrapMetadataTests(unittest.TestCase):
         entitlements = plistlib.loads((APPLE / "macOS/App/CapyCanvas.entitlements").read_bytes())
         self.assertEqual(entitlements, {"com.apple.security.app-sandbox": True,
             "com.apple.security.files.user-selected.read-write": True})
+        for platform in ("iOS", "macOS"):
+            info = plistlib.loads((APPLE / platform / "App/Info.plist").read_bytes())
+            self.assertIs(info["ITSAppUsesNonExemptEncryption"], False)
+        mac = plistlib.loads((APPLE / "macOS/App/Info.plist").read_bytes())
+        self.assertEqual(mac["LSApplicationCategoryType"], "public.app-category.graphics-design")
         manifest = plistlib.loads((APPLE / "Shared/PrivacyInfo.xcprivacy").read_bytes())
         self.assertFalse(manifest["NSPrivacyTracking"])
         self.assertEqual(manifest["NSPrivacyCollectedDataTypes"], [])
