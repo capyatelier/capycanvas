@@ -92,9 +92,9 @@ import kotlin.math.roundToInt
     }
 }
 
-@Composable internal fun ToolbarDivider(modifier: Modifier, horizontal: Boolean) {
+@Composable internal fun ToolbarDivider(modifier: Modifier, horizontal: Boolean, fraction: Float = .7f) {
     Box(modifier, contentAlignment = Alignment.Center) {
-        Box((if (horizontal) Modifier.fillMaxWidth(.7f).height(1.dp) else Modifier.width(1.dp).fillMaxHeight(.7f))
+        Box((if (horizontal) Modifier.fillMaxWidth(fraction).height(1.dp) else Modifier.width(1.dp).fillMaxHeight(fraction))
             .background(LocalPalette.current.secondary.copy(alpha = .3f)))
     }
 }

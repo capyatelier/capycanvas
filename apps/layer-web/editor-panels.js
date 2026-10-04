@@ -42,6 +42,7 @@ export function createEditorPanels({ selectionUi, app, state, element, button, i
         key = next; rows = []; root.replaceChildren();
         for (const [kind, items] of [["groups",view.groups], ["subtools",view.subtools]]) {
           if (!items.length) continue;
+          if (kind === "subtools" && view.groups.length) root.append(element("div", "tile-divider column-divider tool-set-divider"));
           const list = element("div", `tool-${kind}`); root.append(list);
           for (const [index,item] of items.entries()) {
             const read=()=>(readView?.()||state().tool_panels[panel]||state().tool_set)[kind][index];

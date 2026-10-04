@@ -55,7 +55,8 @@ Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 
 Tool Set category buttons fill their grid cells, so hover, selection and input
-cover the whole category.
+cover the whole category. A thin horizontal divider separates categories from
+tools when both are shown, using the toolbar's inset separator style.
 
 `EditingState.tool_slots` remembers one choice per tool slot across layouts,
 outside document and layout history. Brush groups use `ToolMemory` for presets

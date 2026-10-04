@@ -19,6 +19,7 @@ pub struct ToolSet {
     pub root: gtk::Box,
     panel: layer_ui::Panel,
     groups: gtk::FlowBox,
+    divider: gtk::Separator,
     list: gtk::Box,
     pub group_buttons: RefCell<Vec<gtk::Button>>,
     pub buttons: RefCell<Vec<(ToolSetItem, gtk::Button, Option<gtk::Picture>)>>,
@@ -40,8 +41,12 @@ impl ToolSet {
             .row_spacing(2)
             .build();
         groups.add_css_class("tool-groups");
+        let divider = gtk::Separator::builder().orientation(gtk::Orientation::Horizontal)
+            .margin_start(4).margin_end(4).visible(false).build();
+        divider.set_widget_name("tool-set-divider");
         let list = gtk::Box::new(gtk::Orientation::Vertical, 2);
         root.append(&groups);
+        root.append(&divider);
         root.append(&list);
         groups.set_visible(panel != layer_ui::Panel::Tools);
         list.set_visible(!matches!(panel, layer_ui::Panel::BrushSets | layer_ui::Panel::SculptSets));
@@ -49,6 +54,7 @@ impl ToolSet {
             root,
             panel,
             groups,
+            divider,
             list,
             group_buttons: RefCell::default(),
             buttons: RefCell::default(),
@@ -70,6 +76,7 @@ impl ToolSet {
                 })
         };
         self.groups.set_visible(self.panel != layer_ui::Panel::Tools && !view.groups.is_empty());
+        self.divider.set_visible(self.groups.is_visible() && self.list.is_visible() && !view.subtools.is_empty());
         let previous = self.view.borrow();
         if !same(&previous.groups, &view.groups) {
             while let Some(child) = self.groups.first_child() {

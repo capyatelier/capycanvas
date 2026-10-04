@@ -734,6 +734,7 @@ body[data-theme="dark"] .toolbar-manager .destructive-action { color: #ff7b63; }
 .tool-groups .tool-choice-label { flex:1; min-width:0; justify-content:flex-end; }
 .tool-groups .tool-choice-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .tool-subtools { display:flex; flex-direction:column; gap:2px; }
+.tool-set-divider { position:relative; height:1px; margin-bottom:6px; }
 .brush-sets-control .tool-groups, .sculpt-sets-control .tool-groups { flex-direction:column; flex-wrap:nowrap; gap:2px; margin-bottom:0; }
 .brush-sets-control .tool-choice-button, .sculpt-sets-control .tool-choice-button { width:100%; min-height:44px; gap:8px; padding:6px; }
 .brush-sets-control .tool-choice-label, .sculpt-sets-control .tool-choice-label { justify-content:flex-start; }
