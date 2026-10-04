@@ -87,7 +87,7 @@ private struct PlacedCanvasBar: View {
                     .frame(width: labelWidth).accessibilityIdentifier("canvas-bar-label")
             }
             ForEach(Array(items.prefix(shown).enumerated()), id: \.offset) { _, item in field(item, completion: false) }
-            EditorMenuButton(menu: { AppleContextMenu(menu) { store.dispatch($0) } }, identifier: "canvas-bar-menu",
+            EditorMenuButton(menu: { [menu] in AppleContextMenu(menu) { store.dispatch($0) } }, identifier: "canvas-bar-menu",
                 rootFocusesSelection: false) {
                 SharedIcon(name: "more", size: 20).frame(width: Self.itemHeight, height: Self.itemHeight)
             }.buttonStyle(EditorControlButtonStyle(selected: false, corner: .half))
@@ -116,7 +116,7 @@ private struct PlacedCanvasBar: View {
         let id = item["menu"].string, label = item["label"].string
         let disabled = !command.isNull && !command["enabled"].bool, reason = command.disabledReason
         let tip = command.isNull ? label : reason ?? command["tooltip"].string
-        return EditorMenuButton(menu: { AppleContextMenu(menus[id] ?? JSON()) { store.dispatch($0) } },
+        return EditorMenuButton(menu: { [model = menus[id] ?? JSON()] in AppleContextMenu(model) { store.dispatch($0) } },
             identifier: "canvas-bar-menu-items-" + id, rootFocusesSelection: false) {
             HStack(spacing: Self.menuGap) {
                 SharedIcon(name: item["icon"].string, size: Self.menuIcon)
