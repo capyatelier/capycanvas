@@ -13,7 +13,7 @@ web-time = "1.1.0"
 layer-core = { path = "../layer-core" }
 layer-render = { path = "../layer-render" }
 rtrb = "0.4.0"
-flate2 = "1"
+flate2.workspace = true
 bincode = { version = "=2.0.1", default-features = false, features = ["std", "serde"] }
 serde_json = { version = "1", features = ["float_roundtrip"] }
 serde = { version = "1", features = ["derive"] }

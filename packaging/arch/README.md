@@ -5,11 +5,17 @@ and Omarchy. It stages the same desktop entry, MIME registration, icon, filters,
 license material and pinned GTK runtime as the native Linux package. Photo
 codecs are compiled into the shared Rust core.
 
-The recipe no longer downloads or builds native photo-codec archives. `shaderc`
-supplies GTK's shader compiler; `cargo-about` collects original Rust dependency
-notices. GLib tools, DRM/Vulkan headers and Wayland protocols are explicit GTK
+Shared Rust photo codecs need no native codec archives. The local GTK runtime
+builds its own statically linked TIFF and JPEG libraries from checksum-pinned
+sources; their archives, build overlays and licenses ship with the package.
+`shaderc` supplies GTK's shader compiler and `sassc` compiles its stylesheets;
+`curl` fetches the pinned GTK archive; `cargo-about` collects original Rust
+dependency notices. GLib tools, DRM/Vulkan headers and Wayland protocols are explicit GTK
 build dependencies. GTK runtime sources and missing license notices use the pinned checksums
 and revisions from the shared packaging tools.
+
+For development on Arch or Omarchy, install the toolkit and build prerequisites
+listed in the [Linux guide](../../docs/development/linux.md#prerequisites).
 
 Rust copyright notices are collected from either rustup's sysroot or Arch's
 system `rust` package. The native packager removes application debug data; additional

@@ -9,7 +9,7 @@ url='https://github.com/capyatelier/capycanvas'
 license=('MIT OR Apache-2.0' 'LicenseRef-Capy-Canvas-Branding')
 depends=('glibc' 'gcc-libs' 'gtk4>=1:4.22' 'libadwaita>=1:1.9' 'wayland' 'vulkan-icd-loader')
 optdepends=('vulkan-driver: hardware Vulkan rendering (required at runtime)')
-makedepends=('cargo-about' 'desktop-file-utils' 'git' 'glib2-devel' 'libdrm' 'meson' 'ninja' 'nodejs' 'python' 'rust' 'shaderc' 'vulkan-headers' 'wayland-protocols')
+makedepends=('cargo-about' 'curl' 'desktop-file-utils' 'git' 'glib2-devel' 'libdrm' 'meson' 'ninja' 'nodejs' 'python' 'rust' 'sassc' 'shaderc' 'vulkan-headers' 'wayland-protocols')
 provides=('capycanvas')
 conflicts=('capycanvas')
 # The native packager strips the app; preserve the bundled GTK manifest hashes.

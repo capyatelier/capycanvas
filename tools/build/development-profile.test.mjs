@@ -20,7 +20,7 @@ for (const [platform, profile, explicit, expected] of [
     const bin = mkdtempSync(join(tmpdir(), "capy-profile-"));
     t.after(() => rmSync(bin, { recursive: true, force: true }));
     const log = join(bin, "commands.jsonl");
-    for (const tool of ["cargo", "wasm-bindgen", "python3", "mkdir", "cp"]) {
+    for (const tool of ["bash", "cargo", "wasm-bindgen", "python3", "mkdir", "cp"]) {
       writeFileSync(join(bin, tool), `#!${process.execPath}
 require("node:fs").appendFileSync(process.env.COMMAND_LOG,
   JSON.stringify([${JSON.stringify(tool)}, ...process.argv.slice(2)]) + "\\n");
@@ -32,11 +32,15 @@ require("node:fs").appendFileSync(process.env.COMMAND_LOG,
       cwd: bin,
       env: { ...process.env, PATH: `${bin}:/usr/bin:/bin`, CAPY_RUST_PROFILE: profile,
         LAYER_WASM_BINDGEN: join(bin, "wasm-bindgen"), CARGO_TARGET_DIR: "custom target",
-        COMMAND_LOG: log },
+        CAPY_GTK_BUILD_DIR: join(bin, "gtk cache"), COMMAND_LOG: log },
       encoding: "utf8",
     });
     assert.equal(result.status, 0, result.stderr);
     const commands = readFileSync(log, "utf8").trim().split("\n").map(JSON.parse);
+    if (platform === "linux") {
+      assert.deepEqual(commands.shift(), ["bash", "tools/build/gtk-runtime/build.sh",
+        join(bin, "gtk cache"), join(bin, "gtk cache/prefix")]);
+    }
     assert.deepEqual(commands[0], platform === "linux"
       ? ["cargo", "run", "--locked", "--profile", expected, "-p", "layer-linux", "--", ...args]
       : ["cargo", "build", "--locked", "--profile", expected, "-p", "layer-web-link", "--target", "wasm32-unknown-unknown"]);

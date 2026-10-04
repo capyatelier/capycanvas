@@ -131,6 +131,12 @@ cost and input-to-display latency on the target device.
 
 ## Files and other host services
 
+Shared document compression and photo codecs use Rust implementations, including
+the explicitly selected Rust deflate backend. ICC transforms use Rust too.
+Native workspace storage builds its bundled SQLite; it does not require system
+SQLite development packages. Toolkit dependencies belong to the Linux client,
+and GPU drivers and platform APIs remain host requirements.
+
 Shared code defines file requests, save checkpoints and close decisions. The host
 opens pickers, reads or writes bytes and reports completion. Package decoding and
 encoding belong off the input path. An incoming document is validated before it

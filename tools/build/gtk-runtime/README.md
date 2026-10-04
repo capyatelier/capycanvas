@@ -16,14 +16,22 @@ departure before any motion:
 
 ```sh
 python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.22.4
+python3 tools/build/gtk-runtime/test-runtime.py \
+  target/gtk-runtime/prefix target/gtk-runtime/gtk-4.22.4/subprojects
 ```
 
-The source archive is pinned by SHA-256. The build needs GTK's system development
-dependencies, Meson, Ninja, `pkg-config`, a C compiler and `glslc`. It neither
+The source archive is pinned by SHA-256. TIFF and JPEG use GTK's checksum-pinned
+Meson wraps and link statically into the local GTK library. System TIFF and JPEG
+development packages are unnecessary. TIFF enables JPEG and deflate compression;
+its optional JBIG, LERC, LZMA, WebP and Zstandard dependencies are disabled.
+The build needs GTK's remaining system development dependencies, Wayland protocol
+files, DRM headers, Meson, Ninja, `pkg-config`, a C compiler, `glslc` and `sassc`. It neither
 installs system packages nor replaces system GTK. An optional `deps/usr` under
 the build directory can supply extracted development headers/tools, as in the
 recorded Fedora review build. The prefix contains the library, source archive,
-license, patch, standalone build script and a checksum manifest.
+licenses, patches, standalone build script and a checksum manifest, including
+the TIFF and JPEG source archives and Meson build overlays. Rebuilds seed Meson's
+package cache from these shipped sources, so they need no codec downloads.
 
 `apps/layer-linux/package.mjs` and `run.sh` default to `target/gtk-runtime` as their cache;
 `CAPY_GTK_BUILD_DIR` can select another cache. The launcher selects the bundled
@@ -34,7 +42,7 @@ GTK's other shared dependencies and libadwaita remain system requirements.
 From a relocated package, rebuild the supplied source without a network fetch:
 
 ```sh
-bash share/doc/capycanvas-gtk/build.sh /tmp/capy-gtk-build /tmp/capy-gtk-prefix
+bash share/doc/capycanvas-gtk/build.sh "$PWD/gtk-build" "$PWD/gtk-prefix"
 ```
 
 Package smoke validation checks the actual mapped GTK library path;

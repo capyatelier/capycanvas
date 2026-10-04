@@ -26,14 +26,33 @@ if [[ ! -f "$gtk_build/patched.sha256" ]] || [[ $(cat "$gtk_build/patched.sha256
     patch -d "$gtk_build/gtk-4.22.4" -p1 < "$gtk_recipe/tablet-proximity-cursor.patch"
     echo "$gtk_patch_hash" > "$gtk_build/patched.sha256"
 fi
+python3 - "$gtk_recipe/sources" "$gtk_build/gtk-4.22.4/subprojects" <<'PY'
+import configparser, pathlib, shutil, sys
+sources, projects = map(pathlib.Path, sys.argv[1:])
+for name in ['libtiff', 'libjpeg-turbo']:
+    wrap = configparser.ConfigParser(interpolation=None)
+    wrap.read(projects / (name + '.wrap'))
+    for kind in ['source', 'patch']:
+        filename = wrap['wrap-file'][kind + '_filename']
+        if (sources / filename).is_file():
+            (projects / 'packagecache').mkdir(exist_ok=True)
+            shutil.copy2(sources / filename, projects / 'packagecache' / filename)
+PY
 if [[ -d "$gtk_build/deps/usr" ]]; then
     export PKG_CONFIG_PATH="$gtk_build/deps/usr/lib64/pkgconfig:$gtk_build/deps/usr/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
     export PATH="$gtk_build/deps/usr/bin:$PATH"
+    export LD_LIBRARY_PATH="$gtk_build/deps/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
 gtk_config=()
 if [[ -f "$gtk_build/build/build.ninja" ]]; then gtk_config+=(--reconfigure); fi
 meson setup "${gtk_config[@]}" "$gtk_build/build" "$gtk_build/gtk-4.22.4" \
-    --buildtype=release --wrap-mode=nofallback -Dbuild-demos=false -Dbuild-tests=false \
+    --buildtype=release -Dc_args=-fPIC --wrap-mode=nofallback --force-fallback-for=libtiff,libjpeg-turbo \
+    -Dlibtiff:default_library=static -Dlibtiff:jbig=disabled -Dlibtiff:lerc=disabled \
+    -Dlibtiff:lzma=disabled -Dlibtiff:webp=disabled -Dlibtiff:zstd=disabled \
+    -Dlibtiff:jpeg=enabled -Dlibtiff:zlib=enabled \
+    -Dlibjpeg-turbo:default_library=static \
+    -Dlibjpeg-turbo:jpeg-turbo=disabled -Dlibjpeg-turbo:tests=disabled \
+    -Dbuild-demos=false -Dbuild-tests=false \
     -Dbuild-testsuite=false -Dbuild-examples=false -Dintrospection=disabled \
     -Dmedia-gstreamer=disabled -Ddocumentation=false -Dman-pages=false -Dx11-backend=false
 ninja -C "$gtk_build/build" -j "${CAPY_BUILD_JOBS:-8}" gtk/libgtk-4.so.1.2200.4
@@ -42,16 +61,35 @@ mv -f "$gtk_prefix/lib/libgtk-4.so.1.new" "$gtk_prefix/lib/libgtk-4.so.1"
 cp "$gtk_build/gtk-4.22.4/COPYING" "$gtk_docs/COPYING"
 cp "$gtk_build/$gtk_archive" "$gtk_docs/sources/"
 cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/build.sh" "$gtk_docs/"
-python3 - "$gtk_prefix" <<'PY'
-import hashlib, json, pathlib, sys
+python3 - "$gtk_prefix" "$gtk_build/gtk-4.22.4/subprojects" <<'PY'
+import configparser, hashlib, json, pathlib, shutil, sys
 p = pathlib.Path(sys.argv[1])
+projects = pathlib.Path(sys.argv[2])
+docs = p / 'share/doc/capycanvas-gtk'
 files = ['lib/libgtk-4.so.1', 'share/doc/capycanvas-gtk/COPYING',
          'share/doc/capycanvas-gtk/sources/gtk-4.22.4.tar.xz',
          'share/doc/capycanvas-gtk/pad-event-surface.patch',
          'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch', 'share/doc/capycanvas-gtk/build.sh']
+dependencies = {}
+for name in ['libtiff', 'libjpeg-turbo']:
+    wrap = configparser.ConfigParser(interpolation=None)
+    wrap.read(projects / (name + '.wrap'))
+    data = wrap['wrap-file']
+    for kind in ['source', 'patch']:
+        source = projects / 'packagecache' / data[kind + '_filename']
+        assert hashlib.sha256(source.read_bytes()).hexdigest() == data[kind + '_hash'], source
+        shutil.copy2(source, docs / 'sources' / source.name)
+        files.append(str((docs / 'sources' / source.name).relative_to(p)))
+    licenses = docs / name
+    licenses.mkdir(exist_ok=True)
+    for filename in ['LICENSE.md', 'LICENSE.build']:
+        shutil.copy2(projects / data['directory'] / filename, licenses / filename)
+        files.append(str((licenses / filename).relative_to(p)))
+    dependencies[name] = dict(version=data['wrapdb_version'].split('-')[0], source=data['source_url'])
 manifest = dict(version='4.22.4', license='LGPL-2.1-or-later',
                 source='https://download.gnome.org/sources/gtk/4.22/gtk-4.22.4.tar.xz',
-                rebuild='bash share/doc/capycanvas-gtk/build.sh /tmp/capy-gtk-build /tmp/capy-gtk-prefix',
+                dependencies=dependencies,
+                rebuild='bash share/doc/capycanvas-gtk/build.sh "$PWD/gtk-build" "$PWD/gtk-prefix"',
                 files={f: hashlib.sha256((p/f).read_bytes()).hexdigest() for f in files})
 (p/'manifest.json').write_text(json.dumps(manifest, indent=2)+'\n')
 PY

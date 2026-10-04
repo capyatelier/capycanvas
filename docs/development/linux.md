@@ -14,9 +14,33 @@ Install a recent stable Rust toolchain, a C/C++ toolchain, `pkg-config`, and the
 GTK 4.22+, libadwaita 1.9 and Wayland development packages. Enabled API features
 are declared in [`apps/layer-linux/Cargo.toml`](../../apps/layer-linux/Cargo.toml).
 The launcher also builds the [patched GTK runtime](../../tools/build/gtk-runtime/README.md),
-which needs Meson, Ninja, `glslc` and GTK's development dependencies.
+which needs Meson, Ninja, `glslc`, `sassc`, Wayland protocol files, DRM headers
+and GTK's development dependencies. Its TIFF and JPEG libraries build from
+checksum-pinned sources and link statically; their system development packages
+are unnecessary. The first build downloads those sources; later builds use the cache.
 Photo codecs and ICC color management are Rust crates; no libjpeg-turbo,
 LittleCMS or HEIF system packages are needed.
+
+On Fedora:
+
+```bash
+sudo dnf install gcc gcc-c++ pkgconf-pkg-config python3 curl patch tar \
+  gtk4-devel libadwaita-devel wayland-devel libpng-devel zlib-devel \
+  meson ninja-build glslc sassc wayland-protocols-devel libdrm-devel vulkan-headers
+```
+
+On Arch Linux or Omarchy, with a current system:
+
+```bash
+sudo pacman -S --needed base-devel rust python curl glib2-devel gtk4 libadwaita wayland \
+  libpng zlib meson ninja shaderc sassc wayland-protocols libdrm vulkan-headers
+```
+
+GTK still requires its native toolkit libraries, fonts and Wayland/Vulkan
+interfaces. These are Linux host requirements, separate from the portable
+Rust core. Fedora splits development headers into `-devel` packages; Arch
+includes them with the libraries. `glslc` is provided by Fedora's `glslc`
+package and Arch's `shaderc` package. `sassc` is a build tool on both.
 
 ```bash
 pkg-config --modversion gtk4 libadwaita-1 wayland-client
@@ -301,7 +325,7 @@ asserting, and check persistence by reopening, not only by reading rows.
 
 Besides the build prerequisites, install Node.js, `strip`,
 `desktop-file-validate`, `cargo-about`, and GTK's own build dependencies with
-Meson, Ninja and `glslc`:
+Meson, Ninja, `glslc` and `sassc`:
 
 ```bash
 cargo install cargo-about --version 0.9.2 --features cli --locked
