@@ -8,7 +8,7 @@ extension XCTestCase {
         workspaceActivate(photo)
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: photo)
         waitForExpectations(timeout: 10)
-        for label in ["Rectangle select", "Ellipse select", "Polygonal lasso", "Select by color"] {
+        for label in ["Rectangle select", "Lasso selection", "Auto select"] {
             XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
                 "toolbar-tile-toolbar-", label)).firstMatch.waitForExistence(timeout: 10), "Photo toolbar has \(label)")
         }

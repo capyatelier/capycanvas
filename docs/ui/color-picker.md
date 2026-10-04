@@ -44,7 +44,7 @@ column and floating-panel resize in both themes with mouse and touch, including
 the absence of synchronous field raster calls. Android already uses background
 field rendering and retains its bitmap across size changes.
 
-GTK, Web, Android and Windows place the selected paint circle above the other
+Every host places the selected paint circle above the other
 circle, including its border and pointer target. Hover leaves that order
 unchanged. Transparent paint keeps the remembered paint circle in front;
 temporary black or white uses the primary circle. Rust publishes the front
@@ -52,7 +52,7 @@ swatch with the color panel view.
 The visible circular rim belongs to the button's hit area, and the selection or
 hover border covers the paint fill.
 
-GTK, Web, Android and Windows live paint icons in the toolbar and window bar use
+Live paint icons in the toolbar and window bar use
 the same front swatch as the panel. Each circle has an opaque transparency checker
 beneath its paint, so the rear circle cannot show through it. Selecting a paint
 updates retained icons even when neither paint color changes. HDR rendition

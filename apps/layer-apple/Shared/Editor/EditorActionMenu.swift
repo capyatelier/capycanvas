@@ -6,16 +6,18 @@ struct EditorMenuButton<Label: View>: View {
     var rootFocusesSelection = true
     @ViewBuilder let label: () -> Label
     @Environment(\.editorPopupStore) private var store
-    @State private var active: AppleContextMenu?
+    @State private var active = false
     @State private var popupID = UUID()
     var body: some View {
-        Button { active = active == nil ? menu() : nil } label: { label().contentShape(Rectangle()) }
-            .accessibilityValue(active == nil ? "Collapsed" : "Expanded")
-            .editorPopover(isPresented: Binding(get: { active != nil }, set: { if !$0 { active = nil } })) {
-                EditorActionMenu(model: active ?? AppleContextMenu(JSON()) { _ in }, identifier: identifier,
-                    rootFocusesSelection: rootFocusesSelection) { active = nil }
+        Button { active.toggle() } label: { label().contentShape(Rectangle()) }
+            .accessibilityValue(active ? "Expanded" : "Collapsed")
+            .editorPopover(isPresented: $active) {
+                if active {
+                    EditorActionMenu(model: menu(), identifier: identifier,
+                        rootFocusesSelection: rootFocusesSelection) { active = false }
+                }
             }
-            .onChange(of: active != nil) { _, open in store?.workspace.popover(popupID, open: open) }
+            .onChange(of: active) { _, open in store?.workspace.popover(popupID, open: open) }
             .onDisappear { store?.workspace.popover(popupID, open: false) }
     }
 }
@@ -30,9 +32,18 @@ struct EditorActionMenu: View {
     var rootFocusesSelection = true
     var capturesKeys = true
     var dismiss: () -> Void
-    @State private var pages: [(item: AppleContextMenu.Item, index: Int)] = []
+    @State private var pages: [Int] = []
     @State private var focus: Int?
-    private var sections: [[AppleContextMenu.Item]] { pages.last?.item.sections ?? model.sections }
+    private var page: AppleContextMenu.Item? {
+        var sections = model.sections, parent: AppleContextMenu.Item?
+        for index in pages {
+            let entries = sections.flatMap { $0 }
+            guard entries.indices.contains(index) else { return nil }
+            parent = entries[index]; sections = entries[index].sections
+        }
+        return parent
+    }
+    private var sections: [[AppleContextMenu.Item]] { pages.isEmpty ? model.sections : page?.sections ?? [] }
     private var entries: [AppleContextMenu.Item] { sections.flatMap { $0 } }
     private var enabled: [Int] { entries.indices.filter { entries[$0].enabled } }
     private var initialFocus: Int? {
@@ -60,9 +71,9 @@ struct EditorActionMenu: View {
         return min(560, CGFloat(rows + separators + heading + 12))
     }
     @ViewBuilder private var header: some View {
-        if let page = pages.last {
+        if !pages.isEmpty {
             Button { back() } label: {
-                Label(page.item.label, systemImage: "chevron.left")
+                Label(page?.label ?? "", systemImage: "chevron.left")
                     .frame(maxWidth: .infinity, minHeight: 36, alignment: .leading)
             }.buttonStyle(.plain).padding(.horizontal, 10).accessibilityIdentifier("editor-menu-back")
             Divider()
@@ -90,7 +101,9 @@ struct EditorActionMenu: View {
     private func itemLabel(_ item: AppleContextMenu.Item) -> some View {
         HStack(spacing: 8) {
             Image(systemName: "checkmark").frame(width: 16).opacity(item.selected == true ? 1 : 0)
+            if !item.icon.isEmpty { SharedIcon(name: item.icon) }
             Text(item.label).frame(maxWidth: .infinity, alignment: .leading)
+            if item.marker { ToolGroupMarker() }
             if !item.hint.isEmpty { Text(item.hint).foregroundStyle(.secondary).font(.caption) }
             if !item.sections.isEmpty { Image(systemName: "chevron.right").font(.caption) }
         }.padding(.horizontal, 10).frame(minHeight: 36).contentShape(Rectangle())
@@ -122,11 +135,11 @@ struct EditorActionMenu: View {
         guard !enabled.isEmpty else { return }
         focus = enabled[((enabled.firstIndex(of: focus ?? -1) ?? 0) + delta + enabled.count) % enabled.count]
     }
-    private func back() { focus = pages.removeLast().index }
+    private func back() { focus = pages.removeLast() }
     private func activate(_ index: Int) {
         let item = entries[index]
         guard item.enabled else { return }
-        if !item.sections.isEmpty { pages.append((item, index)); focus = initialFocus }
+        if !item.sections.isEmpty { pages.append(index); focus = initialFocus }
         else { dismiss(); item.action?() }
     }
 }

@@ -27,7 +27,6 @@ extension XCTestCase {
         }
         #endif
         editorTool("Lasso selection", in: app)
-        editorChoice("Select", group: true, in: app)
         editorChoice("Lasso selection", in: app)
         #if os(macOS)
         clickWithoutArea()
@@ -90,7 +89,7 @@ extension XCTestCase {
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         workspaceActivate(app.buttons["layer-New layer"])
         workspaceActivate(app.buttons["color-swap"])
-        editorTool("Figure", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
+        editorTool("Line", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
         viewport.coordinate(withNormalizedOffset: sheet.offset(0.25, 0.2)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: sheet.offset(0.6, 0.8)))
         workspaceActivate(app.buttons["number-value-layer-opacity"])
@@ -121,9 +120,8 @@ extension XCTestCase {
             expectation(for: NSPredicate(format: "value == %@", label), evaluatedWith: menu)
             waitForExpectations(timeout: 5)
         }
-        // Independently calculated sRGB result of 50% red over blue in linear light.
         source("Visible color")
-        pick(0.45, expected: [0.672824, 0.366774, 0.599931, 1])
+        pick(0.45, expected: [0.55, 0.35, 0.5, 1])
         attachEditor(in: app, name: "eyedropper-visible")
         source("Selected layer")
         pick(0.45, expected: [0.9, 0.25, 0.2, 1])

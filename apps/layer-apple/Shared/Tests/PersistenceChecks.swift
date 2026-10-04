@@ -16,6 +16,10 @@ extension XCTestCase {
         return app
     }
 
+    @MainActor func useFreshStorage(_ app: XCUIApplication) {
+        app.launchEnvironment["CAPY_STORAGE_DIR"] = "capy-test-" + UUID().uuidString
+    }
+
     @MainActor func editorCaptureApplication() -> XCUIApplication {
         let app = editorTestApplication()
         app.launchEnvironment["CAPY_CAPTURE_PROBE"] = "1"

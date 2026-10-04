@@ -16,49 +16,52 @@ struct WorkspaceSwitcher: View {
         10 + CGFloat(max(0, choices.count - 1)) * 2 + choices.reduce(0) { width, workspace in
             width + min(110, EditorTextMetrics.width(workspace["title"].string, size: textSize, weight: .medium))
                 + 16
-        }
+        } + 2 + WorkspaceSwitcherOptions.size.width
     }
     var body: some View {
         Group {
             if maximumWidth + 0.5 < naturalWidth {
-                EditorMenuButton(menu: {
-                    AppleContextMenu(Self.menu(workspaces)) { workspaces.switchTo($0["id"].string) }
-                }, identifier: "workspace-switcher-menu") {
+                EditorMenuButton(menu: { Self.menu(workspaces) }, identifier: "workspace-switcher-menu") {
                     HStack(spacing: 8) {
-                        Text(choices.first(where: { $0["current"].bool })?["title"].string ?? "Workspaces")
+                        Text(choices.first(where: { $0["current"].bool })?["title"].string ?? workspaces.view["switcher_menu"]["title"].string)
                             .lineLimit(1)
                         Image(systemName: "chevron.down").font(.system(size: 11))
                     }.padding(.horizontal, 12).frame(width: maximumWidth, height: tile)
                 }.buttonStyle(HeaderButtonStyle(radius: tile / 2))
+                    .disabled(!workspaces.ready || workspaces.readOnly)
+                    .modifier(WorkspaceSwitcherContext(workspaces: workspaces))
             } else {
                 segments.glassSurface(SquircleShape.tile, fill: palette.glassSwitcher)
             }
         }
-        .disabled(!workspaces.ready || workspaces.busy || workspaces.readOnly || workspaces.switcherBusy || workspaces.presented)
-        .accessibilityElement(children: .contain).accessibilityLabel("Workspaces").accessibilityIdentifier("workspace-switcher")
+        .accessibilityElement(children: .contain).accessibilityLabel(workspaces.view["switcher_menu"]["title"].string)
+        .accessibilityIdentifier("workspace-switcher")
         .modifier(HeaderControlMeasurement(id: "workspace-switcher"))
     }
-    @MainActor static func menu(_ workspaces: WorkspaceController) -> JSON {
-        JSON(["sections":[workspaces.view["switcher_display"].array.map { workspace in
-            ["label":workspace["title"].raw, "enabled":workspaces.ready && !workspaces.busy && !workspaces.readOnly && !workspaces.switcherBusy,
-                "selected":workspace["current"].bool,
-                "action":["type":"apple_workspace_switch", "id":workspace["id"].raw]]
-        }]])
+    @MainActor static func menu(_ workspaces: WorkspaceController) -> AppleContextMenu {
+        AppleContextMenu(workspaces.view["switcher_menu"].replacing("title", with: JSON(""))) { workspaces.store?.dispatch($0) }
     }
+    @MainActor static func options(_ workspaces: WorkspaceController) -> AppleContextMenu {
+        AppleContextMenu(workspaces.view["switcher_options"].replacing("title", with: JSON(""))) { workspaces.store?.dispatch($0) }
+    }
+    private var choicesEnabled: Bool { workspaces.ready && !workspaces.busy && !workspaces.readOnly && !workspaces.presented }
     private var segments: some View {
         WorkspaceNameWidth(natural: naturalWidth, maximum: maximumWidth) {
-            ScrollViewReader { scroll in
-                EditorScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 2) {
-                        ForEach(choices, id: \.switcherID) { workspace in
-                            choice(workspace).id(workspace["id"].string)
+            HStack(spacing: 2) {
+                ScrollViewReader { scroll in
+                    EditorScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 2) {
+                            ForEach(choices, id: \.switcherID) { workspace in
+                                choice(workspace).id(workspace["id"].string)
+                            }
+                        }.padding([.leading, .vertical], 5)
+                    }.frame(height: 36)
+                        .onChange(of: choices.first?["id"].string) { _, first in
+                            if let first, first == workspaces.view["id"].string { scroll.scrollTo(first, anchor: .leading) }
                         }
-                    }.padding(5)
-                }.frame(height: 36)
-                    .onChange(of: choices.first?["id"].string) { _, first in
-                        if let first, first == workspaces.view["id"].string { scroll.scrollTo(first, anchor: .leading) }
-                    }
-            }
+                }.disabled(!choicesEnabled).modifier(WorkspaceSwitcherContext(workspaces: workspaces))
+                WorkspaceSwitcherOptions(workspaces: workspaces, palette: palette)
+            }.padding(.trailing, 5)
         }
     }
     private func choice(_ workspace: JSON) -> some View {
@@ -74,6 +77,39 @@ struct WorkspaceSwitcher: View {
             .accessibilityIdentifier("workspace-switch-" + workspace["id"].string)
             .accessibilityAddTraits(selected ? .isSelected : [])
             .modifier(HeaderControlMeasurement(id: "workspace-switch-" + workspace["id"].string))
+    }
+}
+
+private struct WorkspaceSwitcherContext: ViewModifier {
+    @ObservedObject var workspaces: WorkspaceController
+    @State private var popupID = UUID()
+    func body(content: Content) -> some View {
+        content.nativeEditorContextMenu(identity: "workspace-switcher", load: { $0(WorkspaceSwitcher.options(workspaces)) },
+            visibility: { workspaces.store?.workspace.popover(popupID, open: $0) })
+    }
+}
+
+struct WorkspaceSwitcherOptions: View {
+    static let size = CGSize(width: 20, height: 26)
+    @ObservedObject var workspaces: WorkspaceController
+    let palette: EditorPalette
+    @State private var open = false
+    @State private var popupID = UUID()
+    var body: some View {
+        let label = workspaces.view["switcher_options_label"].string
+        Button { open.toggle() } label: {
+            SharedIcon(name: "more-small", size: 16).foregroundStyle(palette["text"].opacity(0.7))
+                .frame(width: Self.size.width, height: Self.size.height).contentShape(Rectangle())
+        }.buttonStyle(SwitcherChoiceStyle(selected: false, palette: palette))
+            .help(label).accessibilityLabel(label).accessibilityIdentifier("workspace-switcher-options")
+            .editorPopover(isPresented: $open) {
+                if open {
+                    EditorActionMenu(model: WorkspaceSwitcher.options(workspaces), width: 280,
+                        identifier: "workspace-switcher-options-menu") { open = false }
+                }
+            }
+            .onChange(of: open) { _, open in workspaces.store?.workspace.popover(popupID, open: open) }
+            .onDisappear { workspaces.store?.workspace.popover(popupID, open: false) }
     }
 }
 

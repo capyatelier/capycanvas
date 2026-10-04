@@ -203,31 +203,54 @@ private struct StorageAlert: ViewModifier {
 private struct CameraStatus: View {
     @ObservedObject var store: EditorStore
     @ObservedObject var camera: CameraReadout
-    @State private var menu: AppleContextMenu?
+    @State private var menu: JSON?
+    private var copy: JSON { store.catalog["native_copy"]["header"] }
+    private var refreshKey: String {
+        JSON([camera.value["zoom"].raw, camera.value["rotation"].raw, camera.value["zoom_locked"].raw,
+            camera.value["rotation_locked"].raw, store.catalog["navigator_commands"].array.map { store.command($0.string)["enabled"].raw }]).stableKey
+    }
     private func refresh() {
         store.query(["type": "zoom_menu"]) { model in
             guard menu != nil else { return }
-            menu = AppleContextMenu(model.replacing("title", with: JSON(""))) { store.dispatch($0) }
+            menu = model
         }
+    }
+    private func sections(_ model: JSON, rotation: Bool) -> AppleContextMenu {
+        let all = model["sections"].array, boundary = min(all.count, Int(model["rotation_section"].uint))
+        let part = rotation ? Array(all[boundary...]) : Array(all[..<boundary])
+        return AppleContextMenu(JSON(["title": "", "sections": part.map(\.raw)])) { store.dispatch($0) }
     }
     var body: some View {
         Button {
-            if menu == nil { menu = AppleContextMenu(JSON()) { _ in }; refresh() } else { menu = nil }
+            if menu == nil { menu = JSON(); refresh() } else { menu = nil }
         } label: {
             Text(verbatim: "\(Int((camera.value["zoom"].number * 100).rounded()))% · \(Int((camera.value["rotation"].number * 180 / .pi).rounded()))°")
-        }.buttonStyle(.plain).focusable(false).help("Canvas zoom and rotation")
+        }.buttonStyle(.plain).focusable(false).help(copy["zoom"].string)
             .accessibilityIdentifier("camera-status")
-            .onChange(of: camera.value["zoom"].number) { if menu != nil { refresh() } }
+            .onChange(of: refreshKey) { if menu != nil { refresh() } }
             .editorPopover(isPresented: Binding(get: { menu != nil }, set: { if !$0 { menu = nil } })) {
-                VStack(alignment: .leading, spacing: 6) {
-                    NumberControl(store: store, label: "Zoom", value: camera.value["zoom"].number, control: store.catalog["zoom"],
-                        identifier: "zoom") { value, completion in
-                        store.edit(["type": "set_zoom", "zoom": value], completion: completion)
-                    }.padding(.horizontal, 10).padding(.top, 8)
-                    Divider()
-                    EditorActionMenu(model: menu ?? AppleContextMenu(JSON()) { _ in }, width: 240, identifier: "zoom-menu",
-                        rootFocusesSelection: false, capturesKeys: false) { menu = nil }
-                }.frame(width: 240)
+                let model = menu ?? JSON()
+                EditorScrollView {
+                    VStack(alignment: .leading, spacing: 6) {
+                        NumberControl(store: store, label: copy["zoom"].string, value: camera.value["zoom"].number,
+                            control: store.catalog["zoom"], identifier: "zoom", inline: true) { value, completion in
+                            store.edit(["type": "set_zoom", "zoom": value], completion: completion)
+                        }.padding(.horizontal, 10).padding(.top, 8)
+                        Divider()
+                        EditorActionMenu(model: sections(model, rotation: false), width: 240, identifier: "zoom-menu",
+                            rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                        NumberControl(store: store, label: copy["rotation"].string, value: camera.value["rotation"].number,
+                            control: store.catalog["rotation"], identifier: "rotation", inline: true) { value, completion in
+                            store.edit(["type": "set_rotation", "rotation": value], completion: completion)
+                        }.padding(.horizontal, 10)
+                        Divider()
+                        EditorActionMenu(model: sections(model, rotation: true), width: 240, identifier: "rotation-menu",
+                            rootFocusesSelection: false, capturesKeys: false) { menu = nil }.fixedSize(horizontal: false, vertical: true)
+                        Divider()
+                        NavigationButtons(store: store, prefix: "zoom").padding([.horizontal, .bottom], 8)
+                    }
+                }.frame(width: 240).frame(maxHeight: 640).fixedSize(horizontal: false, vertical: true)
             }
     }
 }

@@ -8,14 +8,16 @@ struct ManagedColorButton: View {
     let documentSpace: String
     var viewing = JSON()
     var opaque = false
+    var titled = true
+    var swatchWidth: CGFloat = 48
     let change: (JSON) -> Void
     @State private var editing = false
     var body: some View {
         let preview = ColorUI.preview(value)
         HStack {
-            Text(label).frame(maxWidth: .infinity, alignment: .leading)
+            if titled { Text(label).frame(maxWidth: .infinity, alignment: .leading) }
             Button { editing = true } label: {
-                ColorSwatch(rgba: preview["rgba"], shape: .control).frame(width: 48, height: 28)
+                ColorSwatch(rgba: preview["rgba"], shape: .control).frame(width: swatchWidth, height: 28)
                     .overlay(SquircleShape.control.stroke(.primary.opacity(0.3), lineWidth: 1))
             }.buttonStyle(.plain).accessibilityLabel(label).accessibilityIdentifier(identifier + "-color")
                 .help(preview["in_gamut"].bool ? label : nativeCopy["color"]["outside_p3"].string)

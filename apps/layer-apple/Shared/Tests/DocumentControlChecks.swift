@@ -549,7 +549,7 @@ extension XCTestCase {
         }
         XCTAssertTrue(allBlue, "The exported image must contain the opaque blue artwork")
         attachEditor(in: app, name: "native-project-saved")
-        app.terminate(); app.launch()
+        app.terminate(); useFreshStorage(app); app.launch()
         XCTAssertTrue(title.waitForExistence(timeout: 30))
         XCTAssertTrue(titleText().hasPrefix("Untitled · "))
         XCTAssertEqual(layers.count, 2, "Reopen must load the saved file, independently of in-memory artwork")

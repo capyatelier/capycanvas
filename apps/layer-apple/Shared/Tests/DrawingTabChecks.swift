@@ -62,12 +62,12 @@ extension XCTestCase {
         #else
         start.press(forDuration: 0.7, thenDragTo: end)
         #endif
-        let undo = app.buttons["Undo Tab Order"]
+        let undo = app.buttons["Undo tab order"]
         expectation(for: NSPredicate(format: "enabled == YES"), evaluatedWith: undo); waitForExpectations(timeout: 15)
         XCTAssertLessThan(second.frame.midY, first.frame.midY)
         workspaceActivate(undo)
         expectation(for: NSPredicate { _, _ in first.frame.midY < second.frame.midY }, evaluatedWith: first); waitForExpectations(timeout: 15)
-        workspaceActivate(app.buttons["Redo Tab Order"])
+        workspaceActivate(app.buttons["Redo tab order"])
         expectation(for: NSPredicate { _, _ in second.frame.midY < first.frame.midY }, evaluatedWith: first); waitForExpectations(timeout: 15)
         workspaceActivate(first)
         XCTAssertTrue(app.buttons["Done"].firstMatch.waitForNonExistence(timeout: 30))

@@ -74,7 +74,10 @@ extension XCTestCase {
         attachEditor(in: app, name: "photo-tool-options")
         let options = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolbar-component-")).firstMatch
         func openDisplayMenu() {
-            let blank = options.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.5))
+            let end = options.descendants(matching: .any).allElementsBoundByIndex.map(\.frame)
+                .filter { $0.width < options.frame.width && $0.maxX < more.frame.minX }.map(\.maxX).max() ?? options.frame.minX
+            let blank = options.coordinate(withNormalizedOffset: .zero)
+                .withOffset(CGVector(dx: (end + more.frame.minX) / 2 - options.frame.minX, dy: options.frame.height / 2))
             #if os(macOS)
             blank.rightClick()
             #else

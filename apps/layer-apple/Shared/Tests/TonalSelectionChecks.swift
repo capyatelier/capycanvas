@@ -2,15 +2,12 @@ import XCTest
 
 extension XCTestCase {
     @MainActor func checkTonalSelection(in app: XCUIApplication) {
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
-        app.launch(); capturePaintEditor(in: app)
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"workspace_manager","command":{"type":"switch","id":"builtin:workspace:photographer"}},{"type":"invoke","command":"tonal_select"}]"#
+        app.launch()
         let photo = app.buttons["workspace-switch-builtin:workspace:photographer"]
-        workspaceActivate(photo)
+        XCTAssertTrue(photo.waitForExistence(timeout: 30))
         expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: photo)
         waitForExpectations(timeout: 10)
-        editorTool("Rectangle select", in: app)
-        workspaceActivate(app.buttons["toolbar-choice-variant"])
-        workspaceActivate(app.buttons["toolbar-choice-variant-7"])
         let more = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "toolbar-more-")).firstMatch
         let inline = app.descendants(matching: .any)["toolbar-segments-tonal-tones"].waitForExistence(timeout: 5)
         if !inline {

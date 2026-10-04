@@ -7,7 +7,7 @@ struct BrushColorButton: View {
         Button { store.customize(["type": "open_control", "control": "brush_color"]) } label: {
             Group {
                 if store.snapshot["color_panel"]["hdr"].bool { HDRColorSwatch(color: store.snapshot["color_panel"]["definition"], viewing: store.colorViewing) }
-                else { ColorSwatch(rgba: store.paintPreview) }
+                else { ColorSwatch(rgba: store.snapshot["paint_pair"]["rgba"]) }
             }
                 .clipShape(RoundedRectangle(cornerRadius: 4))
                 .padding(.horizontal, 12).padding(.vertical, 4).frame(height: 34)
@@ -19,12 +19,12 @@ struct BrushColorButton: View {
 }
 
 struct PanelControls: View {
-    @Environment(\.editorPalette) private var surface
     @ObservedObject var store: EditorStore
     let panel: JSON
     var scrollable = true
     var measureForWorkspace = true
     var splitFilters = false
+    var drawerToolSet = JSON()
     private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
     private var fitsColorWheel: Bool {
         panel["id"].string == "color" && panel["controls"].array.filter { $0["visible_in_panel"].bool }.map { $0["control"].string } == ["color_wheel"]
@@ -85,7 +85,8 @@ struct PanelControls: View {
     }
     @ViewBuilder func control(_ item: JSON, maximumHeight: CGFloat? = nil) -> some View {
         switch item["control"].string {
-        case "brushes", "brush_sets", "sculpt_sets", "tools": ToolSetControls(store: store, panel: panel["id"].string)
+        case "brushes", "brush_sets", "sculpt_sets", "tools":
+            ToolSetControls(store: store, panel: panel["id"].string, drawerToolSet: drawerToolSet)
         case "tool_settings": ToolSettingsControls(store: store)
         // Match the shared panel's fit-to-viewport wheel while retaining its
         // readable minimum size and scrolling for smaller/customized panels.
@@ -111,43 +112,54 @@ struct PanelControls: View {
             store.edit(["type": action, "value": value], completion: completion)
         }.id(preset)
     }
-    private var sizes: some View {
-        let lineHeight = max(1, store.catalog["text_size_pt"].number * 4 / 3) * 1.42
-        return SizePresetsLayout(cellHeight: 42 + lineHeight) {
+    private var sizes: some View { BrushSizeGrid(store: store, identifier: "size") }
+}
+
+struct BrushSizeGrid: View {
+    @ObservedObject var store: EditorStore
+    let identifier: String
+    var body: some View {
+        let style = ToolbarUI.cached(["type": "style", "style": "small"], language: store.interfaceLanguage)
+        let tile = store.catalog["brush_size_tile"], width = tile[0].number, height = tile[1].number
+        let shape = SquircleShape(style["size"][0].number / 2)
+        BrushSizeLayout(tile: CGSize(width: width, height: height), gap: style["gap"].number) {
             ForEach(store.catalog["brush_sizes"].array.indices, id: \.self) { index in
-                let preset = store.catalog["brush_sizes"][index], size = preset["value"].number
-                Button { store.dispatch(["type": "set_brush_size", "value": size]) } label: {
-                    VStack(spacing: 4) {
-                        Circle().frame(width: min(27, 2 + sqrt(size) * 1.2), height: min(27, 2 + sqrt(size) * 1.2)).frame(height: 28)
-                        Text(preset["label"].string).frame(height: lineHeight)
-                    }.padding(2).frame(maxWidth: .infinity).frame(height: 36 + lineHeight)
-                        .background(size == store.state["brush"]["diameter"].number ? surface.active : Color.clear, in: SquircleShape.control)
-                }.buttonStyle(.plain).padding(3)
+                let preset = store.catalog["brush_sizes"][index], value = preset["value"].number
+                Button { store.dispatch(["type": "set_brush_size", "value": value]) } label: {
+                    ZStack(alignment: .top) {
+                        Circle().fill(.foreground).frame(width: preset["preview_diameter"].number, height: preset["preview_diameter"].number)
+                            .frame(width: width, height: width)
+                            .frame(maxHeight: .infinity, alignment: .top)
+                            .mask(LinearGradient(stops: [.init(color: .black, location: 0.4), .init(color: .black.opacity(0.2), location: 0.65),
+                                .init(color: .clear, location: 1)], startPoint: .top, endPoint: .bottom))
+                        Text(preset["label"].string).lineLimit(1).frame(maxHeight: .infinity, alignment: .bottom).padding(.bottom, 2)
+                    }.frame(width: width, height: height).contentShape(shape)
+                }.buttonStyle(EditorControlButtonStyle(selected: value == store.state["brush"]["diameter"].number,
+                    corner: .radius(style["size"][0].number / 2)))
+                    .accessibilityLabel("\(preset["label"].string) px")
+                    .accessibilityAddTraits(value == store.state["brush"]["diameter"].number ? .isSelected : [])
+                    .accessibilityIdentifier("\(identifier)-\(preset["label"].string)")
             }
         }
     }
-
 }
 
-/// The same two/three/four-column breakpoints and cell spacing as the web and
-/// Android panels. Intrinsic font height is accounted for before Rust measures
-/// the surrounding panel; wide drawers keep four columns instead of adding more.
-private struct SizePresetsLayout: Layout {
-    let cellHeight: CGFloat
-    private func columns(_ width: CGFloat) -> Int { width < 130 ? 2 : width < 174 ? 3 : 4 }
+private struct BrushSizeLayout: Layout {
+    let tile: CGSize
+    let gap: CGFloat
+    private func columns(_ width: CGFloat) -> Int { max(1, Int((width + gap) / (tile.width + gap))) }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let requested = proposal.width ?? 224
-        let width = requested.isFinite ? max(0, requested) : 224
+        let requested = proposal.width ?? 6 * (tile.width + gap) - gap
+        let width = requested.isFinite ? max(tile.width, requested) : 6 * (tile.width + gap) - gap
         let rows = (subviews.count + columns(width) - 1) / columns(width)
-        return CGSize(width: width, height: CGFloat(rows) * cellHeight + CGFloat(max(0, rows - 1)) * 4)
+        return CGSize(width: width, height: CGFloat(rows) * tile.height + CGFloat(max(0, rows - 1)) * gap)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         let count = columns(bounds.width)
-        let width = max(0, (bounds.width - CGFloat(count - 1) * 2) / CGFloat(count))
         for (index, view) in subviews.enumerated() {
-            view.place(at: CGPoint(x: bounds.minX + CGFloat(index % count) * (width + 2),
-                y: bounds.minY + CGFloat(index / count) * (cellHeight + 4)), anchor: .topLeading,
-                proposal: ProposedViewSize(width: width, height: cellHeight))
+            view.place(at: CGPoint(x: bounds.minX + CGFloat(index % count) * (tile.width + gap),
+                y: bounds.minY + CGFloat(index / count) * (tile.height + gap)), anchor: .topLeading,
+                proposal: ProposedViewSize(tile))
         }
     }
 }

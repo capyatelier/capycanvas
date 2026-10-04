@@ -119,7 +119,7 @@ struct LayerPanel: View {
             }
             LayerButton(icon: "delete", label: store.catalog["native_copy"]["layers"]["delete_selected"].string, enabled: view["can_delete"].bool) { store.layer(["op": "delete_selected"]) }
             Spacer(minLength: 0)
-            LayerButton(icon: "more", label: store.catalog["native_copy"]["layers"]["actions"].string, enabled: !current.isNull) {
+            LayerButton(icon: "more-small", label: store.catalog["native_copy"]["layers"]["actions"].string, enabled: !current.isNull) {
                 openMenu(current, mask: current["mask_selected"].bool, source: .footer)
             }.editorPopover(isPresented: menuPresented(at: .footer), placement: .inward) { menuContent }
         }.padding(.horizontal, 6).padding(.vertical, 4)
@@ -322,7 +322,7 @@ private struct LayerRow: View {
             SharedIcon(name: layer["locked"].bool ? "lock" : "alpha-lock", size: 12)
                 .opacity(layer["locked"].bool || layer["alpha_locked"].bool ? 1 : 0)
             if layer["can_drop_below"].bool {
-                SharedIcon(name: "grip", size: 12).opacity(0.6).frame(width: 12, height: 36)
+                SharedIcon(name: "grip").opacity(0.6).frame(width: 16, height: 36)
                     .contentShape(Rectangle())
                     .modifier(LayerRowMeasurement(id: id, part: \.grip, enabled: !preview))
                     .accessibilityLabel(store.catalog["native_copy"]["layers"]["move_layer"].string).accessibilityIdentifier("layer-grip-\(id)")

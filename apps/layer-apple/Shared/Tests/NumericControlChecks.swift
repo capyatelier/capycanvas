@@ -262,19 +262,17 @@ extension XCTestCase {
         let entry = app.textFields["number-entry-tool-size"]
         workspaceActivate(value)
         XCTAssertTrue(entry.waitForExistence(timeout: 5))
-        entry.typeText("20 + 22\n")
-        expectation(for: NSPredicate(format: "value BEGINSWITH %@", "42"), evaluatedWith: value)
+        entry.typeText("20 + 20\n")
+        expectation(for: NSPredicate(format: "value BEGINSWITH %@", "40"), evaluatedWith: value)
         waitForExpectations(timeout: 5)
-        let sizePanel = app.buttons["number-value-Brush size"]
+        let preset = app.buttons["size-40"], sizePanel = app.buttons["number-value-Brush size"]
         // Tool and Brush size share one tab group in the current default layout.
-        // Inspect the independent readout only after mounting its actual tab.
         workspaceActivate(app.buttons["panel-tab-sizes"])
-        XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
-        XCTAssertTrue((sizePanel.value as? String)?.hasPrefix("42") == true,
-            "Tool Settings and Brush size must reflect the same accepted Rust edit")
+        XCTAssertTrue(preset.waitForExistence(timeout: 5))
+        XCTAssertTrue(preset.isSelected, "Tool Settings and Brush size must reflect the same accepted Rust edit")
         workspaceActivate(app.buttons["panel-tab-tool_settings"])
         workspaceActivate(app.buttons["number-increase-tool-size"])
-        expectation(for: NSPredicate { _, _ in (value.value as? String)?.hasPrefix("42") == false }, evaluatedWith: value)
+        expectation(for: NSPredicate { _, _ in (value.value as? String)?.hasPrefix("40") == false }, evaluatedWith: value)
         waitForExpectations(timeout: 5)
         let accepted = value.value as? String
         workspaceActivate(value)
@@ -282,9 +280,10 @@ extension XCTestCase {
         let error = app.staticTexts["number-error-tool-size"]
         XCTAssertTrue(error.waitForExistence(timeout: 5))
         workspaceActivate(app.buttons["panel-tab-sizes"])
-        XCTAssertTrue(sizePanel.waitForExistence(timeout: 5))
-        XCTAssertEqual(sizePanel.value as? String, accepted, "An invalid expression must preserve brush size")
+        XCTAssertTrue(preset.waitForExistence(timeout: 5))
+        XCTAssertFalse(preset.isSelected, "An invalid expression must preserve brush size")
         workspaceActivate(app.buttons["panel-tab-tool_settings"])
+        XCTAssertEqual(value.value as? String, accepted, "An invalid expression must preserve brush size")
         // Changing tabs retires the draft. Re-enter an invalid expression to
         // check Escape/correction independently of that view-lifecycle behavior.
         workspaceActivate(value)

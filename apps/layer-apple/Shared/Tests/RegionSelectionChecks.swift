@@ -172,7 +172,7 @@ extension XCTestCase {
         }
         func red(_ data: Data) -> Bool { Int(data[0]) > Int(data[2]) + 50 }
         // A separate outline layer makes the three region sources distinguishable.
-        editorTool("Figure", in: app)
+        editorTool("Line", in: app)
         editorChoice("Rectangle", group: true, in: app); editorChoice("Outline", in: app)
         coordinate(paper.point(0.1, 0.15)).click(forDuration: 0.05,
             thenDragTo: coordinate(paper.point(0.7, 0.85)))

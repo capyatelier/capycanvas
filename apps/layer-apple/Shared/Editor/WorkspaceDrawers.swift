@@ -118,7 +118,8 @@ private struct WorkspaceContentDrawer: View {
                                         ForEach(drawer.model["columns"][index].array.indices, id: \.self) { row in
                                             let panel = drawer.panel(drawer.model["columns"][index][row])
                                             DrawerPanelBody(store: store, panel: panel, width: bounds.rect.width,
-                                                splitFilters: drawer.model["columns"].array.contains { $0.array.contains { $0.string == "filter_types" } })
+                                                splitFilters: drawer.model["columns"].array.contains { $0.array.contains { $0.string == "filter_types" } },
+                                                toolSet: drawer.model["tool_set"])
                                         }
                                     }.frame(maxWidth: .infinity, alignment: .topLeading)
                                         .background(GeometryReader { body in
@@ -159,6 +160,7 @@ private struct DrawerPanelBody: View {
     let panel: JSON
     let width: CGFloat
     let splitFilters: Bool
+    let toolSet: JSON
     @State private var tiles = JSON()
     private var tileKey: String { JSON([panel["id"].raw, panel["tiles"].array.map { [$0["id"].raw, $0["control"].raw] }, panel["tile_style"].raw, width]).stableKey }
     var body: some View {
@@ -173,7 +175,8 @@ private struct DrawerPanelBody: View {
                         if !Task.isCancelled { tiles = result }
                     }
             } else {
-                PanelControls(store: store, panel: panel, scrollable: false, measureForWorkspace: false, splitFilters: splitFilters)
+                PanelControls(store: store, panel: panel, scrollable: false, measureForWorkspace: false, splitFilters: splitFilters,
+                    drawerToolSet: toolSet)
                     .frame(height: ["layers", "adjustments", "filter_types"].contains(panel["id"].string) ? 480 : panel["id"].string == "navigator" ? 240 : nil)
             }
         }

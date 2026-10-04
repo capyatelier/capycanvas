@@ -48,7 +48,6 @@ struct ColorPanel: View {
                         .accessibilityIdentifier("color-quick-" + name)
                         .colorPlaced(layout[name], id: "quick-" + name)
                 }
-                // Foreground is above background for both painting and hit testing.
                 ForEach(["background", "foreground", "transparent"], id: \.self) { slot in
                     let swatch = model["swatches"].array.first { $0["slot"].string == slot } ?? JSON()
                     Button { color(["op": "select", "slot": slot]) } label: {
@@ -64,6 +63,7 @@ struct ColorPanel: View {
                         .accessibilityAddTraits(swatch["selected"].bool ? .isSelected : [])
                         .accessibilityIdentifier("color-" + slot)
                         .colorPlaced(layout[slot], id: slot)
+                        .zIndex(model["front_swatch"].string == slot ? 1 : 0)
                 }
                 PaintColorControls(store: store, compact: true).colorPlaced(layout["edit"], id: "edit")
                 if hdr {
@@ -133,7 +133,7 @@ private struct ColorPanelButtonStyle: ButtonStyle {
         var body: some View {
             configuration.label
                 .foregroundStyle(kind == .shape && hovered ? palette.accent : palette["text"])
-                .background {
+                .overlay {
                     if case .paint(let selected) = kind {
                         Circle().strokeBorder(palette["text"].opacity(selected || hovered ? 1 : 0.25),
                             lineWidth: selected || hovered ? 2 : 1)

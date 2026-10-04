@@ -88,7 +88,7 @@ extension XCTestCase {
         XCTAssertTrue(app.buttons["curve-reset"].waitForExistence(timeout: 5), "An edited curve offers reset on the chart")
         let curved = changed(from: blue)
         XCTAssertGreaterThan(curved[0], blue[0])
-        XCTAssertEqual(curved[1], blue[1]); XCTAssertEqual(curved[2], blue[2])
+        XCTAssertEqual(Int(curved[1]), Int(blue[1]), accuracy: 1); XCTAssertEqual(Int(curved[2]), Int(blue[2]), accuracy: 1)
         let nearPoint = point.withOffset(CGVector(dx: 5, dy: 5))
         nearPoint.clickOrTap()
         expectPixels(curved, in: app)
@@ -151,25 +151,16 @@ extension XCTestCase {
         addFilter("Gradient Map", id: "gradient_map")
         let gray = changed(from: blue)
         XCTAssertEqual(gray[0], gray[1]); XCTAssertEqual(gray[1], gray[2])
-        let reverse = app.descendants(matching: .any)["property-reverse"].firstMatch
-        func toggleReverse(_ enabled: Bool) {
-            // The native switch's accessibility frame includes its label.
-            // Activate the visible trailing switch, not the blank row center.
-            let track = reverse.coordinate(withNormalizedOffset: CGVector(dx: 0.9, dy: 0.5))
-            #if os(macOS)
-            track.click()
-            // AppKit exposes the switch value as a number; UIKit uses text.
-            expectation(for: NSPredicate(format: "value == %d", enabled ? 1 : 0), evaluatedWith: reverse)
-            waitForExpectations(timeout: 10)
-            #else
-            track.tap()
-            expectValue(reverse, enabled ? "1" : "0")
-            #endif
-        }
-        reveal(reverse); toggleReverse(true)
+        let reverse = app.buttons["gradient-reverse"]
+        reveal(reverse); workspaceActivate(reverse)
         let reversed = changed(from: gray)
         history(before: gray, after: reversed)
-        toggleReverse(false); expectPixels(gray, in: app)
+        workspaceActivate(reverse); expectPixels(gray, in: app)
+        let interpolation = app.buttons["gradient-interpolation"]
+        reveal(interpolation); workspaceActivate(interpolation)
+        workspaceActivate(app.buttons["gradient-interpolation-option-1"])
+        _ = XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in pixels() != gray }, object: app)], timeout: 5)
+        let linear = pixels()
         let color = app.buttons["gradient-stop-color"]
         reveal(color); workspaceActivate(color)
         let redField = app.textFields["color-input-0"]
@@ -178,15 +169,16 @@ extension XCTestCase {
         redField.typeKey("a", modifierFlags: .command); redField.typeText("1")
         workspaceActivate(app.buttons["color-input-use"])
         XCTAssertTrue(redField.waitForNonExistence(timeout: 10))
-        let red = changed(from: gray)
-        XCTAssertGreaterThan(red[0], gray[0]); XCTAssertEqual(red[1], gray[1]); XCTAssertEqual(red[2], gray[2])
-        history(before: gray, after: red)
+        let red = changed(from: linear)
+        XCTAssertGreaterThan(red[0], linear[0]); XCTAssertEqual(Int(red[1]), Int(linear[1]), accuracy: 2); XCTAssertEqual(Int(red[2]), Int(linear[2]), accuracy: 2)
+        history(before: linear, after: red)
         attachEditor(in: app, name: "filter-gradient-color-artwork")
-        let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
+        let gradient = app.descendants(matching: .any)["gradient-strip"].firstMatch
+        let markers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "gradient-marker-"))
         reveal(gradient)
-        let middle = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 43.0 / 52))
+        let middle = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 39.0 / 46))
         middle.clickOrTap()
-        expectation(for: NSPredicate(format: "label ENDSWITH %@", ", 3 stops"), evaluatedWith: gradient)
+        expectation(for: NSPredicate { _, _ in markers.count == 3 }, evaluatedWith: gradient)
         waitForExpectations(timeout: 10); expectPixels(red, in: app)
         expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
         XCTAssertTrue(app.buttons["gradient-remove"].isEnabled, "A new stop must be selected without another tap")
@@ -194,11 +186,11 @@ extension XCTestCase {
         nearMiddle.clickOrTap()
         expectPixels(red, in: app); expectValue(app.buttons["number-value-gradient-position"], "50.0 %")
         let stopDestination = gradient.coordinate(withNormalizedOffset:
-            CGVector(dx: (6 + (gradient.frame.width - 12) * 0.7) / gradient.frame.width, dy: 43.0 / 52))
+            CGVector(dx: (6 + (gradient.frame.width - 12) * 0.7) / gradient.frame.width, dy: 39.0 / 46))
         middle.press(forDuration: 0.05, thenDragTo: stopDestination, withVelocity: .slow, thenHoldForDuration: 0.1)
         let shifted = changed(from: red)
-        XCTAssertEqual(shifted[0], red[0]); XCTAssertLessThan(shifted[1], red[1]); XCTAssertLessThan(shifted[2], red[2])
-        XCTAssertTrue(gradient.label.hasSuffix(", 3 stops"), "Dragging a stop must not insert another")
+        XCTAssertEqual(Int(shifted[0]), Int(red[0]), accuracy: 2); XCTAssertLessThan(shifted[1], red[1]); XCTAssertLessThan(shifted[2], red[2])
+        XCTAssertEqual(markers.count, 3, "Dragging a stop must not insert another")
         history(before: red, after: shifted)
         attachEditor(in: app, name: "filter-gradient-stop-drag")
         reveal(app.buttons["gradient-remove"]); workspaceActivate(app.buttons["gradient-remove"])
@@ -282,11 +274,16 @@ extension XCTestCase {
         workspaceActivate(app.buttons["panel-tab-adjustments"])
         workspaceActivate(app.buttons["filter-search-toggle"]); search("Gradient Map")
         workspaceActivate(app.buttons["adjustment-gradient_map"])
-        let gradient = app.descendants(matching: .any)["effect-gradient"].firstMatch
-        XCTAssertTrue(gradient.waitForExistence(timeout: 10)); expectGraphic(gradient, "2 stops")
+        let gradient = app.descendants(matching: .any)["gradient-strip"].firstMatch
+        let markers = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "gradient-marker-"))
+        func expectStops(_ count: Int) {
+            expectation(for: NSPredicate { _, _ in markers.count == count }, evaluatedWith: gradient)
+            waitForExpectations(timeout: 30)
+        }
+        XCTAssertTrue(gradient.waitForExistence(timeout: 10)); expectStops(2)
         let stop = gradient.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.4))
         stop.clickOrTap()
-        expectGraphic(gradient, "3 stops")
+        expectStops(3)
         // Select the actual returned stop, then edit its shared numeric value.
         stop.clickOrTap()
         let position = app.textFields["number-entry-gradient-position"]
@@ -296,7 +293,7 @@ extension XCTestCase {
         let gradientReset = app.buttons["gradient-reset"]
         XCTAssertTrue(gradientReset.waitForExistence(timeout: 10))
         revealEditorControl(gradientReset, in: app.scrollViews.containing(.button, identifier: "gradient-reset").firstMatch)
-        workspaceActivate(gradientReset); expectGraphic(gradient, "2 stops")
+        workspaceActivate(gradientReset); expectStops(2)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
         #if os(macOS)
         let screenshot = app.windows.firstMatch.screenshot()

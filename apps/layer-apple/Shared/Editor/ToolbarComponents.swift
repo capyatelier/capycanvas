@@ -428,6 +428,7 @@ private let captionPadding: CGFloat = 10, captionGap: CGFloat = 6, captionIcon: 
     caption: String? = nil, language: String = "en") -> CGSize {
     func captioned(_ text: String) -> CGFloat { captionPadding * 2 + captionIcon + captionGap + ceil(toolbarTextWidth(text, size: textSize)) }
     if !option["Range"].isNull { return CGSize(width: preferences["sliders"].bool ? 280 : 100, height: 28) }
+    if !option["Gradient"].isNull { return CGSize(width: vertical ? width : 120, height: 24) }
     let choice = option["Choice"]
     if choice["columns"].uint > 0 {
         let columns = CGFloat(choice["columns"].uint), rows = (CGFloat(choice["items"].array.count) / columns).rounded(.up)
@@ -480,10 +481,36 @@ struct ToolOptionField: View {
                 showSlider: preferences["sliders"].bool) { index, value, completion in
                 edit(["type": "set_tool_setting", "id": bounds[index]["id"].raw, "value": value], completion)
             }
+        } else if !option["Gradient"].isNull {
+            GradientOptionButton(store: store, control: option["Gradient"], prefix: prefix, edit: edit)
         } else if !option["Action"].isNull {
             ToolOptionAction(store: store, command: option["Action"]["state"], checkable: option["Action"]["checkable"].bool,
                 iconSize: iconSize, caption: caption, prefix: prefix, accent: accent, edit: edit)
         }
+    }
+}
+
+private struct GradientOptionButton: View {
+    @ObservedObject var store: EditorStore
+    let control: JSON
+    let prefix: String
+    let edit: ToolOptionEdit
+    @State private var open = false
+    @State private var popupID = UUID()
+    var body: some View {
+        Button { open.toggle() } label: {
+            GradientPreview(store: store, gradient: control["value"]["value"])
+                .clipShape(SquircleShape.control).contentShape(Rectangle())
+        }.buttonStyle(.plain).accessibilityLabel(control["label"].string).help(control["label"].string)
+            .accessibilityIdentifier(prefix + "-gradient")
+            .editorPopover(isPresented: $open) {
+                if open {
+                    GradientEditor(store: store, control: control, identifier: prefix + "-gradient-editor", send: edit)
+                        .padding(10).frame(width: 260)
+                }
+            }
+            .onChange(of: open) { _, open in store.workspace.popover(popupID, open: open) }
+            .onDisappear { store.workspace.popover(popupID, open: false) }
     }
 }
 

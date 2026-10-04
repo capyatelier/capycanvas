@@ -95,9 +95,9 @@ private struct PropertyField: View {
                 }
             }
         case "gradient":
-            GradientProperty(store: store, control: control, effect: {
-                effect($0, revision: revision, phase: $1, completion: $2)
-            }, reset: reset)
+            GradientEditor(store: store, control: control) { action, completion in
+                store.edit(action as? [String: Any] ?? [:], completion: completion)
+            }
         default: EmptyView()
         }
     }
@@ -275,141 +275,6 @@ private struct CurveProperty: View {
                         .help(curve["reset_label"].string).accessibilityLabel(curve["reset_label"].string).accessibilityIdentifier("curve-reset")
                 }
             }
-    }
-}
-
-private struct GradientProperty: View {
-    @Environment(\.capyNativeCopy) private var nativeCopy
-    @ObservedObject var store: EditorStore
-    let control: JSON
-    let effect: ([String: Any], String?, (@MainActor (String?) -> Void)?) -> Void
-    let reset: () -> Void
-    @Environment(\.isEnabled) private var enabled
-    @GestureState private var contact = false
-    @State private var selected = 0
-    @State private var fieldRevision: UInt64 = 0
-    @State private var dragging = false
-    @State private var dragStop: (index: Int, position: Double)?
-    @State private var ramp = JSON()
-    @State private var previews = JSON()
-    private var stops: [JSON] { control["value"]["value"]["stops"].array }
-    private var index: Int { max(0, min(selected, stops.count - 1)) }
-    private var removable: Bool { index > 0 && index < stops.count - 1 }
-    private var palette: EditorPalette { EditorPalette(source: store.state["palette"]) }
-    private func change(_ position: Double, index: Int?, color: Any = NSNull(), remove: Bool = false,
-        revision: UInt64? = nil, phase: String? = nil,
-        completion: (@MainActor (String?) -> Void)? = nil) {
-        // A retired field keeps its original stop. Do not retarget a delayed
-        // edit when selection or the stop list changes, even if an index is
-        // reused. Cancellation still retires the original preview.
-        if phase != "cancel" {
-            guard index == nil || index == self.index,
-                revision == nil || revision == fieldRevision else { completion?(nil); return }
-        }
-        effect(["op": "gradient", "target": control["gradient"]["destination"].raw, "edit": ["kind": "stop", "index": index as Any? ?? NSNull(),
-            "position": position, "color": color, "remove": remove]], phase, completion)
-    }
-    private func opacity(_ value: Double, index: Int, revision: UInt64, phase: String? = nil,
-        completion: @escaping @MainActor (String?) -> Void) {
-        var color = stops[index]["color"]["rgba"].array.map(\.number)
-        guard color.count == 4 else { completion(nativeCopy["color"]["invalid"].string); return }
-        color[3] = value
-        change(stops[index]["position"].number, index: index, color: stops[index]["color"].replacing("rgba", with: JSON(color)).raw, revision: revision, phase: phase, completion: completion)
-    }
-    private func cancelDrag() {
-        if let stop = dragStop { change(0, index: stop.index, phase: "cancel") }
-        dragging = false; dragStop = nil
-    }
-    var body: some View {
-        let index = self.index
-        let revision = fieldRevision
-        VStack(alignment: .leading, spacing: 6) {
-            GeometryReader { geometry in
-                Canvas(colorMode: .extendedLinear) { context, size in
-                    let width = max(1, size.width - 12)
-                    let samples = ramp.array
-                    let gradient = Gradient(stops: samples.enumerated().map { Gradient.Stop(color: $0.element["rgba"].paintColor, location: Double($0.offset) / Double(max(1, samples.count - 1))) })
-                    context.fill(Path(roundedRect: CGRect(x: 6, y: 0, width: width, height: 32), cornerRadius: 4), with: .linearGradient(gradient,
-                        startPoint: CGPoint(x: 6, y: 0), endPoint: CGPoint(x: size.width - 6, y: 0)))
-                    for (i, stop) in stops.enumerated() {
-                        let x = 6 + stop["position"].number * width
-                        let marker = Path(ellipseIn: CGRect(x: x - 4.5, y: 38.5, width: 9, height: 9))
-                        context.fill(marker, with: .color(previews[i]["rgba"].paintColor))
-                        context.stroke(marker, with: .color(palette["text"]), lineWidth: 1)
-                        if i == index {
-                            context.stroke(Path(ellipseIn: CGRect(x: x - 7, y: 36, width: 14, height: 14)),
-                                with: .color(palette["text"]), lineWidth: 2)
-                        }
-                    }
-                }.contentShape(Rectangle()).gesture(DragGesture(minimumDistance: 0).updating($contact) { _, active, _ in active = true }.onChanged { event in
-                    let width = geometry.size.width - 12
-                    guard width > 0 else { return }
-                    if !dragging {
-                        dragging = true
-                        let nearest = stops.indices.min { abs(6 + stops[$0]["position"].number * width - event.startLocation.x) < abs(6 + stops[$1]["position"].number * width - event.startLocation.x) }
-                        if let found = nearest, abs(6 + stops[found]["position"].number * width - event.startLocation.x) <= 12 {
-                            selected = found
-                            dragStop = (found, stops[found]["position"].number)
-                            change(stops[found]["position"].number, index: found, phase: "down")
-                        }
-                    }
-                    if let stop = dragStop, event.translation.width != 0 {
-                        change(stop.position + event.translation.width / width, index: stop.index, phase: "move")
-                    }
-                }.onEnded { event in
-                    guard dragging else { return }
-                    let width = geometry.size.width - 12
-                    guard width > 0 else { cancelDrag(); return }
-                    if let stop = dragStop {
-                        change(stop.position + event.translation.width / width, index: stop.index, phase: "up")
-                    } else {
-                        change((event.location.x - 6) / width, index: nil)
-                    }
-                    dragging = false; dragStop = nil
-                }).allowsHitTesting(enabled)
-                    .onChange(of: contact) { _, active in if !active { cancelDrag() } }
-                    .onDisappear(perform: cancelDrag)
-                    .accessibilityIdentifier("effect-gradient")
-                    .accessibilityLabel("\(control["label"].string), \(stops.count) stops")
-            }.frame(height: 52)
-            if !stops.isEmpty {
-                Group {
-                    NumberControl(store: store, label: nativeCopy["color"]["position"].string, value: stops[index]["position"].number,
-                        control: store.catalog["opacity"], identifier: "gradient-position",
-                        gestureChange: { change($1, index: index, revision: revision, phase: $0, completion: $2) }) {
-                        change($0, index: index, revision: revision, completion: $1)
-                    }.disabled(!removable)
-                    ManagedColorButton(label: nativeCopy["color"]["color"].string, identifier: "gradient-stop", value: stops[index]["color"],
-                        documentSpace: store.state["colors"]["rgb_space"].string, viewing: store.colorViewing) {
-                        change(stops[index]["position"].number, index: index, color: $0.raw, revision: revision)
-                    }
-                    NumberControl(store: store, label: nativeCopy["color"]["opacity"].string, value: stops[index]["color"]["rgba"][3].number,
-                        control: store.catalog["opacity"], identifier: "gradient-opacity",
-                        gestureChange: { opacity($1, index: index, revision: revision, phase: $0, completion: $2) }) {
-                        opacity($0, index: index, revision: revision, completion: $1)
-                    }
-                }.id("\(index):\(revision)")
-            }
-            HStack {
-                Button(nativeCopy["color"]["remove_stop"].string) { change(0, index: index, remove: true); selected = max(0, index - 1) }
-                    .disabled(!removable).accessibilityIdentifier("gradient-remove")
-                Spacer(minLength: 0)
-                Button(nativeCopy["color"]["reset_gradient"].string, action: reset)
-                    .accessibilityIdentifier("gradient-reset")
-            }.buttonStyle(.plain)
-        }.task(id: JSON([control["value"]["value"].raw, store.state["colors"]["rgb_space"].raw]).stableKey) {
-            ramp = ColorUI.resolve(["type": "gradient", "gradient": control["value"]["value"].raw,
-                "document_space": store.state["colors"]["rgb_space"].raw, "display_space": "DisplayP3"])
-            previews = ColorUI.resolve(["type": "preview", "colors": stops.map { $0["color"].raw }, "display_space": "DisplayP3"])
-            if !ramp["error"].isNull { store.failure = ramp["error"].string }
-            if !previews["error"].isNull { store.failure = previews["error"].string }
-        }.onChange(of: stops.map { $0["position"].number }) { previous, current in
-            if current.count != previous.count { fieldRevision &+= 1 }
-            // Select the stop Rust actually inserted, including history restoration.
-            guard current.count == previous.count + 1,
-                let inserted = current.firstIndex(where: { !previous.contains($0) }) else { return }
-            selected = inserted
-        }
     }
 }
 

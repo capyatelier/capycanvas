@@ -557,6 +557,11 @@ extension XCTestCase {
                 editorHistory(command, in: app); expectSamples(pixels)
             }
         }
+        let attachment = app.buttons["layer-attachment"]
+        func clipped(_ selected: Bool) {
+            expectation(for: NSPredicate(format: "selected == %@", NSNumber(value: selected)), evaluatedWith: attachment)
+            waitForExpectations(timeout: 5)
+        }
 
         // A bounded paint layer exposes loss of alpha or accidental edits to
         // the source when clearing, recoloring and removing its duplicate.
@@ -604,9 +609,9 @@ extension XCTestCase {
         editorHistory("Redo", in: app); flag("Lock editing", false); expectSamples(opaqueRed)
 
         workspaceActivate(rows[originalID].buttons["layer-Show layer"]); expectSamples(opaqueRed)
-        action("Clip to layer below"); flag("Clip to layer below", true); expectInk(red)
+        workspaceActivate(attachment); clipped(true); expectInk(red)
         attachEditor(in: app, name: "layer-clipped-duplicate")
-        history(opaqueRed, samples()); flag("Clip to layer below", false)
+        history(opaqueRed, samples()); clipped(false)
         action("Delete layer"); expectCount(initialCount); expectSamples(original)
         rowID = originalID
 
@@ -615,9 +620,9 @@ extension XCTestCase {
         action("New clipping layer"); expectCount(initialCount + 1)
         rowID = rows.element(boundBy: 0).identifier
         let clippingID = rowID
-        flag("Clip to layer below", true); expectSamples(original)
+        clipped(true); expectSamples(original)
         editorHistory("Undo", in: app); expectCount(initialCount); expectSamples(original)
-        editorHistory("Redo", in: app); expectCount(initialCount + 1); flag("Clip to layer below", true)
+        editorHistory("Redo", in: app); expectCount(initialCount + 1); clipped(true)
         selectAll(); fill(); expectInk(red)
         let clipped = samples()
         history(original, clipped)
@@ -711,7 +716,7 @@ extension XCTestCase {
                 // Cancel already returns to Move. Activating its toolbar tile
                 // again opens the tool drawer over the canvas.
                 XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
-                    "tool-group-", "Move")).firstMatch.isSelected)
+                    "tool-group-", "Operation")).firstMatch.isSelected)
                 viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX, dy: bounds.midY)).click(forDuration: 0.05,
                     thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(
                         dx: bounds.midX + bounds.width * 0.25, dy: bounds.midY)))
@@ -783,7 +788,7 @@ extension XCTestCase {
         expectation(for: NSPredicate { _, _ in rows.count == 4 }, evaluatedWith: app)
         waitForExpectations(timeout: 5); expectInk(baseline)
         XCTAssertTrue(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
-            "tool-group-", "Move")).firstMatch.isSelected)
+            "tool-group-", "Operation")).firstMatch.isSelected)
         #if os(macOS)
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         viewport.coordinate(withNormalizedOffset: CGVector(dx: bounds.midX, dy: bounds.midY)).click(forDuration: 0.05,
@@ -830,7 +835,7 @@ extension XCTestCase {
             CGPoint(x: center.x, y: bounds.maxY - bounds.height * 0.1)]
         let filled = [true, true, true, true, true], blank = [false, false, false, false, false]
         func expectInk(_ value: [Bool]) { expectBluePaper(value, at: points, in: app) }
-        editorTool("Operation", in: app); editorChoice("Move", group: true, in: app)
+        editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
         XCTAssertFalse(app.buttons["number-value-tool-transform_x"].exists)
         expectInk(filled)
         #if os(macOS)

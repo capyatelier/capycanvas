@@ -174,6 +174,8 @@ import SwiftUI
                         .accessibilityIdentifier("header-item-\(id)")
                         .accessibilityAddTraits(header.selected == id ? .isSelected : [])
                         .modifier(HeaderSourceMeasurement(source: JSON(["kind":"item", "value":id])))
+                } else if entry["item"]["kind"].string == "workspaces" {
+                    item(entry, width: allocation["bounds"]["width"].number, inBar: barred.contains(id))
                 } else {
                     item(entry, width: allocation["bounds"]["width"].number, inBar: barred.contains(id))
                         .modifier(WorkspaceContext(store: store, target: JSON(["kind":"header", "id":id])))
@@ -203,7 +205,7 @@ import SwiftUI
                             header.selected = id.uint; header.closeOverflow(); focused = true
                         } label: {
                             HStack(spacing: 6) {
-                                SharedIcon(name: "grip", size: 12).opacity(0.5)
+                                SharedIcon(name: "grip").opacity(0.5)
                                 Text(metadata(entry)["label"].string)
                                 Spacer(minLength: 0)
                             }.padding(.horizontal, 8).frame(height: 36).contentShape(Rectangle())
@@ -217,7 +219,7 @@ import SwiftUI
     }
     private func item(_ entry: JSON, width: CGFloat, inBar: Bool = false) -> some View {
         HStack(spacing: 0) {
-            if editing { SharedIcon(name: "grip", size: 12).frame(width: 20).opacity(0.5) }
+            if editing { SharedIcon(name: "grip").frame(width: 20).opacity(0.5) }
             HeaderItemControl(store: store, entry: entry, description: metadata(entry), size: size, status: status,
                 width: max(0, width - (editing ? 20 : 0)), editing: editing, inBar: inBar)
         }.frame(width: width, height: size["tile"].number)
@@ -231,9 +233,9 @@ import SwiftUI
                 switch entry["item"]["kind"].string {
                 case "menu", "menu_labels": row["sections"] = editorApplicationMenu(store)["sections"].raw
                 case "workspaces":
-                    if let workspaces = store.workspaces { row["sections"] = WorkspaceSwitcher.menu(workspaces)["sections"].raw }
+                    if let workspaces = store.workspaces { row["sections"] = workspaces.view["switcher_menu"]["sections"].raw }
                     else { row["enabled"] = false }
-                case "tool": row["enabled"] = metadata(entry)["enabled"].bool
+                case "tool": row["enabled"] = metadata(entry)["enabled"].bool; row["has_variants"] = metadata(entry)["has_variants"].raw
                 case "document_title", "clock", "battery", "space": row["enabled"] = false
                 default: break
                 }
@@ -245,7 +247,6 @@ import SwiftUI
             case "apple_header_item":
                 if editing { header.selected = action["id"].uint; focused = true }
                 else { activateHeaderItem(store, entry: entries.first { $0["id"].uint == action["id"].uint } ?? JSON()) }
-            case "apple_workspace_switch": store.workspaces?.switchTo(action["id"].string)
             default: store.dispatch(action)
             }
         }
@@ -299,18 +300,21 @@ private struct HeaderItemControl: View {
                 } else { Text(description["label"].string).lineLimit(1) }
             case "space": Color.clear.contentShape(Rectangle()).modifier(HeaderCaption(enabled: !editing))
             case "tool":
-                if entry["item"]["control"]["kind"].string == "color" {
+                let control = description["resolved_control"].isNull ? entry["item"]["control"] : description["resolved_control"]
+                if control["kind"].string == "color" {
                     Button { store.dispatch(["type":"activate_header_item", "id":entry["id"].raw]) } label: {
-                        PaintPairIcon(rgba: store.paintPair, size: size["icon"].number)
+                        PaintPairIcon(pair: store.paintPair, size: size["icon"].number)
                             .frame(maxWidth: .infinity, maxHeight: .infinity).contentShape(Rectangle())
                     }.buttonStyle(HeaderButtonStyle(hovering: hovering, inBar: inBar, drawerOpen: drawerOpen, radius: radius))
                         .accessibilityLabel(description["label"].string)
                 } else {
                     tile(description["icon"].string) {
-                        PickerActivation.activate(entry["item"]["control"], anchor: ["kind": "header", "id": entry["id"].raw], store: store) {
+                        PickerActivation.activate(control, anchor: ["kind": "header", "id": entry["id"].raw], store: store) {
                             store.dispatch(["type":"activate_header_item", "id":entry["id"].raw])
                         }
-                    }
+                    }.overlay(alignment: .bottomTrailing) { if description["has_variants"].bool && !editing { ToolGroupMarker() } }
+                        .accessibilityIdentifier("header-tool-" + ([entry["item"]["control"]["command"], entry["item"]["control"]["slot"],
+                            entry["item"]["control"]["kind"]].map(\.string).first { !$0.isEmpty } ?? ""))
                 }
             default: SharedIcon(name: "toolbar", size: size["icon"].number)
             }
@@ -373,7 +377,7 @@ private struct HeaderEditorBank: View {
             .accessibilityElement(children: .contain).accessibilityIdentifier("header-editor")
     }
     private func chip(_ label: String, source: JSON) -> some View {
-        HStack(spacing: 6) { SharedIcon(name: "grip", size: 12); Text(label).lineLimit(1) }
+        HStack(spacing: 6) { SharedIcon(name: "grip"); Text(label).lineLimit(1) }
             .padding(.horizontal, 10).frame(height: 36)
             .background(EditorPalette(source: store.state["palette"])["bg"], in: SquircleShape.control)
             .contentShape(Rectangle()).accessibilityElement(children: .ignore).accessibilityLabel(label)

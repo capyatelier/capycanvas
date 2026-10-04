@@ -394,7 +394,7 @@ to the camera limits, zooms about the work-area centre and rounds like Actual
 Pixels. The field takes its value from the camera and refreshes only while the
 menu is open.
 
-GTK, Web and Android also show a rotation slider from
+GTK, Web, Android, macOS and iPadOS also show a rotation slider from
 `NumericControl::rotation()`. Both fields use one row with the slider and editable
 value, without a visible label or step buttons. Zoom controls and percentages
 precede Lock zoom; the rotation slider, Reset rotation and Lock rotation follow

@@ -245,7 +245,7 @@ extension XCTestCase {
         editorMenu(in: app, menu: "Edit", id: "fill_selection", label: "Fill selection")
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
         workspaceActivate(app.buttons["color-swap"])
-        editorTool("Figure", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
+        editorTool("Line", in: app); editorChoice("Rectangle", group: true, in: app); editorChoice("Fill", in: app)
         viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.38, dy: 0.43)).click(forDuration: 0.05,
             thenDragTo: viewport.coordinate(withNormalizedOffset: CGVector(dx: 0.53, dy: 0.67)))
         editorDocumentTitle(in: app).hover()
@@ -337,7 +337,7 @@ extension XCTestCase {
             return colored.count >= sample.count / 8
         }
         #endif
-        tool("Figure")
+        tool("Line")
         for shape in ["Line", "Rectangle", "Ellipse"] {
             choose(shape, group: true)
             let paints = shape == "Line" ? ["Outline"] : ["Outline", "Fill", "Outline + fill"]
@@ -363,12 +363,12 @@ extension XCTestCase {
         }
         for radial in [false, true] {
             for transparent in [false, true] {
-                app.terminate()
+                app.terminate(); useFreshStorage(app)
                 let alpha = transparent ? 0 : 1
                 app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = "[{\"type\":\"set_theme\",\"theme\":\"light\"},{\"type\":\"set_color\",\"rgba\":[0.9,0.25,0.2,\(alpha)]},{\"type\":\"color\",\"action\":{\"op\":\"swap\"}},{\"type\":\"set_color\",\"rgba\":[0.2,0.45,0.8,1]}]"
                 app.launch(); capturePaintEditor(in: app)
                 attachEditor(in: app, name: "figure-controls")
-                tool("Gradient")
+                tool("Linear")
                 choose(radial ? "Radial" : "Linear", group: false)
                 XCTAssertTrue(app.buttons["number-value-tool-opacity"].exists)
                 #if os(macOS)
@@ -393,7 +393,7 @@ extension XCTestCase {
         app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
         app.launch(); capturePaintEditor(in: app)
         workspaceActivate(app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@",
-            "toolbar-tile-toolbar-", "Ruler")).firstMatch)
+            "toolbar-tile-toolbar-", "Straight")).firstMatch)
         let show = app.buttons["tool-action-show_rulers"]
         let snap = app.buttons["tool-action-snap_rulers"]
         let delete = app.buttons["tool-action-delete_ruler"]

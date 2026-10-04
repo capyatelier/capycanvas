@@ -71,7 +71,7 @@ struct PanelGrip: View {
     var body: some View {
         SharedIcon(name: "grip").opacity(0.65)
             .rotationEffect(.degrees(vertical ? 90 : 0))
-            .offset(x: vertical ? 0 : -1.6, y: vertical ? -1.6 : 0)
+            .offset(x: vertical ? 0 : -2, y: vertical ? -2 : 0)
     }
 }
 

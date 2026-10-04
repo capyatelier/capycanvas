@@ -294,7 +294,7 @@ struct NumberControlFrames: PreferenceKey {
         value.merge(nextValue()) { _, new in new }
     }
 }
-private struct NumberControlMeasurement: ViewModifier {
+struct NumberControlMeasurement: ViewModifier {
     let id: String
     @Environment(\.measureNumberControls) private var enabled
     func body(content: Content) -> some View {

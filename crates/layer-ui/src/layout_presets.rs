@@ -63,9 +63,7 @@ impl WorkspacePreset {
                     .expect("default active tab");
             }
         }
-        if matches!(platform, crate::Platform::Gtk | crate::Platform::Web | crate::Platform::Android | crate::Platform::Windows) {
-            self.group_tools(&mut layout);
-        }
+        self.group_tools(&mut layout);
         let group = layout.panel_group(Panel::Color).unwrap();
         if !layout.fit_height_groups.contains(&group) {
             layout.fit_height_groups.push(group);

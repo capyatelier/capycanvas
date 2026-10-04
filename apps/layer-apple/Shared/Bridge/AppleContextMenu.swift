@@ -7,6 +7,8 @@ import Foundation
     let sections: [[Item]]
     struct Item {
         let label: String
+        let icon: String
+        let marker: Bool
         let identifier: String
         let enabled: Bool
         let selected: Bool?
@@ -34,7 +36,8 @@ import Foundation
                         : payload["type"].string == "invoke" ? "command-" + payload["command"].string : "menu-action-" + item["label"].string
                     let action: (() -> Void)? = !request.isNull && command != nil ? { if enabled { command?(request) } }
                         : payload.isNull ? nil : { if enabled { invoke(payload) } }
-                    return Item(label: item["label"].string, identifier: identifier, enabled: enabled,
+                    return Item(label: item["label"].string, icon: item["icon"].string, marker: item["has_variants"].bool,
+                        identifier: identifier, enabled: enabled,
                         selected: item["selected"].isNull ? nil : item["selected"].bool,
                         hint: item["hint"].string, bindings: item["bindings"].array,
                         sections: decodeSections(item["sections"], parentEnabled: enabled),

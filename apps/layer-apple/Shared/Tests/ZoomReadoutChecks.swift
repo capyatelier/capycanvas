@@ -30,6 +30,31 @@ extension XCTestCase {
         workspaceViewport(in: app).coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.12)).clickOrTap()
         XCTAssertTrue(menu.waitForNonExistence(timeout: 5), "A tap outside closes the zoom menu")
         expectReadout("250%")
+
+        workspaceActivate(status)
+        let rotation = app.buttons["number-value-rotation"], rotate = app.buttons["zoom-rotate_right"]
+        let rotationMenu = app.descendants(matching: .any)["rotation-menu"].firstMatch
+        XCTAssertTrue(rotation.waitForExistence(timeout: 10), "The menu offers the rotation slider")
+        XCTAssertTrue(rotate.exists, "The menu repeats Navigator's buttons")
+        XCTAssertLessThan(value.frame.maxY, menu.frame.minY + 1)
+        XCTAssertLessThan(menu.frame.maxY, rotation.frame.minY + 1, "Zoom controls stay together above rotation")
+        XCTAssertLessThan(rotation.frame.maxY, rotationMenu.frame.minY + 1)
+        XCTAssertLessThan(rotationMenu.frame.maxY, rotate.frame.minY + 1, "Navigator's buttons close the menu")
+        attachEditor(in: app, name: "zoom-readout-rotation")
+        workspaceActivate(rotate)
+        expectation(for: NSPredicate { _, _ in !readout().hasSuffix(" 0°") }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
+        XCTAssertTrue(menu.exists, "Navigation buttons keep the menu open")
+        let lock = app.buttons["menu-action-Lock rotation"]
+        XCTAssertFalse(lock.isSelected)
+        workspaceActivate(lock)
+        XCTAssertTrue(menu.waitForNonExistence(timeout: 5))
+        workspaceActivate(status)
+        XCTAssertTrue(lock.waitForExistence(timeout: 10))
+        XCTAssertTrue(lock.isSelected, "The lock shows its current state")
+        workspaceActivate(app.buttons["menu-action-Reset rotation"])
+        expectation(for: NSPredicate { _, _ in readout().hasSuffix(" 0°") }, evaluatedWith: status)
+        waitForExpectations(timeout: 10)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 }

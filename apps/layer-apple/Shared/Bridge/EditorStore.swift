@@ -73,14 +73,7 @@ import SwiftUI
         JSON(["document_space": displayColors["rgb_space"].raw, "recipe": snapshot["proof_panel"]["recipe"].raw,
               "document_depth": state["layer_tools"]["mask_editing"].isNull ? snapshot["proof_panel"]["depth"].raw : displayColors["hdr_depth"].raw, "headroom": displayHeadroom, "hdr": snapshot["color_panel"]["hdr"].bool])
     }
-    var paintPreview: JSON {
-        snapshot["color_panel"]["swatches"].array.first { $0["selected"].bool }?["rgba"] ?? JSON()
-    }
-    var paintPair: JSON {
-        let swatches = snapshot["color_panel"]["swatches"].array
-        func rgba(_ slot: String) -> Any { (swatches.first { $0["slot"].string == slot }?["rgba"] ?? JSON()).raw }
-        return JSON(["foreground": rgba("foreground"), "background": rgba("background")])
-    }
+    var paintPair: JSON { snapshot["paint_pair"] }
     var workspaceMotion: WorkspaceMotion { ui.workspace }
 
     init(platform: UInt32, scene: String = UUID().uuidString, persistence: EditorPersistence = .shared,

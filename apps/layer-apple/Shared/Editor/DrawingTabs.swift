@@ -271,7 +271,7 @@ private struct DrawingTabList: View {
                 Group {
                     if vertical {
                         HStack(spacing: 5) {
-                            SharedIcon(name: "grip", size: 12).frame(width: 24, height: 44).contentShape(Rectangle())
+                            SharedIcon(name: "grip").frame(width: 24, height: 44).contentShape(Rectangle())
                                 .modifier(DrawingMeasure(id: id, part: \.grip)).accessibilityLabel(store.catalog["native_copy"]["header"]["move_drawing"].string)
                             pick(row, alignment: .leading)
                             close(row).buttonStyle(.plain).frame(width: 24, height: 44)

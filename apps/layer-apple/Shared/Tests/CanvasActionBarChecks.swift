@@ -98,7 +98,7 @@ extension XCTestCase {
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         XCTAssertFalse(bar.waitForExistence(timeout: 2), "Painting tools hide the selection bar")
         editorMenu(in: app, menu: "Select", id: "deselect", label: "Deselect pixels")
-        editorTool("Operation", in: app); editorChoice("Move", group: true, in: app)
+        editorTool("Operation", in: app); editorChoice("Operation", group: true, in: app)
         XCTAssertFalse(bar.exists, "No bar without a selection")
         editorMenu(in: app, menu: "Select", id: "select_all", label: "Select all pixels")
         expect(action("deselect"), "exists == YES AND enabled == YES", "Select all shows the selection bar")

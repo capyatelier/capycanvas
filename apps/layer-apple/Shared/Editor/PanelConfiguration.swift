@@ -82,20 +82,7 @@ struct PanelConfiguration: View {
         default: PanelControls(store: store, panel: panel).control(item)
         }
     }
-    private var configurationSizes: some View {
-        ConfigurationFlow(spacing: 6) {
-            ForEach(store.catalog["brush_sizes"].array.indices, id: \.self) { index in
-                let preset = store.catalog["brush_sizes"][index], value = preset["value"].number
-                Button { store.dispatch(["type": "set_brush_size", "value": value]) } label: {
-                    Text(preset["label"].string).fontWeight(.bold).padding(.horizontal, 12)
-                        .frame(minWidth: 52).frame(height: fontSize * 1.66 + 8)
-                        .background(palette["button"].opacity(13 / 255), in: SquircleShape.control)
-                        .contentShape(Rectangle())
-                }.buttonStyle(.plain).accessibilityLabel("\(preset["label"].string) px")
-                    .accessibilityIdentifier("configuration-size-\(preset["label"].string)")
-            }
-        }.padding(3)
-    }
+    private var configurationSizes: some View { BrushSizeGrid(store: store, identifier: "configuration-size").padding(3) }
 }
 
 /// Intrinsic-width wrapping matches the web flex row and Android FlowRow.

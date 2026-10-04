@@ -48,7 +48,7 @@ struct WorkspaceSwitcherRows: View {
             ForEach(rows, id: \.workspaceRowID) { row in
                 let id = row["id"].string
                 HStack(spacing: 6) {
-                    Button {} label: { SharedIcon(name: "grip", size: 12).frame(width: 16, height: rowHeight).contentShape(Rectangle()) }
+                    Button {} label: { SharedIcon(name: "grip").frame(width: 16, height: rowHeight).contentShape(Rectangle()) }
                         .buttonStyle(.plain).foregroundStyle(.secondary)
                         .help(nativeCopy["header"]["drag_to_reorder"].string).accessibilityLabel(reorderCaptions[id] ?? "")
                         .accessibilityIdentifier("workspace-grip-" + id)
@@ -114,7 +114,7 @@ struct WorkspaceSwitcherRows: View {
                 .allowsHitTesting(false).accessibilityHidden(true)
         }
         if let drag = interaction.drag, let row = rows.first(where: { $0["id"].string == drag.id }) {
-            HStack { SharedIcon(name: "grip", size: 12); Text(row["title"].string).lineLimit(1); Spacer() }
+            HStack { SharedIcon(name: "grip"); Text(row["title"].string).lineLimit(1); Spacer() }
                 .padding(.horizontal, 10).frame(width: drag.bounds.width, height: drag.bounds.height)
                 .modifier(EditorPopupSurface(shape: RoundedRectangle(cornerRadius: 6)))
                 .shadow(radius: 4, y: 2)

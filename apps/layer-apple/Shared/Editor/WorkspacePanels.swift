@@ -241,7 +241,8 @@ private struct WorkspaceTile: View {
                     drawerDirection: store.contentDrawers.sources["tool"]?.direction) {
                     guard !store.workspace.input.contact.consumeClick() else { return }
                     let anchor: [String: Any] = ["kind": "tile", "panel": panel["id"].raw, "tile": tile["id"].raw]
-                    PickerActivation.activate(tile["control"], anchor: anchor, store: store) {
+                    PickerActivation.activate(tile["resolved_control"].isNull ? tile["control"] : tile["resolved_control"],
+                        anchor: anchor, store: store) {
                         store.dispatch(["type": "activate_tile", "panel": panel["id"].raw, "tile": tile["id"].raw])
                     }
                 }

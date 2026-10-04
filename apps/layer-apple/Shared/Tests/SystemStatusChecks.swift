@@ -23,7 +23,7 @@ extension XCTestCase {
         XCTAssertTrue(wheel.waitForExistence(timeout: 10))
         XCTAssertTrue(workspaceViewport(in: app).frame.contains(drawer.frame),
             "Drawer \(drawer.frame) must fit the editor \(workspaceViewport(in: app).frame)")
-        workspaceActivate(app.buttons["Brush"])
+        workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(wheel.waitForNonExistence(timeout: 10), "Another header tool switches the drawer in one click")
         XCTAssertTrue(drawer.exists)
         let pencil = app.buttons["brush_sets-Pencil"]
@@ -36,16 +36,16 @@ extension XCTestCase {
         expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
         waitForExpectations(timeout: 10)
         attachEditor(in: app, name: "brush-three-column-drawer")
-        workspaceActivate(app.buttons["Sculpt"])
+        workspaceActivate(app.buttons["header-tool-sculpt"])
         workspaceActivate(app.buttons["sculpt_sets-Liquify"])
         XCTAssertTrue(app.buttons["brush-12"].waitForExistence(timeout: 10))
         XCTAssertFalse(pencil.exists)
         attachEditor(in: app, name: "sculpt-three-column-drawer")
-        workspaceActivate(app.buttons["Brush"])
+        workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(pencil.waitForExistence(timeout: 10))
         expectation(for: NSPredicate(format: "value == %@", "37.0 px"), evaluatedWith: size)
         waitForExpectations(timeout: 10)
-        workspaceActivate(app.buttons["Brush"])
+        workspaceActivate(app.buttons["header-tool-drawing_brush"])
         XCTAssertTrue(drawer.waitForNonExistence(timeout: 10), "The current opener toggles its drawer closed")
         workspaceActivate(app.buttons["Filters panel"])
         let brightness = app.buttons["adjustment-brightness_contrast"], curves = app.buttons["adjustment-curves"]

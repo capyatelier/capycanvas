@@ -63,7 +63,7 @@ Switching layouts keeps that state and the document, camera and undo history.
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
 | Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (GTK; Color/Palettes on hosts awaiting the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
-On GTK, Web, Android and Windows, Paint keeps 17 tool positions: Pen, Pencil, Brush,
+Paint keeps 17 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
 Gradient; Operation, Figure, Ruler, Hand and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
@@ -89,9 +89,7 @@ Fill. Figure and Ruler remain available in Add Tools. Tonal Selection and Quick
 Mask keep their existing selection entry points.
 
 These arrangements use shared tool groups described in
-[toolbar customization](panel-customization.md#tool-variations). Apple clients
-retain their existing individual-tool arrangements until they support the slot
-controls.
+[toolbar customization](panel-customization.md#tool-variations).
 
 In Paint, the Color and Navigator groups take their content height: Color
 follows its SDR or HDR wheel and footer, and Navigator follows the document
@@ -242,7 +240,7 @@ like a slider track, with a subtle accent for the active choice, and scrolls
 horizontally when its choices overflow. By default it sits to the right of the
 document title; Sketch centers it, and the title-bar editor can move it.
 
-On GTK, Web, Android and Windows, a vertical **⋮** at the end of the switcher
+On every host, a vertical **⋮** at the end of the switcher
 well opens **Workspace options**. The button stays fixed while the choices scroll.
 The options button is 20px wide, matches the 26px workspace pill height, and uses
 the same 2px gap as the pills. Its menu starts directly with the checklist,
@@ -258,7 +256,8 @@ previous visibility and shows a notice when the full editor is closed.
 
 Right-clicking a workspace choice, the dots, or unused switcher space opens the
 same visibility menu. Touch/pen hold and the keyboard context-menu action do
-the same, including in Customize Title Bar. Releasing a recognized hold does
+the same, including in Customize Title Bar. macOS and iPadOS have no keyboard
+context-menu action, and their options open outside Customize Title Bar. Releasing a recognized hold does
 not switch workspaces. Ordinary clicks keep their switching behavior.
 
 Manage Workspaces keeps a single ordered list. Every row has a narrow, dimmed

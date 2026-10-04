@@ -5,7 +5,10 @@ import SwiftUI
 struct ToolSetControls: View {
     @ObservedObject var store: EditorStore
     var panel = "brushes"
-    private var model: JSON { panel == "brushes" ? store.state["tool_set"] : store.state["tool_panels"][panel] }
+    var drawerToolSet = JSON()
+    private var model: JSON {
+        panel == "brushes" ? drawerToolSet.isNull ? store.state["tool_set"] : drawerToolSet : store.state["tool_panels"][panel]
+    }
     private var sets: Bool { panel == "brush_sets" || panel == "sculpt_sets" }
     var body: some View {
         VStack(spacing: 6) {
@@ -13,6 +16,9 @@ struct ToolSetControls: View {
                 VStack(spacing: 2) { items(model["groups"], group: true) }
             } else {
                 ToolGroupsLayout { items(model["groups"], group: true) }
+            }
+            if !model["groups"].array.isEmpty && !model["subtools"].array.isEmpty {
+                Rectangle().fill(EditorPalette(source: store.state["palette"])["text"].opacity(0.3)).frame(height: 1).padding(.horizontal, 4)
             }
             VStack(spacing: 2) { items(model["subtools"], group: false) }
         }
@@ -23,6 +29,7 @@ struct ToolSetControls: View {
             let item = items[index]
             let command = item["action"]["type"].string == "invoke"
                 ? store.command(item["action"]["command"].string) : JSON()
+            let enabled = item["enabled"].bool && (command.isNull || command["enabled"].bool)
             Button { store.dispatch(item["action"]) } label: {
                 Group {
                     if group && sets {
@@ -57,8 +64,7 @@ struct ToolSetControls: View {
                     .frame(maxWidth: .infinity, minHeight: group ? nil : item["preview"].isNull ? (store.tonalActive ? 36 : 44) : 64)
                     .contentShape(Rectangle())
             }.buttonStyle(EditorControlButtonStyle(selected: item["selected"].bool))
-                .disabled(!command.isNull && !command["enabled"].bool)
-                .opacity(!command.isNull && !command["enabled"].bool ? 0.36 : 1)
+                .disabled(!enabled).opacity(enabled ? 1 : 0.36)
                 .help(command.isNull ? item["label"].string : command["tooltip"].string)
                 .accessibilityLabel(item["label"].string)
                 .accessibilityAddTraits(item["selected"].bool ? .isSelected : [])
@@ -121,6 +127,11 @@ struct ToolSettingsControls: View {
         let modes = actions.filter { SelectionModes.commands.contains($0["command"].string) }
         VStack(alignment: .leading, spacing: 8) {
             if !modes.isEmpty { SelectionModeGroup(store: store, actions: modes) }
+            ForEach(store.state["tool_extra"].array.map { $0["Gradient"] }.filter { !$0.isNull }, id: \.["gradient"]["destination"].stableKey) { gradient in
+                GradientEditor(store: store, control: gradient, identifier: "tool-gradient") { action, completion in
+                    store.edit(action as? [String: Any] ?? [:], completion: completion)
+                }
+            }
             let choices = store.state["tool_extra"].array.map { $0["Choice"] }.filter { !$0.isNull }
             ForEach(choices.filter { $0["beside"].isNull }, id: \.stableKey) { choice in
                 ToolOptionField(store: store, option: JSON(["Choice": choice.raw]), iconSize: 20, vertical: false, labeled: true,

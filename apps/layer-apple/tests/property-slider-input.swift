@@ -15,7 +15,7 @@ import QuartzCore
         let cases = [("", "brush-size"), ("", "brush-opacity"), ("", "tool-document"),
             ("curves", "point"), ("", "opacity"), ("", "layer-opacity"),
             ("brightness_contrast", "brightness"),
-            ("gradient_map", "position"), ("gradient_map", "opacity")]
+            ("gradient_map", "position"), ("gradient_map", "stop-draft")]
             .filter { filter.isEmpty || $0.1.hasPrefix(filter) }
         try require(!cases.isEmpty, "No property cases match \(filter)")
         for platform: UInt32 in [0, 1] {
@@ -33,20 +33,18 @@ import QuartzCore
                 if toolControl { try await action(["type": "invoke", "command": "auto_select"]) }
                 let layer = store.state["layer_properties"]["layer"].uint
                 let brushControl = mode == "brush-size" || mode == "brush-opacity"
-                let defaultControls = store.state["layer_properties"]["controls"].stableKey
+                let defaultValues = JSON(store.state["layer_properties"]["controls"].array.map { $0["value"].raw }).stableKey
                 let key = effect == "curves" ? "rgb" : effect == "gradient_map" ? "gradient"
                     : effect == "brightness_contrast" ? "brightness" : "opacity"
                 let identifier = toolControl ? "tool-tolerance" : brushControl ? (mode == "brush-size" ? "Brush size" : "Brush opacity")
                     : mode == "layer-opacity" ? mode : effect == "gradient_map"
-                    ? "gradient-" + mode
+                    ? "gradient-strip"
                     : "property-" + key
                 func value() -> Double {
                     if toolControl { return store.state["tool_settings"].array.first { $0["id"].string == "tolerance" }!["value"].number }
                     if brushControl { return store.state["brush"][mode == "brush-size" ? "diameter" : "opacity"].number }
                     let value = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]
-                    if effect == "gradient_map" {
-                        return mode == "position" ? value[1]["position"].number : value[1]["color"]["rgba"][3].number
-                    }
+                    if effect == "gradient_map" { return value["stops"][1]["position"].number }
                     return value.number
                 }
                 let geometry = PropertySliderGeometry()
@@ -181,21 +179,82 @@ import QuartzCore
                     note("PASS: platform \(platform), native curve insertion/selection/removal and history")
                     continue
                 }
+                let markerY = (geometry.frames["gradient-strip:track"]?.minY ?? 0) + 39
                 if effect == "gradient_map" {
-                    let position = geometry.frames["gradient-position:root"]!
                     // Add the stop through the real view. Its controls must target
                     // the inserted stop immediately, without a second selection tap.
-                    try await click(CGPoint(x: 150, y: position.minY - 6 - 52 + 43))
-                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"].array
+                    try await click(CGPoint(x: 150, y: markerY))
+                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]["stops"].array
                     try require(stops.count == 3 && abs(stops[1]["position"].number - 0.5) < 0.0001,
                         "Native gradient insertion must add the middle stop")
+                }
+                if effect == "gradient_map" && mode == "stop-draft" {
+                    func values() -> String { JSON(store.state["layer_properties"]["controls"].array.map { $0["value"].raw }).stableKey }
+                    let identifier = "gradient-position"
+                    try await click(CGPoint(x: 150, y: markerY))
+                    let (field, delegate) = try await draft(identifier, "37 %")
+                    try await click(CGPoint(x: 12, y: markerY))
+                    let accepted = values()
+                    try await commit(field, delegate)
+                    try require(values() == accepted,
+                        "A retired gradient field must not change either stop after selection switches")
+                    note("PASS: platform \(platform), gradient stop selection rejects a retired \(mode) field")
+
+                    try await click(CGPoint(x: 150, y: markerY))
+                    let (insertionField, insertionDelegate) = try await draft(identifier, "37 %")
+                    try await click(CGPoint(x: 81, y: markerY))
+                    let inserted = values()
+                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"]["stops"].array
+                    try require(stops.count == 4 && abs(stops[1]["position"].number - 0.25) < 0.0001,
+                        "The native plot must insert a new stop at the old selected index")
+                    try require(geometry.frames[identifier + ":entry"] == nil,
+                        "Insertion must discard the old field's visible draft")
+                    try await commit(insertionField, insertionDelegate)
+                    try require(values() == inserted,
+                        "A previous stop's unfinished field must not edit a new stop reusing its index")
+                    note("PASS: platform \(platform), gradient insertion retires the \(mode) field even when its index is reused")
+
+                    let (historyField, historyDelegate) = try await draft(identifier, "37 %")
+                    try await action(["type": "invoke", "command": "undo"])
+                    try require(values() == accepted,
+                        "One Undo must remove the inserted stop and restore the original gradient")
+                    try await commit(historyField, historyDelegate)
+                    try require(values() == accepted,
+                        "A field from the undone stop must not edit its replacement")
+                    try await action(["type": "invoke", "command": "redo"])
+                    try require(values() == inserted,
+                        "An ignored callback must preserve insertion Redo")
+                    note("PASS: platform \(platform), gradient Undo/Redo retires the \(mode) draft and retains history")
+
+                    let (removedField, removedDelegate) = try await draft(identifier, "37 %")
+                    let remove = geometry.frames["gradient-remove:root"]!, reset = geometry.frames["gradient-reset:root"]!
+                    try await click(CGPoint(x: remove.midX, y: remove.midY))
+                    try require(values() == accepted,
+                        "Remove stop must remove the selected insertion")
+                    try await commit(removedField, removedDelegate)
+                    try require(values() == accepted,
+                        "A removed stop's field must not change the remaining gradient")
+                    try await click(CGPoint(x: 150, y: markerY))
+                    let (resetField, resetDelegate) = try await draft(identifier, "37 %")
+                    try await click(CGPoint(x: reset.midX, y: reset.midY))
+                    try require(values() == defaultValues,
+                        "The native Reset button must restore the shared gradient defaults")
+                    try await commit(resetField, resetDelegate)
+                    try require(values() == defaultValues,
+                        "Reset must discard an unfinished position draft")
+                    note("PASS: platform \(platform), gradient Remove and Reset discard unfinished position drafts")
+                    try require(store.failure == nil, store.failure ?? "")
+                    continue
                 }
                 guard let track = geometry.frames[identifier + ":track"] else {
                     throw HostFailure(message: "Missing native property slider")
                 }
                 let original = value()
                 func contact(_ type: NSEvent.EventType, _ fraction: CGFloat) async throws {
-                    try event(type, at: CGPoint(x: track.minX + track.width * fraction, y: track.midY), marker: host, number: 1)
+                    let point = effect == "gradient_map"
+                        ? CGPoint(x: track.minX + 6 + (track.width - 12) * (0.5 + (fraction - 0.2) / 2), y: markerY)
+                        : CGPoint(x: track.minX + track.width * fraction, y: track.midY)
+                    try event(type, at: point, marker: host, number: 1)
                     try await drain()
                 }
                 try await contact(.leftMouseDown, 0.2)
@@ -254,66 +313,6 @@ import QuartzCore
                         "Ignored field callbacks must not add history after Add layer")
                     try require(abs(value() - edited) < 0.0001, "Undo must retain the former layer's accepted value")
                     note("PASS: platform \(platform), \(identifier), retired field and document-epoch rejection preserve values and history")
-                }
-                if effect == "gradient_map" && mode == "opacity" {
-                    let markerY = geometry.frames["gradient-position:root"]!.minY - 6 - 52 + 43
-                    try await click(CGPoint(x: 150, y: markerY))
-                    let (field, delegate) = try await draft(identifier, "37 %")
-                    try await click(CGPoint(x: 12, y: markerY))
-                    let accepted = store.state["layer_properties"]["controls"].stableKey
-                    try await commit(field, delegate)
-                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
-                        "A retired gradient field must not change either stop after selection switches")
-                    note("PASS: platform \(platform), gradient stop selection rejects a retired \(mode) field")
-
-                    try await click(CGPoint(x: 150, y: markerY))
-                    let (insertionField, insertionDelegate) = try await draft(identifier, "37 %")
-                    // The inserted quarter stop takes index 1 from the selected
-                    // middle stop. Index equality must not preserve its draft.
-                    try await click(CGPoint(x: 81, y: markerY))
-                    let inserted = store.state["layer_properties"]["controls"].stableKey
-                    let stops = store.state["layer_properties"]["controls"].array.first { $0["key"].string == key }!["value"]["value"].array
-                    try require(stops.count == 4 && abs(stops[1]["position"].number - 0.25) < 0.0001,
-                        "The native plot must insert a new stop at the old selected index")
-                    try require(geometry.frames[identifier + ":entry"] == nil,
-                        "Insertion must discard the old field's visible draft")
-                    try await commit(insertionField, insertionDelegate)
-                    try require(store.state["layer_properties"]["controls"].stableKey == inserted,
-                        "A previous stop's unfinished field must not edit a new stop reusing its index")
-                    note("PASS: platform \(platform), gradient insertion retires the \(mode) field even when its index is reused")
-
-                    let (historyField, historyDelegate) = try await draft(identifier, "37 %")
-                    try await action(["type": "invoke", "command": "undo"])
-                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
-                        "One Undo must remove the inserted stop and restore the original gradient")
-                    try await commit(historyField, historyDelegate)
-                    try require(store.state["layer_properties"]["controls"].stableKey == accepted,
-                        "A field from the undone stop must not edit its replacement")
-                    try await action(["type": "invoke", "command": "redo"])
-                    try require(store.state["layer_properties"]["controls"].stableKey == inserted,
-                        "An ignored callback must preserve insertion Redo")
-                    note("PASS: platform \(platform), gradient Undo/Redo retires the \(mode) draft and retains history")
-
-                    if mode == "opacity" {
-                        let (removedField, removedDelegate) = try await draft(identifier, "37 %")
-                        let footerY = geometry.frames["gradient-opacity:root"]!.maxY + 6 + 10
-                        try await click(CGPoint(x: 45, y: footerY))
-                        try require(store.state["layer_properties"]["controls"].stableKey == accepted,
-                            "Remove stop must remove the selected insertion")
-                        try await commit(removedField, removedDelegate)
-                        try require(store.state["layer_properties"]["controls"].stableKey == accepted,
-                            "A removed stop's field must not change the remaining gradient")
-                        for iteration in 0..<2 {
-                            let (resetField, resetDelegate) = try await draft(identifier, "37 %")
-                            try await click(CGPoint(x: 260, y: footerY))
-                            try require(store.state["layer_properties"]["controls"].stableKey == defaultControls,
-                                "The native Reset button must restore the shared gradient defaults")
-                            try await commit(resetField, resetDelegate)
-                            try require(store.state["layer_properties"]["controls"].stableKey == defaultControls,
-                                "Reset must discard a draft even when the stop count is unchanged (\(iteration))")
-                        }
-                        note("PASS: platform \(platform), gradient Remove and repeated Reset discard unfinished opacity drafts")
-                    }
                 }
                 try require(store.failure == nil, store.failure ?? "")
                 note("PASS: platform \(platform), \(effect.isEmpty ? "paint" : effect)/\(mode), native slider, one-step history and cancellation")

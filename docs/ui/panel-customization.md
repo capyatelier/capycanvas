@@ -78,7 +78,8 @@ GTK coverage is `workspace-motion.sh gtk --native-test=native_toolbar_variations
 `--native-test=native_toolbar_variations_overflow_input` focuses on title-bar
 sizes and overflow. `--native-test=native_panel_preview_input` checks tool and
 filter row compression and expansion; `--tooltips` checks captions across the whole row.
-Web uses `workspace-motion.sh web --tool-variations`. Run
+Web uses `workspace-motion.sh web --tool-variations`, and Apple runs
+`EditorLaunchTests/testToolGroups` and `testToolGroupsDark`. Run
 native popup journeys without `--tablet`, whose synthetic pen serials cannot
 authorize popup grabs.
 

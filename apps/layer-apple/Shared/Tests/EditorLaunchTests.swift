@@ -115,6 +115,9 @@ final class EditorLaunchTests: XCTestCase {
 
     @MainActor func testPopupThemeFollowsExplicitAndSystem() { checkPopupThemeFollowsExplicitAndSystem() }
 
+    @MainActor func testToolGroups() { checkToolGroups(in: editorCaptureApplication(), theme: "light") }
+    @MainActor func testToolGroupsDark() { checkToolGroups(in: editorCaptureApplication(), theme: "dark") }
+    @MainActor func testSwitcherVisibility() { checkSwitcherVisibility(in: editorTestApplication()) }
     @MainActor func testWorkspaceSwitcher() {
         checkWorkspaceSwitcher(in: editorTestApplication())
     }
@@ -287,7 +290,7 @@ final class EditorLaunchTests: XCTestCase {
         #if os(macOS)
         app.launchArguments += ["-AppleInterfaceStyle", "Light"]
         #endif
-        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"}]"#
+        app.launchEnvironment["CAPY_INITIAL_ACTIONS"] = #"[{"type":"set_theme","theme":"light"},{"type":"customize","action":{"type":"set_control_visible","panel":"sizes","control":"brush_size","visible":true}}]"#
         app.launch()
         checkNumericToolControls(in: app)
         #if os(macOS)

@@ -217,7 +217,8 @@ extension XCTestCase {
         XCTAssertTrue(toggle.waitForExistence(timeout: 20))
         workspaceActivate(app.buttons["configuration-size-8"])
         let values = app.buttons.matching(identifier: "number-value-Brush size")
-        XCTAssertEqual(values.count, 2, "The preset must update both the live panel and configuration")
+        XCTAssertEqual(values.count, 1, "Configuration offers the hidden Brush size slider")
+        XCTAssertTrue(app.buttons["size-8"].isSelected, "The preset must update both the live panel and configuration")
         for value in values.allElementsBoundByIndex {
             expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: value)
         }
@@ -236,12 +237,13 @@ extension XCTestCase {
         if colorToggle.value as? String == "Off" { workspaceActivate(colorToggle) }
         expectation(for: NSPredicate(format: "value == %@", "On"), evaluatedWith: colorToggle)
         waitForExpectations(timeout: 5)
+        XCTAssertEqual(toggle.value as? String, "Off", "The Brush size slider is hidden until enabled")
         workspaceActivate(toggle)
-        expectation(for: NSPredicate(format: "value == %@", "Off"), evaluatedWith: toggle)
+        expectation(for: NSPredicate(format: "value == %@", "On"), evaluatedWith: toggle)
         waitForExpectations(timeout: 5)
         workspaceActivate(app.buttons["close-panel-configuration"])
         let size = app.buttons["number-value-Brush size"]
-        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: size)
+        expectation(for: NSPredicate(format: "value == %@", "8.0 px"), evaluatedWith: size)
         waitForExpectations(timeout: 5)
         let liveColor = app.buttons["brush-color"]
         let liveControls = app.scrollViews.containing(.button, identifier: "brush-color").firstMatch

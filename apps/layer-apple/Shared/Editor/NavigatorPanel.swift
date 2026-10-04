@@ -2,7 +2,6 @@ import SwiftUI
 
 struct NavigatorPanel: View {
     @ObservedObject var store: EditorStore
-    private let commands = ["zoom_out", "zoom_in", "rotate_left", "rotate_right", "flip_horizontal", "flip_vertical"]
     private var aspect: CGFloat {
         let document = store.state["tabs"][0]
         guard !store.camera.value.isNull,
@@ -15,17 +14,25 @@ struct NavigatorPanel: View {
         VStack(spacing: 2) {
             NavigatorDrawing(store: store)
                 .frame(minHeight: 0, idealHeight: 164, maxHeight: .infinity)
-            HStack(spacing: 2) {
-                ForEach(commands, id: \.self) { id in
-                    let command = store.command(id)
-                    IconTile(icon: command["icon"].string, label: command["tooltip"].string,
-                        selected: command["selected"].bool, enabled: command["enabled"].bool) { store.invoke(id) }
-                        .frame(height: 32).accessibilityIdentifier("navigator-" + id)
-                }
-            }
+            NavigationButtons(store: store, prefix: "navigator")
         }.padding(8)
             .modifier(PanelBodyMeasurement(panel: "navigator", kind: .scroll,
                 naturalHeight: { [aspect] width in max(0, width - 16) * aspect + 2 + 32 + 16 }))
+    }
+}
+
+struct NavigationButtons: View {
+    @ObservedObject var store: EditorStore
+    let prefix: String
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(store.catalog["navigator_commands"].array.map(\.string), id: \.self) { id in
+                let command = store.command(id)
+                IconTile(icon: command["icon"].string, label: command["tooltip"].string,
+                    selected: command["selected"].bool, enabled: command["enabled"].bool) { store.invoke(id) }
+                    .frame(height: 32).accessibilityIdentifier(prefix + "-" + id)
+            }
+        }
     }
 }
 

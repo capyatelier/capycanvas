@@ -11,6 +11,9 @@ extension AppleContextMenu {
                 let item = NSMenuItem(title: entry.label, action: nil, keyEquivalent: "")
                 item.isEnabled = entry.enabled; item.state = entry.selected == true ? .on : .off
                 if !entry.hint.isEmpty { item.toolTip = entry.hint }
+                if !entry.icon.isEmpty, let image = NSImage(named: "icon-" + SharedIcon.assetKey(entry.icon))?.copy() as? NSImage {
+                    image.isTemplate = true; image.size = NSSize(width: 16, height: 16); item.image = image
+                }
                 if let binding = entry.bindings.first, let shortcut = menuShortcut(binding) {
                     item.keyEquivalent = String(shortcut.key.character)
                     var modifiers: NSEvent.ModifierFlags = []
