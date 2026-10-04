@@ -196,8 +196,11 @@ The same parser resolves custom packages and the bundled catalog. Built-in IDs
 and metadata belong to the app and cannot be overridden by imported packages.
 
 Each parameter declares its semantic `dimension`: `scalar` (the default),
-`angle`, `time`, `source_pixels`, `composition_pixels` or `normalized`.
-Image resize scales pixel lengths; displayed `unit` labels affect presentation
+`count`, `angle`, `time`, `source_pixels`, `composition_pixels` or `normalized`.
+Counts require whole bounds and values. Posterize Levels and Kaleidoscope Segments
+are counts. Denoise exposes Strength and uses an internal radius of two pixels;
+Domain Warp uses three internal noise octaves. Image resize scales pixel lengths
+without rounding to displayed decimal places; displayed `unit` labels affect presentation
 only. The bundled catalog declares pixel lengths, degree angles and seconds explicitly.
 Custom packages retain their own declarations; built-in files omit the schema.
 Percentages keep their existing meanings: center coordinates use the respective
@@ -220,6 +223,14 @@ WGSL or an ordered array of manifest-local WGSL filenames. Modules resolve to
 shared source chunks, so fused filters include common helpers once. Custom
 document programs contain resolved code and do not need their original package.
 Built-in document records contain only ID and parameter-data version.
+The runtime package schema includes editor presentation and execution
+optimizations. Custom `.capy` definitions retain literal labels, semantic kinds,
+hard bounds, units, dimensions, defaults, constraints, opaque-color capability,
+shader code, slots, passes and resource bindings. They omit pages, sections,
+conditional visibility, slider bounds/mapping, steps, decimal places,
+`resolution` and `constant_color`. Reopening uses plain controls and native
+evaluation, independently of the installed catalog. The
+[package contract](capy-package.md) owns the artwork grammar.
 
 Bundled category, program and parameter labels, sections and choice labels use
 explicit `ResourceLabel` references from the current localization catalog.
@@ -239,8 +250,10 @@ remain that supplied text, or an explicit object separating them:
 
 Option values are nonempty and unique within a parameter. Display labels may
 match. Runtime `EffectValue::Choice` values and host actions use indices. Files store
-stable option strings. GPU indices are derived from the current schema; LUT
-color-space codes use an explicit mapping independent of that order. Category IDs, parameter keys and
+stable option strings. Curves Domain, Selective Color Mode, Gradient Fill Style
+and LUT color-space choices map stable values explicitly to GPU codes, so their
+option order can change. Custom choice codes follow their retained ordered
+options. Category IDs, parameter keys and
 shader identities are independent of labels. Property views supply raw
 `section_id` metadata alongside the resolved `section` heading, so hosts group
 controls by identity even when translated headings match. User layer names and
@@ -283,8 +296,10 @@ with interval-scaled tangents; gradients store exact positions, linear RGB, alph
 and mixing coordinates.
 `fx_lut(base, offset, value)` locates a segment with at most five binary-search
 steps and evaluates it directly. The former 256-sample parameter representation
-is removed. Earlier ABI programs are rejected, including embedded document programs;
-there is no compatibility adapter. Native photo editing must not inherit a
+is removed. Runtime packages declare `abi: 5`; custom artwork uses the fixed
+`capy.filter/1` contract for this ABI without a separate `abi` field. Earlier
+runtime ABIs and unknown artwork contracts are unsupported; there is no
+compatibility adapter. Native photo editing must not inherit a
 sampled LUT's error around closely spaced controls.
 
 Color parameters and gradient stops retain a tagged, straight `RgbColor` in
@@ -532,7 +547,9 @@ no third-party shader implementation was imported.
 
 Run the changed-layer checks in [Testing](../development/testing.md). Core tests
 cover reserved IDs, explicit keyed values, dimensions, opaque colors and stable
-color-space choices. Fixed artwork fixtures protect data compatibility; renderer
+color-space choices. The fixed `builtin-contracts.json` snapshot protects semantic
+parameter contracts and shader parameter order; the fixed artwork fixture
+retains pixel, material, lookup and authored-value assertions. Renderer
 tests compile all current built-ins and custom programs with overlapping function
 names separately. UI tests cover atomic catalog publication without document
 mutation and shared property controls. Native journeys verify open/edit/save/reopen

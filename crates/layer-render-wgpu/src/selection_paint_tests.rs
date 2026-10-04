@@ -133,10 +133,9 @@ fn saved_selection_overlay_uses_working_visibility_without_changing_authored_art
     use layer_core::{Edit, SavedSelection};
     let mut document = paint_document([128; 2], "artwork");
     let saved = RecordChange::insert(&document.artwork.selections, SavedSelection {
-        selection: Selection::full(), display: Default::default(),
+        selection: Selection::full(),
     });
-    let mut value = Occurrence::new(OccurrenceContent::Selection(saved.handle), "Saved coverage");
-    value.visible = false;
+    let value = Occurrence::new(OccurrenceContent::Selection(saved.handle), "Saved coverage");
     let occurrence = RecordChange::insert(&document.artwork.occurrences, value);
     let handle = occurrence.handle;
     let stack = document.composition().result;
@@ -144,19 +143,20 @@ fn saved_selection_overlay_uses_working_visibility_without_changing_authored_art
     membership.entries.insert(0, handle);
     let membership = RecordChange::replace(&document.artwork.stacks, stack, Some(membership)).unwrap();
     document.apply(Edit::Batch(vec![Edit::SavedSelection(saved), Edit::Occurrence(occurrence), Edit::Stack(membership)])).unwrap();
+    document.working.selection_overlays.visibility.insert(handle, false);
     let authored = document.artwork.clone();
     let mut r = renderer();
     r.set_selection_overlay(Some(layer_render::SelectionOverlay {
         active: false, editing: None, color: [1., 0., 0., 0.5], protected: false, saved_protected: false,
     }));
-    let base = packet(document.scene(), [128; 2]);
+    let base = FramePacket { selection_overlays: Some(&document.working.selection_overlays), ..packet(document.scene(), [128; 2]) };
     r.prepare_selection_previews(base).unwrap();
     assert!(r.selection_previews.texture.is_none());
-    let mut visibility = std::collections::BTreeMap::from([(handle, true)]);
-    r.prepare_selection_previews(FramePacket { selection_visibility: Some(&visibility), ..base }).unwrap();
+    let mut visibility = layer_core::authored::SelectionOverlays {visibility: [(handle,true)].into(), ..Default::default()};
+    r.prepare_selection_previews(FramePacket { selection_overlays: Some(&visibility), ..base }).unwrap();
     assert!(r.selection_previews.texture.is_some());
-    visibility.insert(handle, false);
-    r.prepare_selection_previews(FramePacket { selection_visibility: Some(&visibility), ..base }).unwrap();
+    visibility.visibility.insert(handle, false);
+    r.prepare_selection_previews(FramePacket { selection_overlays: Some(&visibility), ..base }).unwrap();
     assert!(r.selection_previews.texture.is_none());
     r.prepare_selection_previews(base).unwrap();
     assert!(r.selection_previews.texture.is_none());

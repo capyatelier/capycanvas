@@ -709,14 +709,16 @@ impl<R: CanvasRenderer> UiSession<R> {
                         .map_err(error)?;
                 }
                 let doc=self.engine.document();
-                let saved=RecordChange::insert(&doc.artwork.selections,SavedSelection {selection,display:if save_current && self.selection_masks.target().is_some() {self.mask_properties()} else {Default::default()}});
+                let saved=RecordChange::insert(&doc.artwork.selections,SavedSelection {selection});
+                let mut working=doc.working.clone();
+                if save_current && self.selection_masks.target().is_some() {working.selection_overlays.properties.insert(saved.handle,self.mask_properties());}
                 let occurrence=RecordChange::insert(&doc.artwork.occurrences,Occurrence::new(OccurrenceContent::Selection(saved.handle),
                     self.numbered_document_name(MessageId::DOCUMENTS_SELECTION_NAME,u64::from(doc.artwork.occurrences.next_handle().index())+1)));
                 let id=occurrence.handle;
                 let stack=match parent {Some(h)=>match doc.scene().occurrence(h).map(|o|o.content.clone()) {Some(OccurrenceContent::Stack(s))=>s,_=>return Err("Choose a group".into())},None=>doc.composition().result};
                 let mut entries=doc.artwork.stacks.get(stack).ok_or("Missing stack")?.clone();entries.entries.insert(0,id);
                 let stack=RecordChange::replace(&doc.artwork.stacks,stack,Some(entries)).map_err(error)?;
-                self.layer_edit(Edit::Batch(vec![Edit::SavedSelection(saved),Edit::Occurrence(occurrence),Edit::Stack(stack)]))?;
+                self.layer_edit(Edit::Batch(vec![Edit::SavedSelection(saved),Edit::Occurrence(occurrence),Edit::Stack(stack),Edit::Working(working)]))?;
                 self.begin_selection_mask(SelectionTarget::Saved(id))?;
                 self.state.layer_tools.rename_layer=Some(occurrence_token(id));
             }

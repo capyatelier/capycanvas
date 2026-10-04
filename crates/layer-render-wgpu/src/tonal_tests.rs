@@ -96,7 +96,7 @@ fn tonal_cache_preserves_alpha_and_tracks_artwork_not_selection_or_navigation() 
     let submit = |r: &mut WgpuRasterizer, layer: &Document, saved: Option<Selection>| {
         let mut document = layer.clone();
         if let Some(selection) = saved {
-            let record = RecordChange::insert(&document.artwork.selections,SavedSelection {selection,display:Default::default()});
+            let record = RecordChange::insert(&document.artwork.selections,SavedSelection {selection,});
             document.apply(layer_core::Edit::SavedSelection(record)).unwrap();
         }
         r.submit(FramePacket {
@@ -302,7 +302,7 @@ fn tonal_61mp_performance() {
             let mut doc = layer.clone();
             doc.working.selection = Some(Selection::pixels(result.pixels));
             let saved = RecordChange::insert(&doc.artwork.selections,SavedSelection {
-                selection: doc.working.selection.clone().unwrap(), display:Default::default(),
+                selection: doc.working.selection.clone().unwrap(),
             });
             let saved_id = saved.id;
             doc.apply(layer_core::Edit::SavedSelection(saved)).unwrap();

@@ -34,7 +34,7 @@ impl Scene {
             view: packet.view,
             document_extent: extent,
             scene,
-            selection_visibility: None,
+            selection_overlays: None,
             inspect_mask: None,
             dabs: &[],
             dab_batches: &[],

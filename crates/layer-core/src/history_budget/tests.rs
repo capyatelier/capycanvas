@@ -80,7 +80,6 @@ fn retained_selection_inventory_counts_binary_ownership_across_history_and_masks
         &d.artwork.selections,
         SavedSelection {
             selection: selection.clone(),
-            display: Default::default(),
         },
     );
     let mut occurrence = d.artwork.occurrences.get(h).unwrap().clone();

@@ -129,6 +129,8 @@ It covers aborted resource publication, immutable-ID conflicts, metadata corrupt
 retention, interrupted restore, stale writes, atomic ownership transfer and closed
 membership. `--drawing-tabs-recovery` walks automatic restart in both themes with
 clean and dirty drawings, tab order, cameras, undo/redo, save checkpoints and close.
+It checks Selection Layer overlay pixels immediately after color, opacity and
+native eye edits and after restart, while the portable artwork remains unchanged.
 `--session-restart-performance` records three six-second pen gestures alongside
 background checkpoints, logical resource/metadata bytes, snapshot age
 at publication and browser callback/input costs under `artifacts/seamless-restart/web`.

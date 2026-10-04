@@ -84,6 +84,7 @@ pub struct ViewportPresenter {
     retained: bool,
     history: crate::present_damage::Retained,
     presented_view: Option<(ViewState, [f32; 4], u32, f32)>,
+    presented_selection_overlay: Option<layer_render::SelectionOverlay>,
     overlays_changed: bool,
     backdrop: Option<crate::backdrop_blur::BackdropBlur>,
     source_camera: Option<[f32; 128]>,
@@ -603,6 +604,7 @@ impl ViewportPresenter {
             retained: false,
             history: Default::default(),
             presented_view: None,
+            presented_selection_overlay: None,
             overlays_changed: false,
             backdrop: None,
             source_camera: None,
@@ -748,6 +750,7 @@ impl ViewportPresenter {
         let previous = &self.history;
         !previous.valid
             || self.presented_view != Some((view, surround_linear, self.quarter_turns, self.corner_radius))
+            || self.presented_selection_overlay != renderer.selection_overlay
             || (previous.revision != renderer.composite_revision
                 && (previous.artwork_revision != renderer.artwork_revision || !cache.has_pending_work(renderer)))
             || previous.selection_revision != renderer.selection_paint_revision
@@ -1252,6 +1255,7 @@ impl ViewportPresenter {
         // Works both for present() and hosts submitting encode() themselves.
         self.uploads.finish(encoder);
         self.presented_view = Some((view, surround_linear, self.quarter_turns, self.corner_radius));
+        self.presented_selection_overlay = renderer.selection_overlay;
         self.overlays_changed = false;
         Ok(())
     }
@@ -1289,6 +1293,70 @@ pub(crate) fn surface_pipeline(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn selection_overlay_changes_present_without_artwork_or_coverage_changes() {
+        use layer_render::SelectionOverlay;
+        let mut document = crate::layer_tests::placement::paint_document([128; 2], "white artwork");
+        crate::layer_tests::placement::paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source([128; 2], |_, _| [255; 4]));
+        let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        let packet = crate::test_support::packet(document.scene(), [128; 2]);
+        renderer.submit(packet).unwrap();
+        let overlay = SelectionOverlay { active: true, editing: None, color: [1., 0., 0., 0.5], protected: false, saved_protected: false };
+        renderer.set_selection_overlay(Some(overlay));
+        renderer.set_selection_outline(Some(&std::sync::Arc::new(layer_core::Selection::full()))).unwrap();
+        let (texture, target) = crate::create_target(renderer.device(), [128; 2], wgpu::TextureFormat::Rgba8UnormSrgb, "selection overlay presentation");
+        let mut presenter = ViewportPresenter::for_surface(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+        presenter.set_target_retention(true);
+        let revisions = (renderer.artwork_revision, renderer.composite_revision, renderer.display_selection_revision, renderer.selection_paint_revision);
+        for overlay in [
+            overlay,
+            SelectionOverlay { color: [0., 1., 0., 0.5], ..overlay },
+            SelectionOverlay { color: [0., 1., 0., 0.37], ..overlay },
+            SelectionOverlay { active: false, ..overlay },
+            SelectionOverlay { protected: true, ..overlay },
+        ] {
+            renderer.set_selection_overlay(Some(overlay));
+            assert!(presenter.needs_present(&renderer, packet.view, [1.; 4]), "{overlay:?}");
+            presenter.present(&renderer, &target, packet.view, [1.; 4]).unwrap();
+            assert!(!presenter.needs_present(&renderer, packet.view, [1.; 4]));
+            let pixels = crate::layer_tests::page_bytes(&renderer, &texture);
+            let actual = &pixels[(64 * 128 + 64) * 4..][..4];
+            let alpha = if overlay.active && !overlay.protected { overlay.color[3] } else { 0. };
+            for channel in 0..3 {
+                let expected = (layer_core::color::RgbSpace::Srgb.encode(f64::from(1. - alpha + overlay.color[channel] * alpha)) * 255.).round() as u8;
+                assert!(actual[channel].abs_diff(expected) <= 1, "{overlay:?} channel {channel}: {} vs {expected}", actual[channel]);
+            }
+            assert_eq!(actual[3], 255);
+            assert_eq!((renderer.artwork_revision, renderer.composite_revision, renderer.display_selection_revision, renderer.selection_paint_revision), revisions);
+        }
+    }
+    #[test]
+    fn vector_selection_overlay_uses_submitted_extent_after_creation_and_resize() {
+        let mut renderer = WgpuRasterizer::new_native_headless(Default::default()).unwrap();
+        renderer.set_selection_overlay(Some(layer_render::SelectionOverlay {
+            active: true, editing: None, color: [0., 1., 0., 0.37], protected: false, saved_protected: false,
+        }));
+        let selection = std::sync::Arc::new(layer_core::Selection::polygon(vec![
+            layer_core::Point { x: 16., y: 16. }, layer_core::Point { x: 112., y: 16. },
+            layer_core::Point { x: 112., y: 88. }, layer_core::Point { x: 16., y: 88. },
+        ]).unwrap());
+        for extent in [[48, 48], [128, 96]] {
+            let mut document = crate::layer_tests::placement::paint_document(extent, "white artwork");
+            crate::layer_tests::placement::paint_mut(&mut document).original = Some(layer_core::color::source::rgba8_source(extent, |_, _| [255; 4]));
+            renderer.set_selection_outline(Some(&selection)).unwrap();
+            let packet = crate::test_support::packet(document.scene(), extent);
+            renderer.submit(packet).unwrap();
+            let (texture, target) = crate::create_target(renderer.device(), extent, wgpu::TextureFormat::Rgba8UnormSrgb, "resized selection overlay");
+            let mut presenter = ViewportPresenter::for_surface(&renderer, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+            presenter.present(&renderer, &target, packet.view, [1.; 4]).unwrap();
+            let pixels = crate::layer_tests::page_bytes(&renderer, &texture);
+            for (position, expected) in [([8, 8], [255; 4]), ([extent[0] - 24, extent[1] - 24], [208, 255, 208, 255])] {
+                let offset = ((position[1] * extent[0] + position[0]) * 4) as usize;
+                let actual = &pixels[offset..][..4];
+                assert!(actual.iter().zip(expected).all(|(a, b)| a.abs_diff(b) <= 1), "{extent:?} {position:?}: {actual:?} vs {expected:?}");
+            }
+        }
+    }
     #[test]
     fn overview_records_reject_invalid_geometry() {
         let p = OverviewPlacement {

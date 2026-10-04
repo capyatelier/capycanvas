@@ -100,6 +100,9 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Gaussian Blur slider, small radius | 60, soft | **Not met.** Screen 50.0 presents/s, p99 33.4 ms; renderer 23.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Gaussian Blur slider, large radius | 60, soft | **Not met.** Screen 42.7 presents/s, p99 50.0 ms; renderer 15.5 completed updates/s | Two-page-refinement qualification below, Navigator open |
 | Other neighbourhood filter sliders: Unsharp Mask, Edge-Preserving Smooth | 60, soft | | |
+| Denoise Strength | 60, soft | **Not met.** 0.199 completed updates/s; whole-screen proxy 27.86–30.72 presents/s, p99 99.96 ms | [Fixed filter controls](#fixed-filter-controls), 2026-10-04 |
+| Domain Warp Distance, animation frozen | 60, soft | **Not met.** 0.199 completed updates/s; whole-screen proxy 54.14–54.32 presents/s, p99 66.64–83.30 ms | [Fixed filter controls](#fixed-filter-controls), 2026-10-04 |
+| Saved-selection overlay opacity | 60 | **Unqualified.** 7.78–21.71 completed updates/s; whole-screen proxy 59.21–59.62 presents/s, p99 16.85–33.33 ms; independent canvas presentation unmeasured | [Fixed filter controls](#fixed-filter-controls), 2026-10-04 |
 | Animated or warping filter: Domain Warp, Ripple | 60, soft | | |
 | Fill layer or gradient-fill edit | 60, soft | **Not met** for Solid Color opacity: screen 47.44 presents/s, p99 ≤49.98 ms; renderer 32.51 fresh completed updates/s. Gradient unmeasured | [Solid Color fills](#solid-color-fills) |
 | Navigation with Shadows/Highlights or Clarity | 60 | **Unqualified on current M3.** 52.398–59.826 completed updates/s; first contact below 57/s for both guides; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison) |
@@ -124,6 +127,64 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Workspace visibility checklist: vertical scroll | 60 | Screen 60.02 presents/s, maximum p99 17.03 ms | Workspace switcher scrolling below; long-list fixture |
 | Menu open and close | 60 | | |
 | Interface language change | 60 | Current lifecycle binary unmeasured. Earlier German checkpoint: cold publication 169.2–195.5 ms; warm 144.4–194.4 ms; preparation-only maximum 4.095 ms | Matched Web language checkpoint below; no tier qualification |
+
+## Fixed filter controls
+
+Measured 2026-10-04 on the reference TCL tablet with the 4248 × 2832 Sony photo
+at Fit, in a release Rust benchmark APK, with three warmed five-second scrubs
+per control. Denoise uses a fixed two-pixel neighborhood; Domain Warp uses three
+noise octaves and a frozen animation phase. Thermal status was 0 before and
+after both builds.
+
+The baseline is `7fcca04e5`, with only the benchmark harness added. The candidate
+is the same commit plus the artwork-contract changes, source patch SHA-256
+`fbe1e761a0b3b6f5912a58f142aa94ba0533c5b1e2033b3180335b212c8beda2`.
+Baseline and candidate APK SHA-256 values are
+`571fe6a9150efe14fc27c3dc877b0a868304896f944e0126d8b0335a51396398` and
+`c375c0760ad0ded0d328adc3acfcee463ba821be03c4d064ad9d4c9a457811a6`.
+
+| Control | Baseline screen presents/s | Candidate screen presents/s | Baseline / candidate screen interval p99 |
+| --- | --- | --- | --- |
+| Denoise Strength | 30.21 / 31.55 / 31.13 | 29.50 / 30.92 / 31.44 | 99.88–116.63 / 83.44–99.98 ms |
+| Domain Warp Distance | 52.90 / 52.52 / 52.47 | 53.72 / 53.35 / 54.10 | 66.66–83.29 / 66.66–66.81 ms |
+
+Both builds record only one completed renderer update per contact, or
+0.198–0.199 updates/s; there are too few completions for a gap p99. The screen
+measurements include native controls and do not establish independent canvas
+presentation rates: the retained canvas SurfaceFlinger layer reports one event
+per contact. Neither build meets the target. This comparison finds no measurable
+regression from fixing the kernels; it does not establish a hardware-limit waiver.
+Source manifests, APK identities, thermal records and individual samples are in
+`artifacts/format-stabilization/android/`, including `baseline/report.json` and
+`filter-final-report.json`.
+
+The final production changes were measured again after integrating `bd6532ada`,
+with source patch SHA-256
+`fa400bde6693b2e3b72c774095c10b90e07dfb488ae38f8bc9c772b64ce00991`,
+APK SHA-256
+`92e7818f24dccfcfd7d66447b7e39fd4bd4cd177d12ee17b12c1bbc45357b867`
+and test APK SHA-256
+`3b0ba43ec2b1d1bac03872c5efa57c5ad900fa137f0a71537ba3c621f51b54c6`.
+The same three warmed five-second scrubs used the dark theme; light-theme
+scrubs passed separately. Thermal status stayed 0, CPU/GPU temperature rose
+from 51.1 to 57.6 °C and skin temperature from 31 to 38 °C.
+
+| Control | Completed updates/s | Completion gap p99 | Whole-screen presents/s | Screen interval p99 |
+| --- | --- | --- | --- | --- |
+| Denoise Strength | 0.199 / 0.199 / 0.199 | Too few completions | 27.86 / 30.32 / 30.72 | 99.96 / 99.96 / 99.96 ms |
+| Domain Warp Distance | 0.199 / 0.199 / 0.199 | Too few completions | 54.32 / 54.16 / 54.14 | 66.64 / 83.30 / 66.65 ms |
+| Saved-selection overlay opacity | 13.13 / 7.78 / 21.71 | 231.20 / 335.53 / 71.16 ms | 59.21 / 59.62 / 59.41 | 33.33 / 16.85 / 33.31 ms |
+
+Overlay scrubs changed 71, 96 and 54 opacity values while preserving the authored
+checkpoint and modified state. Completion counters are diagnostic; they do not
+prove independently presented canvas frames or stale pixels. The whole-screen
+and native-window traces cannot qualify canvas motion. Native UI presentation
+was 59.36–59.44 Hz with p99 35.72–38.75 ms, exceeding the 33.33 ms limit.
+The overlay remains unqualified, and neither filter meets its target. Mid and
+top tiers remain unmeasured for this change. Raw traces, thermal records and
+individual samples are under
+`artifacts/format-stabilization/android/integrated-perf/`; its `report.json`
+contains the exact values.
 
 ## Layer attachment qualification
 

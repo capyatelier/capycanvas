@@ -117,10 +117,10 @@ internal class RecoveryController(private val host: CanvasHost, application: App
         manifest = ""; owners.clear()
     }
     private suspend fun save(cleanExit: Boolean): Boolean = storage.withLock {
-        ensureOwners()
         val view = JSONObject(host.drawingTabs.query(obj("op" to "view")))
         val drawings = org.json.JSONArray(view.array("tabs").objects().map {
-            obj("id" to it.getLong("id"), "key" to owners.getValue(it.getLong("id")).key)
+            val id = it.getLong("id")
+            obj("id" to id, "key" to owners.getOrPut(id) { Owner(UUID.randomUUID().toString()) }.key)
         })
         writeManifest(obj("type" to "stage", "drawings" to drawings, "active" to view.getLong("selected")))
         for (tab in view.array("tabs").objects()) {
@@ -139,8 +139,8 @@ internal class RecoveryController(private val host: CanvasHost, application: App
         true
     }
     fun capture(): Job? {
-        if (!started || closed || backgrounded || restoring || held == null || host.drawingTabs.switching) return null
         checkpoint?.takeIf { it.isActive }?.let { return it }
+        if (!started || closed || backgrounded || restoring || held == null || host.drawingTabs.switching) return null
         return scope.launch {
             try { save(false) }
             catch (e: CancellationException) { throw e }

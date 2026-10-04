@@ -67,7 +67,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             view,
             scene: snapshot.view(),
             inspect_mask: None,
-            selection_visibility: None,
+            selection_overlays: None,
             document_extent: snapshot.view().composition().size,
             blend_space: snapshot.view().composition().blend,
             dabs: &[],

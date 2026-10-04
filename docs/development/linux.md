@@ -134,7 +134,10 @@ The private checkpoint never overwrites the artist's project file.
 camera, modified state, retained Undo/Redo and explicit close cancellation and
 discard. `native_session_restart_saved_origins` checks that intact saved originals
 remain clean, missing or changed originals require an explicit close decision,
-and Save As preserves the restored drawing. `native_document_files` checks saved
+and Save As preserves the restored drawing. It also changes Selection Layer
+overlay opacity and visibility through native controls, checks the displayed pixels
+and clean artwork state, and verifies that private restart retains the display
+settings while portable files omit them. `native_document_files` checks saved
 project pixels and preservation of the clean drawing's private copy. Run each
 through the private-display runner, with a fresh `CAPY_RECOVERY_DIR`, and set `CAPY_NATIVE_TEST_THEME=light`
 or `dark` for both presentations.

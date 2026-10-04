@@ -284,7 +284,7 @@ pub struct FramePacket<'a> {
     /// lost when a renderer is recreated.
     pub scene: SceneView<'a>,
     pub inspect_mask: Option<OccurrenceHandle>,
-    pub selection_visibility: Option<&'a std::collections::BTreeMap<OccurrenceHandle, bool>>,
+    pub selection_overlays: Option<&'a layer_core::authored::SelectionOverlays>,
     pub dabs: &'a [Dab],
     pub dab_batches: &'a [DabBatch],
     /// Clear renderer-owned paint storage before applying persistent batches.

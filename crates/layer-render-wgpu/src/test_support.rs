@@ -56,7 +56,7 @@ pub(crate) fn packet(scene: SceneView<'_>, extent: [u32; 2]) -> FramePacket<'_> 
         view: view(extent),
         document_extent: extent,
         scene,
-        selection_visibility: None,
+        selection_overlays: None,
         inspect_mask: None,
         dabs: &[],
         dab_batches: &[],

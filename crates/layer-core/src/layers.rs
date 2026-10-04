@@ -825,10 +825,10 @@ impl Document {
         if let Some(previous) = working.occurrence.filter(|h| {
             self.scene().occurrence(*h).is_some_and(|o| matches!(o.content, OccurrenceContent::Selection(_)))
         }) {
-            working.selection_visibility.insert(previous, false);
+            working.selection_overlays.visibility.insert(previous, false);
         }
         if matches!(self.scene().occurrence(id).unwrap().content, OccurrenceContent::Selection(_)) {
-            working.selection_visibility.insert(id, true);
+            working.selection_overlays.visibility.insert(id, true);
         }
         working.occurrence = Some(id);
         working.layer_selection = BTreeSet::from([id]);
@@ -1235,8 +1235,8 @@ mod organization_tests {
         saved(&mut doc, "Two", Selection::full());
         nest(&mut doc, "Group", &["One", "Two"]);
         occurrence_mut(&mut doc, "Group").visible = false;
-        occurrence_mut(&mut doc, "One").visible = false;
         let one = id(&doc, "One");
+        doc.working.selection_overlays.visibility.insert(one, false);
         let two = id(&doc, "Two");
         let paint = id(&doc, "Paint");
         let authored = doc.artwork.clone();
@@ -1250,18 +1250,19 @@ mod organization_tests {
         occurrence_mut(&mut doc, "Group").visible = true;
         let authored = doc.artwork.clone();
         assert!(doc.layer_is_visible(one));
-        assert!(!layer_is_visible(doc.scene(), one), "authored scene visibility ignores working overlays");
+        assert!(layer_is_visible(doc.scene(), one));
         doc.apply(doc.select_occurrence_edit(two).unwrap()).unwrap();
         assert!(!doc.layer_is_visible(one));
+        assert!(layer_is_visible(doc.scene(), one), "authored scene visibility ignores working overlays");
         assert!(doc.layer_is_visible(two));
-        assert_eq!(doc.working.selection_visibility.get(&one), Some(&false));
-        assert_eq!(doc.working.selection_visibility.get(&two), Some(&true));
+        assert_eq!(doc.working.selection_overlays.visibility.get(&one), Some(&false));
+        assert_eq!(doc.working.selection_overlays.visibility.get(&two), Some(&true));
         doc.apply(doc.select_occurrence_edit(two).unwrap()).unwrap();
         assert!(doc.layer_is_visible(two), "reselecting keeps the selected overlay shown");
         doc.apply(doc.select_occurrence_edit(paint).unwrap()).unwrap();
         assert!(!doc.layer_is_visible(two));
         assert!(doc.layer_is_visible(paint));
-        assert!(!doc.working.selection_visibility.contains_key(&paint));
+        assert!(!doc.working.selection_overlays.visibility.contains_key(&paint));
         assert_eq!(doc.artwork, authored);
     }
 

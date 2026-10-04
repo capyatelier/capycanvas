@@ -174,7 +174,7 @@ fn declared_filters_match_encoded_references() {
         ("unsharp_mask", &UNSHARP[..], unsharp, 8),
         ("high_pass", &[("sigma", 4.), ("amount", 100.)], high_pass, 15),
         ("soft_focus", &[("sigma", 5.), ("amount", 40.)], soft_focus, 18),
-        ("denoise", &[("radius", 2.), ("strength", 25.)], denoise, 4),
+        ("denoise", &[("strength", 25.)], denoise, 4),
     ] {
         assert_eq!(fixture(id).program().space, EffectSpace::Blending, "{id} follows the document's Blending");
         let actual = composite(space, &[filter(id, values, EffectSpace::Blending)], photo(texture));

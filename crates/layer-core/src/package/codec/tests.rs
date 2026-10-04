@@ -74,7 +74,7 @@ fn fixture(depth: SampleDepth) -> Artwork {
     occurrence.mask=Some(MaskUse {source:mask,enabled:true,linked:false,inverted:true,translation:Point{x:2.,y:3.},placement:crate::Projective::IDENTITY});
     let a=artwork.occurrences.insert(identity(20),occurrence).unwrap();
     let b=artwork.occurrences.insert(identity(21),Occurrence::new(OccurrenceContent::Paint(second),"Independent copy")).unwrap();
-    let saved=artwork.selections.insert(identity(13),SavedSelection {selection,display:crate::SelectionMaskProperties {opacity:0.35,..Default::default()}}).unwrap();
+    let saved=artwork.selections.insert(identity(13),SavedSelection {selection,}).unwrap();
     let c=artwork.occurrences.insert(identity(22),Occurrence::new(OccurrenceContent::Selection(saved),"Saved coverage")).unwrap();
     artwork.stacks.get_mut(stack).unwrap().entries=vec![a,b,c];
     let lut=Arc::new(Lut3d::from_samples(2,[[0.;3],[1.;3]],"Exact table".into(),vec![[0.125,0.75,0.5];8].into()).unwrap());

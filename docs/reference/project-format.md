@@ -23,12 +23,15 @@ Sources own original images, sparse raster revisions and material state. See the
 [authored model](authored-model.md) for field ownership and editable validation.
 Hidden and unplaced content remains authored work and is validated and saved.
 
-Working selection, saved-selection overlay visibility, editing targets, camera,
+Working selection, saved-selection overlay visibility/color/opacity, editing targets, camera,
 preferences, GPU handles, active
 contacts and undo history stay outside the portable manifest. Saved selection
 objects and initial mask coverage are authored data. Built-in effects save stable IDs, parameter-data versions and every keyed
 value, and resolve the current app implementation on open. Custom effects retain
-embedded code and literal editor metadata independently of the installed catalog. Output contexts preserve captured integrated effect phases.
+embedded code, literal labels and semantic parameter definitions independently
+of the installed catalog. Editor presentation and render optimizations stay in
+runtime packages; the [package contract](capy-package.md) defines the retained
+custom evaluation data. Output contexts preserve captured integrated effect phases.
 
 An original image retains its independent extent, channels, depth, profile and
 resolution. Rasterization replaces that original with document-space samples

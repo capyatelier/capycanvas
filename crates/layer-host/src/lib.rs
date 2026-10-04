@@ -1248,7 +1248,7 @@ mod tests {
         assert!(host.session.background_readback_idle());
         loop {
             let (_, images) = host.layer_thumbnails([(1, fill)]).unwrap();
-            if let Some(image) = images.first() {
+            if let Some(image) = images.iter().find(|image| image.request_id == 1) {
                 assert!(image.bytes.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255, 0, 0, 255]));
                 break;
             }
@@ -1258,7 +1258,7 @@ mod tests {
         let mask = host.session.state().layers.iter().find(|layer| layer.id == fill).unwrap().mask_id.unwrap();
         loop {
             let (_, images) = host.layer_thumbnails([(2, mask)]).unwrap();
-            if let Some(image) = images.first() {
+            if let Some(image) = images.iter().find(|image| image.request_id == 2) {
                 assert!(image.bytes.as_chunks::<4>().0.iter().all(|pixel| *pixel == [255; 4]));
                 break;
             }

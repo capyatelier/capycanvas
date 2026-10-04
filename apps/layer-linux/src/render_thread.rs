@@ -71,7 +71,7 @@ struct Frame {
     extent: [u32; 2],
     scene: Arc<SceneSnapshot>,
     inspect_mask: Option<OccurrenceHandle>,
-    selection_visibility: Arc<std::collections::BTreeMap<OccurrenceHandle, bool>>,
+    selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     dabs: Vec<Dab>,
     batches: Vec<DabBatch>,
     restore_rasters: Vec<(SourceTarget, layer_core::raster::RasterRevision)>,
@@ -112,7 +112,7 @@ impl Frame {
             document_extent: self.extent,
             scene: self.scene.view(),
             inspect_mask: self.inspect_mask,
-            selection_visibility: Some(&self.selection_visibility),
+            selection_overlays: Some(&self.selection_overlays),
             dabs: &self.dabs,
             dab_batches: &self.batches,
             restore_rasters: &self.restore_rasters,
@@ -255,7 +255,7 @@ pub struct RenderWorker {
     pub(crate) view_color: crate::display_color::ViewColor,
     first_frame_sent: bool,
     context_seed: EvaluationContext,
-    selection_visibility: Arc<std::collections::BTreeMap<OccurrenceHandle, bool>>,
+    selection_overlays: Arc<layer_core::authored::SelectionOverlays>,
     settling_roots: Vec<layer_core::raster::RasterRevision>,
     settling_view: Option<(ViewState, Vec<CursorSegment>)>,
     pub(super) startup: layer_render_wgpu::StartupProgress,
@@ -438,7 +438,7 @@ impl RenderWorker {
             .map_err(error)?;
         Ok(Self {
             context_seed: EvaluationContext::default(),
-            selection_visibility: Arc::default(),
+            selection_overlays: Arc::default(),
             snapshot_job: None,
             analysis_job: None,
             analysis_candidate: None,
@@ -1006,9 +1006,9 @@ impl CanvasRenderer for RenderWorker {
         if self.in_flight.load(Ordering::Acquire) >= 2 {
             return Err(BackendError("Canvas frame queue full"));
         }
-        match packet.selection_visibility {
-            Some(visibility) if visibility != self.selection_visibility.as_ref() => self.selection_visibility = Arc::new(visibility.clone()),
-            None if !self.selection_visibility.is_empty() => self.selection_visibility = Arc::default(),
+        match packet.selection_overlays {
+            Some(visibility) if visibility != self.selection_overlays.as_ref() => self.selection_overlays = Arc::new(visibility.clone()),
+            None if *self.selection_overlays != layer_core::authored::SelectionOverlays::default() => self.selection_overlays = Arc::default(),
             _ => (),
         }
         let frame = Frame {
@@ -1017,7 +1017,7 @@ impl CanvasRenderer for RenderWorker {
             extent: packet.document_extent,
             scene: Arc::new(packet.scene.snapshot(self.evaluation_context())),
             inspect_mask: packet.inspect_mask,
-            selection_visibility: self.selection_visibility.clone(),
+            selection_overlays: self.selection_overlays.clone(),
             pending_rasters: packet.scene.targets().filter_map(|target| packet.scene.raster(target))
                 .filter(|r| packet.commit_rasters && r.try_data().is_none()).cloned().collect(),
             dabs: packet.dabs.to_vec(),
@@ -1805,7 +1805,7 @@ impl Worker {
                 .submit(FramePacket {
                     scene: scene.with_scope(&scope),
                     inspect_mask: None,
-                    selection_visibility: None,
+                    selection_overlays: None,
                     dabs: &[],
                     dab_batches: &[],
                     restore_rasters: &[],

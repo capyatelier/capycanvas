@@ -87,7 +87,9 @@ class AndroidRasterTest {
     private fun invoke(id: String) = send(obj("type" to "invoke", "command" to id))
     private fun action(value: JSONObject) { native { Native.dispatch(it, value.toString()) }; scenario.onActivity { host.documentChanged() }; tick(); compose.waitForIdle() }
     private fun action(command: String) { compose.runOnUiThread { host.invoke(command) }; compose.waitForIdle() }
-    private fun tabs() = native { JSONObject(Native.documentTabs(it, obj("op" to "view").toString())) }
+    private fun tabs(handle: Long) = JSONObject(Native.documentTabs(handle, obj("op" to "view").toString()))
+    private fun tabs() = native { tabs(it) }
+    private fun selectedSessionCapture() = native { Native.sessionCapture(it,tabs(it).getLong("selected")) }
     private fun ids() = tabs().array("tabs").objects().map { it.getLong("id") }
     private val sourceVisible = JSONObject.quote("Visible")
     private fun histogram(): JSONObject {
@@ -187,8 +189,7 @@ class AndroidRasterTest {
         point(3,90.0,dy);tick()
     }
     private fun captureSession(directory: File) {
-        val selected = tabs().getLong("selected")
-        val capture = native {Native.sessionCapture(it,selected)}
+        val capture = selectedSessionCapture()
         assertNotEquals("Session capture ready",0L,capture)
         val store = Native.sessionStoreOpen(directory.absolutePath)
         try {Native.sessionCommit(capture,store)} finally {Native.sessionFree(capture);Native.sessionStoreFree(store)}
@@ -196,7 +197,11 @@ class AndroidRasterTest {
     private fun restoreSessionTask(directory: File, id: Long = 1): Long {
         val task = native {Native.sessionRestoreTask(it)}
         val store = Native.sessionStoreOpen(directory.absolutePath)
-        try {Native.sessionRead(task,store,true);Native.sessionPrepare(task,id,"null")} catch(e:Exception) {Native.sessionFree(task);throw e} finally {Native.sessionStoreFree(store)}
+        try {
+            val location=Native.sessionRead(task,store,true)
+            val observed=host.documents.observeDestination(location.takeUnless {it=="null"}?.let {JSONObject(it).getString("uri")},task)
+            Native.sessionPrepare(task,id,observed)
+        } catch(e:Exception) {Native.sessionFree(task);throw e} finally {Native.sessionStoreFree(store)}
         return task
     }
     private fun adoptSession(task: Long, id: Long = 1) {
@@ -221,6 +226,13 @@ class AndroidRasterTest {
         } finally {Native.projectFree(job.first)}
     }
     private fun save(name: String)=finishSave(saveTask(name),name)
+    private fun adoptProject(task: Long) = runBlocking {
+        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+            host.drawingTabs.beforeAdopt(task)
+            try { host.withNative { Native.projectAdopt(it,task,"null") } }
+            finally { host.drawingTabs.afterAdopt() }
+        }
+    }
     private fun open(file: File, corrupt: Boolean=false, input: (() -> ParcelFileDescriptor)?=null) {
         val job=native {handle -> val (id,state)=request(handle,"open_document")
             Native.projectTask(handle,id,"null",state.getLong("epoch"),state.getLong("revision")) to id }
@@ -252,8 +264,7 @@ class AndroidRasterTest {
                     val current=native{state(it).getJSONObject("document_file")};assertFalse(current.getBoolean("busy"));assertEquals(incumbent.getLong("epoch"),current.getLong("epoch"));assertEquals(incumbent.getLong("revision"),current.getLong("revision"))
                 } else {
                     assertEquals("Editable input cannot be a package view","null",packageSummary)
-                    compose.waitUntil(120_000){tick();native{Native.projectParkReady(it,job.first)}}
-                    native {Native.projectAdopt(it,job.first,"null")}
+                    adoptProject(job.first)
                 }
             }
         } finally {Native.projectFree(job.first)}
@@ -808,7 +819,7 @@ class AndroidRasterTest {
         compose.onNodeWithTag("mask-color-bucket").performClick()
         compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("layer_properties").array("controls").objects().first { it.getString("key")=="mask_color" }.getJSONObject("value").getJSONObject("value").getJSONArray("rgba").getDouble(1)==.5 }
         send(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to false)))
-        compose.onNodeWithTag("selection-load-0").performClick()
+        compose.onNodeWithTag("selection-load-0",useUnmergedTree=true).performClick()
         compose.waitUntil(30_000) { !view().optBoolean("quick_mask") }
         assertTrue(view().getBoolean("has_selection"))
         invoke("quick_mask")
@@ -827,7 +838,7 @@ class AndroidRasterTest {
         assertEquals(id,view().getJSONObject("mask_editing").getLong("layer"))
         assertEquals("layer-brush-symbolic",host.snapshot!!.getJSONObject("state").array("layers").objects().first { it.getLong("id")==id }.getString("selection_icon"))
         val thumb=compose.onNodeWithTag("layer-thumbnail-$id-false",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
-        val load=compose.onNodeWithTag("selection-load-$id").fetchSemanticsNode().boundsInRoot
+        val load=compose.onNodeWithTag("selection-load-$id",useUnmergedTree=true).fetchSemanticsNode().boundsInRoot
         assertTrue("Thumbnail $thumb and Load $load align",kotlin.math.abs(thumb.width-load.width)<=thumb.width*.1f && load.left>=thumb.right && load.left-thumb.right<20f)
         send(obj("type" to "selection", "action" to obj("op" to "begin_refine", "kind" to "grow", "layer" to id)))
         compose.onNodeWithText("Grow Selection").assertIsDisplayed()
@@ -837,7 +848,7 @@ class AndroidRasterTest {
         invoke("undo");invoke("redo")
         invoke("clear_selection_mask"); invoke("return_to_artwork")
         invoke("deselect")
-        compose.onNodeWithTag("selection-load-$id").assertIsDisplayed().performClick()
+        compose.onNodeWithTag("selection-load-$id",useUnmergedTree=true).assertIsDisplayed().performClick()
         compose.waitUntil(30_000) { view().getBoolean("has_selection") }
         assertTrue("An explicitly empty selection is retained",view().getBoolean("has_selection"))
         assertEquals("Selection overlays never enter exported artwork",blank,hash(png("selection-overlay-export.png")))
@@ -1765,7 +1776,7 @@ class AndroidRasterTest {
         val baseCount=count()
         batch(photos);assertEquals(baseCount+photos.size,count());memoryStage("provisional batch")
         if (!affineSmoke) {
-            assertEquals("Recovery defers while a placement is provisional", 0L, native { Native.sessionCapture(it,tabs().getLong("selected")) })
+            assertEquals("Recovery defers while a placement is provisional", 0L, selectedSessionCapture())
             press("cancel_transform");assertEquals(baseCount,count())
             batch(photos)
         }
@@ -2804,6 +2815,75 @@ class AndroidRasterTest {
         assertNull(host.failure)
     }
 
+    @Test fun acceptedRecoveryCheckpointDrainsBeforeAdoption() {
+        host.awaitReady(120_000,compose)
+        compose.waitUntil(120_000) {tick();native {Native.sessionSettle(it,System.nanoTime());JSONObject(Native.documentTabs(it,obj("op" to "ready").toString())).getBoolean("park")}}
+        compose.waitUntil(120_000) {host.recovery.ready && !host.recovery.working}
+        assertNull(host.failure);assertNull(host.actionError)
+        val task=native { handle -> val(id,file)=request(handle,"new_document")
+            Native.projectTask(handle,id,"null",file.getLong("epoch"),file.getLong("revision")) }
+        val entered=java.util.concurrent.CountDownLatch(1)
+        val release=java.util.concurrent.CountDownLatch(1)
+        var blocker:Job?=null;var transition:Job?=null
+        try {
+            Native.projectWork(task,-1,128,128)
+            blocker=runBlocking { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                host.viewModelScope.launch {host.withNative {entered.countDown();check(release.await(60,java.util.concurrent.TimeUnit.SECONDS))}}
+            } }
+            assertTrue(entered.await(10,java.util.concurrent.TimeUnit.SECONDS))
+            val accepted=runBlocking { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {checkNotNull(host.recovery.capture())} }
+            assertTrue(accepted.isActive)
+            transition=runBlocking { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                host.viewModelScope.launch {host.drawingTabs.beforeAdopt(task)}
+            } }
+            compose.waitUntil(10_000) {host.drawingTabs.switching}
+            assertSame(accepted,runBlocking { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {host.recovery.capture()} })
+            assertFalse(transition.isCompleted)
+            release.countDown();runBlocking {transition.join()}
+            assertTrue(accepted.isCompleted)
+            runBlocking { kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                try {host.withNative {Native.projectAdopt(it,task,"null")}}
+                finally {host.drawingTabs.afterAdopt()}
+            } }
+            assertNull(host.failure);assertNull(host.actionError)
+        } finally {
+            release.countDown()
+            runBlocking {blocker?.join();transition?.join()}
+            Native.projectFree(task)
+        }
+    }
+
+    @Test fun countFilterControlsStepAndPersistWholeValues() {
+        val task = native { handle -> val (id,file)=request(handle,"new_document")
+            Native.projectTask(handle,id,"null",file.getLong("epoch"),file.getLong("revision")) }
+        try { Native.projectWork(task,-1,128,128); adoptProject(task) } finally { Native.projectFree(task) }
+        refresh()
+        action(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "properties", "visible" to true)))
+        val group=host.panelGroup("properties")
+        action(obj("type" to "customize", "action" to obj("type" to "set_column_collapsed", "group" to group.getInt("id"), "collapsed" to false)))
+        action(obj("type" to "select_panel_tab", "group" to group.getInt("id"), "panel" to "properties"))
+        for ((id,key,label) in listOf(Triple("posterize","levels","Levels"),Triple("kaleidoscope","segments","Segments"))) {
+            action(obj("type" to "effect", "action" to obj("op" to "insert", "effect" to id)))
+            val layerLabel=native {handle -> val layer=state(handle).getJSONObject("layer_properties").getLong("layer");state(handle).array("layers").objects().first {it.getLong("id")==layer}.getString("label")}
+            fun control()=native { state(it).getJSONObject("layer_properties").array("controls").objects().first { c -> c.getString("key")==key } }
+            fun value()=control().getJSONObject("value").getDouble("value")
+            val numeric=control().getJSONObject("kind").getJSONObject("numeric")
+            assertEquals(1.0,numeric.getDouble("step"),0.0);assertEquals(0,numeric.getInt("digits"))
+            compose.onNodeWithTag("number-value-$key").performScrollTo().performClick()
+            compose.onNodeWithTag("number-$label").performTextReplacement("7")
+            compose.onNodeWithTag("number-$label").performKeyInput { pressKey(Key.DirectionUp) }
+            compose.onNodeWithTag("number-$label").performImeAction()
+            compose.waitUntil(30_000) { value()==8.0 };refresh()
+            val name="count-$id.capy";val saved=manifest(save(name))
+            open(File(files,name));refresh()
+            val reopenedLayer=native {state(it).array("layers").objects().single {row -> row.getString("label")==layerLabel}.getLong("id")}
+            action(obj("type" to "select_layer", "id" to reopenedLayer))
+            assertEquals(8.0,value(),0.0)
+            assertEquals(saved.artworkRecords().toString(),manifest(save("count-reopened.capy")).artworkRecords().toString())
+            assertNull(host.failure);assertNull(host.actionError)
+        }
+    }
+
     @Test fun pointwiseColorEffectsPersistAllParametersAndOriginalSource() {
         for ((space, depth) in listOf("Srgb" to "U8", "DisplayP3" to "U16", "ProPhoto" to "F16", "Srgb" to "F32")) {
             val task = native { handle ->
@@ -2812,7 +2892,7 @@ class AndroidRasterTest {
             }
             try {
                 Native.projectOptions(task, obj("extent" to org.json.JSONArray(listOf(128, 128)), "color" to obj("space" to space, "depth" to depth), "background" to "White").toString())
-                Native.projectWork(task, -1, 128, 128); native { Native.projectAdopt(it, task, "null") }
+                Native.projectWork(task, -1, 128, 128); adoptProject(task)
             } finally { Native.projectFree(task) }
             refresh(); invoke("fit_canvas"); stroke(0.0)
             png("p21-source.png", builtinRecipe(2).put("format", "Png").put("depth", "U8"))
@@ -3909,7 +3989,21 @@ class AndroidRasterTest {
         val epoch=native {state(it).getJSONObject("document_file").getLong("epoch")}
         open(corrupt,true)
         assertEquals(epoch,native {state(it).getJSONObject("document_file").getLong("epoch")})
+        invoke("select_all");invoke("save_selection_layer")
+        send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
+        val selectionLayer=native {state(it).array("layers").objects().single {row -> row.optBoolean("selection_layer")}.getLong("id")}
+        val selectionLabel=native {state(it).array("layers").objects().first {row -> row.getLong("id")==selectionLayer}.getString("label")}
+        invoke("return_to_artwork")
+        val beforeEye=manifest(save("selection-eye-before.capy"))
+        val eyeCheckpoint=native {JSONObject(Native.sessionStamp(it,tabs(it).getLong("selected"))).getLong("checkpoint")}
+        send(obj("type" to "layer", "action" to obj("op" to "visibility", "id" to selectionLayer, "value" to true)))
+        fun selectionVisible()=native {state(it).array("layers").objects().single {row -> row.optBoolean("selection_layer") && row.getString("label")==selectionLabel}.getBoolean("visible")}
+        assertTrue(selectionVisible())
+        assertEquals(eyeCheckpoint,native {JSONObject(Native.sessionStamp(it,tabs(it).getLong("selected"))).getLong("checkpoint")})
+        assertFalse(native {state(it).getJSONObject("document_file").getBoolean("modified")})
+        assertEquals(beforeEye.artworkRecords().toString(),manifest(save("selection-eye-after.capy")).artworkRecords().toString())
         val recovery=File(files,"atomic-recovery.capy")
+        val capturedFile=native {state(it).getJSONObject("document_file")}
         captureSession(recovery)
         val stale=restoreSessionTask(recovery)
         try {
@@ -3926,8 +4020,11 @@ class AndroidRasterTest {
         } finally {Native.sessionFree(restore)}
         tick()
         assertEquals(hash(firstPng),hash(png("recovered.png")))
+        assertTrue(selectionVisible())
         val recovered=native {state(it).getJSONObject("document_file")}
-        assertTrue(recovered.getBoolean("modified"));assertTrue(recovered.isNull("location"))
+        assertEquals(capturedFile.getBoolean("modified"),recovered.getBoolean("modified"))
+        assertEquals(jsonValue(capturedFile.opt("location")),jsonValue(recovered.opt("location")))
+        assertTrue(recovered.getBoolean("recovered"))
         // Real Activity/surface recreation retains the ViewModel and history.
         val retained = host
         scenario.recreate()
@@ -3946,6 +4043,7 @@ class AndroidRasterTest {
         assertEquals(expectedTabs,tabs().array("tabs").objects().map {it.getString("title")})
         assertEquals(expectedSelected,tabs().getLong("selected"))
         assertEquals(hash(firstPng),hash(png("controller-restored.png")))
+        assertTrue(selectionVisible())
         activity.getExternalFilesDir(null)!!.resolve("raster-result.txt").writeText("PASS exact snapshots, active-contact save, undo/redo, GPU replacement, corrupt-file retention, Activity recreation and seamless restart\n")
     }
 

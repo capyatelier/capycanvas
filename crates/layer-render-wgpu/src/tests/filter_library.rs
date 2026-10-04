@@ -245,7 +245,16 @@ fn entire_filter_catalog_renders_masks_freezes_and_animates() {
             id.id()
         );
         document.artwork.occurrences.get_mut(target).unwrap().mask = None;
-        document.artwork.occurrences.get_mut(target).unwrap().attachment = layer_core::Attachment::Effect;
+        let source = document.scene().children(None)[1];
+        let layer_core::authored::OccurrenceContent::Paint(paint) = document.scene().occurrence(source).unwrap().content else { panic!("paint source"); };
+        let original_source = document.artwork.paint.get(paint).unwrap().original.clone().unwrap();
+        let copy = insert_source(&mut document, "Clipped source", original_source);
+        let stack = document.artwork.stacks.insert(layer_core::authored::PortableId::random(), layer_core::authored::Stack { entries: vec![target, copy] }).unwrap();
+        let mut group = layer_core::authored::Occurrence::new(layer_core::authored::OccurrenceContent::Stack(stack), "Clipped filter");
+        group.attachment = layer_core::Attachment::Clip;
+        let group = document.artwork.occurrences.insert(layer_core::authored::PortableId::random(), group).unwrap();
+        let root = document.composition().result;
+        document.artwork.stacks.get_mut(root).unwrap().entries = vec![group, source];
         refresh(&mut document);
         prepare_analysis(&mut r, &document, target, 20.);
         submit(&mut r, EXTENT, &document, 20., false, true, None);

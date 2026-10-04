@@ -143,11 +143,11 @@ impl WgpuRasterizer {
             let masks: Vec<_> = scene.order().iter().rev().filter_map(|&handle| {
                 let target = scene.source_target(handle)?;
                 let SourceTarget::Selection(saved) = target else { return None; };
-                let visible = packet.selection_visibility.and_then(|visibility| visibility.get(&handle)).copied()
+                let visible = packet.selection_overlays.and_then(|overlays| overlays.visibility.get(&handle)).copied()
                     .unwrap_or_else(|| scene.occurrence(handle).is_some_and(|occurrence| occurrence.visible));
                 if Some(handle) == options.editing || !visible || scene.parent(handle).is_some_and(|parent| !scene.visible(parent)) { return None; }
-                let source = scene.artwork().selections.get(saved)?;
-                previews.definitions.get(&target).cloned().map(|coverage| (coverage, source.display.clone()))
+                let properties = packet.selection_overlays.and_then(|overlays| overlays.properties.get(&saved)).cloned().unwrap_or_default();
+                previews.definitions.get(&target).cloned().map(|coverage| (coverage, properties))
             }).collect();
             if masks.is_empty() {
                 previews.reset();

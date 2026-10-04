@@ -98,7 +98,7 @@ pub fn effect(doc: &mut Document, name: &str, program: &str) {
 }
 pub fn saved(doc: &mut Document, name: &str, selection: Selection) {
     let h = id(doc, name);
-    let s = doc.artwork.selections.insert(PortableId::random(), SavedSelection { selection, display: Default::default() }).unwrap();
+    let s = doc.artwork.selections.insert(PortableId::random(), SavedSelection { selection,}).unwrap();
     doc.artwork.occurrences.get_mut(h).unwrap().content = OccurrenceContent::Selection(s);
     refresh(doc);
     if doc.working.occurrence == Some(h) { doc.working.target = doc.scene().source_target(h); }

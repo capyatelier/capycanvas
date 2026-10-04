@@ -55,31 +55,40 @@ mod painted_selection_checks {
         assert_eq!(s.engine.document().working.selection, Some(coverage));
     }
     #[test]
-    fn explicit_saved_selection_visibility_clears_navigation_override() {
+    fn explicit_saved_selection_visibility_keeps_artwork_checkpoint_and_redo() {
         let mut s = session(Platform::Gtk);
         invoke(&mut s, CommandId::NewSelectionLayer);
         let first = s.engine.document().working.occurrence.unwrap();
         invoke(&mut s, CommandId::NewSelectionLayer);
         let second = s.engine.document().working.occurrence.unwrap();
-        assert_eq!(s.engine.document().working.selection_visibility.get(&first), Some(&false));
+        assert_eq!(s.engine.document().working.selection_overlays.visibility.get(&first), Some(&false));
         assert!(!s.engine.document().effective_visibility(first));
         let authored = s.engine.document().clone();
         let checkpoint = s.engine.checkpoint();
         s.layer_action(LayerAction::Visibility { id: crate::session::occurrence_token(first), value: true }).unwrap();
         assert!(s.engine.document().effective_visibility(first));
         assert!(s.engine.document().effective_visibility(second));
-        assert!(!s.engine.document().working.selection_visibility.contains_key(&first));
+        assert_eq!(s.engine.document().working.selection_overlays.visibility.get(&first), Some(&true));
         assert_live_artwork_eq(s.engine.document(), &authored);
         assert_eq!(s.engine.checkpoint(), checkpoint);
         s.layer_action(LayerAction::Visibility { id: crate::session::occurrence_token(first), value: false }).unwrap();
-        assert!(!s.engine.document().scene().occurrence(first).unwrap().visible);
+        assert!(s.engine.document().scene().occurrence(first).unwrap().visible);
         assert!(!s.engine.document().effective_visibility(first));
-        assert!(!s.engine.document().working.selection_visibility.contains_key(&first));
-        assert_ne!(s.engine.checkpoint(), checkpoint);
-        invoke(&mut s, CommandId::Undo);
+        assert_eq!(s.engine.document().working.selection_overlays.visibility.get(&first), Some(&false));
+        assert_eq!(s.engine.checkpoint(), checkpoint);
         assert_live_artwork_eq(s.engine.document(), &authored);
-        assert!(s.engine.document().effective_visibility(first));
+        invoke(&mut s, CommandId::Undo);
         assert!(s.command(CommandId::Redo).enabled);
+        let mut working=s.engine.document().working.clone();working.solo_visibility=Some([(first,true)].into());
+        s.engine.preview_edit(layer_core::Edit::Working(working)).unwrap();
+        let solo=s.engine.document().working.solo_visibility.clone();
+        let artwork=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();
+        for value in [true,false] {
+            s.layer_action(LayerAction::Visibility {id:crate::session::occurrence_token(first),value}).unwrap();
+            assert_eq!(s.engine.document().artwork,artwork);assert_eq!(s.engine.checkpoint(),checkpoint);
+            assert_eq!(s.engine.document().working.solo_visibility,solo);
+            assert!(s.command(CommandId::Redo).enabled);
+        }
     }
     #[test]
     fn mask_mode_couples_overlay_and_painting_and_bucket_uses_displayed_color() {
@@ -552,10 +561,10 @@ mod painted_selection_checks {
         invoke(&mut s, CommandId::ReturnToArtwork);
         s.dispatch(UiAction::SelectLayer { id: crate::session::occurrence_token(id) }).unwrap();
         assert_eq!(s.selection_masks.target(), Some(layer_core::SelectionTarget::Saved(id)));
+        let artwork=s.engine.document().artwork.clone();let checkpoint=s.engine.checkpoint();
         s.dispatch(set(crate::session::occurrence_token(id), "mask_opacity", EffectValue::Number(0.7))).unwrap();
-        invoke(&mut s, CommandId::Undo);
-        assert_eq!(s.mask_properties().opacity, 0.3);
-        invoke(&mut s, CommandId::Redo);
+        assert_eq!(s.engine.document().artwork,artwork);
+        assert_eq!(s.engine.checkpoint(),checkpoint);
         assert_eq!(s.mask_properties().opacity, 0.7);
         assert!(s.dispatch(set(crate::session::occurrence_token(id), "mask_opacity", EffectValue::Number(2.))).is_err());
         let original = s.mask_properties();
@@ -563,5 +572,12 @@ mod painted_selection_checks {
             s.dispatch(UiAction::Effect { action: EffectAction::Gesture { phase, action: Box::new(EffectAction::Set { layer: crate::session::occurrence_token(id), key: "mask_opacity".into(), value: EffectValue::Number(value) }) } }).unwrap();
         }
         assert_eq!(s.mask_properties(), original);
+        for phase in [ContactPhase::Down,ContactPhase::Move,ContactPhase::Up] {
+            s.dispatch(UiAction::Effect {action:EffectAction::Gesture {phase,action:Box::new(EffectAction::Set {
+                layer:crate::session::occurrence_token(id),key:"mask_opacity".into(),value:EffectValue::Number(0.4)})}}).unwrap();
+        }
+        assert_eq!(s.mask_properties().opacity,0.4);
+        assert_eq!(s.engine.document().artwork,artwork);
+        assert_eq!(s.engine.checkpoint(),checkpoint);
     }
 }

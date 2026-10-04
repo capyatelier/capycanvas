@@ -494,7 +494,7 @@ mod tests {
         let application = RecordChange::insert(&doc.artwork.effects, EffectApplication { definition: definition.handle, values: draft.values, domain: [16, 16] });
         let effect = RecordChange::insert(&doc.artwork.occurrences, Occurrence::new(OccurrenceContent::Effect(application.handle), "Effect"));
         let effect_handle = effect.handle; let app_handle = application.handle;
-        let selection = RecordChange::insert(&doc.artwork.selections, SavedSelection { selection: crate::Selection::empty(), display: Default::default() });
+        let selection = RecordChange::insert(&doc.artwork.selections, SavedSelection { selection: crate::Selection::empty(),});
         let selected = RecordChange { handle: OccurrenceHandle::from_index(effect.handle.index() + 1), id: PortableId::random(), value: Some(Occurrence::new(OccurrenceContent::Selection(selection.handle), "Selection")) };
         let selected_handle = selected.handle;
         let OccurrenceContent::Stack(stack) = doc.scene().occurrence(group_handle).unwrap().content else { unreachable!() };

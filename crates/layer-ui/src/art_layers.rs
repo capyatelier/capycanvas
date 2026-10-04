@@ -434,15 +434,18 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn visibility_edit(&self, values: impl IntoIterator<Item = (OccurrenceHandle, bool)>) -> Result<Edit, String> {
         let doc = self.engine.document();
         let mut working = doc.working.clone();
-        working.solo_visibility = None;
         let mut edits = Vec::new();
         for (id, visible) in values {
             let mut occurrence = doc.scene().occurrence(id).ok_or("Unknown layer")?.clone();
+            if matches!(occurrence.content, OccurrenceContent::Selection(_)) {
+                working.selection_overlays.visibility.insert(id, visible);
+                continue;
+            }
+            working.solo_visibility = None;
             if occurrence.visible != visible {
                 occurrence.visible = visible;
                 edits.push(self.occurrence_change(id, occurrence)?);
             }
-            working.selection_visibility.remove(&id);
         }
         edits.push(Edit::Working(working));
         Ok(Edit::Batch(edits))

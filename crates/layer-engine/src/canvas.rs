@@ -1344,7 +1344,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
             document_extent: [self.editor.document().composition().size[0], self.editor.document().composition().size[1]],
             scene,
             inspect_mask: self.editor.document().working.inspect_mask,
-            selection_visibility: Some(&self.editor.document().working.selection_visibility),
+            selection_overlays: Some(&self.editor.document().working.selection_overlays),
             dabs: &self.dabs,
             dab_batches: step.as_ref().map_or(&self.batches, |(batch, _)| std::slice::from_ref(batch)),
             restore_rasters: &self.restore_rasters,

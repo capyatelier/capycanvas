@@ -87,8 +87,8 @@ The initial registry is:
 | `capy.paint-source/1` | Required pixel `domain`; optional `original`, sparse `tiles`, `material`. The original retains its role, extent, interpretation, resolution and tile references independently of overrides. |
 | `capy.coverage-source/1` | Required pixel `domain`; `initial`, `default_coverage`, sparse `tiles`. Initial contour/pixel selection remains authoritative where supplied. |
 | `capy.effect/1` | Required `definition` reference and pixel `domain`; `values` keyed by parameter keys, `bindings` keyed by resource-local slots, `inputs` keyed by typed input ports. |
-| `capy.effect-definition/1` | Built-in: required `builtin` ID and parameter-data `version`. Custom: stable `key`, evaluation `contract`, shader `abi`, `kind`, `code`, `entry`, keyed `parameters`, ordered `slots` and literal presentation metadata. |
-| `capy.selection/1` | Required `shape`; placement/inversion and saved display `color`/`opacity`. Pixels use coverage resources; contours keep their geometry. |
+| `capy.effect-definition/1` | Built-in: required `builtin` ID and parameter-data `version`. Custom: stable `key`, evaluation `contract`, `kind`, `code`, `entry`, keyed `parameters`, ordered `slots` and literal labels. |
+| `capy.selection/1` | Required `shape`; placement/inversion. Pixels use coverage resources; contours keep their geometry. |
 | `capy.guides/1` | Authored ruler geometry and reference markings. |
 | `capy.output/1` | Required `source` composition endpoint; `name`, `context`, framing, SDR rendition, proof intent and optional `representation`. |
 
@@ -126,7 +126,7 @@ The common frozen defaults are:
 | Paint overrides/material tiles | No override at absent coordinates; an imported base is revealed. |
 | Coverage `default_coverage` | One; supplied `initial` coverage takes precedence before painted overrides. |
 | Effect parameter value | Required for every parameter, including a value equal to the insertion default. |
-| Effect alpha/space/resolution/time | `preserve`, `linear`, `native`, false. |
+| Custom effect alpha/space/time | `preserve`, `linear`, false. |
 | Output context | Elapsed coordinate zero; animated effect opening phase zero. |
 | Output representation | Unavailable. |
 
@@ -144,8 +144,11 @@ references. Relationship semantics and field ownership are specified with the
 [authored model](authored-model.md).
 
 Built-in definitions contain only `{"builtin":"exposure","version":1}`. The
-version describes parameter data, not shader code. Gradient Map and Gradient Fill
-use data version 2, including explicit interpolation and stops. Only the current
+version describes parameter data, not shader code. Gradient Map, Gradient Fill,
+Denoise, Domain Warp, Posterize and Kaleidoscope use data version 2. Gradients
+retain explicit interpolation and stops; Posterize and Kaleidoscope require whole
+counts. Denoise authors Strength with an internal radius of two pixels; Domain
+Warp uses three internal noise octaves. Only the current
 data version is supported; there are no pre-release conversion readers.
 Opening resolves the current bundled
 implementation and editor schema once. Labels, ranges used by sliders,
@@ -169,11 +172,14 @@ outside the file.
 
 Custom definitions embed code and their schema, use literal labels, and execute
 independently of built-in shader fusion. Their `slots` fixes the shader layout.
-Their parameter dimensions use `scalar`, `angle`, `time`, or `length` with a
+Their parameter dimensions use `scalar`, `count`, `angle`, `time`, or `length` with a
 `source_pixels`, `composition_pixels` or `normalized` reference. Built-in dimensions
 come from the current catalog; a displayed unit never controls resizing.
-The custom evaluation contract `capy.filter/1` and shader ABI `5` are independent
-of built-in parameter versions. Unknown custom contracts remain preserved.
+Counts require whole bounds and values. Resizing multiplies pixel lengths without
+rounding to the number field's displayed precision, then applies hard bounds.
+The custom evaluation contract `capy.filter/1` fixes shader ABI `5`; artwork has
+no separate `abi` field. This contract is independent of built-in parameter
+versions. Unknown custom contracts remain preserved.
 
 ### Nested values
 
@@ -204,8 +210,11 @@ Affine `[a,b,c,d,tx,ty]` means `x'=a*x+c*y+tx`, `y'=b*x+d*y+ty`.
 Matrices/meshes preserve current invertibility and bounded mapping validation.
 A mask placement permits projective/translation only; linked owner mesh mapping
 is evaluated by its existing pre-map contract, not duplicated onto the mask.
-Saved-selection display color defaults to straight sRGB red `[1,0,0,1]` and
-opacity `0.5`, independently of occurrence contribution opacity. Blend and
+Saved-selection overlay visibility, color and opacity belong to working state
+and are absent from this grammar. Selection occurrences fix `visible` to true,
+`opacity` to one, `blend` and `isolated_blend` to normal, and `reference` and
+`alpha_locked` to false, with no mask or attachment; these defaults are omitted.
+Names, placement and edit locks remain authored. Blend and
 rendering-intent names use the existing semantic names in lower snake case,
 never Rust discriminants or GPU blend codes. Blend names are `normal`,
 `multiply`, `screen`, `add`, `overlay`, `soft_light`, `color`, `darken`, `lighten`,
@@ -227,32 +236,32 @@ color), `curve` (ordered `[x,y]` pairs), `gradient` (`stops`, an ordered array o
 `{position,color}`, and `interpolation`: `Classic`, `LinearRgb` or `Oklab`), or `lut3d` (`{"resource":{"ref":"…"},"title":"…"}` or explicit
 null). Every parameter is required; null LUT means intentionally empty.
 Custom definition parameters are a map keyed by stable keys, with required `kind`,
-`default`, `label`, and optional `section`, `page`, `visible_when`, `soft_bounds`,
-`mapping`, `opaque` (default false, color only) and dimensional declarations. Parameter `kind` is an object tagged by `kind`. Number adds
-required finite `min`,`max`,`step`, U8 `decimals`, and optional presentation `unit`
-(default empty); `min<=max`, `step>0`, decimals at most 6. Choice adds required
+`default`, `label`, optional `opaque` (default false, color only) and dimensional
+declarations. Parameter `kind` is an object tagged by `kind`. Number adds required
+finite `min`,`max` and optional semantic `unit` (default empty); `min<=max`.
+Count parameters require whole bounds and values. Choice adds required
 `options`, a nonempty array of unique stable literal strings or `{value,label}`
 objects (at most 256). Other kinds add no kind fields. Values satisfy their kind:
 number within bounds, choice one declared option, curves/gradients 2–32 strictly
 increasing points/stops in `[0,1]` with endpoints zero and one. Curve ordinates
 are within `[0,1]`. LUT resource type and declared working-color binding are
-validated together. Optional soft bounds lie within hard bounds; mapping is
-permitted only for number, logarithmic mapping requires positive minimum and
-power exponent is within `[0.125,8]`. Custom labels are literal strings. Built-in translation keys are never saved.
-`visible_when` addresses a local parameter `key` and typed `value`. Mapping is
-`{"type":"linear"}`, `{"type":"log"}` or
-`{"type":"power","exponent":number}`, with linear omitted.
+validated together. Custom labels are literal strings. Built-in translation keys
+are never saved. Pages, sections, conditional visibility, slider bounds/mapping,
+steps and decimal places belong to runtime editor presentation. Custom artwork
+opens with plain controls; count controls use whole-number steps.
 
 Custom definition `passes` retain `entry` and `sampling` (`neighborhood` with `radius`,
 `parameter` with `key`,`scale`,`padding`, or `document`). `lookups` retain code
 resource refs, `entry`, ordered parameter `dependencies`, `values`,
 `workgroup_size`, `workgroups`. `auxiliary` is `lut3d` with local `resource` and
-`color_space` keys, or `analysis` with kind `local_illumination`. `pages` retain
-local IDs/labels; `constraints` retain kind `ordered_numbers`, `lower`, `upper`,
+`color_space` keys, or `analysis` with kind `local_illumination` or `dehaze`.
+`constraints` retain kind `ordered_numbers`, `lower`, `upper`,
 `gap`. These local strings are not cross-object references. Missing lists are
 empty, missing auxiliary is absent. Required scalar fields are not silently
 replaced from a newer catalog. Type and dimensional additions are unsupported
-until explicitly interpreted by the reader.
+until explicitly interpreted by the reader. Runtime `resolution` and
+`constant_color` optimization declarations are omitted; reopened custom programs
+evaluate at native resolution through their retained code.
 
 ## Resources and packs
 
@@ -599,7 +608,7 @@ Fixtures distinguish malformed content from unsupported content and preservation
 | Fixture | Required result |
 | --- | --- |
 | Duplicate JSON key/ID, dangling ref, malformed reserved ref, occurrence in two stacks, cyclic stack expansion, overflowing range, noncanonical U64 | Invalid; no editable adoption. |
-| Known object with unknown `future_mode`, enum/port, definition ABI or resource encoding | Preserved even when hidden or unplaced. |
+| Known object with unknown `future_mode`, enum/port, evaluation contract or resource encoding | Preserved even when hidden or unplaced. |
 | Two groups reference the same stack, or an unplaced second occurrence references an already used paint source | Preserved; direct paint-reference counts alone do not establish support. |
 | Unknown non-ancillary record with no path from the root/output | Preserved; it is retained authored work. |
 | Unknown ancillary copy-safe note references an existing occurrence and opaque resource | Editable; preserve note/resource unchanged after unrelated edits. |
@@ -615,8 +624,11 @@ Fixtures distinguish malformed content from unsupported content and preservation
 The checked-in `codec/fixtures/authored-filters.capy` covers all 52 built-ins, exact
 raster samples, watercolor state, LUT samples and SDR rendition using the current
 occurrence and filter data versions. Its fixed values exercise opening, editing,
-saving, reopening and compiling current filters. `parameter-bounds.json` protects
-accepted numeric data independently of sliders. Keep these inputs fixed while
+saving, reopening and compiling current filters. `builtin-contracts.json` fixes
+all 52 built-in contracts and 282 parameter keys: kinds, choice IDs, units,
+dimensions, accepted bounds, constraints and shader parameter order. Choice order
+may change because built-in shader codes map explicitly from stable values.
+Keep these inputs fixed while
 their data versions remain supported; superseded pre-release formats have no
 conversion readers.
 

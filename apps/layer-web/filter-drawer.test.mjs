@@ -85,7 +85,7 @@ export async function checkFilterDrawer({call,evaluate,settle}) {
     assert.equal(await evaluate(`document.querySelector('${row(2)} .layer-type-symbol')?.getBoundingClientRect().width`),14);
     await capture(`gradient-thumbnail-${theme}`);
   }
-  await send({type:'effect',action:{op:'set',layer:2,key:'reverse',value:{kind:'toggle',value:true}}});
+  await evaluate(`layerApp.dispatch({type:'effect',action:{op:'gradient',target:layerApp.state().layer_properties.controls.find(c=>c.key==='gradient').gradient.destination,edit:{kind:'reverse'}}})`);await settle();
   await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]>200&&d.getImageData(27,16,1,1).data[0]<60;})()`);
   await send({type:'invoke',command:'undo'});
   await wait(`(()=>{const d=document.querySelector('${row(2)} .layer-thumbnail canvas')?.getContext('2d');return d&&d.getImageData(4,16,1,1).data[0]<60&&d.getImageData(27,16,1,1).data[0]>200;})()`);

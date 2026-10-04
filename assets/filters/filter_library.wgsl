@@ -71,8 +71,8 @@ fn capy_motion_blur(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return sum/f32(count);
 }
 fn capy_denoise(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let amount=fx_parameter(b,1u).x/100.;if amount<.0001{return c;}
-    let radius=i32(fx_parameter(b,0u).x);let center=fx_straight(c);let range=.01+amount*.35;
+    let amount=fx_parameter(b,0u).x/100.;if amount<.0001{return c;}
+    let radius=2;let center=fx_straight(c);let range=.01+amount*.35;
     var sum=vec3<f32>(0.);var total=0.;
     for(var y=-radius;y<=radius;y+=1){for(var x=-radius;x<=radius;x+=1){
         let v=fx_sample(p+vec2<f32>(f32(x),f32(y)));let diff=fx_straight(v)-center;
@@ -221,7 +221,7 @@ fn capy_iridescence(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
     return fx_rgba(mix(rgb,fx_preserve_luma(film,l),fx_parameter(b,0u).x/100.),c.a);
 }
 fn capy_domain_warp(c:vec4<f32>,p:vec2<f32>,b:u32)->vec4<f32>{
-    let octaves=u32(fx_parameter(b,2u).x);let time=fx_time(b);let q=p/fx_parameter(b,1u).x+vec2<f32>(time*.17,-time*.23);
+    let octaves=3u;let time=fx_time(b);let q=p/fx_parameter(b,1u).x+vec2<f32>(time*.17,-time*.23);
     let bend=vec2<f32>(fx_fbm(q,octaves,3u),fx_fbm(q+19.3,octaves,31u));
     let warp=vec2<f32>(fx_fbm(q+bend*1.4,octaves,71u),fx_fbm(q+bend*1.4+7.9,octaves,113u));
     return fx_sample(p+warp*fx_parameter(b,0u).x);

@@ -322,7 +322,7 @@ mod tests {
         for filter in bundled_effect_catalog().filters() {
             for parameter in filter.program.parameters.iter() {
                 if let crate::EffectParameterKind::Number {unit,..}=&parameter.kind {
-                    let expected=match unit.as_ref() {"deg"=>Some(crate::authored::Dimension::Angle),"s"=>Some(crate::authored::Dimension::Time),"px"=>Some(crate::authored::Dimension::SourcePixels),_=>None};
+                    let expected=match unit.as_ref() {"°"=>Some(crate::authored::Dimension::Angle),"s"=>Some(crate::authored::Dimension::Time),"px"=>Some(crate::authored::Dimension::SourcePixels),_=>None};
                     if let Some(dimension)=expected {assert_eq!(parameter.dimension,dimension,"{}.{}",filter.id(),parameter.key);}
                 }
                 if parameter.opaque {

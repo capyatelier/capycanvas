@@ -1557,6 +1557,13 @@ impl WgpuRasterizer {
         if resized {
             self.selection_clip.reset();
             self.document_extent = extent;
+            let vector_selection = self.display_selection.as_ref()
+                .filter(|(selection, _)| !matches!(selection.shape, layer_core::SelectionShape::Pixels(_)))
+                .map(|(selection, _)| selection.clone());
+            if let Some(selection) = vector_selection {
+                self.display_selection = None;
+                self.replace_display_selection(Some(&selection))?;
+            }
             self.paint_layers.clear();
             self.preview_pages.clear();
             self.preview_coverage_pages.clear();

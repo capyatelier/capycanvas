@@ -107,13 +107,13 @@ pub struct EffectApplication {
 }
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Dimension { #[default] Scalar, Angle, Time, SourcePixels, CompositionPixels, Normalized }
+pub enum Dimension { #[default] Scalar, Count, Angle, Time, SourcePixels, CompositionPixels, Normalized }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Definition {
     pub program: Arc<EffectProgram>,
 }
 #[derive(Clone, Debug, PartialEq)]
-pub struct SavedSelection { pub selection: Selection, pub display: SelectionMaskProperties }
+pub struct SavedSelection { pub selection: Selection }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Guides { pub rulers: Vec<(PortableId, RulerGeometry)> }
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -141,13 +141,24 @@ pub enum SourceTarget { Paint(PaintHandle), Coverage(CoverageHandle), Selection(
 pub struct WorkingState {
     pub generation: u64,
     pub selection: Option<Selection>,
-    pub selection_visibility: BTreeMap<OccurrenceHandle,bool>,
+    pub selection_overlays: SelectionOverlays,
     pub layer_selection: BTreeSet<OccurrenceHandle>,
     pub layer_anchor: Option<OccurrenceHandle>,
     pub solo_visibility: Option<BTreeMap<OccurrenceHandle,bool>>,
     pub occurrence: Option<OccurrenceHandle>,
     pub target: Option<SourceTarget>,
     pub inspect_mask: Option<OccurrenceHandle>,
+}
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SelectionOverlays {
+    pub visibility: BTreeMap<OccurrenceHandle,bool>,
+    pub properties: BTreeMap<SelectionHandle,SelectionMaskProperties>,
+}
+impl SelectionOverlays {
+    pub fn metadata_bytes(&self) -> usize {
+        self.visibility.len().saturating_mul(64).saturating_add(self.properties.len().saturating_mul(128))
+    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

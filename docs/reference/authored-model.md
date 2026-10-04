@@ -77,7 +77,8 @@ current UI preferences.
 | `Document.next_stroke_id` | Transient contact allocator. | Omit on wire; exhaustion fails before mutation. |
 | `WorkingState.occurrence`, `target` | Optional selected occurrence and explicit `SourceTarget`; a new drawing chooses its first paint occurrence. | Delete/undo repairs or restores both atomically; portable save omits them. |
 | `WorkingState.selection` | Optional current selection in composition coordinates. | Portable save omits it; selection undo, painting restrictions and parked tabs retain it. |
-| `WorkingState.selection_visibility` | Transient per-occurrence overrides for saved-selection display; absent entries inherit authored visibility. | Navigation never edits `Occurrence.visible`; delete repairs overrides, undo restores them, and portable save omits them. |
+| `WorkingState.selection_overlays.visibility` | Transient per-occurrence visibility for saved-selection overlays; absent entries are visible. | Navigation and eye toggles never edit artwork; delete repairs entries, undo restores them, and private recovery retains them while portable save omits them. |
+| `WorkingState.selection_overlays.properties` | Transient per-saved-selection overlay color and opacity; absent entries use sRGB red `[1,0,0,1]` and `0.5`. | Property edits preserve artwork and redo; parked tabs and recovery retain them, while portable save omits them. |
 | `WorkingState.inspect_mask` | Optional occurrence whose mask is inspected. | Omit from portable artwork and output pixels. |
 | `WorkingState.generation` | Runtime working-state generation. | Reject stale working requests without treating navigation as an authored edit. |
 
@@ -114,7 +115,7 @@ shared session or workspace owners.
 | --- | --- | --- |
 | `Occurrence.content` | Paint-source use, nested stack, effect application or saved selection. | Groups, effects and selections do not acquire fake paint sources. |
 | `Occurrence.name` | Literal UTF-8 name supplied at creation. | Rename preserves identity and does not invalidate pixels. |
-| `Occurrence.visible` | Contribution visibility, initially true. | Hiding contribution does not disable a source demanded by an explicit input. |
+| `Occurrence.visible` | Artwork contribution visibility, initially true; fixed true for saved selections. | Hiding artwork contribution does not disable a source demanded by an explicit input. Selection overlay visibility belongs to working state. |
 | `Occurrence.opacity` | Finite contribution factor `[0,1]`, initially 1. | Affect only this occurrence and retain pass-through interpolation. |
 | `Occurrence.blend`, `isolated_blend` | Actual blend operation and retained isolated group blend, initially Normal. | Pass Through is an explicit mode; toggling isolation restores the retained blend. |
 | `Occurrence.attachment` | `None`, `Clip` or `Effect`, initially None. | Publication resolves a common clipping base or an effect owner from sibling order, independent of visibility. |
@@ -148,7 +149,6 @@ and corresponding placement together.
 | `MaskUse.translation`, `placement` | Translation in the defined parent domain and independent projective geometry, initially zero and identity. | Preserve unlinked placement and owner pre-maps through projective/mesh placement. |
 | `MaskUse.inverted` | Use inversion, initially false. | Apply at its declared stage; initial-selection inversion stays separate. |
 | `SavedSelection.selection` | Authored `Selection` geometry or immutable pixel coverage. | Preserve independently of current working selection; do not composite exported color. |
-| `SavedSelection.display` | Overlay color and opacity, default sRGB red `[1,0,0,1]` and `0.5`. | Preserve named selection display properties while omitting overlays from output. |
 
 Saved selections retain `Selection.shape`, `affine` and `inverted`. Contours use
 finite pixel coordinates and the even/odd rule. Pixel selections retain origin,
@@ -156,6 +156,10 @@ extent, sample representation and immutable coverage. An absent current selectio
 and an empty current selection remain different working states. Saved-selection
 painting changes its authored coverage; loading it into current selection changes
 working state and remains undoable without marking artwork dirty.
+Selection occurrences retain names, order, placement and edit locks. Their
+artwork-only flags are fixed: visible, unit opacity, normal blend and isolated
+blend, no reference designation, alpha lock, mask or attachment. Overlay display
+changes do not alter saved coverage or portable records.
 
 ### Source and material resources
 
@@ -195,7 +199,7 @@ strong deduplication remain separate from editable source identity.
 | `EffectApplication.values` | Values in validated compact ABI slots, addressed externally by stable parameter keys. | Wire decode maps keys once; control rename/reorder never retargets values. |
 | `EffectApplication.domain` | Explicit local pixel domain. | Preserve independently of the composition frame. |
 | `Definition.program` | Shared immutable runtime program. Built-in wire records store only stable ID and parameter-data version; custom records embed their definition. | Built-ins resolve the current catalog on open; custom code and literal labels retain their owners. |
-| `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths; UI unit labels never decide scaling. |
+| `EffectParameter.dimension` | Catalog-owned dimension for built-ins; embedded schema for custom filters. | Resize scales explicit source/composition pixel lengths without UI precision rounding; count bounds and values are whole numbers. UI unit labels never decide scaling. |
 | `EffectParameter.opaque` | Color-control capability, default false. | RGB-only controls author opaque colors; stored alpha remains intact even when the filter ignores it. |
 
 Built-in shader ABI, code, passes, preparation, labels, page layout and slider
@@ -204,14 +208,20 @@ may change slightly with bug fixes; authored values must remain readable and
 editable. No shader generations or retained historical built-in implementations
 are required.
 
-Custom definitions retain code, ABI slots, kind, alpha/space/resolution policy,
+Custom definitions retain code, ordered slots, kind, alpha/space policy,
 passes, time input, lookup declarations, auxiliary bindings, literal labels,
 parameters and constraints. They execute separately from built-in fusion. Their
-schema includes accepted numeric bounds and separate optional slider bounds.
+schema includes accepted numeric bounds, units and dimensions. The fixed
+`capy.filter/1` evaluation contract uses shader ABI 5 without a separate artwork
+ABI field. Editor pages, sections, visibility conditions, slider bounds/mapping,
+steps and decimal places are omitted, along with runtime resolution and constant
+color optimizations. Reopened custom programs use plain controls and native
+evaluation. Runtime filter packages can still declare these presentation and
+optimization details.
 
 Every application saves every value under its stable key, including defaults.
 Choice selections use stable option IDs; runtime indices are derived on load.
-LUT color-space IDs map explicitly to RGB spaces and GPU codes. Numbers, toggles,
+Built-in choices and LUT color-space IDs map explicitly to GPU codes. Numbers, toggles,
 portable colors, curve control points, gradient stops and LUT bindings remain
 authored data. Missing values and unknown parameters/options never silently use
 current defaults. Fixed-file fixtures protect the supported authored meaning.
@@ -290,7 +300,8 @@ stages.
 
 The ordered shared editor owns authored stores and working state. Working state
 contains current selection, selected occurrence, explicit drawing target and mask
-inspection, plus its own mutation generation. Existing UI/session owners retain
+inspection, saved-selection overlay visibility/color/opacity and its own mutation
+generation. Existing UI/session owners retain
 camera, tools, tabs and preferences. One transaction can update artwork and working
 state atomically. Working-only changes do not advance the artwork saved checkpoint;
 selection undo remains in shared history.

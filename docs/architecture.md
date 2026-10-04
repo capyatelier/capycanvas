@@ -21,7 +21,7 @@ sources own pixels. Compact typed handles identify runtime records, while stable
 portable IDs identify records in files. `Editor` applies atomic reversible record
 changes and retains immutable owners for undo/redo.
 
-Working selection, saved-selection visibility overrides and editing targets
+Working selection, saved-selection overlay visibility/color/opacity and editing targets
 belong to `WorkingState`; they do not
 enter the portable artwork manifest. A captured `ArtworkCapture` retains shared
 immutable artwork roots, an output evaluation context and a checkpoint. Shared

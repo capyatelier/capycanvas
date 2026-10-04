@@ -7,7 +7,7 @@ mod gradient;
 pub use gradient::{GradientDestination,GradientEdit,GradientControls};
 pub use curves::{CurveAxis,CurveAxisView,CurveControls,CurveCoordinateControl,CurveDomain};
 pub(super) use curves::PropertyEditorState;
-use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{Definition, EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SavedSelection, SelectionHandle, SourceTarget}};
+use layer_core::{Edit, EffectInstance, EffectParameterKind, EffectValue, ResourceLabel, authored::{Definition, EffectApplication, EffectBaseline, EffectHandle, Occurrence, OccurrenceContent, OccurrenceHandle, RecordChange, SceneScope, SelectionHandle, SourceTarget}};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
@@ -472,7 +472,8 @@ pub(super) fn number_control(p: &layer_core::EffectParameter) -> Option<NumericC
     let EffectParameterKind::Number { min, max, step, decimals, unit } = &p.kind else {
         return None;
     };
-    let mut numeric = NumericControl::number(*min as f64, *max as f64, *step as f64, *decimals as u32).unit(unit);
+    let (step,decimals)=if p.dimension==layer_core::authored::Dimension::Count {(1.,0)} else {(*step,*decimals)};
+    let mut numeric = NumericControl::number(*min as f64, *max as f64, step as f64, decimals as u32).unit(unit);
     numeric.mapping=p.mapping;
     if let Some([low,high])=p.soft_bounds {numeric.soft_min=low;numeric.soft_max=high;}
     // Percentages express an amount, not an item count, even when the
@@ -577,8 +578,8 @@ pub(super) fn properties(doc: &Document, painting: layer_core::SelectionPaintBeh
         return LayerPropertiesView {layer: Some(token), title, enabled: !doc.is_locked(handle), ..Default::default()};
     }
     if let OccurrenceContent::Selection(selection) = layer.content {
-        let Some(selection) = doc.artwork.selections.get(selection) else { return LayerPropertiesView::default(); };
-        return super::selection_properties::properties(token, &title, &selection.display, painting, !doc.is_locked(handle), l);
+        let properties = doc.working.selection_overlays.properties.get(&selection).cloned().unwrap_or_default();
+        return super::selection_properties::properties(token, &title, &properties, painting, !doc.is_locked(handle), l);
     }
     let mut controls = Vec::new();
     let mut curve_max = None;
@@ -715,13 +716,13 @@ pub(super) fn effect_baseline(document: &Document, occurrence: OccurrenceHandle)
 enum PropertyBaseline {
     Effect {value: EffectBaseline, definition: Definition},
     Occurrence {handle: OccurrenceHandle, value: Occurrence},
-    SavedSelection {occurrence: OccurrenceHandle, handle: SelectionHandle, value: SavedSelection},
+    SelectionDisplay {occurrence: OccurrenceHandle, handle: SelectionHandle, value: Option<layer_core::SelectionMaskProperties>},
 }
 impl PropertyBaseline {
     fn capture(document: &Document, handle: OccurrenceHandle) -> Result<Self, String> {
         if let Some(SourceTarget::Selection(selection)) = document.scene().source_target(handle) {
-            let value = document.artwork.selections.get(selection).ok_or("Missing saved selection")?.clone();
-            Ok(Self::SavedSelection {occurrence: handle, handle: selection, value})
+            let value = document.working.selection_overlays.properties.get(&selection).cloned();
+            Ok(Self::SelectionDisplay {occurrence: handle, handle: selection, value})
         } else if let Ok(value) = effect_baseline(document, handle) {
             let definition = document.artwork.definitions.get(value.application.definition).ok_or("Missing adjustment definition")?.clone();
             Ok(Self::Effect {value, definition})
@@ -730,7 +731,7 @@ impl PropertyBaseline {
         }
     }
     fn occurrence(&self) -> OccurrenceHandle {
-        match self {Self::Effect {value,..} => value.occurrence, Self::Occurrence {handle,..} => *handle, Self::SavedSelection {occurrence,..} => *occurrence}
+        match self {Self::Effect {value,..} => value.occurrence, Self::Occurrence {handle,..} => *handle, Self::SelectionDisplay {occurrence,..} => *occurrence}
     }
     fn edit(&self, document: &Document) -> Result<Edit, String> {
         let art = &document.artwork;
@@ -740,7 +741,11 @@ impl PropertyBaseline {
                 Edit::Effect(RecordChange::replace(&art.effects, value.effect, Some(value.application.clone())).map_err(str::to_string)?),
             ])),
             Self::Occurrence {handle, value} => Ok(Edit::Occurrence(RecordChange::replace(&art.occurrences, *handle, Some(value.clone())).map_err(str::to_string)?)),
-            Self::SavedSelection {handle, value, ..} => Ok(Edit::SavedSelection(RecordChange::replace(&art.selections, *handle, Some(value.clone())).map_err(str::to_string)?)),
+            Self::SelectionDisplay {handle, value, ..} => {
+                let mut working=document.working.clone();
+                match value {Some(value)=>{working.selection_overlays.properties.insert(*handle,value.clone());},None=>{working.selection_overlays.properties.remove(handle);}}
+                Ok(Edit::Working(working))
+            },
         }
     }
 }
@@ -897,7 +902,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let mut draft=effect_draft(document,handle)?;
                 draft.set(&resource,EffectValue::Lut3d(None)).map_err(str::to_string)?;
                 if let Some(preset)=preset {
-                    draft.set(&color_space,EffectValue::Choice(0)).map_err(str::to_string)?;
+                    draft.set_choice(&color_space,"srgb").map_err(str::to_string)?;
                     draft.set(&resource,EffectValue::Lut3d(Some(preset.resource()))).map_err(str::to_string)?;
                 }
                 if draft.view()==original {return Ok(());}
@@ -1096,7 +1101,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let (index,insertion_attachment)=if generator&&!replacing {doc.content_insertion(parent,index)}else{(index,layer_core::Attachment::None)};
                 let depth = doc.composition().color.depth;
                 let mut instance = EffectInstance::new(catalog.program());
-                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set("domain", EffectValue::Choice(1)).map_err(str::to_string)?; }
+                if depth.is_float() && instance.program.id.as_ref() == "curves" { instance.set_choice("domain", "Log HDR").map_err(str::to_string)?; }
                 if generator && let Some(color) = instance.program.parameters.iter().find(|parameter| parameter.kind == EffectParameterKind::Color) {
                     instance.set(&color.key.clone(), EffectValue::Color(self.state.colors.definition())).map_err(str::to_string)?;
                 }
@@ -1216,7 +1221,7 @@ mod resource_tests {
                     }
                     LayerKind::Selection => {
                         let selection = selected.artwork.selections.insert(layer_core::authored::PortableId::random(), layer_core::authored::SavedSelection {
-                            selection: layer_core::Selection::empty(), display: Default::default(),
+                            selection: layer_core::Selection::empty(),
                         }).unwrap();
                         OccurrenceContent::Selection(selection)
                     }
@@ -1230,6 +1235,16 @@ mod resource_tests {
     fn package() -> EffectPackage {
         let bundled = layer_core::bundled_effect_catalog();
         EffectPackage { format: 2, categories: bundled.categories().to_vec(), filters: bundled.filters().to_vec() }
+    }
+    #[test]
+    fn custom_count_controls_step_in_whole_units_without_presentation_hints() {
+        let mut parameter=layer_core::bundled_effect_catalog().get("kaleidoscope").unwrap().program().parameters[0].clone();
+        let EffectParameterKind::Number {step,decimals,..}=&mut parameter.kind else {panic!()};
+        *step=0.01;*decimals=6;
+        let numeric=number_control(&parameter).unwrap();
+        assert_eq!(numeric.step,1.);assert_eq!(numeric.digits,0);
+        let value=numeric.resolve(6.,NumericOperation::Step {steps:1.}).unwrap().value;
+        assert_eq!(value,7.);parameter.validate(&EffectValue::Number(value as f32)).unwrap();
     }
     fn resolve(package: EffectPackage) -> EffectCatalog {
         package.resolve(|_| Err("resolved fixture has no module imports".into())).unwrap()

@@ -54,7 +54,7 @@ fn main() -> Result<(), String> {
         Selection::pixels(Arc::new(SelectionPixels::bytes([width, height], [0, 0, width, height], words).map_err(|e| e.to_string())?));
     let mut artwork = document.artwork;
     let saved =
-        artwork.selections.insert(PortableId::random(), SavedSelection { selection: selection.clone(), display: Default::default() })?;
+        artwork.selections.insert(PortableId::random(), SavedSelection { selection: selection.clone(),})?;
     let occurrence =
         artwork.occurrences.insert(PortableId::random(), Occurrence::new(OccurrenceContent::Selection(saved), "Shared mask"))?;
     let stack = artwork.compositions.get(artwork.root).ok_or("Missing fixture composition")?.result;

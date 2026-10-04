@@ -569,6 +569,7 @@ class AndroidCanvasBarBenchmarkTest {
             }
             inject(MotionEvent.ACTION_CANCEL, SystemClock.uptimeMillis(), 0.0, 0.0, 0f)
             waitFor("ready") { host.snapshot?.optBoolean("shaders_ready") == true && host.workspaceManager?.optBoolean("ready") == true && host.workspaceManager?.optBoolean("busy") == false }
+            args.getString("theme")?.let { action(obj("type" to "set_theme", "theme" to it)) }
             if (args.getString("defaultPhoto") == "true") {
                 instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "switch", "id" to "builtin:workspace:photographer")) }
                 waitFor("Photo workspace") { host.workspaceManager?.optString("id") == "builtin:workspace:photographer" && host.workspaceManager?.optBoolean("busy") == false }
@@ -785,6 +786,9 @@ class AndroidCanvasBarBenchmarkTest {
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-small-drag", .2),
                     Scrub("gaussian_blur", "sigma", "Radius", "effect-gaussian-large-drag", .7),
                     Scrub("unsharp_mask", "amount", "Amount", "effect-unsharp-amount-drag", .3, span = .4, radius = args.getString("effectRadius")?.toDouble() ?: 85.0),
+                    Scrub("denoise", "strength", "Strength", "effect-denoise-strength-drag", .3, span = .4),
+                    Scrub("domain_warp", "distance", "Distortion", "effect-domain-warp-distance-drag", .3, span = .4),
+                    Scrub("selection_overlay", "mask_opacity", "Overlay opacity", "selection-overlay-opacity-drag", .3, span = .4),
                 ) else listOf(
                     Scrub("solid_color", "opacity", "Opacity", "fill-opacity-drag", .35, span = .4),
                     Scrub("levels", "black", "Black", "effect-levels-black-drag", .15, span = .4, primeSpan = .4),
@@ -824,9 +828,13 @@ class AndroidCanvasBarBenchmarkTest {
                         effect(obj("op" to "insert", "effect" to "vibrance"))
                     }
                     val guideBegan = SystemClock.elapsedRealtimeNanos()
-                    if (lookup == null) effect(obj("op" to "insert", "effect" to scrub.id))
+                    if (scrub.id == "selection_overlay") {
+                        invoke("select_all"); invoke("save_selection_layer")
+                        action(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
+                    } else if (lookup == null) effect(obj("op" to "insert", "effect" to scrub.id))
                     else action(obj("type" to "select_layer", "id" to lookup.second))
                     val effectLayer = state().getJSONObject("layer_properties").getLong("layer")
+                    if (scrub.id == "domain_warp") effect(obj("op" to "set", "layer" to effectLayer, "key" to "animate", "value" to obj("kind" to "toggle", "value" to false)))
                     scrub.radius?.let { radius -> effect(obj("op" to "set", "layer" to effectLayer, "key" to "sigma", "value" to obj("kind" to "number", "value" to radius))) }
                     if (scrub.id == "solid_color") action(obj("type" to "layer", "action" to obj("op" to "delete_mask", "id" to effectLayer)))
                     val hasGuide = scrub.id in listOf("shadows_highlights", "clarity", "dehaze")
@@ -925,11 +933,14 @@ class AndroidCanvasBarBenchmarkTest {
                         host.awaitMain("${scrub.title} gesture changes its value", 10_000, condition = { value() != before })
                     } finally { interactionSnapshot("${scrub.label}-prime-after", sliderTag, ::slider) }
                     val warmupDownInjectionMs = lastDownInjectionNs / 1e6
-                    invoke("undo")
+                    if (scrub.id == "selection_overlay") effect(obj("op" to "set", "layer" to effectLayer, "key" to scrub.key, "value" to obj("kind" to "number", "value" to before)))
+                    else invoke("undo")
                     waitFor("filter shaders ready") { host.snapshot?.optBoolean("shaders_ready") == true }
                     if (wanted("spatial-effects")) waitGuide("spatial filter warmup settled")
                     if (scrub.id == "levels") precisionSettled("Levels warmup settled")
                     if (scrub.id == "dehaze") waitGuide("Dehaze warmup settled")
+                    val artworkCheckpoint = native { JSONObject(Native.sessionStamp(it, host.drawingTabs.selected)).getLong("checkpoint") }
+                    val modified = state().getJSONObject("document_file").getBoolean("modified")
                     val preparationMs = (System.nanoTime() - preparedAt) / 1e6
                     val effectRepeats = args.getString("effectRepeats", "1")!!.toInt().also { require(it > 0) }
                     repeat(effectRepeats) { index ->
@@ -955,8 +966,11 @@ class AndroidCanvasBarBenchmarkTest {
                             drag(start, duration) { t -> track.width() * scrub.span * (1 - kotlin.math.abs(1 - (t % .5) * 4)) to 0.0 }
                             sampler.join()
                         }
+                        val finalCheckpoint = native { JSONObject(Native.sessionStamp(it, host.drawingTabs.selected)).getLong("checkpoint") }
+                        val finalModified = state().getJSONObject("document_file").getBoolean("modified")
                         val result = File(output, "$label.json")
                         result.writeText(JSONObject(result.readText()).put("effect_values", JSONArray(values.toList().sorted()))
+                            .put("artwork_checkpoint_before", artworkCheckpoint).put("artwork_checkpoint_after", finalCheckpoint).put("modified_before", modified).put("modified_after", finalModified)
                             .put("source_memory_before_effect", sourceMemoryBeforeEffect).put("source_display_before_effect", sourceDisplayBeforeEffect)
                             .put("guide_wait_ms", if (hasGuide) (guideReady - guideBegan) / 1e6 else JSONObject.NULL).put("guide_wait_begin_boot_ns", if (hasGuide) guideBegan else JSONObject.NULL).put("guide_ready_boot_ns", if (hasGuide) guideReady else JSONObject.NULL)
                             .put("settle_before_contact_ms", settleMs).put("warmup_down_injection_ms", warmupDownInjectionMs).put("down_injection_ms", lastDownInjectionNs / 1e6).put("slider_travel_fraction", scrub.span).put("triangle_period_seconds", .5).put("preparation_ms", preparationMs).put("effect_id", scrub.id).put("effect_key", scrub.key).put("effect_page", scrub.page ?: "rgb").put("colorize", scrub.colorize).put("effect_radius", scrub.radius).put("theme", state().getString("theme"))
@@ -966,6 +980,10 @@ class AndroidCanvasBarBenchmarkTest {
                             JSONArray(listOf(track.left, track.top, track.right, track.bottom))).toString(2))
                         if (effectRepeats > 1) result.copyTo(File(output, "$label-$index.json"), overwrite = true)
                         check(values.size > 1) { "$label did not change its value during motion" }
+                        if (scrub.id == "selection_overlay") {
+                            check(finalCheckpoint == artworkCheckpoint) { "Overlay opacity changed the artwork checkpoint" }
+                            check(finalModified == modified) { "Overlay opacity changed the saved state" }
+                        }
                         if (scrub.span == .4 && scrub.id == "color_lookup") check(values.max() - values.min() > 25) { "$label did not traverse enough coarse numeric steps" }
                         if (scrub.id == "gaussian_blur") check(values.all { it > 0 && it < 21 }) { "$label reached a stationary slider limit" }
                     }

@@ -121,7 +121,7 @@ impl ColorCanvas {
             view: self.view,
             document_extent: document.composition().size,
             scene,
-            selection_visibility: None,
+            selection_overlays: None,
             inspect_mask: None,
             dabs: &[],
             dab_batches: &[],

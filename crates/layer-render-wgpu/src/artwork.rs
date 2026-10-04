@@ -62,7 +62,7 @@ impl Frame {
         FramePacket {
             commit_rasters: true,
             scene: self.scene.view().with_scope(&self.scope),
-            selection_visibility: None,
+            selection_overlays: None,
             inspect_mask: None,
             view: self.view,
             document_extent: extent,

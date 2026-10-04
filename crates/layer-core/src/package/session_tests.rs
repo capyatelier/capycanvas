@@ -36,8 +36,7 @@ fn fixture()->Editor {
         translation:Point{x:2.,y:3.},placement:LayerPlacement {outer:Projective([1.,0.,1.,0.,1.,2.,0.,0.,1.]),
             mesh:Some(Arc::new(MeshMap::fit(Rect::from_extent([19,11]),[1,1],|p|Some(Point{x:p.x+0.01*p.y*p.y,y:p.y})).unwrap())),interpolation:Interpolation::Bicubic},
         mask:Some(MaskUse {source:coverage,enabled:false,linked:false,inverted:true,translation:Point{x:3.,y:1.},placement:Projective([1.,0.,2.,0.,1.,0.,0.,0.,1.])})};
-    let saved=art.selections.insert(PortableId::random(),SavedSelection {selection:pixels(),display:SelectionMaskProperties {
-        color:RgbColor {space:RgbSpace::DisplayP3,rgba:[0.25,0.5,0.75,1.],linear_rgb:None},opacity:0.75}}).unwrap();
+    let saved=art.selections.insert(PortableId::random(),SavedSelection {selection:pixels(),}).unwrap();
     let selection=art.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Selection(saved),"Selected 色")).unwrap();
     let program=crate::bundled_effect_catalog().get("color_lookup").unwrap().program();
     let mut effect=EffectInstance::new(program.clone());effect.set("resource",EffectValue::Lut3d(Some(lut(0.25)))).unwrap();
@@ -50,7 +49,9 @@ fn fixture()->Editor {
     art.guides.insert(PortableId::random(),Guides {rulers:vec![(PortableId::random(),RulerGeometry::Parallel {start:Point{x:1.,y:2.},end:Point{x:9.,y:3.}})]}).unwrap();
     art.metadata=Arc::new(PhotoMetadata {exif:Some(Resource::from(vec![11;53])),xmp:Some(Resource::from(vec![13;67])),iptc:Some(Resource::from(vec![17;31]))});
     let mut document=Document::from_artwork(art).unwrap();
-    document.working=WorkingState {generation:0,selection:Some(pixels()),selection_visibility:[(selection,false)].into(),
+    document.working=WorkingState {generation:0,selection:Some(pixels()),selection_overlays:SelectionOverlays {
+        visibility:[(selection,false)].into(),properties:[(saved,SelectionMaskProperties {
+            color:RgbColor {space:RgbSpace::DisplayP3,rgba:[0.25,0.5,0.75,1.],linear_rgb:None},opacity:0.75})].into()},
         layer_selection:[ink,selection].into(),layer_anchor:Some(ink),solo_visibility:Some([(ink,true),(selection,false)].into()),
         occurrence:Some(ink),target:Some(SourceTarget::Coverage(coverage)),inspect_mask:Some(ink)};
     Editor::new(document)
@@ -96,8 +97,7 @@ fn perform_all(editor:&mut Editor) {
     change!(definitions,Definition,definition,Definition {program:program.clone()});
     let mut effect=EffectInstance::new(program);effect.set("resource",EffectValue::Lut3d(Some(lut(0.75)))).unwrap();
     change!(effects,Effect,lookup,EffectApplication {definition,values:effect.values,domain:[19,11]});
-    change!(selections,SavedSelection,saved,SavedSelection {selection:Selection::polygon(vec![Point{x:2.,y:1.},Point{x:17.,y:1.},Point{x:17.,y:8.}]).unwrap(),
-        display:SelectionMaskProperties {color:RgbColor {space:RgbSpace::Srgb,rgba:[0.75,0.25,0.5,1.],linear_rgb:None},opacity:0.25}});
+    change!(selections,SavedSelection,saved,SavedSelection {selection:Selection::polygon(vec![Point{x:2.,y:1.},Point{x:17.,y:1.},Point{x:17.,y:8.}]).unwrap(),});
     change!(guides,Guides,guides,Guides {rulers:vec![(PortableId::random(),RulerGeometry::Radial {center:Point{x:7.,y:5.}})]});
     let mut proof=ProofRecipe::new("Print 色".into(),ColorProfile::Builtin(RgbSpace::AdobeRgb));proof.simulate_paper=true;
     change!(outputs,Output,output,Output {composition:root,name:"Output 色".into(),context:EvaluationContext {elapsed:3.25,phases:Arc::new(vec![(lookup,0.625)])},
@@ -149,6 +149,14 @@ fn assert_editor(expected:&Editor,actual:&Editor) {
         let right=Arc::make_mut(&mut b.definitions.get_mut(handle).unwrap().program);
         normalize_shader(&mut left.wgsl,&mut right.wgsl);assert_eq!(left.lookups.len(),right.lookups.len());
         for (a,b) in Arc::make_mut(&mut left.lookups).iter_mut().zip(Arc::make_mut(&mut right.lookups).iter_mut()) {normalize_shader(&mut a.wgsl,&mut b.wgsl);}
+        if crate::bundled_effect_catalog().get(&left.id).is_none() {
+            let encode=|program:&crate::EffectProgram|super::super::effect_records::encode_definition(
+                &Definition {program:Arc::new(program.clone())},&mut crate::package::resources::ResourceInventory::default()).unwrap();
+            assert_eq!(encode(left),encode(right));
+            assert_eq!(EffectInstance::new(Arc::new(left.clone())).gpu_parameters(RgbSpace::Srgb).unwrap(),
+                EffectInstance::new(Arc::new(right.clone())).gpu_parameters(RgbSpace::Srgb).unwrap());
+            *left=right.clone();
+        }
     }
     assert_eq!(a,b);
 }
@@ -175,6 +183,17 @@ fn reopen(editor:&Editor)->Editor {
     let loaded=open(ImmutableBacking::new(Arc::new(Arc::<[u8]>::from(bytes))).unwrap(),ProjectLimits::default(),&cancel).unwrap();
     assert_eq!(loaded.metadata.value,metadata);assert_eq!(loaded.editor.document().working.generation,editor.document().working.generation);
     assert_editor(editor,&loaded.editor);transfer(&loaded.editor)
+}
+#[test]
+fn saved_selection_overlay_visibility_is_private_and_survives_recovery() {
+    let mut original=fixture();let artwork=original.document().artwork.clone();let checkpoint=original.checkpoint();
+    let handle=original.document().working.selection_overlays.visibility.keys().copied().next().unwrap();
+    for visible in [true,false] {
+        let mut working=original.document().working.clone();working.selection_overlays.visibility.insert(handle,visible);
+        original.perform(Edit::Working(working)).unwrap();assert_eq!(original.document().artwork,artwork);assert_eq!(original.checkpoint(),checkpoint);
+        let restored=reopen(&original);assert_eq!(restored.document().effective_visibility(handle),visible);
+        assert_eq!(restored.document().working.selection_overlays.visibility.get(&handle),Some(&visible));
+    }
 }
 #[test]
 fn every_record_and_raster_edit_restores_semantics_across_undo_redo_and_branching() {

@@ -1,4 +1,4 @@
-import {readPackage,packageResourceIdentity} from './package-fixture.test.mjs';
+import {readPackage,authoredIdentity,packageResourceIdentity} from './package-fixture.test.mjs';
 import assert from 'node:assert/strict';
 import {mkdir,writeFile} from 'node:fs/promises';
 
@@ -121,6 +121,51 @@ export async function checkDrawingTabRecovery({call,evaluate,settle}) {
   await evaluate("[...document.querySelectorAll('dialog[open] button')].find(button=>button.textContent==='Discard Changes').click()");await wait('layerApp.app.document_tabs(0).tabs.length===2');await ready();
   await evaluate('layerApp.documents.autosave()');const old=await evaluate('performance.timeOrigin');await call('Page.reload');await wait(`performance.timeOrigin!==${old}&&window.layerApp?.app.brush_ready()`);await ready();
   assert.deepEqual((await tabs()).tabs.map(tab=>tab.id),[third,second],'An acknowledged close cannot resurrect on restart');
+  await select(third);await evaluate(`layerApp.dispatch({type:'set_rotation',rotation:0})`);await invoke('fit_canvas');await invoke('deselect');await invoke('rectangle_select');await ready();await settle();
+  const overlayPoint=(x,y)=>evaluate(`(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect();return{x:r.x+(${x}*c.zoom+c.translation[0])*r.width/c.viewport[0],y:r.y+(${y}*c.zoom+c.translation[1])*r.height/c.viewport[1]}})()`);
+  for(const [type,x,y] of [['mousePressed',24,24],['mouseMoved',72,72],['mouseReleased',72,72]]) {
+    await call('Input.dispatchMouseEvent',{type,...await overlayPoint(x,y),button:'left',buttons:type==='mouseReleased'?0:1,clickCount:1});await settle();
+  }
+  await wait('layerApp.state().layer_tools.has_selection');await invoke('save_selection_layer');await evaluate(`layerApp.dispatch({type:'layer',action:{op:'cancel_rename'}})`);await ready();
+  const overlayOwner=await evaluate('String(layerApp.state().layer_tools.mask_editing.layer)');
+  const overlayProperties=()=>evaluate(`JSON.parse(JSON.stringify(layerApp.state().layer_properties.controls.filter(control=>['mask_color','mask_opacity'].includes(control.key)).map(control=>[control.key,control.value])))`);
+  const overlayVisible=()=>evaluate(`layerApp.state().layers.find(layer=>String(layer.id)===${JSON.stringify(overlayOwner)}).visible`);
+  const overlayEye=async()=>{
+    await evaluate(`layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'layers',visible:true}})`);await settle();
+    await evaluate(`document.querySelector('.dock-tab[data-panel="layers"],.column-tab[data-panel="layers"]')?.click()`);await settle();
+    const selector=`.layer-row[data-layer="${overlayOwner}"] > button:first-child`;
+    const point=await evaluate(`(()=>{const eye=document.querySelector(${JSON.stringify(selector)});eye.scrollIntoView({block:'nearest'});const r=eye.getBoundingClientRect();return{x:r.x+r.width/2,y:r.y+r.height/2}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});
+    await settle();await ready();
+  };
+  const overlayPixels=async(visible=true)=>{
+    const deadline=Date.now()+30000;
+    for(;;) {
+      await evaluate('layerApp.wake()');await settle();await evaluate('layerApp.app.wait_for_canvas()');
+      const point=await overlayPoint(48,48),shot=await call('Page.captureScreenshot',{format:'png',clip:{...point,width:1,height:1,scale:1}});
+      const pixel=await evaluate(`(async()=>{const image=new Image();image.src='data:image/png;base64,${shot.data}';await image.decode();const canvas=document.createElement('canvas');canvas.width=canvas.height=1;const context=canvas.getContext('2d',{willReadFrequently:true});context.drawImage(image,0,0);return Array.from(context.getImageData(0,0,1,1).data)})()`);
+      if(visible?pixel[1]>pixel[0]+20&&pixel[1]>pixel[2]+10:pixel.slice(0,3).every(channel=>channel>240)&&pixel[3]===255)return;
+      assert.ok(Date.now()<deadline,`Saved overlay reaches presented ${visible?'green':'white'} pixels: ${pixel}`);await new Promise(resolve=>setTimeout(resolve,50));
+    }
+  };
+  const overlayArchive=()=>readPackage(evaluate,`await (async()=>{const root=await navigator.storage.getDirectory(),directory=await root.getDirectoryHandle('capy-test-session-originals'),file=await directory.getFileHandle(layerApp.state().document_file.location.name);return new Uint8Array(await(await file.getFile()).arrayBuffer())})()`);
+  await installSave();await invoke('save_document_as');await ready();const overlayOriginal=authoredIdentity(await overlayArchive());
+  for(const theme of ['light','dark']) {
+    await evaluate(`layerApp.dispatch({type:'set_theme',theme:${JSON.stringify(theme)}});layerApp.dispatch({type:'select_layer',id:BigInt(${JSON.stringify(overlayOwner)})});layerApp.dispatch({type:'customize',action:{type:'set_panel_visible',panel:'properties',visible:true}});`);await settle();
+    await evaluate(`document.querySelector('.dock-tab[data-panel="properties"],.column-tab[data-panel="properties"]')?.click()`);await settle();
+    for(const [key,value] of [['mask_opacity',{kind:'number',value:.37}],['mask_color',{kind:'color',value:{space:'Srgb',rgba:[.2,.7,.3,1]}}]])await evaluate(`layerApp.dispatch({type:'effect',action:{op:'set',layer:Number(${JSON.stringify(overlayOwner)}),key:${JSON.stringify(key)},value:${JSON.stringify(value)}}})`);
+    await overlayPixels();const before=await overlayProperties();
+    assert.equal(await evaluate('layerApp.state().document_file.modified'),false,'Private overlay properties retain the clean artwork checkpoint');
+    for(const visible of [false,true]) {
+      await overlayEye();assert.equal(await overlayVisible(),visible,`${theme}: saved selection eye changes private visibility`);await overlayPixels(visible);
+      assert.equal(await evaluate('layerApp.state().document_file.modified'),false,'Private overlay visibility retains the clean artwork checkpoint');
+      await installSave();await invoke('save_document_as');await ready();assert.deepEqual(authoredIdentity(await overlayArchive()),overlayOriginal,'Private overlay properties and visibility leave portable artwork unchanged');
+      await evaluate('layerApp.documents.autosave()');const origin=await evaluate('performance.timeOrigin');await call('Page.reload',{ignoreCache:true});await wait(`performance.timeOrigin!==${origin}&&window.layerApp?.app.brush_ready()`);await ready();
+      assert.deepEqual(await overlayProperties(),before,`${theme}: private restart retains overlay color and opacity`);assert.equal(await overlayVisible(),visible,`${theme}: private restart retains eye visibility`);
+      assert.equal(await evaluate('layerApp.state().document_file.modified'),false,'Restored private overlay settings retain the clean artwork checkpoint');await overlayPixels(visible);
+    }
+  }
+  console.log('PASS saved selection overlay: native eye visibility, immediate color/opacity redraw, clean unchanged portable artwork and automatic restore pixels in both themes');
   await evaluate('layerApp.documents.autosave()');
   const injection=await call('Page.addScriptToEvaluateOnNewDocument',{source:`(()=>{let current;Object.defineProperty(window,'layerApp',{configurable:true,get:()=>current,set:value=>{current=value;const prepare=value.app.prepare_session_restart.bind(value.app);let entered=false;value.app.prepare_session_restart=(...args)=>{const pending=prepare(...args);if(!entered){entered=true;window.liveStartupLayers=value.state().layers.length+1;value.dispatch({type:'invoke',command:'add_layer'});}return pending;};}});})()`});
   try {

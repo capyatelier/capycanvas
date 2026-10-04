@@ -198,7 +198,7 @@ impl Worker {
             document_extent: document.composition().size,
             scene,
             inspect_mask: None,
-            selection_visibility: Some(&document.working.selection_visibility),
+            selection_overlays: Some(&document.working.selection_overlays),
             dabs: &[],
             dab_batches: &[],
             restore_rasters: &restored,

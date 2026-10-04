@@ -216,7 +216,7 @@ impl Editor {
     pub fn retained_tiles(&self) -> RetainedTiles {
         let mut roots=crate::RootInventory::default();
         roots.document(&self.document);
-        let mut metadata_bytes=crate::artwork_metadata(&self.document.artwork).saturating_add(self.document.working.selection_visibility.len().saturating_mul(64));
+        let mut metadata_bytes=crate::artwork_metadata(&self.document.artwork).saturating_add(self.document.working.selection_overlays.metadata_bytes());
         for entry in self.undo.iter().chain(&self.redo) {entry.edit.roots(&mut roots);metadata_bytes=metadata_bytes.saturating_add(entry.metadata_bytes);}
         let mut seen=HashSet::new();
         let rasters:Vec<_>=roots.rasters.into_iter().filter(|r|seen.insert(r.identity())).cloned().collect();

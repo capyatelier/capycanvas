@@ -123,9 +123,12 @@ impl GradientDefinition {
 #[repr(u8)]
 pub enum GradientShape {
     #[default]
-    Linear,
-    Radial,
-    Reflected,
+    #[serde(rename = "Linear")]
+    Linear = 0,
+    #[serde(rename = "Radial")]
+    Radial = 1,
+    #[serde(rename = "Reflected")]
+    Reflected = 2,
 }
 impl GradientShape {
     pub const ALL: [Self;3] = [Self::Linear, Self::Radial, Self::Reflected];

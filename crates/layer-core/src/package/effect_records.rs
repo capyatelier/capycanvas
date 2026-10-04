@@ -2,7 +2,7 @@ use crate::GradientStop;
 use crate::{authored::{Definition, Dimension, Resource}, effect_catalog::ResourceLabel, effects::*, Lut3d};
 use super::values::{self, DecodeError, DecodeResult, object, required, string, boolean, array, finite_f32, u32_value};
 use serde_json::{json, Map, Value};
-use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+use std::{collections::BTreeSet, sync::Arc};
 
 pub trait ResourceWriter {
     fn code(&mut self, source: &Resource<str>) -> Result<Value, String>;
@@ -64,7 +64,7 @@ fn decode_gradient_stops(value: &Value) -> DecodeResult<Vec<GradientStop>> {
     }).collect()
 }
 fn builtin_version(id: &str) -> u32 {
-    match id {"gradient_map"|"gradient_fill"=>2,_=>1}
+    match id {"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"=>2,_=>1}
 }
 fn decode_value(value: &Value, kind: &EffectParameterKind, reader: &mut impl ResourceReader) -> DecodeResult<EffectValue> {
     let fields = object(value, &["kind", "value"])?;
@@ -97,8 +97,8 @@ fn decode_value(value: &Value, kind: &EffectParameterKind, reader: &mut impl Res
 }
 fn encode_kind(kind: &EffectParameterKind) -> Value {
     match kind {
-        EffectParameterKind::Number {min,max,step,decimals,unit} => {
-            let mut fields = json!({"kind":"number","min":min,"max":max,"step":step,"decimals":decimals});
+        EffectParameterKind::Number {min,max,unit,..} => {
+            let mut fields = json!({"kind":"number","min":min,"max":max});
             if !unit.is_empty() { fields["unit"] = json!(unit); } fields
         },
         EffectParameterKind::Choice {options} => json!({"kind":"choice","options":options.iter().map(|option| match option {
@@ -111,11 +111,9 @@ fn decode_kind(value: &Value) -> DecodeResult<EffectParameterKind> {
     let tag = string(required(value.as_object().ok_or("Expected parameter kind object")?, "kind")?)?;
     Ok(match tag {
         "number" => {
-            let fields = object(value,&["kind","min","max","step","decimals","unit"])?;
-            let decimals = u32_value(required(fields,"decimals")?)?;
-            if decimals > 6 { return Err("Invalid decimal places".into()); }
+            let fields = object(value,&["kind","min","max","unit"])?;
             EffectParameterKind::Number { min:finite_f32(required(fields,"min")?)?, max:finite_f32(required(fields,"max")?)?,
-                step:finite_f32(required(fields,"step")?)?, decimals:decimals as u8,
+                step:0.01, decimals:6,
                 unit: fields.get("unit").map(string).transpose()?.unwrap_or("").into() }
         },
         "choice" => {
@@ -151,7 +149,7 @@ fn decode_code(value: &Value, reader: &mut impl ResourceReader) -> DecodeResult<
         else { EffectShader::Linked {sources:sources.into()} })
 }
 fn encode_dimension(fields: &mut Map<String,Value>, dimension: &Dimension) {
-    let (dimension,reference) = match dimension {Dimension::Scalar => return, Dimension::Angle=>("angle",None), Dimension::Time=>("time",None),
+    let (dimension,reference) = match dimension {Dimension::Scalar => return, Dimension::Count=>("count",None), Dimension::Angle=>("angle",None), Dimension::Time=>("time",None),
         Dimension::SourcePixels=>("length",Some("source_pixels")),Dimension::CompositionPixels=>("length",Some("composition_pixels")),
         Dimension::Normalized=>("length",Some("normalized"))};
     fields.insert("dimension".into(),json!(dimension));
@@ -164,7 +162,7 @@ fn decode_dimension(fields: &Map<String,Value>) -> DecodeResult<Dimension> {
     };
     let tag=string(dimension)?;
     if tag!="length" && fields.contains_key("reference") {return Err("Only length has a reference".into());}
-    Ok(match tag {"scalar"=>Dimension::Scalar,"angle"=>Dimension::Angle,"time"=>Dimension::Time,
+    Ok(match tag {"scalar"=>Dimension::Scalar,"count"=>Dimension::Count,"angle"=>Dimension::Angle,"time"=>Dimension::Time,
         "length" => match string(required(fields,"reference")?)? {"source_pixels"=>Dimension::SourcePixels,
             "composition_pixels"=>Dimension::CompositionPixels,"normalized"=>Dimension::Normalized,_=>return Err(unsupported("length reference"))},
         _=>return Err(unsupported("dimension"))})
@@ -177,38 +175,27 @@ pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWrit
         return Ok(json!({"builtin":program.id,"version":builtin_version(&program.id)}));
     }
     if !program.literal_labels() { return Err("Custom filters require literal labels".into()); }
-    let EffectProgram {abi,id,label,kind,constant_color,alpha,space,resolution,wgsl,entry,passes,time,lookups,auxiliary,pages,parameters:program_parameters,constraints}=program.as_ref();
+    let EffectProgram {id,label,kind,alpha,space,wgsl,entry,passes,time,lookups,auxiliary,parameters:program_parameters,constraints,..}=program.as_ref();
     text(&json!(id)).map_err(|error|error.to_string())?;
     EffectInstance::new(program.clone()).validate().map_err(str::to_string)?;
     let mut parameters=Map::new();
     for parameter in program_parameters.iter() {
-        let EffectParameter {dimension,opaque,key,label:parameter_label,section,page,visible_when,soft_bounds,mapping,kind:parameter_kind,default}=parameter;
+        let EffectParameter {dimension,opaque,key,label:parameter_label,kind:parameter_kind,default,..}=parameter;
         let mut fields=Map::new();
         fields.insert("kind".into(),encode_kind(parameter_kind));
         fields.insert("default".into(),encode_value(default,parameter_kind,writer)?);
         fields.insert("label".into(),encode_label(parameter_label));
-        if let Some(section)=section {fields.insert("section".into(),encode_label(section));}
-        if let Some(page)=page {fields.insert("page".into(),json!(page));}
-        if let Some(condition)=visible_when {
-            let target=program_parameters.iter().find(|p|p.key==condition.key).ok_or("Unknown visibility parameter")?;
-            fields.insert("visible_when".into(),json!({"key":condition.key,"value":encode_value(&condition.value,&target.kind,writer)?}));
-        }
-        if let Some(bounds)=soft_bounds {fields.insert("soft_bounds".into(),json!(bounds));}
-        match mapping {NumericMapping::Linear=>{},NumericMapping::Log=>{fields.insert("mapping".into(),json!({"type":"log"}));},
-            NumericMapping::Power {exponent}=>{fields.insert("mapping".into(),json!({"type":"power","exponent":exponent}));}}
         if *opaque {fields.insert("opaque".into(),json!(true));}
         encode_dimension(&mut fields,dimension);
         parameters.insert(key.to_string(),Value::Object(fields));
     }
-    let mut data=json!({"key":id,"contract":"capy.filter/1","abi":abi,"label":encode_label(label),
+    let mut data=json!({"key":id,"contract":"capy.filter/1","label":encode_label(label),
         "kind":match kind {EffectKind::Adjustment=>"adjustment",EffectKind::Generator=>"generator"},
         "code":encode_code(wgsl,writer)?,"entry":entry,"parameters":parameters,
         "slots":program_parameters.iter().map(|p| &p.key).collect::<Vec<_>>()});
     match alpha {EffectAlpha::Preserve=>{},EffectAlpha::Filter=>{data["alpha"]=json!("filter");}}
     match space {EffectSpace::Linear=>{},EffectSpace::Blending=>{data["space"]=json!("blending");}}
-    match resolution {EffectResolution::Native=>{},EffectResolution::Display=>{data["resolution"]=json!("display");}}
     if *time {data["time"]=json!(true);}
-    if let Some(key)=constant_color {data["constant_color"]=json!(key);}
     if !passes.is_empty() {data["passes"]=Value::Array(passes.iter().map(|pass| {let EffectPass {entry,sampling}=pass;json!({"entry":entry,"sampling":match sampling {
         EffectSampling::Neighborhood {radius}=>json!({"kind":"neighborhood","radius":radius}),
         EffectSampling::Parameter {key,scale,padding}=>json!({"kind":"parameter","key":key,"scale":scale,"padding":padding}),
@@ -219,20 +206,9 @@ pub fn encode_definition(definition: &Definition, writer: &mut impl ResourceWrit
     if let Some(auxiliary)=auxiliary {data["auxiliary"]=match auxiliary {
         EffectAuxiliary::Lut3d {resource,color_space}=>json!({"kind":"lut3d","resource":resource,"color_space":color_space}),
         EffectAuxiliary::Analysis {analysis}=>json!({"kind":"analysis","analysis":match analysis {EffectAnalysisKind::LocalIllumination=>"local_illumination",EffectAnalysisKind::Dehaze=>"dehaze"}})};}
-    if !pages.is_empty() {data["pages"]=json!(pages.iter().map(|page|{let EffectPage {id,label}=page;json!({"id":id,"label":encode_label(label)})}).collect::<Vec<_>>());}
     if !constraints.is_empty() {data["constraints"]=json!(constraints.iter().map(|constraint|match constraint {
         EffectConstraint::OrderedNumbers {lower,upper,gap}=>json!({"kind":"ordered_numbers","lower":lower,"upper":upper,"gap":gap})}).collect::<Vec<_>>());}
     Ok(data)
-}
-fn decode_mapping(value: &Value) -> DecodeResult<NumericMapping> {
-    let fields=value.as_object().ok_or("Expected mapping object")?;
-    Ok(match string(required(fields,"type")?)? {
-        "linear"=>{object(value,&["type"])?;NumericMapping::Linear},
-        "log"=>{object(value,&["type"])?;NumericMapping::Log},
-        "power"=>{object(value,&["type","exponent"])?;
-            NumericMapping::Power {exponent:required(fields,"exponent")?.as_f64().filter(|v|v.is_finite()).ok_or("Invalid exponent")?}},
-        _=>return Err(unsupported("mapping")),
-    })
 }
 fn decode_sampling(value: &Value) -> DecodeResult<EffectSampling> {
     let fields=value.as_object().ok_or("Expected sampling object")?;
@@ -268,41 +244,22 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
         let builtin=crate::bundled_effect_catalog().get(id).ok_or_else(||unsupported("built-in ID"))?;
         return Ok(Definition {program:builtin.program()});
     }
-    let fields=object(value,&["key","contract","abi","label","kind","constant_color","code","entry","parameters","slots","alpha","space",
-        "resolution","time","passes","lookups","auxiliary","pages","constraints"])?;
+    let fields=object(value,&["key","contract","label","kind","code","entry","parameters","slots","alpha","space",
+        "time","passes","lookups","auxiliary","constraints"])?;
     if string(required(fields,"contract")?)? != "capy.filter/1" {return Err(unsupported("evaluation contract"));}
     if crate::bundled_effect_catalog().get(string(required(fields,"key")?)?).is_some() { return Err("Reserved built-in filter ID".into()); }
-    let abi=u32_value(required(fields,"abi")?)?;
-    if abi!=EFFECT_ABI {return Err(unsupported("shader ABI"));}
     let parameter_records=required(fields,"parameters")?.as_object().ok_or("Expected keyed parameters")?;
     if parameter_records.len()>64 {return Err("Too many effect parameters".into());}
     let slots=bounded(required(fields,"slots")?,64)?.iter().map(text).collect::<DecodeResult<Vec<_>>>()?;
     if slots.len()!=parameter_records.len() || slots.iter().collect::<BTreeSet<_>>().len()!=slots.len()
         || slots.iter().any(|key|!parameter_records.contains_key(key.as_ref())) {return Err("Invalid effect ABI slots".into());}
-    let mut kinds=BTreeMap::new();
-    for key in &slots {
-        let record=object(&parameter_records[key.as_ref()],&["kind","default","label","section","page","visible_when","soft_bounds","mapping","dimension","reference","opaque"])?;
-        kinds.insert(key.clone(),decode_kind(required(record,"kind")?)?);
-    }
     let mut parameters=Vec::new();
     for key in slots {
-        let record=parameter_records[key.as_ref()].as_object().unwrap();
-        let kind=kinds[&key].clone();
+        let record=object(&parameter_records[key.as_ref()],&["kind","default","label","dimension","reference","opaque"])?;
+        let kind=decode_kind(required(record,"kind")?)?;
         let default=decode_value(required(record,"default")?,&kind,reader)?;
-        let visible_when=record.get("visible_when").map(|value| {
-            let fields=object(value,&["key","value"])?;
-            let key=text(required(fields,"key")?)?;
-            let kind=kinds.get(&key).ok_or("Unknown visibility parameter")?;
-            Ok::<_,DecodeError>(EffectVisibility {key,value:decode_value(required(fields,"value")?,kind,reader)?})
-        }).transpose()?;
-        let soft_bounds=record.get("soft_bounds").map(|v| {
-            let pair=array(v,2)?;
-            let number=|v:&Value| v.as_f64().filter(|v|v.is_finite()).ok_or_else(||DecodeError::Invalid("Invalid soft bound".into()));
-            Ok::<_,DecodeError>([number(&pair[0])?,number(&pair[1])?])
-        }).transpose()?;
         parameters.push(EffectParameter {dimension:decode_dimension(record)?,opaque:record.get("opaque").map(boolean).transpose()?.unwrap_or(false),key,label:label(required(record,"label")?)?,
-            section:record.get("section").map(label).transpose()?,page:record.get("page").map(text).transpose()?,visible_when,soft_bounds,
-            mapping:record.get("mapping").map(decode_mapping).transpose()?.unwrap_or_default(),kind,default});
+            section:None,page:None,visible_when:None,soft_bounds:None,mapping:NumericMapping::Linear,kind,default});
     }
     let passes=list(fields,"passes",8)?.iter().map(|v| {
         let fields=object(v,&["entry","sampling"])?;
@@ -315,10 +272,6 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
             values:u32_value(required(fields,"values")?)?,workgroup_size:triple(required(fields,"workgroup_size")?)?,
             workgroups:triple(required(fields,"workgroups")?)?})
     }).collect::<DecodeResult<Vec<_>>>()?;
-    let pages=list(fields,"pages",16)?.iter().map(|v| {
-        let fields=object(v,&["id","label"])?;
-        Ok(EffectPage {id:text(required(fields,"id")?)?,label:label(required(fields,"label")?)?})
-    }).collect::<DecodeResult<Vec<_>>>()?;
     let constraints=list(fields,"constraints",128)?.iter().map(|v| {
         let fields=v.as_object().ok_or("Expected constraint object")?;
         if string(required(fields,"kind")?)?!="ordered_numbers" {return Err(unsupported("constraint"));}
@@ -328,12 +281,11 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
     let kind=match string(required(fields,"kind")?)? {"adjustment"=>EffectKind::Adjustment,"generator"=>EffectKind::Generator,_=>return Err(unsupported("kind"))};
     let alpha=match fields.get("alpha").map(string).transpose()?.unwrap_or("preserve") {"preserve"=>EffectAlpha::Preserve,"filter"=>EffectAlpha::Filter,_=>return Err(unsupported("alpha"))};
     let space=match fields.get("space").map(string).transpose()?.unwrap_or("linear") {"linear"=>EffectSpace::Linear,"blending"=>EffectSpace::Blending,_=>return Err(unsupported("space"))};
-    let resolution=match fields.get("resolution").map(string).transpose()?.unwrap_or("native") {"native"=>EffectResolution::Native,"display"=>EffectResolution::Display,_=>return Err(unsupported("resolution"))};
-    let program=Arc::new(EffectProgram {abi,id:text(required(fields,"key")?)?,label:label(required(fields,"label")?)?,kind,alpha,space,resolution,
+    let program=Arc::new(EffectProgram {abi:EFFECT_ABI,id:text(required(fields,"key")?)?,label:label(required(fields,"label")?)?,kind,alpha,space,resolution:EffectResolution::Native,
         wgsl:decode_code(required(fields,"code")?,reader)?,entry:text(required(fields,"entry")?)?,passes:passes.into(),
         time:fields.get("time").map(boolean).transpose()?.unwrap_or(false),lookups:lookups.into(),
-        constant_color:fields.get("constant_color").map(text).transpose()?,
-        auxiliary:fields.get("auxiliary").map(decode_auxiliary).transpose()?,pages:pages.into(),parameters:parameters.into(),constraints:constraints.into()});
+        constant_color:None,
+        auxiliary:fields.get("auxiliary").map(decode_auxiliary).transpose()?,pages:Arc::default(),parameters:parameters.into(),constraints:constraints.into()});
     EffectInstance::new(program.clone()).validate()?;
     Ok(Definition {program})
 }
@@ -361,6 +313,7 @@ pub fn decode_values(program: &Arc<EffectProgram>, value: &Value, reader: &mut i
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     #[derive(Default)]
     struct Resources { code: BTreeMap<String,Resource<str>>, luts: BTreeMap<String,Arc<Lut3d>> }
     impl ResourceWriter for Resources {
@@ -384,6 +337,49 @@ mod tests {
     }
     fn fixture() -> Definition {
         Definition {program:crate::effect_catalog::custom_program("exposure")}
+    }
+    #[test]
+    fn builtin_data_contracts_and_shader_parameter_order_are_fixed() {
+        assert_eq!(EFFECT_ABI,5);
+        let mut actual=Map::new();
+        for filter in crate::bundled_effect_catalog().filters() {
+            let program=filter.program();
+            let parameters:Vec<_>=program.parameters.iter().map(|p| {
+                let kind=if let EffectParameterKind::Choice {options}=&p.kind {
+                    let choices:BTreeSet<_>=options.iter().map(EffectOption::value).collect();
+                    json!({"kind":"choice","options":choices})
+                } else {encode_kind(&p.kind)};
+                json!({"key":p.key,"kind":kind,"dimension":p.dimension,"opaque":p.opaque})
+            }).collect();
+            actual.insert(filter.id().into(),json!({"version":builtin_version(filter.id()),"kind":program.kind,
+                "time":program.time,"parameters":parameters,"constraints":program.constraints}));
+        }
+        let expected:Value=serde_json::from_str(include_str!("codec/fixtures/builtin-contracts.json")).unwrap();
+        assert_eq!(Value::Object(actual),expected);
+    }
+    #[test]
+    fn saved_builtin_choices_keep_shader_meaning_when_controls_move_or_change_labels() {
+        for (id,key,slot,choices) in [("curves","domain",261,&["Encoded RGB","Log HDR"][..]),
+            ("selective_color","mode",37,&["Relative","Absolute"][..]),
+            ("gradient_fill","style",66,&["Linear","Radial","Reflected"][..])] {
+            let original=crate::bundled_effect_catalog().get(id).unwrap().program();
+            let mut program=original.clone();
+            let parameter=Arc::make_mut(&mut Arc::make_mut(&mut program).parameters).iter_mut().find(|p|p.key.as_ref()==key).unwrap();
+            let EffectParameterKind::Choice {options}=&mut parameter.kind else {panic!()};
+            Arc::make_mut(options).reverse();
+            for option in Arc::make_mut(options) {*option=EffectOption::Labeled {value:option.value().into(),label:"Renamed choice".into()};}
+            for (code,choice) in choices.iter().enumerate() {
+                let mut saved=encode_values(&original,&EffectInstance::new(original.clone()).values,&mut Resources::default()).unwrap();
+                saved[key]=json!({"kind":"choice","value":choice});
+                let values=decode_values(&program,&saved,&mut Resources::default()).unwrap();
+                let view=EffectView::new(&program,&values);
+                assert_eq!(view.choice(key),Some(*choice));
+                assert_eq!(view.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap()[slot][0],code as f32);
+                let mut inserted=EffectInstance::new(program.clone());
+                inserted.set_choice(key,choice).unwrap();
+                assert_eq!(inserted.choice(key),Some(*choice));
+            }
+        }
     }
     #[test]
     fn builtins_save_only_identity_and_all_authored_values() {
@@ -426,6 +422,15 @@ mod tests {
             let mut resources=Resources::default();
             let encoded=encode_definition(&definition,&mut resources).unwrap();
             let decoded=decode_definition(&encoded,&mut resources).unwrap();
+            for field in ["abi","pages","resolution","constant_color"] {assert!(encoded.get(field).is_none());}
+            for parameter in encoded["parameters"].as_object().unwrap().values() {
+                for field in ["section","page","visible_when","soft_bounds","mapping"] {assert!(parameter.get(field).is_none());}
+                for field in ["step","decimals"] {assert!(parameter["kind"].get(field).is_none());}
+            }
+            let original=EffectInstance::new(definition.program.clone());
+            let restored=EffectInstance::new(decoded.program.clone());
+            assert_eq!(restored.values,original.values);
+            assert_eq!(restored.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap(),original.gpu_parameters(crate::color::RgbSpace::Srgb).unwrap());
             assert_eq!(encode_definition(&decoded,&mut resources).unwrap(),encoded);
             for (source,loaded) in definition.program.wgsl.sources().unwrap().iter().zip(decoded.program.wgsl.sources().unwrap()) {
                 assert!(source.same_owner(loaded));
@@ -505,7 +510,8 @@ mod tests {
             Arc::make_mut(&mut Arc::make_mut(&mut definition.program).parameters)[0].dimension=dimension;
             let encoded=encode_definition(&definition,&mut resources).unwrap();
             let decoded=decode_definition(&encoded,&mut resources).unwrap();
-            assert_eq!(decoded.program.parameters,definition.program.parameters);
+            assert_eq!(decoded.program.parameters[0].dimension,dimension);
+            assert_eq!(encode_definition(&decoded,&mut resources).unwrap(),encoded);
             assert_eq!(decoded.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>(),definition.program.parameters.iter().map(|p|&p.key).collect::<Vec<_>>());
         }
     }

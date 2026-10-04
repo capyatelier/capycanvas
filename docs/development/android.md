@@ -98,6 +98,10 @@ and updates the manual save checkpoint rather than retiring the session.
 Activity teardown completes accepted restores and settles pending edits on the
 native owner without a presentation surface before its final checkpoint. Storage
 leases and the native editor stay alive until that work completes.
+Drawing replacement and tab switching await an accepted checkpoint before changing
+membership. Each checkpoint assigns storage owners from its captured tab list.
+`AndroidRasterTest#acceptedRecoveryCheckpointDrainsBeforeAdoption` holds native
+owner work while checking that an accepted checkpoint drains before replacement.
 
 Persisted provider permissions permit reopening saved destinations after process
 restart. Restore observes the saved destination on an I/O worker without opening

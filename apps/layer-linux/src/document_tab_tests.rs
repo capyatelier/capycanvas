@@ -779,16 +779,59 @@ fn native_session_restart_saved_origins() {
     let root=std::path::PathBuf::from(std::env::var_os("CAPY_RECOVERY_DIR").unwrap()).parent().unwrap().join("originals");
     std::fs::create_dir_all(&root).unwrap();
     let paths=[root.join("intact.capy"),root.join("missing.capy"),root.join("changed.capy")];
-    crate::open_workspace(&app,&windows,Some((new_drawing(128,96,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap(),None)));
+    let mut drawing=new_drawing(128,96,&layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    drawing.working.selection=Some(layer_core::Selection::polygon(vec![Point{x:8.,y:8.},Point{x:96.,y:8.},Point{x:96.,y:72.}]).unwrap());
+    crate::open_workspace(&app,&windows,Some((drawing,None)));
     until(||windows.borrow().first().is_some_and(|w|w.window.is_mapped()),"saved-origin window mapped");
     let w=windows.borrow()[0].clone();new_photo::ready(&w);apply_fixture_theme(&w);
+    let mut overlay_id=None;
+    let mut overlay_occurrence_id=None;
     for (i,path) in paths.iter().enumerate() {
         if i>0 {glib::MainContext::default().block_on(w.documents.open(&w,(new_drawing(128,96,&w.localization()).unwrap(),None))).unwrap();new_photo::ready(&w);}
         new_photo::invoke(&w,CommandId::AddLayer);
+        if i==0 {
+            new_photo::invoke(&w,CommandId::SaveSelectionLayer);
+            w.dispatch(UiAction::Layer {action:layer_ui::LayerAction::CancelRename});new_photo::ready(&w);
+        }
         crate::files::choose_next_save(path.clone());
         new_photo::invoke(&w,CommandId::SaveDocument);
         until(||state(&w).document_file.location.is_some()&&!state(&w).document_file.busy&&!w.servicing.get(),"saved origin acknowledged");
         assert!(!state(&w).document_file.modified,"{:?}",state(&w).host_error);
+        if i==0 {
+            let before=ui_session(&w).engine().document().clone();
+            let checkpoint=ui_session(&w).engine().checkpoint();
+            let occurrence=ui_session(&w).engine().document().working.occurrence.unwrap();
+            let layer_core::authored::SourceTarget::Selection(handle)=ui_session(&w).engine().document().scene().source_target(occurrence).unwrap() else {panic!("saved selection target")};
+            overlay_id=Some(before.artwork.selections.id(handle).unwrap());
+            overlay_occurrence_id=Some(before.artwork.occurrences.id(occurrence).unwrap());
+            w.window.maximize();until(||w.window.is_maximized(),"selection window maximized");
+            super::pointwise::configure_properties(&w);
+            until(||widgets(w.window.upcast_ref()).any(|widget|widget.widget_name()=="property-mask_opacity" && widget.is_mapped()),"saved-selection opacity control mapped");
+            let overlay_before=ui_session(&w).engine().backend().capture().unwrap().bytes;
+            let mut input=RemoteInput::new().timeout_secs(30);input.ready();
+            let control=super::pointwise::number(&w,"mask_opacity");super::histogram::scroll_to(control.upcast_ref());
+            input.click(screen_point(&find_css(control.upcast_ref(),"number-value").unwrap(),&w.window,[0.5,0.5]));
+            descendant::<gtk::Entry>(&control).unwrap().set_text("37");input.key(0xff0d);new_photo::ready(&w);
+            assert_ne!(ui_session(&w).engine().backend().capture().unwrap().bytes,overlay_before,"native canvas updates saved-selection overlay opacity");
+            w.customize(CustomizationAction::SetPanelVisible {panel:Panel::Layers,visible:true});
+            w.dispatch(UiAction::MovePanel {panel:Panel::Layers,target:DockTarget::Edge {edge:Edge::Left,outer:false},viewport:[w.window.width() as f32,800.]});new_photo::ready(&w);
+            let row=named::<gtk::Box>(w.layer_panel.root.upcast_ref(),&format!("art-layer-{}",layer_ui::occurrence_token(occurrence)));
+            let eye=row.first_child().unwrap();histogram::scroll_to(&eye);
+            until(||eye.is_mapped(),"saved-selection eye mapped");
+            input.click(screen_point(&eye,&w.window,[0.5,0.5]));new_photo::ready(&w);input.finish();
+            assert_eq!(ui_session(&w).engine().document().working.selection_overlays.visibility.get(&occurrence),Some(&false));
+            assert_eq!(ui_session(&w).engine().checkpoint(),checkpoint,"selection display edits preserve the authored checkpoint");
+            assert_eq!(ui_session(&w).engine().document().artwork,before.artwork);
+            assert_live_artwork_eq(ui_session(&w).engine().document(),&before);
+            assert!(!state(&w).document_file.modified,"overlay edits keep saved artwork clean");
+            assert_eq!(ui_session(&w).engine().document().working.selection_overlays.properties[&handle].opacity,0.37);
+            let (_,bytes)=super::pointwise::saved_artwork(&w);
+            let reopened=open_native_document(std::io::Cursor::new(bytes));
+            assert!(reopened.working.selection_overlays.properties.is_empty(),"portable artwork omits selection display properties");
+            assert!(reopened.working.selection_overlays.visibility.is_empty(),"portable artwork omits selection overlay visibility");
+            assert_eq!(reopened.artwork.selections.get(reopened.artwork.selections.resolve(overlay_id.unwrap()).unwrap()),before.artwork.selections.get(handle));
+            assert_eq!(reopened.artwork.occurrences.get(reopened.artwork.occurrences.resolve(overlay_occurrence_id.unwrap()).unwrap()),before.artwork.occurrences.get(occurrence));
+        }
     }
     switch(&w,1);w.window.close();
     until(||!w.window.is_visible()&&windows.borrow().is_empty(),"saved drawings quit without prompting");
@@ -802,6 +845,12 @@ fn native_session_restart_saved_origins() {
     assert_eq!(w.documents.len(),3);
     assert_eq!(w.documents.selected(),1);assert!(w.window.visible_dialog().is_none());
     assert!(!state(&w).document_file.modified);assert!(!state(&w).document_file.recovered);
+    let handle=ui_session(&w).engine().document().artwork.selections.resolve(overlay_id.unwrap()).unwrap();
+    assert_eq!(ui_session(&w).engine().document().working.selection_overlays.properties[&handle].opacity,0.37,"native restart restores private selection display properties");
+    let occurrence=ui_session(&w).engine().document().artwork.occurrences.resolve(overlay_occurrence_id.unwrap()).unwrap();
+    assert_eq!(ui_session(&w).engine().document().working.selection_overlays.visibility.get(&occurrence),Some(&false),"native restart restores private selection visibility");
+    assert!(ui_session(&w).engine().document().scene().occurrence(occurrence).unwrap().visible);
+    assert!(!state(&w).layers.iter().find(|layer|layer.id==layer_ui::occurrence_token(occurrence)).unwrap().visible);
     w.documents.select(&w,1,true);
     until(||w.documents.len()==2&&!w.documents.changing.get(),"intact saved original closes cleanly");
     assert!(w.window.visible_dialog().is_none());

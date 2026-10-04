@@ -434,7 +434,7 @@ fn photo_selection_roundtrips_shared_binary_coverage() {
     );
     let selection = Selection { affine: Affine([1., 0., 0., 1., 2., 3.]), inverted: true, ..Selection::pixels(pixels) };
     let saved =
-        artwork.selections.insert(identity(13), SavedSelection { selection: selection.clone(), display: Default::default() }).unwrap();
+        artwork.selections.insert(identity(13), SavedSelection { selection: selection.clone(),}).unwrap();
     let occurrence = artwork.occurrences.insert(identity(22), Occurrence::new(OccurrenceContent::Selection(saved), "Saved")).unwrap();
     let stack = artwork.compositions.get(artwork.root).unwrap().result;
     artwork.stacks.get_mut(stack).unwrap().entries.push(occurrence);

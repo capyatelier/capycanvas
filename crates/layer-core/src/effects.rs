@@ -599,7 +599,17 @@ impl<'a> EffectView<'a> {
                 EffectValue::Choice(v) => {
                     let code = if matches!(&self.program.auxiliary, Some(EffectAuxiliary::Lut3d {color_space,..}) if color_space == &parameter.key) {
                         RgbSpace::from_id(self.choice(&parameter.key).ok_or("Invalid color lookup color space")?).ok_or("Invalid color lookup color space")?.shader_code()
-                    } else { *v };
+                    } else {
+                        match (self.program.id.as_ref(), parameter.key.as_ref(), self.choice(&parameter.key)) {
+                            ("curves", "domain", Some("Encoded RGB")) | ("selective_color", "mode", Some("Relative"))
+                                | ("gradient_fill", "style", Some("Linear")) => 0,
+                            ("curves", "domain", Some("Log HDR")) | ("selective_color", "mode", Some("Absolute"))
+                                | ("gradient_fill", "style", Some("Radial")) => 1,
+                            ("gradient_fill", "style", Some("Reflected")) => 2,
+                            ("curves", "domain", _) | ("selective_color", "mode", _) | ("gradient_fill", "style", _) => return Err("Unknown built-in choice".into()),
+                            _ => *v,
+                        }
+                    };
                     data.push([code as f32, 0., 0., 0.]);
                 },
                 EffectValue::Color(v) => data.push(v.encoded_in(space)?),
@@ -622,11 +632,10 @@ impl<'a> EffectView<'a> {
     pub fn scaled_values(&self, factor: f32) -> Option<Vec<EffectValue>> {
         let mut values = self.values.to_vec();
         for (parameter, value) in self.program.parameters.iter().zip(&mut values) {
-            if let (EffectParameterKind::Number { min, max, decimals, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
+            if let (EffectParameterKind::Number { min, max, .. }, EffectValue::Number(v)) = (&parameter.kind, value)
                 && matches!(parameter.dimension, Dimension::SourcePixels | Dimension::CompositionPixels)
             {
-                let places = 10f32.powi(i32::from(*decimals));
-                *v = ((*v * factor * places).round() / places).clamp(*min, *max);
+                *v = (*v * factor).clamp(*min, *max);
             }
         }
         (values != self.values && EffectView::new(self.program, &values).validate().is_ok()).then_some(values)
@@ -659,6 +668,12 @@ impl EffectInstance {
                 .collect(),
             program,
         }
+    }
+    pub fn set_choice(&mut self, key: &str, choice: &str) -> Result<(), &'static str> {
+        let parameter=self.program.parameters.iter().find(|p|p.key.as_ref()==key).ok_or("Unknown effect parameter")?;
+        let EffectParameterKind::Choice {options}=&parameter.kind else {return Err("Expected a choice parameter");};
+        let index=options.iter().position(|option|option.value()==choice).ok_or("Unknown effect choice")?;
+        self.set(key,EffectValue::Choice(index as u32))
     }
     pub fn set(&mut self, key: &str, mut value: EffectValue) -> Result<(), &'static str> {
         let i = self
@@ -722,6 +737,7 @@ impl EffectParameter {
             return Err("Numeric presentation on nonnumeric effect parameter");
         }
         if self.opaque && self.kind != EffectParameterKind::Color { return Err("Opaque requires a color parameter"); }
+        if self.dimension == Dimension::Count && !matches!(self.kind, EffectParameterKind::Number {..}) { return Err("Count requires a number parameter"); }
         let valid = match (&self.kind, value) {
             (
                 EffectParameterKind::Number {
@@ -741,6 +757,7 @@ impl EffectParameter {
                     && *decimals <= 6
                     && v.is_finite()
                     && (*min..=*max).contains(v)
+                    && (self.dimension != Dimension::Count || [*min, *max, *v].into_iter().all(|v| v.fract() == 0.))
             }
             (EffectParameterKind::Toggle, EffectValue::Toggle(_)) => true,
             (EffectParameterKind::Choice { options }, EffectValue::Choice(v)) => {
@@ -989,6 +1006,28 @@ mod tests {
             preview.validate().unwrap();
             assert_eq!(original, EffectInstance::new(id.program()));
             assert!(!preview.animated());
+        }
+    }
+    #[test]
+    fn resizing_preserves_authored_precision_independently_of_numeric_presentation() {
+        for decimals in [0, 1, 2, 6] {
+            let mut effect=EffectInstance::new(fixture("gaussian_blur").program());
+            let parameters=Arc::make_mut(&mut Arc::make_mut(&mut effect.program).parameters);
+            let EffectParameterKind::Number {decimals:places,step,..}=&mut parameters[0].kind else {panic!()};
+            *places=decimals;*step=0.25;
+            effect.set("sigma",EffectValue::Number(1.25)).unwrap();
+            let scaled=effect.view().scaled_values(1.5).unwrap();
+            assert_eq!(scaled[0],EffectValue::Number(1.875));
+            assert_eq!(EffectView::new(&effect.program,&scaled).scaled_values(2./3.).unwrap(),effect.values);
+        }
+    }
+    #[test]
+    fn count_parameters_accept_only_whole_authored_values() {
+        for (id,key) in [("posterize","levels"),("kaleidoscope","segments")] {
+            let mut effect=EffectInstance::new(fixture(id).program());
+            effect.set(key,EffectValue::Number(7.)).unwrap();
+            for invalid in [7.25,7.5,f32::NAN] {assert!(effect.set(key,EffectValue::Number(invalid)).is_err());}
+            assert_eq!(effect.value(key),Some(&EffectValue::Number(7.)));
         }
     }
     #[test]

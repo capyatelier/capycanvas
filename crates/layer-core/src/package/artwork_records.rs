@@ -1,8 +1,8 @@
 use super::{effect_records, selection_records, manifest::Manifest, resources::{ResourceInventory, ResourceReader, reference, reference_id}, values::{self as v, DecodeError, DecodeResult}};
 use super::RASTER_TILE_SIZE as TILE_SIZE;
-use crate::{authored::*, color::{DocumentColor, RgbColor, hdr::SdrRendition, source::{SourceImage, SourceKind, SourceChannels, SourceInterpretation}},
+use crate::{authored::*, color::{DocumentColor, hdr::SdrRendition, source::{SourceImage, SourceKind, SourceChannels, SourceInterpretation}},
     raster::{RasterData, RasterRevision, RasterPlane, RasterWatercolor, TileKey},
-    BlendSpace, LayerBlend, LayerPlacement, Point, Rect, PhotoMetadata, SelectionMaskProperties, RulerGeometry};
+    BlendSpace, LayerBlend, LayerPlacement, Point, Rect, PhotoMetadata, RulerGeometry};
 use serde_json::{Map, Value, json};
 use std::{collections::{BTreeMap, BTreeSet}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 
@@ -188,12 +188,7 @@ pub(crate) fn encode_change(art:&Artwork,edit:&crate::Edit,resources:&mut Resour
         Ok(record(identity,"capy.effect/1",Value::Object(data)))
         },
         crate::Edit::SavedSelection(change)=>{let identity=change.id;let selection=change.value.as_ref().ok_or("Cannot encode removed record")?;
-            selection.display.validate().map_err(|e|e.to_string())?;
-        let mut data=selection_records::encode_selection(&selection.selection,resources)?.as_object().unwrap().clone();
-        let color=v::encode_rgb_color(selection.display.color)?;
-        if selection.display.color.space!=crate::color::RgbSpace::Srgb || selection.display.color.rgba.map(f32::to_bits)!=[1f32.to_bits(),0,0,1f32.to_bits()] || selection.display.color.linear_rgb.is_some() {data.insert("color".into(),color);}
-        set_float(&mut data,"opacity",selection.display.opacity,0.5)?;
-        Ok(record(identity,"capy.selection/1",Value::Object(data)))
+        Ok(record(identity,"capy.selection/1",selection_records::encode_selection(&selection.selection,resources)?))
         },
         crate::Edit::Guides(change)=>{let identity=change.id;let guides=change.value.as_ref().ok_or("Cannot encode removed record")?;
             Ok(record(identity,"capy.guides/1",encode_guides(guides)?))
@@ -318,10 +313,8 @@ pub(crate) fn decode_records_into(art:&mut Artwork,objects:&BTreeMap<PortableId,
             let default_coverage=float_field(data,"default_coverage",1.)?;if !(0. ..=1.).contains(&default_coverage) {return Err("Invalid default coverage".into());}
             art.coverage.install(art.coverage.allocated(*identity).unwrap(),CoverageSource {domain,raster,initial,default_coverage,operations:Arc::default()})?;},
         "capy.effect-definition/1"=> {let definition=effect_records::decode_definition(value,reader)?;art.definitions.install(art.definitions.allocated(*identity).unwrap(),definition)?;},
-        "capy.selection/1"=> {let data=fields(value,&["shape","affine","inverted","color","opacity"])?;let mut selection=data.clone();selection.remove("color");selection.remove("opacity");
-            let selection=selection_records::decode_selection(&Value::Object(selection),reader)?;
-            let display=SelectionMaskProperties {color:data.get("color").map(v::parse_rgb_color).transpose()?.unwrap_or(RgbColor {space:crate::color::RgbSpace::Srgb,rgba:[1.,0.,0.,1.],linear_rgb:None}),opacity:float_field(data,"opacity",0.5)?};
-            display.validate().map_err(|e|e.to_string())?;art.selections.install(art.selections.allocated(*identity).unwrap(),SavedSelection {selection,display})?;},
+        "capy.selection/1"=> {let selection=selection_records::decode_selection(value,reader)?;
+            art.selections.install(art.selections.allocated(*identity).unwrap(),SavedSelection {selection})?;},
         "capy.guides/1"=> {let guides=decode_guides(value)?;art.guides.install(art.guides.allocated(*identity).unwrap(),guides)?;}, _=>{}
     }}
     for (identity,kind,value) in &known {if *kind=="capy.effect/1" {
@@ -461,8 +454,8 @@ mod tests {
         let group=art.occurrences.insert(PortableId::random(),group).unwrap();
         let stack=art.compositions.get(art.root).unwrap().result;art.stacks.get_mut(stack).unwrap().entries.push(group);
         art.paint.insert(PortableId::random(),PaintSource {domain:[3,5],raster:RasterRevision::default(),original:None,operations:Arc::default()}).unwrap();
-        art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::full(),display:SelectionMaskProperties {color:RgbColor::new(crate::color::RgbSpace::DisplayP3,[0.5,0.3,0.1,0.7]).unwrap(),opacity:0.375}}).unwrap();
-        art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::empty(),display:SelectionMaskProperties {color:RgbColor::new(crate::color::RgbSpace::Srgb,[1.,-0.,0.,1.]).unwrap(),opacity:-0.}}).unwrap();
+        art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::full(),}).unwrap();
+        art.selections.insert(PortableId::random(),SavedSelection {selection:crate::Selection::empty(),}).unwrap();
         art.guides.insert(PortableId::random(),Guides {rulers:vec![(PortableId::random(),RulerGeometry::Parallel {start:Point {x:1.,y:2.},end:Point {x:3.,y:4.}})]}).unwrap();
         let program=crate::bundled_effect_catalog().filters()[0].program();let values=crate::EffectInstance::new(program.clone()).values;
         let definition=art.definitions.insert(PortableId::random(),Definition {program}).unwrap();

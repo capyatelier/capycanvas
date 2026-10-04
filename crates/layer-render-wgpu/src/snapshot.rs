@@ -548,7 +548,7 @@ impl SnapshotRenderer {
             },
             document_extent: self.extent,
             scene: view,
-            selection_visibility: None,
+            selection_overlays: None,
             inspect_mask: None,
             time_seconds: self.time,
             dabs: &[],

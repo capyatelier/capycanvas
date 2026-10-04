@@ -7,7 +7,7 @@ use layer_core::{Document, CoverageSnapshot, Selection, authored::*};
 
 fn packet(document: &Document, extent: [u32; 2]) -> FramePacket<'_> {
     FramePacket {
-        selection_visibility: Some(&document.working.selection_visibility),
+        selection_overlays: Some(&document.working.selection_overlays),
         inspect_mask: document.working.inspect_mask,
         view: ViewState { width_px: extent[0], height_px: extent[1], ..test_view() },
         ..crate::test_support::packet(document.scene(), extent)

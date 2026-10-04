@@ -190,7 +190,6 @@ resources-parameter-curves-domain = Ruang kurva
 
 resources-parameter-curves-hdr-stops = Rentang HDR
 
-resources-parameter-denoise-radius = Radius
 
 resources-parameter-denoise-strength = Kekuatan
 
@@ -198,7 +197,6 @@ resources-parameter-domain-warp-animate = Animasikan
 
 resources-parameter-domain-warp-distance = Distorsi
 
-resources-parameter-domain-warp-octaves = Detail
 
 resources-parameter-domain-warp-scale = Ukuran pola
 

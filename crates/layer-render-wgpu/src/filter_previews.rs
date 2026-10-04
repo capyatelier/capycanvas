@@ -811,7 +811,7 @@ impl Scene {
         let snapshot=source_snapshot(request)?;let scene=snapshot.view();
         let (parent,_)=source_scope(request.snapshot.view(),request.source).ok_or(GpuRasterError::InvalidExtent)?;
         self.jobs.clear();self.used.fill(false);
-        let packet=FramePacket{commit_rasters:true,time_seconds:snapshot.context.elapsed,view:request.view,document_extent:scene.composition().size,scene,selection_visibility:None,inspect_mask:None,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:false,composite_all:false,blend_space:scene.composition().blend};
+        let packet=FramePacket{commit_rasters:true,time_seconds:snapshot.context.elapsed,view:request.view,document_extent:scene.composition().size,scene,selection_overlays:None,inspect_mask:None,dabs:&[],dab_batches:&[],restore_rasters:&[],reset_layers:false,composite_all:false,blend_space:scene.composition().blend};
         let output=match request.source {
             FilterPreviewSource::LayerStack(_)=>scene::Output::Artwork(parent),
             FilterPreviewSource::EffectInput(target)=>scene::Output::EffectInput(target),

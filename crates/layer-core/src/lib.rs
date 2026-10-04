@@ -482,10 +482,13 @@ pub enum BrushGrainBehavior {
 #[repr(u8)]
 pub enum ColorMixSpace {
     #[default]
-    LinearRgb,
-    Oklab,
+    #[serde(rename = "LinearRgb")]
+    LinearRgb = 0,
+    #[serde(rename = "Oklab")]
+    Oklab = 1,
     /// Encoded values under the document's transfer curve, as Clip Studio Paint mixes.
-    Classic,
+    #[serde(rename = "Classic")]
+    Classic = 2,
 }
 
 impl ColorMixSpace {
@@ -1522,7 +1525,7 @@ impl Document {
     pub fn effective_visibility(&self,id:OccurrenceHandle)->bool {
         let Some(occurrence)=self.artwork.occurrences.get(id)else{return false;};
         if matches!(occurrence.content,OccurrenceContent::Selection(_)) {
-            self.working.selection_visibility.get(&id).copied().unwrap_or(occurrence.visible)
+            self.working.selection_overlays.visibility.get(&id).copied().unwrap_or(occurrence.visible)
         }else{occurrence.visible}
     }
     fn repair_working(&mut self) -> Result<(), DocumentError> {
@@ -1568,7 +1571,9 @@ impl Document {
         if let Some(visibility) = &mut self.working.solo_visibility {
             visibility.retain(|h, _| self.artwork.occurrences.get(*h).is_some());
         }
-        self.working.selection_visibility.retain(|h,_|self.artwork.occurrences.get(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Selection(_))));
+        self.working.selection_overlays.visibility.retain(|h,_|self.artwork.occurrences.get(*h).is_some_and(|o|matches!(o.content,OccurrenceContent::Selection(_))));
+        self.working.selection_overlays.properties.retain(|h,_|self.artwork.selections.get(*h).is_some());
+        for properties in self.working.selection_overlays.properties.values() { properties.validate()?; }
         Ok(())
     }
     fn validate_payloads(&self) -> Result<(), DocumentError> {
@@ -1658,7 +1663,8 @@ impl Document {
             if o.isolated_blend==LayerBlend::PassThrough {return Err(invalid("The retained isolated blend cannot be Pass Through"));}
             if o.passes_through() && (o.attachment!=Attachment::None || !self.scene().attached_effects(h).is_empty() || self.scene().order().iter().any(|other|self.scene().clipping_base(*other)==Some(h))) {return Err(invalid("Release attachments before switching to Pass Through"));}
             if let OccurrenceContent::Selection(_) = o.content
-                && (o.mask.is_some() || o.attachment != Attachment::None || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.)
+                && (o.mask.is_some() || o.attachment != Attachment::None || o.alpha_locked || o.blend != LayerBlend::Normal || o.opacity != 1.
+                    || !o.visible || o.reference || o.isolated_blend != LayerBlend::Normal)
             {
                 return Err(invalid("Selection Layers cannot contain artwork"));
             }
@@ -1697,7 +1703,6 @@ impl Document {
         }
         for (_, _, s) in self.artwork.selections.iter() {
             s.selection.validate()?;
-            s.display.validate()?;
         }
         crate::rulers::validate_rulers(&self.rulers().collect::<Vec<_>>())?;
         for (_, _, o) in self.artwork.outputs.iter() {
@@ -2093,7 +2098,7 @@ fn edit_metadata(edit: &Edit) -> usize {
             .iter()
             .map(edit_metadata)
             .fold(0usize, usize::saturating_add),
-        Edit::Working(w)=>w.selection_visibility.len().saturating_add(w.layer_selection.len()).saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64),
+        Edit::Working(w)=>w.selection_overlays.metadata_bytes().saturating_add(w.layer_selection.len().saturating_add(w.solo_visibility.as_ref().map_or(0, |v| v.len())).saturating_mul(64)),
         Edit::Stack(c) => c.value.as_ref().map_or(0, |s| {
             s.entries.len() * std::mem::size_of::<OccurrenceHandle>()
         }),
@@ -2759,8 +2764,8 @@ mod tests {
     #[test]
     fn saved_selection_navigation_keeps_authored_visibility_and_restores_working_overrides() {
         let mut d=document([64;2]);let paint=d.working.occurrence.unwrap();
-        let saved=RecordChange::insert(&d.artwork.selections,SavedSelection {selection:Selection::full(),display:Default::default()});
-        let mut value=Occurrence::new(OccurrenceContent::Selection(saved.handle),"Saved coverage");value.visible=false;
+        let saved=RecordChange::insert(&d.artwork.selections,SavedSelection {selection:Selection::full(),});
+        let value=Occurrence::new(OccurrenceContent::Selection(saved.handle),"Saved coverage");
         let occurrence=RecordChange::insert(&d.artwork.occurrences,value);let handle=occurrence.handle;
         let stack=d.composition().result;let mut membership=d.artwork.stacks.get(stack).unwrap().clone();membership.entries.insert(0,handle);
         let membership=RecordChange::replace(&d.artwork.stacks,stack,Some(membership)).unwrap();
@@ -2769,17 +2774,17 @@ mod tests {
         let authored=editor.document().artwork.clone();let checkpoint=editor.checkpoint();
         editor.perform(editor.document().select_occurrence_edit(handle).unwrap()).unwrap();
         assert!(editor.document().effective_visibility(handle));
-        assert!(!editor.document().artwork.occurrences.get(handle).unwrap().visible);
+        assert!(editor.document().artwork.occurrences.get(handle).unwrap().visible);
         assert_eq!(editor.document().artwork,authored);assert_eq!(editor.checkpoint(),checkpoint);assert!(editor.can_redo());assert!(!editor.can_undo());
         assert_eq!(*editor.capture(0,EvaluationContext::default()).unwrap().artwork,authored);
-        let mut working=editor.document().working.clone();working.selection_visibility.insert(paint,false);
-        editor.perform(Edit::Working(working)).unwrap();assert!(!editor.document().working.selection_visibility.contains_key(&paint));
+        let mut working=editor.document().working.clone();working.selection_overlays.visibility.insert(paint,false);
+        editor.perform(Edit::Working(working)).unwrap();assert!(!editor.document().working.selection_overlays.visibility.contains_key(&paint));
         editor.perform(editor.document().select_occurrence_edit(paint).unwrap()).unwrap();
         assert!(!editor.document().effective_visibility(handle));assert_eq!(editor.document().artwork,authored);assert_eq!(editor.checkpoint(),checkpoint);assert!(editor.can_redo());
         editor.perform(editor.document().delete_layers_edit(&[handle]).unwrap()).unwrap();
-        assert!(!editor.document().working.selection_visibility.contains_key(&handle));
+        assert!(!editor.document().working.selection_overlays.visibility.contains_key(&handle));
         editor.undo().unwrap();
-        assert_eq!(editor.document().working.selection_visibility.get(&handle),Some(&false));
+        assert_eq!(editor.document().working.selection_overlays.visibility.get(&handle),Some(&false));
         assert_eq!(editor.document().artwork,authored);
     }
     #[test]

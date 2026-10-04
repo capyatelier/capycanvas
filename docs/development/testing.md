@@ -42,6 +42,17 @@ Use `session::test_support` for `layer-ui`'s Recorder fixtures, action dispatch,
 pointer records, selections and document-space pen input. Platform changes belong
 in that test fixture module; production sessions keep the host's platform.
 
+Artwork and filter changes run core `package::effect_records`, `package::codec`
+and `package::session` tests. The fixed
+[`builtin-contracts.json`](../../crates/layer-core/src/package/codec/fixtures/builtin-contracts.json)
+snapshot checks semantic types, choice IDs, units, dimensions, hard bounds,
+constraints and shader parameter order. The fixed
+[`authored-filters.capy`](../../crates/layer-core/src/package/codec/fixtures/authored-filters.capy)
+checks all built-ins alongside exact raster, watercolor, LUT and SDR values.
+Keep resize precision, whole-count controls, choice reordering and private
+selection-overlay recovery assertions. Replace superseded pre-release fixtures
+without conversion readers; retain the pixel and authored-value checks.
+
 Photo writer tests use `photo::test_support::assert_provider_failure` for row
 cancellation. Keep each codec's admission, publication and pixel assertions.
 

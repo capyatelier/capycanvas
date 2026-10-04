@@ -3833,6 +3833,7 @@ fn native_adjustment_panels_review() {
     use layer_ui::EffectAction;
     let app = native_test_app("art.capycanvas.AdjustmentReview");
     let w = fixture_workspace(&app);
+    w.window.maximize();
     w.window.present();
     pump(900);
     let show_adjustments = || {
@@ -3854,6 +3855,7 @@ fn native_adjustment_panels_review() {
     w.dispatch(UiAction::SetTheme {
         theme: Some(Theme::Dark),
     });
+    apply_fixture_theme(&w);
     let study = layer_core::color::source::rgba8_source([512, 512], |x, y| {
         let (x, y) = (x as f32 / 511., y as f32 / 511.);
         [
@@ -3906,7 +3908,9 @@ fn native_adjustment_panels_review() {
         pump(80);
         named::<gtk::Button>(w.effects.adjustments.upcast_ref(), &format!("adjustment-{}", kind.id()))
         .emit_clicked();
-        pump(180);
+        new_photo::ready(&w);
+        let updating=w.localization().text(layer_ui::localization::MessageId::RESOURCES_ANALYSIS_UPDATING);
+        until(||state(&w).layer_properties.description!=updating.as_ref(),"adjustment source analysis completed");
         assert!(!w.status.is_visible(), "{}", w.status.text());
         assert!(w.effects.properties.is_mapped());
         let s = state(&w);
@@ -3920,24 +3924,12 @@ fn native_adjustment_panels_review() {
         };
         assert_eq!(s.layer_properties.description, expected.as_ref());
         if kind.id() == "color_balance" {
-            let mut headings = Vec::new();
-            let mut child = w.effects.properties.last_child().unwrap().first_child();
-            while let Some(widget) = child {
-                if widget.has_css_class("property-section") {
-                    headings.push(
-                        widget
-                            .downcast_ref::<gtk::Label>()
-                            .unwrap()
-                            .text()
-                            .to_string(),
-                    );
-                }
-                child = widget.next_sibling();
-            }
-            assert_eq!(headings, ["Shadows", "Midtones", "Highlights"]);
+            let pages=named::<gtk::DropDown>(w.effects.properties.upcast_ref(),"properties-page");
+            let model=pages.model().unwrap();
+            assert_eq!((0..model.n_items()).map(|i|model.item(i).unwrap().downcast::<gtk::StringObject>().unwrap().string().to_string()).collect::<Vec<_>>(),["Shadows","Midtones","Highlights"]);
         }
         let program = kind.program();
-        let (key, value) = match kind.id() {
+        let edit = (!program.parameters.is_empty()).then(|| match kind.id() {
             "curves" => (
                 "curve_0",
                 EffectValue::Curve(vec![[0., 0.], [0.4, 0.65], [1., 1.]]),
@@ -3981,21 +3973,21 @@ fn native_adjustment_panels_review() {
                 else {
                     unreachable!()
                 };
-                (
-                    parameter.key.as_ref(),
-                    EffectValue::Number(min + (max - min) * 0.3),
-                )
+                let value=min+(max-min)*0.3;
+                (parameter.key.as_ref(),EffectValue::Number(if parameter.dimension==layer_core::authored::Dimension::Count {value.round()} else {value}))
             }
-        };
-        w.dispatch(UiAction::Effect {
-            action: EffectAction::Set {
-                layer: id,
-                key: key.into(),
-                value,
-            },
         });
-        pump(200);
-        assert!(!w.status.is_visible(), "{}", w.status.text());
+        if let Some((key,value))=edit {
+            w.dispatch(UiAction::Effect {
+                action: EffectAction::Set {
+                    layer: id,
+                    key: key.into(),
+                    value,
+                },
+            });
+            pump(200);
+            assert!(!w.status.is_visible(), "{}", w.status.text());
+        }
         if kind.id() == "levels" {
             for (key, label) in [("clamp_input", "Clamp input"), ("clamp_output", "Clamp output")] {
                 let mut child = w.effects.properties.last_child().unwrap().first_child();
@@ -4028,6 +4020,7 @@ fn native_adjustment_panels_review() {
         }
         if kind.id() == "gradient_map" {
             let bar = find_named(w.effects.properties.upcast_ref(), "effect-gradient").unwrap();
+            histogram::scroll_to(&bar);
             let mut input=RemoteInput::new().timeout_secs(30);input.ready();
             input.click(screen_point(&bar,&w.window,[0.3,0.5]));input.finish();
             pump(80);

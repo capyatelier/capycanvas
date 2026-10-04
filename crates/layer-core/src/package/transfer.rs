@@ -329,7 +329,7 @@ impl TransferReceiver {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Document, Editor, Selection, SelectionShape, SelectionMaskProperties, EffectInstance, EffectValue};
+    use crate::{Document, Editor, Selection, SelectionShape, EffectInstance, EffectValue};
     use super::super::codec::{PreparedPackage, OpenOutcome};
     fn capture()->ArtworkCapture {
         let mut document=Document::new(PortableId::random(),19,11,crate::DocumentNames{paint:"ink".into(),paper:"paper".into()});
@@ -446,7 +446,7 @@ mod tests {
         assert_eq!(pixels.transfer_chunk_ids(),transient.transfer_chunk_ids());
         assert!(transient.transfer_chunks().is_none(),"main adoption must retain decoded words without compression");
         let mut artwork=restored.artwork.as_ref().clone();
-        let saved=artwork.selections.insert(PortableId::random(),SavedSelection{selection:Selection::pixels(transient.clone()),display:SelectionMaskProperties::default()}).unwrap();
+        let saved=artwork.selections.insert(PortableId::random(),SavedSelection{selection:Selection::pixels(transient.clone()),}).unwrap();
         let occurrence=artwork.occurrences.insert(PortableId::random(),Occurrence::new(OccurrenceContent::Selection(saved),"saved")).unwrap();
         let stack=artwork.compositions.get(artwork.root).unwrap().result;artwork.stacks.get_mut(stack).unwrap().entries.insert(0,occurrence);
         let saved_capture=artwork.capture(restored.checkpoint).unwrap();

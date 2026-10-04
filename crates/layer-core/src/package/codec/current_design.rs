@@ -19,7 +19,7 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
         builtin_ids.insert(builtin.id());
         assert!(Arc::ptr_eq(&definition.program,&builtin.program()));
         let record=manifest["objects"].as_array().unwrap().iter().find(|r|r["id"]==json!(id)).unwrap();
-        assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":if matches!(builtin.id(),"gradient_map"|"gradient_fill"){2}else{1}}));
+        assert_eq!(record["data"],json!({"builtin":builtin.id(),"version":if matches!(builtin.id(),"gradient_map"|"gradient_fill"|"denoise"|"domain_warp"|"posterize"|"kaleidoscope"){2}else{1}}));
     }
     assert_eq!(builtin_ids.len(),52);
     for (_,id,application) in artwork.effects.iter() {
@@ -56,12 +56,13 @@ fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls(
 
 #[test]
 fn saved_numeric_bounds_remain_accepted_independently_of_slider_ranges() {
-    let bounds:Value=serde_json::from_str(include_str!("fixtures/parameter-bounds.json")).unwrap();
-    for (id,parameters) in bounds.as_object().unwrap() {
+    let contracts:Value=serde_json::from_str(include_str!("fixtures/builtin-contracts.json")).unwrap();
+    for (id,contract) in contracts.as_object().unwrap() {
         let builtin=crate::bundled_effect_catalog().get(id).unwrap();
-        for (key,range) in parameters.as_object().unwrap() {
-            let parameter=builtin.program.parameters.iter().find(|p|p.key.as_ref()==key).unwrap();
-            for number in range.as_array().unwrap() {parameter.validate(&EffectValue::Number(number.as_f64().unwrap() as f32)).unwrap();}
+        for saved in contract["parameters"].as_array().unwrap() {
+            if saved["kind"]["kind"]!="number" {continue;}
+            let parameter=builtin.program.parameters.iter().find(|p|p.key.as_ref()==saved["key"].as_str().unwrap()).unwrap();
+            for bound in ["min","max"] {parameter.validate(&EffectValue::Number(saved["kind"][bound].as_f64().unwrap() as f32)).unwrap();}
         }
     }
     assert_eq!(crate::package::RASTER_TILE_SIZE,256);
