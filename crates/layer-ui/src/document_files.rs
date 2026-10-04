@@ -117,6 +117,7 @@ pub struct DocumentFileState {
     pub epoch: u64,
     pub revision: u64,
     pub location: Option<DocumentLocation>,
+    pub export_uri: Option<String>,
     /// Suggested master name for an opened photo; never a save destination.
     pub unsaved_name: Option<String>,
     pub modified: bool,
@@ -131,7 +132,7 @@ impl Default for DocumentFileState {
 }
 impl DocumentFileState {
     pub fn localized(localization: &Localizer) -> Self {
-        Self { epoch: 0, revision: 0, location: None, unsaved_name: None, modified: false,
+        Self { epoch: 0, revision: 0, location: None, export_uri: None, unsaved_name: None, modified: false,
             busy: false, close_ready: false, untitled: localization.text(MessageId::DOCUMENTS_UNTITLED) }
     }
     pub fn set_localization(&mut self, localization: &Localizer) {
@@ -152,6 +153,12 @@ pub enum DocumentColorOperation { Assign, Convert, Depth }
 
 #[derive(Clone, Debug, Serialize)]
 pub struct LookupTarget {pub document: PortableId, pub activation:u64, pub layer:u64, pub epoch:u64, pub key:String}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExportRepeat {
+    pub recipe: ExportRecipe,
+    pub location: DocumentLocation,
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
@@ -175,6 +182,9 @@ pub enum DocumentRequest {
     },
     Export {
         name: String,
+        owner: u64,
+        epoch: u64,
+        repeat: Option<ExportRepeat>,
     },
     ConfirmClose {
         title: String,
@@ -310,6 +320,8 @@ pub(super) struct DocumentFiles {
     pending_copy: Option<DocumentRequestCopy>,
     pub(super) cut: Option<clipboard::PendingCut>,
     host_error_copy: Option<DocumentHostErrorCopy>,
+    pub(super) last_export: Option<ExportRepeat>,
+    pending_export: Option<(u64, u64, ExportRepeat)>,
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
@@ -351,7 +363,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         if let Some(request) = self.state.requests.iter_mut().find(|request| request.id == *id) {
             match &mut request.kind {
-                HostRequestKind::Document { request: DocumentRequest::Save { name, .. } | DocumentRequest::Export { name } } => *name = text,
+                HostRequestKind::Document { request: DocumentRequest::Save { name, .. } | DocumentRequest::Export { name, .. } } => *name = text,
                 HostRequestKind::Document { request: DocumentRequest::ConfirmClose { title } } => *title = text,
                 _ => {},
             }
@@ -458,7 +470,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let pending_copy = if self.state.document_file.location.is_none() && self.state.document_file.unsaved_name.is_none() {
             match &request {
                 DocumentRequest::Save { .. } => Some(DocumentRequestCopy::Filename("capy")),
-                DocumentRequest::Export { .. } => Some(DocumentRequestCopy::Filename("png")),
+                DocumentRequest::Export { repeat: None, .. } => Some(DocumentRequestCopy::Filename("png")),
                 _ => None,
             }
         } else { None };
@@ -571,7 +583,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     /// Freeze the committed master and its rendering coordinates for an output
     /// worker. This never reserves or acknowledges a saved-project checkpoint.
     pub fn capture_project_export(&self, id: u32) -> Result<DocumentExport, String> {
-        if !matches!(self.document_request(id)?, DocumentRequest::Export { .. }) {
+        if !matches!(self.document_request(id)?, DocumentRequest::Export { owner, epoch, .. } if *owner == self.engine.document().owner && *epoch == self.state.document_file.epoch) {
             return Err(FileFailure::NotExportRequest.message(self.localization()));
         }
         self.require_document_idle()?;
@@ -610,6 +622,20 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(true)
     }
 
+    pub fn prepare_export(&mut self, id: u32, owner: u64, recipe: ExportRecipe, location: DocumentLocation) -> Result<(), String> {
+        if !matches!(self.document_request(id)?, DocumentRequest::Export { owner: expected, epoch, .. } if *expected == owner && *epoch == self.state.document_file.epoch)
+            || self.engine.document().owner != owner {
+            return Err(FileFailure::UnknownRequest.message(self.localization()));
+        }
+        location.validate().map_err(|reason| reason.message(self.localization()))?;
+        recipe.validate_for_document(self.engine.document()).map_err(|reason| reason.message(self.localization()))?;
+        if self.state.document_file.location.as_ref().is_some_and(|master| master.uri == location.uri) {
+            return Err(crate::color_feature_copy::DocumentColorCopy::new(self.localization()).choose_different.to_string());
+        }
+        self.files.pending_export = Some((owner, self.state.document_file.epoch, ExportRepeat { recipe, location }));
+        Ok(())
+    }
+
     /// Success acknowledges a completed write/open/export, never just a chosen
     /// filename. Cancellation is distinct from failure and does not clear dirty.
     pub fn complete_document_request(
@@ -622,6 +648,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             return Err(FileFailure::RespondClose.message(self.localization()));
         }
         let save = matches!(request, DocumentRequest::Save { .. });
+        let export = matches!(request, DocumentRequest::Export { .. });
         let lookup = matches!(request, DocumentRequest::ImportLookup { .. });
         let cutting = matches!(request, DocumentRequest::Copy { cut: true, .. });
         if save && result == Ok(true) && self.files.pending.as_ref().unwrap().1.is_none() {
@@ -632,10 +659,19 @@ impl<R: CanvasRenderer> UiSession<R> {
         }) {
             return Err(FileFailure::UnknownRequest.message(self.localization()));
         }
+        if export && result == Ok(true) && self.files.pending_export.as_ref().is_some_and(|(owner, epoch, _)| {
+            *owner != self.engine.document().owner || *epoch != self.state.document_file.epoch
+        }) {
+            return Err(FileFailure::UnknownRequest.message(self.localization()));
+        }
         let (_, snapshot) = self.files.pending.take().unwrap();
         self.files.pending_copy = None;
         self.state.requests.retain(|r| r.id != id);
         let success = result == Ok(true);
+        if let Some((_, _, last)) = self.files.pending_export.take().filter(|_| export && success) {
+            self.state.document_file.export_uri = Some(last.location.uri.clone());
+            self.files.last_export = Some(last);
+        }
         let cut = self.files.cut.take().filter(|_| cutting && success);
         if let Err(diagnostic) = result {
             if lookup {
@@ -851,7 +887,7 @@ mod localization_tests {
         let mut session = UiSession::blank_localized(Recorder::default(), [256,256], Platform::Windows, Localizer::shared(UiLanguage::English)).unwrap();
         session.state.document_file.unsaved_name = Some("Untitled { $name } 🖌".into());
         layer(&mut session, LayerAction::New { group: false, clipped: false });
-        session.request_document(DocumentRequest::Export { name: "literal 🖌.png".into() }).unwrap();
+        session.request_document(DocumentRequest::Export { name: "literal 🖌.png".into(), owner: session.engine.document().owner, epoch:session.state.document_file.epoch, repeat: None }).unwrap();
         let id = session.files.pending.as_ref().unwrap().0;
         session.complete_document_request(id, Ok(true)).unwrap();
         assert!(session.files.pending.is_none());
@@ -1127,5 +1163,108 @@ mod capture_tests {
         assert!(session.state.document_file.location.is_none());
         assert_eq!(session.files.pending.as_ref().unwrap().0, request);
         session.complete_document_request(request, Ok(false)).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod export_again_tests {
+    use super::*;
+    use crate::session::test_support::{Recorder, layer};
+
+    fn session() -> UiSession<Recorder> {
+        UiSession::blank(Recorder::default(), [256,256], Platform::Gtk).unwrap()
+    }
+    fn location(name: &str) -> DocumentLocation {
+        DocumentLocation { uri: format!("private:export:{name}"), name: name.into() }
+    }
+    fn request(session: &mut UiSession<Recorder>, again: bool) -> (u32,u64) {
+        session.dispatch(UiAction::Invoke { command: if again { CommandId::ExportAgain } else { CommandId::ExportDocument } }).unwrap();
+        let id=session.files.pending.as_ref().unwrap().0;
+        let DocumentRequest::Export {owner,..}=session.document_request(id).unwrap() else {panic!("export request")};
+        (id,*owner)
+    }
+    fn prepare(session: &mut UiSession<Recorder>, id:u32, owner:u64, destination:DocumentLocation) {
+        session.dispatch(UiAction::PrepareExport {id,owner,recipe:ExportRecipe::web_share(),location:destination}).unwrap();
+    }
+    fn publish(session:&mut UiSession<Recorder>, destination:DocumentLocation) {
+        let (id,owner)=request(session,false);
+        prepare(session,id,owner,destination);
+        session.complete_document_request(id,Ok(true)).unwrap();
+    }
+
+    #[test]
+    fn export_again_remembers_only_success_and_never_acknowledges_saved_artwork() {
+        let mut app=session();
+        layer(&mut app,LayerAction::New {group:false,clipped:false});
+        let checkpoint=app.engine.checkpoint();let saved=app.files.saved_checkpoint;
+        let (id,owner)=request(&mut app,false);
+        prepare(&mut app,id,owner,location("first.png"));
+        assert!(app.files.last_export.is_none());assert!(app.state.document_file.export_uri.is_none());
+        app.complete_document_request(id,Ok(true)).unwrap();
+        let remembered=app.files.last_export.clone().unwrap();
+        assert_eq!(remembered.location,location("first.png"));
+        for result in [Ok(false),Err("private write failed".into())] {
+            let (id,owner)=request(&mut app,false);
+            prepare(&mut app,id,owner,location("cancelled.png"));
+            app.complete_document_request(id,result).unwrap();
+            assert_eq!(app.files.last_export.as_ref(),Some(&remembered));
+            assert_eq!(app.state.document_file.export_uri.as_deref(),Some("private:export:first.png"));
+        }
+        assert_eq!(app.engine.checkpoint(),checkpoint);assert_eq!(app.files.saved_checkpoint,saved);
+        assert!(app.state.document_file.modified);
+    }
+
+    #[test]
+    fn export_again_captures_fresh_artwork_with_the_concrete_recipe_and_target() {
+        let mut app=session();
+        let (id,owner)=request(&mut app,false);
+        let original=app.capture_project_export(id).unwrap();
+        prepare(&mut app,id,owner,location("drawing.png"));app.complete_document_request(id,Ok(true)).unwrap();
+        layer(&mut app,LayerAction::New {group:false,clipped:false});
+        let (id,_)=request(&mut app,true);
+        let DocumentRequest::Export {repeat:Some(repeat),name,..}=app.document_request(id).unwrap() else {panic!("repeat")};
+        assert_eq!(repeat.recipe,ExportRecipe::web_share());assert_eq!(repeat.location,location("drawing.png"));assert_eq!(name,"drawing.png");
+        let fresh=app.capture_project_export(id).unwrap();
+        assert_ne!(fresh.capture.checkpoint.edit_checkpoint,original.capture.checkpoint.edit_checkpoint);
+        assert_ne!(fresh.capture.artwork.occurrences.len(),original.capture.artwork.occurrences.len());
+        app.complete_document_request(id,Ok(false)).unwrap();
+        assert_eq!(app.files.last_export.as_ref().unwrap().location,location("drawing.png"));
+    }
+
+    #[test]
+    fn export_again_rejects_stale_owner_and_activation_without_replacing_success() {
+        for prepared in [false,true] {
+            let mut app=session();publish(&mut app,location("accepted.png"));
+            let remembered=app.files.last_export.clone();
+            let (id,owner)=request(&mut app,false);
+            assert!(app.prepare_export(id,owner.wrapping_add(1),ExportRecipe::web_share(),location("wrong.png")).is_err());
+            if prepared {prepare(&mut app,id,owner,location("stale.png"));}
+            let other=session();app.inherit_window_state(&other).unwrap();
+            if prepared {assert!(app.complete_document_request(id,Ok(true)).is_err());}
+            else {assert!(app.prepare_export(id,owner,ExportRecipe::web_share(),location("stale.png")).is_err());}
+            assert_eq!(app.files.last_export,remembered);assert_eq!(app.files.pending.as_ref().unwrap().0,id);
+        }
+    }
+
+    #[test]
+    fn export_again_memory_belongs_to_the_drawing_across_parking_and_renderer_replacement() {
+        let mut first=session();let mut second=session();
+        publish(&mut first,location("first.png"));publish(&mut second,location("second.png"));
+        first.frame(0,0).unwrap();first.park_document().unwrap();
+        first.inherit_window_state(&second).unwrap();first.replace_renderer(Recorder::default()).unwrap();
+        assert_eq!(first.files.last_export.as_ref().unwrap().location,location("first.png"));
+        assert_eq!(second.files.last_export.as_ref().unwrap().location,location("second.png"));
+        let fresh=UiSession::new(Recorder::default(),first.engine.document().clone(),[256,256],Platform::Gtk).unwrap();
+        assert!(fresh.files.last_export.is_none());assert!(fresh.state.document_file.export_uri.is_none());
+    }
+
+    #[test]
+    fn export_again_cannot_publish_over_the_editable_master() {
+        let mut app=session();let master=location("master.capy");
+        app.initialize_document_location(Some(master.clone())).unwrap();
+        let (id,owner)=request(&mut app,false);
+        assert!(app.prepare_export(id,owner,ExportRecipe::web_share(),master).is_err());
+        assert!(app.files.pending_export.is_none());assert!(app.files.last_export.is_none());
+        app.complete_document_request(id,Ok(false)).unwrap();
     }
 }

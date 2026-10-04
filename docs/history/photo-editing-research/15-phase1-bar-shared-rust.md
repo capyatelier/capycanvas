@@ -1,8 +1,8 @@
 # Phase 1 audit: canvas action bar in shared Rust
 
-[Photo editing research](../photo-editing-research.md) · [Phase 1 plan](../../development/canvas-action-bar-transforms.md) · source report, 2026-09-26 · baseline `5eb45a47`
+[Photo editing research](../photo-editing-research.md) · [Canvas action bar](../../ui/canvas-action-bar.md) · source report, 2026-09-26 · baseline `5eb45a47`
 
-Read-only implementation audit made by an agent against baseline `5eb45a47` to prepare Phase 1. It covers how the bar's state reaches each host, its contents and context validation, context predicates, anchor and placement, chrome input, the commands to add, the existing placement bars, and the shared tests to extend. The [Phase 1 plan](../../development/canvas-action-bar-transforms.md) incorporates the findings and resolves the points where the audits differ. Line numbers can drift in later commits; verify before relying on one.
+Read-only implementation audit made by an agent against baseline `5eb45a47` to prepare Phase 1. It covers how the bar's state reaches each host, its contents and context validation, context predicates, anchor and placement, chrome input, the commands to add, the existing placement bars, and the shared tests to extend. The implementation plan is retired; the current [canvas action bar guide](../../ui/canvas-action-bar.md) describes the delivered behavior. Line numbers can drift in later commits; verify before relying on one.
 
 ---
 

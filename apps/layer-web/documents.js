@@ -28,7 +28,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   let nextHandle=0,closing=false,changing=false,batching=false;
   const images=createImageImport({app,canvas,dispatch,applyChange,wake,element,button,icon,message,gpuOperation,
     interpret:()=>chooseSourceProfile({app,dialog,element,button})});
-  const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.map(t=>t.uri));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
+  const pruneHandles=()=>{const live=new Set(app.document_tabs(0).tabs.flatMap(t=>[t.uri,t.export_uri]));for(const key of handles.keys())if(!live.has(key))handles.delete(key);};
   const location=(name,handle)=>{const uri=`browser:${++nextHandle}`;if(handle)handles.set(uri,handle);return{uri,name};};
   const openDialogs=new Set();
   const dialog=(title,build)=>new Promise(resolve=>{
@@ -193,7 +193,14 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
   }
   async function destination(request,recipe) {
     const old=request.location && handles.get(request.location.uri);
-    if(old)return{location:request.location,handle:old};
+    if(old) {
+      if(!request.repeat)return{location:request.location,handle:old};
+      try {
+        let permission=await old.queryPermission?.({mode:"readwrite"})??"granted";
+        if(permission==="prompt")permission=await old.requestPermission({mode:"readwrite"});
+        if(permission==="granted"){await old.getFile();return{location:request.location,handle:old};}
+      } catch(error) { if(error?.name==="AbortError")throw error; }
+    }
     if(window.showSaveFilePicker) {
       const [extension,mime]=recipe?exportFormats[recipe.format]:["capy","application/octet-stream"];
       const description=recipe?formatLabels()[recipe.format]:delivery.drawing_type;
@@ -287,14 +294,14 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
           applyChange(app.finish_document(id,false));
           try {
             await proof.finishPending();
-            if(app.state().document_file.epoch===epoch)dispatch({type:"invoke",command:"export_document"});
+            if(app.state().document_file.epoch===epoch)dispatch({type:"invoke",command:r.repeat?"export_again":"export_document"});
           } catch(error) { message(error); }
           return;
         }
-        const choice=r.type==="export"?await chooseExport({app,dialog,element,button,numberField,gpuOperation,id}):null;
+        const choice=r.repeat?{recipe:r.repeat.recipe}:r.type==="export"?await chooseExport({app,dialog,element,button,numberField,gpuOperation,id}):null;
         const recipe=choice?.recipe??null;
         if(r.type==="export"&&!recipe){applyChange(app.finish_document(id,false));return;}
-        const target=await destination(r,recipe);
+        const target=await destination(r.repeat?{...r,location:r.repeat.location}:r,recipe);
         if(recipe){
           const extension=exportFormats[recipe.format][0];
           const extensions=extension==='jpg'?['jpg','jpeg']:extension==='tif'?['tif','tiff']:[extension];
@@ -309,6 +316,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             control=app.capture_control();progress=element("aside","file-progress");progress.setAttribute("role","status");
             progressLabel=element("span","",progressCaption);progress.append(progressLabel,button(()=>common.cancel,()=>{control.cancel();progressPhase="cancelling";bindCopy(progressLabel,progressCaption);}));document.body.append(progress);
           }
+          if(recipe)applyChange(app.dispatch({type:"prepare_export",id,owner:r.owner,recipe,location:target.location}));
           const bytes=(output=r.type==="save"?await app.save_project(id,target.location):await gpuOperation(()=>app.export_image(id,recipe,control))).blob;
           if(progress){progressPhase="writing_image";bindCopy(progressLabel,progressCaption);progress.querySelector('button').disabled=true;}
 
@@ -319,7 +327,7 @@ export function createDocuments({app,bootstrap,delivery,state,canvas,dispatch,ap
             catch(error){try{await stream.abort();}catch{}throw error;}
           } else success=!!await download(bytes,target.location.name,recipe?exportFormats[recipe.format][1]:"application/octet-stream");
           applyChange(app.finish_document(id,success));
-          if(success&&recipe)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:"export_preferences",reason:error.color_feature_error}}:deliveryFailure("export_preferences",{detail:String(error)}));}
+          if(success&&recipe&&!r.repeat)try{await app.export_presets({type:"remember",index:choice.destination<4?choice.destination:3,recipe});}catch(error){message(error?.color_feature_error!==undefined?{document_host_error:{type:"export_preferences",reason:error.color_feature_error}}:deliveryFailure("export_preferences",{detail:String(error)}));}
           if(success && r.type==="save" && !app.state().document_file.modified) {
             await recovery.retire(ownerId);
           }

@@ -258,6 +258,103 @@ class AndroidRasterTest {
     private fun sourceIdentity(manifest: JSONObject): String = manifest.originalIdentity()
     private fun hash(bytes: ByteArray)=MessageDigest.getInstance("SHA-256").digest(bytes).toList()
 
+    @Test fun exportAgainRetainsDestinationRecipeAndDrawingOwnership() {
+        fun idle() {compose.waitUntil(120_000) {!host.documents.working&&!host.documentInputBlocked&&!host.drawingTabs.switching&&!native {state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure)}
+        fun document()=native {state(it).getJSONObject("document_file")}.apply {remove("busy");remove("close_ready");remove("export_uri")}.toString()
+        fun repeatUri()=native {state(it).getJSONObject("document_file").optString("export_uri")}
+        fun pixels(bytes:ByteArray):IntArray {
+            val bitmap=android.graphics.BitmapFactory.decodeByteArray(bytes,0,bytes.size,android.graphics.BitmapFactory.Options().apply {inPremultiplied=false})!!
+            try {return IntArray(bitmap.width*bitmap.height).also {bitmap.getPixels(it,0,bitmap.width,0,0,bitmap.width,bitmap.height)}} finally {bitmap.recycle()}
+        }
+        fun fresh() {
+            DocumentController.nativeFileJobsForTest=true
+            val task=native {h->val(id,file)=request(h,"new_document");Native.projectTask(h,id,"null",file.getLong("epoch"),file.getLong("revision"))}
+            try {Native.projectWork(task,-1,128,128);compose.waitUntil(60_000) {tick();native {Native.projectParkReady(it,task)}};native {Native.projectAdopt(it,task,"null")}} finally {Native.projectFree(task)}
+            refresh();idle();invoke("fit_canvas");invoke("pen")
+        }
+        fun paint(y:Double) {
+            val camera=native {state(it).getJSONObject("camera")};val zoom=camera.getDouble("zoom");val pan=camera.getJSONArray("translation");val viewport=camera.getJSONArray("viewport")
+            assertEquals(0.0,camera.getDouble("rotation"),0.0)
+            val x=32*zoom+pan.getDouble(0)-viewport.getDouble(0)*.5;val dy=y*zoom+pan.getDouble(1)-viewport.getDouble(1)*.5
+            point(1,x,dy);for(i in 1..6) {SystemClock.sleep(10);point(2,x+i*64*zoom/6,dy)};point(3,x+64*zoom,dy);refresh()
+        }
+        fun menu(command:String):Long {
+            val current=native {state(it)}
+            File(activity.getExternalFilesDir(null),"export-again-state-${current.getString("theme")}.json").writeText(obj("command" to command,"core" to current,"host" to host.snapshot,"blocked" to host.documentInputBlocked,"tone" to native {JSONObject(Native.toneStatus(it))}).toString())
+            val label=current.array("commands").objects().first {c->c.getString("id")==command}.getString("label")
+            if(compose.onAllNodesWithTag("application-menu-file").fetchSemanticsNodes().isNotEmpty())compose.onNodeWithTag("application-menu-file").performClick()
+            else {compose.onNodeWithTag("header-menu-labels-compact").performClick();compose.onNode(hasText("File") and hasAnyAncestor(isPopup())).performClick()}
+            val entry=compose.onNode(hasText(label) and hasAnyAncestor(isPopup())).assertIsDisplayed().assertIsEnabled()
+            if(command=="export_again") {
+                val capture=instrumentation.uiAutomation.takeScreenshot();val theme=native {state(it).getString("theme")}
+                File(activity.getExternalFilesDir(null),"export-again-menu-$theme.png").outputStream().use {capture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};capture.recycle()
+            }
+            val started=SystemClock.uptimeMillis();entry.performClick();return started
+        }
+        val uris=mutableListOf<android.net.Uri>()
+        fun destination(name:String)=activity.contentResolver.insert(android.provider.MediaStore.Downloads.EXTERNAL_CONTENT_URI,android.content.ContentValues().apply {
+            put(android.provider.MediaStore.MediaColumns.DISPLAY_NAME,"capy-again-${System.nanoTime()}-$name.png");put(android.provider.MediaStore.MediaColumns.MIME_TYPE,"image/png")
+        })!!.also {uris.add(it)}
+        fun bytes(uri:android.net.Uri)=activity.contentResolver.openInputStream(uri)!!.use {it.readBytes()}
+        val result=java.util.concurrent.atomic.AtomicReference<android.net.Uri?>()
+        val choices=java.util.concurrent.atomic.AtomicInteger()
+        val intent=java.util.concurrent.atomic.AtomicReference<android.content.Intent>()
+        val monitor=object:android.app.Instrumentation.ActivityMonitor() {
+            override fun onStartActivity(value:android.content.Intent):android.app.Instrumentation.ActivityResult? {
+                if(value.action!=android.content.Intent.ACTION_CREATE_DOCUMENT)return null
+                intent.set(android.content.Intent(value));choices.incrementAndGet()
+                val uri=result.get()
+                return android.app.Instrumentation.ActivityResult(if(uri==null)android.app.Activity.RESULT_CANCELED else android.app.Activity.RESULT_OK,android.content.Intent().setData(uri).addFlags(android.content.Intent.FLAG_GRANT_READ_URI_PERMISSION or android.content.Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
+            }
+        }
+        instrumentation.addMonitor(monitor)
+        try {for(theme in listOf("light","dark")) {
+            fresh();action(obj("type" to "set_theme","theme" to theme));paint(32.0)
+            val masterName="again-master-$theme.capy";val master=save(masterName);val masterFile=File(files,masterName)
+            val recipe=builtinRecipe(0).put("format","Png").put("depth","U8")
+            val color=native {JSONObject(Native.query(it,obj("type" to "document_color").toString()))}
+            val preset=runBlocking {ColorPreferencesStore.presets(activity,color,obj("type" to "save","name" to "Repeat PNG","recipe" to recipe))}.getInt("index")
+            try {
+                val uri=destination(theme);result.set(uri);val count=choices.get();val clean=document()
+                DocumentController.nativeFileJobsForTest=false;menu("export_document")
+                compose.waitUntil(30_000) {compose.onAllNodesWithTag("color-choice-Destination").fetchSemanticsNodes().isNotEmpty()}
+                compose.onNodeWithTag("color-choice-Destination").performScrollTo().performClick();compose.onNode(hasText("Repeat PNG") and hasAnyAncestor(isPopup())).performClick()
+                val ordinaryStarted=SystemClock.uptimeMillis();compose.onNodeWithTag("export-choose-file").performClick()
+                compose.waitUntil(120_000) {choices.get()==count+1&&runCatching {bytes(uri).isNotEmpty()}.getOrDefault(false)};idle();val ordinaryMs=SystemClock.uptimeMillis()-ordinaryStarted
+                assertEquals("image/png",intent.get().type);assertEquals(uri.toString(),repeatUri());assertEquals(clean,document());assertArrayEquals(master,masterFile.readBytes())
+                val first=bytes(uri)
+                val repeatStarted=menu("export_again");idle();val repeatMs=SystemClock.uptimeMillis()-repeatStarted
+                assertEquals(count+1,choices.get());assertArrayEquals(first,bytes(uri));assertEquals(clean,document())
+                File(activity.getExternalFilesDir(null),"export-again-timing-$theme.json").writeText(obj("model" to android.os.Build.MODEL,"width_dp" to activity.resources.configuration.screenWidthDp,"extent" to org.json.JSONArray(listOf(128,128)),"ordinary_ms" to ordinaryMs,"repeat_ms" to repeatMs,"same_pixels" to true).toString())
+                result.set(null);menu("export_document");compose.onNodeWithTag("export-choose-file").performClick()
+                compose.waitUntil(30_000) {choices.get()==count+2};idle();assertArrayEquals(first,bytes(uri));assertEquals(uri.toString(),repeatUri())
+                DocumentController.nativeFileJobsForTest=true;paint(96.0);val expected=pixels(png("again-reference-$theme.png",recipe));refresh();idle();val dirty=document();assertEquals(uri.toString(),repeatUri())
+                assertTrue(JSONObject(dirty).getBoolean("modified"));assertFalse(pixels(first).contentEquals(expected))
+                DocumentController.nativeFileJobsForTest=false;menu("export_again")
+                compose.waitUntil(120_000) {!bytes(uri).contentEquals(first)};idle()
+                assertEquals(count+2,choices.get());assertTrue(compose.onAllNodesWithTag("export-choose-file").fetchSemanticsNodes().isEmpty())
+                assertArrayEquals(expected,pixels(bytes(uri)));assertEquals(dirty,document());assertArrayEquals(master,masterFile.readBytes());assertNull(host.actionError)
+                activity.contentResolver.delete(uri,null,null);result.set(null);menu("export_again")
+                compose.waitUntil(30_000) {choices.get()==count+3};idle()
+                assertTrue(intent.get().getStringExtra(android.content.Intent.EXTRA_TITLE)!!.endsWith(".png"));assertEquals(dirty,document())
+                val bad=File(files,"unwritable-$theme.png").apply {mkdir()};result.set(android.net.Uri.fromFile(bad));menu("export_again")
+                compose.waitUntil(30_000) {host.hostError!=null};idle();assertEquals(dirty,document());assertArrayEquals(master,masterFile.readBytes())
+                compose.onNodeWithText(host.bootstrap!!.getJSONObject("common").getString("ok")).performClick();assertEquals(uri.toString(),repeatUri());bad.delete()
+                val replacement=destination("recovered-$theme");result.set(replacement);menu("export_again")
+                compose.waitUntil(120_000) {runCatching {bytes(replacement).isNotEmpty()}.getOrDefault(false)};idle();assertEquals(replacement.toString(),repeatUri());assertArrayEquals(expected,pixels(bytes(replacement)));assertEquals(dirty,document())
+                val owner=tabs().getLong("selected");fresh()
+                assertFalse(native {state(it).array("commands").objects().first {c->c.getString("id")=="export_again"}.getBoolean("enabled")})
+                val task=native {Native.documentSwitch(it,owner,false)}
+                if(task!=0L)try {Native.documentResumeWork(task);native {Native.documentResume(it,task)}} finally {Native.documentResumeFree(task)}
+                refresh();idle();assertEquals(replacement.toString(),repeatUri());assertTrue(native {state(it).array("commands").objects().first {c->c.getString("id")=="export_again"}.getBoolean("enabled")})
+                DocumentController.nativeFileJobsForTest=true;assertTrue(JSONObject(document()).getBoolean("modified"));assertArrayEquals(expected,pixels(png("again-owner-$theme.png",recipe)))
+                assertArrayEquals(master,masterFile.readBytes());assertNull(host.actionError)
+                val capture=instrumentation.uiAutomation.takeScreenshot()
+                File(activity.getExternalFilesDir(null),"export-again-$theme.png").outputStream().use {capture.compress(android.graphics.Bitmap.CompressFormat.PNG,100,it)};capture.recycle()
+            } finally {runBlocking {ColorPreferencesStore.presets(activity,color,obj("type" to "remove","index" to preset))}}
+        }} finally {instrumentation.removeMonitor(monitor);DocumentController.nativeFileJobsForTest=true;uris.forEach {activity.contentResolver.delete(it,null,null)}}
+    }
+
     @Test fun webpExportThroughTheDialogDecodes() {
         fun idle(){compose.waitUntil(120_000){!host.documents.working&&!native{state(it).getJSONObject("document_file").getBoolean("busy")}};assertNull(host.failure);assertNull(host.actionError)}
         fun choice(label:String,text:String){

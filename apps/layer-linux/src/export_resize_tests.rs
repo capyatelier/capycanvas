@@ -2,6 +2,7 @@
 use super::new_photo::{capture_ui, chooser, combo, finish, invoke, ready, response};
 use super::place_source::snapshot;
 use super::*;
+use gtk::gio;
 use layer_core::color::{ColorProfile, DocumentColor, SampleDepth, RgbSpace, source::*};
 
 trait NumericEdit {
@@ -13,6 +14,187 @@ impl NumericEdit for crate::number_control::NumberControl {
         descendant::<gtk::Entry>(self).unwrap().set_text(&value.to_string());
         assert!(self.commit_text());
     }
+}
+
+fn export_menu_item(w: &Rc<Workspace>, input: &mut RemoteInput, command: CommandId) -> gtk::Widget {
+    let menu = named::<gtk::MenuButton>(w.window.upcast_ref(), "application-menu-Primary");
+    input.click(screen_point(menu.upcast_ref(), &w.window, [0.5, 0.5]));
+    let popup = menu.popover().unwrap().downcast::<gtk::PopoverMenu>().unwrap();
+    let item = |parent: &gtk::PopoverMenu, label: &str| widgets(parent.upcast_ref()).find(|widget|
+        widget.is_mapped() && widget.width() > 0 && widget.height() > 0
+            && widget.type_().name() == "GtkModelButton"
+            && descendant::<gtk::Label>(widget).is_some_and(|text| text.label() == label));
+    let label = ApplicationMenu::File.localized_label(&w.localization());
+    until(|| item(&popup, &label).is_some(), "native File submenu allocated");
+    let file = item(&popup, &label).unwrap();
+    let submenu = file.property::<Option<gtk::PopoverMenu>>("popover").unwrap();
+    let point = screen_point(&file, &w.window, [0.5, 0.5]);
+    input.perform(serde_json::json!([{"point":point},{"wait_ms":200}]));
+    if !submenu.is_mapped() { input.click(point); }
+    let label = command.localized_label(&w.localization());
+    until(|| item(&submenu, &label).is_some(), "native File command allocated");
+    item(&submenu, &label).unwrap()
+}
+
+fn export_menu_click(w: &Rc<Workspace>, input: &mut RemoteInput, command: CommandId) -> Instant {
+    let item = export_menu_item(w, input, command);
+    assert!(item.is_sensitive(), "{command:?}");
+    let started = Instant::now();
+    input.click(screen_point(&item, &w.window, [0.5, 0.5]));
+    pump(60);
+    started
+}
+
+fn repeat_png(path: &std::path::Path) -> [f32; 4] {
+    let image = layer_color::photo::read_photo(
+        std::io::BufReader::new(std::fs::File::open(path).unwrap()), Default::default()).unwrap();
+    assert_eq!(image.extent, [32, 24]);
+    assert_eq!(image.interpretation.depth, SampleDepth::U16);
+    assert!(image.resolution.unwrap().pixels_per_inch().into_iter().all(|ppi| (ppi - 240.).abs() < 0.013));
+    let decoder = layer_color::WorkingDecoder::new(&image.interpretation, RgbSpace::Srgb, Default::default()).unwrap();
+    let mut row = vec![0; image.row_bytes()];
+    image.rows().read(12, &mut row).unwrap();
+    let mut pixels = vec![[0.; 4]; 32];
+    decoder.decode_pixels(&row, &mut pixels).unwrap();
+    pixels[16]
+}
+
+#[test]
+#[ignore = "private Wayland display and hardware GPU"]
+#[allow(deprecated)]
+fn native_export_again_retains_recipe_and_current_pixels_per_document() {
+    let (app, windows) = crate::application("art.capycanvas.ExportAgain");
+    let app = NativeTestApp(app);
+    app.register(None::<&gio::Cancellable>).unwrap();
+    let output = std::path::PathBuf::from(std::env::var_os("LAYER_TEST_ARTIFACTS").unwrap());
+    let mut input = RemoteInput::new().timeout_secs(30);
+    input.ready();
+    for theme in [Theme::Light, Theme::Dark] {
+        let output = output.join(format!("{theme:?}"));
+        std::fs::create_dir_all(&output).unwrap();
+        let output = output.canonicalize().unwrap();
+        let destination = output.join("retained.png");
+        let mut project = new_drawing(64, 48, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        paint_at_mut(&mut project, 0).original = Some(rgba8_source([64, 48], |_, _| [128, 128, 128, 255]));
+        crate::open_workspace(&app, &windows, Some((project, None)), None);
+        until(|| windows.borrow().last().is_some_and(|w| w.window.is_mapped()), "export owner window mapped");
+        let w = windows.borrow().last().unwrap().clone();
+        w.window.maximize(); w.window.present(); ready(&w);
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        let mut workspace = state(&w).workspace;
+        let first = workspace.layout.header.zones[HeaderZone::Left.index()].first().unwrap().id;
+        workspace.layout.header.add(HeaderZone::Left, Some(first), &[HeaderItem::Menu]).unwrap();
+        w.dispatch(UiAction::RestoreWorkspace { workspace: Box::new(workspace) });
+        ready(&w);
+        assert!(!export_menu_item(&w, &mut input, CommandId::ExportAgain).is_sensitive());
+        input.key(0xff1b); input.key(0xff1b);
+        let master = snapshot(&w);
+        let initial_modified = state(&w).document_file.modified;
+        export_menu_click(&w, &mut input, CommandId::ExportDocument);
+        until(|| w.window.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "export-options"), "native Export options");
+        combo(&w, "export-preset").set_selected(2);
+        combo(&w, "export-format").set_selected(0);
+        combo(&w, "export-size").set_selected(1);
+        let dialog = w.window.visible_dialog().unwrap();
+        for (name, value) in [("export-width", 32.), ("export-height", 24.), ("export-ppi", 240.)] {
+            if name == "export-ppi" { combo(&w, "export-resolution").set_selected(1); }
+            named::<crate::number_control::NumberControl>(dialog.upcast_ref(), name).edit_value(value);
+        }
+        combo(&w, "export-depth").set_selected(1);
+        capture_ui(&w, &output, "export-recipe.png");
+        response(&w, "export");
+        let file = chooser();
+        file.set_current_folder(Some(&gio::File::for_path(&output))).unwrap();
+        file.set_current_name("retained.png"); pump(350);
+        let normal_started = Instant::now();
+        file.response(gtk::ResponseType::Accept); finish(&w);
+        let normal_ms = normal_started.elapsed().as_secs_f64() * 1000.; ready(&w);
+        let gray = repeat_png(&destination);
+        assert!((gray[0] - 0.21586).abs() < 0.001 && (gray[0] - gray[1]).abs() < 0.0001 && gray[3] == 1., "{gray:?}");
+        assert_eq!(snapshot(&w), master);
+        assert_eq!(state(&w).document_file.modified, initial_modified);
+        let uri = gio::File::for_path(&destination).uri().to_string();
+        assert_eq!(state(&w).document_file.export_uri.as_deref(), Some(uri.as_str()));
+        let old_bytes = std::fs::read(&destination).unwrap();
+        let unchanged_started = export_menu_click(&w, &mut input, CommandId::ExportAgain);
+        finish(&w);
+        let unchanged_repeat_ms = unchanged_started.elapsed().as_secs_f64() * 1000.; ready(&w);
+        assert_eq!(std::fs::read(&destination).unwrap(), old_bytes);
+        assert_eq!(repeat_png(&destination), gray);
+        assert_eq!(snapshot(&w), master);
+        assert_eq!(state(&w).document_file.modified, initial_modified);
+        invoke(&w, CommandId::FitCanvas);
+        w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Definition {
+            color: layer_core::color::RgbColor::new(RgbSpace::Srgb, [1., 0., 0., 1.]).unwrap(),
+        } });
+        w.dispatch(UiAction::SetBrushOpacity { value: 1. });
+        invoke(&w, CommandId::Fill);
+        let before = super::editing_tools::raster(&w);
+        super::editing_tools::stroke(&mut input, &w, [32., 24.], [32., 24.]);
+        super::editing_tools::committed(&w, &before);
+        assert!(state(&w).document_file.modified);
+        let edited = snapshot(&w);
+        let revision = ui_session(&w).engine().document().revision;
+        let repeat_started = export_menu_click(&w, &mut input, CommandId::ExportAgain);
+        finish(&w);
+        let repeat_ms = repeat_started.elapsed().as_secs_f64() * 1000.; ready(&w);
+        std::fs::write(output.join("completion.json"), serde_json::to_vec_pretty(&serde_json::json!({
+            "canvas": [64, 48], "output": [32, 24], "depth": "U16", "ppi": 240,
+            "normal_accept_to_complete_ms": normal_ms, "unchanged_repeat_native_click_to_complete_ms": unchanged_repeat_ms,
+            "edited_repeat_native_click_to_complete_ms": repeat_ms,
+            "reference_hardware": false,
+        })).unwrap()).unwrap();
+        assert_ne!(std::fs::read(&destination).unwrap(), old_bytes);
+        let red = repeat_png(&destination);
+        assert!(red[0] > 0.999 && red[1].abs() < 0.001 && red[2].abs() < 0.001 && red[3] == 1., "{red:?}");
+        assert_eq!(snapshot(&w), edited);
+        assert_eq!(ui_session(&w).engine().document().revision, revision);
+        assert!(state(&w).document_file.modified);
+        export_menu_click(&w, &mut input, CommandId::ExportDocument);
+        until(|| w.window.visible_dialog().is_some_and(|dialog| dialog.widget_name() == "export-options"), "cancelled Export options");
+        named::<crate::number_control::NumberControl>(w.window.visible_dialog().unwrap().upcast_ref(), "export-width").edit_value(7.);
+        response(&w, "cancel"); finish(&w);
+        export_menu_click(&w, &mut input, CommandId::ExportAgain);
+        finish(&w); assert_eq!(repeat_png(&destination), red);
+        std::fs::remove_file(&destination).unwrap();
+        export_menu_click(&w, &mut input, CommandId::ExportAgain);
+        let file = chooser();
+        assert_eq!(file.current_name().as_deref(), Some("retained.png"));
+        assert!(w.window.visible_dialog().is_none());
+        file.response(gtk::ResponseType::Cancel); finish(&w);
+        assert!(!destination.exists());
+        assert_eq!(state(&w).document_file.export_uri.as_deref(), Some(uri.as_str()));
+        assert_eq!(snapshot(&w), edited);
+        export_menu_click(&w, &mut input, CommandId::ExportAgain);
+        let file = chooser();
+        file.set_current_folder(Some(&gio::File::for_path(&output))).unwrap();
+        file.set_current_name("replacement.png"); pump(350);
+        capture_ui(&w, &output, "missing-target-chooser.png");
+        file.response(gtk::ResponseType::Accept); finish(&w); ready(&w);
+        let replacement = output.join("replacement.png");
+        assert_eq!(repeat_png(&replacement), red);
+        assert_eq!(state(&w).document_file.export_uri.as_deref(), Some(gio::File::for_path(&replacement).uri().as_str()));
+        let first = w.documents.selected();
+        export_menu_click(&w, &mut input, CommandId::NewDocument);
+        for (name, value) in [("new-document-width", 64.), ("new-document-height", 48.)] {
+            named::<adw::SpinRow>(w.window.upcast_ref(), name).set_value(value);
+        }
+        response(&w, "create");
+        until(|| w.documents.len() == 2 && !w.documents.changing.get(), "second export owner"); ready(&w);
+        assert!(state(&w).document_file.export_uri.is_none());
+        assert!(!export_menu_item(&w, &mut input, CommandId::ExportAgain).is_sensitive());
+        input.key(0xff1b); input.key(0xff1b);
+        let tab = find_named(w.window.upcast_ref(), &format!("document-tab-{first}")).unwrap();
+        input.click(screen_point(&tab, &w.window, [0.5, 0.5]));
+        until(|| w.documents.selected() == first && !w.documents.changing.get(), "retained export owner reactivated"); ready(&w);
+        export_menu_click(&w, &mut input, CommandId::ExportAgain); finish(&w);
+        assert_eq!(repeat_png(&replacement), red);
+        assert_eq!(snapshot(&w), edited);
+        assert!(state(&w).document_file.modified);
+        capture_ui(&w, &output, "repeat-current-artwork.png");
+        w.window.destroy(); pump(60);
+    }
+    input.finish();
 }
 
 #[test]

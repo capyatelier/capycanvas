@@ -1271,7 +1271,7 @@ pub fn tool_choice_localized(control: ToolbarControl, localization: &Localizer) 
                 CommandId::OpenDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_OPEN_DOCUMENT).to_string(),
                 CommandId::SaveDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SAVE_DOCUMENT).to_string(),
                 CommandId::SaveDocumentAs => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_SAVE_DOCUMENT_AS).to_string(),
-                CommandId::ExportDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EXPORT_DOCUMENT).to_string(),
+                CommandId::ExportDocument | CommandId::ExportAgain => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_EXPORT_DOCUMENT).to_string(),
                 CommandId::CloseDocument => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_CLOSE_DOCUMENT).to_string(),
                 CommandId::KeyboardShortcuts => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_KEYBOARD_SHORTCUTS).to_string(),
                 CommandId::About => localization.text(MessageId::WORKSPACE_TOOL_DESCRIPTION_ABOUT).to_string(),

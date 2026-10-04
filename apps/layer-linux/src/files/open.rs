@@ -254,7 +254,7 @@ fn write_package(package: &layer_ui::PackageView, original: Option<&Path>, desti
     })
 }
 
-fn same_file(source: &Path, destination: &Path) -> bool {
+pub(super) fn same_file(source: &Path, destination: &Path) -> bool {
     if source == destination { return true; }
     if let (Ok(source), Ok(destination)) = (source.canonicalize(), destination.canonicalize()) {
         if source == destination { return true; }

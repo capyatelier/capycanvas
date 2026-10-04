@@ -1,15 +1,15 @@
 # Photo editing M2–M4: quick wins, foundations and retouching
 
-[Design history](README.md) · [Photo editing research](photo-editing-research.md) · [Photo editing performance](../development/photo-editing-performance.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
+[Design history](README.md) · [Photo editing research](photo-editing-research.md) · [Performance targets](../PERFORMANCE_TARGETS.md) · [Canvas action bar](../ui/canvas-action-bar.md) · [Drag convention](../ui/drag-and-reorder.md)
 
-Status: **landed** on GTK, Web and Android (2026-09-28), planned against `origin/main` at `6fcc6fba`. This record keeps the plan's decisions, design notes and steps as they were written; the guides describe the current behaviour. [Outcome](#outcome) lists what landed. The performance and memory gates M4 did not meet are in [photo editing performance](../development/photo-editing-performance.md).
+Status: **landed** on GTK, Web and Android (2026-09-28), planned against `origin/main` at `6fcc6fba`. This record keeps the plan's decisions, design notes and steps as they were written; the guides describe the current behaviour. [Outcome](#outcome) lists what landed. The performance and memory gates M4 did not meet are in [open qualification](../development/photo-editing-roadmap.md#open-qualification-and-earlier-follow-ups).
 
 This plan turns milestones M2, M3 and M4 of the [research record's sequencing](photo-editing-research.md#7-recommended-sequencing) into ordered, testable steps. The product specification is sections 5 and 6 of the research record. This document records:
 - where the code has moved since the research baseline (`5eb45a47`);
 - the decisions the research left open;
 - the steps, their tests and each milestone's exit test.
 
-Hosts in scope are GTK, Web and Android. Apple and Windows follow later through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides; the [photo editing roadmap](../development/photo-editing-roadmap.md#apple-and-windows) lists what each step leaves for them.
+Hosts in scope are GTK, Web and Android. Apple and Windows follow later through the [Apple](../APPLE_PORTING_GUIDE.md) and [Windows](../WINDOWS_PORTING_GUIDE.md) porting guides; the [photo editing roadmap](../development/photo-editing-roadmap.md#apple-and-windows-follow-up) lists what each step leaves for them.
 
 Follow [AGENTS.md](../../AGENTS.md) and the [commit guide](../COMMIT_GUIDE.md) throughout:
 - Keep rules, validation and history in shared Rust.
@@ -614,7 +614,7 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
 - **Filter declarations:** a built-in filter that declares the wrong space gives a subtly wrong result. Each declared filter gets an oracle test against the Photoshop reference.
 - **Pass Through caches:** these caches have regressed before. A stale widened backdrop is the likely failure.
 - **A larger shader include:** `blend_modes.wgsl` grows in every effect pipeline, which raises register pressure on Adreno and Mali. Measure with the filter microbench.
-- **Scope:** by the audits' estimates, M2 is about the size of Phase 1, M3 about half as large again, and M4 larger still now that Perceptual blending covers Normal layers and brushes. [Order if time runs short](#order-if-time-runs-short) defines the stopping points.
+- **Scope:** by the audits' estimates, M2 is about the size of Phase 1, M3 about half as large again, and M4 larger still now that Perceptual blending covers Normal layers and brushes.
 
 ## Outcome
 
@@ -686,4 +686,4 @@ Sizes: S ≤ ½ day, M ≈ 1 day, L 2–3 days, XL > 3 days.
 - **M4.5, Color mixing** on GTK, Web and Android: a per-brush Color mixing choice (Oklab, Linear light, Classic) in the Tool Options of brushes that mix paint; Classic mixes encoded values. Smudge and Natural Blender now mix in the Oklab their presets declare.
 - **M4.4** on GTK, Web and Android: 17 more blend modes (24 in all) from one shared set of formulas on every composite path and for brushes; a grouped blend menu from shared Rust; modes defined only on 0–1 hidden in float documents.
 
-**Remaining:** none for GTK, Web and Android. What is left of the epic, including the Apple and Windows ports and the open items found during M2–M4, is in the [photo editing roadmap](../development/photo-editing-roadmap.md); the performance and memory gates are in [photo editing performance](../development/photo-editing-performance.md).
+**Remaining:** none for GTK, Web and Android. What is left of the epic, including the Apple and Windows ports and the open items found during M2–M4, is in the [photo editing roadmap](../development/photo-editing-roadmap.md); the performance and memory gates are in [open qualification](../development/photo-editing-roadmap.md#open-qualification-and-earlier-follow-ups).

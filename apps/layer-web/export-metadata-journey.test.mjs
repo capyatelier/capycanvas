@@ -18,16 +18,80 @@ export async function checkExportMetadata({call,evaluate,settle}) {
   };
   const saved=async(name,finish)=>{
     await evaluate('exportMetadata.last=null');await finish();await idle();await wait('!!exportMetadata.last');
-    await evaluate(`exportMetadata.files.set(${JSON.stringify(name)},exportMetadata.last.slice())`);
+    await evaluate(`exportMetadata.files.set(${JSON.stringify(name)},exportMetadata.last.slice());exportMetadata.handles.set(${JSON.stringify(name)},exportMetadata.target)`);
     const bytes=Buffer.from(await evaluate('Array.from(exportMetadata.last)'));
     await writeFile(`${directory}/${name}`,bytes);
     return bytes;
   };
+  const nativeClick=async expression=>{
+    const point=await evaluate(`(()=>{const n=${expression};if(!n||n.disabled)throw Error('Missing enabled export menu control');n.scrollIntoView({block:'nearest'});const r=n.getBoundingClientRect(),x=r.x+r.width/2,y=r.y+r.height/2;if(!r.width||!r.height||!n.contains(document.elementFromPoint(x,y)))throw Error('Obstructed export menu control');return{x,y}})()`);
+    for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...point,button:'left',buttons:type==='mousePressed'?1:0,clickCount:1});await settle();
+  };
+  const menu=async command=>{
+    await nativeClick(`[...document.querySelectorAll('.header-menu[data-menu=file] summary,.header-menu-labels-compact summary,.header-menu-overflow summary')].find(n=>n.checkVisibility())`);
+    for(let depth=0;depth<3;depth++){
+      const found=await evaluate(`(()=>{const rows=[...document.querySelectorAll('.header-menu[open] [role=menu] button')];return rows.some(n=>n.menuItem?.action?.type==='invoke'&&n.menuItem.action.command===${JSON.stringify(command)})})()`);
+      if(found){await nativeClick(`[...document.querySelectorAll('.header-menu[open] [role=menu] button')].find(n=>n.menuItem?.action?.type==='invoke'&&n.menuItem.action.command===${JSON.stringify(command)})`);return;}
+      await nativeClick(`(()=>{const has=item=>item.action?.type==='invoke'&&item.action.command===${JSON.stringify(command)}||item.sections?.flat().some(has);return [...document.querySelectorAll('.header-menu[open] [role=menu] button')].find(n=>n.menuItem&&has(n.menuItem))})()`);
+    }
+    assert.fail('Export command absent from the native File menu');
+  };
+  const checkpoint=()=>evaluate(`JSON.parse(JSON.stringify({file:layerApp.state().document_file,layers:layerApp.state().layers,selected:layerApp.app.document_tabs(0).selected},(_,v)=>typeof v==='bigint'?String(v):v))`);
+  const checkExportAgain=async()=>{
+    const timings=[];
+    for(const width of [640,1100])for(const theme of ['light','dark']){
+      await call('Emulation.setDeviceMetricsOverride',{width,height:800,deviceScaleFactor:1,mobile:false});await send({type:'set_theme',theme});
+      await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await set('Format','Png');
+      const normalStart=Date.now();const original=await saved(`again-${width}-${theme}.png`,()=>click('Choose File…'));const normalMs=Date.now()-normalStart;
+      const picks=await evaluate('exportMetadata.picks'),master=await evaluate('JSON.stringify(layerApp.state().document_file.location)');
+      const cleanRepeatStart=Date.now(),cleanRepeat=await saved(`again-clean-${width}-${theme}.png`,()=>menu('export_again')),cleanRepeatMs=Date.now()-cleanRepeatStart;assert.deepEqual(cleanRepeat,original,'Clean Export Again retains exact recipe and source bytes');
+      const beforeEdit=await checkpoint();await send({type:'effect',action:{op:'insert',effect:'invert'}});await idle();const edited=await checkpoint();
+      const repeatStart=Date.now();const repeated=await saved(`again-edited-${width}-${theme}.png`,()=>menu('export_again'));timings.push({width,theme,extent:[160,120],normal_ms:normalMs,clean_repeat_ms:cleanRepeatMs,edited_repeat_ms:Date.now()-repeatStart,normal_bytes:original.length,repeat_bytes:repeated.length});
+      assert.notDeepEqual(repeated,original,'Export Again writes the edited artwork');
+      assert.equal(await evaluate('exportMetadata.picks'),picks,'Export Again reuses the same native target without a picker');
+      assert.equal(await evaluate(`!!document.querySelector('dialog[open] [aria-label="Format"]')`),false,'Export Again skips options');
+      assert.deepEqual(await checkpoint(),edited,'Export Again leaves master, dirty state and editor history unchanged');
+      assert.equal(await evaluate('JSON.stringify(layerApp.state().document_file.location)'),master);
+      await writeFile(`${directory}/export-again-${width}-${theme}.png`,Buffer.from((await call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      if(width===640){
+        const aborts=await evaluate('exportMetadata.aborts');await evaluate("exportMetadata.mode='fail';exportMetadata.last=null");await menu('export_again');await idle();
+        await wait('!!layerApp.state().host_error');assert.equal(await evaluate('exportMetadata.last'),null);assert.equal(await evaluate('exportMetadata.aborts'),aborts+1);assert.deepEqual(await evaluate('JSON.stringify(layerApp.state().document_file.location)'),master);
+        await evaluate("exportMetadata.mode='success'");await saved(`retry-${theme}.png`,()=>menu('export_again'));
+        assert.equal(await evaluate('exportMetadata.picks'),picks,'Failed write preserves the repeat target for retry');
+        const remembered=await evaluate('layerApp.state().document_file.export_uri');
+        await evaluate("exportMetadata.mode='cancel'");await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await click('Choose File…');await idle();
+        assert.equal(await evaluate('layerApp.state().document_file.export_uri'),remembered,'Cancelled replacement export preserves the previous repeat target');
+        await evaluate("exportMetadata.mode='success'");const previousTarget=await evaluate('exportMetadata.picks');await saved(`after-cancel-${theme}.png`,()=>menu('export_again'));assert.equal(await evaluate('exportMetadata.picks'),previousTarget);
+        await invoke('undo');await idle();
+        assert.deepEqual((await checkpoint()).layers,beforeEdit.layers,'Export failure does not consume the artwork Undo');
+      }else{await invoke('undo');await idle();assert.deepEqual((await checkpoint()).layers,beforeEdit.layers);}
+    }
+    await open('camera.jpg');const protectedMaster=await checkpoint(),writes=await evaluate('exportMetadata.writes');
+    await evaluate("exportMetadata.mode='master'");await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await set('Format','Jpeg');await click('Choose File…');await idle();await wait('!!layerApp.state().host_error');
+    assert.equal(await evaluate('exportMetadata.writes'),writes,'Export refuses the master handle before opening a write');assert.deepEqual(await checkpoint(),protectedMaster,'Master protection preserves the document');await evaluate("exportMetadata.mode='success'");
+    await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await set('Format','Png');await saved('first-owner.png',()=>click('Choose File…'));
+    await writeFile(`${directory}/export-again-timings.json`,JSON.stringify(timings,null,2));
+    const owner=await evaluate('String(layerApp.app.document_tabs(0).selected)'),ownerTarget=await evaluate('layerApp.state().document_file.export_uri');
+    await open('camera.jpg');
+    assert.equal(await evaluate("layerApp.state().commands.find(c=>c.id==='export_again').enabled"),false,'A different drawing does not inherit the previous export');
+    await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await set('Format','Png');await saved('second-owner.png',()=>click('Choose File…'));
+    assert.notEqual(await evaluate('layerApp.state().document_file.export_uri'),ownerTarget);
+    await evaluate(`layerApp.documents.select(BigInt(${JSON.stringify(owner)}))`);await idle();assert.equal(await evaluate('layerApp.state().document_file.export_uri'),ownerTarget,'Switching tabs restores its own repeat destination');
+    const picks=await evaluate('exportMetadata.picks');await saved('first-owner-repeat.png',()=>menu('export_again'));assert.equal(await evaluate('exportMetadata.picks'),picks);
+    await evaluate(`exportMetadata.downloads=[];exportMetadata.anchor=HTMLAnchorElement.prototype.click;HTMLAnchorElement.prototype.click=function(){if(this.download){exportMetadata.downloads.push({name:this.download,bytes:fetch(this.href).then(r=>r.arrayBuffer()).then(b=>Array.from(new Uint8Array(b)))});return;}return exportMetadata.anchor.call(this)};delete window.showSaveFilePicker`);
+    try{
+      await menu('export_document');await wait(`!!document.querySelector('dialog[open] [aria-label="Format"]')`);await set('Format','Png');await click('Choose File…');await wait(`!![...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Download')`);await click('Download');await click('File saved');await idle();
+      const count=await evaluate('exportMetadata.downloads.length');assert.equal(count,1);
+      await menu('export_again');await wait(`!![...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Download')`);await click('Cancel');await idle();assert.equal(await evaluate('exportMetadata.downloads.length'),count,'Cancelled fallback confirms no download');
+      await menu('export_again');await wait(`!![...document.querySelectorAll('dialog[open] button')].find(n=>n.textContent==='Download')`);await click('Download');await click('File saved');await idle();assert.equal(await evaluate('exportMetadata.downloads.length'),count+1,'Export Again repeats the browser download confirmation');
+      const outputs=await evaluate('Promise.all(exportMetadata.downloads.map(async d=>({name:d.name,bytes:await d.bytes})))');assert.deepEqual(outputs[0],outputs[1],'Unedited fallback exports retain name and exact bytes');
+    }finally{await evaluate('HTMLAnchorElement.prototype.click=exportMetadata.anchor;window.showSaveFilePicker=exportMetadata.savePicker');}
+  };
   const initialTheme=await evaluate('layerApp.state().settings.theme ?? null');
-  await evaluate(`window.exportMetadata={files:new Map()};
+  await evaluate(`window.exportMetadata={files:new Map(),handles:new Map(),openPicker:window.showOpenFilePicker,savePicker:window.showSaveFilePicker,picks:0,writes:0,aborts:0,mode:'success'};
     exportMetadata.dismiss=setInterval(()=>[...document.querySelectorAll('dialog[open] button')].find(b=>['Keep for Later','Discard Changes'].includes(b.textContent))?.click(),50);
-    window.showOpenFilePicker=async()=>[{name:exportMetadata.openName,async getFile(){return new File([exportMetadata.files.get(exportMetadata.openName)],exportMetadata.openName)}}];
-    window.showSaveFilePicker=async options=>({name:options.suggestedName,async createWritable(){let bytes;return{async write(b){bytes=new Uint8Array(b instanceof Blob?await b.arrayBuffer():b)},async close(){exportMetadata.last=bytes},async abort(){}}}});`);
+    window.showOpenFilePicker=async()=>{const name=exportMetadata.openName;const handle={name,async isSameEntry(other){return other===this||other===exportMetadata.handles.get(name)},async getFile(){return new File([exportMetadata.files.get(name)],name)}};exportMetadata.openHandle=handle;return[handle]};
+    window.showSaveFilePicker=async options=>{exportMetadata.picks++;if(exportMetadata.mode==='master')return exportMetadata.openHandle;if(exportMetadata.mode==='cancel')throw new DOMException('Cancelled','AbortError');let committed;const handle={name:options.suggestedName,async queryPermission(){return 'granted'},async getFile(){if(!committed)throw new DOMException('Owned file is missing','NotFoundError');return new File([committed],this.name)},async isSameEntry(other){return other===this},async createWritable(){let bytes;exportMetadata.writes++;return{async write(b){if(exportMetadata.mode==='fail')throw Error('Owned export write failure');bytes=new Uint8Array(b instanceof Blob?await b.arrayBuffer():b)},async close(){committed=bytes;exportMetadata.last=bytes;exportMetadata.target=handle},async abort(){exportMetadata.aborts++}}}};return handle};`);
   await evaluate(`(async()=>{
     const canvas=new OffscreenCanvas(160,120),context=canvas.getContext('2d');
     const gradient=context.createLinearGradient(0,0,160,120);gradient.addColorStop(0,'#123456');gradient.addColorStop(1,'#e0c070');
@@ -95,9 +159,10 @@ export async function checkExportMetadata({call,evaluate,settle}) {
     await set('Format','Jpeg');await set('Metadata','None');
     const none=await saved('none.jpg',()=>click('Choose File…'));
     for(const dropped of ['Capycam','Ada Painter']) assert.ok(!contains(none,dropped),`None leaves out ${dropped}`);
+    await checkExportAgain();
     console.log('Web export keeps camera, lens and copyright without location in JPEG and WebP; the saved drawing keeps the metadata; None removes it.');
   } finally {
-    await evaluate('clearInterval(exportMetadata.dismiss)');
+    await evaluate('clearInterval(exportMetadata.dismiss);window.showOpenFilePicker=exportMetadata.openPicker;window.showSaveFilePicker=exportMetadata.savePicker');
     await send({type:'set_theme',theme:initialTheme});
   }
 }

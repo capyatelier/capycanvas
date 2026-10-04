@@ -1,6 +1,6 @@
 # Canvas action bar
 
-[Workspace and UI](README.md) · [Panel transparency](panel-transparency.md) · [Toolbar components](toolbar-components.md) · [Phase 1 plan](../development/canvas-action-bar-transforms.md)
+[Workspace and UI](README.md) · [Panel transparency](panel-transparency.md) · [Toolbar components](toolbar-components.md)
 
 The canvas action bar shows the next steps for the object being edited, beside it. It is an accelerator: every item is an ordinary command, so the menus, Tool Options and command search stay complete, and each item keeps its shared validation and one-step history.
 

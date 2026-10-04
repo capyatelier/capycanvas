@@ -104,7 +104,7 @@ Every build-list item was then checked for the canvas contexts it creates or cha
 
 Reddit, photopea.com/learn and some Adobe help pages refused automated access, so none are cited. View counts measure search demand, not usage. The rankings below are product judgment.
 
-**Source reports.** The full reports, with every source URL and `file:line` detail, are in [`photo-editing-research/`](photo-editing-research). They are dated agent output. Reports 1–10 use baseline `dac76c20`, and those audits refer to the superseded first draft of this plan. Reports 11–17 use `5eb45a47`; 15–17 prepare [Phase 1](../development/canvas-action-bar-transforms.md).
+**Source reports.** The full reports, with every source URL and `file:line` detail, are in [`photo-editing-research/`](photo-editing-research). They are dated agent output. Reports 1–10 use baseline `dac76c20`, and those audits refer to the superseded first draft of this plan. Reports 11–17 use `5eb45a47`; 15–17 prepared Phase 1; its retired plan is superseded by the current [canvas action bar guide](../ui/canvas-action-bar.md).
 
 | # | Report | File |
 | --- | --- | --- |

@@ -46,7 +46,7 @@ Gray row is 21.26 / 71.52 / 7.22. Neutral Selective Color and the identity RGB
 matrix preserve the input pixel exactly. Both use qualified display-resolution
 previews; export evaluates their native pixels.
 
-The [tone and color contract](../development/photo-editing-m5-m6-color.md#huesaturation-by-range)
+The [adjustment mathematics](photo-adjustments.md#hue-ranges-and-selective-color)
 defines the equations and bounds. All controls, validation, history and saved
 values use the existing runtime schema on GTK, Web, Android and Windows.
 
@@ -109,8 +109,8 @@ CPU delivery decodes the same representation; row analysis accumulates in Float6
 before packing the bounded Float32 guide. Sampling uses the source value only
 when every neighboring weight is zero.
 
-The [local-adjustment contract](../development/photo-editing-m5-m6-color.md#local-adjustments-and-source-aware-analysis)
-defines the equations and photographic acceptance. The guide is a fixed spatial
+The [local-adjustment contract](photo-adjustments.md#local-adjustments)
+defines the equations. The guide is a fixed spatial
 approximation, independent of zoom; effects retain native-resolution evaluation.
 
 ## Dehaze
@@ -135,7 +135,7 @@ before upper guides; queries and export use the same frozen source and consumer.
 The consumer protects bright neutral surfaces and neutral shadows, and applies a
 bounded linear-sRGB correction to the original premultiplied pixel. This retains
 alpha and extended signed/HDR values. The
-[local-adjustment contract](../development/photo-editing-m5-m6-color.md#local-adjustments-and-source-aware-analysis)
+[Dehaze contract](photo-adjustments.md#dehaze)
 owns the exact equations. It remains a fixed spatial approximation, independent
 of zoom and output size.
 

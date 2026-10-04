@@ -1647,8 +1647,8 @@ or prove their behavior.
 
 | Planned feature | Where it fits |
 | --- | --- |
-| [Document palettes](color-palettes-research.md) and [document color samplers](../development/photo-editing-m5-m6.md) | Palette and sampler objects; swatches become bindable later. |
-| [Color Lookup with imported `.cube` files](../development/photo-editing-m5-m6-execution.md) | Resources referenced by effect applications, kept after the source file is deleted. |
+| [Document palettes](color-palettes-research.md) and [document color samplers](../development/photo-editing-roadmap.md#inspection-presets-and-export) | Palette and sampler objects; swatches become bindable later. |
+| [Color Lookup with imported `.cube` files](../reference/runtime-filters.md#imported-color-lookup-tables) | Resources referenced by effect applications, kept after the source file is deleted. |
 | [Per-layer linear blending](../development/photo-editing-roadmap.md), Blend If, mask density and feather ([research](photo-editing-research.md)) | Occurrence fields omitted at their defaults; a per-layer blend space overrides the composition's. |
 | [Layer comps and tags](layers-research.md) | Comps are outputs with a context; tags are fields or copy-safe ancillary records. |
 | [Persisted history snapshots](photo-editing-research.md) | Explicitly retained snapshot objects outside the stack, with their own budget; ordinary undo history remains session state. |

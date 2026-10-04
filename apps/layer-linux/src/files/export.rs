@@ -1127,7 +1127,7 @@ async fn choose_recipe(w: &Rc<Workspace>, snapshot: &DocumentExport) -> Result<O
     }))
 }
 
-pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, String> {
+pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str, owner: u64, repeat: Option<&ExportRepeat>) -> Result<bool, String> {
     w.proof_panel.finish_pending(w).await?;
     // The preview and final file share one immutable artwork revision and time.
     let (mut snapshot, context) = {
@@ -1140,8 +1140,11 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         snapshot.time = snapshot.output().context.elapsed;
         Ok::<_, String>(snapshot)
     }).await.map_err(|_| "Export capture worker failed".to_string())??;
-    let Some(choice) = choose_recipe(w, &snapshot).await? else { return Ok(false); };
-    let recipe = choice.recipe;
+    let choice = if repeat.is_some() { None } else {
+        let Some(choice) = choose_recipe(w, &snapshot).await? else { return Ok(false); };
+        Some(choice)
+    };
+    let recipe = repeat.map(|last| last.recipe.clone()).or_else(|| choice.as_ref().map(|choice| choice.recipe.clone())).unwrap();
     recipe.validate().map_err(|reason| reason.message(&w.localization()))?;
     let copy = layer_ui::color_feature_copy::ExportCopy::new(&w.localization());
     let dialog = gtk::FileDialog::builder()
@@ -1172,7 +1175,14 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
     filters.append(&filter);
     dialog.set_filters(Some(&filters));
     dialog.set_default_filter(Some(&filter));
-    let file = match super::chooser::save(&dialog, &w.window, super::chooser::Folder::Export).await {
+    let retained = if let Some(last) = repeat {
+        let file = gio::File::for_uri(&last.location.uri);
+        let path = file.path();
+        let writable = gio::spawn_blocking(move || path.is_some_and(|path| std::fs::OpenOptions::new().write(true).open(path).is_ok()))
+            .await.unwrap_or(false);
+        writable.then_some(file)
+    } else { None };
+    let file = if let Some(file) = retained { file } else { match super::chooser::save(&dialog, &w.window, super::chooser::Folder::Export).await {
         Ok(file) => file,
         Err(e)
             if e.matches(gtk::DialogError::Dismissed) || e.matches(gtk::DialogError::Cancelled) =>
@@ -1180,16 +1190,12 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
             return Ok(false);
         }
         Err(e) => return Err(e.to_string()),
-    };
+    }};
     let path = file.path().ok_or_else(||layer_ui::DocumentHostError::ChooseDeviceFile.message(&w.localization()))?;
-    if w.gpu
-        .borrow()
-        .as_ref()
-        .and_then(|g| g.session.state().document_file.location.as_ref())
-        .is_some_and(|location| file.equal(&gio::File::for_uri(&location.uri)))
-    {
-        return Err(layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).choose_different.to_string());
-    }
+    let master = w.gpu.borrow().as_ref().and_then(|g| g.session.state().document_file.location.as_ref())
+        .and_then(|location| gio::File::for_uri(&location.uri).path());
+    let location = DocumentLocation { uri: file.uri().into(), name: path.file_name().unwrap_or_default().to_string_lossy().into_owned() };
+    w.gpu.borrow_mut().as_mut().ok_or("Canvas unavailable")?.session.prepare_export(id, owner, recipe.clone(), location)?;
     let extension = path.extension().and_then(|v| v.to_str()).unwrap_or("");
     if !extension.eq_ignore_ascii_case(recipe.format.extension())
         && !(recipe.format == ExportFormat::Tiff && extension.eq_ignore_ascii_case("tiff"))
@@ -1250,9 +1256,13 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         }
     ));
     let remembered = recipe.clone();
+    let master_refusal = layer_ui::color_feature_copy::DocumentColorCopy::new(&w.localization()).choose_different.to_string();
     let result = gio::spawn_blocking({
         let job = job.clone();
-        move || write_snapshot(gpu, snapshot, recipe, &path, &job)
+        move || {
+            if master.as_ref().is_some_and(|master| super::open::same_file(master, &path)) { return Err(layer_ui::ColorFeatureError::Diagnostic(master_refusal)); }
+            write_snapshot(gpu, snapshot, recipe, &path, &job)
+        }
     })
     .await
     .map_err(|_| layer_ui::ColorFeatureError::Diagnostic("Image export worker failed".into()).message(&w.localization()));
@@ -1263,12 +1273,16 @@ pub(super) async fn run(w: &Rc<Workspace>, id: u32, name: &str) -> Result<bool, 
         Ok(false)
     } else {
         result?.map_err(|reason| reason.message(&w.localization()))?;
-        let mut next = choice.library.clone();
-        next.remember(choice.destination.min(3), remembered).map_err(|reason| reason.preset_message(&w.localization()))?;
-        if next != choice.library {
-            presets::save(choice.library, next).await.map_err(|reason| {
-                layer_ui::DocumentDeliveryMessage::ExportPreferences {detail: reason.preset_message(&w.localization())}.message(&w.localization())
-            })?;
+        if let Some(choice) = choice {
+            let mut next = choice.library.clone();
+            let saved = async {
+                next.remember(choice.destination.min(3), remembered)?;
+                if next != choice.library { presets::save(choice.library, next).await?; }
+                Ok::<_, layer_ui::ColorFeatureError>(())
+            }.await;
+            if let Err(reason) = saved {
+                w.changed(Err(layer_ui::DocumentDeliveryMessage::ExportPreferences {detail: reason.preset_message(&w.localization())}.message(&w.localization())));
+            }
         }
         Ok(true)
     }

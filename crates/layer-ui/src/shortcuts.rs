@@ -652,7 +652,7 @@ fn command_section(command: CommandId) -> ShortcutSection {
         | C::ToggleTheme => ShortcutSection::View,
         C::SdrRendition | C::PreviewSdr | C::SoftProofSetup | C::SoftProof | C::GamutWarning | C::Histogram
         | C::AssignProfile | C::ConvertColorSpace | C::ChangeBitDepth | C::BlendPerceptual | C::BlendLinear => ShortcutSection::Color,
-        C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::CloseDocument
+        C::NewDocument | C::OpenDocument | C::SaveDocument | C::SaveDocumentAs | C::ExportDocument | C::ExportAgain | C::CloseDocument
         | C::ImportImage | C::DocumentProperties | C::NewWindow | C::Drawings => ShortcutSection::File,
         C::About | C::Website | C::SourceCode => ShortcutSection::Help,
         _ => ShortcutSection::Window,

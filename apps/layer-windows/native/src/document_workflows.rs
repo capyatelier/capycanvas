@@ -177,7 +177,7 @@ impl Task {
         let (kind, payload) = match request {
             HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id).map_err(|reason|reason.proof_message(session.localization()))?))),
             HostRequestKind::Document {
-                request: DocumentRequest::Export { name },
+                request: DocumentRequest::Export { name, .. },
             } => (
                 "export",
                 Payload::Export {

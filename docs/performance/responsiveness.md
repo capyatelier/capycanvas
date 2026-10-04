@@ -20,6 +20,30 @@ otherwise.
 | Cold launch with an empty shader cache → ready | 10 s | About 18 s in instrumented runs | Huion: 3.50 s to all shaders; workspace 2.34 s ([shader readiness](../internals/shared-shader-readiness.md), 2026-09-25) | |
 | Open the tier photo → first frame | 3 / 4 / 6 s | | | |
 
+## Export Again
+
+Supplemental measurements on 2026-10-04 use small unchanged PNG fixtures and
+the Export Again build based on `00b2d6e73`. Every repeat produces identical
+bytes. Completion includes native input acknowledgement, test settling and file
+publication; it is not input-to-visible-response latency or a reference-tier
+canvas measurement. Ordinary export starts at destination acceptance, while
+Export Again starts at command activation, so these are not encoder speed
+comparisons. The action reuses the existing capture and export workers.
+
+| Host and workload | Ordinary export | Export Again |
+| --- | ---: | ---: |
+| GTK release, NVIDIA RTX PRO 6000 Blackwell Max-Q, 64×48 → 32×24 U16 PNG, both themes at 640 | 294–395 ms | 357–362 ms |
+| Chrome 154 / hardware Vulkan on the same GPU, 160×120 PNG, both themes at 640/1100 | 98–128 ms | 125–315 ms |
+| Huion KP1202, Android debug, 128×128 PNG, both themes at 533 dp | 567–609 ms | 433–488 ms |
+
+Build SHA-256 prefixes are GTK test executable `f87c415678794486` with local
+GTK library `48d36af98003c10a`, Web Wasm `d80f8321457a4245` with file transport
+`5c0aba2e7a8d86e5`, and Android APK `c234ae856a267f34`.
+Browser destination handles and Android picker results are
+controlled fixtures; real encoding, browser output workers and Android provider
+writes run. These checks do not qualify large-photo export, external provider
+latency or physical pen latency.
+
 ## Supplemental cleanup comparison
 
 Measured on Huion KP1202 on 2026-09-29: benchmark release APKs, 4248 × 2832,

@@ -336,6 +336,7 @@ pub struct DocumentTabLabel {
     pub title: String,
     pub location: String,
     pub uri: Option<String>,
+    pub export_uri: Option<String>,
     pub modified: bool,
 }
 impl DocumentTabLabel {
@@ -356,6 +357,7 @@ impl DocumentTabLabel {
             title,
             modified: file.modified,
             uri: file.location.as_ref().map(|l| l.uri.clone()),
+            export_uri: file.export_uri.clone(),
             location: file
                 .location
                 .as_ref()

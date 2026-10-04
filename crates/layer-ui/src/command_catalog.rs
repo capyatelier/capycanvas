@@ -1000,6 +1000,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::NewDocument
             | C::OpenDocument
             | C::ExportDocument
+            | C::ExportAgain
             | C::UseReferenceBelow
             | C::SelectAll
             | C::Deselect
@@ -1059,6 +1060,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         let selection = self.has_selection();
         let apply_refusal = active.and_then(|l| art_layers::apply_mask_refusal(l.kind(), self.localization()));
         let reason: Arc<str> = match command {
+            C::ExportAgain => l.text(MessageId::COMMANDS_EXPORT_FIRST),
             C::Undo => l.text(MessageId::COMMANDS_NOTHING_TO_UNDO),
             C::Redo if self.cropping() => l.text(MessageId::COMMANDS_APPLY_OR_CANCEL_THE_CROP_FIRST),
             C::Redo => l.text(MessageId::COMMANDS_NOTHING_TO_REDO),

@@ -1,110 +1,185 @@
-# Photo editing roadmap
+# Photo editing: deferred work
 
-[Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [M2–M4 record](../history/photo-editing-m2-m4.md) · [Photo editing performance](photo-editing-performance.md)
+[Developer guide](README.md) · [Photo editing research](../history/photo-editing-research.md) · [Performance targets](../PERFORMANCE_TARGETS.md)
 
-Status: **open** (2026-10-02). Milestones M0 to M5 of the [research record's sequencing](../history/photo-editing-research.md#7-recommended-sequencing) are implemented: M1 on every host, and M2 to M5 on GTK, Web and Android, with live Liquify deferred. This plan lists what is left of the photo editing epic. Item IDs (GEO-1, RET-5 and so on) are specified in sections 5 and 6 of the research record, and journey numbers refer to its section 2. Unmet performance and memory gates remain in [photo editing performance](photo-editing-performance.md) and the [tier tables](../PERFORMANCE_TARGETS.md).
+The remaining photo epic is deferred. Resume individual features from this list
+against current code; the historical research is a design record, not a current
+inventory. P numbers identify the former M5–M6 execution sequence; research IDs
+identify the broader M7/M8 backlog. They do not require separate builds or commits.
 
-Each milestone gets its own implementation plan, as M2–M4 had: decisions first, then steps with tests and an exit test, then host journeys in light and dark. Delete the plan when its work lands.
+## Delivered foundation
 
-Transform, selected-pixel Move, Trim, Reveal All and Crop Fit Content now share
-asynchronous GPU bounds in their existing GTK, Web and Android controls.
-Transparent source padding, erased overrides, masks and selection coverage use
-actual pixels; pending work is cancellable. See [image commands](../ui/image-commands.md).
-Affine paint extents preserve canvas reach and hidden content after Move.
-Apply Transform to Pixels bakes accepted placement while retaining raw
-pigment, wetness and editable masks, with cancellable atomic publication.
-Paint and photos retain perspective and Warp, with exact reopen, grid splits,
-point selection and atomic group transforms. Their controls are described in
-the [canvas action bar](../ui/canvas-action-bar.md#transform-modes).
-Position anchor controls absolute X/Y independently of the draggable pivot;
-snapping, held nudges and Transform Again share one session implementation.
-Properties now supplies bounded pages, conditional visibility, slider mappings
-and soft bounds. Curves uses shared channel navigation and precise numeric
-point editing in Encoded RGB and Log HDR, described in
-[numeric controls](../ui/numeric-controls.md#properties-and-curves).
-White Balance on GTK, Web and Android now has a neutral-point picker with linear,
-alpha-weighted sampling before the adjustment and one-step undo. Its exact query path preserves
-placed layer content, reference membership, nested adjustment input and frozen
-animation ownership. See [White Balance](../ui/color-picker.md#white-balance).
-GTK, Web and Android also have dockable GPU Histogram and RGB Waveform panels, input histograms in Levels and Curves,
-and canvas clipping overlays. Levels has per-channel stages, full-source Auto
-and black/neutral/white calibration; Curves has matching calibration and targeted
-image dragging. See [Properties](../ui/numeric-controls.md#properties-and-curves)
-and [calibration](../ui/color-picker.md#levels-and-curves).
-Hue / Saturation now has six editable hue ranges and Colorize. Invert, luminance
-Threshold, Desaturate and Photo Filter use the existing shared Properties controls
-on GTK, Web, Android and Windows. Selective Color adds nine CMYK pages with Relative and
-Absolute methods; Channel Mixer adds RGB output rows and an independent
-Monochrome row through the same controls on GTK, Web, Android and Windows.
-Color Lookup on GTK, Web and Android offers built-in looks and imports bounded
-3D `.cube` LUTs, with Color space, Intensity and undoable replacement. Projects
-embed and deduplicate table data. See
-[runtime filters](../reference/runtime-filters.md#imported-color-lookup-tables).
-Shadows/Highlights, Clarity and Dehaze use shared source-aware analysis and
-ordinary Properties controls. Dehaze prepares its own dark-channel and
-transmission guide. Amount changes reuse each guide; exact capture prepares
-matching lower-to-upper dependencies. See
-[local adjustments](../reference/runtime-filters.md#shadowshighlights-and-clarity)
-and [Dehaze](../reference/runtime-filters.md#dehaze).
+GTK, Web and Android have the P01–P30 geometry and color implementation:
+pixel-tight bounds, retained perspective/Warp, explicit transform baking,
+group transforms, precise Properties controls, sampled White Balance and
+Levels/Curves, Histogram and RGB Waveform, pointwise and local adjustments,
+3D CUBE LUTs, Gaussian sigma through 85 and unified multi-stop gradients.
+Export Again adds the repeated-export action from P44–P45 independently of the
+remaining export redesign. Feature delivery does not close performance gates.
 
+Current behavior belongs in [image commands](../ui/image-commands.md),
+[transform controls](../ui/canvas-action-bar.md),
+[numeric controls](../ui/numeric-controls.md),
+[color sampling](../ui/color-picker.md),
+[runtime filters](../reference/runtime-filters.md) and
+[export](../ui/color-management.md#export-again).
 
-## Milestones
+## Inspection, presets and export
 
-| Milestone | Contents | Journeys |
-| --- | --- | --- |
-| **M6 Tone and color** | Remaining P-7 picker metadata, ADJ-1 with ADJ-4 and the picker bar modes (BAR-5), ADJ-2, ADJ-3, ADJ-5, ADJ-6, ADJ-10, VIEW-2 with its bar mode, VIEW-3 with sampler bars, IO-3, T-3, T-7, T-14. | Improves 5–10, 13, 29 |
-| **M7 Masking and compositing** | SEL-6 as an on-canvas session, SEL-7, SEL-8, LYR-3, LYR-4, ADJ-7, ADJ-8, T-10. | Opens 15; improves 11, 12, 14, 16, 17, 19 |
-| **M8 Advanced** | RET-5 (Content-Aware on the selection bar), RET-6, RET-8, RET-9 history brush, LYR-6 to LYR-9, IO-4 to IO-6, ADJ-11 remainder, ADJ-12, SEL-9, VIEW-4, VIEW-5, T-12, T-19, and the BAR-8 decision. | Opens 9; completes 21, 28 |
+| Former milestones | Deferred feature |
+| --- | --- |
+| P31–P32 | Info panel and persistent document color samplers, then Web/Android interactions. |
+| P33–P34 | Effects, Print Proof and SDR Before/After, split views and momentary comparison. |
+| P35–P37 | Cross-document copy/paste of one effect's settings and a local saved-preset library. |
+| P38–P39 | Authoritative shared export recipe controls; Long Edge, Short Edge, Percent and Megapixels size modes. |
+| P40 | Bounded output sharpening after resizing. |
+| P41–P43 | One frozen source per export dialog, actual encoded file-size calculation and artifact reuse on GTK/Web/Android. |
+| P46 | Combined workflows, resource lifetime, current hardware qualification and retirement of superseded paths. |
 
-Order: M6 to M8 as listed. Gradient interpolation in Oklab (T-14, in M6) is a per-gradient choice, as decision 4 of the M2–M4 record planned.
+**Info and samplers.** Reuse the bounded GPU artwork-query path. Store up to ten
+stable-ID sample positions, sample widths and readout choices in the drawing;
+values and active selection remain transient. Dragging makes one undo item and
+Cancel restores the original. Whole-image geometry commands transform positions;
+layer transforms leave them fixed. Readouts include named document RGB, linear
+RGB/EV, OKLCH and alpha, retaining signed/HDR values. Distinguish pending, empty
+and outside-canvas results. Query only while Info or a sampling gesture needs
+values. Keep Info as an ordinary secondary panel beside Navigator/Proof, with
+shared actions and native mouse, pen, touch and keyboard input.
 
-**Later, by decision:** per-layer linear blending for non-Normal layers in Perceptual documents; constant-colour pages, so a Dodge & Burn layer and other fill layers stop costing a full layer of GPU memory.
-Live Liquify (XF-5) is deferred to a future effect; existing baked Liquify remains supported.
+**Comparison.** Keep Before/After entirely in view state, outside history and
+export. Effects Before bypasses adjustments while preserving fills, geometry,
+masks and blending. Proof/SDR compare existing output transforms. Use Before,
+After, vertical and horizontal split layouts, initially vertical at 50%.
+Divider motion reuses a bounded display-resolution pair with shared source
+backing and animation time; it must not render the whole drawing twice per move.
+Momentary comparison has no default shortcut and releases on key-up, blur,
+modal opening or cancellation. Editing exits comparison. Keep HDR surface
+selection correct for both branches; Navigator and numeric samples retain their
+ordinary source meanings.
 
-## Apple and Windows
+**Effect settings and presets.** Copy one complete effect instance, including
+tagged colors, curves, gradients and LUT resources. Built-ins retain stable
+filter IDs, parameter-data versions and every keyed value; current code and
+controls come from the bundled catalog. Custom effects retain their immutable
+program. Paste requires an unlocked target and changes only the effect, with
+one undo item. Numeric values retain destination-working-space meaning; tagged
+colors retain their defining space. Validate accepted bounds independently of
+slider ranges, plus shaders and resources, before publication or application.
+Custom programs compile separately, so matching IDs or WGSL declarations may
+coexist; built-in IDs stay reserved. Catalog changes affect future insertions,
+not stored presets or existing custom applications. Refusal leaves source and
+destination intact. Follow the [package contract](../reference/capy-package.md).
+The window-owned clipboard survives tab changes and source closure without
+retaining live layers. A local library reuses Filter
+Types and its bounded preview cache; no new library browser or Settings section.
+The proposed library bounds are 64 entries and 64 MiB, with unique trimmed
+1–80-character names. Revalidate under the existing host storage lock, preserve
+old data on failed writes and reject stale target completions.
 
-The M5 transform controls and shared Properties pages/precise Curves also need
-native presentation and device verification on Apple; Windows presents them.
-Shared Rust support and bridge compilation do not establish native UI parity.
+**Export controls.** Extend the existing ExportDraft/ExportForm and worker,
+removing host recipe assembly as controls migrate. Add checked sizing with
+half-up rounding for edge/percent modes and a pixel-budget-safe megapixel mode;
+keep codec limits and the 32768-axis bound. PPI changes metadata only. Preserve
+current color/depth/metadata normalization. Revisit ordinary Export's per-drawing
+recipe defaults separately; Export Again already retains its concrete recipe.
 
-M1 shipped on every host, and Apple and Windows present M2 to M4.
+**Output sharpening.** Proposed choices are Off/Low/Standard/High, default Off.
+Apply a seven-tap Gaussian unsharp mask after the linear-premultiplied row
+resampler, before tone/profile conversion, quantization and gain-map splitting:
+sigma .75 output pixels, radius 3, amounts 0/.25/.5/1. Blur RGB and coverage
+together, sharpen straight RGB, then restore original alpha. Preserve finite
+extended values and admit at most seven input rows plus one output row. Off
+keeps the exact bypass. Qualify transparent edges, HDR and codec passes before
+exposing the control.
 
-## Open items from M2–M4
+**Frozen export and file size.** Preview, size calculation and publication share
+one immutable artwork revision/time per dialog. Calculate File Size performs an
+actual metadata-complete encode on demand; Export reuses the result only while
+owner and complete recipe match. Recipe changes invalidate prepared output;
+slider motion does not trigger full encoding. One running preparation and one
+replaceable pending recipe bound the work. Reuse GTK/Android temporary files
+and Web worker OPFS, existing memory admission, cancellation and stale-job
+cleanup. Never open or truncate the destination during preparation. Existing
+Export Again continues to capture fresh artwork for each invocation.
 
-**Behaviour**
-- **Copy to New Layer** creates an unlocked, unclipped layer above the clipping
-  stack. It captures the source's own mask but not the clipping base's coverage.
-- **Undo after a canvas change** is briefly disabled and says "Nothing to undo".
-- **Hidden pixels** can still be written by brush dabs past the canvas edge and by a fill through an inverted selection.
-- **Reselect** keeps the selection's position on undo of a canvas change.
-- **Straighten and Delete Cropped Pixels:** Delete Cropped Pixels trims masks by tile, so a band under 256 px of mask coverage can remain.
-- **Image commands:** undo of a turn or resize does not re-centre the view, and the resampled-tile prediction can overcount by one row or column.
-- **Eyedropper:** choosing another tool while the Eyedropper is active returns to the previous tool.
-- **Leave Copy** is not remembered across sessions.
-- **Disabled shortcuts:** a shortcut pressed while its command is disabled gives no notice (for example Ctrl+C while a selection is still being prepared).
-- **Preference actions** sent while Settings is closed are refused with no visible error.
-- **Ungroup of an isolated group** ignores adjustment children below its layers.
-- **Contact brushes without a release limit** (the Eraser, for example) still taper the last span when pressure falls without motion.
-- **Metadata:** writing IPTC-IIM, and Extended XMP for packets larger than one JPEG segment.
-- **Android:** right after a stylus Wand selection is published, a layer edit can briefly be refused with "Finish the canvas interaction first".
+## Masking and compositing: M7
 
-**Blending**
-- **Spot Healing** scores its candidates on linear values; only its tone match follows the document's Blending.
-- **Export matte and resize** run in linear light in Perceptual documents.
-- **Brush previews** are rendered in Linear light while new documents blend perceptually, and previews 10 (Smudge) and 24 (Natural Blender) still show linear mixing.
+| Research IDs | Deferred result |
+| --- | --- |
+| SEL-6 | On-canvas Refine Edge, uncertain-edge matting and optional color decontamination; output to selection, mask or a new masked layer. |
+| SEL-7 | Edge-aware quick selection through the existing painted-selection tool. |
+| SEL-8 | Channel selections, Color to Alpha and Select Similar. |
+| LYR-3 | Blend If / Blend Ranges with matching cached, fused and exact composition. |
+| LYR-4 | Mask density and live feather through the existing mask controls. |
+| ADJ-7 | Large-radius, lens and tilt-shift blurs; the delivered Gaussian range is not this feature. |
+| ADJ-8 | Noise Reduction, Median, Dust & Scratches and Smart Sharpen. |
+| T-10 | Live Wand/Select by Color tolerance changes from a saved baseline, amending one undo step. |
 
-**Host presentation**
-- **Properties panel** still offers a flat blend choice in code order, including modes hidden from the menu in float documents.
-- **GTK Document Properties** builds its rows in the host instead of from `DocumentInfo::describe`, as Web and Android do.
-- **GTK Tool Options** put every grouped checkbox option in one radio group, which would misbehave if two groups ever showed at once.
-- **Clone source bar on tablets** sits at the bottom of the work area instead of beside the disc.
-- **Android bar captions** clip their last glyph (for example "Apply", "Disable" and "Edit Content").
-- **Android Tool Options numbers** that are not sliders need two taps: one shows the field, one focuses it.
-- **Android Tool Set** lists Crop twice while the Crop tool is active.
-- **Accessible names:** relabelled bar buttons are announced by their command's label ("Enable Layer Mask" for a button reading "Disable").
-- **Web on a tablet:** twice, interior tiles drew white after a crop or straighten Apply in the Huion's Chrome; it did not recur in six later runs.
+## Advanced workflows: M8
 
-**Tests and tooling**
-- **GTK tablet proxy:** `--tablet` runs lose their Wayland connection whenever Quick Mask or Selection Layer rows change, and at the first clipboard write, so those pen journeys run on Web and Android only.
-- **Web tests on tablets:** after a run leaves an unsaved document, the next `device.test.mjs` load waits on "Recover drawing?".
-- **Headless Web** screenshots leave out WebGPU pixels, so the Clone and Heal live-preview checks need a headed run or a tablet.
+| Research IDs | Deferred result |
+| --- | --- |
+| RET-5, RET-6 | Local content-aware removal/fill, Patch and content-aware move. |
+| RET-8, RET-9 | Blur/sharpen brushes and History brush; Revert to Original already exists. |
+| LYR-6–LYR-9 | Align/distribute/auto-align, stack modes, layer styles, panorama and focus merge. |
+| IO-4–IO-6 | Batch processing, layer/selection export, RAW hand-off and New Drawing from Files. |
+| ADJ-11, ADJ-12 | Remaining lens corrections and Match Color; vignette removal already exists. |
+| SEL-9 | Subject/Sky selection research using on-device models with acceptable licenses, size and cost. |
+| VIEW-4, VIEW-5 | Additional guides/grid/overlays and the History panel. |
+| T-12, T-19, BAR-8 | Sampling below for Smudge/Blender, exposed brush blend modes and a decision on a layer action bar without a selection. |
+
+Live Liquify and Reconstruct remain deferred. Preserve the existing baked tool;
+a future live version is an effect, not another retained-placement variant.
+Per-layer linear blending in Perceptual drawings and compact constant-color
+storage are separate deferred decisions. RAW development and generative cloud
+features remain outside this epic's agreed scope.
+
+## Apple and Windows follow-up
+
+Re-audit existing implementations before assigning ports. Shared Rust and bridge
+compilation do not prove native parity; several Windows controls already exist.
+
+| Former packets | Remaining parity/qualification scope |
+| --- | --- |
+| F01/F08 | Retained geometry, group transforms, bake and input/lifecycle controls. |
+| F02/F09 | Properties pages, precise Curves, calibration, targeted adjustment and scopes. |
+| F03/F10 | Unified gradient editor and LUT file import. |
+| F04/F11 | Info, persistent samplers and comparison after their shared implementation. |
+| F05/F12 | Effect clipboard and saved presets after their shared implementation. |
+| F06/F13 | Export recipe controls and output sharpening. |
+| F07/F14 | Frozen export, destination ownership and Export Again. |
+| F15 | Retire remaining legacy Histogram routes and qualify every supported host. |
+
+Require macOS mouse/keyboard and physical-iPad pen/touch journeys, and Windows
+native D3D12/input/device-loss journeys, in both themes. Keep capabilities honest
+until native workflows work; never discard unsupported artwork silently.
+
+## Open qualification and earlier follow-ups
+
+Current measurements belong only in the [tier tables](../PERFORMANCE_TARGETS.md)
+and [responsiveness record](../performance/responsiveness.md). The latest
+[top-tier color/gradient results](../performance/top-tier.md) still have motion
+and completion-latency misses. No hardware ceiling is established.
+Reproduce the reported 8-bit gradient banding with its original colors and zoom
+before treating that report as closed.
+
+Before closing the epic, qualify active motion, exact analysis/Auto, guide
+preparation, export/cancellation, first visible content and continuous process/
+driver memory peaks on reference hardware. Include physical stylus input,
+input-to-photon latency and low/mid reference tiers. Measure combined
+transform/mask → adjustment → comparison/preset → export workflows when the
+deferred features exist. Repeated Frequency Separation and merge/undo must
+remain bounded; the earlier 24 MP memory gates were roughly 1.5 GB settled PSS,
+2.5 GB during the operation and at least 1 GB device memory available.
+
+Reproduce older reports before treating them as current bugs or allocating work:
+clipping coverage in Copy to New Layer; transient undo/selection readiness;
+hidden-pixel writes; crop-mask trimming; image-command recentering; isolated
+group adjustment handling; Eyedropper tool switching; Leave Copy persistence;
+disabled-action feedback; contact-brush release taper; IPTC/large XMP writing;
+perceptual export-matte/resize and brush-preview consistency; grouped blend
+choices; GTK Document Properties/Tool Options; tablet Clone bar positioning;
+Android caption clipping, numeric focus and duplicated Crop choice; accessible
+labels; Web tablet tile artifacts; and private GTK/Web test-runner limitations.
+The [M2–M4 record](../history/photo-editing-m2-m4.md) preserves their original
+context. Unrelated baseline failures remain in the [testing guide](testing.md).

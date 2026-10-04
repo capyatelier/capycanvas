@@ -41,6 +41,8 @@ command-save-document = Simpan
 command-save-document-as = Simpan Sebagai…
 
 command-export-document = Ekspor…
+command-export-again = Ekspor Lagi
+commands-export-first = Ekspor gambar ini terlebih dahulu
 
 command-close-document = Tutup
 

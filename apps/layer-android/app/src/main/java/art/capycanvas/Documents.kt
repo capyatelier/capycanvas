@@ -88,7 +88,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         try {
             val (uri, previewOnly) = decision.await() ?: return true
             packageCopying = true
-            if (previewOnly && original != null && withContext(Dispatchers.IO) { samePackageDestination(original, uri) }) {
+            if (previewOnly && original != null && withContext(Dispatchers.IO) { sameDestination(original, uri) }) {
                 error(JSONObject(summary).getString("destination_error"))
             }
             spool = withContext(Dispatchers.IO) {File.createTempFile("capy-package-",if(previewOnly)".png" else ".capy",application.cacheDir)}
@@ -105,7 +105,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
         }
         return true
     }
-    private fun samePackageDestination(original: Uri, destination: Uri): Boolean {
+    private fun sameDestination(original: Uri, destination: Uri): Boolean {
         if (original.normalizeScheme() == destination.normalizeScheme()) return true
         if (original.scheme == "file" && destination.scheme == "file") {
             return runCatching { java.nio.file.Files.isSameFile(File(original.path!!).toPath(), File(destination.path!!).toPath()) }.getOrDefault(false)
@@ -193,8 +193,17 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         val epoch=file.optLong("epoch")
                         finish(id!!,false)
                         try { host.proof.finishPending() } catch(e:Exception) {host.reportActionError(e.message?:actionFailed);return@launch}
-                        if(host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke("export_document")
-                    } else exportRequest=request
+                        if(host.snapshot?.objectOrNull("state")?.objectOrNull("document_file")?.optLong("epoch")==epoch)host.invoke(if(document.objectOrNull("repeat")!=null)"export_again" else "export_document")
+                    } else {
+                        val repeat=document.objectOrNull("repeat")
+                        if(repeat==null)exportRequest=request else {
+                            exportRecipe=repeat.getJSONObject("recipe")
+                            val approved=approval
+                            val uri=Uri.parse(repeat.getJSONObject("location").getString("uri"))
+                            val writable=withContext(Dispatchers.IO) {runCatching {application.contentResolver.openFileDescriptor(uri,"rw")?.use {true} ?: false}.getOrDefault(false)}
+                            if(writable)transfer(request,uri,approved) else picker=DocumentPicker(request,approved.first,approved.second)
+                        }
+                    }
                 }
                 catch(e:Exception){complete(id!!,false,e.message?:actionFailed)}
             } }
@@ -272,10 +281,11 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                 }
                 if (kind == "export") {
                     val master = host.snapshot?.getJSONObject("state")?.getJSONObject("document_file")?.objectOrNull("location")?.optString("uri")
-                    check(uri.toString() != master) { host.catalog.getJSONObject("document_delivery_copy").getString("separate_copy") }
+                    check(master==null||!withContext(Dispatchers.IO) {sameDestination(Uri.parse(master),uri!!)}) { host.catalog.getJSONObject("document_delivery_copy").getString("separate_copy") }
                     val extensions = exportFileType(exportRecipe?.getString("format")).second
                     if (location!!.getString("name").substringAfterLast('.').lowercase() !in extensions) error(deliveryMessage("export_extension", "extension" to extensions.first()))
                 }
+                if(kind=="export")host.withNative {Native.dispatch(it,obj("type" to "prepare_export","id" to id,"owner" to document.getLong("owner"),"recipe" to exportRecipe,"location" to location).toString())}
                 if(kind=="open"||kind=="new")host.drawingTabs.trim()
                 if (kind in listOf("export", "open", "new")) { control = Native.captureControl(); exportControl = control; exportCancelled = false; publishing = false; exporting = kind == "export"; opening = !exporting }
                 if (kind == "export") withTimeout(30_000) {
@@ -301,7 +311,7 @@ internal class DocumentController(private val host: CanvasHost, private val appl
                         } ?: error(actionFailed)
                     }
                     finish(id, true)
-                    if(kind=="export")try {
+                    if(kind=="export"&&document.objectOrNull("repeat")==null)try {
                         val color=JSONObject(host.withNative{Native.query(it,obj("type" to "document_color").toString())})
                         ColorPreferencesStore.presets(application,color,obj("type" to "remember","index" to if(exportDestination<4)exportDestination else 3,"recipe" to exportRecipe))
                     }catch(e:Exception){host.reportActionError(deliveryMessage("export_preferences", "detail" to (e.message ?: actionFailed)))}

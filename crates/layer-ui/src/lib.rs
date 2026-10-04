@@ -124,7 +124,7 @@ pub use session::{
     AdjustmentChoice, ApplicationLink, ApplicationMenu, ZoomMenu, NAVIGATOR_COMMANDS, ClipboardCapture, CloseDecision,
     LARGE_CLIP_PIXELS, PasteMode, PixelClip,
     DEFAULT_DOCUMENT_EXTENT,
-    DocumentColorOperation, DocumentIdleReason, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
+    DocumentColorOperation, DocumentIdleReason, ExportRepeat, DocumentHostError, DocumentHostErrorCopy, HostRequestFailure, DocumentExport, DocumentFileState, DocumentLocation, DocumentRequest, EffectAction, FilterCategoryChoice,
     FilterLoadState, FilterPickerAction, FilterPickerState, LayerPropertiesView,
     MAX_NEW_DOCUMENT_DIMENSION, PropertyControl, PropertyKind, PropertyPageView, CurveAxis, CurveAxisView, CurveControls, CurveCoordinateControl, CurveDomain, new_drawing, new_document_spec,
 };
@@ -298,6 +298,7 @@ pub const FILE_MENU: MenuSpec = MenuSpec {
             CommandId::SaveDocument,
             CommandId::SaveDocumentAs,
             CommandId::ExportDocument,
+            CommandId::ExportAgain,
         ],
         &[CommandId::DocumentProperties, CommandId::RepairSourceProfile, CommandId::Drawings, CommandId::CloseDocument],
     ],
@@ -428,6 +429,7 @@ command_ids! {
     SaveDocument,
     SaveDocumentAs,
     ExportDocument,
+    ExportAgain,
     CloseDocument,
     Pen,
     Pencil,
@@ -629,6 +631,7 @@ command_ids! {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
+            Self::ExportAgain => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
             Self::Waveform => Panel::Waveform.available_on(platform),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),
@@ -689,7 +692,7 @@ impl CommandId {
             Self::OpenDocument => "open-document",
             Self::SaveDocument => "save-document",
             Self::SaveDocumentAs => "save-as",
-            Self::ExportDocument => "export-document",
+            Self::ExportDocument | Self::ExportAgain => "export-document",
             Self::CloseDocument => "close-document",
             Self::Pen => "pen",
             Self::Pencil => "pencil",
@@ -938,6 +941,7 @@ impl CommandId {
             Self::SaveDocument => MessageId::COMMAND_SAVE_DOCUMENT,
             Self::SaveDocumentAs => MessageId::COMMAND_SAVE_DOCUMENT_AS,
             Self::ExportDocument => MessageId::COMMAND_EXPORT_DOCUMENT,
+            Self::ExportAgain => MessageId::COMMAND_EXPORT_AGAIN,
             Self::CloseDocument => MessageId::COMMAND_CLOSE_DOCUMENT,
             Self::Pen => MessageId::COMMAND_PEN,
             Self::Pencil => MessageId::COMMAND_PENCIL,
@@ -1546,6 +1550,7 @@ pub enum UiAction {
     RestoreSavedSettings {
         saved: String,
     },
+    PrepareExport { id: u32, owner: u64, recipe: ExportRecipe, location: DocumentLocation },
     CompleteRequest {
         id: u32,
         error: Option<String>,
@@ -1560,7 +1565,8 @@ impl UiAction {
     pub(crate) fn is_host_report(&self) -> bool {
         matches!(
             self,
-            Self::CompleteRequest { .. }
+            Self::PrepareExport { .. }
+                | Self::CompleteRequest { .. }
                 | Self::CompleteRequestFailure { .. }
                 | Self::CloseSettings
                 | Self::RestoreSettings { .. }

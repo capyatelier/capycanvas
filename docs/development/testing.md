@@ -37,6 +37,16 @@ in that test fixture module; production sessions keep the host's platform.
 Photo writer tests use `photo::test_support::assert_provider_failure` for row
 cancellation. Keep each codec's admission, publication and pixel assertions.
 
+Export Again uses `export_again_tests` in `layer-ui`, GTK's
+`native_export_again_retains_recipe_and_current_pixels_per_document`, Web's
+`--export-metadata` journey and Android's
+`AndroidRasterTest#exportAgainRetainsDestinationRecipeAndDrawingOwnership`.
+Exercise both themes at narrow and wide widths. Check current pixels with the
+retained recipe, per-drawing destinations, cancellation/failure, missing-file
+fallback and unchanged editable-master bytes and dirty state. Browser downloads
+still require their existing confirmation; picker/handle doubles exercise
+transport failures without writing outside the private test profile.
+
 Workspace tests replay the SQLite/browser preference fixture through IndexedDB.
 The manager fixture's `expire_lease` changes both the cached claim and SQLite row.
 Host test helpers keep serialization flags, update readers and GPU frame timing

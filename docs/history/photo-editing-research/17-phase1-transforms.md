@@ -1,8 +1,8 @@
 # Phase 1 audit: transform session, distort and warp
 
-[Photo editing research](../photo-editing-research.md) · [Phase 1 plan](../../development/canvas-action-bar-transforms.md) · source report, 2026-09-26 · baseline `5eb45a47`
+[Photo editing research](../photo-editing-research.md) · [Canvas action bar](../../ui/canvas-action-bar.md) · source report, 2026-09-26 · baseline `5eb45a47`
 
-Read-only implementation audit made by an agent against baseline `5eb45a47` to prepare Phase 1. It covers the transform transaction, the preview and commit pipeline, selections after a non-affine commit, interpolation, placed photos, tests, and window blur. The [Phase 1 plan](../../development/canvas-action-bar-transforms.md) incorporates the findings and resolves the points where the audits differ. Line numbers can drift in later commits; verify before relying on one.
+Read-only implementation audit made by an agent against baseline `5eb45a47` to prepare Phase 1. It covers the transform transaction, the preview and commit pipeline, selections after a non-affine commit, interpolation, placed photos, tests, and window blur. The implementation plan is retired; the current [canvas action bar guide](../../ui/canvas-action-bar.md) describes the delivered behavior. Line numbers can drift in later commits; verify before relying on one.
 
 ---
 

@@ -273,8 +273,8 @@ async fn document_request(
             .ok_or_else(|| DocumentHostError::DrawingTabsUnavailable.message(&w.localization()))?(project, None, None);
         return Ok(true);
     }
-    if let DocumentRequest::Export { name } = request {
-        return export::run(w, id, name).await;
+    if let DocumentRequest::Export { name, owner, repeat, .. } = request {
+        return export::run(w, id, name, *owner, repeat.as_ref()).await;
     }
     let Some(file) = choose_file(w, request).await? else {
         return Ok(false);

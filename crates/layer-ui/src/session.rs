@@ -2346,6 +2346,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     && !matches!(document.working.target, Some(SourceTarget::Coverage(_)))
                     && self.can_edit_original(active.unwrap_or_default())
             }
+            CommandId::ExportAgain => self.files.last_export.is_some() && self.require_document_idle().is_ok() && !self.state.document_file.busy,
             CommandId::AssignProfile | CommandId::ConvertColorSpace | CommandId::ChangeBitDepth | CommandId::ImportImage | CommandId::PasteImage | CommandId::PasteInPlace | CommandId::DocumentProperties | CommandId::NewDocument | CommandId::OpenDocument | CommandId::ExportDocument => {
                 self.require_document_idle().is_ok() && !self.state.document_file.busy
             }
@@ -3722,6 +3723,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.apply_settings(Settings::restore_localized(&saved, self.localization()))?;
                 (SETTINGS | COMMANDS, true)
             }
+            UiAction::PrepareExport { id, owner, recipe, location } => {
+                self.prepare_export(id, owner, recipe, location)?;
+                (0, false)
+            }
             UiAction::CompleteRequest { id, error } => {
                 self.retire_host_request(id)?;
                 self.set_host_error(error);
@@ -4556,9 +4561,13 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.request_save(command == CommandId::SaveDocumentAs)?;
                 Ok((DOCUMENT | HOST, false))
             }
-            CommandId::ExportDocument => {
+            CommandId::ExportDocument | CommandId::ExportAgain => {
+                let repeat = (command == CommandId::ExportAgain).then(|| self.files.last_export.clone()).flatten();
                 self.request_document(DocumentRequest::Export {
-                    name: self.document_filename("png"),
+                    name: repeat.as_ref().map_or_else(|| self.document_filename("png"), |last| last.location.name.clone()),
+                    owner: self.engine.document().owner,
+                    epoch: self.state.document_file.epoch,
+                    repeat,
                 })?;
                 Ok((DOCUMENT | HOST, false))
             }

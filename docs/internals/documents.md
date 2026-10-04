@@ -228,6 +228,21 @@ Opening first validates the project and prepares its GPU dependencies. The host
 must preserve the existing document if that work fails. Closing coordinates Save,
 Discard and Cancel with any pending edits or write operation.
 
+Export requests carry their drawing owner and activation epoch. The host stages
+the validated concrete recipe and destination through `prepare_export`; only
+successful completion publishes them as that drawing's last export. Cancelled,
+failed and stale completions cannot replace it. Export Again uses the same
+request and worker with that recipe and destination, capturing fresh artwork on
+each invocation. The transport checks current destination access and aliases of
+the editable master before publication. Export never advances a save checkpoint.
+
+The remembered export belongs to `DocumentFiles`: parked tabs and renderer
+recreation retain it, while a fresh or reopened drawing resets it. It is absent
+from artwork and settings serialization. Tab views expose its opaque
+`export_uri` so Web retains the corresponding file handle for exactly that
+drawing's lifetime. See [Export Again](../ui/color-management.md#export-again)
+for destination fallback behavior.
+
 The policy is shared, but the transports differ. GTK uses native file dialogs and
 local atomic replacement; Android uses document providers; Apple uses native file
 services. Windows implements native project dialogs and PNG export, while the

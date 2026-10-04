@@ -64,9 +64,7 @@ and how parity is checked.
 - [Automatic recovery](autorecovery.md) is deferred until the qualified application
   cutover lands, then revisits session restoration and checkpoint storage through
   the [authored capture boundary](../reference/authored-model.md#capture-phases-and-recovery-extension).
-- [Photo editing roadmap](photo-editing-roadmap.md) lists what is left of the
-  [photo editing build list](../history/photo-editing-research.md) after M4, and
-  [photo editing performance](photo-editing-performance.md) the performance and
-  memory gates M2–M4 did not meet.
-- [Canvas action bar and transforms](canvas-action-bar-transforms.md) is Phase 1
-  of the same list.
+- [Photo editing roadmap](photo-editing-roadmap.md) collects deferred inspection,
+  presets, export, masking, retouching and host qualification work. Current
+  measurements and remaining targets belong in the
+  [performance tier tables](../PERFORMANCE_TARGETS.md).
