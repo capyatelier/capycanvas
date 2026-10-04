@@ -11,8 +11,11 @@ specific tasks.
 ### Working alongside other sessions
 
 - Other people and agents commit, build and use devices on this machine and push
-  to `origin/main` while you work. Work in your own worktree under `/home`, never
-  in `/tmp` ([environment](docs/development/environment.md)).
+  to `origin/main` while you work. Use the worktree named by the user or provided
+  as the task's working directory; it already provides isolation.
+  Create another worktree only when none is assigned or the user requests one,
+  and put it under `/home`, never `/tmp`
+  ([environment](docs/development/environment.md)).
 - Fetch and rebase onto `origin/main` before pushing, then rerun your checks.
   Never force-push `main`, `git reset --hard` or bare `git stash` in a shared
   checkout, or delete another session's worktree, branch, build, install or files.

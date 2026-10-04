@@ -9,15 +9,20 @@ hardware are in [devices](devices.md).
 
 ## Worktrees and build directories
 
-- Work in your own git worktree. Another session may be building, testing or
-  committing in any other checkout, including the main one.
+- Use the git worktree named by the user or provided as the task's working
+  directory. It is already isolated; do not create a nested or replacement
+  worktree for a routine task.
+  Create one only when none is assigned or the user requests one. Another session
+  may be building, testing or committing in any other checkout, including the
+  main one.
 - Put worktrees and build directories under `/home`, for example
   `~/.cache/capy/<name>`. `/tmp` is a tmpfs whose per-user quota every session
   shares; a few Cargo `target/` directories fill it, and then every session's
   builds and tool output fail. If a worktree must live in `/tmp`, set
   `CARGO_TARGET_DIR` and the Gradle build directory under `/home`.
-- Delete your own scratch worktrees and build copies when you finish. Never
-  delete, reset or clean another session's worktree, branch, build or files.
+- Delete scratch worktrees and build copies you created when you finish; keep
+  the user's assigned worktree. Never delete, reset or clean another session's
+  worktree, branch, build or files.
 - Set `CARGO_TERM_COLOR=never` when output goes to a log or an agent.
 
 ## Build profiles
