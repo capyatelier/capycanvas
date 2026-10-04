@@ -14,6 +14,7 @@ impl fmt::Display for DecodeError {
 impl std::error::Error for DecodeError {}
 impl From<String> for DecodeError { fn from(message: String) -> Self { Self::Invalid(message) } }
 impl From<&str> for DecodeError { fn from(message: &str) -> Self { Self::Invalid(message.into()) } }
+impl From<DecodeError> for String { fn from(error: DecodeError) -> Self { error.to_string() } }
 pub type DecodeResult<T> = Result<T, DecodeError>;
 
 pub fn object<'a>(value: &'a Value, allowed: &[&str]) -> DecodeResult<&'a Map<String, Value>> {
@@ -171,7 +172,9 @@ pub fn encode_resolution(value: ImageResolution) -> Result<Value, String> {
 
 pub fn parse_affine(value: &Value) -> DecodeResult<Affine> {
     let result = Affine(floats(value)?);
-    if result.inverse().is_none() { return Err("Invalid affine transform".into()); }
+    let [a,b,c,d,_,_] = result.0.map(f64::from);
+    if a*d-b*c == 0. { return Err("Invalid affine transform".into()); }
+    if result.inverse().is_none() { return Err(DecodeError::Unsupported("Affine transform exceeds evaluator precision".into())); }
     Ok(result)
 }
 pub fn encode_affine(value: Affine) -> Result<Value, String> {
@@ -180,7 +183,8 @@ pub fn encode_affine(value: Affine) -> Result<Value, String> {
 }
 pub fn parse_projective(value: &Value) -> DecodeResult<Projective> {
     let result = Projective(floats(value)?);
-    if result.inverse().is_none() { return Err("Invalid projective transform".into()); }
+    if Projective::invert(result.0.map(f64::from)).is_none() { return Err("Invalid projective transform".into()); }
+    if result.inverse().is_none() { return Err(DecodeError::Unsupported("Projective transform exceeds evaluator precision".into())); }
     Ok(result)
 }
 pub fn encode_projective(value: Projective) -> Result<Value, String> {
@@ -205,13 +209,14 @@ pub fn parse_mesh(value: &Value) -> DecodeResult<MeshMap> {
         if values.len() < 2 { return Err("Invalid mesh breakpoint count".into()); }
         if values.len() > usize::from(MeshMap::MAX_CELLS) + 1 { return Err(DecodeError::Unsupported("Mesh exceeds the supported cell count".into())); }
         *out = values.iter().map(finite_f32).collect::<DecodeResult<Vec<_>>>()?.into();
+        if out[0] != 0. || out[out.len()-1] != 1. || out.windows(2).any(|w|w[1]<=w[0]) { return Err("Invalid mesh breakpoints".into()); }
     }
     let values = required(fields, "net")?.as_array().ok_or("Invalid mesh net")?;
     let expected = (3 * (breakpoints[0].len() - 1) + 1) * (3 * (breakpoints[1].len() - 1) + 1);
     if values.len() != expected { return Err("Invalid mesh net size".into()); }
     let mesh = MeshMap { frame: parse_affine(required(fields, "frame")?)?, breakpoints,
         net: values.iter().map(parse_point).collect::<DecodeResult<Vec<_>>>()?.into() };
-    if !mesh.valid() { return Err("Invalid mesh".into()); }
+    if !mesh.valid() { return Err(DecodeError::Unsupported("Mesh exceeds evaluator precision".into())); }
     Ok(mesh)
 }
 pub fn encode_mesh(value: &MeshMap) -> Result<Value, String> {
@@ -225,7 +230,7 @@ pub fn parse_placement(value: &Value, source: Rect) -> DecodeResult<(Point, Laye
     let placement = LayerPlacement { outer: optional(fields, "projective", Projective::IDENTITY, parse_projective)?,
         mesh: fields.get("mesh").map(parse_mesh).transpose()?.map(Arc::new),
         interpolation: optional(fields, "interpolation", Interpolation::Linear, parse_interpolation)? };
-    placement.validate_for(source).map_err(|e| DecodeError::Invalid(e.to_string()))?;
+    admit_projective(placement.outer, placement.mesh.as_ref().map_or(source, |mesh| mesh.drawn_bounds()))?;
     Ok((translation, placement))
 }
 pub fn encode_placement(translation: Point, value: &LayerPlacement, source: Rect) -> Result<Value, String> {
@@ -247,8 +252,13 @@ pub fn parse_mask_placement(value: &Value, source: Rect) -> DecodeResult<(Point,
     let fields = object(value, &["translation", "projective"])?;
     let translation = optional(fields, "translation", Point::default(), parse_point)?;
     let projective = optional(fields, "projective", Projective::IDENTITY, parse_projective)?;
-    if !projective.covers(source) { return Err("Invalid mask placement".into()); }
+    admit_projective(projective, source)?;
     Ok((translation, projective))
+}
+fn admit_projective(projective: Projective, source: Rect) -> DecodeResult<()> {
+    if projective.weight_ratio(source).is_none() { return Err("Placement crosses its projective horizon".into()); }
+    if !projective.covers(source) { return Err(DecodeError::Unsupported("Placement exceeds evaluator precision".into())); }
+    Ok(())
 }
 pub fn encode_mask_placement(translation: Point, projective: Projective, source: Rect) -> Result<Value, String> {
     if !projective.covers(source) { return Err("Invalid mask placement".into()); }
@@ -287,7 +297,10 @@ pub fn parse_proof<P>(value: &Value, profile: impl FnOnce(&Value) -> DecodeResul
         conversion: ConversionOptions { intent: optional(fields, "intent", RenderingIntent::RelativeColorimetric, parse_intent)?,
             black_point_compensation: optional(fields, "black_point_compensation", true, boolean)? },
         simulate_paper: optional(fields, "simulate_paper", false, boolean)?, simulate_black_ink: optional(fields, "simulate_black_ink", true, boolean)? };
-    result.validate().map_err(String::from)?;
+    result.validate().map_err(|error| match error {
+        crate::color::ProofRecipeError::NameLimit => DecodeError::Unsupported(error.diagnostic().into()),
+        _ => DecodeError::Invalid(error.diagnostic().into()),
+    })?;
     Ok(result)
 }
 pub fn encode_proof<P>(value: &ProofRecipe<P>, profile: impl FnOnce(&P) -> Result<Value, String>) -> Result<Value, String> {
@@ -422,6 +435,18 @@ mod tests {
     }
 
     #[test]
+    fn finite_transform_precision_is_an_admission_limit() {
+        unsupported(parse_affine(&json!([1e-40,0,0,1,0,0])));
+        invalid(parse_affine(&json!([0,0,0,1,0,0])));
+        let mesh=MeshMap::identity(Rect::from_extent([16;2]),[2,1]).unwrap();
+        let mut value=encode_mesh(&mesh).unwrap();
+        value["breakpoints"][0]=json!([0,1e-7,1]);
+        unsupported(parse_mesh(&value));
+        value["breakpoints"][0]=json!([0,0,1]);
+        invalid(parse_mesh(&value));
+    }
+
+    #[test]
     fn proof_frozen_defaults_and_known_semantic_validation() {
         let decode_profile = |v:&Value| Ok(v.clone());
         let minimal = json!({"name":"Printer", "profile":{"builtin":"srgb"}});
@@ -434,11 +459,11 @@ mod tests {
         for (value, reason) in [
             (json!({"name":"Printer", "profile":{}, "simulate_paper":true, "simulate_black_ink":false}), crate::color::ProofRecipeError::PaperRequiresBlackInk),
             (json!({"name":"Printer", "profile":{}, "intent":"absolute_colorimetric"}), crate::color::ProofRecipeError::AbsoluteBlackPoint),
-            (json!({"name":"x".repeat(1025), "profile":{}}), crate::color::ProofRecipeError::NameLimit),
         ] {
             assert_eq!(parse_proof(&value,decode_profile).unwrap_err(), DecodeError::Invalid(reason.diagnostic().into()));
         }
         assert!(parse_proof(&json!({"name":"", "profile":{}}),decode_profile).unwrap().name.is_empty());
+        unsupported(parse_proof(&json!({"name":"x".repeat(1025), "profile":{}}),decode_profile));
         unsupported(parse_proof(&json!({"name":"Printer", "profile":{}, "intent":"future"}),decode_profile));
         unsupported(parse_proof(&json!({"name":"Printer", "profile":{}, "future":true}),decode_profile));
         let absolute = parse_proof(&json!({"name":"Printer", "profile":{}, "intent":"absolute_colorimetric", "black_point_compensation":false}),decode_profile).unwrap();

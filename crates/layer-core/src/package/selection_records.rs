@@ -86,7 +86,7 @@ pub fn decode_selection(value: &Value, resources: &mut impl SelectionResourceRea
         (Some(value), None) => {
             let contours = value.as_array().ok_or("Expected selection contours")?;
             let mut result = Vec::new();
-            result.try_reserve_exact(contours.len()).map_err(|_| "Selection allocation failed")?;
+            result.try_reserve_exact(contours.len()).map_err(|_| DecodeError::Unsupported("Selection allocation failed".into()))?;
             for contour in contours {
                 let points = contour.as_array().ok_or("Expected a selection contour")?;
                 if points.len() < 3 { return Err("Invalid selection contour".into()); }
@@ -116,7 +116,7 @@ pub fn decode_selection(value: &Value, resources: &mut impl SelectionResourceRea
                 return Err(DecodeError::Unsupported("Selection exceeds coverage admission".into()));
             }
             let mut loaded = Vec::new();
-            loaded.try_reserve_exact(chunks.len()).map_err(|_| "Selection allocation failed")?;
+            loaded.try_reserve_exact(chunks.len()).map_err(|_| DecodeError::Unsupported("Selection allocation failed".into()))?;
             for (index, value) in chunks.iter().enumerate() {
                 reference(value)?;
                 loaded.push(resources.chunk(value, &chunk_descriptor(extent, bounds, byte_coverage, index))?);

@@ -14,7 +14,7 @@ fn graph() -> GraphShape {
         outputs: vec![id(5)], default_output: Some(id(5)), ..Default::default()
     }
 }
-fn validate(graph: &GraphShape) -> Result<Support, &'static str> { graph.validate(id(1), GraphLimits::default()) }
+fn validate(graph: &GraphShape) -> Result<Support, GraphError> { graph.validate(id(1), GraphLimits::default()) }
 
 #[test]
 fn portable_identity_is_exact_and_has_one_spelling() {
@@ -54,7 +54,7 @@ fn retained_unplaced_content_is_validated_without_being_collected() {
     g.objects.insert(id(7), Shape::Unknown { ancillary: false, references: vec![id(6)] });
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
     g.objects.insert(id(7), Shape::Unknown { ancillary: false, references: vec![id(99)] });
-    assert_eq!(validate(&g), Err("Dangling authored reference"));
+    assert_eq!(validate(&g), Err("Dangling authored reference".into()));
 }
 
 #[test]
@@ -91,7 +91,7 @@ fn shared_matte_is_not_an_image_alpha_or_a_visibility_dependency() {
     g.objects.insert(id(9), Shape::Effect { definition: id(7), inputs: vec![id(6)] });
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
     g.objects.insert(id(3), Shape::Occurrence { content: Content::Paint(id(6)), mask: None });
-    assert_eq!(validate(&g), Err("Invalid authored relationship"));
+    assert_eq!(validate(&g), Err("Invalid authored relationship".into()));
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn output_contexts_do_not_change_source_ownership() {
     g.outputs.push(id(6));
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
     g.default_output = Some(id(99));
-    assert_eq!(validate(&g), Err("Invalid default output"));
+    assert_eq!(validate(&g), Err("Invalid default output".into()));
     g.outputs.clear(); g.default_output = None;
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))));
 }
@@ -110,11 +110,11 @@ fn output_contexts_do_not_change_source_ownership() {
 fn membership_and_evaluation_cycles_are_not_resource_references() {
     let mut g = graph();
     g.objects.insert(id(3), Shape::Occurrence { content: Content::Group(id(2)), mask: None });
-    assert_eq!(validate(&g), Err("Cyclic authored dependency"));
+    assert_eq!(validate(&g), Err("Cyclic authored dependency".into()));
     let mut g = graph();
     g.objects.insert(id(6), Shape::Definition { dependencies: vec![id(7)] });
     g.objects.insert(id(7), Shape::Definition { dependencies: vec![id(6)] });
-    assert_eq!(validate(&g), Err("Cyclic authored dependency"));
+    assert_eq!(validate(&g), Err("Cyclic authored dependency".into()));
     g.objects.insert(id(6), Shape::Unknown { ancillary: false, references: vec![id(7)] });
     g.objects.insert(id(7), Shape::Unknown { ancillary: false, references: vec![id(6)] });
     assert!(matches!(validate(&g), Ok(Support::Preserved(_))), "unknown reference semantics do not imply execution");
@@ -135,7 +135,7 @@ fn ancillary_dependencies_cannot_change_required_artwork() {
 fn duplicate_membership_is_malformed_and_expansion_is_bounded() {
     let mut g = graph();
     g.objects.insert(id(2), Shape::Stack { entries: vec![id(3), id(3)] });
-    assert_eq!(validate(&g), Err("Occurrence belongs to multiple stack slots"));
+    assert_eq!(validate(&g), Err("Occurrence belongs to multiple stack slots".into()));
     let g = graph();
     for limits in [
         GraphLimits { objects: 4, ..Default::default() },

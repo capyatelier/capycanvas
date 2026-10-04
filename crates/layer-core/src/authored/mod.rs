@@ -6,7 +6,7 @@ pub use identity::PortableId;
 pub use resource::{EncodedBytes, Resource, ResourceEncoding};
 pub(crate) use resource::{EncodedIntegrity, IntegrityCache};
 pub use store::{Handle, RecordChange, Store};
-pub use topology::{Content, GraphLimits, GraphShape, Shape, Support};
+pub use topology::{Content, GraphError, GraphLimits, GraphShape, Shape, Support};
 
 #[cfg(test)]
 mod tests;

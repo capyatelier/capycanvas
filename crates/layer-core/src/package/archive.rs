@@ -1,4 +1,5 @@
 use std::{collections::BTreeSet, io::{Read, Seek, SeekFrom, Write}};
+use super::values::{DecodeError, DecodeResult};
 
 pub const MIMETYPE: &[u8] = b"application/x-capy-canvas";
 const LIMIT32: u64 = u32::MAX as u64;
@@ -35,7 +36,7 @@ fn extras(bytes: &[u8], expected: &[u64]) -> Result<(), String> {
 }
 
 impl Directory {
-    pub fn read(input: &mut (impl Read + Seek), max_entries: usize, max_metadata: u64) -> Result<Self, String> {
+    pub fn read(input: &mut (impl Read + Seek), max_entries: usize, max_metadata: u64) -> DecodeResult<Self> {
         let length = input.seek(SeekFrom::End(0)).map_err(io)?;
         let end_offset = length.checked_sub(22).ok_or("Incomplete ZIP end record")?;
         let end = at::<22>(input, end_offset)?;
@@ -61,9 +62,10 @@ impl Directory {
             [count, size, offset] = actual;
             start
         } else { end_offset };
-        if count == 0 || count > max_entries as u64 || size > max_metadata || add(offset, size)? != directory_end {
-            return Err("Invalid or oversized ZIP directory".into());
+        if count == 0 || add(offset, size)? != directory_end {
+            return Err("Invalid ZIP directory".into());
         }
+        if count > max_entries as u64 || size > max_metadata { return Err(DecodeError::Unsupported("ZIP directory exceeds admission".into())); }
         let mut archive = zip::ZipArchive::new(&mut *input).map_err(|e| format!("Invalid ZIP: {e}"))?;
         if archive.len() as u64 != count || archive.offset() != 0 { return Err("Ambiguous ZIP member inventory".into()); }
         let mut members = Vec::with_capacity(count as usize);
@@ -72,10 +74,12 @@ impl Directory {
         for index in 0..archive.len() {
             let file = archive.by_index_raw(index).map_err(|e| e.to_string())?;
             let name = std::str::from_utf8(file.name_raw()).map_err(|_| "Non-ASCII ZIP member")?;
+            if name.len()>255 { return Err(DecodeError::Unsupported("ZIP member name exceeds admission".into())); }
+            if name == "manifest.json" && file.size() > max_metadata { return Err(DecodeError::Unsupported("Package metadata exceeds limit".into())); }
             if !name_valid(name) || !names.insert(name.to_ascii_lowercase()) || file.encrypted()
                 || match file.compression() {
                     zip::CompressionMethod::Stored => file.size() != file.compressed_size(),
-                    zip::CompressionMethod::Deflated => name != "manifest.json" || file.compressed_size() >= file.size() || file.size() > max_metadata,
+                    zip::CompressionMethod::Deflated => name != "manifest.json" || file.compressed_size() >= file.size(),
                     _ => true,
                 }
                 || file.unix_mode().is_some_and(|m| m & 0o170000 != 0 && m & 0o170000 != 0o100000) {

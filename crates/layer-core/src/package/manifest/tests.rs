@@ -22,7 +22,7 @@ fn directory(extra: &[(&str, &[u8])]) -> Directory {
     }).collect();
     Directory { members, length:offset }
 }
-fn parse(value: &Value, directory: &Directory) -> Result<ManifestRead, String> {
+fn parse(value: &Value, directory: &Directory) -> DecodeResult<ManifestRead> {
     Manifest::parse(&serde_json::to_vec(value).unwrap(), directory, ManifestLimits::default())
 }
 fn known(value: &Value, directory: &Directory) -> Manifest {
@@ -213,6 +213,7 @@ fn metadata_and_reference_limits_apply_before_graph_adoption() {
         ManifestLimits{graph:GraphLimits{objects:2,..Default::default()},..Default::default()},
         ManifestLimits{graph:GraphLimits{edges:2,..Default::default()},..Default::default()},
         ManifestLimits{traversal_nodes:2,..Default::default()}] {
-        assert!(Manifest::parse(&bytes,&directory(&[]),limits).is_err());
+        let outcome=Manifest::parse(&bytes,&directory(&[]),limits);
+        assert!(matches!(outcome,Err(DecodeError::Unsupported(_))|Ok(ManifestRead::Limited {..})|Ok(ManifestRead::Known(Manifest {support:Support::Preserved(_),..}))),"{outcome:?}");
     }
 }

@@ -145,6 +145,7 @@ impl Document {
             }
         }
         if tiles>limits.tiles || raster_bytes>limits.raster_bytes{return Err("Artwork pixels exceed the memory limit".into());}
+        crate::package::codec::admit_metadata(&self.artwork,limits)?;
         Ok(())
     }
 }

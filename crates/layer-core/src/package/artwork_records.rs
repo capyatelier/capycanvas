@@ -44,7 +44,10 @@ fn coordinate(value:&Value)->DecodeResult<[u32;2]> {let pair=v::array(value,2)?;
 fn material(value:&Value)->DecodeResult<Option<RasterWatercolor>> {
     let data=fields(value,&["watercolor"])?;
     data.get("watercolor").map(|value| {let data=fields(value,&["wet_edge","burnt_edge","edge_width"])?;
-        Ok(RasterWatercolor {wet_edge:v::finite_f32(v::required(data,"wet_edge")?)?,burnt_edge:v::finite_f32(v::required(data,"burnt_edge")?)?,edge_width:v::finite_f32(v::required(data,"edge_width")?)?})}).transpose()
+        let material=RasterWatercolor {wet_edge:v::finite_f32(v::required(data,"wet_edge")?)?,burnt_edge:v::finite_f32(v::required(data,"burnt_edge")?)?,edge_width:v::finite_f32(v::required(data,"edge_width")?)?};
+        if material.edge_width<=0. {return Err("Watercolor edge width must be positive".into());}
+        if !(1. ..=16.).contains(&material.edge_width) {return Err(DecodeError::Unsupported("Watercolor edge width exceeds evaluator range".into()));}
+        Ok(material)}).transpose()
 }
 fn encode_raster(raster:&RasterRevision, domain:[u32;2], mask:bool,color:DocumentColor,resources:&mut ResourceInventory,cancel:&AtomicBool)->Result<Map<String,Value>,String> {
     let raster=raster.wait_data_cancellable(cancel)?; raster.validate_index(domain,mask,color)?;
@@ -105,6 +108,9 @@ fn decode_original(value:&Value,reader:&mut ResourceReader<'_>)->DecodeResult<Ar
     let interpretation=fields(v::required(data,"interpretation")?,&["channels","depth","profile","profile_assumed"])?;
     let channels=match v::string(v::required(interpretation,"channels")?)? {"gray"=>SourceChannels::Gray,"gray_alpha"=>SourceChannels::GrayAlpha,"rgb"=>SourceChannels::Rgb,"rgba"=>SourceChannels::Rgba,"cmyk"=>SourceChannels::Cmyk,name=>return Err(DecodeError::Unsupported(format!("Unknown source channels {name}")))};
     let interpretation=SourceInterpretation {channels,depth:v::parse_depth(v::required(interpretation,"depth")?)?,profile:reader.profile(v::required(interpretation,"profile")?)?,profile_assumed:bool_field(interpretation,"profile_assumed",false)?};
+    if interpretation.depth.is_float() && (!matches!(interpretation.profile,crate::color::ColorProfile::Builtin(_)) || !matches!(channels,SourceChannels::Rgb|SourceChannels::Rgba)) {
+        return Err(DecodeError::Unsupported("HDR source interpretation is unsupported".into()));
+    }
     let kind=match data.get("role").map(v::string).transpose()?.unwrap_or("original") {"original"=>SourceKind::Original,"rasterized"=>SourceKind::Rasterized,name=>return Err(DecodeError::Unsupported(format!("Unknown original role {name}")))};
     let mut tiles=BTreeMap::new(); let records=list(v::required(data,"tiles")?)?;
     if records.len()>reader.limits.tiles {return Err(DecodeError::Unsupported("Too many original tiles".into()));}
@@ -122,6 +128,7 @@ fn content_bounds(art:&Artwork,content:&OccurrenceContent,canvas:[u32;2])->Resul
         OccurrenceContent::Stack(_)|OccurrenceContent::Effect(_)=>Rect::from_extent(canvas)})
 }
 fn encode_guides(guides:&Guides)->Result<Value,String> {
+    if guides.rulers.len()>crate::rulers::MAX_RULERS {return Err("Too many rulers".into());}
     let mut seen=BTreeSet::new(); let mut rulers=Vec::new();
     for (id,geometry) in &guides.rulers {
         if !seen.insert(*id) {return Err("Duplicate ruler identity".into());} geometry.validate().map_err(|e|e.to_string())?;
@@ -132,12 +139,14 @@ fn encode_guides(guides:&Guides)->Result<Value,String> {
 }
 fn decode_guides(value:&Value)->DecodeResult<Guides> {
     let data=fields(value,&["rulers"])?; let mut rulers=Vec::new(); let mut seen=BTreeSet::new();
-    if let Some(value)=data.get("rulers") {let records=list(value)?;if records.len()>1024 {return Err(DecodeError::Unsupported("Too many rulers".into()));}for ruler in records {
+    if let Some(value)=data.get("rulers") {let records=list(value)?;if records.len()>crate::rulers::MAX_RULERS {return Err(DecodeError::Unsupported("Too many rulers".into()));}for ruler in records {
         let ruler=fields(ruler,&["id","geometry"])?; let id=v::string(v::required(ruler,"id")?)?.parse::<PortableId>()?;
         if !seen.insert(id) {return Err("Duplicate ruler identity".into());}
         let geometry=v::required(ruler,"geometry")?; let kind=v::string(v::required(geometry.as_object().ok_or("Expected ruler geometry")?,"kind")?)?;
         let geometry=match kind {"straight"|"parallel"=> {let data=fields(geometry,&["kind","start","end"])?; let start=v::parse_point(v::required(data,"start")?)?; let end=v::parse_point(v::required(data,"end")?)?; if kind=="straight" {RulerGeometry::Straight {start,end}} else {RulerGeometry::Parallel {start,end}}},"radial"=> {let data=fields(geometry,&["kind","center"])?; RulerGeometry::Radial {center:v::parse_point(v::required(data,"center")?)?}},name=>return Err(DecodeError::Unsupported(format!("Unknown ruler {name}")))};
-        geometry.validate().map_err(|e|e.to_string())?; rulers.push((id,geometry));
+        let (start,end)=geometry.handles();
+        if end==Some(start) {return Err("Ruler endpoints must be distinct".into());}
+        geometry.validate().map_err(|e|DecodeError::Unsupported(e.to_string()))?; rulers.push((id,geometry));
     }} Ok(Guides {rulers})
 }
 
@@ -386,6 +395,9 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
     }
     art.root=art.compositions.allocated(manifest.root).ok_or("Root is not a composition")?;
     decode_records_into(&mut art,&manifest.objects,reader)?;
+    if art.guides.iter().map(|(_,_,guides)|guides.rulers.len()).sum::<usize>()>crate::rulers::MAX_RULERS {
+        return Err(DecodeError::Unsupported("Too many rulers".into()));
+    }
     let mut metadata=PhotoMetadata::default();
     if let Some(value)=&manifest.metadata {
         let data=fields(value,&["exif","xmp","iptc"])?;
@@ -396,10 +408,12 @@ pub(crate) fn decode_with_layout(manifest:&Manifest,reader:&mut ResourceReader<'
             *slot=Some(reader.bytes(value,"capy.photo-metadata/1",PhotoMetadata::MAX_BYTES)?);
         }}
     }
+    if metadata.blocks().into_iter().flatten().map(|block|block.len()).sum::<usize>()>PhotoMetadata::MAX_BYTES {
+        return Err(DecodeError::Unsupported("Photo metadata exceeds admission".into()));
+    }
     metadata.validate()?;art.metadata=Arc::new(metadata);
     let default=manifest.default_output.ok_or_else(||DecodeError::Unsupported("Artwork has no editable output".into()))?;
     art.default_output=art.outputs.allocated(default).ok_or("Default is not an output")?;
-    art.topology()?;
     if matches!(manifest.support,Support::Editable){SceneIndex::build(&art)?;}
     Ok(art)
 }

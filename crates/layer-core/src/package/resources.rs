@@ -216,7 +216,6 @@ pub struct ResourceReader<'a> {
     pub(crate) bytes: BTreeMap<PortableId, Resource<[u8]>>, pub(crate) texts: BTreeMap<PortableId, Resource<str>>,
     pub(crate) tiles: BTreeMap<PortableId, Arc<TileBlob>>, pub(crate) luts: BTreeMap<PortableId, Arc<Lut3d>>, decoded: u64,
     verified: bool,
-    retained_tiles: bool,
     aliases: BTreeMap<(usize,u64,u64), (PortableId,Value)>,
     rasters: BTreeMap<PortableId, crate::raster::RasterTile>,
     pub(crate) selections: BTreeMap<SelectionKey, Arc<crate::SelectionPixels>>,
@@ -231,10 +230,7 @@ pub(crate) struct ResourceCache {
 }
 impl<'a> ResourceReader<'a> {
     pub fn new(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        Self {manifest,backing,cancelled,limits,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,retained_tiles:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),originals:BTreeMap::new()}
-    }
-    pub(crate) fn for_history(manifest: &'a Manifest, backing: &'a ImmutableBacking, cancelled: &'a AtomicBool, limits: crate::ProjectLimits) -> Self {
-        let mut reader=Self::new(manifest,backing,cancelled,limits);reader.retained_tiles=true;reader
+        Self {manifest,backing,cancelled,limits,bytes:BTreeMap::new(),texts:BTreeMap::new(),tiles:BTreeMap::new(),luts:BTreeMap::new(),decoded:0,verified:false,aliases:BTreeMap::new(),rasters:BTreeMap::new(),selections:BTreeMap::new(),originals:BTreeMap::new()}
     }
     pub(crate) fn install_cache(&mut self, cache: ResourceCache) {
         self.bytes=cache.bytes;self.texts=cache.texts;self.tiles=cache.tiles;self.luts=cache.luts;self.decoded=cache.decoded;
@@ -264,7 +260,7 @@ impl<'a> ResourceReader<'a> {
     }
     fn charge(&self, bytes: u64) -> DecodeResult<()> {
         let decoded = self.decoded.checked_add(bytes).ok_or("Decoded resource size overflow")?;
-        if decoded > self.limits.raster_bytes { return Err(DecodeError::Unsupported("Drawing exceeds resource admission budget".into())); }
+        if decoded > self.limits.raster_bytes.saturating_add(self.limits.asset_bytes) { return Err(DecodeError::Unsupported("Drawing exceeds resource admission budget".into())); }
         Ok(())
     }
     pub fn raster_tile(&mut self, reference:&Value) -> DecodeResult<crate::raster::RasterTile> {
@@ -287,9 +283,9 @@ impl<'a> ResourceReader<'a> {
         if self.verified { return Err("Missing verified resource payload".into()); }
         let record = self.manifest.resources.get(&id).ok_or("Missing resource")?;
         let range = record.range.ok_or_else(|| DecodeError::Unsupported("Unknown resource location".into()))?;
-        if record.bytes > limit as u64 { return Err("Resource exceeds encoded size bound".into()); }
+        if record.bytes > limit as u64 { return Err(DecodeError::Unsupported("Resource exceeds encoded size bound".into())); }
         if range.length != record.bytes {return Err("Resource range length disagrees with descriptor".into());}
-        let mut bytes = Vec::new(); bytes.try_reserve_exact(record.bytes as usize).map_err(|_| "Resource allocation failed")?;
+        let mut bytes = Vec::new(); bytes.try_reserve_exact(record.bytes as usize).map_err(|_| DecodeError::Unsupported("Resource allocation failed".into()))?;
         while bytes.len() < record.bytes as usize {
             if self.cancelled.load(Ordering::Relaxed) { return Err("Package operation cancelled".into()); }
             let length = (record.bytes as usize - bytes.len()).min(MAX_RANGE_BYTES);
@@ -346,7 +342,7 @@ impl<'a> ResourceReader<'a> {
         }
         let descriptor=parse_descriptor(&record["data"])?;
         let size=descriptor.byte_len([TILE_SIZE;2]).ok_or("Invalid tile descriptor")?;
-        let retained=if self.retained_tiles {self.manifest.resources[&id].bytes}else{size as u64};
+        let retained=self.manifest.resources[&id].bytes;
         self.charge(retained)?;
         let (bytes,integrity)=self.stored(id,lz4_flex::block::get_maximum_output_size(size))?;
         let tile=Arc::new(TileBlob::from_package(id,descriptor,bytes).map_err(|e|self.backing.fail(e))?);
@@ -383,6 +379,7 @@ impl super::effect_records::ResourceReader for ResourceReader<'_> {
     fn lut(&mut self, value: &Value) -> DecodeResult<Arc<Lut3d>> {
         let binding=values::object(value,&["resource","title"])?;
         let title:Arc<str>=values::string(values::required(binding,"title")?)?.into();
+        if title.chars().count()>256 {return Err(DecodeError::Unsupported("Color lookup title exceeds the current limit".into()));}
         let resource=values::required(binding,"resource")?;
         let (id,record)=self.record(resource,"capy.lut3d/1")?;
         if let Some(lut)=self.luts.get(&id) {return Ok(Arc::new(lut.with_title(title)?));}
@@ -392,11 +389,13 @@ impl super::effect_records::ResourceReader for ResourceReader<'_> {
         }
         let data=values::object(&record["data"],&["size","domain","decoded_bytes"])?;
         let size=values::u32_value(values::required(data,"size")?)?;
+        if size>Lut3d::MAX_SIZE {return Err(DecodeError::Unsupported("Color lookup size exceeds the current limit".into()));}
         let domain=values::array(values::required(data,"domain")?,2)?;
         let mut bounds=[[0.;3];2];
         for (out,row) in bounds.iter_mut().zip(domain) { for (component,value) in out.iter_mut().zip(values::array(row,3)?) { *component=values::finite_f32(value)?; } }
         let bytes=self.bytes(resource,"capy.lut3d/1",(Lut3d::MAX_SIZE as usize).pow(3)*12)?;
         let lut=Arc::new(Lut3d::from_resource(size,bounds,title,bytes).map_err(|e|self.backing.fail(e.into()))?);
+        lut.validate_gpu_domain().map_err(|e|DecodeError::Unsupported(e.into()))?;
         self.luts.insert(id,lut.clone()); Ok(lut)
     }
 }

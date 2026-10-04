@@ -211,7 +211,7 @@ impl PreparedTransfer {
     fn adopt_verified_with_retention<T>(&self,limits:ProjectLimits,cancel:&AtomicBool,retained:bool,additional:impl FnOnce(&Artwork,&mut ResourceReader<'_>)->Result<T,String>)->Result<(ArtworkCapture,Option<crate::Selection>,T),String>{
         active(cancel)?;let manifest=manifest(&self.descriptor,limits)?;
         let empty:Arc<[u8]>=Arc::from([]);let backing=ImmutableBacking::new(Arc::new(empty)).map_err(str::to_string)?;
-        let mut reader=if retained {ResourceReader::for_history(&manifest,&backing,cancel,limits)}else{ResourceReader::new(&manifest,&backing,cancel,limits)};reader.require_verified();
+        let mut reader=ResourceReader::new(&manifest,&backing,cancel,limits);reader.require_verified();
         if manifest.resources.len()!=self.descriptor.resources.len()||self.descriptor.checkpoint.document!=manifest.document{return Err("Transfer identity inventory mismatch".into());}
         let mut decoded=0u64;
         for (id,state) in &self.descriptor.resources {

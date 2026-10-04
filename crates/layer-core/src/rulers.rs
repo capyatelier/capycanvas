@@ -2,6 +2,8 @@
 use crate::{DocumentError, Point, Rect};
 use serde::{Deserialize, Serialize};
 
+pub(crate) const MAX_RULERS: usize = 1024;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RulerKind {
@@ -171,7 +173,7 @@ where
 }
 
 pub(crate) fn validate_rulers(rulers: &[Ruler]) -> Result<(), DocumentError> {
-    if rulers.len() > 1024 {
+    if rulers.len() > MAX_RULERS {
         return Err(DocumentError::InvalidRuler("Too many rulers"));
     }
     let mut ids = std::collections::BTreeSet::new();

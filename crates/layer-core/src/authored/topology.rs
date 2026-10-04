@@ -55,6 +55,16 @@ impl Default for GraphLimits {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GraphError { Invalid(&'static str), Unsupported(&'static str) }
+impl From<&'static str> for GraphError { fn from(message: &'static str) -> Self { Self::Invalid(message) } }
+impl std::fmt::Display for GraphError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self { Self::Invalid(message) | Self::Unsupported(message) => f.write_str(message) }
+    }
+}
+impl From<GraphError> for String { fn from(error: GraphError) -> Self { error.to_string() } }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Support { Editable, Preserved(BTreeSet<&'static str>) }
 
 #[derive(Default)]
@@ -65,23 +75,23 @@ pub struct GraphShape {
     pub default_output: Option<PortableId>,
 }
 impl GraphShape {
-    pub fn validate(&self, root: PortableId, limits: GraphLimits) -> Result<Support, &'static str> {
-        if self.objects.len() > limits.objects { return Err("Authored object limit exceeded"); }
-        if self.objects.keys().any(|id| self.resources.contains(id)) { return Err("Duplicate authored identity"); }
+    pub fn validate(&self, root: PortableId, limits: GraphLimits) -> Result<Support, GraphError> {
+        if self.objects.len() > limits.objects { return Err(GraphError::Unsupported("Authored object limit exceeded")); }
+        if self.objects.keys().any(|id| self.resources.contains(id)) { return Err("Duplicate authored identity".into()); }
         let root_shape = self.objects.get(&root).ok_or("Missing authored root")?;
-        if root_shape.ancillary() { return Err("Ancillary authored root"); }
+        if root_shape.ancillary() { return Err("Ancillary authored root".into()); }
         let mut reasons = BTreeSet::new();
         if !matches!(root_shape, Shape::Composition { .. }) { reasons.insert("Unsupported authored root"); }
         if self.outputs.is_empty() != self.default_output.is_none()
             || self.default_output.is_some_and(|id| !self.outputs.contains(&id)) {
-            return Err("Invalid default output");
+            return Err("Invalid default output".into());
         }
         let mut seen_outputs = BTreeSet::new();
         for id in &self.outputs {
-            if !seen_outputs.insert(*id) { return Err("Duplicate output"); }
+            if !seen_outputs.insert(*id) { return Err("Duplicate output".into()); }
             let shape = self.objects.get(id).ok_or("Missing output")?;
             if !matches!(shape, Shape::Output { .. } | Shape::Unknown { ancillary: false, .. }) {
-                return Err("Invalid output type");
+                return Err("Invalid output type".into());
             }
         }
         let mut memberships = BTreeMap::<PortableId, usize>::new();
@@ -91,18 +101,18 @@ impl GraphShape {
         let mut expansion = BTreeMap::<PortableId, Vec<PortableId>>::new();
         for (id, shape) in &self.objects {
             edges = edges.checked_add(shape.reference_count()).ok_or("Authored edge count overflow")?;
-            if edges > limits.edges { return Err("Authored edge limit exceeded"); }
+            if edges > limits.edges { return Err(GraphError::Unsupported("Authored edge limit exceeded")); }
             let references = shape.references();
             for target in &references {
                 if let Some(referenced) = self.objects.get(target) {
-                    if referenced.ancillary() { return Err("Artwork or ancillary record depends on ancillary data"); }
-                } else if !self.resources.contains(target) { return Err("Dangling authored reference"); }
+                    if referenced.ancillary() { return Err("Artwork or ancillary record depends on ancillary data".into()); }
+                } else if !self.resources.contains(target) { return Err("Dangling authored reference".into()); }
             }
-            let mut expect = |target: PortableId, predicate: fn(&Shape) -> bool| -> Result<(), &'static str> {
+            let mut expect = |target: PortableId, predicate: fn(&Shape) -> bool| -> Result<(), GraphError> {
                 match self.objects.get(&target) {
                     Some(Shape::Unknown { ancillary: false, .. }) => { reasons.insert("Unknown referenced type"); Ok(()) },
                     Some(value) if predicate(value) => Ok(()),
-                    _ => Err("Invalid authored relationship"),
+                    _ => Err("Invalid authored relationship".into()),
                 }
             };
             let mut dependencies = Vec::new();
@@ -115,7 +125,7 @@ impl GraphShape {
                 Shape::Stack { entries } => {
                     for entry in entries {
                         expect(*entry, |s| matches!(s, Shape::Occurrence { .. }))?;
-                        if *memberships.entry(*entry).or_default() != 0 { return Err("Occurrence belongs to multiple stack slots"); }
+                        if *memberships.entry(*entry).or_default() != 0 { return Err("Occurrence belongs to multiple stack slots".into()); }
                         *memberships.get_mut(entry).unwrap() += 1;
                     }
                     dependencies.extend(entries);
@@ -176,7 +186,7 @@ impl GraphShape {
     }
 }
 
-fn acyclic(graph: &BTreeMap<PortableId, Vec<PortableId>>, limit: usize) -> Result<(), &'static str> {
+fn acyclic(graph: &BTreeMap<PortableId, Vec<PortableId>>, limit: usize) -> Result<(), GraphError> {
     let mut counts: BTreeMap<_, usize> = graph.keys().map(|id| (*id, 0)).collect();
     for dependencies in graph.values() {
         for dependency in dependencies { *counts.entry(*dependency).or_default() += 1; }
@@ -185,7 +195,7 @@ fn acyclic(graph: &BTreeMap<PortableId, Vec<PortableId>>, limit: usize) -> Resul
     let mut depths = BTreeMap::<PortableId, usize>::new();
     let mut visited = 0;
     while let Some((id, depth)) = queue.pop_front() {
-        if depth > limit { return Err("Authored dependency depth exceeded"); }
+        if depth > limit { return Err(GraphError::Unsupported("Authored dependency depth exceeded")); }
         visited += 1;
         for dependency in graph.get(&id).into_iter().flatten() {
             let next_depth = depths.entry(*dependency).or_default();
@@ -195,6 +205,6 @@ fn acyclic(graph: &BTreeMap<PortableId, Vec<PortableId>>, limit: usize) -> Resul
             if *count == 0 { queue.push_back((*dependency, *next_depth)); }
         }
     }
-    if visited != counts.len() { return Err("Cyclic authored dependency"); }
+    if visited != counts.len() { return Err("Cyclic authored dependency".into()); }
     Ok(())
 }

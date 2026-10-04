@@ -137,6 +137,23 @@ Invalid is reserved for data that can never become valid: malformed JSON, IDs,
 references, lengths, integrity, cycles and values outside a field's mathematical
 domain. A well-formed value that this version does not accept, such as a count,
 range or combination a later version may allow, is unsupported.
+Reader, editor admission and finalized capture publication share metadata and
+record admission. Metadata is bounded to 64 MiB, fewer than 128 nested JSON
+containers and 4,194,304 traversal nodes; evaluation graphs admit 65,536 objects,
+262,144 evaluation edges and depth 128. Resource bindings, including repeated
+tile references, do not consume evaluation edges. There are at most 262,144
+resource records. Project admission also bounds layers, dimensions, retained
+source bytes and raster bytes using the same units on reopen. Shared source
+owners and compressed tile allocations count once; editable raster capacity is
+charged per source. Pending edits must resolve before final publication.
+
+Current evaluator bounds include 1,024 rulers, 32 mesh cells per axis, 32 curve
+points or gradient stops and LUT cubes of side 65. Precision bounds on invertible
+maps, positive mesh intervals, distinct ruler points and finite LUT domains are unsupported; singular
+maps, horizon crossings and unordered domains are invalid. Readers stop at an
+admission bound and preserve original bytes without attempting further allocation.
+Known outputs are listed when bounded metadata parsing can reach them.
+
 Validate every retained object, including unplaced work. A valid graph outside the
 editable subset remains preserved: shared editable sources, shared effect
 applications or two group occurrences using one stack cannot be normalized by
@@ -221,7 +238,7 @@ objects have closed known field sets; unknown additions follow preservation poli
 | Cubic mesh | Required `frame:[a,b,c,d,tx,ty]`, `breakpoints:[[x…],[y…]]`, `net:[[x,y]…]`; affine frame maps the unit square to source pixels, breakpoints retain the current cubic patch partition, net is row-major destination control points. GPU tessellation is absent. |
 | Sparse tile entry | `{"coordinate":[x,y],"plane":"color","resource":{"ref":"…"}}`; all fields required, coordinate U32 in source-local 256-pixel tiles, no repeated coordinate/plane pair. |
 | Imported `original` | Required `extent`, `interpretation`, `tiles`; optional `role` (`original` or `rasterized`) and `resolution`. Interpretation has required `channels`, `depth`, `profile` and optional `profile_assumed`. Original tile entries have coordinate/resource only. |
-| Material | `{"watercolor":{"wet_edge":number,"burnt_edge":number,"edge_width":number}}`; all three settings required when watercolor exists; finite wet/burnt edges in `[0,1]`, edge width in `[1,16]` source pixels. |
+| Material | `{"watercolor":{"wet_edge":number,"burnt_edge":number,"edge_width":number}}`; all three settings required when watercolor exists; finite wet/burnt edges in `[0,1]`, positive edge width in source pixels, currently admitted in `[1,16]`. |
 | Selection shape | `{"contours":[[[x,y]…]…]}` using even/odd interiors, or `{"pixels":{"extent":[w,h],"bounds":[x0,y0,x1,y1],"depth":"u4","chunks":[{"ref":"…"}…]}}`; exactly one alternative. U8 coverage uses depth `u8`. |
 | Selection placement | Optional `affine:[a,b,c,d,tx,ty]` and `inverted`; identity/false when absent. Coverage-source `initial` uses the same shape/placement values inline. |
 | Guides | `rulers` array with required stable portable `id` and `geometry`; geometry is `{kind:"straight"|"parallel",start:[x,y],end:[x,y]}` or `{kind:"radial",center:[x,y]}`. Ruler IDs are type-owned local subelement IDs. |
@@ -400,6 +417,9 @@ packed RGB samples: three little-endian F32 numbers per sample, red varying
 fastest, then green, then blue. `capy.rgb-f32/1` has no header or padding.
 Samples, domain and title survive save/reopen without reinterpretation. The
 renderer derives normalization metadata and its GPU buffer layout at runtime.
+Finite ordered domains outside GPU precision or range, and cubes exceeding the
+current size limit, are unsupported rather than corrupt. Nonfinite samples,
+unordered domains and inconsistent payload lengths remain invalid.
 The selected color space uses the stable IDs `srgb`, `display_p3`, `adobe_rgb`,
 `pro_photo`; option order is unrelated to their explicit GPU codes.
 
@@ -435,7 +455,9 @@ Resource CRCs and byte-range offsets retain their existing stored-byte meaning.
 All members have zero flags, no encryption or descriptors, and matching
 size/CRC/name/version fields in local and central headers. Names are
 relative ASCII paths without empty, `.` or `..` components, backslashes, drive
-prefixes, NULs or case-insensitive aliases. No directory entries, symlinks,
+prefixes, NULs or case-insensitive aliases. Readers currently admit names up to
+255 bytes; longer names exceed admission rather than indicate corruption.
+No directory entries, symlinks,
 archive/member comments, leading executable bytes or trailing bytes are allowed.
 Writers use zero DOS timestamps and no platform ownership metadata. Readers do
 not use timestamps or external attributes as artwork semantics.
@@ -698,9 +720,13 @@ and displayed unit labels are excluded. Choice order may change because built-in
 shader codes map explicitly from stable values. Reader regressions distinguish future record/resource types,
 unknown descriptors and admission limits from inconsistent known descriptors,
 malformed data and failed integrity checks.
-Keep these inputs fixed while
-their data versions remain supported; superseded pre-release formats have no
-conversion readers.
+Keep these inputs fixed while their data versions remain supported. Adding a
+built-in, widening an accepted numeric range or adding a stable choice does not
+require updating the baseline. Add separate fixed inputs for new authored data.
+An intentional data-version change requires a concrete conversion and tests
+opening the unchanged released fixture, editing and resaving it. Do not replace
+the baseline with output from the new writer to make a compatibility failure pass.
+Superseded pre-release formats have no conversion readers.
 
 Retain exact-byte/source/material/profile/LUT/selection assertions from the existing
 codec tests when replacing their envelope fixtures. Retain the integrated-phase

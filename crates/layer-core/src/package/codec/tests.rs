@@ -6,6 +6,9 @@ use crate::{authored::*, color::{DocumentColor, SampleDepth, RgbSpace, ColorProf
 use crate::package::{ByteSource, RangeState, transport::ChunkedBytes, MAX_RANGE_BYTES};
 use std::{collections::BTreeSet, sync::{Mutex, atomic::AtomicUsize}};
 
+#[path="admission.rs"]
+mod admission;
+
 fn identity(n: u128) -> PortableId { PortableId::from_bytes(n.to_be_bytes()) }
 fn checkpoint(artwork: &Artwork) -> CaptureCheckpoint {
     CaptureCheckpoint {owner:17,document:artwork.id,session_generation:3,artwork_generation:7,working_generation:11,edit_checkpoint:13}

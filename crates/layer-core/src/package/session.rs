@@ -389,7 +389,7 @@ pub fn open_parts(metadata:&[u8],resource_pack:ImmutableBacking,limits:ProjectLi
     let mut resource_limits=limits;resource_limits.raster_bytes=resource_limits.raster_bytes.saturating_add(limits.asset_bytes).saturating_add(crate::history_budget::BYTE_BUDGET as u64);
     for state in std::iter::once(&record.current).chain(&record.undo).chain(&record.redo) {
         active(cancel)?;let manifest=record.manifest(state,&directory,limits)?;
-        let mut reader=ResourceReader::for_history(&manifest,&resource_pack,cancel,resource_limits);reader.install_cache(cache);
+        let mut reader=ResourceReader::new(&manifest,&resource_pack,cancel,resource_limits);reader.install_cache(cache);
         if documents.is_empty() {profiles=decode_profiles(&record.metadata_profiles,&mut reader)?;}
         let mut artwork=artwork_records::decode_with_layout(&manifest,&mut reader,Some(&record.layout)).map_err(|e|e.to_string())?;
         artwork.extensions=extensions.clone();

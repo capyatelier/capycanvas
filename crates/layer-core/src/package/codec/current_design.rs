@@ -3,6 +3,30 @@ use super::*;
 const SAVED: &[u8] = include_bytes!("fixtures/authored-filters.capy");
 
 #[test]
+fn saved_lookup_admission_preserves_original_bytes_without_latching_corruption() {
+    for (field, value) in [("domain", json!(([[1e-40;3],[2e-40;3]]))),
+        ("domain", json!(([[-1e38;3],[1e38;3]]))), ("size", json!(66))] {
+        let changed = rewrite(SAVED, |manifest| {
+            let record = manifest["resources"].as_array_mut().unwrap().iter_mut().find(|r| r["type"] == "capy.lut3d/1").unwrap();
+            record["data"][field] = value;
+        });
+        let original = backing(changed.clone());
+        let outcome = open(original.clone(), Default::default(), &AtomicBool::new(false)).unwrap();
+        assert!(matches!(outcome, OpenOutcome::Preserved {..}), "{outcome:?}");
+        let mut copied = Vec::new();
+        copy_original(&original, &mut copied, &AtomicBool::new(false)).unwrap();
+        assert_eq!(copied, changed);
+    }
+    for (field, value) in [("domain", json!(([[1.;3],[1.;3]]))), ("size", json!(3)), ("size", json!(1))] {
+        let changed = rewrite(SAVED, |manifest| {
+            let record = manifest["resources"].as_array_mut().unwrap().iter_mut().find(|r| r["type"] == "capy.lut3d/1").unwrap();
+            record["data"][field] = value;
+        });
+        assert!(matches!(open(backing(changed), Default::default(), &AtomicBool::new(false)).unwrap(), OpenOutcome::Failure {..}));
+    }
+}
+
+#[test]
 fn saved_artwork_retains_authored_values_resources_and_current_builtin_controls() {
     let artwork=editable(SAVED.to_vec());
     let document=crate::Document::from_artwork(artwork.clone()).unwrap();

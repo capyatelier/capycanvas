@@ -91,15 +91,22 @@ impl Lut3d {
     }
     pub fn bytes(&self) -> usize { self.payload.as_ref().map_or(0, |payload| payload.len()) }
     pub fn accepts(&self, space: RgbSpace) -> bool {
-        self.payload.is_some() && self.spaces & (1 << space.shader_code()) != 0
+        self.payload.is_some() && self.spaces & (1 << space.shader_code()) != 0 && self.validate_gpu_domain().is_ok()
     }
     pub fn validate_descriptor(&self) -> Result<(), &'static str> {
         let d = &self.descriptor;
         if !(2..=Self::MAX_SIZE).contains(&d.size) || d.title.chars().count() > 256
             || d.title.chars().any(char::is_control)
-            || d.domain.iter().flatten().any(|v| !v.is_finite() || v.abs() > 1e37)
+            || d.domain.iter().flatten().any(|v| !v.is_finite())
             || (0..3).any(|i| d.domain[0][i] >= d.domain[1][i]) {
             return Err("Invalid color lookup descriptor");
+        }
+        Ok(())
+    }
+    pub fn validate_gpu_domain(&self) -> Result<(), &'static str> {
+        let d = &self.descriptor;
+        if d.domain.iter().flatten().any(|v| v.abs() > 1e37) {
+            return Err("Color lookup domain exceeds GPU range");
         }
         let tiny = f64::from(f32::MIN_POSITIVE);
         for axis in 0..3 {
@@ -114,6 +121,7 @@ impl Lut3d {
     pub fn from_samples(size: u32, domain: [[f32; 3]; 2], title: Arc<str>, samples: Arc<[[f32; 3]]>) -> Result<Self, &'static str> {
         let mut value = Self { descriptor: Descriptor { size, domain, title, digest: [0; 32] }, payload: None, spaces: 0 };
         value.validate_descriptor()?;
+        value.validate_gpu_domain()?;
         if samples.len() != (size as usize).pow(3) {
             return Err("Invalid color lookup samples");
         }
@@ -129,7 +137,7 @@ impl Lut3d {
         let mut bounds = [[f32::INFINITY;3],[f32::NEG_INFINITY;3]];
         for sample in samples {
             for i in 0..3 {
-                if !sample[i].is_finite() || sample[i].abs() > 1e37 { return Err("Invalid color lookup samples"); }
+                if !sample[i].is_finite() { return Err("Invalid color lookup samples"); }
                 bounds[0][i] = bounds[0][i].min(sample[i]);
                 bounds[1][i] = bounds[1][i].max(sample[i]);
             }

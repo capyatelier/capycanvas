@@ -2,6 +2,7 @@ use super::{archive::{Directory, Member}, parse_json, references};
 use crate::authored::{Content, GraphLimits, GraphShape, PortableId, Shape, Support};
 use serde_json::{Map, Value};
 use std::collections::{BTreeMap, BTreeSet};
+use super::values::{DecodeError, DecodeResult};
 
 #[derive(Clone, Copy, Debug)]
 pub struct ManifestLimits { pub metadata_bytes: usize, pub graph: GraphLimits, pub resources: usize, pub traversal_nodes: usize }
@@ -9,7 +10,7 @@ impl Default for ManifestLimits {
     fn default() -> Self { Self { metadata_bytes: 64 * 1024 * 1024, graph: GraphLimits::default(), resources: 262_144, traversal_nodes: 4_194_304 } }
 }
 #[derive(Debug)]
-pub enum ManifestRead { Known(Manifest), UnsupportedEnvelope(Value) }
+pub enum ManifestRead { Known(Manifest), UnsupportedEnvelope(Value), Limited { value: Value, reason: String } }
 #[derive(Debug)]
 pub struct Manifest {
     pub document: PortableId,
@@ -198,15 +199,24 @@ pub(crate) fn overlaps(resources: &BTreeMap<PortableId, ResourceRecord>) -> Resu
 }
 
 impl Manifest {
-    pub fn parse(bytes: &[u8], directory: &Directory, limits: ManifestLimits) -> Result<ManifestRead, String> {
+    pub fn parse(bytes: &[u8], directory: &Directory, limits: ManifestLimits) -> DecodeResult<ManifestRead> {
         let value = parse_json(bytes, limits.metadata_bytes)?;
         Self::from_value(value,Some(directory),limits)
     }
     pub(crate) fn transfer(value:&Value,limits:ManifestLimits)->Result<ManifestRead,String> {
         if crate::json_len(value)>limits.metadata_bytes {return Err("Transfer metadata exceeds admission".into());}
-        Self::from_value(value.clone(),None,limits)
+        Self::from_value(value.clone(),None,limits).map_err(String::from)
     }
-    fn from_value(value:Value,directory:Option<&Directory>,limits:ManifestLimits)->Result<ManifestRead,String> {
+    pub(crate) fn admit(value: &Value, limits: ManifestLimits) -> DecodeResult<()> {
+        let fields = object(value)?;
+        if array(required(fields,"objects")?)?.len() > limits.graph.objects
+            || array(required(fields,"resources")?)?.len() > limits.resources {
+            return Err(DecodeError::Unsupported("Manifest record limit exceeded".into()));
+        }
+        references(value, limits.traversal_nodes)?;
+        Ok(())
+    }
+    fn from_value(value:Value,directory:Option<&Directory>,limits:ManifestLimits)->DecodeResult<ManifestRead> {
         let fields = object(&value)?;
         let format = string(required(fields, "format")?)?;
         let version = required(fields, "version")?.as_u64().filter(|v| *v <= u32::MAX as u64).ok_or("Invalid envelope version")?;
@@ -215,15 +225,15 @@ impl Manifest {
         }
         if let Some(directory)=directory {namespace(directory)?;}
         let members = directory.into_iter().flat_map(|d|d.members.iter()).enumerate().map(|(i, m)| (m.name.as_str(), (i, m))).collect();
+        match Self::admit(&value, limits) {
+            Err(DecodeError::Unsupported(reason)) => return Ok(ManifestRead::Limited {value,reason}),
+            result => result?,
+        }
         let all_refs = references(&value, limits.traversal_nodes)?;
-        if all_refs.len() > limits.graph.edges { return Err("Manifest reference limit exceeded".into()); }
         let document = identity(required(fields, "document")?)?;
         let root = reference(required(fields, "root")?)?;
         let outputs = array(required(fields, "outputs")?)?.iter().map(reference).collect::<Result<Vec<_>, _>>()?;
         let default_output = fields.get("default_output").map(reference).transpose()?;
-        let objects_count = array(required(fields, "objects")?)?.len();
-        let resources_count = array(required(fields, "resources")?)?.len();
-        if objects_count > limits.graph.objects || resources_count > limits.resources { return Err("Manifest record limit exceeded".into()); }
         let Value::Object(mut fields) = value else { unreachable!() };
         let metadata = fields.remove("metadata");
         let mut reasons = BTreeSet::new();
@@ -298,7 +308,12 @@ impl Manifest {
             }
         }
         overlaps(&resources)?;
-        if let Support::Preserved(graph_reasons) = graph.validate(root, limits.graph)? { reasons.extend(graph_reasons); }
+        match graph.validate(root, limits.graph) {
+            Ok(Support::Preserved(graph_reasons)) => reasons.extend(graph_reasons),
+            Err(crate::authored::GraphError::Unsupported(reason)) => { reasons.insert(reason); },
+            Err(crate::authored::GraphError::Invalid(reason)) => return Err(reason.into()),
+            Ok(Support::Editable) => {},
+        }
         let support = if reasons.is_empty() { Support::Editable } else { Support::Preserved(reasons) };
         Ok(ManifestRead::Known(Self { document, root, objects, resources, outputs, default_output, metadata, support }))
     }

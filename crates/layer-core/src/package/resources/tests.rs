@@ -138,7 +138,7 @@ fn equal_tile_payloads_keep_ids_but_read_validate_and_charge_one_physical_range(
     let mut reader=ResourceReader::new(&manifest,&backing,&cancelled,limits);
     let first=reader.tile(&references[0]).unwrap();let second=reader.tile(&references[1]).unwrap();
     assert_eq!(reads.load(Ordering::Relaxed),1);
-    assert_eq!(reader.decoded,decoded,"aliases have one validated sample allocation");
+    assert_eq!(reader.decoded,prepared.length,"aliases retain one compressed allocation");
     assert_ne!(first.resource_id(),second.resource_id());assert!(!Arc::ptr_eq(&first,&second));
     assert_eq!(first.owner_identity(),second.owner_identity());
     assert!(Arc::ptr_eq(&first.compressed,&second.compressed));

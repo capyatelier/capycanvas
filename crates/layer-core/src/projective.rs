@@ -113,13 +113,17 @@ impl Projective {
     /// Every point of `rect` has an image, so its image is one convex,
     /// unfolded quadrilateral.
     pub fn covers(self, rect: Rect) -> bool {
+        self.weight_ratio(rect).is_some_and(|ratio| ratio > MIN_WEIGHT_RATIO)
+            && rect.corners().iter().all(|p| self.map(*p).is_some())
+    }
+    pub fn weight_ratio(self, rect: Rect) -> Option<f64> {
         if rect.is_empty() || self.0.iter().any(|v| !v.is_finite()) {
-            return false;
+            return None;
         }
         let weights = rect.corners().map(|p| self.homogeneous(p)[2]);
         let largest = weights.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-        weights.iter().all(|w| *w > largest * MIN_WEIGHT_RATIO)
-            && rect.corners().iter().all(|p| self.map(*p).is_some())
+        let smallest = weights.iter().copied().fold(f64::INFINITY, f64::min);
+        (smallest > 0.).then_some(smallest / largest)
     }
     /// Bounds of the mapped rectangle, when the map covers it.
     pub fn bounds(self, rect: Rect) -> Option<Rect> {

@@ -53,6 +53,36 @@ fn metadata(artwork:&Artwork,resources:&mut ResourceInventory) -> Result<Option<
     }
     Ok((!fields.is_empty()).then_some(Value::Object(fields)))
 }
+pub(crate) fn admit_metadata(artwork:&Artwork,limits:crate::ProjectLimits)->Result<(),String> {
+    if artwork.paint.iter().any(|(_,_,p)|!p.operations.is_empty()) || artwork.coverage.iter().any(|(_,_,p)|!p.operations.is_empty()) {return Ok(());}
+    for raster in artwork.paint.iter().map(|(_,_,p)|&p.raster).chain(artwork.coverage.iter().map(|(_,_,p)|&p.raster)) {
+        let Some(data)=raster.try_data() else {return Ok(())};
+        if data?.tiles.values().any(|tile|tile.try_backing().is_none()) {return Ok(());}
+    }
+    let (mut objects,mut inventory)=super::artwork_records::encode_with_inventory(artwork,&AtomicBool::new(false),ResourceInventory::for_transfer())?;
+    let metadata=metadata(artwork,&mut inventory)?;
+    let live=objects.iter().filter_map(|r|r["id"].as_str()?.parse().ok()).collect();
+    let (extensions,opaque)=artwork.extensions.edited_retained(&live)?;
+    objects.extend(extensions);
+    let resources:Vec<_>=inventory.entries.iter().map(|(id,entry)| {
+        let mut data=entry.data.clone();
+        if matches!(entry.payload,resources::Payload::Bytes(_)|resources::Payload::Code(_)) {data["decoded_bytes"]=u64::MAX.to_string().into();}
+        json!({"id":id,"type":entry.kind,"data":data,"encoding":"capy.lz4-bytes/1",
+            "location":{"pack":"data/tiles-1.bin","offset":u64::MAX.to_string()},"bytes":u64::MAX.to_string(),"crc32":"ffffffff"})
+    }).chain(opaque.iter().map(|resource|resource.record(json!({"pack":"data/tiles-1.bin","offset":u64::MAX.to_string()})))).collect();
+    let default=artwork.outputs.id(artwork.default_output).ok_or("Missing default output")?;
+    if let Some(output)=objects.iter_mut().find(|record|record["id"]==json!(default)) {
+        output["data"]["representation"]=json!({"member":"preview.png","size":[1024,1024],"color":"srgb"});
+    }
+    let mut value=json!({"default_output":resources::reference(default),"document":artwork.id,"format":"capy.canvas",
+        "objects":objects,"outputs":artwork.outputs.iter().map(|(_,id,_)|resources::reference(id)).collect::<Vec<_>>(),
+        "resources":resources,"root":resources::reference(artwork.compositions.id(artwork.root).ok_or("Missing root")?),"version":1});
+    if let Some(metadata)=metadata {value["metadata"]=metadata;}
+    let metadata_limit=limits.metadata_bytes.min(crate::ProjectLimits::default().metadata_bytes) as usize;
+    if crate::json_len(&value)>metadata_limit {return Err("Artwork metadata exceeds package limit".into());}
+    Manifest::admit(&value,ManifestLimits {metadata_bytes:metadata_limit,..Default::default()})?;
+    Ok(())
+}
 impl PreparedPackage {
     pub fn prepare(capture:&ArtworkCapture, preview:Option<CapturedPreview>, cancelled:&AtomicBool) -> Result<Self,String> {
         active(cancelled)?;
@@ -61,6 +91,7 @@ impl PreparedPackage {
         if artwork.paint.iter().any(|(_,_,s)|!s.operations.is_empty())||artwork.coverage.iter().any(|(_,_,s)|!s.operations.is_empty()){return Err("Wait for the current edit before saving".into());}
         let shape=artwork.topology()?;
         let (mut objects,mut inventory)=super::artwork_records::encode(artwork,cancelled)?;
+        crate::Document::from_artwork((**artwork).clone()).map_err(|e|e.to_string())?.admit(Default::default())?;
         if objects.iter().any(custom_definition) {return Err("Drawings with custom filters can't be saved yet".into());}
         let metadata=metadata(artwork,&mut inventory)?;
         let root=artwork.compositions.id(artwork.root).ok_or("Missing authored root")?;
@@ -87,6 +118,7 @@ impl PreparedPackage {
             objects:&objects,outputs:&outputs,resources:ResourceRecords(&resources.entries),root:resources::reference(root),version:1,
         }).map_err(|e|e.to_string())?;
         if manifest.len()>crate::ProjectLimits::default().metadata_bytes as usize {return Err("Artwork metadata exceeds package limit".into());}
+        Manifest::admit(&super::parse_json(&manifest,ManifestLimits::default().metadata_bytes)?,ManifestLimits::default())?;
         Ok(Self {checkpoint:capture.checkpoint,preview_status,manifest:manifest.into(),resources,preview})
     }
     pub fn manifest(&self) -> &[u8] {&self.manifest}
@@ -122,12 +154,30 @@ fn matching_preview(manifest:&Manifest,preview:Option<Preview>) -> Option<Previe
     let representation=&record["data"]["representation"];
     (representation==&json!({"member":"preview.png","size":preview.size(),"color":"srgb"})).then_some(preview)
 }
+fn limited(source:ImmutableBacking,value:Value,preview:Option<Preview>,reason:String)->OpenOutcome {
+    let mut outputs=Vec::new();
+    let mut matched=None;
+    if let (Some(records),Some(ids))=(value["objects"].as_array(),value["outputs"].as_array()) {
+        let mut wanted=ids.iter().take(ManifestLimits::default().graph.objects).filter_map(|id|resources::reference_id(id).ok()).collect::<std::collections::BTreeSet<_>>();
+        for record in records {
+            let Some(id)=record["id"].as_str().and_then(|id|id.parse().ok()) else {continue};
+            if record["type"]=="capy.output/1" && wanted.remove(&id) {
+                outputs.push(OutputInfo {id,name:record["data"]["name"].as_str().unwrap_or("").into()});
+                if resources::reference_id(&value["default_output"]).ok()==Some(id)
+                    && preview.as_ref().is_some_and(|p|record["data"]["representation"]==json!({"member":"preview.png","size":p.size(),"color":"srgb"})) {matched=preview.clone();}
+            }
+        }
+    }
+    OpenOutcome::Preserved {source,outputs,preview:matched,reason}
+}
 fn custom_definition(record:&Value)->bool {record["type"]=="capy.effect-definition/1" && record["data"].get("builtin").is_none()}
 pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&AtomicBool) -> Result<OpenOutcome,String> {
     active(cancelled)?;
     let mut reader=BackingReader::new(&source,cancelled);
     let directory=match Directory::read(&mut reader,262_144,limits.metadata_bytes) {
-        Ok(directory)=>directory,Err(reason)=>{active(cancelled)?;return Ok(OpenOutcome::Failure {source,reason});}
+        Ok(directory)=>directory,
+        Err(super::values::DecodeError::Unsupported(reason))=>{active(cancelled)?;return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason});},
+        Err(super::values::DecodeError::Invalid(reason))=>{active(cancelled)?;return Ok(OpenOutcome::Failure {source,reason});}
     };
     let preview=preview(&directory,&mut reader);
     let bytes=match directory.read_member(&mut reader,directory.member("manifest.json").unwrap(),limits.metadata_bytes.min(usize::MAX as u64) as usize) {
@@ -136,7 +186,9 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
     let manifest=match Manifest::parse(&bytes,&directory,ManifestLimits {metadata_bytes:limits.metadata_bytes.min(usize::MAX as u64) as usize,..Default::default()}) {
         Ok(ManifestRead::Known(manifest))=>manifest,
         Ok(ManifestRead::UnsupportedEnvelope(_))=>return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview,reason:"Unsupported package envelope".into()}),
-        Err(reason)=>return Ok(failed(source,preview,reason)),
+        Ok(ManifestRead::Limited {value,reason})=>return Ok(limited(source,value,preview,reason)),
+        Err(super::values::DecodeError::Unsupported(reason))=>return Ok(OpenOutcome::Preserved {source,outputs:Vec::new(),preview:None,reason}),
+        Err(super::values::DecodeError::Invalid(reason))=>return Ok(failed(source,preview,reason)),
     };
     let mut resources=resources::ResourceReader::new(&manifest,&source,cancelled,limits);
     let decoded=super::artwork_records::decode(&manifest,&mut resources);
@@ -145,6 +197,11 @@ pub fn open(source:ImmutableBacking,limits:crate::ProjectLimits,cancelled:&Atomi
         Ok(mut artwork)=>{
             if let Support::Preserved(reasons)=&manifest.support {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:reasons.iter().copied().collect::<Vec<_>>().join("; ")});}
             if manifest.objects.values().any(custom_definition) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason:"Custom filters are unsupported".into()});}
+            let document=crate::Document::from_artwork(artwork.clone());
+            match document {
+                Err(reason)=>return Ok(failed(source,preview,reason.to_string())),
+                Ok(document)=>if let Err(reason)=document.admit(limits) {return Ok(OpenOutcome::Preserved {source,outputs:output_inventory(&manifest),preview:matching_preview(&manifest,preview),reason});},
+            }
             artwork.extensions=match crate::authored::Extensions::load(&manifest,&source,cancelled) {Ok(extensions)=>Arc::new(extensions),Err(reason)=>{active(cancelled)?;return Ok(failed(source,preview,reason));}};
             Ok(OpenOutcome::Candidate {artwork,source,preview:matching_preview(&manifest,preview)})
         }

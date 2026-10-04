@@ -9,7 +9,7 @@ fn package_manifest(manifest: &[u8], extra: &[(&str, &[u8])]) -> Vec<u8> {
         crc32: crc32fast::hash(input.get_ref()), input }).collect();
     let mut bytes = Vec::new(); write_archive(&mut bytes, &mut members, 16 * 1024 * 1024).unwrap(); bytes
 }
-fn read(bytes: &[u8]) -> Result<Directory, String> { Directory::read(&mut Cursor::new(bytes), 100_000, 16 * 1024 * 1024) }
+fn read(bytes: &[u8]) -> DecodeResult<Directory> { Directory::read(&mut Cursor::new(bytes), 100_000, 16 * 1024 * 1024) }
 
 #[test]
 fn nonseekable_output_has_complete_local_headers_and_preserves_compressed_bytes() {
@@ -346,4 +346,16 @@ fn compressed_metadata_rejects_corruption_expansion_mismatch_and_extra_streams()
     let mut input = raw.as_slice();
     assert!(write_archive(&mut bounded_output, &mut [InputMember {name:"manifest.json", length:8192, crc32:member.crc32, input:&mut input}], 8191).is_err());
     assert!(bounded_output.is_empty());
+}
+
+#[test]
+fn member_name_budget_is_unsupported() {
+    let mut bytes=Vec::new();let mut directory=Vec::new();
+    for (name,data) in [("mimetype".to_string(),MIMETYPE),("manifest.json".into(),b"{}".as_slice()),("x".repeat(256),b"optional".as_slice())] {
+        let (local,central)=headers(&name,data.len() as u64,None,crc32fast::hash(data),bytes.len() as u64);
+        bytes.extend(local);bytes.extend(data);directory.extend(central);
+    }
+    let end=tail(3,directory.len() as u64,bytes.len() as u64,false).unwrap();
+    bytes.extend(directory);bytes.extend(end);
+    assert!(matches!(read(&bytes),Err(DecodeError::Unsupported(_))));
 }

@@ -5,7 +5,7 @@ use std::{collections::BTreeMap, sync::{Arc, Mutex, atomic::{AtomicBool, Orderin
 #[test]
 fn duplicate_keys_and_reserved_reference_ambiguity_are_rejected_before_interpretation() {
     for bytes in [br#"{"a":1,"a":1}"#.as_slice(), br#"{"unknown":{"x":null,"x":false}}"#, br#"{"a":1,"\u0061":2}"#] {
-        assert!(parse_json(bytes, 4096).unwrap_err().contains("Duplicate JSON key"));
+        assert!(parse_json(bytes, 4096).unwrap_err().to_string().contains("Duplicate JSON key"));
     }
     for bytes in [br#"{"ref":"00000000000000000000000000000001","fallback":1}"#.as_slice(), br#"{"ref":18446744073709551615}"#] {
         let value = parse_json(bytes, 4096).unwrap();

@@ -23,12 +23,13 @@ fn list<'a>(fields: &'a Map<String, Value>, key: &str, maximum: usize) -> Decode
 }
 fn text(value: &Value) -> DecodeResult<Arc<str>> {
     let text = string(value)?;
-    if text.is_empty() || text.len() > 256 { return Err("Invalid effect string".into()); }
+    if text.is_empty() { return Err("Invalid effect string".into()); }
+    if text.len() > 256 { return Err(unsupported("string length")); }
     Ok(text.into())
 }
 fn label(value: &Value) -> DecodeResult<ResourceLabel> {
     let result = ResourceLabel::Literal(string(value)?.into());
-    if !result.valid(256) { return Err("Invalid effect label".into()); }
+    if !result.valid(256) { return Err(unsupported("label")); }
     Ok(result)
 }
 fn encode_label(value: &ResourceLabel) -> Value {
@@ -250,7 +251,7 @@ pub fn decode_definition(value: &Value, reader: &mut impl ResourceReader) -> Dec
     if string(required(fields,"contract")?)? != "capy.filter/1" {return Err(unsupported("evaluation contract"));}
     if crate::bundled_effect_catalog().get(string(required(fields,"key")?)?).is_some() { return Err("Reserved built-in filter ID".into()); }
     let parameter_records=required(fields,"parameters")?.as_object().ok_or("Expected keyed parameters")?;
-    if parameter_records.len()>64 {return Err("Too many effect parameters".into());}
+    if parameter_records.len()>64 {return Err(unsupported("parameter count"));}
     let slots=bounded(required(fields,"slots")?,64)?.iter().map(text).collect::<DecodeResult<Vec<_>>>()?;
     if slots.len()!=parameter_records.len() || slots.iter().collect::<BTreeSet<_>>().len()!=slots.len()
         || slots.iter().any(|key|!parameter_records.contains_key(key.as_ref())) {return Err("Invalid effect ABI slots".into());}
@@ -309,6 +310,10 @@ pub fn decode_values(program: &Arc<EffectProgram>, value: &Value, reader: &mut i
         Ok(value)
     }).collect::<DecodeResult<Vec<_>>>()?;
     let instance=EffectInstance {program:program.clone(),values};
+    if let Some(EffectAuxiliary::Lut3d {color_space,..})=&program.auxiliary
+        && let Some(lut)=instance.view().lut3d()
+        && let Some(space)=instance.choice(color_space).and_then(crate::color::RgbSpace::from_id)
+        && !lut.accepts(space) {return Err(unsupported("color lookup evaluator range"));}
     instance.validate()?;
     Ok(instance.values)
 }
@@ -363,7 +368,28 @@ mod tests {
                 "alpha":program.alpha,"space":program.space,"time":program.time,"parameters":parameters,"constraints":program.constraints}));
         }
         let expected:Value=serde_json::from_str(include_str!("codec/fixtures/builtin-contracts.json")).unwrap();
-        assert_eq!(Value::Object(actual),expected);
+        for (id, contract) in expected.as_object().unwrap() {
+            let mut supported = actual.get(id).unwrap_or_else(|| panic!("Saved built-in {id} is missing")).clone();
+            for (key, parameter) in contract["parameters"].as_object().unwrap() {
+                let kind = &mut supported["parameters"][key]["kind"];
+                match parameter["kind"]["kind"].as_str() {
+                    Some("number") => {
+                        assert!(kind["min"].as_f64().unwrap() <= parameter["kind"]["min"].as_f64().unwrap(), "{id}.{key} minimum narrowed");
+                        assert!(kind["max"].as_f64().unwrap() >= parameter["kind"]["max"].as_f64().unwrap(), "{id}.{key} maximum narrowed");
+                        kind["min"] = parameter["kind"]["min"].clone();
+                        kind["max"] = parameter["kind"]["max"].clone();
+                    },
+                    Some("choice") => {
+                        for choice in parameter["kind"]["options"].as_array().unwrap() {
+                            assert!(kind["options"].as_array().unwrap().contains(choice), "{id}.{key} lost choice {choice}");
+                        }
+                        kind["options"] = parameter["kind"]["options"].clone();
+                    },
+                    _ => {},
+                }
+            }
+            assert_eq!(&supported, contract, "Saved built-in {id} changed its contract");
+        }
     }
     #[test]
     fn saved_builtin_choices_keep_shader_meaning_when_controls_move_or_change_labels() {
