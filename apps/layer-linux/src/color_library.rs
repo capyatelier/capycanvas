@@ -418,7 +418,6 @@ impl PalettePanel {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return false;
         };
-        let stored = matches!(action, Action::Store { .. });
         let result = w.gpu.borrow_mut().as_mut().map(|g| {
             g.session.dispatch(UiAction::Color {
                 action: ColorAction::Library { action },
@@ -426,18 +425,6 @@ impl PalettePanel {
         });
         match result {
             Some(Ok(change)) => {
-                if stored {
-                    self.selected.set(w.gpu.borrow().as_ref().and_then(|g| {
-                        g.session
-                            .state()
-                            .colors
-                            .library
-                            .active_palette()
-                            .swatches
-                            .last()
-                            .map(|s| s.id)
-                    }));
-                }
                 self.error(None);
                 w.changed(Ok(change));
                 true
@@ -561,7 +548,6 @@ impl PalettePanel {
             #[weak(rename_to=panel)]
             self,
             move |_| {
-                panel.selected.set(id);
                 if let Some(id) = id {
                     panel.apply(Action::Use { id });
                 } else {
@@ -650,9 +636,8 @@ impl PalettePanel {
                     .as_ref()
                     .and_then(|l| l.swatch(id))
                     .map(|s| s.color);
-                if let Some(color) = color {
-                    self.selected.set(Some(id));
-                    self.use_color(color);
+                if color.is_some() {
+                    self.apply(Action::Use { id });
                     self.edit_name();
                 }
             }
@@ -783,7 +768,7 @@ impl PalettePanel {
         let copy = layer_ui::NativeCopy::new(&workspace.localization()).palettes;
         let colors = state.display_colors();
         let current = colors.definition();
-        let library = &state.colors.library;
+        let library = &state.color_library;
         let palette = library.active_palette();
         let display_changed = self.view.replace((view, headroom)) != (view, headroom);
         let old = self.library.borrow();
@@ -818,7 +803,7 @@ impl PalettePanel {
             self.error(None);
         }
         self.selected
-            .set(layer_ui::selected_swatch(palette, current, self.selected.get()));
+            .set(layer_ui::selected_swatch(palette, current, library.selected));
         self.selector_label.set_text(&palette.name);
         self.selector
             .set_tooltip_text(Some(&layer_ui::NativeCaption::ChoosePalette { name: palette.name.clone() }.message(&workspace.localization())));

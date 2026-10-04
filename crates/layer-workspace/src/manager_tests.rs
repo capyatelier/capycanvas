@@ -159,10 +159,7 @@ fn startup_reuses_existing_workspaces_before_creating_an_independent_copy() {
         // reused when all built-ins are busy.
         let mut source = m.current().unwrap();
         let working = source.working.as_mut().unwrap();
-        working
-            .tools
-            .set_override(working.preset, "size", 73., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-            .unwrap();
+        working.zen_mode = true;
         let custom = m
             .create_from_snapshot(source, "My Workspace", true, 5_000)
             .await
@@ -287,11 +284,7 @@ fn default_catalog_is_protected_and_workspace_edits_survive_switching_and_restar
         let mut layout = capture.history.layout().clone();
         layout.header.size = layer_ui::HeaderSize::Large;
         capture.history.append(&layout, layer_ui::LayoutChange::Automatic);
-        capture
-            .working
-            .tools
-            .set_override(capture.working.preset, "size", 73., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-            .unwrap();
+        capture.working.zen_mode = true;
         m.observe(capture.clone(), 4_000);
         m.flush().await.unwrap();
         let incoming = m
@@ -465,6 +458,9 @@ fn expired_owner_resolves_a_committed_save_before_reacquiring_its_claim() {
         let mut capture = m.current().unwrap().capture().unwrap();
         capture.working.zen_mode = true;
         m.observe(capture.clone(), 2_000);
+        let mut editing = layer_ui::EditingState::default();
+        editing.colors.set_rgba([0.2, 0.3, 0.4, 1.]).unwrap();
+        m.observe_editing(editing.clone());
         m.store.lose_reply.set(true);
         m.store.block_receipts.set(true);
         assert!(m.save_once().await.is_err());
@@ -473,6 +469,8 @@ fn expired_owner_resolves_a_committed_save_before_reacquiring_its_claim() {
         f.expire_lease(&id);
         m.revalidate_owner(1).await.unwrap();
         assert!(!m.dirty());
+        m.load_editing().await.unwrap();
+        assert_eq!(m.editing(), Some(Box::new(editing)));
         assert!(m.error().is_none());
         assert_eq!(m.current().unwrap().working, Some(capture.working));
     });
@@ -648,11 +646,7 @@ fn manager_recovery_library_and_backup_round_trip() {
         changed.bands[0].extent += 80.;
         capture.history.append(&changed, layer_ui::LayoutChange::Automatic);
         capture.working.zen_mode = true;
-        capture
-            .working
-            .tools
-            .set_override(capture.working.preset, "size", 87., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-            .unwrap();
+        capture.working.zen_mode = true;
         m.observe(capture.clone(), 4_000);
         let details = m.details(&m.current_record().unwrap(), true, 6_000);
         assert_eq!(
@@ -802,11 +796,7 @@ fn duplication_switching_and_original_baselines_are_independent() {
         layout.bands[0].extent += 100.;
         capture.history.append(&layout, layer_ui::LayoutChange::Automatic);
         capture.working.zen_mode = true;
-        capture
-            .working
-            .tools
-            .set_override(capture.working.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-            .unwrap();
+        capture.working.zen_mode = true;
         m.observe(capture.clone(), 2_000);
         let duplicate = m
             .create_from_snapshot(m.current().unwrap(), "Experiment", true, 4_000)
@@ -857,7 +847,7 @@ fn failed_outgoing_save_prevents_switch_and_retains_accepted_edits_for_retry() {
         assert_eq!(m.current().unwrap().working, Some(working.clone()));
         m.store.fail.set(false);
         let mut latest = working;
-        latest.colors.foreground.rgba = [0.3, 0.4, 0.5, 1.];
+        latest.zen_mode = false;
         m.observe_working(latest.clone());
         m.flush().await.unwrap();
         assert!(!m.dirty());
@@ -879,6 +869,8 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     let mut working = m.current().unwrap().working.unwrap();
     working.zen_mode = true;
     m.observe_working(working.clone());
+    let mut editing = layer_ui::EditingState::default();
+    m.observe_editing(editing.clone());
     let (open, gate) = async_channel::bounded(1);
     *m.store.gate.borrow_mut() = Some(gate);
     let mut saving = Box::pin(m.save_once());
@@ -898,10 +890,9 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     assert_eq!(m.current_record().unwrap().claim, saved.claim);
     assert_eq!(m.current_record().unwrap().generations, saved.generations);
     assert_eq!(m.current().unwrap().working, Some(working.clone()));
-    working
-        .tools
-        .set_override(working.preset, "size", 137., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English))
-        .unwrap();
+    editing.colors.set_rgba([0.3, 0.4, 0.5, 1.]).unwrap();
+    m.observe_editing(editing.clone());
+    working.zen_mode = false;
     m.observe_working(working.clone());
     let newer_error = StoreError::new(ErrorKind::Conflict, "Ownership needs revalidation");
     m.set_error(newer_error.clone());
@@ -911,6 +902,8 @@ fn late_save_completion_keeps_newer_dirty_values_and_unrelated_errors() {
     assert_eq!(m.error(), Some(newer_error));
     assert_eq!(m.current().unwrap().working, Some(working.clone()));
     pollster::block_on(m.save_once()).unwrap();
+    pollster::block_on(m.load_editing()).unwrap();
+    assert_eq!(m.editing(), Some(Box::new(editing)));
     assert_eq!(
         pollster::block_on(m.load(&m.active_id().unwrap()))
             .unwrap()
@@ -1046,5 +1039,51 @@ fn switcher_preferences_survive_restart_and_do_not_edit_or_claim_workspaces() {
             matches!(m.store.execute(StoreRequest::Switcher).await.unwrap(), StoreResponse::Switcher(Some(ids)) if ids.is_empty())
         );
         m.close().await.unwrap();
+    });
+}
+
+#[test]
+fn editing_only_save_retries_and_loads_without_advancing_layout_generations() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let record = m.current_record().unwrap();
+        let mut editing = layer_ui::EditingState::default();
+        editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        editing.colors.set_rgba([0.4, 0.2, 0.7, 1.]).unwrap();
+        m.observe_editing(editing.clone());
+        m.store.lose_reply.set(true);
+        m.store.block_receipts.set(true);
+        assert!(m.save_once().await.is_err());
+        assert!(m.dirty());
+        m.store.block_receipts.set(false);
+        m.flush().await.unwrap();
+        assert!(!m.dirty());
+        assert_eq!(m.current_record().unwrap(), record);
+        let reopened = WorkspaceManager::new(m.store.worker.clone(), Platform::Gtk);
+        reopened.load_editing().await.unwrap();
+        assert_eq!(reopened.editing(), Some(Box::new(editing)));
+    });
+}
+
+#[test]
+fn interrupted_editing_recovers_without_creating_a_workspace() {
+    pollster::block_on(async {
+        let f = Fixture::new();
+        let m = &f.manager;
+        let mut editing = layer_ui::EditingState::default();
+        editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let mut batch = CommitBatch::prepare(Owner::fresh(), vec![]).unwrap();
+        batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
+        let sql = rusqlite::Connection::open(f.directory.join("workspaces.sqlite3")).unwrap();
+        sql.execute_batch("CREATE TRIGGER interrupt_editing BEFORE INSERT ON editing BEGIN SELECT RAISE(ABORT,'interrupted editing'); END;").unwrap();
+        assert!(m.store.worker.request(StoreRequest::Commit { batch: batch.clone() }).await.is_err());
+        assert!(m.interrupted_changes(3000).await.unwrap().iter().any(|(id, _)| id == &batch.operation_id));
+        let count = m.items().len();
+        sql.execute_batch("DROP TRIGGER interrupt_editing;").unwrap();
+        assert!(m.recover_interrupted(&batch.operation_id, 4000).await.unwrap().is_none());
+        assert_eq!(m.editing(), Some(Box::new(editing)));
+        assert_eq!(m.items().len(), count);
+        assert!(m.interrupted_changes(5000).await.unwrap().is_empty());
     });
 }

@@ -132,10 +132,12 @@ starter swatches. Deleted palettes are not recreated.
 
 ## Color data and history
 
-Palettes belong to the workspace’s working state. Names, palette
-selection, imports, and bounded recent colors are shared Rust state; the native
-hosts own rendering, focus, menu presentation, and file pickers. Workspace persistence retains
-these values. There is no application-wide library.
+Palettes belong to the shared editing state. Names, active palette, selected
+swatch identity, imports and bounded recent colors survive workspace switches
+and are saved separately from layouts. Artwork and mask paints use the same
+library while keeping separate color targets. Native hosts own rendering, focus,
+menu presentation and file pickers; the shared palette view identifies the
+selected swatch, including when several swatches have the same color.
 
 History contains at most 64 exact definitions, newest first, deduplicated by
 exact definition. Brush history is recorded at successful stroke commit using

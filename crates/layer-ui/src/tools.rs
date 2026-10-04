@@ -462,7 +462,7 @@ pub(crate) fn view(brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: 
 /// merely loading or remembering a brush never rewrites an explicit override.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceToolMemory {
+pub struct ToolMemory {
     tools: BTreeMap<Tool, u32>,
     groups: BTreeMap<ToolGroup, u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -471,7 +471,7 @@ pub struct WorkspaceToolMemory {
     sculpt: Option<u32>,
     pub overrides: BTreeMap<u32, BTreeMap<String, f32>>,
 }
-impl WorkspaceToolMemory {
+impl ToolMemory {
     pub(crate) fn command_preset(&self, command: CommandId) -> Option<u32> {
         Some(match command {
             CommandId::DrawingBrush => self.drawing(),

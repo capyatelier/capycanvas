@@ -203,7 +203,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
     );
     assert_eq!(s.state.brush.tool, Tool::Pencil);
     assert!(s.state.command_search.is_none());
-    let palette = s.state.colors.library.active_palette().id;
+    let palette = s.state.color_library.active_palette().id;
     for (name, color) in [
         ("Catalog One", layer_core::color::RgbColor::BLACK),
         ("Catalog Two", layer_core::color::RgbColor::WHITE),
@@ -221,8 +221,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
     }
     let before: Vec<_> = s
         .state
-        .colors
-        .library
+        .color_library
         .active_palette()
         .swatches
         .iter()
@@ -252,8 +251,7 @@ fn command_submit_uses_latest_text_and_freezes_palette_history_focus() {
     assert_eq!(s.engine.document().layers.len(), layers);
     assert_eq!(
         s.state
-            .colors
-            .library
+            .color_library
             .active_palette()
             .swatches
             .iter()

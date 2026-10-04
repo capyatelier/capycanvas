@@ -141,6 +141,10 @@ impl SqliteStore {
                 self.reset()?;
                 Ok(StoreResponse::Done)
             }
+            StoreRequest::Editing => {
+                let json: Option<String> = self.connection.query_row("SELECT json FROM editing WHERE id=1", [], |r| r.get(0)).optional()?;
+                Ok(StoreResponse::Editing(json))
+            }
             StoreRequest::Switcher => self
                 .preference_ids("workspace_switcher")
                 .map(StoreResponse::Switcher),
@@ -526,6 +530,9 @@ impl SqliteStore {
                 tx.execute("DELETE FROM bindings WHERE key=?1", [key])?;
             }
         }
+        if let Some(editing) = &batch.editing_json {
+            tx.execute("INSERT INTO editing(id,json) VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET json=excluded.json", [editing])?;
+        }
         tx.execute(
             "INSERT INTO receipts(id,hash,receipt,owner,epoch) VALUES(?1,?2,?3,?4,?5)",
             params![
@@ -568,7 +575,8 @@ fn create_schema(connection: &Connection) -> Result<()> {
         CREATE TABLE tombstones (id TEXT PRIMARY KEY, fence TEXT NOT NULL);
         CREATE TABLE cancelled_operations (id TEXT PRIMARY KEY);
         CREATE TABLE workspace_switcher (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
-        CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);")?;
+        CREATE TABLE workspace_order (id INTEGER PRIMARY KEY CHECK(id=1), workspace_ids TEXT NOT NULL);
+        CREATE TABLE editing (id INTEGER PRIMARY KEY CHECK(id=1), json TEXT NOT NULL);")?;
     connection.pragma_update(None, "user_version", SCHEMA_VERSION)?;
     Ok(())
 }

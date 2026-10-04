@@ -85,6 +85,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     .find(|item| item.id == write.id).map(|item| item.metadata))
                     .map(|metadata| (write.id.clone(), metadata)))
                 .collect();
+            let names = if names.is_empty() && batch.editing_json.is_some() { vec![None] } else { names };
             if !names.is_empty() {
                 choices.push(InterruptedChange { id: batch.operation_id, names });
             }
@@ -132,7 +133,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             entity.validate()?;
             entities.push(entity);
         }
-        if entities.is_empty() {
+        if entities.is_empty() && batch.editing_json.is_none() {
             return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::NoRecoverableItemsWereFound));
         }
         let incoming = entities
@@ -148,12 +149,15 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             })
             .collect();
         let mut recovery = CommitBatch::prepare(self.owner.clone(), mutations)?;
+        recovery.editing_json = batch.editing_json;
+        let restores_editing = recovery.editing_json.is_some();
         recovery.abandon_operations = batch.abandon_operations;
         recovery.abandon_operations.push(operation.into());
         if let Some(id) = &incoming {
             self.bind_window(&mut recovery, id);
         }
         self.publish(recovery).await?;
+        if restores_editing { self.load_editing().await?; }
         self.forget_operation(operation);
         self.refresh().await?;
         match incoming {
@@ -169,7 +173,7 @@ mod localization_tests {
     #[test]
     fn interrupted_labels_reproject_names_without_changing_recovery_identity() {
         let english = layer_ui::Localizer::shared(layer_ui::UiLanguage::English);
-        let source = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, Platform::Web, 1000, &english).unwrap();
+        let source = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, Platform::Web, 1000).unwrap();
         let change = InterruptedChange {
             id: "operation-id".into(),
             names: vec![Some((source.id.clone(), source.metadata.clone())), None],

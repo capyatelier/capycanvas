@@ -109,6 +109,7 @@ fn tool_group_commands_publish_medium_choices_and_remember_dynamic_icons() {
             invoke(&mut s, CommandId::Hand);
             let capture = s.capture_workspace().unwrap();
             let mut restored = session(platform);
+            restored.restore_editing(s.editing_state()).unwrap();
             restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
             let variant = ToolVariant::BrushGroup { group: *groups.last().unwrap() };
             assert_eq!(selected_slot_variant(&restored, tile), variant);
@@ -139,7 +140,7 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
             settings.hold_keys = Some(holds);
             s.dispatch(UiAction::RestoreSettings { settings }).unwrap();
         }
-        let permanent = s.workspace_working_state();
+        let permanent = s.editing_state();
         let name = if modifier { "Alt_L" } else { "p" };
         key(&mut s, name, true, false, false);
         assert!(s.command(CommandId::Pen).selected);
@@ -152,12 +153,12 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
         assert_eq!(tiles.iter().find(|tile| tile.id == ids[1]).unwrap().choice.icon, ToolGroup::Pen.icon());
         let DrawerAnchor::Header { id } = header else { unreachable!() };
         assert_eq!(s.header_view().items.iter().find(|item| item.id == id).unwrap().icon, ToolGroup::Pen.icon());
-        let during = s.workspace_working_state();
+        let during = s.editing_state();
         assert_eq!(during.canvas_tool, permanent.canvas_tool);
         assert_eq!(during.preset, permanent.preset);
         assert_eq!(during.tools, permanent.tools);
         key(&mut s, name, false, false, false);
-        let queued = s.workspace_working_state();
+        let queued = s.editing_state();
         assert_eq!(queued.canvas_tool, permanent.canvas_tool);
         assert_eq!(queued.preset, permanent.preset);
         assert_eq!(queued.tools, permanent.tools);
@@ -165,7 +166,7 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
         s.frame(3, 3).unwrap();
         assert!(s.command(CommandId::Hand).selected);
         assert_eq!(s.state().brush.preset, permanent.preset);
-        assert_eq!(s.workspace_working_state().tools, permanent.tools);
+        assert_eq!(s.editing_state().tools, permanent.tools);
         for anchor in [brush, drawing, header] {
             assert_eq!(selected_slot_variant(&s, anchor), watercolor);
         }
@@ -183,7 +184,7 @@ fn tool_group_temporary_brushes_preserve_memory_from_a_nonpainting_tool() {
             assert!(s.command(CommandId::Pen).selected);
             invoke(&mut s, CommandId::Eraser);
             assert!(s.command(CommandId::Eraser).selected);
-            assert_eq!(s.workspace_working_state().tools.drawing(), permanent.tools.drawing());
+            assert_eq!(s.editing_state().tools.drawing(), permanent.tools.drawing());
             assert_eq!(selected_slot_variant(&s, drawing), watercolor);
             assert_eq!(selected_slot_variant(&s, header), watercolor);
             key(&mut s, "Alt_L", false, false, false);
@@ -369,6 +370,7 @@ fn tool_group_existing_nonpaint_commands_keep_layout_identity() {
         assert_eq!(s.state().workspace.layout, layout);
         let capture = s.capture_workspace().unwrap();
         let mut restored = session(Platform::Gtk);
+        restored.restore_editing(s.editing_state()).unwrap();
         restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
         assert_eq!(selected_slot_variant(&restored, anchor), *slot.variants().last().unwrap());
         assert_eq!(selected_slot_variant(&restored, header), *slot.variants().last().unwrap());
@@ -639,7 +641,7 @@ fn workspace_capture_during_spring_and_modifier_holds_keeps_the_permanent_tool()
         let airbrush = ToolVariant::Command { command: CommandId::Airbrush };
         s.dispatch(slot_choice(&s, anchor, airbrush)).unwrap();
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
-        let permanent = s.capture_workspace().unwrap();
+        let permanent = s.editing_state();
         if modifier {
             let mut settings = s.state().settings.clone();
             let mut holds = settings.hold_keys(Platform::Gtk);
@@ -655,21 +657,21 @@ fn workspace_capture_during_spring_and_modifier_holds_keeps_the_permanent_tool()
             assert!(s.command(CommandId::Decoration).selected);
         }
         s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
-        let during = s.capture_workspace().unwrap();
-        assert_eq!(during.working.preset, permanent.working.preset);
-        assert_eq!(during.working.canvas_tool, permanent.working.canvas_tool);
-        assert_eq!(during.working.tool_slots, permanent.working.tool_slots);
-        assert_eq!(during.working.tools.drawing(), permanent.working.tools.drawing());
+        let during = s.editing_state();
+        assert_eq!(during.preset, permanent.preset);
+        assert_eq!(during.canvas_tool, permanent.canvas_tool);
+        assert_eq!(during.tool_slots, permanent.tool_slots);
+        assert_eq!(during.tools.drawing(), permanent.tools.drawing());
         let mut restored = session(Platform::Gtk);
-        restored.adopt_workspace(PreparedWorkspace::new(during).unwrap()).unwrap();
+        restored.restore_editing(during).unwrap();
         assert!(restored.command(CommandId::Airbrush).selected);
         assert_eq!(restored.state().brush.diameter, 73.);
         if modifier { key(&mut s, "Alt_L", false, false, false); }
         else { key(&mut s, "b", false, false, false); }
-        let pending = s.capture_workspace().unwrap();
-        assert_eq!(pending.working.preset, permanent.working.preset);
-        assert_eq!(pending.working.canvas_tool, permanent.working.canvas_tool);
-        assert_eq!(pending.working.tool_slots, permanent.working.tool_slots);
+        let pending = s.editing_state();
+        assert_eq!(pending.preset, permanent.preset);
+        assert_eq!(pending.canvas_tool, permanent.canvas_tool);
+        assert_eq!(pending.tool_slots, permanent.tool_slots);
         s.pen(event(&s, 2, PenPhase::Up, 1.)).unwrap();
         s.frame(3, 3).unwrap();
         assert!(s.command(CommandId::Airbrush).selected);
@@ -697,7 +699,7 @@ fn disabled_slot_choices_are_revalidated_before_they_change_memory() {
 }
 
 #[test]
-fn slot_choices_round_trip_with_independent_workspace_working_state() {
+fn slot_choices_survive_layout_switch_and_editing_restart() {
     let (mut s, panel, ids) = slot_fixture(Platform::Gtk, &[ToolSlotId::Marquee, ToolSlotId::Gradient]);
     let anchor = DrawerAnchor::Tile { panel, tile: ids[0] };
     let original = selected_slot_variant(&s, anchor);
@@ -710,9 +712,10 @@ fn slot_choices_round_trip_with_independent_workspace_working_state() {
     let edited = s.capture_workspace().unwrap();
     assert_eq!(blank.history, edited.history, "variation choices are working state");
     s.adopt_workspace(PreparedWorkspace::new(blank).unwrap()).unwrap();
-    assert_eq!(selected_slot_variant(&s, anchor), original);
+    assert_eq!(selected_slot_variant(&s, anchor), other);
     let encoded = serde_json::to_string(&edited).unwrap();
     let mut restored = session(Platform::Gtk);
+    restored.restore_editing(s.editing_state()).unwrap();
     restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&encoded).unwrap()).unwrap()).unwrap();
     assert_eq!(selected_slot_variant(&restored, anchor), other);
     assert_eq!(selected_slot_variant(&restored, gradient_anchor), gradient);

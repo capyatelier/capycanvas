@@ -319,23 +319,32 @@ impl WorkspaceHistory {
     }
 }
 
-/// Latest-only semantic values, independent of layout/history/template payloads.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct WorkspaceWorkingState {
-    #[serde(default)]
-    pub tool_slots: crate::ToolSlotMemory,
+pub struct EditingState {
     pub version: u32,
     pub preset: u32,
-    pub tools: crate::WorkspaceToolMemory,
+    pub tools: crate::ToolMemory,
+    pub tool_slots: crate::ToolSlotMemory,
     pub colors: crate::ColorState,
+    pub mask_colors: crate::ColorState,
+    pub color_library: crate::ColorLibrary,
     pub canvas_tool: crate::LayerCanvasTool,
     pub selection: crate::SelectionOptions,
     pub region_values: std::collections::BTreeMap<String, f32>,
     pub region_sources: [crate::RegionSource; 2],
     pub gradient: [bool; 2],
     pub figure: (crate::FigureShape, crate::FigurePaint),
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceWorkingState {
+    pub version: u32,
     pub zen_mode: bool,
+}
+impl Default for WorkspaceWorkingState {
+    fn default() -> Self { Self { version: 1, zen_mode: false } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

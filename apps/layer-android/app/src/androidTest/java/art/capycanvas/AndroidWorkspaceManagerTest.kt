@@ -16,7 +16,7 @@ class AndroidWorkspaceManagerTest {
     private lateinit var host: CanvasHost
     private fun view() = host.workspaceManager!!
     private fun state() = host.snapshot!!.getJSONObject("state")
-    @Before fun ready() = launch()
+    @Before fun ready() { launch(); action(obj("type" to "set_theme", "theme" to (androidx.test.platform.app.InstrumentationRegistry.getArguments().getString("theme") ?: "dark"))) }
     private fun launch() {
         scenario = launchCapy(compose = compose)
         host = scenario.activity().host
@@ -47,11 +47,18 @@ class AndroidWorkspaceManagerTest {
         node.performTouchInput { click() }; Thread.sleep(250); compose.waitForIdle()
     }
     private fun menu(label: String) {
-        tap("application-menu-window")
+        if (compose.onAllNodesWithTag("application-menu-window", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) tap("application-menu-window")
+        else {
+            val compact = compose.onAllNodesWithTag("header-menu-labels-compact", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            val item = host.snapshot!!.getJSONObject("header").getJSONObject("model").array("zones").values().flatMap { (it as org.json.JSONArray).objects() }.first { it.getJSONObject("item").getString("kind") in listOf("menu", "menu_labels") }
+            tap(if (compact) "header-menu-labels-compact" else "header-control-${item.getInt("id")}")
+            compose.onNodeWithText("Window", useUnmergedTree = true).performTouchInput { click() }
+        }
         compose.onNodeWithText("Workspaces", useUnmergedTree = true).performTouchInput { click() }
         compose.onNodeWithText(label, useUnmergedTree = true).performTouchInput { click() }
         Thread.sleep(300); idle()
     }
+    private fun editing() = listOf("brush", "colors", "color_library").map { state().getJSONObject(it).toString() }
     private fun capture() = JSONObject(host.workspaceCapture())
     private fun normalized(value: JSONObject): String {
         val copy = JSONObject(value.toString())
@@ -64,7 +71,7 @@ class AndroidWorkspaceManagerTest {
     }
     @Test fun restoreStartingLayoutPlacesPalettesAfterColorAndProofAfterNavigator() {
         val name="Paint"
-        tap("workspace-switch-builtin:workspace:painter");idle()
+        tap("workspace-switch-builtin:workspace:illustrator");idle()
         action(obj("type" to "customize","action" to obj("type" to "set_panel_visible","panel" to "proof","visible" to false)))
         menu("Restore Starting Layout…");tap("workspace-submit");idle()
         fun tabs(node:Any?):List<List<Any>> = when(node) {
@@ -97,6 +104,11 @@ class AndroidWorkspaceManagerTest {
         assertNotEquals(original, painting)
         assertEquals("Tablet Painting", view().getString("name"))
         action(obj("type" to "invoke", "command" to "eraser"))
+        action(obj("type" to "set_brush_size", "value" to 91))
+        action(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(0.2, 0.3, 0.4, 1.0))))
+        action(obj("type" to "color", "action" to obj("op" to "library", "action" to obj("op" to "create_palette", "name" to "Shared colors"))))
+        action(obj("type" to "color", "action" to obj("op" to "library", "action" to obj("op" to "store", "palette" to state().getJSONObject("color_library").getLong("active"), "name" to "Shared ink", "color" to state().getJSONObject("colors").getJSONObject("foreground")))))
+        val sharedEditing = editing()
         action(obj("type" to "move_panel", "panel" to "layers", "viewport" to org.json.JSONArray(listOf(1400, 900)), "target" to obj("kind" to "float", "position" to org.json.JSONArray(listOf(480, 220)))))
         val changed = capture()
         assertNotEquals(initial.getJSONObject("history").toString(), changed.getJSONObject("history").toString())
@@ -113,6 +125,7 @@ class AndroidWorkspaceManagerTest {
         assertEquals(changed.toString(), capture().toString())
         menu("Manage Workspaces…"); tap("workspace-row-$original"); tap("workspace-confirm"); idle()
         assertEquals(original, view().getString("id"))
+        assertEquals(sharedEditing, editing())
         assertEquals(initial.getJSONObject("working").toString(), capture().getJSONObject("working").toString())
         menu("Manage Workspaces…"); tap("workspace-row-$painting"); tap("workspace-confirm"); idle()
         assertEquals(changed.getJSONObject("working").toString(), capture().getJSONObject("working").toString())
@@ -126,6 +139,7 @@ class AndroidWorkspaceManagerTest {
         val beforeRestart = capture()
         scenario.close(); Thread.sleep(500); launch()
         assertEquals(painting, view().getString("id"))
+        assertEquals(sharedEditing, editing())
         assertEquals(normalized(beforeRestart), normalized(capture()))
         menu("Manage Workspaces…"); tap("workspace-options-$painting"); tap("workspace-rename")
         compose.onNode(hasSetTextAction() and hasAnyAncestor(hasTestTag("workspace-name")), useUnmergedTree = true).performTextReplacement("Tablet Inking")
@@ -133,13 +147,17 @@ class AndroidWorkspaceManagerTest {
         assertEquals("Tablet Inking", view().getString("name"))
         for (id in listOf("builtin:workspace:painter", "builtin:workspace:illustrator", "builtin:workspace:photographer")) {
             shot("before-header-switch")
-            tap("workspace-switch-$id"); idle()
+            val headerVisible = compose.onAllNodesWithTag("workspace-switch-$id", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()
+            if (headerVisible) tap("workspace-switch-$id")
+            else { menu("Manage Workspaces…"); tap("workspace-row-$id"); tap("workspace-confirm") }
+            idle()
             if (id != view().getString("id")) {
                 shot("header-switch-failure")
                 File(instrumentation.targetContext.getExternalFilesDir(null), "validation/workspaces/header-switch-failure.json").writeText(view().toString())
             }
             assertEquals(id, view().getString("id"))
-            compose.onNodeWithTag("workspace-switch-$id").assertIsSelected()
+            assertEquals(sharedEditing, editing())
+            if (compose.onAllNodesWithTag("workspace-switch-$id", useUnmergedTree = true).fetchSemanticsNodes().isNotEmpty()) compose.onNodeWithTag("workspace-switch-$id").assertIsSelected()
         }
         menu("Manage Workspaces…")
         for (row in view().array("rows").objects().filter { it.getString("id").startsWith("builtin:workspace:") }) {
@@ -154,7 +172,9 @@ class AndroidWorkspaceManagerTest {
         compose.onNodeWithText("Cancel", useUnmergedTree = true).performTouchInput { click() }; Thread.sleep(250); idle()
         assertEquals(normalized(beforeReset), normalized(capture()))
         menu("Reset All Brushes…"); shot("reset-brushes"); tap("workspace-submit"); idle()
-        beforeReset.getJSONObject("working").getJSONObject("tools").put("overrides", JSONObject())
+        assertNotEquals(91.0, state().getJSONObject("brush").getDouble("diameter"))
+        action(obj("type" to "invoke", "command" to "brush"))
+        assertNotEquals(73.0, state().getJSONObject("brush").getDouble("diameter"))
         assertEquals(normalized(beforeReset), normalized(capture()))
         menu("Restore Starting Layout…"); tap("workspace-submit"); idle()
         assertEquals(beforeReset.getJSONObject("working").toString(), capture().getJSONObject("working").toString())

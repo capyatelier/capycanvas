@@ -5,7 +5,7 @@
 ## Tool variations
 
 Toolbar and title-bar controls derive their tool groups in shared Rust. A
-predefined `ToolSlotId` chooses workspace-specific siblings; a brush command
+predefined `ToolSlotId` remembers its variation across workspaces; a brush command
 exposes its media or presets, and Sketch's Brush, Sculpt and Select commands
 expose their existing sets. Figure, Ruler, Gradient, Move and Fill commands also
 expose their variations. Existing command controls gain this behavior without
@@ -54,16 +54,12 @@ sibling updates the retained drawer at the same origin.
 Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
 the same complete projection through More tool options.
 
-`WorkspaceWorkingState.tool_slots` remembers choices by stable tile or header
-identity for explicit slots and grouped nonbrush commands, outside layout and
-document history. Brush groups use existing `WorkspaceToolMemory` without a
-second saved choice. Moving keeps identity; duplicating
-copies remembered choices. Permanent selections through shortcuts, drawers and
-panels update matching slots. Temporary held tools do not replace these choices
-or the saved permanent tool. Layout undo restores removed controls; memory is
-retained for instances still present in layout history and invalid membership
-falls back to the group's first choice. Existing brush settings and preset
-memory remain authoritative.
+`EditingState.tool_slots` remembers one choice per tool slot across layouts,
+outside document and layout history. Brush groups use `ToolMemory` for presets
+and parameter overrides. Permanent selections through shortcuts, drawers and
+panels update matching slots. Temporary held tools preserve these choices and
+the saved permanent tool. Moving, duplicating or restoring controls keeps the
+shared choice.
 
 Add Tools offers both predefined groups and individual tools, so a variation can
 also have a dedicated command button. The initial groups are fixed definitions;

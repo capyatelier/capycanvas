@@ -11,37 +11,37 @@ fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase(
     s.dispatch(UiAction::Color {
         action: ColorAction::Library {
             action: crate::ColorLibraryAction::Store {
-                palette: s.state.colors.library.palettes[0].id,
+                palette: s.state.color_library.palettes[0].id,
                 name: String::new(),
                 color,
             },
         },
     })
     .unwrap();
-    let id = s.state.colors.library.palettes[0].swatches.last().unwrap().id;
+    let id = s.state.color_library.palettes[0].swatches.last().unwrap().id;
     s.dispatch(UiAction::Color {
         action: ColorAction::Library {
             action: crate::ColorLibraryAction::Use { id },
         },
     })
     .unwrap();
-    assert!(s.state.colors.library.history.is_empty());
+    assert!(s.state.color_library.history.is_empty());
     s.pen(event(&s, 1, PenPhase::Down, 0.8)).unwrap();
     s.frame(10_000_000, 18_000_000).unwrap();
     assert!(
-        s.state.colors.library.history.is_empty(),
+        s.state.color_library.history.is_empty(),
         "live preview is not history"
     );
     s.pen(event(&s, 2, PenPhase::Cancel, 0.)).unwrap();
     s.frame(20_000_000, 28_000_000).unwrap();
-    assert!(s.state.colors.library.history.is_empty());
+    assert!(s.state.color_library.history.is_empty());
     s.pen(event(&s, 3, PenPhase::Down, 0.8)).unwrap();
     s.pen(event(&s, 4, PenPhase::Up, 0.)).unwrap();
     s.frame(40_000_000, 48_000_000).unwrap();
-    assert_eq!(s.state.colors.library.history, [color]);
+    assert_eq!(s.state.color_library.history, [color]);
     invoke(&mut s, CommandId::Undo);
     assert_eq!(
-        s.state.colors.library.history,
+        s.state.color_library.history,
         [color],
         "undo does not erase usage history"
     );
@@ -55,7 +55,7 @@ fn palette_history_tracks_completed_paint_not_selection_preview_cancel_or_erase(
     s.pen(event(&s, 5, PenPhase::Down, 0.8)).unwrap();
     s.pen(event(&s, 6, PenPhase::Up, 0.)).unwrap();
     s.frame(60_000_000, 68_000_000).unwrap();
-    assert_eq!(s.state.colors.library.history, [color]);
+    assert_eq!(s.state.color_library.history, [color]);
 }
 
 #[test]
@@ -69,8 +69,8 @@ fn palette_history_records_successful_fill_definitions() {
     .unwrap();
     let kind = s.fill_operation();
     s.paint_operation(None, kind, &[color]).unwrap();
-    assert_eq!(s.state.colors.library.history, [color]);
-    let before = s.state.colors.library.history.clone();
+    assert_eq!(s.state.color_library.history, [color]);
+    let before = s.state.color_library.history.clone();
     invoke(&mut s, CommandId::Undo);
     s.dispatch(UiAction::Color {
         action: ColorAction::Definition {
@@ -78,5 +78,5 @@ fn palette_history_records_successful_fill_definitions() {
         },
     })
     .unwrap();
-    assert_eq!(s.state.colors.library.history, before);
+    assert_eq!(s.state.color_library.history, before);
 }

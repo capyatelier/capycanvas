@@ -43,11 +43,11 @@ import QuartzCore
 
             func color(_ action: [String: Any]) async throws { try await store.apply(["type": "color", "action": action]) }
             func library(_ action: [String: Any]) async throws { try await color(["op": "library", "action": action]) }
-            let starting = store.state["colors"]["library"]["palettes"].array.count
+            let starting = store.state["color_library"]["palettes"].array.count
             try await library(["op": "create_palette", "name": "Studio colors"])
-            let palette = store.state["colors"]["library"]["palettes"].array.first { $0["name"].string == "Studio colors" }!["id"].uint
+            let palette = store.state["color_library"]["palettes"].array.first { $0["name"].string == "Studio colors" }!["id"].uint
             func saved(_ owner: EditorStore) -> JSON {
-                owner.state["colors"]["library"]["palettes"].array.first { $0["id"].uint == palette } ?? JSON()
+                owner.state["color_library"]["palettes"].array.first { $0["id"].uint == palette } ?? JSON()
             }
             for space in ["Srgb", "DisplayP3", "AdobeRgb", "ProPhoto"] {
                 let definition = JSON(["space": space, "rgba": [1.125, -0.125, 0.34567891, 213.0 / 65535]])
@@ -62,14 +62,14 @@ import QuartzCore
                 try require(store.state["colors"]["foreground"].stableKey == tagged.stableKey, "Use must restore exact tagged values in \(space)")
             }
             try await library(["op": "rename_palette", "id": palette, "name": "Retained colors"])
-            let savedLibrary = store.state["colors"]["library"].stableKey
+            let savedLibrary = store.state["color_library"].stableKey
             // A new document changes wheel space but retains workspace palettes.
             try await store.apply(["type": "invoke", "command": "new_document"])
             try await wait("Next document choices") { store.projectFiles.creating }
             let next = JSON(["extent": [67, 43], "color": ["space": "ProPhoto", "depth": "U16"], "background": "White"])
             store.projectFiles.created(NewDrawingChoice(options: next, presetName: "", useAsDefaults: false))
             try await wait("Next document") { store.state["document_file"]["epoch"].uint == epoch + 2 && !store.projectFiles.busy }
-            try require(store.state["colors"]["library"].stableKey == savedLibrary && store.state["colors"]["rgb_space"].string == "ProPhoto",
+            try require(store.state["color_library"].stableKey == savedLibrary && store.state["colors"]["rgb_space"].string == "ProPhoto",
                 "Document adoption must preserve palettes while updating the wheel gamut")
             let settings = store.state["settings"]["new_document"].stableKey
             let flushed = await withCheckedContinuation { done in store.flushPersistence { done.resume(returning: $0) } }
@@ -77,13 +77,13 @@ import QuartzCore
             try await store.workspaces!.closed()
             let restored = EditorStore(platform: platform, scene: scene, persistence: EditorPersistence(root: root))
             try await wait("Fresh owner restoration") { restored.workspaces?.ready == true || restored.failure != nil }
-            try require(restored.state["colors"]["library"].stableKey == savedLibrary, "Fresh owner must restore palette IDs, names, tags and samples")
+            try require(restored.state["color_library"].stableKey == savedLibrary, "Fresh owner must restore palette IDs, names, tags and samples")
             try require(restored.state["settings"]["new_document"].stableKey == settings, "Fresh owner must restore creation presets and defaults")
             let removal = saved(restored)["swatches"][0]["id"].uint
             for action: [String: Any] in [["op": "remove", "id": removal], ["op": "remove_palette", "id": palette]] {
                 try await restored.apply(["type": "color", "action": ["op": "library", "action": action]])
             }
-            try require(restored.state["colors"]["library"]["palettes"].array.count == starting, "Swatch and palette removal must preserve the remaining palettes")
+            try require(restored.state["color_library"]["palettes"].array.count == starting, "Swatch and palette removal must preserve the remaining palettes")
             try await restored.workspaces!.closed()
             print("PASS: platform \(platform), creation defaults/preset validation/retry/Cancel, all tagged palette spaces, document adoption and fresh-owner durable restoration")
             withExtendedLifetime(surface) {}

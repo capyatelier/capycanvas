@@ -17,6 +17,12 @@ fn native_workspace_transition_stability() {
         let b = w.area.compute_bounds(&w.window).unwrap();
         [b.x(), b.y(), b.width(), b.height()]
     };
+    w.dispatch(UiAction::SetBrushSize { value: 73. });
+    w.dispatch(UiAction::SetColor { rgba: [0.2, 0.3, 0.4, 1.] });
+    w.dispatch(UiAction::Color { action: layer_ui::ColorAction::Library {
+        action: layer_ui::ColorLibraryAction::CreatePalette { name: "Shared colors".into() },
+    } });
+    let editing = ui_session(&w).editing_state();
     let original = geometry(&w);
     let frames = Rc::new(RefCell::new(Vec::new()));
     let clock = w.window.frame_clock().unwrap();
@@ -48,7 +54,8 @@ fn native_workspace_transition_stability() {
         }
     ));
     input.ready();
-    for _ in 0..2 {
+    for theme in [Theme::Dark, Theme::Light] {
+        w.dispatch(UiAction::SetTheme { theme: Some(theme) });
         for (id, _) in DEFAULT_WORKSPACES {
             // The visible Sketch/Paint/Photo labels can change; widget identity
             // follows the stable stored IDs, as in workspace_switcher.rs.
@@ -67,6 +74,7 @@ fn native_workspace_transition_stability() {
                 "workspace switch",
             );
             pump(200);
+            assert_eq!(ui_session(&w).editing_state(), editing);
         }
     }
     // The same owner validation runs after a lease has expired or ownership
@@ -396,18 +404,12 @@ fn check_active_workspace_delete(occupied_default: bool) {
         other.activate(incoming);
     }
     let replacement = DEFAULT_WORKSPACES[if occupied_default { 0 } else { 1 }].0;
-    let mut expected = glib::MainContext::default()
+    let expected = glib::MainContext::default()
         .block_on(manager.load(replacement))
         .unwrap()
         .entity
         .capture()
         .unwrap();
-    let depth = ui_session(&w)
-        .engine()
-        .document()
-        .color
-        .depth;
-    expected.working.colors.set_document_depth(depth).unwrap();
     for confirm in [false, true] {
         w.workspaces.ui.show(&w, ManagerPage::Workspaces);
         pump(400);

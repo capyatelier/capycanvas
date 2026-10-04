@@ -2,7 +2,7 @@ use super::*;
 use std::collections::BTreeMap;
 
 variants! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
     #[serde(rename_all = "snake_case")]
     pub enum ToolSlotId {
         Drawing, Marquee, Lasso, AutomaticSelection, ManualSelection, Healing,
@@ -362,55 +362,14 @@ impl ToolVariant {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ToolSlotSelection {
-    pub slot: ToolSlotId,
-    pub variant: ToolVariant,
-}
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ToolSlotMemory {
-    pub tiles: BTreeMap<u32, ToolSlotSelection>,
-    pub headers: BTreeMap<u32, ToolSlotSelection>,
+    pub choices: BTreeMap<ToolSlotId, ToolVariant>,
 }
 impl ToolSlotMemory {
-    fn get(&self, anchor: DrawerAnchor, slot: ToolSlotId) -> Option<ToolVariant> {
-        let choice = match anchor {
-            DrawerAnchor::Tile { tile, .. } => self.tiles.get(&tile),
-            DrawerAnchor::Header { id } => self.headers.get(&id),
-            _ => None,
-        }?;
-        (choice.slot == slot && slot.variants().contains(&choice.variant)).then_some(choice.variant)
-    }
-    fn remember(&mut self, anchor: DrawerAnchor, slot: ToolSlotId, variant: ToolVariant) {
-        let (map, id) = match anchor {
-            DrawerAnchor::Tile { tile, .. } => (&mut self.tiles, tile),
-            DrawerAnchor::Header { id } => (&mut self.headers, id),
-            _ => return,
-        };
-        map.insert(id, ToolSlotSelection { slot, variant });
-    }
-    pub(crate) fn retain_history(&mut self, history: &LayoutHistory) {
-        let slots: Vec<_> = history
-            .revisions
-            .values()
-            .flat_map(|r| r.layout.tool_slots())
-            .collect();
-        self.tiles.retain(|id, choice| {
-            slots.iter().any(|(a, slot)| {
-                matches!(a, DrawerAnchor::Tile {tile,..} if tile==id)
-                    && *slot == choice.slot
-                    && slot.variants().contains(&choice.variant)
-            })
-        });
-        self.headers.retain(|id, choice| {
-            slots.iter().any(|(a, slot)| {
-                matches!(a, DrawerAnchor::Header {id:header} if header==id)
-                    && *slot == choice.slot
-                    && slot.variants().contains(&choice.variant)
-            })
-        });
-    }
+    fn get(&self, slot: ToolSlotId) -> Option<ToolVariant> { self.choices.get(&slot).copied() }
+    fn remember(&mut self, slot: ToolSlotId, variant: ToolVariant) { self.choices.insert(slot, variant); }
 }
 impl DockLayout {
     pub(crate) fn tool_slots(&self) -> impl Iterator<Item = (DrawerAnchor, ToolSlotId)> + '_ {
@@ -457,18 +416,17 @@ impl DockLayout {
     }
 }
 impl UiState {
-    pub(crate) fn slot_variant(&self, slot: ToolSlotId, anchor: DrawerAnchor) -> ToolVariant {
+    pub(crate) fn slot_variant(&self, slot: ToolSlotId) -> ToolVariant {
         ToolVariant::active(self)
             .filter(|v| slot.variants().contains(v))
-            .or_else(|| self.tool_slots.get(anchor, slot))
+            .or_else(|| self.tool_slots.get(slot))
             .unwrap_or(slot.variants()[0])
     }
     pub(crate) fn resolve_slot(
         &self,
         slot: ToolSlotId,
-        anchor: DrawerAnchor,
     ) -> (ToolChoice, bool, String, ToolbarControl) {
-        let variant = self.slot_variant(slot, anchor);
+        let variant = self.slot_variant(slot);
         let mut choice = tool_choice_localized(variant.control(), &self.localization);
         choice.control = ToolbarControl::ToolSlot { slot };
         choice.label = variant.label(&self.localization);
@@ -489,9 +447,9 @@ impl UiState {
         };
         (choice, enabled, tooltip, variant.control())
     }
-    pub(crate) fn resolve_group(&self, control: ToolbarControl, anchor: DrawerAnchor) -> Option<(ToolChoice, bool, String, ToolbarControl)> {
+    pub(crate) fn resolve_group(&self, control: ToolbarControl) -> Option<(ToolChoice, bool, String, ToolbarControl)> {
         let ToolControlGroup::Slot(slot) = control.tool_group()? else { return None; };
-        let (mut choice, enabled, tooltip, resolved) = self.resolve_slot(slot, anchor);
+        let (mut choice, enabled, tooltip, resolved) = self.resolve_slot(slot);
         choice.control = control;
         Some((choice, enabled, tooltip, resolved))
     }
@@ -616,7 +574,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 .to_string());
         };
         let Some(group) = control.tool_group() else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
-        let remembered = self.group_variant(group, anchor);
+        let remembered = self.group_variant(group);
         let items = self.group_choices(group, Some(anchor)).into_iter()
             .map(|(variant, choice)| {
                 let mut item = ContextMenuItem::command(
@@ -636,9 +594,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             sections: vec![items],
         })
     }
-    fn group_variant(&self, group: ToolControlGroup, anchor: DrawerAnchor) -> ToolVariant {
+    fn group_variant(&self, group: ToolControlGroup) -> ToolVariant {
         let id = match group {
-            ToolControlGroup::Slot(slot) => return self.state.slot_variant(slot, anchor),
+            ToolControlGroup::Slot(slot) => return self.state.slot_variant(slot),
             ToolControlGroup::Selection => return command(self.selection_tools.options.tool.command()),
             ToolControlGroup::Brush(tool) => self.tools.command_preset_in(tool.command(), &self.state.brush, self.layer_interaction.tool).unwrap(),
             ToolControlGroup::Drawing => self.tools.command_preset_in(CommandId::DrawingBrush, &self.state.brush, self.layer_interaction.tool).unwrap(),
@@ -656,9 +614,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         let Some(variant) = ToolVariant::active(&self.state) else {
             return;
         };
-        for (anchor, slot) in self.state.workspace.layout.tool_slots() {
+        for slot in ToolSlotId::ALL {
             if slot.variants().contains(&variant) {
-                self.state.tool_slots.remember(anchor, slot, variant);
+                self.state.tool_slots.remember(slot, variant);
             }
         }
     }
@@ -738,19 +696,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 _ => false,
             }
         })
-    }
-    pub(crate) fn seed_tool_slots(&mut self, before: &DockLayout) {
-        for (anchor, slot) in self.state.workspace.layout.tool_slots() {
-            if self.state.tool_slots.get(anchor, slot).is_none()
-                && !before.tool_slots().any(|(old, _)| old == anchor)
-                && let Some(variant) = before
-                    .tool_slots()
-                    .filter(|(_, old)| *old == slot)
-                    .find_map(|(old, _)| self.state.tool_slots.get(old, slot))
-            {
-                self.state.tool_slots.remember(anchor, slot, variant);
-            }
-        }
     }
     fn show_tool_slot_drawer(&mut self, previous: DrawerAnchor, anchor: DrawerAnchor) {
         let Some(control) = self.state.workspace.layout.anchor_control(anchor) else { return; };
@@ -862,7 +807,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 command: CommandId::Eyedropper,
             });
         }
-        let variant = self.group_variant(group, anchor);
+        let variant = self.group_variant(group);
         if let Some(reason) = self.command_disabled_reason(variant.command()) {
             return Err(reason);
         }

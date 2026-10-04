@@ -140,7 +140,7 @@ fn native_numeric_colors_and_saved_palettes() {
     entry.set_text("P3 low-alpha red");
     entry.emit_activate();
     pump(50);
-    let palette = state(&w).colors.library.active_palette().clone();
+    let palette = state(&w).color_library.active_palette().clone();
     assert_eq!(palette.swatches.len(), 1);
     assert_eq!(palette.swatches[0].name, "P3 low-alpha red");
     assert_eq!(palette.swatches[0].color, original);
@@ -198,16 +198,14 @@ fn native_numeric_colors_and_saved_palettes() {
     });
     assert!(
         state(&next)
-            .colors
-            .library
+            .color_library
             .swatch(palette.swatches[0].id)
             .is_none()
     );
     assert_eq!(state(&next).colors.background, original);
     assert!(
         state(&w)
-            .colors
-            .library
+            .color_library
             .swatch(palette.swatches[0].id)
             .is_some()
     );
@@ -230,11 +228,11 @@ fn native_numeric_colors_and_saved_palettes() {
     remove_from_menu();
     pump(100);
     respond(&next, "Cancel");
-    assert_eq!(state(&next).colors.library.palettes.len(), 11);
+    assert_eq!(state(&next).color_library.palettes.len(), 11);
     remove_from_menu();
     pump(100);
     respond(&next, "Remove");
-    assert_eq!(state(&next).colors.library.palettes.len(), 10);
+    assert_eq!(state(&next).color_library.palettes.len(), 10);
     assert_eq!(state(&next).colors.background, original);
     next.window.destroy();
     w.window.destroy();

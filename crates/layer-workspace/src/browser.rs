@@ -12,6 +12,7 @@ type Result<T> = std::result::Result<T, StoreError>;
 #[serde(deny_unknown_fields)]
 pub struct BrowserDatabase {
     schema: u32,
+    editing: Option<String>,
     items: BTreeMap<String, BrowserRecord>,
     fences: BTreeMap<String, String>,
     receipts: BTreeMap<String, (String, CommitReceipt)>,
@@ -55,6 +56,7 @@ impl Default for BrowserDatabase {
     fn default() -> Self {
         Self {
             schema: SCHEMA_VERSION,
+            editing: None,
             items: Default::default(),
             fences: Default::default(),
             receipts: Default::default(),
@@ -206,6 +208,7 @@ impl BrowserDatabase {
     fn apply(&mut self, request: StoreRequest, now: u64) -> Result<StoreResponse> {
         use StoreRequest::*;
         Ok(match request {
+            Editing => StoreResponse::Editing(self.editing.clone()),
             Switcher => StoreResponse::Switcher(self.switcher.clone()),
             WorkspaceOrder => StoreResponse::WorkspaceOrder(self.workspace_order.clone()),
             UpdateSwitcher { expected, ids } => {
@@ -478,6 +481,7 @@ impl BrowserDatabase {
                 self.bindings.remove(key);
             }
         }
+        if let Some(editing) = batch.editing_json { self.editing = Some(editing); }
         self.receipts
             .insert(batch.operation_id, (hash, receipt.clone()));
         Ok(receipt)

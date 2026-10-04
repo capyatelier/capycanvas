@@ -26,6 +26,7 @@ pub struct ColorPalette {
 pub struct ColorLibrary {
     pub palettes: Vec<ColorPalette>,
     pub active: u64,
+    pub selected: Option<u64>,
     pub history: Vec<RgbColor>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pending_name: Option<(RgbColor, String)>,
@@ -38,7 +39,7 @@ pub struct ColorLibrary {
 }
 impl PartialEq for ColorLibrary {
     fn eq(&self, other: &Self) -> bool {
-        self.palettes == other.palettes && self.active == other.active
+        self.palettes == other.palettes && self.active == other.active && self.selected == other.selected
             && self.history == other.history && self.pending_name == other.pending_name
             && self.starters_installed == other.starters_installed && self.reorders == other.reorders
             && self.next_id == other.next_id
@@ -132,6 +133,7 @@ impl ColorLibrary {
             fresh_default: true,
             reorders: Default::default(),
             active: 1,
+            selected: None,
             history: Vec::new(),
             pending_name: None,
         }
@@ -277,6 +279,9 @@ impl ColorLibrary {
                 }
                 ColorState::validate_definition(swatch.color)?;
             }
+        }
+        if self.selected.is_some_and(|id| self.swatch(id).is_none()) {
+            return Err("Swatch no longer exists".into());
         }
         Ok(())
     }
@@ -432,6 +437,7 @@ impl ColorLibrary {
                 if self.palettes.len() == 1 {
                     return Err("Keep at least one palette".into());
                 }
+                if self.palettes[index].swatches.iter().any(|s| Some(s.id) == self.selected) { self.selected = None; }
                 self.palettes.remove(index);
                 self.forget_reorders(id);
                 if self.active == id {
@@ -467,6 +473,7 @@ impl ColorLibrary {
                 });
                 let palette_id = palette.id;
                 self.forget_reorders(palette_id);
+                self.selected = Some(self.next_id);
                 self.next_id = next;
             }
             ColorLibraryAction::Rename { id, name: value } => {
@@ -490,13 +497,14 @@ impl ColorLibrary {
                     .find(|p| p.swatches.iter().any(|s| s.id == id))
                     .ok_or("Swatch no longer exists")?;
                 palette.swatches.retain(|s| s.id != id);
+                if self.selected == Some(id) { self.selected = None; }
                 let palette_id = palette.id;
                 self.forget_reorders(palette_id);
             }
             ColorLibraryAction::Use { id } => {
-                return Ok(Some(
-                    self.swatch(id).ok_or("Swatch no longer exists")?.color,
-                ));
+                let color = self.swatch(id).ok_or("Swatch no longer exists")?.color;
+                self.selected = Some(id);
+                return Ok(Some(color));
             }
             ColorLibraryAction::Reorder {
                 palette,
@@ -670,62 +678,26 @@ mod tests {
     #[test]
     fn palettes_keep_definitions_and_validate_failed_changes_atomically() {
         let mut state = ColorState::default();
+        let mut library = ColorLibrary::canonical();
         let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0., 0., 123. / 65535.]).unwrap();
-        state
-            .apply_canonical(ColorAction::Library {
-                action: ColorLibraryAction::Store {
-                    palette: 1,
-                    name: "Wide red".into(),
-                    color,
-                },
-            })
-            .unwrap();
-        let id = state.library.palettes[0].swatches[0].id;
+        library.apply_canonical(ColorLibraryAction::Store { palette: 1, name: "Wide red".into(), color }).unwrap();
+        let id = library.palettes[0].swatches[0].id;
         for space in RgbSpace::ALL {
             state.set_rgb_space(space).unwrap();
-            state
-                .apply_canonical(ColorAction::Library {
-                    action: ColorLibraryAction::Use { id },
-                })
-                .unwrap();
+            state.set_color(library.apply_canonical(ColorLibraryAction::Use { id }).unwrap().unwrap()).unwrap();
             assert_eq!(state.definition(), color);
         }
-        state = serde_json::from_slice(&serde_json::to_vec(&state).unwrap()).unwrap();
-        state.validate().unwrap();
-        assert_eq!(state.library.swatch(id).unwrap().color, color);
-        let before = state.clone();
-        assert!(
-            state
-                .apply_canonical(ColorAction::Library {
-                    action: ColorLibraryAction::CreatePalette {
-                        name: "MY COLORS".into()
-                    }
-                })
-                .is_err()
-        );
-        assert_eq!(state, before);
-        assert!(
-            state
-                .apply_canonical(ColorAction::Library {
-                    action: ColorLibraryAction::RemovePalette { id: 1 }
-                })
-                .is_err()
-        );
-        assert_eq!(state, before);
-        state
-            .apply_canonical(ColorAction::Library {
-                action: ColorLibraryAction::Rename {
-                    id,
-                    name: "P3 red".into(),
-                },
-            })
-            .unwrap();
-        state
-            .apply_canonical(ColorAction::Library {
-                action: ColorLibraryAction::Remove { id },
-            })
-            .unwrap();
-        assert!(state.library.swatch(id).is_none());
+        library = serde_json::from_slice(&serde_json::to_vec(&library).unwrap()).unwrap();
+        library.validate().unwrap();
+        assert_eq!(library.swatch(id).unwrap().color, color);
+        let before = library.clone();
+        assert!(library.apply_canonical(ColorLibraryAction::CreatePalette { name: "MY COLORS".into() }).is_err());
+        assert_eq!(library, before);
+        assert!(library.apply_canonical(ColorLibraryAction::RemovePalette { id: 1 }).is_err());
+        assert_eq!(library, before);
+        library.apply_canonical(ColorLibraryAction::Rename { id, name: "P3 red".into() }).unwrap();
+        library.apply_canonical(ColorLibraryAction::Remove { id }).unwrap();
+        assert!(library.swatch(id).is_none());
         assert_eq!(state.definition(), color);
     }
 }

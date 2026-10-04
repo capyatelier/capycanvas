@@ -82,6 +82,7 @@ mod selection_tools_checks {
                 let capture = s.capture_workspace().unwrap();
                 let saved = serde_json::to_string(&capture).unwrap();
                 let mut restored = session(platform);
+                restored.restore_editing(s.editing_state()).unwrap();
                 restored
                     .adopt_workspace(
                         PreparedWorkspace::new(serde_json::from_str(&saved).unwrap()).unwrap(),
@@ -443,10 +444,10 @@ mod selection_tools_checks {
             assert_eq!(s.engine.document().selection, original);
             invoke(&mut s, CommandId::Redo);
             assert_eq!(s.engine.document().selection, result);
-            let working = s.capture_workspace().unwrap();
-            let restored: WorkspaceCapture =
+            let working = s.editing_state();
+            let restored: EditingState =
                 serde_json::from_str(&serde_json::to_string(&working).unwrap()).unwrap();
-            assert_eq!(restored.working.selection, s.selection_tools.options);
+            assert_eq!(restored.selection, s.selection_tools.options);
         }
     }
     #[test]

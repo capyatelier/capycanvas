@@ -138,7 +138,6 @@ internal data class PaletteMenuState(val sections: JSONArray, val point: Offset,
 internal data class PaletteDialog(val kind: String, val id: Long? = null, val initial: String = "")
 
 internal class PaletteController(val host: CanvasHost) {
-    var selected by mutableStateOf<Long?>(null)
     var chooser by mutableStateOf(false)
     var expanded by mutableStateOf(false)
     var editing by mutableStateOf(false)
@@ -163,7 +162,7 @@ internal class PaletteController(val host: CanvasHost) {
     }
     fun selection(view: JSONObject): JSONObject? {
         val swatches = view.array("swatches").objects()
-        return swatches.firstOrNull { it.getLong("id") == selected && it.getBoolean("current") } ?: swatches.firstOrNull { it.getBoolean("current") }
+        return swatches.firstOrNull { it.getBoolean("current") }
     }
     fun apply(action: JSONObject, done: (String?) -> Unit = {}) = host.paletteAction(action) { error ->
         message = error?.let { it to true }
@@ -172,12 +171,10 @@ internal class PaletteController(val host: CanvasHost) {
     fun store() {
         val view = view() ?: return
         val color = current() ?: return
-        apply(obj("op" to "store", "palette" to view.getLong("palette"), "name" to "", "color" to color)) { error ->
-            if (error == null) selected = view()?.array("swatches")?.objects()?.lastOrNull()?.getLong("id")
-        }
+        apply(obj("op" to "store", "palette" to view.getLong("palette"), "name" to "", "color" to color))
     }
-    fun use(id: Long) { selected = id; apply(obj("op" to "use", "id" to id)) }
-    fun useDefinition(color: JSONObject) { selected = null; host.dispatch(obj("type" to "color", "action" to obj("op" to "definition", "color" to color))) }
+    fun use(id: Long) { apply(obj("op" to "use", "id" to id)) }
+    fun useDefinition(color: JSONObject) { host.dispatch(obj("type" to "color", "action" to obj("op" to "definition", "color" to color))) }
     fun beginEditing() { chooser = false; expanded = false; editColor = current()?.toString(); editing = true }
     fun retireStaleEdit() { if (editing && current()?.toString() != editColor) { editing = false; message = null } }
     fun commitName(text: String, done: () -> Unit = {}) {
@@ -208,7 +205,6 @@ internal class PaletteController(val host: CanvasHost) {
                 ?.let { dialog = PaletteDialog("remove", it.getLong("id"), it.getString("name")) }
             "export_palette" -> exportRequest = command
             "rename_color" -> view()?.array("swatches")?.objects()?.firstOrNull { it.getLong("id") == command.getLong("id") }?.let {
-                selected = it.getLong("id")
                 apply(obj("op" to "use", "id" to it.getLong("id"))) { error -> if (error == null) beginEditing() }
             }
             "library" -> apply(command.getJSONObject("action"))
@@ -779,7 +775,7 @@ private fun DrawScope.checker() {
     LaunchedEffect(controller.exportRequest) {
         val request = controller.exportRequest ?: return@LaunchedEffect
         controller.exportRequest = null
-        val palette = controller.state()?.getJSONObject("colors")?.getJSONObject("library")?.array("palettes")?.objects()
+        val palette = controller.state()?.getJSONObject("color_library")?.array("palettes")?.objects()
             ?.firstOrNull { it.getLong("id") == request.getLong("id") } ?: return@LaunchedEffect
         try {
             val result = withContext(Dispatchers.Default) {

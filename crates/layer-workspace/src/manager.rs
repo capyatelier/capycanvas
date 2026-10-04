@@ -7,9 +7,12 @@ type Result<T> = std::result::Result<T, StoreError>;
 struct PendingSave {
     batch: CommitBatch,
     snapshot: Entity,
+    editing: Option<Box<layer_ui::EditingState>>,
 }
 #[derive(Default)]
 struct State {
+    editing: Option<Box<layer_ui::EditingState>>,
+    saved_editing: Option<Box<layer_ui::EditingState>>,
     saved: Option<StoredEntity>,
     latest: Option<Entity>,
     pending: Option<PendingSave>,
@@ -148,10 +151,22 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     pub fn dirty(&self) -> bool {
         let s = self.state.borrow();
         match (&s.saved, &s.latest) {
-            (Some(saved), Some(latest)) => &saved.entity != latest || s.pending.is_some(),
+            (Some(saved), Some(latest)) => &saved.entity != latest || s.editing != s.saved_editing || s.pending.is_some(),
             _ => false,
         }
     }
+    pub fn editing(&self) -> Option<Box<layer_ui::EditingState>> { self.state.borrow().editing.clone() }
+    pub async fn load_editing(&self) -> Result<()> {
+        if let StoreResponse::Editing(json) = self.execute(StoreRequest::Editing).await? {
+            let editing: Option<Box<layer_ui::EditingState>> = json.map(|json| serde_json::from_str(&json)).transpose()?;
+            if let Some(editing) = &editing { editing.validate().map_err(StoreError::workspace)?; }
+            let mut state = self.state.borrow_mut();
+            state.saved_editing = editing.clone();
+            state.editing = editing;
+        }
+        Ok(())
+    }
+    pub fn observe_editing(&self, editing: layer_ui::EditingState) { self.state.borrow_mut().editing = Some(Box::new(editing)); }
     pub fn observe_working(&self, working: WorkspaceWorkingState) {
         if let Some(entity) = &mut self.state.borrow_mut().latest {
             entity.working = Some(working);
@@ -442,7 +457,7 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
     async fn ensure_defaults(&self, now: u64) -> Result<()> {
         for (workspace_id, _) in DEFAULT_WORKSPACES {
             self.ensure_default(
-                Entity::included_workspace(workspace_id, self.platform, now, &self.localization()).unwrap(),
+                Entity::included_workspace(workspace_id, self.platform, now).unwrap(),
             )
             .await?;
         }
@@ -552,21 +567,19 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
             if let Some(pending) = &s.pending {
                 Some(pending.clone())
             } else if let (Some(saved), Some(latest)) = (&s.saved, &s.latest) {
-                if &saved.entity == latest {
+                if &saved.entity == latest && s.editing == s.saved_editing {
                     None
                 } else {
-                    let mutation = update(
+                    let mutations = if &saved.entity == latest { Vec::new() } else { vec![update(
                         saved,
                         (saved.entity.metadata != latest.metadata).then(|| latest.metadata.clone()),
                         (saved.entity.content != latest.content).then(|| latest.content.clone()),
-                        (saved.entity.working != latest.working)
-                            .then(|| latest.working.clone())
-                            .flatten(),
-                    )?;
-                    let pending = PendingSave {
-                        batch: CommitBatch::prepare(self.owner.clone(), vec![mutation])?,
-                        snapshot: latest.clone(),
-                    };
+                        (saved.entity.working != latest.working).then(|| latest.working.clone()).flatten(),
+                    )?] };
+                    let editing = (s.editing != s.saved_editing).then(|| s.editing.clone()).flatten();
+                    let mut batch = CommitBatch::prepare(self.owner.clone(), mutations)?;
+                    batch.editing_json = editing.as_ref().map(serde_json::to_string).transpose()?;
+                    let pending = PendingSave { batch, snapshot: latest.clone(), editing };
                     s.pending = Some(pending.clone());
                     Some(pending)
                 }
@@ -584,7 +597,8 @@ impl<S: WorkspaceStore> WorkspaceManager<S> {
                     && saved.entity.id == pending.snapshot.id
                 {
                     saved.entity = pending.snapshot;
-                    saved.generations = receipt.items[0].1;
+                    if let Some((_, generations)) = receipt.items.first() { saved.generations = *generations; }
+                    if pending.editing.is_some() { s.saved_editing = pending.editing; }
                     s.pending = None;
                     if s.error_operation.as_deref() == Some(&pending.batch.operation_id) {
                         s.error = None;

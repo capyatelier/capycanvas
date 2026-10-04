@@ -49,13 +49,19 @@ Load Layout, and workspace changes save automatically.
 ## Arrangements
 
 [`layout_presets.rs`](../../crates/layer-ui/src/layout_presets.rs) defines every
-arrangement and its initial working state, shared by all hosts.
+arrangement, shared by all hosts. Workspace records contain the arrangement,
+layout history and Zen presentation. Editing state is shared across Sketch, Paint,
+Photo and custom workspaces: active tools and remembered variants, per-preset
+brush settings, artwork and mask paints, picker choices, palettes and recent
+colors, selection options, fill/auto-select options, gradients and figures.
+Switching layouts keeps that state and the document, camera and undo history.
+`EditingState` is saved separately in the same transactional store.
 
 | Workspace | Arrangement |
 | --- | --- |
-| Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and opacity sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. Starts with Brush. |
+| Sketch | Title bar with Capy, Main Menu, Filters, Select and Scale/rotate on the left, the workspace switcher in the center, and Brush, Sculpt, Eraser, Layers and Color on the right (Web adds Full Screen). A compact toolbar centered on the left edge holds the brush size and opacity sliders, the color picker, Undo and Redo. No docked panels; Medium tiles; no zoom readout. |
 | Paint | Tools toolbar on the left edge and Commands toolbar on top. An expanded left column holds Tool Set/Diagnostics, Tool/Brush size and Color/Palettes. The right column is a collapsed stack of Navigator/Proof, Properties/Filters and Layers, opened on load. |
-| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (GTK; Color/Palettes on hosts awaiting the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. Starts with Move, so a drag over a selection moves its pixels. |
+| Photo | Commands toolbar outermost at the top, with Tool Options appended and without Clear, Fill Selection and Flip. Tools toolbar with Small tiles and grouped selection and retouching tools. A permanently expanded far-right column of Histogram/Waveform (GTK; Color/Palettes on hosts awaiting the scope controls), Properties/Filters and Layers, and a collapsed strip beside it with Tool Set/Diagnostics, Tool/Brush size and Navigator/Proof, closed on load. |
 
 On GTK, Web, Android and Windows, Paint keeps 17 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
@@ -125,9 +131,9 @@ The retouching tools also remain available in Sketch's Sculpt drawer.
   Sketch, then Photo), then an existing user workspace; only when every
   workspace is in use does the window create a copy named after its source.
   Deleting the active workspace also reuses an available built-in.
-- Built-in workspaces save tool and layout edits normally but cannot be renamed
+- Built-in workspaces save layout edits normally but cannot be renamed
   or deleted. `metadata.builtin` enforces this in SQLite and the browser store.
-- Selecting a workspace restores its latest settings and arrangement; it never
+- Selecting a workspace restores its latest arrangement and Zen presentation; it never
   reapplies the shipped preset to a healthy workspace. If another window owns
   it, focus that window through the ownership path instead of taking it over.
 - A workspace that cannot decode or validate is listed as unavailable and never
@@ -141,10 +147,9 @@ The retouching tools also remain available in Sketch's Sculpt drawer.
   saved starting arrangement for custom workspaces and copies. Its dialog
   previews exactly what it applies. It keeps working tool settings and document
   edits and adds one undoable layout change.
-- Reset All Brushes resets every brush preset's settings in the current
-  workspace, including inactive presets, through `UiSession::reset_workspace_brushes`.
-  It keeps color, selected tool, arrangement, document edits and other
-  workspaces, and adds no layout history.
+- Reset All Brushes resets every brush preset's shared settings, including
+  inactive presets, through `UiSession::reset_brushes`. It keeps colors, selected
+  tool, arrangement and document edits, and adds no layout history.
 - Ordinary opening and closing of a collapsed strip is transient and adds no
   layout history.
 - Built-in names resolve from `builtin:workspace:*` identities in the launch
@@ -187,14 +192,15 @@ Restore Starting Layout…; and Reset All Brushes…. Captions come from
   enough backdrop to see the preview.
 - **Layout History — name** lists versions with the affected panels, action and
   date. The current version starts selected with Restore disabled.
-- **New Workspace** asks only for a name, copies the current settings and
+- **New Workspace** asks only for a name, copies the current
   arrangement into an independent workspace, and pins it to the top bar.
 - Failed saves offer Retry and Save as New Workspace, and a failed close keeps
   the option to leave the window open.
 
 Hosts keep workspace decisions in shared Rust:
 
-- Capture accepted edits through `capture_workspace` and `workspace_working_state`,
+- Capture accepted edits through `capture_workspace`, `workspace_working_state`
+  and `editing_state`,
   and let `WorkspaceManager` handle saving, naming, loading, ownership and
   publication. Do not serialize widget state or keep a second workspace model.
 - Switch only at a document and workspace idle boundary, through

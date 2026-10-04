@@ -99,7 +99,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
             tooltip(node,str(entry,L"detail"));auto color=object(entry,L"color");
             node.Click([weak,color](auto&&,auto&&){if(auto self=weak.lock()){
                 if(self->editing){self->commitName();if(self->editing)return;}
-                self->selected.reset();self->data->dispatch(O({{L"type",S(L"color")},{L"action",O({{L"op",S(L"definition")},{L"color",color}})}}));self->report(L"");
+                self->data->dispatch(O({{L"type",S(L"color")},{L"action",O({{L"op",S(L"definition")},{L"color",color}})}}));self->report(L"");
             }});
             AutomationProperties::SetAutomationId(node,L"palette-recent-"+to_hstring(uint32_t(cells.size())));
             target.Children().Append(node);cells.push_back(node);
@@ -140,7 +140,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     void editName(){
         editing=true;hstring value;
         if(selected)if(auto s=swatch(*selected))value=str(*s,L"name");
-        if(!selected){auto pending=array(object(object(data->state,L"colors"),L"library"),L"pending_name");
+        if(!selected){auto pending=array(object(data->state,L"color_library"),L"pending_name");
             if(pending.Size()==2&&pending.GetAt(1).ValueType()==JsonValueType::String&&pending.GetStringAt(1)==str(view(),L"color_name"))value=pending.GetStringAt(1);}
         editor.Text(value);name.Visibility(Visibility::Collapsed);editor.Visibility(Visibility::Visible);editor.Focus(FocusState::Programmatic);editor.SelectAll();
     }
@@ -154,12 +154,8 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
     void cancelName(){editing=false;showLabel();report(L"");name.Focus(FocusState::Programmatic);}
     void addColor(){
         if(editing){commitName();if(editing)return;}
-        auto weak=weak_from_this();
-        library(O({{L"op",S(L"store")},{L"palette",N(num(view(),L"palette"))},{L"name",S(L"")},{L"color",current()}}),[weak](hstring error){
-            if(auto self=weak.lock();self&&error.empty())self->selectNewest=true;
-        });
+        library(O({{L"op",S(L"store")},{L"palette",N(num(view(),L"palette"))},{L"name",S(L"")},{L"color",current()}}));
     }
-    bool selectNewest=false;
     MenuFlyout openMenu{nullptr};
     void menu(J target,FrameworkElement const& anchor,hstring const& title){
         auto weak=weak_from_this();auto held=make_weak(anchor);
@@ -199,7 +195,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         if(kind==L"remove_palette"){removeDialog(uint64_t(num(command,L"id")));return;}
         if(kind==L"rename_color"){
             auto id=uint64_t(num(command,L"id"));if(!swatch(id))return;
-            selected=id;library(O({{L"op",S(L"use")},{L"id",N(double(id))}}));editName();return;
+            library(O({{L"op",S(L"use")},{L"id",N(double(id))}}));editName();return;
         }
         if(kind==L"library")library(object(command,L"action"));
     }
@@ -273,7 +269,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         t.node.Click([weak,id](auto&&,auto&&){if(auto self=weak.lock()){
             if(self->drag&&(self->drag->started||self->drag->held))return;
             if(self->editing){self->commitName();if(self->editing)return;}
-            self->selected=id;self->library(O({{L"op",S(L"use")},{L"id",N(double(id))}}));self->sync();
+            self->library(O({{L"op",S(L"use")},{L"id",N(double(id))}}));self->sync();
         }});
         t.node.ContextRequested([weak,id](auto&&,ContextRequestedEventArgs const& e){e.Handled(true);if(auto self=weak.lock();self&&!(self->drag&&self->drag->started)){
             auto s=self->swatch(id);self->menu(O({{L"kind",S(L"color")},{L"id",N(double(id))}}),self->tiles.at(id).node,s?str(*s,L"name"):L"");
@@ -431,9 +427,7 @@ struct PalettesView:std::enable_shared_from_this<PalettesView>{
         auto nextChoices=array(v,L"palettes").Stringify();
         if(editing&&(hstring(currentNext)!=currentKey||nextChoices!=choicesKey)){editing=false;showLabel();report(L"");}
         currentKey=currentNext;
-        bool keep=false;if(selected)if(auto s=swatch(*selected))keep=flag(*s,L"current");
-        if(!keep){selected.reset();for(auto s:array(v,L"swatches"))if(flag(s.GetObject(),L"current")){selected=uint64_t(num(s.GetObject(),L"id"));break;}}
-        if(selectNewest){selectNewest=false;auto all=array(v,L"swatches");if(all.Size())selected=uint64_t(num(all.GetObjectAt(all.Size()-1),L"id"));}
+        selected.reset();for(auto s:array(v,L"swatches"))if(flag(s.GetObject(),L"current")){selected=uint64_t(num(s.GetObject(),L"id"));break;}
         std::set<uint64_t> live;order.clear();
         for(auto value:array(v,L"swatches")){
             auto s=value.GetObject();auto id=uint64_t(num(s,L"id"));live.insert(id);order.push_back(id);

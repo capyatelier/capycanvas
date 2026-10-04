@@ -60,7 +60,7 @@ fn check_palette_reorder(devices: &[&str]) {
         }
         pump(350);
         for device in devices {
-            let palette = state(&d.w).colors.library.active_palette().clone();
+            let palette = state(&d.w).color_library.active_palette().clone();
             let original = palette.swatches.clone();
             let tile = d.named(&format!("palette-swatch-{}", original[0].id));
             let target = d.named(&format!("palette-swatch-{}", original[8].id));
@@ -76,7 +76,7 @@ fn check_palette_reorder(devices: &[&str]) {
             let neighbor = d.named(&format!("palette-swatch-{}", original[1].id));
             let original_neighbor = grid.visual_bounds(&neighbor).unwrap();
             let original_source = grid.visual_bounds(&tile).unwrap();
-            let colors = |d: &Driver| state(&d.w).colors.library.active_palette().swatches.clone();
+            let colors = |d: &Driver| state(&d.w).color_library.active_palette().swatches.clone();
             // Tiny motion remains a tap; dragging needs movement slop, not a hold.
             let jitter = [start[0] + 2., start[1] + 2.];
             d.input.perform(serde_json::json!([
@@ -234,7 +234,7 @@ fn check_palette_reorder(devices: &[&str]) {
             });
             pump(200); // Let the retained grid allocate the undone order before the next device.
             assert_eq!(colors(&d), original);
-            assert!(state(&d.w).colors.library.history.is_empty());
+            assert!(state(&d.w).color_library.history.is_empty());
         }
         capture_palette(&mut d, &format!("palette-reorder-{surface}.png"));
     }
@@ -266,7 +266,7 @@ fn check_palette_reorder(devices: &[&str]) {
             },
         });
         pump(250);
-        let original = state(&d.w).colors.library.active_palette().swatches.clone();
+        let original = state(&d.w).color_library.active_palette().swatches.clone();
         let tile = d.named(&format!("palette-swatch-{}", original[0].id));
         let scroll = tile
             .ancestor(gtk::ScrolledWindow::static_type())
@@ -318,7 +318,7 @@ fn check_palette_reorder(devices: &[&str]) {
                 "{device}: scroll from gutter"
             );
             assert_eq!(
-                state(&d.w).colors.library.active_palette().swatches,
+                state(&d.w).color_library.active_palette().swatches,
                 original
             );
             assert_eq!(state(&d.w).colors.definition(), selected);
@@ -350,10 +350,10 @@ fn check_palette_reorder(devices: &[&str]) {
             d.input.perform(serde_json::json!([{"pen":"leave"}]));
         }
         assert_eq!(
-            state(&d.w).colors.library.active_palette().swatches,
+            state(&d.w).color_library.active_palette().swatches,
             original[1..]
         );
-        assert!(state(&d.w).colors.library.history.is_empty());
+        assert!(state(&d.w).color_library.history.is_empty());
     }
     d.w.window.destroy();
     pump(100);
@@ -364,7 +364,11 @@ fn check_palette_reorder(devices: &[&str]) {
 fn native_palette_panel_input() {
     use layer_core::color::{RgbColor, RgbSpace};
     use layer_ui::{ColorAction, ColorLibraryAction};
-    let mut d = Driver::new("art.capycanvas.PaletteReview");
+    let mut d = Driver::managed("art.capycanvas.PaletteReview");
+    d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: "builtin:workspace:painter".into() });
+    wait_workspaces(&d.w);
+    d.w.dispatch(UiAction::SetTheme { theme: Some(if std::env::var("CAPY_NATIVE_TEST_THEME").as_deref() == Ok("light") { Theme::Light } else { Theme::Dark }) });
+    pump(200);
     let color_button = d.header_tool(ToolbarControl::Color);
     d.click_name(&color_button);
     assert_eq!(
@@ -374,9 +378,10 @@ fn native_palette_panel_input() {
     capture_palette(&mut d, "palette-starter-sketch.png");
     d.click_name("palette-chooser");
     capture_palette(&mut d, "palette-starter-list.png");
-    d.input.key(0xff1b);
+    d.click_name("palette-chooser");
+    assert!(!d.named("palette-browser").is_visible());
     if std::env::var_os("LAYER_NATIVE_CAPTURE_DIR").is_some() {
-        let palettes = state(&d.w).colors.library.palettes.clone();
+        let palettes = state(&d.w).color_library.palettes.clone();
         for (index, palette) in palettes.iter().enumerate() {
             d.w.dispatch(UiAction::Color {
                 action: ColorAction::Library {
@@ -398,7 +403,8 @@ fn native_palette_panel_input() {
         },
     });
     pump(100);
-    let study_id = state(&d.w).colors.library.active_palette().id;
+    assert_eq!(state(&d.w).color_library.active_palette().name, "My study");
+    let study_id = state(&d.w).color_library.active_palette().id;
     let colors = [
         [0.78, 0.25, 0.21, 1.],
         [0.96, 0.55, 0.24, 1.],
@@ -416,11 +422,11 @@ fn native_palette_panel_input() {
         d.click_name("palette-add-color");
     }
     assert!(
-        state(&d.w).colors.library.history.is_empty(),
+        state(&d.w).color_library.history.is_empty(),
         "selection and storing are not paint use"
     );
     assert_eq!(
-        state(&d.w).colors.library.active_palette().swatches.len(),
+        state(&d.w).color_library.active_palette().swatches.len(),
         colors.len()
     );
     d.click_name("palette-color-name");
@@ -432,8 +438,7 @@ fn native_palette_panel_input() {
     d.input.key(0xff0d);
     assert_eq!(
         state(&d.w)
-            .colors
-            .library
+            .color_library
             .active_palette()
             .swatches
             .last()
@@ -441,7 +446,7 @@ fn native_palette_panel_input() {
             .name,
         "Linen"
     );
-    let palette = state(&d.w).colors.library.active_palette().clone();
+    let palette = state(&d.w).color_library.active_palette().clone();
     d.click_name(&format!("palette-swatch-{}", palette.swatches[0].id));
     d.click_name("palette-color-name");
     entry.set_text("linen");
@@ -449,8 +454,7 @@ fn native_palette_panel_input() {
     assert!(entry.has_css_class("error"));
     assert_ne!(
         state(&d.w)
-            .colors
-            .library
+            .color_library
             .swatch(palette.swatches[0].id)
             .unwrap()
             .name,
@@ -504,7 +508,7 @@ fn native_palette_panel_input() {
     );
     d.input.key(0xff1b);
     assert!(state(&d.w).customization.drawer.is_some());
-    assert!(state(&d.w).colors.library.history.is_empty());
+    assert!(state(&d.w).color_library.history.is_empty());
     capture_palette(&mut d, "palette-sketch.png");
     // Native drawing appends usage; recalling that color does not duplicate it.
     d.w.dispatch(UiAction::Invoke {
@@ -513,13 +517,13 @@ fn native_palette_panel_input() {
     d.input.perform(
         serde_json::json!([{"point":[760,600],"down":true},{"point":[840,640]},{"down":false}]),
     );
-    assert_eq!(state(&d.w).colors.library.history.len(), 1);
+    assert_eq!(state(&d.w).color_library.history.len(), 1);
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&color_button);
     }
-    let used = state(&d.w).colors.library.history.clone();
+    let used = state(&d.w).color_library.history.clone();
     d.click_name("palette-recent-color");
-    assert_eq!(state(&d.w).colors.library.history, used);
+    assert_eq!(state(&d.w).color_library.history, used);
     d.w.dispatch(UiAction::SetBrushSize { value: 12. });
     for (index, rgba) in colors.into_iter().enumerate() {
         d.w.dispatch(UiAction::SetColor { rgba });
@@ -528,7 +532,7 @@ fn native_palette_panel_input() {
             serde_json::json!([{"point":[x,780],"down":true},{"point":[x+8,790]},{"down":false}]),
         );
     }
-    assert_eq!(state(&d.w).colors.library.history.len(), colors.len());
+    assert_eq!(state(&d.w).color_library.history.len(), colors.len());
     if state(&d.w).customization.drawer.is_none() {
         d.click_name(&color_button);
     }
@@ -550,7 +554,7 @@ fn native_palette_panel_input() {
     name.set_text("Night study");
     d.click_label("Save");
     assert_eq!(
-        state(&d.w).colors.library.active_palette().name,
+        state(&d.w).color_library.active_palette().name,
         "Night study"
     );
     d.click_name("palette-chooser");
@@ -569,24 +573,25 @@ fn native_palette_panel_input() {
     search.set_text("My study");
     pump(250);
     d.click_name(&format!("palette-choice-{study_id}"));
-    assert_eq!(state(&d.w).colors.library.active_palette().id, study_id);
+    assert_eq!(state(&d.w).color_library.active_palette().id, study_id);
     // The same retained component is docked next to Color in Paint and Photo.
-    for (preset, name) in [
-        (WorkspacePreset::Illustrator, "paint"),
-        (WorkspacePreset::Photographer, "photo"),
-    ] {
-        d.w.dispatch(UiAction::RestoreWorkspace {
-            workspace: Box::new(WorkspaceState {
-                layout: preset.layout(Platform::Gtk),
-                ..WorkspaceState::default()
-            }),
-        });
+    for (id, name) in [("illustrator", "paint"), ("photographer", "photo")] {
+        d.w.workspaces.send(&d.w, layer_workspace::WorkspaceInput::Switch { id: format!("builtin:workspace:{id}") });
+        until(|| !d.w.workspaces.busy() && d.w.workspaces.manager().unwrap().active_id().as_deref()
+            == Some(&format!("builtin:workspace:{id}")), "workspace switch");
         pump(500);
-        let group = state(&d.w)
-            .workspace
-            .layout
-            .panel_group(Panel::Color)
-            .unwrap();
+        if state(&d.w).workspace.layout.panel_group(Panel::Color).is_none() {
+            let change = ui_session_mut(&d.w).reveal_panel(Panel::Color);
+            d.w.changed(change);
+            let group = state(&d.w).workspace.layout.panel_group(Panel::Color).unwrap();
+            d.w.dispatch(UiAction::MovePanel { panel: Panel::Palettes,
+                target: DockTarget::Tab { group, index: None }, viewport: [1600., 1000.] });
+            pump(250);
+        }
+        let group = state(&d.w).workspace.layout.panel_group(Panel::Color).unwrap();
+        let change = ui_session_mut(&d.w).reveal_panel(Panel::Color);
+        d.w.changed(change);
+        pump(250);
         let before =
             d.w.resolved()
                 .groups
@@ -594,10 +599,8 @@ fn native_palette_panel_input() {
                 .find(|g| g.id == group)
                 .unwrap()
                 .bounds;
-        d.w.dispatch(UiAction::SelectPanelTab {
-            group,
-            panel: Panel::Palettes,
-        });
+        let change = ui_session_mut(&d.w).reveal_panel(Panel::Palettes);
+        d.w.changed(change);
         pump(250);
         assert_eq!(
             d.w.resolved()
@@ -641,8 +644,7 @@ fn native_palette_panel_input() {
     });
     pump(150);
     let id = state(&d.w)
-        .colors
-        .library
+        .color_library
         .active_palette()
         .swatches
         .last()
@@ -650,13 +652,13 @@ fn native_palette_panel_input() {
         .id;
     d.click_name(&format!("palette-swatch-{id}"));
     assert_eq!(state(&d.w).colors.definition(), exact);
-    let first = state(&d.w).colors.library.active_palette().swatches[0].clone();
+    let first = state(&d.w).color_library.active_palette().swatches[0].clone();
     let point = d.point(&d.named(&format!("palette-swatch-{}", first.id)));
-    let history = state(&d.w).colors.library.history.clone();
+    let history = state(&d.w).color_library.history.clone();
     d.input
         .perform(serde_json::json!([{"touch":"down","point":point},{"touch":"up"}]));
     assert_eq!(state(&d.w).colors.definition(), first.color);
-    assert_eq!(state(&d.w).colors.library.history, history);
+    assert_eq!(state(&d.w).color_library.history, history);
     // Floating widths exercise native allocation independently of dock defaults.
     let mut layout = state(&d.w).workspace.layout.clone();
     layout
@@ -683,7 +685,7 @@ fn native_palette_panel_input() {
             }),
         });
         pump(350);
-        let palette = state(&d.w).colors.library.active_palette().clone();
+        let palette = state(&d.w).color_library.active_palette().clone();
         let first = d.named(&format!("palette-swatch-{}", palette.swatches[0].id));
         let seventh = d.named(&format!("palette-swatch-{}", palette.swatches[6].id));
         let a = first.compute_bounds(&d.w.window).unwrap();
@@ -842,7 +844,7 @@ fn check_palette_context(devices: &[&str]) {
         } else {
             d.click_name("palette-chooser");
         }
-        let library = state(&d.w).colors.library.clone();
+        let library = state(&d.w).color_library.clone();
         let row = d.named(&format!("palette-choice-{}", library.palettes[1].id));
         assert!(
             find_named(
@@ -865,7 +867,7 @@ fn check_palette_context(devices: &[&str]) {
             assert!(menu.is_visible(), "{device}: row context menu");
             assert!(!menu.has_arrow());
             assert_eq!(
-                state(&d.w).colors.library.active,
+                state(&d.w).color_library.active,
                 library.active,
                 "hold/right click must not activate the row"
             );
@@ -890,7 +892,7 @@ fn check_palette_context(devices: &[&str]) {
             assert_eq!(entry.text(), library.palettes[1].name);
             dialog.close();
             pump(150);
-            assert_eq!(state(&d.w).colors.library, library);
+            assert_eq!(state(&d.w).color_library, library);
         }
         if !devices.contains(&"pen") {
             assert!(row.grab_focus());
@@ -918,7 +920,7 @@ fn check_palette_context(devices: &[&str]) {
             d.input.perform(serde_json::json!([{"touch":"down","point":p},{"touch":"move","point":[p[0],p[1]-65.]},{"touch":"up"}]));
             assert!(scroll.vadjustment().value() > 0.);
             assert!(!d.named("palette-context-menu").is_visible());
-            assert_eq!(state(&d.w).colors.library.active, library.active);
+            assert_eq!(state(&d.w).color_library.active, library.active);
         }
     }
     d.w.window.destroy();

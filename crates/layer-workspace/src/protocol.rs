@@ -102,6 +102,7 @@ pub(crate) struct PreparedWrite {
 pub struct CommitBatch {
     pub operation_id: String,
     pub owner: Owner,
+    pub(crate) editing_json: Option<String>,
     pub(crate) writes: Vec<PreparedWrite>,
     pub(crate) components: BTreeMap<String, String>,
     pub bindings: Vec<(String, Option<String>)>,
@@ -116,6 +117,7 @@ impl CommitBatch {
         let mut batch = Self {
             operation_id: new_id(),
             owner,
+            editing_json: None,
             writes: Vec::new(),
             components: BTreeMap::new(),
             bindings: Vec::new(),
@@ -360,6 +362,7 @@ pub struct CommitReceipt {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum StoreRequest {
+    Editing,
     List,
     Switcher,
     UpdateSwitcher {
@@ -413,6 +416,7 @@ pub enum StoreRequest {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum StoreResponse {
+    Editing(Option<String>),
     Switcher(Option<Vec<String>>),
     WorkspaceOrder(Option<Vec<String>>),
     List(Vec<ItemSummary>),

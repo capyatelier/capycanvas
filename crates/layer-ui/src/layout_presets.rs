@@ -21,21 +21,6 @@ impl WorkspacePreset {
         }
     }
 
-    /// Initial tools belong to the editable workspace, never the saved layout.
-    pub fn working_state_canonical(self) -> crate::WorkspaceWorkingState {
-        self.working_state_localized(&crate::Localizer::shared(crate::UiLanguage::English))
-    }
-    pub fn working_state_localized(self, localization: &crate::Localizer) -> crate::WorkspaceWorkingState {
-        let mut state = crate::WorkspaceWorkingState::new_localized(localization);
-        if self != Self::Illustrator {
-            state.preset = crate::Tool::Brush.default_preset();
-        }
-        if self == Self::Photographer {
-            state.canvas_tool = crate::LayerCanvasTool::Move;
-        }
-        state
-    }
-
     pub fn layout(self, platform: crate::Platform) -> DockLayout {
         let mut layout = match self {
             Self::Painter => return Self::painter_layout(platform),
@@ -399,7 +384,6 @@ mod tests {
         assert_eq!(WorkspacePreset::Illustrator.name(), "Paint");
         assert_eq!(WorkspacePreset::Painter.name(), "Sketch");
         assert_eq!(WorkspacePreset::Photographer.name(), "Photo");
-        assert_eq!(WorkspacePreset::Photographer.working_state_canonical().canvas_tool, crate::LayerCanvasTool::Move);
         for platform in Platform::ALL {
             for preset in WorkspacePreset::ALL {
                 let layout = preset.layout(platform);
@@ -468,7 +452,7 @@ mod tests {
                 layout.validate().unwrap();
                 crate::WorkspaceCapture {
                     history: crate::LayoutHistory::new(&layout),
-                    working: preset.working_state_canonical(),
+                    working: crate::WorkspaceWorkingState::default(),
                 }
                 .validate_structure()
                 .unwrap();

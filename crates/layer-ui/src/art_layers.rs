@@ -2040,7 +2040,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.append_layer_operation(id, layer_core::LayerOperation { placement, coverage, kind }).map_err(error)?;
         if paints {
             for color in colors.iter().rev() {
-                self.state.colors.library.record_use(*color);
+                self.state.color_library.record_use(*color);
             }
         }
         self.layer_interaction.changed = true;

@@ -80,7 +80,7 @@ pub use color::{
 };
 pub use tool_settings::{ToolActionGroup, ToolSetting, ToolSettingAction};
 pub use tools::{
-    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, WorkspaceToolMemory, brush_catalog,
+    Tool, ToolFamily, ToolGroup, ToolPanels, ToolSetItem, ToolSetView, ToolMemory, brush_catalog,
     brush_categories, brush_categories_localized, brush_catalog_localized, brush_ids, preset,
 };
 mod cursor;
@@ -100,7 +100,7 @@ mod tab_drag;
 pub use tab_drag::{TabDragOffset, TabDragPreview};
 mod numeric;
 mod session;
-pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory, ToolSlotSelection};
+pub use session::{ToolSlotId, ToolVariant, ToolSlotMemory};
 pub use session::{CANVAS_BAR_REAPPEAR_MS, CanvasBarContext, CanvasBarItem, CanvasBarKind, CanvasBarLayout, CanvasBarMenu, CanvasBarMeasure, CanvasBarPlacement, CanvasBarSide, CanvasBarView, place_canvas_bar, COMMAND_SEARCH_STYLE, CommandSearchStyle, CommandDescriptor, CommandFocus, CommandParameter, CommandSearchAction, CommandSearchView, ToolCategory};
 pub mod keymaps;
 mod settings;
@@ -181,7 +181,7 @@ pub use theme::{
     ThemePalette,
 };
 pub use workspace::{
-    LayoutHistory, LayoutRevision, LayoutChange, LayoutPanelAction, LayoutPanelName, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
+    LayoutHistory, LayoutRevision, LayoutChange, LayoutPanelAction, LayoutPanelName, EditingState, WorkspaceCapture, WorkspaceState, WorkspaceWorkingState,
     counter, durable_layout, layout_change_description,
 };
 
@@ -1221,6 +1221,7 @@ pub struct UiState {
     pub workspace: WorkspaceState,
     pub brush: BrushState,
     pub colors: ColorState,
+    pub color_library: ColorLibrary,
     pub color_picker: ColorPickerState,
     pub tool_settings: Vec<ToolSetting>,
     pub tool_extra: Vec<ToolOption>,

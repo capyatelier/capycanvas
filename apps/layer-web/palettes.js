@@ -40,7 +40,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }, error => report(String(error)));
   }
   async function exportPalette(id, format, description, report) {
-    const palette = state().colors.library.palettes.find(p => p.id === id);
+    const palette = state().color_library.palettes.find(p => p.id === id);
     if (!palette) { report("Palette no longer exists"); return; }
     try {
       const { metadata, bytes } = await worker({ type: "export", palette, format });
@@ -118,9 +118,9 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     root.replaceChildren(body, divider(), footer, note);
 
     const tiles = new Map();
-    let selected = null, editing = false, drag = null, columns = 6, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
+    let editing = false, drag = null, columns = 6, historyKey, choicesKey, currentKey, swatchCount = -1, rendered = false, layoutFrame = 0;
     const current = () => app.color_panel().definition;
-    const selectedSwatch = () => view.swatches.find(s => s.id === selected);
+    const selectedSwatch = () => view.swatches.find(s => s.current);
     function report(text, notice = false) {
       note.textContent = text || ""; note.hidden = !text; note.classList.toggle("notice", !!notice);
       editor.classList.toggle("error", !!text && !notice);
@@ -146,14 +146,15 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     function showLabel() { editor.hidden = true; name.hidden = false; }
     function editName() {
       editing = true;
-      const pending = state().colors.library.pending_name;
+      const pending = state().color_library.pending_name;
       editor.value = selectedSwatch()?.name ?? (pending?.[1] === view.color_name ? pending[1] : "");
       name.hidden = true; editor.hidden = false; editor.focus(); editor.select();
     }
     function commitName() {
       if (!editing) return;
       editing = false;
-      const action = selected != null ? { op: "rename", id: selected, name: editor.value } : { op: "name_current", color: current(), name: editor.value };
+      const id = selectedSwatch()?.id;
+      const action = id != null ? { op: "rename", id, name: editor.value } : { op: "name_current", color: current(), name: editor.value };
       if (library(action, report)) showLabel(); else editing = true;
     }
     function cancelName() { editing = false; showLabel(); report(null); name.focus(); }
@@ -164,7 +165,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     function addColor() {
       if (editing) { commitName(); if (editing) return; }
       if (library({ op: "store", palette: view.palette, name: "", color: current() }, report)) {
-        selected = view.swatches.at(-1)?.id ?? null; sync();
+        sync();
       }
     }
     function run(command, item) {
@@ -189,7 +190,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         }
         case "rename_color":
           if (!view.swatches.some(s => s.id === command.id)) return;
-          selected = command.id; library({ op: "use", id: command.id }, report); editName(); return;
+          library({ op: "use", id: command.id }, report); editName(); return;
         case "library": library(command.action, report); return;
       }
     }
@@ -205,7 +206,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       node.addEventListener("click", e => {
         if (node.suppressClick) { node.suppressClick = false; e.preventDefault(); return; }
         if (editing) { commitName(); if (editing) return; }
-        selected = id; library({ op: "use", id }, report);
+        library({ op: "use", id }, report);
       });
       node.addEventListener("pointerdown", e => press(e, record, id));
       node.addEventListener("workspace-context-claimed", e => {
@@ -220,7 +221,6 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         node.classList.add("palette-recent");
         node.onclick = () => {
           if (editing) { commitName(); if (editing) return; }
-          selected = null;
           try { applyChange(app.dispatch({ type: "color", action: { op: "definition", color: entry.color } })); report(null); } catch (error) { report(String(error)); }
         };
         return node;
@@ -265,7 +265,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }
     function sync() {
       const s = selectedSwatch();
-      for (const [key, record] of tiles) record.node.classList.toggle("selected", key === String(selected));
+      for (const [key, record] of tiles) record.node.classList.toggle("selected", key === String(s?.id));
       const label = s ? s.name : view.color_name;
       if (nameLabel.textContent !== label) nameLabel.textContent = label;
       name.title = `${label} · Click to rename`;
@@ -278,7 +278,6 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       const nextChoices = JSON.stringify(view.palettes, plain);
       if (editing && (nextCurrent !== currentKey || nextChoices !== choicesKey)) { editing = false; showLabel(); report(null); }
       currentKey = nextCurrent;
-      if (!view.swatches.some(s => s.id === selected && s.current)) selected = view.swatches.find(s => s.current)?.id ?? null;
       const live = new Set(), order = [];
       for (const swatch of view.swatches) {
         const key = String(swatch.id); live.add(key);
@@ -442,9 +441,9 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
   return {
     mount,
     refresh(regions) {
-      const { colors, layer_tools } = state();
-      if (!instances.size || (!(regions & 20) && colors === seen[0] && layer_tools === seen[1])) return;
-      seen = [colors, layer_tools];
+      const { colors, layer_tools, color_library } = state();
+      if (!instances.size || (!(regions & 20) && colors === seen[0] && layer_tools === seen[1] && color_library === seen[2])) return;
+      seen = [colors, layer_tools, color_library];
       const changed = load();
       for (const instance of instances) instance.render(changed);
     },

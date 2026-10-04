@@ -475,11 +475,9 @@ mod painted_selection_checks {
             value: 75.,
         })
         .unwrap();
-        let saved = s.capture_workspace().unwrap();
-        let saved = serde_json::to_string(&saved).unwrap();
-        let prepared = PreparedWorkspace::new(serde_json::from_str(&saved).unwrap()).unwrap();
+        let saved = serde_json::to_string(&s.editing_state()).unwrap();
         let mut restored = session(Platform::Gtk);
-        restored.adopt_workspace(prepared).unwrap();
+        restored.restore_editing(serde_json::from_str(&saved).unwrap()).unwrap();
         assert_eq!(
             restored.selection_tools.options.brush,
             s.selection_tools.options.brush

@@ -150,6 +150,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.set_brush(brush).map_err(error)?;
         self.state.brush = previous.state.brush.clone();
         self.state.colors = previous.state.colors.clone();
+        self.state.color_library = previous.state.color_library.clone();
         self.state.colors.set_rgb_space(destination)?;
         self.state.colors.set_document_depth(self.engine.document().color.depth)?;
         self.apply_brush()

@@ -4,7 +4,7 @@ use layer_ui::{
 };
 use serde::{Deserialize, Serialize};
 
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 pub const HISTORY_BUDGET_BYTES: u64 = 100 * 1024 * 1024;
 pub const OWNER_LEASE_MS: u64 = 30_000;
 pub const OWNER_RENEW_MS: u64 = 10_000;
@@ -457,7 +457,6 @@ impl Entity {
         id: &str,
         platform: layer_ui::Platform,
         now: u64,
-        localization: &layer_ui::Localizer,
     ) -> Option<Self> {
         let (_, preset) = DEFAULT_WORKSPACES.iter().find(|(key, _)| *key == id)?;
         let layout = preset.layout(platform);
@@ -465,7 +464,7 @@ impl Entity {
             preset.name(),
             WorkspaceCapture {
                 history: LayoutHistory::new(&layout),
-                working: preset.working_state_localized(localization),
+                working: WorkspaceWorkingState::default(),
             },
             layout,
             now,
@@ -636,7 +635,7 @@ mod localization_tests {
 
     #[test]
     fn builtin_identity_projection_preserves_literal_metadata_and_package_semantics() {
-        let mut entity = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, layer_ui::Platform::Gtk, 10, &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+        let mut entity = Entity::included_workspace(DEFAULT_WORKSPACES[0].0, layer_ui::Platform::Gtk, 10).unwrap();
         entity.metadata.name = "stored suffix 2".into();
         let before = serde_json::to_vec(&entity).unwrap();
         for language in layer_ui::UiLanguage::ALL {

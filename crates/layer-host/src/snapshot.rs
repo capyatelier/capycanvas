@@ -287,7 +287,7 @@ impl NativeHost {
         map.serialize_entry("paint_pair", &colors.paint_pair(display, rendition))?;
         map.serialize_entry(
             "palette_panel",
-            &layer_ui::PalettePanelView::new(colors, &state.colors.library, |color| {
+            &layer_ui::PalettePanelView::new(colors, &state.color_library, |color| {
                 self.swatch_preview(colors, color)
             }, self.session.localization()),
         )?;

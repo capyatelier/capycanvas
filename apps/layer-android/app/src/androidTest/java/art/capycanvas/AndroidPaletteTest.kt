@@ -62,7 +62,7 @@ class AndroidPaletteTest {
     private fun bounds(tag: String) = bounds(tag(tag), tag)
     private fun node(tag: String): SemanticsNode { var result: SemanticsNode? = null; main { result = tagged(tag(tag))?.second }; return checkNotNull(result) { "Missing $tag" } }
     private fun state() = host.snapshot!!.getJSONObject("state")
-    private fun library() = state().getJSONObject("colors").getJSONObject("library")
+    private fun library() = state().getJSONObject("color_library")
     private fun view() = host.snapshot!!.getJSONObject("palette_panel")
     private fun order() = view().array("swatches").objects().map { it.getLong("id") }
     private fun popupCount(): Int {
@@ -133,6 +133,7 @@ class AndroidPaletteTest {
 
     @Before fun ready() {
         launch()
+        action(obj("type" to "set_theme", "theme" to (arguments.getString("theme") ?: "dark")))
         switchWorkspace("builtin:workspace:illustrator")
     }
     private fun launch() {
@@ -183,8 +184,8 @@ class AndroidPaletteTest {
         tool = MotionEvent.TOOL_TYPE_STYLUS
         event(MotionEvent.ACTION_DOWN, canvas); glide(canvas, canvas + Offset(160f, 40f)); event(MotionEvent.ACTION_UP)
         waitFor("stroke records history") { view().array("history").length() == 1 }
-        assertEquals("history keeps the used definition", view().array("swatches").objects()[0].getJSONObject("color").toString(),
-            view().array("history").objects()[0].getJSONObject("color").toString())
+        assertEquals("history keeps the used definition", jsonValue(view().array("swatches").objects()[0].getJSONObject("color")),
+            jsonValue(view().array("history").objects()[0].getJSONObject("color")))
         tool = MotionEvent.TOOL_TYPE_FINGER
         val footer = bounds("palette-footer")
         tap(center("palette-history-expand"))
@@ -393,6 +394,7 @@ class AndroidPaletteTest {
         val saved = library().toString()
         scenario.close()
         launch()
+        action(obj("type" to "set_theme", "theme" to (arguments.getString("theme") ?: "dark")))
         switchWorkspace("builtin:workspace:illustrator")
         waitFor("restored palettes") { library().array("palettes").objects().any { it.getString("name") == "Persisted" } }
         waitFor("the hidden Color page still fits the group") {

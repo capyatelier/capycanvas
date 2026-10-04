@@ -82,6 +82,7 @@ pub(crate) fn validate_payload(
     batch: &CommitBatch,
     mut lookup: impl FnMut(&str) -> Result<String>,
 ) -> Result<()> {
+    if let Some(json) = &batch.editing_json { serde_json::from_str::<layer_ui::EditingState>(json)?.validate().map_err(StoreError::workspace)?; }
     for (id, json) in &batch.components {
         if content_id(json.as_bytes()) != *id {
             return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::InvalidWorkspaceComponent));

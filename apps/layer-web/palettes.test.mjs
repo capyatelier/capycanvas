@@ -16,7 +16,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   };
   const shot = async name => { const r = await call("Page.captureScreenshot", { format: "png" }); await writeFile(`${output}/${name}.png`, Buffer.from(r.data, "base64")); };
   const send = async action => { await evaluate(`layerApp.dispatch(${JSON.stringify(action)})`); await idle(); };
-  const library = () => evaluate("JSON.parse(JSON.stringify(layerApp.state().colors.library,(_,v)=>typeof v==='bigint'?Number(v):v))");
+  const library = () => evaluate("JSON.parse(JSON.stringify(layerApp.state().color_library,(_,v)=>typeof v==='bigint'?Number(v):v))");
   const active = async () => { const l = await library(); return l.palettes.find(p => p.id === l.active); };
   const panelView = () => evaluate("JSON.parse(JSON.stringify(layerApp.app.palette_panel(),(_,v)=>typeof v==='bigint'?Number(v):v))");
   const rect = selector => evaluate(`(()=>{const n=document.querySelector(${JSON.stringify(selector)});if(!n)throw Error('Missing '+${JSON.stringify(selector)});const r=n.getBoundingClientRect();return{x:r.x,y:r.y,width:r.width,height:r.height};})()`);
@@ -123,7 +123,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   await pointer("down");
   for (let i = 1; i <= 6; i++) await pointer("move", { x: canvas.x + canvas.width * (.45 + i * .01), y: canvas.y + canvas.height * .5 });
   await pointer("up");
-  await wait(`JSON.stringify(layerApp.state().colors.library.history[0])===${JSON.stringify(JSON.stringify(view.swatches[used].color))}`, "painting records history");
+  await wait(`JSON.stringify(layerApp.state().color_library.history[0])===${JSON.stringify(JSON.stringify(view.swatches[used].color))}`, "painting records history");
   await wait(`document.querySelector('${P} .palette-history .palette-recent')?.title===${JSON.stringify(view.swatches[used].detail.replace(view.swatches[used].name, "Recently used"))}`);
   view = await panelView();
   assert.equal(JSON.stringify(view.history[0].color), JSON.stringify(view.swatches[used].color), "history stores the exact used definition");
@@ -363,7 +363,7 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
     await wait("window.paletteInput!=null");
     assert.match(await evaluate("paletteInput.accept"), /\.aco.*\.swatches.*\.ase.*\.gpl.*\.kpl/);
     await evaluate(`(()=>{const input=paletteInput;window.paletteInput=null;const t=new DataTransfer();t.items.add(new File([new Uint8Array(${JSON.stringify([...file.bytes])})],${JSON.stringify(file.name)}));input.files=t.files;input.dispatchEvent(new Event('change'));})()`);
-    await wait(`layerApp.state().colors.library.palettes.length===${paletteCount + 1}||!document.querySelector('${P} .palette-message').hidden`, `import ${file.name}`);
+    await wait(`layerApp.state().color_library.palettes.length===${paletteCount + 1}||!document.querySelector('${P} .palette-message').hidden`, `import ${file.name}`);
     assert.equal(await evaluate(`document.querySelector('${P} .palette-message').hidden`), true, `${file.name}: ${await evaluate(`document.querySelector('${P} .palette-message').textContent`)}`);
     assert.equal(await visible(`${P} .palette-chooser`), false, "a successful import closes the chooser");
     const imported = await active();
@@ -401,6 +401,10 @@ export async function checkPalettes({ call, evaluate, settle, reload }) {
   await wait("!JSON.parse(layerApp.app.workspace_view()).dirty", "workspace saved", 20000);
   await reload();
   await wait("window.layerApp && document.body.dataset.gpu==='ready'", "reload", 60000);
+  await idle();
+  await wait("!!document.querySelector('dialog.document-dialog[open] .suggested-action')", "drawing recovery offered");
+  await evaluate("document.querySelector('dialog.document-dialog[open] .suggested-action').click()");
+  await wait("!document.querySelector('dialog.document-dialog[open]')", "drawing recovery completes");
   await idle();
   const restored = await library();
   assert.deepEqual(restored.palettes, saved.palettes, "palettes survive reload");

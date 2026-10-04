@@ -34,9 +34,9 @@ fn color_mixing_is_a_tool_option_of_mixing_brushes_kept_per_brush() {
     s.select_brush(DefaultBrushPreset::WetRound as u32).unwrap();
     assert_eq!(mixing_space(&s), ColorMixSpace::Oklab, "each brush keeps its own choice");
 
-    let saved = serde_json::to_string(&s.capture_workspace().unwrap()).unwrap();
+    let saved = serde_json::to_string(&s.editing_state()).unwrap();
     let mut reopened = session(Platform::Gtk);
-    reopened.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&saved).unwrap()).unwrap()).unwrap();
+    reopened.restore_editing(serde_json::from_str(&saved).unwrap()).unwrap();
     reopened.select_brush(blender).unwrap();
     assert_eq!(mixing_space(&reopened), ColorMixSpace::Classic);
     reopened.dispatch(UiAction::Invoke { command: CommandId::ColorMixLinear }).unwrap();
@@ -45,10 +45,10 @@ fn color_mixing_is_a_tool_option_of_mixing_brushes_kept_per_brush() {
     assert!(reopened.tools.overrides.get(&blender).is_none_or(|o| !o.contains_key("color_mixing")));
 
     let mut older: serde_json::Value = serde_json::from_str(&saved).unwrap();
-    let overrides = older["working"]["tools"]["overrides"][blender.to_string()].as_object_mut().unwrap();
+    let overrides = older["tools"]["overrides"][blender.to_string()].as_object_mut().unwrap();
     assert!(overrides.remove("color_mixing").is_some());
     let mut reopened = session(Platform::Gtk);
-    reopened.adopt_workspace(PreparedWorkspace::new(serde_json::from_value(older).unwrap()).unwrap()).unwrap();
+    reopened.restore_editing(serde_json::from_value(older).unwrap()).unwrap();
     reopened.select_brush(blender).unwrap();
     assert_eq!(mixing_space(&reopened), ColorMixSpace::Oklab);
 }

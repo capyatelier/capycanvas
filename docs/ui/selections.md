@@ -44,10 +44,8 @@ holds the order.
 ## Moving selected pixels
 
 With a selection, a Move drag moves the selected pixels of the active layer or
-mask, as Photoshop's Move tool and Clip Studio Paint's Move Layer tool do. Photo
-starts with Move, so dragging over a selection there moves its pixels. Without a
-selection, Move moves the whole layer by changing its offset, which resamples
-nothing.
+mask. The active tool survives workspace switches. Without a selection, Move
+moves the whole layer by changing its offset, which resamples nothing.
 
 - **Pen and mouse** start the drag at the press, anywhere on the canvas. A
   **finger** starts it on the selected area, the selection's bounds (outside

@@ -900,7 +900,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             };
         }
         if self.command_search.focus == CommandFocus::Palette {
-            let palette = self.state.colors.library.active_palette().id;
+            let palette = self.state.color_library.active_palette().id;
             for (id, redo) in [("command.undo", false), ("command.redo", true)] {
                 if let Some(e) = entries.iter_mut().find(|e| e.descriptor.id == id) {
                     e.action = Some(UiAction::Color {
@@ -926,7 +926,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     ;
                     e.descriptor.enabled =
-                        self.state.colors.library.can_undo_reorder(palette, redo);
+                        self.state.color_library.can_undo_reorder(palette, redo);
                     e.descriptor.disabled_reason =
                         (!e.descriptor.enabled).then(|| l.text(MessageId::COMMANDS_NO_COLOR_REORDER_TO_RESTORE).to_string());
                     e.search = crate::search::normalize(&format!("{} {}", e.descriptor.label, e.search));

@@ -1566,7 +1566,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 }
                 _ => false,
             };
-            let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control,DrawerAnchor::Tile {panel,tile:tile.id}) {
+            let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control) {
                 group
             } else {
                 let tooltip=match tile.control {

@@ -200,13 +200,14 @@ impl PalettePanelView {
     ) -> Self {
         let current = colors.definition();
         let palette = library.active_palette();
+        let selected = selected_swatch(palette, current, library.selected);
         let tile = |id, name: &str, color: RgbColor| PaletteTileView {
             id,
             detail: ColorLibrary::tile_detail(name, color),
             name: name.into(),
             color,
             rgba: preview(color),
-            current: color == current,
+            current: id.is_some() && id == selected,
         };
         Self {
             palette: palette.id,
@@ -231,7 +232,7 @@ impl PalettePanelView {
                     active: p.id == palette.id,
                 })
                 .collect(),
-            color_name: library.color_name(current, localizer),
+            color_name: selected.and_then(|id| library.swatch(id)).map_or_else(|| library.color_name(current, localizer), |swatch| swatch.name.clone()),
             color_detail: ColorLibrary::color_detail(colors),
             can_name: !colors.transparent(),
             can_undo: library.can_undo_reorder(palette.id, false),
@@ -299,7 +300,7 @@ mod tests {
         let mut state = ColorState::default();
         state.set_color(color).unwrap();
         let view = PalettePanelView::new(&state, &library, |c| state.preview(c), &crate::Localizer::shared(crate::UiLanguage::English));
-        assert_eq!(view.swatches.iter().filter(|t| t.current).count(), 2);
+        assert_eq!(view.swatches.iter().filter(|t| t.current).count(), 1);
         assert!(view.can_undo && !view.can_redo);
         assert_eq!(view.palettes[0].preview.len(), 2);
         assert_eq!(

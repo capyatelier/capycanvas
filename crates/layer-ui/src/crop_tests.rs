@@ -69,7 +69,7 @@ fn crop_starts_at_the_canvas_with_its_bar_and_blocks_other_edits() {
     let frame = crop_frame(&s);
     assert_eq!((frame.center, frame.size, frame.angle), (Point { x: 500., y: 400. }, [1000., 800.], 0.));
     assert!(s.command(CommandId::Crop).selected);
-    assert_eq!(s.workspace_working_state().canvas_tool, LayerCanvasTool::Paint, "a saved workspace keeps the tool the crop returns to");
+    assert_eq!(s.editing_state().canvas_tool, LayerCanvasTool::Paint, "a saved workspace keeps the tool the crop returns to");
     let bar = s.state.canvas_bar.clone().expect("the crop bar");
     assert_eq!(bar.context.kind, CanvasBarKind::Crop);
     assert_eq!((bar.placement, bar.anchor), (CanvasBarPlacement::BottomEdge, None));

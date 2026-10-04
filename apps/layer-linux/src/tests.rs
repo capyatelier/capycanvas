@@ -12234,11 +12234,8 @@ fn native_workspace_menu_input() {
             until(|| !w.workspaces.busy(), "workspace switch");
             assert!(
                 manager
-                    .current()
+                    .editing()
                     .unwrap()
-                    .capture()
-                    .unwrap()
-                    .working
                     .tools
                     .overrides
                     .is_empty()

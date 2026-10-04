@@ -117,7 +117,6 @@ pub enum ColorAction {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ColorState {
-    pub library: ColorLibrary,
     pub foreground: RgbColor,
     pub background: RgbColor,
     pub temporary: RgbColor,
@@ -203,22 +202,15 @@ pub struct ColorSwatchView {
 }
 
 impl Default for ColorState {
-    fn default() -> Self { Self::new_localized(&crate::Localizer::shared(crate::UiLanguage::English)) }
+    fn default() -> Self { Self::new() }
 }
 impl ColorState {
     #[cfg(test)]
     fn apply_canonical(&mut self, action: ColorAction) -> Result<(), String> {
-        let action = match action {
-            ColorAction::Library { action } => ColorAction::Library {
-                action: self.library.prepare_creation(action, &crate::Localizer::shared(crate::UiLanguage::English))?,
-            },
-            action => action,
-        };
         self.apply(action).map_err(|reason| reason.message(ColorInputModel::DocumentRgb, &crate::Localizer::shared(crate::UiLanguage::English)))
     }
-    pub fn new_localized(localizer: &crate::Localizer) -> Self {
+    pub fn new() -> Self {
         Self {
-            library: ColorLibrary::fresh(&localizer.text(crate::MessageId::CREATION_PALETTE_MY_COLORS)),
             foreground: RgbColor { linear_rgb: None,
                 space: RgbSpace::Srgb,
                 rgba: [0.075, 0.075, 0.07, 1.],
@@ -239,7 +231,6 @@ impl ColorState {
 }
 impl ColorState {
     pub(crate) fn validate(&self) -> Result<(), String> {
-        self.library.validate()?;
         self.validate_hdr_picker()?;
         for color in [self.foreground, self.background, self.temporary] {
             Self::validate_definition(color)?;
@@ -660,8 +651,8 @@ impl ColorState {
                 self.paint_slot = slot;
                 self.set_color(color)?;
             }
-            ColorAction::Library { action } => {
-                if let Some(color) = self.library.apply(action)? { self.set_color(color)?; }
+            ColorAction::Library { .. } => {
+                return Err("Palette actions require an editing session".into());
             }
             ColorAction::Definition { color } => self.set_color(color)?,
             ColorAction::ToggleReadout => self.readout = self.readout.next(),
@@ -1425,7 +1416,7 @@ mod tests {
     fn active_color_projection_localizes_labels_without_changing_numeric_geometry() {
         let en = crate::Localizer::shared(crate::UiLanguage::English);
         let ja = crate::Localizer::shared(crate::UiLanguage::Japanese);
-        let colors = super::ColorState::new_localized(&ja);
+        let colors = super::ColorState::default();
         let english = colors.view_in_localized(layer_core::color::RgbSpace::Srgb, &en);
         let japanese = colors.view_in_localized(layer_core::color::RgbSpace::Srgb, &ja);
         assert_eq!(english.readout_layout_text, japanese.readout_layout_text);

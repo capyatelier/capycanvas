@@ -28,7 +28,7 @@ fn color_picker_mouse_press_and_pen_release_commit_without_a_stroke() {
         let revision = s.engine.document().revision;
         invoke(&mut s, CommandId::Eyedropper);
         assert_eq!(
-            s.workspace_working_state().canvas_tool,
+            s.editing_state().canvas_tool,
             LayerCanvasTool::Paint
         );
         let hover = event(&s, 1, PenPhase::Hover, 0.);

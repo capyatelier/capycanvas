@@ -70,7 +70,7 @@ impl WebApp {
         let rendition = self.session.effective_sdr_rendition();
         serialize(&layer_ui::PalettePanelView::new(
             colors,
-            &state.colors.library,
+            &state.color_library,
             |color| colors.mapped_swatch(color, rendition),
             self.session.localization(),
         ))

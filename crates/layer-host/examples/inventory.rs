@@ -32,8 +32,8 @@ fn workspace_host(platform: Platform, preset: WorkspacePreset) -> NativeHost {
     // Match the settled app's task workspace and working tools. Bare C-ABI
     // creation precedes the coordinator's adoption and omits its menu routes.
     let layout = preset.layout(platform);
-    let mut capture = WorkspaceCapture::from_template_canonical(&layout).unwrap();
-    capture.working = preset.working_state_canonical();
+    let mut capture = WorkspaceCapture::from_template(&layout).unwrap();
+    capture.working = layer_ui::WorkspaceWorkingState::default();
     host.session
         .adopt_workspace(PreparedWorkspace::new(capture).unwrap())
         .unwrap();

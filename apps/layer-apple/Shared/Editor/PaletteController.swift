@@ -66,7 +66,6 @@ struct BinaryFileDocument: FileDocument {
     }
     var common: JSON { store?.bootstrap["common"] ?? JSON() }
     var copy: JSON { store?.catalog["native_copy"]["palettes"] ?? JSON() }
-    @Published var selected: UInt64?
     @Published var chooser = false
     @Published var expanded = false
     @Published private(set) var editing = false
@@ -96,7 +95,7 @@ struct BinaryFileDocument: FileDocument {
     var current: JSON { store?.snapshot["color_panel"]["definition"] ?? JSON() }
     func selection(_ view: JSON) -> JSON? {
         let swatches = view["swatches"].array
-        return swatches.first { $0["id"].uint == selected && $0["current"].bool } ?? swatches.first { $0["current"].bool }
+        return swatches.first { $0["current"].bool }
     }
 
     func apply(_ action: Any, done: @escaping (String?) -> Void = { _ in }) {
@@ -116,19 +115,16 @@ struct BinaryFileDocument: FileDocument {
         let view = self.view, color = current
         guard !view.isNull, !color.isNull else { return }
         let save: () -> Void = { [weak self] in
-            self?.apply(["op": "store", "palette": view["palette"].raw, "name": "", "color": color.raw]) { [weak self] error in
-                guard let self, error == nil else { return }
-                self.selected = self.view["swatches"].array.last?["id"].uint
-            }
+            self?.apply(["op": "store", "palette": view["palette"].raw, "name": "", "color": color.raw])
         }
         if editing { commitName(editText, then: save) } else { save() }
     }
     func use(_ id: UInt64) {
-        focused = true; selected = id
+        focused = true
         apply(["op": "use", "id": id])
     }
     func useRecent(_ color: JSON) {
-        focused = true; selected = nil
+        focused = true
         store?.dispatch(["type": "color", "action": ["op": "definition", "color": color.raw]])
     }
     func choose(_ id: UInt64) {
@@ -202,7 +198,6 @@ struct BinaryFileDocument: FileDocument {
         case "rename_color":
             let id = command["id"].uint
             guard view["swatches"].array.contains(where: { $0["id"].uint == id }) else { return }
-            selected = id
             apply(["op": "use", "id": id]) { [weak self] error in if error == nil { self?.beginEditing() } }
         case "library": apply(command["action"].raw)
         default: break
@@ -227,7 +222,7 @@ struct BinaryFileDocument: FileDocument {
         }
     }
     private func exportPalette(id: UInt64, format: String) {
-        guard let palette = store?.state["colors"]["library"]["palettes"].array.first(where: { $0["id"].uint == id }) else { return }
+        guard let palette = store?.state["color_library"]["palettes"].array.first(where: { $0["id"].uint == id }) else { return }
         NativeProjectTask.io.async { [weak self] in
             let encoded = Result { try ColorPreferencesStore.exportPalette(palette, format: format) }
             DispatchQueue.main.async { [weak self] in

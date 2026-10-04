@@ -901,7 +901,7 @@ impl NativeHost {
                 json!(recorder.status())
             }
             Query::PaletteMenu { target } => {
-                json!(self.session.state().colors.library.menu(target)?)
+                json!(self.session.state().color_library.menu(target)?)
             }
             Query::RevealPanel { panel } => {
                 let previous = self.session.state().revision;
@@ -912,13 +912,12 @@ impl NativeHost {
             Query::PaletteReorderPreview { palette, id, slot } => json!(
                 self.session
                     .state()
-                    .colors
-                    .library
+                    .color_library
                     .preview_reorder(palette, id, slot)
             ),
             Query::PaletteAction { action, dry_run } => {
                 let result = if dry_run {
-                    self.session.state().colors.library.check(action, self.session.localization())
+                    self.session.state().color_library.check(action, self.session.localization())
                 } else {
                     self.dispatch(UiAction::Color {
                         action: layer_ui::ColorAction::Library { action },

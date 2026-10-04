@@ -89,7 +89,7 @@ pub fn workspace_database(
             cached.list = None;
         }
         let read_only = !pending && matches!(&request,
-            StoreRequest::List | StoreRequest::Load { .. }
+            StoreRequest::Editing | StoreRequest::List | StoreRequest::Load { .. }
             | StoreRequest::Receipt { .. } | StoreRequest::Binding { .. }
             | StoreRequest::Pending
             | StoreRequest::Reopen | StoreRequest::Switcher | StoreRequest::WorkspaceOrder);
@@ -178,6 +178,9 @@ impl WebApp {
                 serialize(&layer_ui::UiChange::default())
             }
         }
+    }
+    pub fn editing_state(&self) -> Result<String, JsValue> {
+        serde_json::to_string(&self.session.editing_state()).map_err(js)
     }
     pub fn workspace_capture(&mut self) -> Result<String, JsValue> {
         serde_json::to_string(&self.session.capture_workspace().map_err(js)?).map_err(js)

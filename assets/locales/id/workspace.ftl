@@ -177,7 +177,7 @@ workspace-new-confirm = Salin pengaturan alat dan tata letak saat ini ke ruang k
 
 workspace-create-and-switch = Buat dan Beralih
 
-workspace-reset-brushes-confirm = Pulihkan pengaturan setiap kuas di ruang kerja ini ke bawaan.
+workspace-reset-brushes-confirm = Pulihkan pengaturan setiap kuas ke bawaan.
 
 workspace-reset-brushes = Atur Ulang Kuas
 
@@ -255,7 +255,7 @@ workspace-toolbars-intro = Atur bilah alat dalam ruang kerja ini.
 
 workspace-library-intro = Simpan bilah alat untuk digunakan kembali di ruang kerja mana pun.
 
-workspace-intro = Ruang kerja menyimpan pengaturan alat dan tata letak untuk berbagai tugas.
+workspace-intro = Ruang kerja menyimpan tata letak untuk berbagai tugas.
 
 workspace-history-hidden = Menyembunyikan { $panels }
 

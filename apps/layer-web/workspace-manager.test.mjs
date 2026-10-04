@@ -7,6 +7,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     throw Error(`Workspace timeout: ${predicate}\n${await evaluate('layerApp.app.workspace_view()')}`);
   };
   const view = () => evaluate('JSON.parse(layerApp.app.workspace_view())');
+  const editing = () => evaluate("JSON.parse(layerApp.app.editing_state())");
   const capture = () => evaluate('JSON.parse(layerApp.app.workspace_capture())');
   const idle = () => wait('JSON.parse(layerApp.app.workspace_view()).ready && !JSON.parse(layerApp.app.workspace_view()).busy && !JSON.parse(layerApp.app.workspace_view()).dirty');
   const click = async selector => {
@@ -47,7 +48,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
   const directory=process.env.LAYER_TEST_ARTIFACTS || '/tmp/capy-workspace-evidence/web'; await mkdir(directory,{recursive:true});
   const shot=async name=>{const s=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(s.data,'base64'));};
   await evaluate(`window.workspaceTestEvents=[];for(const type of ['pointerdown','pointerup','click'])window.addEventListener(type,e=>{workspaceTestEvents.push({type,target:e.target.outerHTML.slice(0,150),x:e.clientX,y:e.clientY,prevented:e.defaultPrevented,active:document.activeElement?.outerHTML.slice(0,80)});if(workspaceTestEvents.length>40)workspaceTestEvents.shift();},{capture:true});`);
-  await idle(); const original = (await view()).id, originalCapture = await capture(), originalLayout = await evaluate('layerApp.state().workspace.layout'); let created;
+  await idle(); await send({type:"set_theme",theme:process.env.CAPY_TEST_THEME || "dark"}); const original = (await view()).id, originalCapture = await capture(), originalLayout = await evaluate('layerApp.state().workspace.layout'); let created;
   try {
     console.log('Workspace UI: opening manager'); await menu('Manage Workspaces…');
     assert.equal(await evaluate('document.querySelector(".workspace-manager input[type=search]")'),null);
@@ -57,6 +58,11 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await click('.workspace-form .suggested-action'); await idle();
     console.log('Workspace UI: created', await view()); const candidate=(await view()).id; assert.notEqual(candidate,original); created=candidate; assert.equal((await view()).name,name);
     await send({type:'invoke',command:'eraser'});
+    await send({type:'set_brush_size',value:91});
+    await send({type:'set_color',rgba:[0.2,0.3,0.4,1]});
+    await send({type:'color',action:{op:'library',action:{op:'create_palette',name:'Shared colors'}}});
+    await send({type:'color',action:{op:'library',action:{op:'store',palette:await evaluate('layerApp.state().color_library.active'),name:'Shared ink',color:await evaluate('layerApp.state().colors.foreground')}}});
+    const sharedEditing=await editing();
     const beforeMove=await capture();
     await send({type:'move_panel',panel:'layers',target:{kind:'float',position:[480,220]}});
     const changed=await capture();
@@ -73,7 +79,8 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Manage Workspaces…'); await click(`.workspace-choice[data-id="${original}"]`);
     await click('.workspace-manager footer .suggested-action'); await idle();
     assert.equal((await view()).id,original);
-    assert.deepEqual((await capture()).working,originalCapture.working,'Switch restores that workspace’s tool settings');
+    assert.deepEqual(await editing(),sharedEditing,"Switch retains brush, paints and palettes");
+    assert.deepEqual((await capture()).working,originalCapture.working,'Switch restores workspace presentation');
     await menu('Manage Workspaces…'); await click(`.workspace-choice[data-id="${created}"]`); await click('.workspace-manager footer .suggested-action'); await idle();
     assert.deepEqual((await capture()).working,changed.working);
     await menu('Layout History…'); assert.equal((await view()).enabled,false); await shot('history');
@@ -87,6 +94,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     const beforeRestart=await capture();
     await reload(); await wait('window.layerApp?.startupTimes.complete != null', 55000); await idle();
     assert.equal((await view()).id,created);
+    assert.deepEqual(await editing(),sharedEditing,"Restart retains shared editing");
     assert.deepEqual(normalized(await capture()),normalized(beforeRestart),'Restart retains undo/redo and working settings');
     await menu('Manage Workspaces…');
     await click(`.workspace-row[data-id="${created}"] .workspace-options`);
@@ -97,6 +105,7 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     for (const id of ['builtin:workspace:painter','builtin:workspace:illustrator','builtin:workspace:photographer']) {
       await click(`.workspace-switcher button[data-workspace-id="${id}"]`); await idle();
       assert.equal((await view()).id,id);
+      assert.deepEqual(await editing(),sharedEditing,"Default workspaces retain shared editing");
       assert.equal(await evaluate(`document.querySelector('[data-workspace-id="${id}"]').getAttribute('aria-pressed')`),'true');
     }
     await menu('Manage Workspaces…');
@@ -114,7 +123,10 @@ export async function checkWorkspaceManager({call, evaluate, settle, reload, tou
     await menu('Reset All Brushes…'); await click('.workspace-form footer button'); await idle();
     assert.deepEqual(normalized(await capture()),normalized(beforeReset),'Cancelling brush reset preserves settings');
     await menu('Reset All Brushes…'); await shot('reset-brushes'); await click('.workspace-form .suggested-action'); await idle();
-    const expectedReset=structuredClone(beforeReset); expectedReset.working.tools.overrides={};
+    const expectedReset=beforeReset;
+    assert.notEqual((await evaluate("layerApp.state().brush")).diameter,91);
+    await send({type:"invoke",command:"brush"});
+    assert.notEqual((await evaluate("layerApp.state().brush")).diameter,73);
     assert.deepEqual(normalized(await capture()),normalized(expectedReset),'Brush reset preserves selection, colors and layout history');
     const beforeLayoutReset=await capture(), beforeLayoutResetView=await evaluate('layerApp.state().workspace.layout');
     assert.notDeepEqual(beforeLayoutReset.history.revisions[beforeLayoutReset.history.current].layout,originalCapture.history.revisions[originalCapture.history.current].layout);

@@ -27,8 +27,8 @@ export async function checkSdrColor({call,evaluate,settle}, photoUrl='/pkg/proph
   for(const model of ['srgb_hex','oklch','hsv','hls','document_rgb'])await evaluate(`(()=>{const s=document.querySelector('.color-dialog select');s.value=${JSON.stringify(model)};s.dispatchEvent(new Event('change'));})()`);
   await click('Use Color');assert.equal(await evaluate('JSON.stringify(layerApp.state().colors.foreground)'),await evaluate('sdrColor'));
   assert.equal(await evaluate(`!![...document.querySelectorAll('.color-wheel-control button')].find(b=>/Palettes/.test(b.textContent))`),false);
-  await evaluate(`layerApp.dispatch({type:'color',action:{op:'library',action:{op:'store',palette:layerApp.state().colors.library.palettes[0].id,name:'SDR precision regression',color:layerApp.state().colors.foreground}}})`);
-  assert.ok(await evaluate(`layerApp.state().colors.library.palettes.some(p=>p.swatches.some(s=>JSON.stringify(s.color)===sdrColor))`));
+  await evaluate(`layerApp.dispatch({type:'color',action:{op:'library',action:{op:'store',palette:layerApp.state().color_library.palettes[0].id,name:'SDR precision regression',color:layerApp.state().colors.foreground}}})`);
+  assert.ok(await evaluate(`layerApp.state().color_library.palettes.some(p=>p.swatches.some(s=>JSON.stringify(s.color)===sdrColor))`));
   const point=await evaluate('(()=>{const c=layerApp.app.camera(),r=layerApp.canvas.getBoundingClientRect(),a=c.work_area;return{x:r.x+(a[0]+a[2]/2)*r.width/c.viewport[0],y:r.y+(a[1]+a[3]/2)*r.height/c.viewport[1]}})()');
   for(const [type,dx,buttons] of [['mousePressed',0,1],['mouseMoved',45,1],['mouseReleased',45,0]]) {await call('Input.dispatchMouseEvent',{type,x:point.x+dx,y:point.y,button:'left',buttons,clickCount:1,pointerType:'pen',force:buttons?.65:0});await settle();}
   await wait('layerApp.state().document_file.modified');await invoke('save_document_as');await wait('!layerApp.state().document_file.busy && !layerApp.state().document_file.modified');

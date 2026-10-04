@@ -1,21 +1,23 @@
 //! Validated workspace adoption, without replaying document/tool commands.
 use super::*;
 
-impl Default for WorkspaceWorkingState {
+impl Default for EditingState {
     fn default() -> Self { Self::new_localized(&Localizer::shared(UiLanguage::English)) }
 }
-impl WorkspaceWorkingState {
+impl EditingState {
     pub fn new_localized(localization: &Localizer) -> Self {
         let region = region_tools::RegionTools::default();
         let layer = art_layers::LayerInteraction::default();
-        let mut colors = ColorState::new_localized(localization);
-        colors.library.ensure_starters_localized(localization);
+        let mut color_library = ColorLibrary::fresh(&localization.text(MessageId::CREATION_PALETTE_MY_COLORS));
+        color_library.ensure_starters_localized(localization);
         Self {
             version: 1,
             preset: layer_core::DefaultBrushPreset::GPen as u32,
-            tools: WorkspaceToolMemory::default(),
+            tools: ToolMemory::default(),
             tool_slots: ToolSlotMemory::default(),
-            colors,
+            colors: ColorState::default(),
+            mask_colors: selection_masks::SelectionMasks::default().colors,
+            color_library,
             canvas_tool: LayerCanvasTool::Paint,
             selection: SelectionOptions::default(),
             region_values: region
@@ -26,19 +28,37 @@ impl WorkspaceWorkingState {
             region_sources: region.source,
             gradient: layer.gradient,
             figure: layer.figure,
-            zen_mode: false,
         }
     }
+    pub fn validate(&self) -> Result<(), WorkspaceValidationError> {
+        if self.version != 1 { return Err("Unsupported editing-state version".into()); }
+        self.tools.validate()?;
+        for (slot, variant) in &self.tool_slots.choices {
+            if !slot.variants().contains(variant) { return Err("Invalid remembered tool variant".into()); }
+        }
+        self.selection.validate()?;
+        if let LayerCanvasTool::Selection { kind } = self.canvas_tool
+            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
+            return Err("Invalid geometric selection tool".into());
+        }
+        self.colors.validate()?;
+        self.mask_colors.validate()?;
+        self.color_library.validate()?;
+        let mut brush = self.tools.brush(preset(self.preset)?);
+        self.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
+        brush.validate().map_err(error)?;
+        let mut region = region_tools::RegionTools::default();
+        for (id, &value) in &self.region_values { region.edit_value(id, value)?; }
+        Ok(())
+    }
+
 }
 impl WorkspaceCapture {
-    pub fn from_template_canonical(layout: &DockLayout) -> Result<Self, String> {
-        Self::from_template_localized(layout, &Localizer::shared(UiLanguage::English))
-    }
-    pub fn from_template_localized(layout: &DockLayout, localization: &Localizer) -> Result<Self, String> {
+    pub fn from_template(layout: &DockLayout) -> Result<Self, String> {
         layout.validate()?;
         Ok(Self {
             history: LayoutHistory::new(layout),
-            working: WorkspaceWorkingState::new_localized(localization),
+            working: WorkspaceWorkingState::default(),
         })
     }
     pub fn validate_structure(&self) -> Result<(), WorkspaceValidationError> {
@@ -48,35 +68,12 @@ impl WorkspaceCapture {
 
 pub struct PreparedWorkspace {
     capture: WorkspaceCapture,
-    region_tools: region_tools::RegionTools,
 }
 impl PreparedWorkspace {
-    pub fn new(mut capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
+    pub fn new(capture: WorkspaceCapture) -> Result<Self, WorkspaceValidationError> {
         capture.history.validate()?;
-        capture.working.tool_slots.retain_history(&capture.history);
-        let state = &capture.working;
-        if state.version != 1 {
-            return Err("Unsupported workspace working-state version".into());
-        }
-        state.tools.validate()?;
-        state.selection.validate()?;
-        if let LayerCanvasTool::Selection { kind } = state.canvas_tool
-            && !matches!(kind, SelectionTool::Rectangle | SelectionTool::Ellipse | SelectionTool::Polygon | SelectionTool::Brush | SelectionTool::Tonal) {
-            return Err("Invalid geometric selection tool".into());
-        }
-        state.colors.validate()?;
-        let mut brush = state.tools.brush(preset(state.preset)?);
-        state.colors.load_paint(&mut brush, layer_core::color::RgbSpace::Srgb)?;
-        brush.validate().map_err(error)?;
-        let mut region_tools = region_tools::RegionTools::default();
-        for (id, &value) in &state.region_values {
-            region_tools.edit_value(id, value)?;
-        }
-        region_tools.source = state.region_sources;
-        Ok(Self {
-            capture,
-            region_tools,
-        })
+        if capture.working.version != 1 { return Err("Unsupported workspace working-state version".into()); }
+        Ok(Self { capture })
     }
 }
 impl<R: CanvasRenderer> UiSession<R> {
@@ -200,7 +197,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         Ok(())
     }
 
-    pub fn workspace_working_state(&self) -> WorkspaceWorkingState {
+    pub fn editing_state(&self) -> EditingState {
         let restore_tool = |restore: crate::interaction::Restore| match restore {
             crate::interaction::Restore::Tool(tool, preset) => Some((tool, preset)),
             _ => None,
@@ -213,12 +210,14 @@ impl<R: CanvasRenderer> UiSession<R> {
             .unwrap_or(self.layer_interaction.tool), self.state.brush.preset));
         let mut tools = self.tools.clone();
         if base.is_some() { tools.remember(preset); }
-        WorkspaceWorkingState {
+        EditingState {
             version: 1,
             preset,
             tools,
             tool_slots: self.state.tool_slots.clone(),
             colors: self.state.colors.clone(),
+            mask_colors: self.selection_masks.colors.clone(),
+            color_library: self.state.color_library.clone(),
             canvas_tool,
             selection: self.selection_tools.options.clone(),
             region_values: self
@@ -230,17 +229,49 @@ impl<R: CanvasRenderer> UiSession<R> {
             region_sources: self.region_tools.source,
             gradient: self.layer_interaction.gradient,
             figure: self.layer_interaction.figure,
-            zen_mode: self
-                .workspace_preview
-                .as_ref()
-                .unwrap_or(&self.state.workspace)
-                .zen_mode,
         }
     }
+    pub fn restore_editing(&mut self, mut state: EditingState) -> Result<UiChange, String> {
+        self.require_workspace_idle()?;
+        state.validate().map_err(|reason| reason.message(self.localization()))?;
+        let space = self.engine.document().color.space;
+        state.colors.set_rgb_space(space)?;
+        state.colors.set_document_depth(self.engine.document().color.depth)?;
+        state.mask_colors.set_document_depth(layer_core::color::SampleDepth::U8)?;
+        let mut brush = state.tools.brush_in(preset(state.preset)?, space);
+        let tool = stroke_paint(tools::group(state.preset).tool(), &state.colors, space, &mut brush)?;
+        let mut region = region_tools::RegionTools::default();
+        for (id, &value) in &state.region_values { region.edit_value(id, value).map_err(|reason| reason.message(self.localization()))?; }
+        region.source = state.region_sources;
+        self.engine.set_brush(brush.clone()).map_err(error)?;
+        self.engine.set_paint_color(state.colors.definition());
+        self.state.brush = BrushState { preset: state.preset, tool: tools::group(state.preset).tool(),
+            diameter: brush.diameter, opacity: brush.opacity, color: state.colors.preview(state.colors.definition()) };
+        self.tool_origin = None;
+        self.tools = state.tools;
+        self.state.tool_slots = state.tool_slots;
+        self.state.colors = state.colors;
+        self.state.color_library = state.color_library;
+        self.selection_masks.colors = state.mask_colors;
+        self.layer_interaction.tool = if state.canvas_tool.picks_color() { LayerCanvasTool::Paint } else { state.canvas_tool };
+        self.state.layer_tools.tool = self.layer_interaction.tool;
+        self.layer_interaction.gradient = state.gradient;
+        self.layer_interaction.figure = state.figure;
+        self.selection_tools.options = state.selection;
+        self.region_tools = region;
+        self.engine.set_tool(tool);
+        self.refresh_tools();
+        self.refresh_commands();
+        Ok(self.changed(regions::BRUSH | regions::DOCUMENT | regions::COMMANDS, true))
+    }
+    pub fn workspace_working_state(&self) -> WorkspaceWorkingState {
+        WorkspaceWorkingState { version: 1,
+            zen_mode: self.workspace_preview.as_ref().unwrap_or(&self.state.workspace).zen_mode }
+    }
 
-    /// Reset every preset override in this workspace, including inactive tools.
+    /// Reset every preset override, including inactive tools.
     /// Keep the current color, selected tool, layout and document history.
-    pub fn reset_workspace_brushes(&mut self) -> Result<UiChange, String> {
+    pub fn reset_brushes(&mut self) -> Result<UiChange, String> {
         self.require_workspace_idle()?;
         if self.workspace_preview.is_some() {
             return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_PREVIEWING_THE_WORKSPACE_FIRST).to_string());
@@ -248,7 +279,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.tools.overrides.is_empty() {
             return Ok(UiChange::default());
         }
-        let mut brush = tools::WorkspaceToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
+        let mut brush = tools::ToolMemory::default().brush_in(preset(self.state.brush.preset)?, self.engine.document().color.space);
         self.state.colors.load_paint(&mut brush, self.engine.document().color.space)?;
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.tools.overrides.clear();
@@ -275,7 +306,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             .customization
             .committed_header(&mut committed.layout);
         let history=self.workspace_history.capture(&committed);
-        self.state.tool_slots.retain_history(&history);
         Ok(WorkspaceCapture {history,working:self.workspace_working_state()})
     }
     pub fn workspace_layout_generation(&self) -> Option<u64> {
@@ -344,20 +374,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         if self.workspace_preview.is_some() {
             return Err(self.localization().text(MessageId::WORKSPACE_REFUSAL_SESSION_FINISH_PREVIEWING_THE_LAYOUT_FIRST).to_string());
         }
-        let PreparedWorkspace {
-            capture,
-            region_tools,
-        } = prepared;
-        let mut working = capture.working;
-        working.colors.library.ensure_starters_localized(self.localization());
-        let space = self.engine.document().color.space;
-        working.colors.set_rgb_space(space)?;
-        working.colors.set_document_depth(self.engine.document().color.depth)?;
-        let mut brush = working.tools.brush_in(preset(working.preset)?, space);
-        let stroke_tool = stroke_paint(tools::group(working.preset).tool(), &working.colors, space, &mut brush)?;
-        // This is the only fallible mutation; CanvasEngine validates before setting.
-        self.engine.set_brush(brush.clone()).map_err(error)?;
-        self.engine.set_paint_color(working.colors.definition());
+        let PreparedWorkspace { capture } = prepared;
+        let working = capture.working;
         let titlebar_insets = self.state.workspace.layout.titlebar_insets;
         let bottom_inset = self.state.workspace.layout.bottom_inset;
         let header_presentation = self.state.workspace.layout.header_presentation.clone();
@@ -372,27 +390,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.workspace.layout.bottom_inset = bottom_inset;
         self.state.workspace.layout.header_presentation = header_presentation;
         self.workspace_history = workspace::WorkspaceHistory::restore(capture.history);
-        self.tools = working.tools;
-        self.state.tool_slots = working.tool_slots;
         self.tool_origin = None;
-        self.state.colors = working.colors;
-        self.state.brush = BrushState {
-            preset: working.preset,
-            tool: tools::group(working.preset).tool(),
-            diameter: brush.diameter,
-            opacity: brush.opacity,
-            color: self.state.colors.preview(self.state.colors.definition()),
-        };
-        let canvas_tool = if working.canvas_tool.picks_color() { LayerCanvasTool::Paint } else { working.canvas_tool };
-        self.layer_interaction.tool = canvas_tool;
-        self.layer_interaction.gradient = working.gradient;
-        self.layer_interaction.figure = working.figure;
-        self.state.layer_tools.tool = canvas_tool;
-        self.region_tools = region_tools;
-        self.tonal_tools = Default::default();
-        self.selection_tools = selection_tools::SelectionTools::default();
-        self.selection_tools.options = working.selection;
-        self.engine.set_tool(stroke_tool);
         self.state.customization = CustomizationState::default();
         self.eyedropper.cancel();
         self.eyedropper.picking = Default::default();

@@ -24,7 +24,7 @@ mod held_actions;
 use held_actions::{ERASER_END, merge_change};
 #[path = "tool_slots.rs"]
 mod tool_slots;
-pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory, ToolSlotSelection};
+pub use tool_slots::{ToolSlotId, ToolVariant, ToolSlotMemory};
 use tool_slots::ToolControlGroup;
 #[path = "gesture_input.rs"]
 mod gesture_input;
@@ -258,7 +258,7 @@ pub struct UiSession<R: CanvasRenderer> {
     source_preview_revisions: source_edit::PreviewRevisions,
     effect_catalog: layer_core::EffectCatalog,
     pending_filters: Option<filter_loading::Pending>,
-    tools: tools::WorkspaceToolMemory,
+    tools: tools::ToolMemory,
     tool_origin: Option<(DrawerAnchor, tool_slots::ToolControlGroup)>,
     pending_tool_drawer: Option<(DrawerAnchor, DrawerAnchor, ToolVariant)>,
     files: document_files::DocumentFiles,
@@ -365,10 +365,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             camera.input_transform(),
         )
         .map_err(|e| e.to_string())?;
-        let mut colors = ColorState::new_localized(&localization);
+        let mut colors = ColorState::default();
         colors.set_rgb_space(engine.document().color.space)?;
         colors.set_document_depth(engine.document().color.depth)?;
-        let brush = tools::WorkspaceToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
+        let brush = tools::ToolMemory::default().brush_in(DefaultBrushPreset::GPen, engine.document().color.space);
         engine.set_brush(brush.clone()).map_err(error)?;
         engine.set_paint_color(colors.definition());
         let effect_catalog = layer_core::bundled_effect_catalog().clone();
@@ -435,7 +435,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             next_request: 1,
             layer_interaction: Default::default(),
             source_preview_revisions: Default::default(),
-            tools: tools::WorkspaceToolMemory::default(),
+            tools: tools::ToolMemory::default(),
             pending_tool_drawer: None,
             tool_origin: None,
             files: document_files::DocumentFiles::default(),
@@ -461,6 +461,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     color: [0.075, 0.075, 0.07, 1.0],
                 },
                 colors,
+                color_library: ColorLibrary::fresh(&localization.text(MessageId::CREATION_PALETTE_MY_COLORS)),
                 color_picker: Default::default(),
                 tool_settings: Vec::new(),
                 tool_extra: Vec::new(),
@@ -499,7 +500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             notices: Default::default(),
             pending_filters: None,
         };
-        session.state.colors.library.ensure_starters_localized(&session.state.localization);
+        session.state.color_library.ensure_starters_localized(&session.state.localization);
         session.refresh_feedback_config();
         session.apply_brush()?;
         session.refresh_document();
@@ -3166,7 +3167,6 @@ impl<R: CanvasRenderer> UiSession<R> {
                 workspace.layout.header_presentation =
                     self.state.workspace.layout.header_presentation.clone();
                 self.state.workspace = *workspace;
-                self.state.tool_slots = ToolSlotMemory::default();
                 self.tool_origin = None;
                 self.workspace_history = workspace::WorkspaceHistory::default();
                 self.divider_drag = None;
@@ -3271,8 +3271,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                 action: ColorAction::Library { action },
             } => {
                 let mut affected = BRUSH;
-                let action = self.state.colors.library.prepare_creation(action, self.localization())?;
-                if let Some(color) = self.state.colors.library.apply(action)? {
+                let action = self.state.color_library.prepare_creation(action, self.localization())?;
+                if let Some(color) = self.state.color_library.apply(action)? {
                     if self.selection_masks.target().is_some() {
                         self.mask_color_action(ColorAction::Definition { color })?;
                         affected |= DOCUMENT;
@@ -3715,7 +3715,6 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
         };
         if let Some(before) = workspace_before {
-            self.seed_tool_slots(&before.layout);
             let mut after = self.state.workspace.clone();
             self.state.customization.committed_header(&mut after.layout);
             if let Some(description) = workspace_description {
@@ -4335,7 +4334,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.sync_retouch_points();
         }
         for color in self.engine.take_used_colors() {
-            self.state.colors.library.record_use(color);
+            self.state.color_library.record_use(color);
             changed |= regions::BRUSH;
         }
         self.input_pending = self.engine.has_pending_input();
@@ -7015,7 +7014,7 @@ mod tests {
     }
 
     #[test]
-    fn reset_all_workspace_brushes_preserves_layout_color_tool_and_document() {
+    fn reset_all_brushes_preserves_layout_color_tool_and_document() {
         let mut s = session(Platform::Gtk);
         s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
         invoke(&mut s, CommandId::Eraser);
@@ -7028,14 +7027,16 @@ mod tests {
         invoke(&mut s, CommandId::Move);
         let before = s.capture_workspace().unwrap();
         let document = s.engine.document().clone();
-        assert_eq!(before.working.tools.overrides.len(), 2);
-        s.reset_workspace_brushes().unwrap();
+        let editing = s.editing_state();
+        assert_eq!(editing.tools.overrides.len(), 2);
+        s.reset_brushes().unwrap();
         let after = s.capture_workspace().unwrap();
-        assert!(after.working.tools.overrides.is_empty());
+        let reset = s.editing_state();
+        assert!(reset.tools.overrides.is_empty());
         assert_eq!(after.history, before.history);
-        assert_eq!(after.working.colors, before.working.colors);
-        assert_eq!(after.working.preset, before.working.preset);
-        assert_eq!(after.working.canvas_tool, before.working.canvas_tool);
+        assert_eq!(reset.colors, editing.colors);
+        assert_eq!(reset.preset, editing.preset);
+        assert_eq!(reset.canvas_tool, editing.canvas_tool);
         assert_eq!(s.engine.document(), &document);
         assert_eq!(
             s.state.brush.opacity,
@@ -7047,11 +7048,11 @@ mod tests {
             default_brush(DefaultBrushPreset::GPen).diameter
         );
         let unchanged = s.capture_workspace().unwrap();
-        s.reset_workspace_brushes().unwrap();
+        s.reset_brushes().unwrap();
         assert_eq!(s.capture_workspace().unwrap(), unchanged);
         s.begin_workspace_transition().unwrap();
         s.begin_workspace_layout_preview().unwrap();
-        assert!(s.reset_workspace_brushes().is_err());
+        assert!(s.reset_brushes().is_err());
         s.cancel_workspace_layout_preview();
         s.end_workspace_transition();
     }
@@ -7212,6 +7213,7 @@ mod tests {
         assert_eq!(captured.history.revisions.len(), 2);
         let encoded = serde_json::to_string(&captured).unwrap();
         let mut reopened = session(Platform::Gtk);
+        reopened.restore_editing(s.editing_state()).unwrap();
         reopened
             .adopt_workspace(
                 PreparedWorkspace::new(serde_json::from_str(&encoded).unwrap()).unwrap(),
@@ -7246,43 +7248,48 @@ mod tests {
     }
 
     #[test]
-    fn workspace_switch_keeps_independent_working_values_and_document_history() {
-        let mut s = session(Platform::Gtk);
-        invoke(&mut s, CommandId::AddLayer);
-        let document = s.engine.document().clone();
-        let blank = s.capture_workspace().unwrap();
-        s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
-        s.dispatch(UiAction::SetToolSetting {
-            id: "flow".into(),
-            value: 0.32,
-        })
-        .unwrap();
-        s.dispatch(UiAction::SetColor {
-            rgba: [0.1, 0.2, 0.3, 1.],
-        })
-        .unwrap();
-        invoke(&mut s, CommandId::ZenMode);
-        assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 1);
-        s.dispatch(UiAction::MovePanel {
-            panel: Panel::Sizes,
-            target: DockTarget::Float {
-                position: [400., 200.],
-            },
-            viewport: [1200., 900.],
-        })
-        .unwrap();
-        let working = s.workspace_working_state();
-        let painting = s.capture_workspace().unwrap();
-        s.adopt_workspace(PreparedWorkspace::new(blank.clone()).unwrap())
-            .unwrap();
-        assert_eq!(s.workspace_working_state(), blank.working);
-        assert!(!s.command(CommandId::UndoWorkspace).enabled);
-        s.adopt_workspace(PreparedWorkspace::new(painting.clone()).unwrap())
-            .unwrap();
-        assert_eq!(s.workspace_working_state(), working);
-        assert_eq!(s.engine.document(), &document);
-        assert!(s.engine.can_undo());
-        assert_eq!(s.engine.configured_brush().flow, 0.32);
+    fn workspace_switch_keeps_shared_editing_values_and_document_history() {
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            invoke(&mut s, CommandId::AddLayer);
+            let document = s.engine.document().clone();
+            s.dispatch(UiAction::SetBrushSize { value: 73. }).unwrap();
+            s.dispatch(UiAction::SetToolSetting { id: "flow".into(), value: 0.32 }).unwrap();
+            let mut editing = s.editing_state();
+            editing.colors.set_rgba([0.1, 0.2, 0.3, 1.]).unwrap();
+            editing.mask_colors.set_rgba([0.7, 0.7, 0.7, 1.]).unwrap();
+            editing.colors.shape = ColorShape::Triangle;
+            editing.colors.readout = ColorReadout::Rgb;
+            editing.selection.feather = 8.;
+            editing.selection.brush = serde_json::from_value(serde_json::json!({"size": 75.})).unwrap();
+            editing.selection.tonal.softness = 0.4;
+            editing.region_values.insert("tolerance".into(), 0.31);
+            editing.region_sources = [RegionSource::Visible, RegionSource::Editing];
+            editing.gradient = [true, true];
+            editing.figure = (FigureShape::Ellipse, FigurePaint::Both);
+            let palette = editing.color_library.active;
+            let color = editing.colors.definition();
+            for name in ["First", "Second"] {
+                editing.color_library.apply(ColorLibraryAction::Store { palette, name: name.into(), color }).unwrap();
+            }
+            editing.color_library.record_use(color);
+            s.restore_editing(editing).unwrap();
+            let editing = s.editing_state();
+            for preset in WorkspacePreset::ALL {
+                let mut capture = WorkspaceCapture::from_template(&preset.layout(platform)).unwrap();
+                capture.working.zen_mode = preset == WorkspacePreset::Painter;
+                let presentation = capture.working.clone();
+                s.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
+                assert_eq!(s.workspace_working_state(), presentation);
+                assert_eq!(s.editing_state(), editing);
+                assert_eq!(s.engine.document(), &document);
+                assert!(s.engine.can_undo());
+                assert_eq!(s.engine.configured_brush().flow, 0.32);
+            }
+            let mut restored = session(platform);
+            restored.restore_editing(serde_json::from_slice(&serde_json::to_vec(&editing).unwrap()).unwrap()).unwrap();
+            assert_eq!(restored.editing_state(), editing);
+        }
     }
 
     #[test]
@@ -7290,18 +7297,12 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let id = s.state.brush.preset;
         let defaults = layer_core::default_brush(preset(id).unwrap());
-        let mut saved = s.capture_workspace().unwrap();
-        // A previously explicit value can become equal to an updated default.
-        saved
-            .working
-            .tools
-            .overrides
-            .insert(id, [("flow".into(), defaults.flow)].into());
-        s.adopt_workspace(PreparedWorkspace::new(saved).unwrap())
-            .unwrap();
+        let mut saved = s.editing_state();
+        saved.tools.overrides.insert(id, [("flow".into(), defaults.flow)].into());
+        s.restore_editing(saved).unwrap();
         s.dispatch(UiAction::SetBrushSize { value: 91. }).unwrap();
         assert_eq!(
-            s.workspace_working_state().tools.overrides[&id]["flow"],
+            s.editing_state().tools.overrides[&id]["flow"],
             defaults.flow
         );
         s.dispatch(UiAction::SelectBrush {
@@ -7315,12 +7316,12 @@ mod tests {
             value: defaults.flow,
         })
         .unwrap();
-        assert!(!s.workspace_working_state().tools.overrides[&id].contains_key("flow"));
+        assert!(!s.editing_state().tools.overrides[&id].contains_key("flow"));
         s.dispatch(UiAction::SetBrushSize {
             value: defaults.diameter,
         })
         .unwrap();
-        assert!(s.workspace_working_state().tools.overrides.is_empty());
+        assert!(s.editing_state().tools.overrides.is_empty());
         assert_eq!(s.capture_workspace().unwrap().history.revisions.len(), 1);
     }
 
@@ -7329,12 +7330,13 @@ mod tests {
         let mut s = session(Platform::Gtk);
         let captured = s.capture_workspace().unwrap();
         let mut invalid = captured.clone();
-        invalid
-            .working
-            .tools
-            .overrides
-            .insert(0, [("future_setting".into(), 0.2)].into());
+        invalid.working.version = 0;
         assert!(PreparedWorkspace::new(invalid).is_err());
+        let before = s.editing_state();
+        let mut invalid = before.clone();
+        invalid.tools.overrides.insert(0, [("future_setting".into(), 0.2)].into());
+        assert!(s.restore_editing(invalid).is_err());
+        assert_eq!(s.editing_state(), before);
         let prepared = PreparedWorkspace::new(captured.clone()).unwrap();
         s.pen(event(&s, 1, PenPhase::Down, 1.)).unwrap();
         let document = s.engine.document().clone();
@@ -8859,6 +8861,7 @@ mod tests {
             assert!(s.state.customization.drawer.is_none(), "Clicking the opener again closes it");
             let capture = s.capture_workspace().unwrap();
             let mut restored = session(Platform::Gtk);
+            restored.restore_editing(s.editing_state()).unwrap();
             restored.adopt_workspace(PreparedWorkspace::new(capture).unwrap()).unwrap();
             assert_eq!((restored.state.brush.preset, restored.state.brush.diameter), remembered);
         }
@@ -8913,6 +8916,7 @@ mod tests {
             let capture = s.capture_workspace().unwrap();
             let json = serde_json::to_string(&capture).unwrap();
             let mut restored = session(platform);
+            restored.restore_editing(serde_json::from_str(&serde_json::to_string(&s.editing_state()).unwrap()).unwrap()).unwrap();
             restored.adopt_workspace(PreparedWorkspace::new(serde_json::from_str(&json).unwrap()).unwrap()).unwrap();
             assert_eq!(restored.command(CommandId::DrawingBrush).icon, Some("pencil"));
             assert_eq!(restored.command(CommandId::Sculpt).icon, Some("spot-heal"));

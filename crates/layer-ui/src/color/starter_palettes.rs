@@ -371,19 +371,19 @@ fn creation_preparation_keeps_user_literals_and_rejects_invalid_colors() {
 
 #[cfg(test)]
 #[test]
-fn fresh_workspace_reset_does_not_rewrite_restored_names() {
+fn fresh_editing_reset_does_not_rewrite_restored_names() {
     let localizer = crate::Localizer::shared(crate::UiLanguage::Japanese);
-    let mut working = crate::WorkspaceWorkingState::new_localized(&localizer);
-    working.colors.library.palettes[0].name = "My colors".into();
-    working.colors.library.palettes[0].swatches[0].name = "手描きの色".into();
+    let mut working = crate::EditingState::new_localized(&localizer);
+    working.color_library.palettes[0].name = "My colors".into();
+    working.color_library.palettes[0].swatches[0].name = "手描きの色".into();
     let bytes = serde_json::to_vec(&working).unwrap();
-    let mut restored: crate::WorkspaceWorkingState = serde_json::from_slice(&bytes).unwrap();
-    restored.colors.library.ensure_starters(starter_palettes(&localizer), |stem, number| format!("{stem} {number}"));
+    let mut restored: crate::EditingState = serde_json::from_slice(&bytes).unwrap();
+    restored.color_library.ensure_starters(starter_palettes(&localizer), |stem, number| format!("{stem} {number}"));
     assert_eq!(serde_json::to_vec(&restored).unwrap(), bytes);
-    let reset = crate::WorkspaceWorkingState::new_localized(&localizer);
-    assert_eq!(reset.colors.library.palettes[0].name, localizer.text(crate::MessageId::CREATION_PALETTE_OCEAN_STUDY).as_ref());
-    assert_eq!(reset.colors.library.palettes[0].id, working.colors.library.palettes[0].id);
-    assert_eq!(reset.colors.library.palettes[0].swatches[0].color, working.colors.library.palettes[0].swatches[0].color);
+    let reset = crate::EditingState::new_localized(&localizer);
+    assert_eq!(reset.color_library.palettes[0].name, localizer.text(crate::MessageId::CREATION_PALETTE_OCEAN_STUDY).as_ref());
+    assert_eq!(reset.color_library.palettes[0].id, working.color_library.palettes[0].id);
+    assert_eq!(reset.color_library.palettes[0].swatches[0].color, working.color_library.palettes[0].swatches[0].color);
 }
 
 #[cfg(test)]

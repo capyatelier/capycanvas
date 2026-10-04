@@ -43,7 +43,7 @@ fn apple_palette_file_codec_round_trips_every_format_and_rejects_damage() {
     assert_eq!(limits["read_bytes"], 1024 * 1024 + 1);
     assert!(limits["extensions"].as_array().unwrap().contains(&json!("aco")));
     let app = App::new(1);
-    let library = &app.state()["colors"]["library"];
+    let library = &app.state()["color_library"];
     let palette = library["palettes"].as_array().unwrap().iter().find(|p| p["swatches"].as_array().unwrap().len() > 3).unwrap().clone();
     let count = palette["swatches"].as_array().unwrap().len();
     for format in ["capycolor", "aco", "swatches", "ase", "gpl"] {
@@ -60,9 +60,9 @@ fn apple_palette_file_codec_round_trips_every_format_and_rejects_damage() {
         let action = &imported["action"];
         assert_eq!(action["op"], "import");
         assert_eq!(action["swatches"].as_array().unwrap().len(), count.min(30), "{format}");
-        let before = app.state()["colors"]["library"]["palettes"].as_array().unwrap().len();
+        let before = app.state()["color_library"]["palettes"].as_array().unwrap().len();
         app.action(json!({"type":"color","action":{"op":"library","action":action}}));
-        assert_eq!(app.state()["colors"]["library"]["palettes"].as_array().unwrap().len(), before + 1);
+        assert_eq!(app.state()["color_library"]["palettes"].as_array().unwrap().len(), before + 1);
     }
     let damaged = palette_file(json!({"type":"import","file_name":"Broken.aco"}), &[0, 1, 0, 9, 0], None);
     assert!(damaged["error"].is_string(), "{damaged}");

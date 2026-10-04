@@ -370,8 +370,7 @@ fn active_deletion_uses_available_defaults_and_persists_the_replacement() {
                 .entity
                 .capture()
                 .unwrap();
-            let mut displayed = saved.clone();
-            displayed.working.colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
+            let displayed = saved.clone();
             assert_eq!(f.host.session.capture_workspace().unwrap(), displayed);
             if occupied == 0 {
                 assert_eq!(saved.working, capture.working);
@@ -569,7 +568,7 @@ fn save_failure_lost_ack_suspend_and_restart_preserve_working_history() {
 }
 
 #[test]
-fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
+fn default_switches_preserve_editing_and_brush_reset_is_shared() {
     let mut f = Fixture::new();
     let original = f.controller.view.id.clone().unwrap();
     let initial = f.host.session.capture_workspace().unwrap();
@@ -581,7 +580,9 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     f.action(serde_json::json!({"type":"set_color","rgba":[0.2,0.3,0.4,1.0]}));
     f.save();
     let edited = f.host.session.capture_workspace().unwrap();
+    let editing = f.host.session.editing_state();
     f.input(serde_json::json!({"type":"switch","id":"builtin:workspace:photographer"}));
+    assert_eq!(f.host.session.editing_state(), editing);
     f.input(serde_json::json!({"type":"switch","id":painter}));
     assert_eq!(f.host.session.capture_workspace().unwrap(), edited);
     f.input(serde_json::json!({"type":"form","action":{"type":"reset_brushes"}}));
@@ -591,20 +592,12 @@ fn default_switches_preserve_edits_and_brush_reset_is_working_state_only() {
     f.input(serde_json::json!({"type":"submit","name":""}));
     let reset = f.host.session.capture_workspace().unwrap();
     assert_eq!(reset.history, edited.history);
-    let mut expected = edited.working.clone();
+    let mut expected = editing;
     assert!(!expected.tools.overrides.is_empty());
     expected.tools.overrides.clear();
-    assert_eq!(reset.working, expected);
-    assert_eq!(
-        f.controller
-            .manager
-            .current()
-            .unwrap()
-            .capture()
-            .unwrap()
-            .working,
-        expected
-    );
+    assert_eq!(reset, edited);
+    assert_eq!(f.host.session.editing_state(), expected);
+    assert_eq!(*f.controller.manager.editing().unwrap(), expected);
     f.input(serde_json::json!({"type":"form","action":{"type":"rename","value":painter}}));
     f.input(serde_json::json!({"type":"submit","name":"My Painter"}));
     assert!(
@@ -899,9 +892,7 @@ fn unpinned_current_workspace_is_temporary_and_previews_do_not_replace_it() {
     f.input(serde_json::json!({"type":"select","id":p}));
     assert_eq!(shown(&f), [i.clone(), p.clone(), h.clone()]);
     f.input(serde_json::json!({"type":"cancel"}));
-    let mut displayed = original.clone();
-    let colors = &mut displayed.entity.working.as_mut().unwrap().colors;
-    colors.set_document_depth(f.host.session.engine().document().color.depth).unwrap();
+    let displayed = original.clone();
     assert_eq!(f.controller.manager.current_record().unwrap(), displayed);
 
     // Pinning returns it to the saved order without duplicating it.
@@ -1504,7 +1495,7 @@ fn startup_survives_a_failure_at_every_storage_request() {
                 "Workspace changes in this window won't be saved: This workspace cannot be opened. Choose another workspace or reset this one."
             };
             assert_eq!(notice(&host).as_deref(), Some(expected), "{context}");
-            let before = host.session.capture_workspace().unwrap();
+            let before = host.session.editing_state();
             host.dispatch(UiAction::Invoke {
                 command: layer_ui::CommandId::Eraser,
             })
@@ -1516,7 +1507,7 @@ fn startup_survives_a_failure_at_every_storage_request() {
             assert!(controller.view.error.is_none(), "{context}");
             assert!(!controller.manager.dirty(), "{context}");
             assert_ne!(
-                controller.manager.current().unwrap().capture().unwrap(),
+                *controller.manager.editing().unwrap(),
                 before
             );
             if reset_heals {

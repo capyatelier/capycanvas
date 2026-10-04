@@ -157,6 +157,12 @@ fn browser_transactions_match_sqlite_contract() {
         vec![create(first.clone(), true), create(second.clone(), false)],
     )
     .unwrap();
+    let mut editing = layer_ui::EditingState::default();
+    editing.tools.set_override(editing.preset, "size", 91., &layer_ui::Localizer::shared(layer_ui::UiLanguage::English)).unwrap();
+    batch.editing_json = Some(serde_json::to_string(&editing).unwrap());
+    let request = StoreRequest::Commit { batch: batch.clone() };
+    let decoded: StoreRequest = serde_json::from_str(&serde_json::to_string(&request).unwrap()).unwrap();
+    assert_eq!(serde_json::to_value(decoded).unwrap(), serde_json::to_value(request).unwrap());
     batch
         .bindings
         .push(("last_workspace".into(), Some(first.id.clone())));
@@ -172,6 +178,7 @@ fn browser_transactions_match_sqlite_contract() {
         },
         1001,
     );
+    execute(StoreRequest::Editing, 1001);
     execute(StoreRequest::List, 1001);
     type PreferenceUpdate = fn(Option<Vec<String>>, Vec<String>) -> StoreRequest;
     for (read, update, ids, replacements) in [

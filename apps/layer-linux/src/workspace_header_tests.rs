@@ -108,7 +108,7 @@ impl Driver {
         let w = fixture_workspace(&app);
         w.window.maximize();
         w.window.present();
-        pump(1800);
+        wait_workspaces(&w);
         w.dispatch(UiAction::RestoreWorkspace {
             workspace: Box::new(WorkspaceState {
                 layout: WorkspacePreset::Painter.layout(Platform::Gtk),
@@ -387,14 +387,7 @@ fn native_workspace_ownership_input() {
     let manager = d.w.workspaces.manager().unwrap();
     assert_eq!(manager.active_id().as_deref(), Some(target_id));
     assert!(manager.error().is_none());
-    let mut adopted = saved.entity.working.unwrap();
-    let depth =
-        ui_session(&d.w)
-            .engine()
-            .document()
-            .color
-            .depth;
-    adopted.colors.set_document_depth(depth).unwrap();
+    let adopted = saved.entity.working.unwrap();
     assert_eq!(manager.current().unwrap().working, Some(adopted));
 
     // Context menus created while an item was occupied use SwitchToWindow.

@@ -635,7 +635,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                 };
                 let (label,enabled,selected,icon,resolved_control,has_variants)=match entry.item {
                     HeaderItem::Tool {control}=>{
-                        if let Some((choice,enabled,tooltip,resolved))=state.resolve_group(control,DrawerAnchor::Header {id:entry.id}) {
+                        if let Some((choice,enabled,tooltip,resolved))=state.resolve_group(control) {
                             (tooltip,enabled,choice.selected,choice.icon,Some(resolved),control.has_variants())
                         } else {
                             (self.header_item_label(entry.item),enabled,selected,icon,Some(control),control.has_variants())

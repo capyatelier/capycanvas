@@ -12,7 +12,7 @@ pub(crate) fn workspace(name: &str) -> Entity {
     let layout = DockLayout::default();
     Entity::workspace(
         name,
-        WorkspaceCapture::from_template_canonical(&layout).unwrap(),
+        WorkspaceCapture::from_template(&layout).unwrap(),
         layout,
         1_000_000,
     )

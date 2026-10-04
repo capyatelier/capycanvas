@@ -182,6 +182,7 @@ struct Install {
 }
 enum Outcome {
     Adopt(Box<StoredEntity>),
+    Editing(Option<Box<StoredEntity>>),
     Done,
     Dismiss,
     Closed,
@@ -446,6 +447,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                 Startup::InMemory => m.use_memory(),
             }
             m.execute(StoreRequest::Reopen).await?;
+            m.load_editing().await?;
             m.refresh_switcher().await?;
             let mut bound = Vec::new();
             for key in keys {
@@ -512,6 +514,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
         if !self.view.ready || self.transition || self.suspended {
             return;
         }
+        self.manager.observe_editing(session.editing_state());
         // The host calls this on accepted state changes, never pointer motion.
         if let Some(generation) = session.workspace_layout_generation() {
             if self.generation != Some(generation) {
@@ -540,6 +543,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
     fn capture<R: CanvasRenderer>(&mut self, session: &mut UiSession<R>, now: u64) -> Result<()> {
         let capture = session.capture_workspace().map_err(StoreError::invalid)?;
         self.manager.observe(capture, now);
+        self.manager.observe_editing(session.editing_state());
         self.generation = session.workspace_layout_generation();
         self.last_edit = now;
         Ok(())
@@ -1089,10 +1093,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             merge(
                 &mut change,
                 session
-                    .reset_workspace_brushes()
+                    .reset_brushes()
                     .map_err(StoreError::invalid)?,
             );
             m.observe_working(session.workspace_working_state());
+            m.observe_editing(session.editing_state());
             self.run(async move {
                 m.flush().await?;
                 Ok(Outcome::Done)
@@ -1155,10 +1160,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                     install(config, None, group, true)
                 }
                 ManagerAction::RecoverInterrupted => {
-                    match m.recover_interrupted(&choice, now).await? {
-                        Some(s) => Outcome::adopt(s),
-                        None => Outcome::Done,
-                    }
+                    Outcome::Editing(m.recover_interrupted(&choice, now).await?.map(Box::new))
                 }
                 _ => {
                     return Err(StoreError::known(ErrorKind::InvalidData, WorkspaceRefusal::ThisActionDoesNotUseAWorkspaceForm));
@@ -1521,7 +1523,7 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             presentation_changed = true;
             match result {
                 Ok(outcome) => {
-                    let keep_prompt = matches!(outcome, Outcome::Adopt(_) | Outcome::Install(_));
+                    let keep_prompt = matches!(outcome, Outcome::Adopt(_) | Outcome::Editing(Some(_)) | Outcome::Install(_));
                     match outcome {
                         Outcome::Adopt(incoming) => {
                             if self
@@ -1535,6 +1537,15 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
                                     self.view.switcher_revision.wrapping_add(1);
                             }
                             self.incoming = Some(*incoming);
+                        }
+                        Outcome::Editing(incoming) => {
+                            if let Some(editing) = self.manager.editing() {
+                                match session.restore_editing(*editing) {
+                                    Ok(c) => merge(&mut change, c),
+                                    Err(e) => self.set_error(StoreError::invalid(e)),
+                                }
+                            }
+                            self.incoming = incoming.map(|s| *s);
                         }
                         Outcome::Focus(target) => {
                             self.view.focus_window = Some(target);
@@ -1667,7 +1678,11 @@ impl<S: WorkspaceStore + 'static> WorkspaceController<S> {
             {
                 self.notify(session, copy);
             }
-            match prepared.and_then(|p| session.adopt_workspace(p).map_err(StoreError::invalid)) {
+            let editing = self.startup.is_some().then(|| self.manager.editing()).flatten();
+            match prepared.and_then(|p| {
+                if let Some(editing) = editing { merge(&mut change, session.restore_editing(*editing).map_err(StoreError::invalid)?); }
+                session.adopt_workspace(p).map_err(StoreError::invalid)
+            }) {
                 Ok(c) => {
                     merge(&mut change, c);
                     self.startup = None;

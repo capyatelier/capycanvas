@@ -215,8 +215,7 @@ impl WebApp {
             &self
                 .session
                 .state()
-                .colors
-                .library
+                .color_library
                 .menu(target)
                 .map_err(js)?,
         )
@@ -230,15 +229,14 @@ impl WebApp {
         let preview = self
             .session
             .state()
-            .colors
-            .library
+            .color_library
             .preview_reorder(palette, id, slot);
         serialize(&preview)
     }
     pub fn palette_action_error(&self, action: JsValue) -> Result<Option<String>, JsValue> {
         let action: layer_ui::ColorLibraryAction =
             serde_wasm_bindgen::from_value(action).map_err(js)?;
-        Ok(self.session.state().colors.library.check(action, self.session.localization()).err())
+        Ok(self.session.state().color_library.check(action, self.session.localization()).err())
     }
     pub fn group_tab_style(&self, group: u32) -> Result<JsValue, JsValue> {
         serialize(
@@ -590,6 +588,7 @@ impl WebApp {
             workspace,
             brush,
             colors,
+            color_library,
             color_picker,
             tool_settings,
             tool_extra,
@@ -643,6 +642,7 @@ impl WebApp {
         field!(workspace);
         field!(brush);
         field!(colors);
+        field!(color_library);
         field!(color_picker);
         field!(tool_settings);
         field!(tool_extra);

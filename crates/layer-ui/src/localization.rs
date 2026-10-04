@@ -561,14 +561,11 @@ mod tests {
         let japanese = "tool-control-selection-brush-hardness = 硬さ\ntool-control-selection-brush-opacity = 不透明度\nnumeric-range = { $label } は範囲外です。\ntool-control-selection-brush-size = サイズ１２\nnumeric-whole-pixels = { $label } は整数のピクセルで指定してください。\ntool-control-gap-closing = 隙間１２\n";
         let active = Localizer::from_bundles(UiLanguage::Japanese, fixture(japanese), fixture(english));
         let canonical = Localizer::from_bundles(UiLanguage::English, fixture(english), fixture(english));
-        let mut capture = crate::WorkspaceCapture {
-            history: crate::LayoutHistory::new(&crate::DockLayout::default()),
-            working: crate::WorkspaceWorkingState::default(),
-        };
-        capture.working.selection.brush = serde_json::from_value(serde_json::json!({"size": 0.})).unwrap();
+        let mut capture = crate::EditingState::default();
+        capture.selection.brush = serde_json::from_value(serde_json::json!({"size": 0.})).unwrap();
         let before_capture = capture.clone();
-        let structural = capture.validate_structure().unwrap_err();
-        let admission = crate::PreparedWorkspace::new(capture.clone()).err().unwrap();
+        let structural = capture.validate().unwrap_err();
+        let admission = capture.clone().validate().unwrap_err();
         assert_eq!(structural, admission);
         assert_eq!(admission.message(&active), "サイズ１２ は範囲外です。");
         assert_eq!(admission.message(&canonical), "Size is out of range.");
