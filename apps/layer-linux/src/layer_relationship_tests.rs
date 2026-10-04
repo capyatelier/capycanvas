@@ -74,6 +74,26 @@ fn native_layer_settings_menu() {
         w.dispatch(UiAction::Invoke { command: CommandId::Redo });
         pump(100);
         assert!(!state(&w).layer_tools.attachment.checked);
+        for reference in [true, false] {
+            let popover = open(&mut input);
+            let control = item(&popover, "Use as reference");
+            assert_eq!(control.property::<bool>("active"), !reference);
+            input.click(screen_point(&control, &w.window, [0.5, 0.5]));
+            until(|| state(&w).layers.iter().find(|r| r.id == group).unwrap().reference == reference, "Reference use toggles");
+            icon(&row, if reference { "layer-reference-symbolic" } else { "layer-selection-checked-symbolic" });
+            save_snapshot(&w, 100, || directory.join(format!("{theme:?}-reference-{reference}.png")));
+            if reference {
+                relationship_action(&w, A::Select { id: 1, mask: false });
+                icon(&row, "layer-reference-symbolic");
+                input.click(screen_point(&find_css(&row, "layer-name").unwrap(), &w.surface, [0.5, 0.5]));
+                until(|| state(&w).layer_tools.editing_layer.as_ref().unwrap().id == group, "Reference group selected");
+                icon(&row, "layer-reference-symbolic");
+                relationship_action(&w, A::ToggleSelection { id: 1 });
+                icon(&row, "layer-selection-checked-symbolic");
+                relationship_action(&w, A::ToggleSelection { id: 1 });
+                icon(&row, "layer-reference-symbolic");
+            }
+        }
     }
     input.finish();
     w.window.destroy();

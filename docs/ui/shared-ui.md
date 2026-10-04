@@ -440,6 +440,11 @@ target. Shift selects a range of visible rows. Collapsing a folder replaces
 concealed checks with the folder row. Undo and
 redo restore the checked set and reveal its rows.
 
+The sole selected editing reference uses the lighthouse icon for paint layers
+and groups, with or without a mask. Reference rows keep the lighthouse when
+unselected. Multiple checked rows and checked rows outside the editing target
+use checkmarks.
+
 New Group wraps multiple checked rows from the same parent in their displayed
 order, including separated rows. Deleting an expanded folder removes its wrapper
 and keeps unchecked children when their appearance can be preserved. A collapsed

@@ -5723,7 +5723,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             selected: !self.selection_masks.quick() && selected.contains(&id),
             load_selection_tooltip: "Use this layer as the current selection; keep the saved layer unchanged",
             selection_icon: if selected.contains(&id)
-                && (selected.len() > 1 || Some(id) != doc.working.occurrence || !drawing)
+                && (selected.len() > 1 || Some(id) != doc.working.occurrence || (!drawing && !l.reference))
             {
                 "layer-selection-checked-symbolic"
             } else if l.reference {

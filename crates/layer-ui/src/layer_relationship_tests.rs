@@ -3,6 +3,39 @@ fn relationship_row(s: &UiSession<Recorder>, id: u64) -> &LayerState {
 }
 
 #[test]
+fn sole_editing_references_keep_the_lighthouse_without_a_paint_target() {
+    for platform in Platform::ALL {
+        for group in [false, true] {
+            for mask in [false, true] {
+                let mut s = session(platform);
+                let base = occurrence_token(s.engine.document().working.occurrence.unwrap());
+                layer(&mut s, LayerAction::New { group, clipped: false });
+                let id = occurrence_token(s.engine.document().working.occurrence.unwrap());
+                if mask { layer(&mut s, LayerAction::AddMask { id, replace: false }); }
+                let ordinary = relationship_row(&s, id).selection_icon;
+                layer(&mut s, LayerAction::ReferenceSelection);
+                assert!(relationship_row(&s, id).selected && relationship_row(&s, id).editing);
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-reference-symbolic");
+                invoke(&mut s, CommandId::Undo);
+                assert_eq!(relationship_row(&s, id).selection_icon, ordinary);
+                invoke(&mut s, CommandId::Redo);
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-reference-symbolic");
+                layer(&mut s, LayerAction::Select { id: base, mask: false });
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-reference-symbolic");
+                layer(&mut s, LayerAction::ToggleSelection { id });
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-selection-checked-symbolic");
+                layer(&mut s, LayerAction::ToggleSelection { id: base });
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-selection-checked-symbolic");
+                layer(&mut s, LayerAction::Select { id, mask: false });
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-reference-symbolic");
+                layer(&mut s, LayerAction::Lock { id, value: true });
+                assert_eq!(relationship_row(&s, id).selection_icon, "layer-reference-symbolic");
+            }
+        }
+    }
+}
+
+#[test]
 fn layer_settings_keep_labels_checks_and_packaged_icons_on_every_host() {
     fn icons(sections: &[Vec<ContextMenuItem>]) {
         for item in sections.iter().flatten() {

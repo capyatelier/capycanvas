@@ -97,6 +97,25 @@ export async function checkPassThrough({call,evaluate,settle}) {
         await wait(`!${opened}&&layerApp.state().layer_tools.editing_layer.blend_label===${JSON.stringify(checked?'Normal':'Pass Through')}`);
         assert.equal(await evaluate(`document.querySelector('.layer-row[data-layer="${group}"] .layer-meta').textContent`),checked?'':'Pass Through');
       }
+      for(const reference of [true,false]) {
+        await settings(group);
+        await tap(await middle(row('Use as reference')),'mouse');
+        await wait(`!${opened}&&layerApp.state().layer_tools.editing_layer.reference===${reference}`);
+        const glyph=`document.querySelector('.layer-row[data-layer="${group}"] > button:nth-child(2) svg')`;
+        assert.equal(await evaluate(`${glyph}.dataset.asset`),reference?'reference':'selection-checked');
+        await capture(`reference-${name}-${reference}`,await rect(`document.querySelector('.layer-list')`));
+        if(reference) {
+          await send({type:'layer',action:{op:'select',id:fill,mask:false}});
+          assert.equal(await evaluate(`${glyph}.dataset.asset`),'reference');
+          await tap(await middle(`document.querySelector('.layer-row[data-layer="${group}"] .layer-name')`),'mouse');
+          await wait(`Number(layerApp.state().layer_tools.editing_layer.id)===${group}`);
+          assert.equal(await evaluate(`${glyph}.dataset.asset`),'reference');
+          await send({type:'layer',action:{op:'toggle_selection',id:fill}});
+          assert.equal(await evaluate(`${glyph}.dataset.asset`),'selection-checked');
+          await send({type:'layer',action:{op:'toggle_selection',id:fill}});
+          assert.equal(await evaluate(`${glyph}.dataset.asset`),'reference');
+        }
+      }
     }
     await send({type:'layer',action:{op:'select',id:fill,mask:false}});
     await wait(`Number(layerApp.state().layer_tools.editing_layer.id)===${fill}&&!document.querySelector('${control}').disabled`);
@@ -143,7 +162,7 @@ export async function checkPassThrough({call,evaluate,settle}) {
     await send({type:'layer',action:{op:'new',group:true,clipped:false}});
     await wait(`layerApp.state().layer_tools.editing_layer.blend_label==='Pass Through'`);
     assert.equal(await evaluate(`document.querySelector('${control} .layer-blend-label').textContent`),'Pass Through','New Group passes through');
-    console.log(`PASS pass through: fixed Layer Settings labels, packaged icons, checked states, default subtitles and clipping tooltips in both themes; blend behavior and new-group preference; screenshots in ${directory}`);
+    console.log(`PASS pass through: fixed Layer Settings labels, packaged icons, checked states, default subtitles, clipping tooltips and selected reference group icons in both themes; blend behavior and new-group preference; screenshots in ${directory}`);
   } finally {
     await send({type:'preferences',action:{type:'edit',id:'pass_through_groups',value:saved.pass}});
     if(saved.theme)await send({type:'set_theme',theme:saved.theme});
