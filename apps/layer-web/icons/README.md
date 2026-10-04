@@ -34,6 +34,8 @@ directly by GTK and Web.
 
 Draw new icons on a 16×16 viewBox. A few older icons use 24×24, and the capybara
 marks keep their own square viewBoxes.
+The `tool-group` corner marker uses 1px rounded corners and 60% opacity within
+its 16px box, keeping the triangle quieter than the tool icon.
 The shared `more-small` and `grip` icons use 2px dots centered at y=3, 8 and 13,
 for 12px-tall artwork within their 16px boxes. Their integer coordinates align
 the dots' bounds to pixels: one column at x=8 for `more-small`, two at x=5 and 11
