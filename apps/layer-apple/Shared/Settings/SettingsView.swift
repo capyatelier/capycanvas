@@ -312,17 +312,20 @@ private struct CenteredFlow: Layout {
         }
         return rows
     }
+    private func rowWidth(_ row: [(Int, CGSize)]) -> CGFloat {
+        row.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, row.count - 1))
+    }
     func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         let width = proposal.width ?? .infinity
         let lines = rows(width, subviews)
         let height = lines.map { $0.map(\.1.height).max() ?? 0 }.reduce(0, +) + spacing * CGFloat(max(0, lines.count - 1))
-        let widest = lines.map { $0.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, $0.count - 1)) }.max() ?? 0
+        let widest = lines.map(rowWidth).max() ?? 0
         return CGSize(width: proposal.width ?? widest, height: height)
     }
     func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         var y = bounds.minY
         for line in rows(bounds.width, subviews) {
-            let width = line.map(\.1.width).reduce(0, +) + spacing * CGFloat(max(0, line.count - 1))
+            let width = rowWidth(line)
             var x = bounds.midX - width / 2
             let height = line.map(\.1.height).max() ?? 0
             for (index, size) in line {
