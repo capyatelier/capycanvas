@@ -126,7 +126,8 @@ first matching row and its error check, or leaves the default journey to the hos
 
 `--tool-variations` checks Photo's 15 and Paint's 17 tool buttons, compact variation
 menus and secondary menus, retained icons and sibling choices in active-tool
-drawers, title-bar slots,
+drawers, Paint's command categories and remembered media icons, Sketch's header
+groups, separate manual and automatic selection menus and Tool Set rows,
 and mouse/touch/pen hold-to-reorder with one layout undo/redo in both themes.
 
 `--language-switching` visits all shipped languages in light and dark themes,

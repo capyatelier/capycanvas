@@ -82,9 +82,10 @@ try{
         Tap "tile-toolbar-$($slot.id)"
         Wait-Until {!(Model).state.customization.drawer} 'Grouped drawer did not toggle closed'
         $eraser=@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.command -eq 'eraser'}|Select-Object -First 1
-        if(!$eraser -or $eraser.has_variants){throw 'Eraser is not an independent pinned tool'}
+        if(!$eraser -or !$eraser.has_variants){throw 'Eraser category has no preset choices'}
+        if(@(@((Model).panels|Where-Object id -eq 'toolbar')[0].tiles|Where-Object {$_.control.kind -eq 'brush' -and $_.has_variants}).Count){throw 'Pinned brush preset has category choices'}
         Tap "tile-toolbar-$($eraser.id)"
-        Wait-Until {(Tile $eraser.id).selected} 'Pinned Eraser did not activate'
+        Wait-Until {(Tile $eraser.id).selected} 'Eraser category did not activate'
         Capture ($workspace.Split(':')[-1]) -WithModel -Composed
     }
     Wait-Until {@(Menus).Count -eq 0} 'Earlier menu remained visible before header customization'
@@ -115,7 +116,7 @@ try{
     Capture 'header-variations' -WithModel -Composed
     $results|ConvertTo-Json -Depth 5|Set-Content (Join-Path $run 'results.json')
     & (Join-Path $PSScriptRoot 'exercise-window.ps1') -ProcessId $review.Id -Action Close -DiscardUnsaved
-    [pscustomobject]@{theme=$Theme;toolbar='passed';header='passed';devices=@('mouse','pen','touch');pinned_eraser='passed';checked_choices='passed';layout_unchanged='passed';evidence=$run}|ConvertTo-Json
+    [pscustomobject]@{theme=$Theme;toolbar='passed';header='passed';devices=@('mouse','pen','touch');eraser_group='passed';checked_choices='passed';layout_unchanged='passed';evidence=$run}|ConvertTo-Json
 }catch{
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw
 }finally{Exit-CapyEnvironment}

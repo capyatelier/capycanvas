@@ -63,7 +63,13 @@ Gradient; Operation, Figure, Ruler, Hand and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
 Selection; Auto select includes Select by Color; Fill includes Lasso Fill; Blend
 includes Clone. Operation, Figure, Ruler and Gradient expose their existing
-variations in the same positions. Pen and Pencil remain separate. Its Commands
+variations in the same positions. Pen and Pencil remain separate. Pen exposes
+Pen and Marker; Pencil exposes Pencil and Pastel; Brush exposes Paint,
+Watercolor and Oil; Airbrush exposes Airbrush and Spray. The other brush
+categories expose their presets. Every group has a softly rounded bottom-right
+triangle and remembers the selected subgroup's icon, including when inactive.
+Selection menus, drawers and the docked Tool Set use the same separate manual
+and automatic memberships. Its Commands
 toolbar holds New, Open, Save; Undo, Redo; Clear, Fill selection, Scale/rotate;
 and Flip horizontal.
 
@@ -76,7 +82,7 @@ Heal. Gradient/Fill includes all existing gradient variations, Fill and Lasso
 Fill. Figure and Ruler remain available in Add Tools. Tonal Selection and Quick
 Mask keep their existing selection entry points.
 
-These arrangements use shared tool slots described in
+These arrangements use shared tool groups described in
 [toolbar customization](panel-customization.md#tool-variations). Apple clients
 retain their existing individual-tool arrangements until they support the slot
 controls.
@@ -95,6 +101,10 @@ closes its drawer, and choosing a set keeps the drawer open and restores that
 set's last tool. **Sculpt** opens **Sculpting → Tools → Tool** with Blend,
 Liquify, Clone, Heal and Spot Heal, and Eraser has a two-panel **Tools → Tool** drawer. Brush and Sculpt
 each remember their own selection across workspace switches and restarts.
+Brush, Sculpt, Eraser and Select use the same corner triangle and subgroup icons
+as Paint and Photo. Their corner buttons, secondary clicks and touch or pen
+holds open the compact variation menu; clicking the selected main button still
+opens the full drawer.
 Brushes, Sculpting and Tools are ordinary panels: Brushes starts 160 logical
 pixels wide, shrinks to 104, and uses rows at least 44 pixels tall (48 dp on
 Android). **Select** remembers the last selection tool and opens a two-panel

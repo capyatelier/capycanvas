@@ -36,6 +36,10 @@ pub(super) fn merge_change(a: UiChange, b: UiChange) -> UiChange {
 }
 
 impl<R: CanvasRenderer> UiSession<R> {
+    pub(super) fn temporary_tool(&self) -> bool {
+        self.interaction.applying_hold || self.interaction.hold_base.is_some() || self.interaction.spring.is_some()
+            || self.interaction.restores.iter().any(|restore| matches!(restore, Restore::Tool(..)))
+    }
     pub(super) fn press_hold(&mut self, token: String, action: UiAction) {
         self.interaction.holds.retain(|(t, _)| *t != token);
         self.interaction.holds.push((token, action));
@@ -97,9 +101,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             self.interaction.restores.push(spring.restore);
             return UiChange::default();
         }
+        let brush_changed = self.layer_interaction.tool == LayerCanvasTool::Paint && self.tools.remember(self.state.brush.preset);
         let memory = self.state.tool_slots.clone();
         self.remember_tool_slots();
-        if memory != self.state.tool_slots { self.changed(regions::BRUSH | regions::COMMANDS, false) }
+        if brush_changed || memory != self.state.tool_slots { self.changed(regions::BRUSH | regions::COMMANDS, false) }
         else { UiChange::default() }
     }
 
@@ -257,6 +262,7 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn restore(&mut self, restore: Restore) -> Result<UiChange, String> {
         match restore {
             Restore::Tool(tool, preset) if (self.layer_interaction.tool, self.state.brush.preset) != (tool, preset) => {
+                if tool != LayerCanvasTool::Paint && self.state.brush.preset != preset { self.select_brush(preset)?; }
                 self.dispatch(if tool == LayerCanvasTool::Paint {
                     UiAction::SelectBrush { id: preset }
                 } else {
@@ -331,11 +337,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 );
             }
             if let Some((tool, preset)) = self.interaction.hold_base {
-                change = merge_change(change, self.dispatch(if tool == LayerCanvasTool::Paint {
-                    UiAction::SelectBrush { id: preset }
-                } else {
-                    UiAction::Layer { action: LayerAction::Tool { tool } }
-                })?);
+                change = merge_change(change, self.restore(Restore::Tool(tool, preset))?);
             }
         }
         match target {

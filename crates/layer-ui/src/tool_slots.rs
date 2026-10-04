@@ -14,9 +14,84 @@ variants! {
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ToolVariant {
     Command { command: CommandId },
+    BrushGroup { group: ToolGroup },
+    BrushPreset { id: u32 },
     Figure { shape: FigureShape },
     Ruler { kind: RulerKind },
     Gradient { radial: bool, transparent: bool },
+}
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ToolControlGroup {
+    Slot(ToolSlotId),
+    Brush(Tool),
+    Drawing,
+    Sculpt,
+    Selection,
+}
+impl ToolbarControl {
+    pub(crate) fn tool_group(self) -> Option<ToolControlGroup> {
+        use ToolControlGroup as G;
+        Some(match self {
+            Self::ToolSlot { slot } => G::Slot(slot),
+            Self::Command { command } => match command {
+                CommandId::DrawingBrush => G::Drawing,
+                CommandId::Sculpt => G::Sculpt,
+                CommandId::Select => G::Selection,
+                CommandId::Figure => G::Slot(ToolSlotId::Figure),
+                CommandId::Ruler => G::Slot(ToolSlotId::Ruler),
+                CommandId::Gradient => G::Slot(ToolSlotId::Gradient),
+                CommandId::Move => G::Slot(ToolSlotId::Operation),
+                CommandId::Fill => G::Slot(ToolSlotId::Fill),
+                _ => G::Brush(command.paint_tool()?),
+            },
+            _ => return None,
+        })
+    }
+    pub(crate) fn slot_group(self) -> Option<ToolSlotId> {
+        if let Some(ToolControlGroup::Slot(slot)) = self.tool_group() { Some(slot) } else { None }
+    }
+    pub fn has_variants(self) -> bool { self.tool_group().is_some() }
+}
+impl ToolControlGroup {
+    fn variants(self) -> Vec<ToolVariant> {
+        match self {
+            Self::Slot(slot) => slot.variants().to_vec(),
+            Self::Selection => SelectionTool::ALL.into_iter().map(|t| command(t.command())).collect(),
+            Self::Brush(tool) => {
+                let groups: Vec<_> = ToolGroup::ALL.into_iter().filter(|g| g.tool() == tool).collect();
+                if groups.len() > 1 {
+                    groups.into_iter().map(|group| ToolVariant::BrushGroup { group }).collect()
+                } else {
+                    tools::brush_ids().filter(|&id| tools::group(id).tool() == tool).map(|id| ToolVariant::BrushPreset { id }).collect()
+                }
+            },
+            Self::Drawing | Self::Sculpt => ToolGroup::ALL.into_iter()
+                .filter(|g| if self == Self::Drawing { tools::is_drawing(g.tool()) } else { tools::is_sculpt(g.tool()) })
+                .map(|group| ToolVariant::BrushGroup { group }).collect(),
+        }
+    }
+    fn contains(self, variant: ToolVariant) -> bool {
+        match self {
+            Self::Slot(slot) => slot.variants().contains(&variant),
+            Self::Selection => matches!(variant, ToolVariant::Command { command } if SelectionTool::ALL.iter().any(|t| t.command() == command)),
+            Self::Brush(tool) => match variant {
+                ToolVariant::BrushGroup { group } => group.tool() == tool && ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() > 1,
+                ToolVariant::BrushPreset { id } => preset(id).is_ok() && tools::group(id).tool() == tool && ToolGroup::ALL.iter().filter(|g| g.tool() == tool).count() == 1,
+                _ => false,
+            },
+            Self::Drawing => matches!(variant, ToolVariant::BrushGroup { group } if tools::is_drawing(group.tool())),
+            Self::Sculpt => matches!(variant, ToolVariant::BrushGroup { group } if tools::is_sculpt(group.tool())),
+        }
+    }
+    fn active(self, state: &UiState) -> bool {
+        match self {
+            Self::Slot(slot) => ToolVariant::active(state).is_some_and(|v| slot.variants().contains(&v)),
+            Self::Selection => state.layer_tools.tool.selection_tool().is_some(),
+            Self::Brush(tool) => state.layer_tools.tool == LayerCanvasTool::Paint && state.brush.tool == tool,
+            Self::Drawing => state.layer_tools.tool == LayerCanvasTool::Paint && tools::is_drawing(state.brush.tool),
+            Self::Sculpt => state.layer_tools.tool == LayerCanvasTool::Paint && tools::is_sculpt(state.brush.tool),
+        }
+    }
 }
 const fn command(command: CommandId) -> ToolVariant {
     ToolVariant::Command { command }
@@ -167,12 +242,15 @@ impl ToolVariant {
     pub fn command(self) -> CommandId {
         match self {
             Self::Command { command } => command,
+            Self::BrushGroup { group } => group.tool().command(),
+            Self::BrushPreset { id } => preset(id).map(|_| tools::group(id).tool().command()).unwrap_or(CommandId::Brush),
             Self::Figure { .. } => CommandId::Figure,
             Self::Ruler { .. } => CommandId::Ruler,
             Self::Gradient { .. } => CommandId::Gradient,
         }
     }
     pub(crate) fn control(self) -> ToolbarControl {
+        if let Self::BrushPreset { id } = self { return ToolbarControl::Brush { id }; }
         ToolbarControl::Command {
             command: self.command(),
         }
@@ -180,6 +258,8 @@ impl ToolVariant {
     pub(crate) fn icon(self) -> &'static str {
         match self {
             Self::Command { command } => command.icon().unwrap_or("menu"),
+            Self::BrushGroup { group } => group.icon(),
+            Self::BrushPreset { id } => preset(id).map(|_| tools::group(id).icon()).unwrap_or("brush"),
             Self::Figure { shape } => match shape {
                 FigureShape::Line => "line",
                 FigureShape::Rectangle => "rectangle",
@@ -201,9 +281,16 @@ impl ToolVariant {
             },
         }
     }
+    fn icon_in(self, state: &UiState) -> &'static str {
+        if let Self::Command { command } = self {
+            state.commands.iter().find(|c| c.id == command).and_then(|c| c.icon).unwrap_or(self.icon())
+        } else { self.icon() }
+    }
     fn label(self, localization: &Localizer) -> String {
         let id = match self {
             Self::Command { command } => return command.localized_label(localization).to_string(),
+            Self::BrushGroup { group } => return group.localized_label(localization).to_string(),
+            Self::BrushPreset { id } => return tools::brush_label_localized(id, localization).map(|s| s.to_string()).unwrap_or_default(),
             Self::Figure {
                 shape: FigureShape::Line,
             } => MessageId::TOOL_FIGURES_LINE,
@@ -268,6 +355,13 @@ impl ToolVariant {
                 }
             }),
         })
+    }
+    fn is_active(self, state: &UiState) -> bool {
+        match self {
+            Self::BrushGroup { group } => state.layer_tools.tool == LayerCanvasTool::Paint && tools::group(state.brush.preset) == group,
+            Self::BrushPreset { id } => state.layer_tools.tool == LayerCanvasTool::Paint && state.brush.preset == id,
+            _ => Self::active(state) == Some(self),
+        }
     }
 }
 
@@ -341,7 +435,7 @@ impl DockLayout {
                 _ => None,
             }))
             .filter_map(|(anchor, control)| {
-                if let ToolbarControl::ToolSlot { slot } = control {
+                if let Some(ToolControlGroup::Slot(slot)) = control.tool_group() {
                     Some((anchor, slot))
                 } else {
                     None
@@ -381,7 +475,7 @@ impl UiState {
         let mut choice = tool_choice_localized(variant.control(), &self.localization);
         choice.control = ToolbarControl::ToolSlot { slot };
         choice.label = variant.label(&self.localization);
-        choice.icon = variant.icon();
+        choice.icon = variant.icon_in(self);
         choice.selected = ToolVariant::active(self) == Some(variant);
         let enabled = tool_state(self, variant.control()).0;
         let shortcut = self
@@ -398,11 +492,19 @@ impl UiState {
         };
         (choice, enabled, tooltip, variant.control())
     }
+    pub(crate) fn resolve_group(&self, control: ToolbarControl, anchor: DrawerAnchor) -> Option<(ToolChoice, bool, String, ToolbarControl)> {
+        let ToolControlGroup::Slot(slot) = control.tool_group()? else { return None; };
+        let (mut choice, enabled, tooltip, resolved) = self.resolve_slot(slot, anchor);
+        choice.control = control;
+        Some((choice, enabled, tooltip, resolved))
+    }
 }
 impl<R: CanvasRenderer> UiSession<R> {
     pub(crate) fn variant_action(&self, variant: ToolVariant) -> UiAction {
         match variant {
             ToolVariant::Command { command } => UiAction::Invoke { command },
+            ToolVariant::BrushGroup { group } => UiAction::SelectBrushSet { group },
+            ToolVariant::BrushPreset { id } => UiAction::SelectBrush { id },
             ToolVariant::Figure { shape } => UiAction::Layer {
                 action: LayerAction::Tool {
                     tool: LayerCanvasTool::Figure {
@@ -434,25 +536,25 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     pub(crate) fn tool_variants_menu(&self, anchor: DrawerAnchor) -> Result<ContextMenu, String> {
-        let Some(ToolbarControl::ToolSlot { slot }) =
-            self.state.workspace.layout.anchor_control(anchor)
+        let Some(control) = self.state.workspace.layout.anchor_control(anchor)
         else {
             return Err(self
                 .localization()
                 .text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)
                 .to_string());
         };
-        let remembered = self.state.slot_variant(slot, anchor);
-        let items = slot
+        let Some(group) = control.tool_group() else { return Err(self.localization().text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET).to_string()); };
+        let remembered = self.group_variant(group, anchor);
+        let items = group
             .variants()
-            .iter()
+            .into_iter()
             .filter(|v| v.command().available_on(self.state.platform))
-            .map(|&variant| {
+            .map(|variant| {
                 let mut item = ContextMenuItem::command(
                     variant.label(self.localization()),
                     UiAction::ChooseToolVariant { anchor, variant },
                 );
-                item.icon = Some(variant.icon());
+                item.icon = Some(variant.icon_in(&self.state));
                 item.selected = Some(remembered == variant);
                 item.enabled = self.command(variant.command()).enabled;
                 if let Some(reason) = self.command_disabled_reason(variant.command()) {
@@ -462,15 +564,37 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             .collect();
         Ok(ContextMenu {
-            title: slot.label(self.localization()),
+            title: match group { ToolControlGroup::Slot(slot) => slot.label(self.localization()), _ => tool_choice_localized(control, self.localization()).label },
             sections: vec![items],
         })
     }
+    fn group_variant(&self, group: ToolControlGroup, anchor: DrawerAnchor) -> ToolVariant {
+        let id = match group {
+            ToolControlGroup::Slot(slot) => return self.state.slot_variant(slot, anchor),
+            ToolControlGroup::Selection => return command(self.selection_tools.options.tool.command()),
+            ToolControlGroup::Brush(tool) => self.tools.command_preset_in(tool.command(), &self.state.brush, self.layer_interaction.tool).unwrap(),
+            ToolControlGroup::Drawing => self.tools.command_preset_in(CommandId::DrawingBrush, &self.state.brush, self.layer_interaction.tool).unwrap(),
+            ToolControlGroup::Sculpt => self.tools.command_preset_in(CommandId::Sculpt, &self.state.brush, self.layer_interaction.tool).unwrap(),
+        };
+        let variant = ToolVariant::BrushGroup { group: tools::group(id) };
+        if group.contains(variant) { variant } else { ToolVariant::BrushPreset { id } }
+    }
+    pub(crate) fn selection_slot(&self, tool: SelectionTool) -> Option<ToolSlotId> {
+        let variant = command(tool.command());
+        if let Some(group) = self.state.customization.drawer.as_ref()
+            .and_then(|d| self.state.workspace.layout.anchor_control(d.anchor))
+            .and_then(|c| c.tool_group())
+        {
+            match group {
+                ToolControlGroup::Selection => return None,
+                ToolControlGroup::Slot(slot) if slot.variants().contains(&variant) => return Some(slot),
+                _ => (),
+            }
+        }
+        self.state.workspace.layout.tool_slots().find_map(|(_, slot)| slot.variants().contains(&variant).then_some(slot))
+    }
     pub(crate) fn remember_tool_slots(&mut self) {
-        if self.interaction.applying_hold
-            || self.interaction.hold_base.is_some()
-            || self.interaction.spring.is_some()
-            || self.interaction.restores.iter().any(|restore| matches!(restore, crate::interaction::Restore::Tool(..)))
+        if self.temporary_tool()
             || self.layer_interaction.tool.picks_color()
         {
             return;
@@ -493,7 +617,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .map(|&variant| ToolSetItem {
                 enabled: self.command(variant.command()).enabled,
                 label: variant.label(self.localization()).into(),
-                icon: variant.icon(),
+                icon: variant.icon_in(&self.state),
                 action: UiAction::ChooseToolVariant { anchor, variant },
                 selected: active == Some(variant),
                 preview: None,
@@ -523,13 +647,33 @@ impl<R: CanvasRenderer> UiSession<R> {
         let control = self.state.workspace.layout.anchor_control(anchor);
         let active = ToolVariant::active(&self.state);
         let slot = match control {
-            Some(ToolbarControl::ToolSlot { slot }) => Some((anchor, slot)),
             Some(ToolbarControl::ToolOptions { .. }) => self
                 .state
                 .workspace
                 .layout
                 .tool_slots()
                 .find(|(_, slot)| active.is_some_and(|v| slot.variants().contains(&v))),
+            Some(control) => match control.tool_group() {
+                Some(ToolControlGroup::Slot(slot)) => Some((anchor, slot)),
+                Some(group) => {
+                    if !group.active(&self.state) {
+                        if !self.interaction.applying_hold && self.interaction.hold_base.is_none() {
+                            self.state.customization.drawer = None;
+                            return true;
+                        }
+                        return false;
+                    }
+                    let columns = control.drawer_columns().unwrap();
+                    let drawer = self.state.customization.drawer.as_mut().unwrap();
+                    if drawer.columns != columns || drawer.tool_set.is_some() {
+                        drawer.columns = columns;
+                        drawer.tool_set = None;
+                        return true;
+                    }
+                    return false;
+                },
+                _ => return false,
+            },
             _ => return false,
         };
         let (columns, tool_set) = if let Some((origin, slot)) = slot {
@@ -570,9 +714,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.state.customization.drawer.as_ref().is_some_and(|d| {
             match self.state.workspace.layout.anchor_control(d.anchor) {
                 Some(ToolbarControl::ToolOptions { .. }) => true,
-                Some(ToolbarControl::ToolSlot { slot }) => {
-                    ToolVariant::active(&self.state).is_some_and(|v| slot.variants().contains(&v))
-                }
+                Some(control) => control.tool_group().is_some_and(|g| g.active(&self.state)),
                 _ => false,
             }
         })
@@ -591,6 +733,8 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
     }
     fn show_tool_slot_drawer(&mut self, previous: DrawerAnchor, anchor: DrawerAnchor) {
+        let Some(control) = self.state.workspace.layout.anchor_control(anchor) else { return; };
+        let Some(columns) = control.drawer_columns() else { return; };
         let anchor = if matches!(
             self.state.workspace.layout.anchor_control(previous),
             Some(ToolbarControl::ToolOptions { .. })
@@ -601,12 +745,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.state.customization.drawer = Some(ContentDrawer {
             anchor,
-            columns: vec![vec![Panel::Brushes], vec![Panel::ToolSettings]],
+            columns,
             tool_set: None,
             dismissal: DrawerDismissal::OutsideContact,
             tabs: None,
             compact: false,
         });
+        if self.layer_interaction.tool.selection_tool().is_some() { self.refresh_tools(); }
         self.update_slot_drawer();
     }
     pub(crate) fn finish_tool_slot_request(&mut self, previous: LayerCanvasTool) -> bool {
@@ -614,14 +759,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         if changed {
             self.remember_tool_slots();
             if let Some((old, anchor, variant)) = self.pending_tool_drawer.take()
-                && ToolVariant::active(&self.state) == Some(variant)
+                && variant.is_active(&self.state)
                 && self
                     .state
                     .customization
                     .drawer
                     .as_ref()
                     .is_some_and(|d| d.anchor == old)
-                && matches!(self.state.workspace.layout.anchor_control(anchor),Some(ToolbarControl::ToolSlot {slot}) if slot.variants().contains(&variant))
+                && self.state.workspace.layout.anchor_control(anchor).and_then(|c| c.tool_group()).is_some_and(|g| g.contains(variant))
             {
                 self.show_tool_slot_drawer(old, anchor);
                 return true;
@@ -637,15 +782,14 @@ impl<R: CanvasRenderer> UiSession<R> {
         anchor: DrawerAnchor,
         variant: ToolVariant,
     ) -> Result<UiChange, String> {
-        let Some(ToolbarControl::ToolSlot { slot }) =
-            self.state.workspace.layout.anchor_control(anchor)
+        let Some(group) = self.state.workspace.layout.anchor_control(anchor).and_then(|c| c.tool_group())
         else {
             return Err(self
                 .localization()
                 .text(MessageId::WORKSPACE_REFUSAL_CUSTOMIZATION_THE_TARGET_TOOL_NO_LONGER_EXISTS)
                 .to_string());
         };
-        if !slot.variants().contains(&variant) {
+        if !group.contains(variant) {
             return Err(self
                 .localization()
                 .text(MessageId::COMMANDS_UNAVAILABLE_IN_THE_CURRENT_TOOL_OR_EDIT_TARGET)
@@ -662,7 +806,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             .filter(|d| !matches!(d.anchor, DrawerAnchor::Column { .. }))
             .map(|d| d.anchor);
         let change = self.dispatch(self.variant_action(variant))?;
-        if ToolVariant::active(&self.state) == Some(variant) {
+        if variant.is_active(&self.state) {
             self.remember_tool_slots();
             if let Some(old) = open {
                 self.show_tool_slot_drawer(old, anchor);

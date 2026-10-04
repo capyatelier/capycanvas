@@ -579,12 +579,34 @@ pub struct WorkspaceToolMemory {
     pub overrides: BTreeMap<u32, BTreeMap<String, f32>>,
 }
 impl WorkspaceToolMemory {
-    pub fn remember(&mut self, id: u32) {
+    pub(crate) fn command_preset(&self, command: CommandId) -> Option<u32> {
+        Some(match command {
+            CommandId::DrawingBrush => self.drawing(),
+            CommandId::Sculpt => self.sculpt(),
+            _ => self.tool(command.paint_tool()?),
+        })
+    }
+    pub(crate) fn command_preset_in(&self, command: CommandId, brush: &BrushState, canvas_tool: LayerCanvasTool) -> Option<u32> {
+        let remembered = self.command_preset(command)?;
+        let active = canvas_tool == LayerCanvasTool::Paint && match command {
+            CommandId::DrawingBrush => is_drawing(brush.tool),
+            CommandId::Sculpt => is_sculpt(brush.tool),
+            _ => command.paint_tool() == Some(brush.tool),
+        };
+        Some(if active { brush.preset } else { remembered })
+    }
+    pub(crate) fn tooltip_label(&self, command: CommandId, label: &str, brush: &BrushState, canvas_tool: LayerCanvasTool, localizer: &Localizer) -> String {
+        let Some(preset) = self.command_preset_in(command, brush, canvas_tool) else { return label.to_string(); };
+        let medium = group(preset).localized_label(localizer);
+        if medium.as_ref() == label { label.to_string() } else { format!("{medium} · {label}") }
+    }
+    pub fn remember(&mut self, id: u32) -> bool {
         let group = group(id);
-        self.tools.insert(group.tool(), id);
-        self.groups.insert(group, id);
-        if is_drawing(group.tool()) { self.drawing = Some(id); }
-        if is_sculpt(group.tool()) { self.sculpt = Some(id); }
+        let mut changed = self.tools.insert(group.tool(), id) != Some(id);
+        changed |= self.groups.insert(group, id) != Some(id);
+        if is_drawing(group.tool()) { changed |= self.drawing != Some(id); self.drawing = Some(id); }
+        if is_sculpt(group.tool()) { changed |= self.sculpt != Some(id); self.sculpt = Some(id); }
+        changed
     }
     pub fn set_override(&mut self, id: u32, setting: &str, value: f32, localizer: &Localizer) -> Result<(), String> {
         let defaults = layer_core::default_brush(preset(id)?);

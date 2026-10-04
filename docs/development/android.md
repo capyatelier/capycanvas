@@ -191,6 +191,9 @@ behavior and high-refresh presentation need a real tablet.
   persistence. `#toolVariantCornersAndContextMenusShareRememberedChoices` checks
   toolbar and title-bar variant corners, mouse context menus, touch and pen holds,
   full drawer sibling choices, retained openers and workspace switching in both
+  themes. `#commandGroupsProjectTheirOwnChoicesIconsAndSelectionScope` checks
+  inactive Paint and Sketch group corners, remembered media icons in headers,
+  pinned preset leaves, selection family scope and Sketch drawer columns in both
   themes. Native drag capture respects panel stacking: a drawer blocks covered
   resize handles while its own controls remain interactive.
 - `AndroidRasterTest`: document, file and GPU lifecycle.

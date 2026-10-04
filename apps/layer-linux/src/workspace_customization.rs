@@ -40,6 +40,9 @@ pub(super) fn tool_variations_button(
     button.set_child(gtk::Widget::NONE);
     overlay.set_child(content.as_ref());
     let indicator = crate::icons::image("layer-tool-group-symbolic");
+    if let Some(label) = content.as_ref().and_then(|content| content.downcast_ref::<gtk::Label>()) {
+        label.set_margin_end(indicator.measure(gtk::Orientation::Horizontal, -1).0);
+    }
     indicator.set_halign(gtk::Align::End);
     indicator.set_valign(gtk::Align::End);
     indicator.set_can_target(false);
@@ -1629,6 +1632,13 @@ impl Workspace {
             1,
             1,
         )));
+        let mut ancestor = widget.parent();
+        while let Some(parent) = ancestor {
+            ancestor = parent.parent();
+            if let Some(source) = parent.downcast_ref::<gtk::Popover>() {
+                source.popdown();
+            }
+        }
         popover.popup();
         popover.present();
     }

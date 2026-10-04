@@ -22,13 +22,257 @@ fn component_id(d: &Driver, control: ToolbarControl) -> u32 {
         .id
 }
 
-fn slot_anchor(d: &Driver, slot: ToolSlotId) -> DrawerAnchor {
+fn control_anchor(d: &Driver, control: ToolbarControl) -> DrawerAnchor {
     let layout = state(&d.w).workspace.layout;
     let (panel, tile) = layout.panels.iter().find_map(|panel| {
-        panel.tiles().iter().find(|tile| tile.control == ToolbarControl::ToolSlot { slot })
+        panel.tiles().iter().find(|tile| tile.control == control)
             .map(|tile| (panel.id, tile.id))
     }).unwrap();
     DrawerAnchor::Tile { panel, tile }
+}
+fn slot_anchor(d: &Driver, slot: ToolSlotId) -> DrawerAnchor {
+    control_anchor(d, ToolbarControl::ToolSlot { slot })
+}
+fn anchor_widget(d: &Driver, anchor: DrawerAnchor) -> gtk::Widget {
+    d.named(&match anchor {
+        DrawerAnchor::Tile { tile, .. } => format!("tile-{tile}"),
+        DrawerAnchor::Header { id } => format!("header-item-{id}"),
+        DrawerAnchor::Column { .. } => unreachable!(),
+    })
+}
+fn assert_group_marker(widget: &gtk::Widget, expected: bool) {
+    let marker = find_named(widget, "layer-tool-group-symbolic");
+    assert_eq!(marker.is_some(), expected, "group marker on {}", widget.widget_name());
+    if let Some(marker) = marker {
+        let image = marker.downcast::<gtk::Image>().unwrap();
+        assert!(image.is_mapped() && !image.can_target());
+        assert!(image.paintable().is_some_and(|paintable| paintable.is::<gtk::Svg>()));
+    }
+}
+fn assert_toolbar_markers(d: &Driver) {
+    for panel in state(&d.w).workspace.layout.panels {
+        for tile in panel.tiles().iter().filter(|tile| !tile.control.is_component()
+            && tile.control != ToolbarControl::Divider) {
+            assert_group_marker(&d.named(&format!("tile-{}", tile.id)), tile.control.has_variants());
+        }
+    }
+}
+fn choose_group(d: &mut Driver, anchor: DrawerAnchor, group: layer_ui::ToolGroup) {
+    let widget = anchor_widget(d, anchor);
+    let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+    d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+    assert!(variant_context(d).is_visible());
+    assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before,
+        "opening an inactive group's chooser does not activate it");
+    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+    let index = menu.sections.iter().flatten().position(|item|
+        item.icon == Some(group.icon())).unwrap();
+    choose_variant(d, anchor, index);
+    assert_eq!(state(&d.w).brush.tool, group.tool());
+    assert!(state(&d.w).customization.drawer.is_none());
+    assert!(find_named(&widget, &format!("layer-{}-symbolic", group.icon())).is_some());
+}
+fn paint_category_variations(d: &mut Driver, theme: Theme) {
+    restore(d, WorkspacePreset::Illustrator);
+    assert_toolbar_markers(d);
+    for (command, group) in [
+        (CommandId::Pen, layer_ui::ToolGroup::Marker),
+        (CommandId::Pencil, layer_ui::ToolGroup::Pastel),
+        (CommandId::Brush, layer_ui::ToolGroup::Watercolor),
+        (CommandId::Brush, layer_ui::ToolGroup::Oil),
+        (CommandId::Airbrush, layer_ui::ToolGroup::Spray),
+    ] {
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+        pump(150);
+        let anchor = control_anchor(d, ToolbarControl::Command { command });
+        let widget = anchor_widget(d, anchor);
+        let image = descendant::<gtk::Image>(&widget).unwrap();
+        choose_group(d, anchor, group);
+        let preset = state(&d.w).brush.preset;
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+        pump(150);
+        assert_eq!(descendant::<gtk::Image>(&widget).unwrap(), image);
+        assert!(find_named(&widget, &format!("layer-{}-symbolic", group.icon())).is_some(),
+            "an inactive category remembers its medium");
+        d.click(&widget);
+        assert_eq!(state(&d.w).brush.preset, preset);
+        assert!(state(&d.w).customization.drawer.is_none(), "first click restores the medium");
+        d.capture_canvas(&format!("paint-{group:?}-{theme:?}.png"));
+    }
+    for command in [CommandId::Eraser, CommandId::Decoration, CommandId::Liquify] {
+        let anchor = control_anchor(d, ToolbarControl::Command { command });
+        let widget = anchor_widget(d, anchor);
+        assert_group_marker(&widget, true);
+        d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+        assert!(variant_context(d).is_visible());
+        let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+        assert!(!menu.sections[0].is_empty());
+        assert!(menu.sections[0].iter().all(|item| matches!(item.action,
+            Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushPreset { .. }, .. }))));
+        choose_variant(d, anchor, 0);
+        assert!(ui_session(&d.w).command(command).selected);
+    }
+    let DrawerAnchor::Tile { panel, .. } = control_anchor(d,
+        ToolbarControl::Command { command: CommandId::Pen }) else { unreachable!() };
+    let pinned = ToolbarControl::Brush { id: state(&d.w).brush.preset };
+    for action in [CustomizationAction::InsertTools { panel, before: None },
+        CustomizationAction::PickerSelect { control: pinned, selected: true },
+        CustomizationAction::ConfirmTools] {
+        d.w.dispatch(UiAction::Customize { action });
+    }
+    pump(250);
+    let anchor = control_anchor(d, pinned);
+    assert_group_marker(&anchor_widget(d, anchor), false);
+    assert!(ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).is_err());
+}
+fn paint_selection_variations(d: &mut Driver, theme: Theme) {
+    restore(d, WorkspacePreset::Illustrator);
+    for (slot, commands) in [
+        (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
+            CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
+        (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect]),
+    ] {
+        let anchor = slot_anchor(d, slot);
+        let widget = anchor_widget(d, anchor);
+        d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+        choose_variant(d, anchor, 0);
+        let view = state(&d.w).tool_set;
+        let actual = view.subtools.iter().filter_map(|item| match item.action {
+            UiAction::Invoke { command } => Some(command),
+            _ => None,
+        }).collect::<Vec<_>>();
+        assert_eq!(actual.len(), commands.len());
+        assert!(commands.iter().all(|command| actual.contains(command)));
+        let tools = d.w.panel_widget(Panel::Brushes);
+        for tool in SelectionTool::ALL {
+            let name = format!("tool-choice-{:?}", tool.command());
+            assert_eq!(find_named(&tools, &name).is_some(), commands.contains(&tool.command()),
+                "native Tool Set membership for {slot:?}: {tool:?}");
+        }
+        let last = commands.last().unwrap();
+        d.click(&find_named(&tools, &format!("tool-choice-{last:?}")).unwrap());
+        assert!(ui_session(&d.w).command(*last).selected);
+        d.capture_canvas(&format!("paint-selection-{slot:?}-{theme:?}.png"));
+    }
+}
+fn sketch_group_variations(d: &mut Driver, theme: Theme) {
+    restore(d, WorkspacePreset::Painter);
+    for (command, group) in [
+        (CommandId::DrawingBrush, layer_ui::ToolGroup::Pastel),
+        (CommandId::Sculpt, layer_ui::ToolGroup::Liquify),
+    ] {
+        d.w.dispatch(UiAction::Invoke { command: CommandId::Lasso });
+        pump(150);
+        let id = state(&d.w).workspace.layout.header.entries().find(|entry|
+            entry.item == HeaderItem::Tool { control: ToolbarControl::Command { command } }).unwrap().id;
+        let anchor = DrawerAnchor::Header { id };
+        let widget = anchor_widget(d, anchor);
+        assert_group_marker(&widget, true);
+        choose_group(d, anchor, group);
+        d.click(&widget);
+        let drawer = state(&d.w).customization.drawer.unwrap();
+        let sets_panel = if command == CommandId::DrawingBrush { Panel::BrushSets } else { Panel::SculptSets };
+        assert_eq!(drawer.columns, [vec![sets_panel], vec![Panel::Tools], vec![Panel::ToolSettings]]);
+        let sets = d.named(&format!("drawer-panel-{sets_panel:?}"));
+        let tools = d.named("drawer-panel-Tools");
+        let settings = d.named("drawer-panel-ToolSettings");
+        assert!(sets.is_mapped() && tools.is_mapped() && settings.is_mapped());
+        assert!(sets.width() < tools.width() && tools.width() < settings.width());
+        let preset = state(&d.w).tool_panels.tools.subtools.last().unwrap().preview.unwrap();
+        d.click(&find_named(&tools, &format!("brush-{preset}")).unwrap());
+        assert_eq!(state(&d.w).brush.preset, preset);
+        assert_eq!(state(&d.w).customization.drawer.as_ref().unwrap().anchor, anchor);
+        d.capture_canvas(&format!("sketch-{command:?}-{theme:?}.png"));
+        d.click(&widget);
+        assert!(state(&d.w).customization.drawer.is_none());
+    }
+    d.w.dispatch(UiAction::Invoke { command: CommandId::Brush });
+    pump(150);
+    let control = ToolbarControl::Command { command: CommandId::Select };
+    let id = state(&d.w).workspace.layout.header.entries().find(|entry|
+        entry.item == HeaderItem::Tool { control }).unwrap().id;
+    let anchor = DrawerAnchor::Header { id };
+    let widget = anchor_widget(d, anchor);
+    assert_group_marker(&widget, true);
+    let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+    d.input.click(screen_point(&widget, &d.w.window, [0.9, 0.9]));
+    assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
+    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+    let index = menu.sections[0].iter().position(|item| matches!(item.action,
+        Some(UiAction::ChooseToolVariant { variant: ToolVariant::Command { command: CommandId::RectangleSelect }, .. }))).unwrap();
+    choose_variant(d, anchor, index);
+    d.header_icon(CommandId::Select, "rectangle-select");
+    d.click(&widget);
+    let drawer = state(&d.w).customization.drawer.unwrap();
+    assert_eq!(drawer.columns, [vec![Panel::Tools], vec![Panel::ToolSettings]]);
+    let tools = d.named("drawer-panel-Tools");
+    assert_eq!(state(&d.w).tool_panels.tools.subtools.len(), SelectionTool::ALL.len());
+    for tool in SelectionTool::ALL {
+        assert!(find_named(&tools, &format!("tool-choice-{:?}", tool.command())).is_some());
+    }
+    d.capture_canvas(&format!("sketch-Select-{theme:?}.png"));
+    d.click(&widget);
+    assert!(state(&d.w).customization.drawer.is_none());
+    sketch_overflow_variations(d, theme);
+}
+fn sketch_overflow_variations(d: &mut Driver, theme: Theme) {
+    d.w.dispatch(HeaderAction::SetSize { size: HeaderSize::Large }.action());
+    for _ in 0..20 {
+        d.w.dispatch(HeaderAction::Add {
+            zone: HeaderZone::Left, before: None,
+            item: HeaderItem::Tool { control: ToolbarControl::Command { command: CommandId::DrawingBrush } },
+        }.action());
+    }
+    pump(350);
+    let model = state(&d.w).workspace.layout.header;
+    let hidden = model.entries().find(|entry|
+        matches!(entry.item, HeaderItem::Tool { control } if control.has_variants())
+            && !d.named(&format!("header-item-{}", entry.id)).is_mapped()).unwrap();
+    let zone = model.location(hidden.id).unwrap().0;
+    d.click_name(&format!("header-overflow-{}", zone.index()));
+    let row = d.named(&format!("header-overflow-item-{}", hidden.id));
+    assert_group_marker(&row, true);
+    let overflow = d.named("header-overflow-popup").downcast::<gtk::Popover>().unwrap();
+    capture_popover(&overflow, d.input.dir.join(format!("sketch-overflow-{theme:?}.png")).to_str().unwrap());
+    let top_left = screen_point(overflow.upcast_ref(), &d.w.window, [0., 0.]);
+    let bottom_right = screen_point(overflow.upcast_ref(), &d.w.window, [1., 1.]);
+    assert!(top_left[0] >= 0. && top_left[1] >= 0.
+        && bottom_right[0] <= d.w.window.width() as f32
+        && bottom_right[1] <= d.w.window.height() as f32);
+    let before = (state(&d.w).layer_tools.tool, state(&d.w).brush.preset);
+    let marker = find_named(&row, "layer-tool-group-symbolic").unwrap();
+    let label = descendant::<gtk::Label>(&row).unwrap();
+    let label_bounds = label.compute_bounds(&row).unwrap();
+    assert!(label_bounds.x() + label_bounds.width() <= marker.compute_bounds(&row).unwrap().x());
+    let corner = screen_point(&marker, &d.w.window, [0.75, 0.75]);
+    d.input.click(corner);
+    let context = variant_context(d);
+    assert!(context.is_mapped());
+    assert!(!overflow.is_mapped());
+    assert_eq!((state(&d.w).layer_tools.tool, state(&d.w).brush.preset), before);
+    capture_popover(&context, d.input.dir.join(format!("sketch-overflow-variants-{theme:?}.png")).to_str().unwrap());
+    let anchor = DrawerAnchor::Header { id: hidden.id };
+    let menu = ui_session(&d.w).context_menu(ContextTarget::ToolVariants { anchor }).unwrap();
+    let index = menu.sections[0].iter().position(|item| matches!(item.action,
+        Some(UiAction::ChooseToolVariant { variant: ToolVariant::BrushGroup { group: layer_ui::ToolGroup::Marker }, .. }))).unwrap();
+    choose_variant(d, anchor, index);
+    assert_eq!(state(&d.w).brush.tool, layer_ui::ToolGroup::Marker.tool());
+    assert!(state(&d.w).customization.drawer.is_none());
+    assert_eq!(state(&d.w).workspace.layout.header, model);
+    assert!(find_named(&anchor_widget(d, anchor), "layer-marker-symbolic").is_some());
+    assert!(!context.is_mapped() && !overflow.is_mapped());
+}
+
+#[test]
+#[ignore = "private Mutter: --native-test=native_toolbar_variations_overflow_input"]
+fn native_toolbar_variations_overflow_input() {
+    let mut d = Driver::new("art.capycanvas.ToolVariationsOverflow");
+    for theme in [Theme::Light, Theme::Dark] {
+        d.w.dispatch(UiAction::SetTheme { theme: Some(theme) });
+        restore(&d, WorkspacePreset::Painter);
+        sketch_overflow_variations(&mut d, theme);
+    }
+    d.finish();
 }
 
 fn variant_context(d: &Driver) -> gtk::Popover {
@@ -56,6 +300,7 @@ fn native_toolbar_variations_input() {
             (WorkspacePreset::Illustrator, ToolSlotId::ManualSelection),
         ] {
             restore(&d, preset);
+            assert_toolbar_markers(&d);
             let anchor = slot_anchor(&d, slot);
             let DrawerAnchor::Tile { panel, tile } = anchor else { unreachable!() };
             let name = format!("tile-{tile}");
@@ -176,6 +421,9 @@ fn native_toolbar_variations_input() {
                 }
             }
         }
+        paint_category_variations(&mut d, theme);
+        paint_selection_variations(&mut d, theme);
+        sketch_group_variations(&mut d, theme);
     }
     d.finish();
 }

@@ -21,7 +21,28 @@ export async function checkToolVariations({call,evaluate,settle}) {
     await evaluate(`(()=>{document.querySelector('[data-variation-choice]')?.removeAttribute('data-variation-choice');const b=[...document.querySelectorAll('.panel-context-menu button')].find(b=>b.querySelector('.menu-label')?.textContent===${JSON.stringify(label)});if(!b)throw Error(${JSON.stringify(label)});b.dataset.variationChoice='true';})()`);
     await click('[data-variation-choice]');
   };
+  const groupView=anchor=>anchor.kind==='header'?`layerApp.app.header_view().items.find(i=>i.id===${anchor.id})`:`layerApp.app.panel_view('${anchor.panel}').tiles.find(t=>t.id===${anchor.tile})`;
+  const groupBody=(anchor,selector)=>anchor.kind==='header'?`${selector} .header-tool`:`${selector} > button:first-child`;
+  const checkCommandGroup=async(anchor,selector,icons=[])=>{
+    const view=groupView(anchor),body=groupBody(anchor,selector),rows=(await model({kind:'tool_variants',anchor})).sections.flat();
+    assert.ok(rows.length,'existing command group has choices');assert.equal(await evaluate(`${view}.has_variants`),true);
+    assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector+' .tool-variations')}).hidden`),false,'command group exposes its corner menu');
+    await evaluate(`window.retainedCommandGroup=document.querySelector(${JSON.stringify(selector)})`);
+    for(const icon of icons.length?icons:[rows.find(r=>!r.selected)?.icon??rows[0].icon]) {
+      const choice=rows.find(row=>row.icon===icon);assert.ok(choice,`group exposes ${icon}`);
+      await click(`${selector} .tool-variations`);assert.ok(await menuOpen());
+      assert.deepEqual(await evaluate("[...document.querySelectorAll('.panel-context-menu .menu-label')].map(n=>n.textContent)"),rows.map(row=>row.label));
+      await choose(choice.label);await wait(`${view}.selected`);
+      assert.equal(await evaluate(`${view}.icon`),icon);
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(body+' > svg')}).dataset.asset`),icon,'native group icon follows chosen medium');
+      assert.equal(await evaluate(`document.querySelector(${JSON.stringify(selector)})===retainedCommandGroup`),true,'existing group retains its native control');
+    }
+    await send({type:'customize',action:{type:'close_expanded'}});await click(body);
+    assert.deepEqual(await evaluate('layerApp.state().customization.drawer.anchor'),anchor,'active group opens its original drawer');
+    return {rows,body,view};
+  };
   const directory=process.env.LAYER_TEST_ARTIFACTS||'artifacts/ui/tool-variations';await mkdir(directory,{recursive:true});
+  const shot=async name=>{const capture=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${name}.png`,Buffer.from(capture.data,'base64'));};
   const original=await evaluate('JSON.parse(layerApp.app.workspace_view()).id');
   await call('Emulation.setDeviceMetricsOverride',{width:1400,height:1000,deviceScaleFactor:1,mobile:false});await settle();
   try {
@@ -80,8 +101,56 @@ export async function checkToolVariations({call,evaluate,settle}) {
       device='mouse';const p=await rect(`${selector} > button:first-child`);
       for(const type of ['mousePressed','mouseReleased'])await call('Input.dispatchMouseEvent',{type,...p,button:'right',buttons:type==='mousePressed'?2:0,clickCount:1});await settle();
       assert.ok(await menuOpen());assert.ok(await evaluate("document.querySelectorAll('.panel-context-menu .menu-label').length")>rows.length);await closeMenu();
-      const capture=await call('Page.captureScreenshot',{format:'png'});await writeFile(`${directory}/${workspace}-${theme}.png`,Buffer.from(capture.data,'base64'));
+      await shot(`${workspace}-${theme}`);
       await send({type:'restore_workspace',workspace:fixture});
+    }
+    for(const theme of ['light','dark']) {
+      device='mouse';await click('.workspace-switcher button[data-workspace-id="builtin:workspace:illustrator"]');
+      await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy');await send({type:'set_theme',theme});
+      const paint=await evaluate('layerApp.state().workspace'),tiles=paint.layout.panels.find(p=>p.id==='toolbar').content.tiles;
+      for(const [index,[command,icons]] of [['pen',['marker']],['pencil',['pastel']],['brush',['watercolor','oil-paint']],['airbrush',['spray']],['eraser',[]],['decoration',[]],['liquify',[]]].entries()) {
+        device=['mouse','touch','pen'][index%3];
+        const tile=tiles.find(t=>t.control.command===command);assert.ok(tile,`Paint has existing ${command} group`);console.log(`Paint group: ${command}/${theme}/${device}`);
+        const anchor={kind:'tile',panel:'toolbar',tile:tile.id},selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`;
+        await checkCommandGroup(anchor,selector,icons);
+        assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.panels.find(p=>p.id==='toolbar').content.tiles.find(t=>t.id===${tile.id}).control`),tile.control,'medium choices preserve existing command configuration');
+        await send({type:'customize',action:{type:'close_expanded'}});
+      }
+      await shot(`paint-media-${theme}`);
+      const selection={};
+      for(const slot of ['manual_selection','automatic_selection']) {
+        device=slot==='manual_selection'?'touch':'pen';
+        const tile=tiles.find(t=>t.control.slot===slot);assert.ok(tile);
+        const anchor={kind:'tile',panel:'toolbar',tile:tile.id},selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,view=groupView(anchor);
+        const rows=(await model({kind:'tool_variants',anchor})).sections.flat();
+        assert.ok(rows.some(row=>row.icon===(slot==='manual_selection'?'lasso':'auto-select')));
+        await click(`${selector} .tool-variations`);await choose(rows[0].label);await wait(`${view}.selected`);
+        const dock='.dock-group .brushes-control .tool-subtools';
+        const dockLabels=await evaluate(`[...document.querySelectorAll('${dock} .tool-choice-name')].map(n=>n.textContent)`);
+        assert.deepEqual([...dockLabels].sort(),rows.map(row=>row.label).sort(),'docked Tool Set uses the same scoped choices as the menu');
+        const alternate=rows.find(row=>row.label!==rows[0].label)||rows[0];
+        await click(`${dock} [data-tool-choice="${alternate.label}"]`);assert.equal(await evaluate(`${view}.icon`),alternate.icon,'docked selection choice updates its group icon');
+        await send({type:'customize',action:{type:'close_expanded'}});await click(groupBody(anchor,selector));await settleDrawer();
+        const drawerLabels=await evaluate("[...document.querySelectorAll('.content-drawer .brushes-control .tool-groups .tool-choice-name')].map(n=>n.textContent)");
+        assert.deepEqual(drawerLabels,rows.map(row=>row.label),'full selection drawer keeps the scoped choices');
+        selection[slot]={menu:rows.map(row=>row.label),dock:dockLabels,drawer:drawerLabels};
+        await shot(`${slot}-${theme}`);await send({type:'customize',action:{type:'close_expanded'}});
+      }
+      for(const surface of ['menu','dock','drawer'])assert.deepEqual(selection.manual_selection[surface].filter(label=>selection.automatic_selection[surface].includes(label)),[],`${surface}: manual and automatic selection groups do not overlap`);
+      await send({type:'restore_workspace',workspace:paint});
+      device='mouse';await click('.workspace-switcher button[data-workspace-id="builtin:workspace:painter"]');await wait('JSON.parse(layerApp.app.workspace_view()).ready&&!JSON.parse(layerApp.app.workspace_view()).busy');await send({type:'set_theme',theme});
+      const sketch=await evaluate('layerApp.state().workspace');
+      for(const [index,[command,icons,columns]] of [['drawing_brush',['marker','pastel','watercolor','oil-paint','spray'],3],['sculpt',['liquify'],3],['select',['polygon-select'],2]].entries()) {
+        device=['mouse','pen','touch'][index];
+        const entry=sketch.layout.header.zones.flat().find(item=>item.item.control?.command===command);assert.ok(entry);
+        const anchor={kind:'header',id:entry.id},selector=`[data-header-item="${entry.id}"]`;
+        const group=await checkCommandGroup(anchor,selector,icons);
+        if(command==='select')assert.equal(group.rows.length,8,'Sketch keeps its single broad selection group');
+        assert.equal(await evaluate('layerApp.state().customization.drawer.columns.length'),columns,'Sketch retains its full class drawer');
+        assert.deepEqual(await evaluate(`layerApp.state().workspace.layout.header.zones.flat().find(e=>e.id===${entry.id}).item.control`),entry.item.control);
+        await settleDrawer();await shot(`sketch-${command}-${theme}`);await send({type:'customize',action:{type:'close_expanded'}});
+      }
+      await send({type:'restore_workspace',workspace:sketch});
     }
     device='mouse';await click('.workspace-switcher button[data-workspace-id="builtin:workspace:painter"]');await wait('!JSON.parse(layerApp.app.workspace_view()).busy');
     const saved=await evaluate('layerApp.state().workspace'),fixture=structuredClone(saved);
@@ -96,6 +165,6 @@ export async function checkToolVariations({call,evaluate,settle}) {
       assert.equal(await evaluate(`document.querySelector('[data-header-item="${entry.id}"] .header-tool').getAttribute('aria-label')`),view.label);
     }
     await send({type:'restore_workspace',workspace:saved});
-    console.log('PASS: Photo 15/Paint 17 tools, corner/secondary menus, retained icons and sibling drawers, mouse/touch/pen hold/reorder and header variants in both themes');
+    console.log('PASS: Photo 15/Paint 17 tools, existing Paint/Sketch command groups, medium icons, disjoint selection menus/Tool Set/drawers, mouse/touch/pen hold/reorder and header variants in both themes');
   } finally {device='mouse';await closeMenu();await click(`.workspace-switcher button[data-workspace-id="${original}"]`);}
 }

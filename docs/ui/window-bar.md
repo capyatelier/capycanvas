@@ -95,7 +95,9 @@ Native window-control targets grow equally in both axes, with 6px outer clearanc
 Menu Labels compacts to an icon-sized menu inside its own item when space is
 short. At narrow widths, each region overflows whole items into a More menu. Tools
 still open their normal drawers, anchored to the visible overflow control;
-resizing does not change the stored arrangement. Workspace choices compact to
+grouped tools also keep their corner menus. GTK reserves scrollbar width in
+scrolling overflow lists and dismisses the overflow popup before opening a tool
+menu. Resizing does not change the stored arrangement. Workspace choices compact to
 a menu when needed. Clock and battery items occupy space only in fullscreen,
 even when included in the saved bar. Both have editable placeholders in the
 builder while windowed; battery also has a placeholder on devices without one.

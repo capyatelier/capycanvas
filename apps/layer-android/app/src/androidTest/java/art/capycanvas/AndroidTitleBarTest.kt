@@ -155,6 +155,19 @@ class AndroidTitleBarTest {
         pressed = menuRoot
         event(MotionEvent.ACTION_DOWN, target!!.boundsInRoot.center); event(MotionEvent.ACTION_UP)
     }
+    private fun variantMenu(anchor: JSONObject): JSONObject {
+        val done = java.util.concurrent.CountDownLatch(1)
+        var result: JSONObject? = null
+        instrumentation.runOnMainSync {
+            host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) {
+                result = it as? JSONObject; done.countDown()
+            }
+        }
+        assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
+        return checkNotNull(result)
+    }
+    private fun variantRows(anchor: JSONObject) = variantMenu(anchor).array("sections").values().flatMap { (it as JSONArray).objects() }
+
     private fun startEditor() {
         action(obj("type" to "invoke", "command" to "customize_workspace_ui"))
         waitFor("inline editor") { editing() && node("header-editor") != null }
@@ -746,7 +759,165 @@ class AndroidTitleBarTest {
         assertTrue(command("color_select").getBoolean("selected"))
     }
 
+    @Test fun commandGroupsProjectTheirOwnChoicesIconsAndSelectionScope() {
+        device.landscape(scenario); idle()
+        fun resetPreset(id: String) {
+            send(obj("type" to "switch", "id" to id))
+            instrumentation.runOnMainSync { host.workspaceInput(obj("type" to "form", "action" to obj("type" to "reset", "value" to id))) }
+            host.drain()
+            waitFor("starting group layout confirmation") { node("workspace-submit") != null }
+            tap("workspace-submit")
+            waitFor("starting group layout confirmation closes") { node("workspace-submit") == null }
+            idle()
+        }
+        fun tiles() = snapshot().array("panels").objects().first { it.getString("id") == "toolbar" }.array("tiles").objects()
+        fun command(id: String) = state().array("commands").objects().first { it.getString("id") == id }
+        fun header(id: Int) = snapshot().getJSONObject("header").array("items").objects().first { it.getInt("id") == id }
+        fun drawer() = state().getJSONObject("customization").objectOrNull("drawer")
+        fun rowCommand(row: JSONObject) = row.getJSONObject("action").let {
+            if (it.optString("type") == "choose_tool_variant") it.getJSONObject("variant").optString("command") else it.optString("command")
+        }
+        fun choose(anchor: JSONObject, tag: String, row: JSONObject, capture: String? = null) {
+            assertTrue(row.optBoolean("enabled", true))
+            tap(tag)
+            waitFor("group menu opens") { node("workspace-menu") != null }
+            capture?.let { idle(); shot(it) }
+            tapMenuRow(row.getString("label"))
+            waitFor("group menu closes") { node("workspace-menu") == null }
+            idle()
+            assertEquals(row.getString("label"), variantRows(anchor).single { it.optBoolean("selected") }.getString("label"))
+        }
+        fun brushGroup(row: JSONObject) = row.getJSONObject("action").getJSONObject("variant").optString("group")
+        val mediaIcons = mapOf("marker" to "marker", "pastel" to "pastel", "watercolor" to "watercolor", "oil" to "oil-paint", "spray" to "spray")
+        val media = mapOf("pen" to listOf("marker"), "pencil" to listOf("pastel"),
+            "brush" to listOf("watercolor", "oil"), "airbrush" to listOf("spray"))
+        val mediaGroups = mapOf("pen" to setOf("pen", "marker"), "pencil" to setOf("pencil", "pastel"),
+            "brush" to setOf("paint", "watercolor", "oil"), "airbrush" to setOf("airbrush", "spray"))
+        resetPreset("builtin:workspace:illustrator")
+        waitFor("Paint command groups") { snapshot().array("panels").objects().firstOrNull { it.getString("id") == "toolbar" }
+            ?.array("tiles")?.objects()?.any { it.getJSONObject("control").optString("command") == "pen" } == true }
+        val paintCommands = tiles().map { it.getJSONObject("control").optString("command") }
+            .filter { it in listOf("pen", "pencil", "brush", "airbrush", "decoration", "eraser", "blend", "liquify", "clone", "heal", "spot_heal") }
+        assertTrue(paintCommands.containsAll(listOf("pen", "pencil", "brush", "airbrush", "eraser")))
+        edit(obj("type" to "edit", "editing" to true))
+        for (entry in entries().filter { it.getJSONObject("item").getString("kind") !in listOf("capy", "settings") })
+            edit(obj("type" to "remove", "id" to entry.getInt("id")))
+        val headers = paintCommands.associateWith { id ->
+            val headerId = model().getInt("next_id")
+            edit(obj("type" to "add", "zone" to "left", "before" to null,
+                "item" to obj("kind" to "tool", "control" to obj("kind" to "command", "command" to id))))
+            headerId
+        }
+        val leafId = model().getInt("next_id")
+        edit(obj("type" to "add", "zone" to "left", "before" to null,
+            "item" to obj("kind" to "tool", "control" to obj("kind" to "brush", "id" to state().getJSONObject("brush").getInt("preset")))))
+        edit(obj("type" to "set_size", "size" to "medium")); edit(obj("type" to "edit", "editing" to false)); idle()
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            assertFalse(header(leafId).getBoolean("has_variants"))
+            assertNull(node("header-variants-$leafId"))
+            for ((index, id) in paintCommands.withIndex()) {
+                tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index % 3]
+                val tileId = tiles().first { it.getJSONObject("control").optString("command") == id }.getInt("id")
+                fun tile() = tiles().first { it.getInt("id") == tileId }
+                val anchor = obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId)
+                val headerAnchor = obj("kind" to "header", "id" to headers.getValue(id))
+                action(obj("type" to "invoke", "command" to "hand"))
+                assertFalse(tile().getBoolean("selected"))
+                assertTrue(tile().getBoolean("has_variants")); assertTrue(header(headers.getValue(id)).getBoolean("has_variants"))
+                assertTrue(bounds("tile-variants-toolbar-$tileId").width >= 14 * density)
+                val rows = variantRows(anchor)
+                assertTrue(rows.isNotEmpty())
+                mediaGroups[id]?.let { assertEquals(it, rows.map(::brushGroup).toSet()) }
+                    ?: assertTrue(rows.all { it.getJSONObject("action").getJSONObject("variant").getString("type") == "brush_preset" })
+                assertEquals(rows.map { it.getString("label") }, variantRows(headerAnchor).map { it.getString("label") })
+                val choices = media[id]?.map { group -> rows.firstOrNull { brushGroup(it) == group } ?: error("$id lacks $group: $rows") }
+                    ?: listOf(rows.first { it.optBoolean("enabled", true) })
+                for (choice in choices) {
+                    mediaIcons[brushGroup(choice)]?.let { assertEquals(it, choice.getString("icon")) }
+                    choose(anchor, "tile-variants-toolbar-$tileId", choice, "paint-menu-$id-${choice.getString("icon")}-$theme")
+                    waitFor("$id chosen medium published") { command(id).getBoolean("selected") && tile().getString("icon") == choice.getString("icon") &&
+                        header(headers.getValue(id)).getString("icon") == choice.getString("icon") }
+                    assertEquals(choice.getString("icon"), tile().getString("icon"))
+                    assertEquals(tile().getString("icon"), header(headers.getValue(id)).getString("icon"))
+                    assertEquals(tile().getString("tooltip"), header(headers.getValue(id)).getString("label"))
+                    val preset = state().getJSONObject("brush").getInt("preset")
+                    action(obj("type" to "invoke", "command" to "hand"))
+                    assertEquals(choice.getString("icon"), tile().getString("icon"))
+                    assertEquals(choice.getString("icon"), header(headers.getValue(id)).getString("icon"))
+                    choose(headerAnchor, "header-variants-${headers.getValue(id)}", choice)
+                    assertEquals(preset, state().getJSONObject("brush").getInt("preset"))
+                    action(obj("type" to "invoke", "command" to "hand")); tap("tile-toolbar-$tileId")
+                    waitFor("$id body activates remembered medium") { command(id).getBoolean("selected") && tile().getBoolean("selected") && header(headers.getValue(id)).getBoolean("selected") }
+                    assertEquals(preset, state().getJSONObject("brush").getInt("preset"))
+                    assertEquals(choice.getString("icon"), tile().getString("icon"))
+                    shot("paint-$id-${choice.getString("icon")}-$theme")
+                }
+            }
+            for ((slot, expected) in listOf("manual_selection" to setOf("lasso", "rectangle_select", "ellipse_select", "polygon_select", "selection_brush"),
+                "automatic_selection" to setOf("auto_select", "color_select"))) {
+                val tileId = tiles().first { it.getJSONObject("control").optString("slot") == slot }.getInt("id")
+                val anchor = obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId)
+                action(obj("type" to "invoke", "command" to "hand"))
+                val rows = variantRows(anchor)
+                assertEquals(expected, rows.map(::rowCommand).toSet())
+                choose(anchor, "tile-variants-toolbar-$tileId", rows.first(), "paint-menu-$slot-$theme")
+                waitFor("$slot choice published") { command(rowCommand(rows.first())).getBoolean("selected") &&
+                    state().getJSONObject("tool_set").array("subtools").objects().map(::rowCommand).toSet() == expected }
+                assertEquals(expected, state().getJSONObject("tool_set").array("subtools").objects().map(::rowCommand).toSet())
+                tap("tile-toolbar-$tileId")
+                waitFor("$slot drawer") { drawer()?.objectOrNull("tool_set") != null && node("tool-drawer") != null }
+                assertEquals(anchor.toString(), drawer()!!.getJSONObject("anchor").toString())
+                assertEquals(expected, drawer()!!.getJSONObject("tool_set").array("groups").objects().map(::rowCommand).toSet())
+                val sibling = drawer()!!.getJSONObject("tool_set").array("groups").objects().first { !it.optBoolean("selected") }
+                waitFor("selection sibling laid out") { (node("tool-drawer")?.second?.find(hasTag("tool-group-${sibling.getString("label")}"))?.boundsInRoot?.height ?: 0f) >= 42 * density }
+                instrumentation.runOnMainSync {
+                    val surface = node("tool-drawer")!!
+                    val row = surface.second.find(hasTag("tool-group-${sibling.getString("label")}"))!!.find { it.config.getOrNull(SemanticsActions.OnClick) != null }!!
+                    pressed = surface.first; point = row.boundsInRoot.center
+                }
+                event(MotionEvent.ACTION_DOWN); event(MotionEvent.ACTION_UP); idle()
+                waitFor("$slot sibling published") { command(rowCommand(sibling)).getBoolean("selected") && drawer()?.getJSONObject("anchor")?.toString() == anchor.toString() }
+                assertEquals(anchor.toString(), drawer()!!.getJSONObject("anchor").toString())
+                shot("paint-$slot-$theme"); tap("tile-toolbar-$tileId")
+                waitFor("selection drawer closes") { drawer() == null }
+            }
+        }
+        resetPreset("builtin:workspace:painter")
+        waitFor("Sketch groups") { entries().firstOrNull { it.getJSONObject("item").objectOrNull("control")?.optString("command") == "drawing_brush" }
+            ?.let { node("header-variants-${it.getInt("id")}") != null } == true }
+        for (theme in listOf("light", "dark")) {
+            action(obj("type" to "set_theme", "theme" to theme))
+            for ((index, id) in listOf("drawing_brush", "sculpt", "select").withIndex()) {
+                tool = listOf(MotionEvent.TOOL_TYPE_MOUSE, MotionEvent.TOOL_TYPE_FINGER, MotionEvent.TOOL_TYPE_STYLUS)[index]
+                val headerId = entries().first { it.getJSONObject("item").objectOrNull("control")?.optString("command") == id }.getInt("id")
+                val anchor = obj("kind" to "header", "id" to headerId)
+                action(obj("type" to "invoke", "command" to "hand"))
+                assertTrue(header(headerId).getBoolean("has_variants")); assertFalse(header(headerId).getBoolean("selected"))
+                val rows = variantRows(anchor)
+                if (id == "drawing_brush") assertEquals(setOf("pen", "marker", "pencil", "pastel", "paint", "watercolor", "oil", "airbrush", "spray", "decoration"), rows.map(::brushGroup).toSet())
+                if (id == "sculpt") assertEquals(setOf("blend", "liquify", "clone", "heal", "spot_heal"), rows.map(::brushGroup).toSet())
+                val choices = if (id == "drawing_brush") mediaIcons.keys.map { group -> rows.firstOrNull { brushGroup(it) == group } ?: error("Sketch lacks $group: $rows") }
+                    else listOf(rows.first { it.optBoolean("enabled", true) })
+                if (id == "select") assertEquals(setOf("rectangle_select", "ellipse_select", "lasso", "polygon_select", "auto_select", "color_select", "selection_brush", "tonal_select"), rows.map(::rowCommand).toSet())
+                for (choice in choices) {
+                    mediaIcons[brushGroup(choice)]?.let { assertEquals(it, choice.getString("icon")) }
+                    choose(anchor, "header-variants-$headerId", choice, "sketch-menu-$id-${choice.getString("icon")}-$theme")
+                    waitFor("Sketch $id chosen group published") { command(id).getBoolean("selected") && header(headerId).getString("icon") == choice.getString("icon") }
+                    assertEquals(choice.getString("icon"), header(headerId).getString("icon"))
+                    tap("header-control-$headerId")
+                    waitFor("Sketch $id grouped drawer") { drawer() != null && node("tool-drawer") != null }
+                    assertEquals(anchor.toString(), drawer()!!.getJSONObject("anchor").toString())
+                    if (id != "select") assertEquals("[[\"${if (id == "drawing_brush") "brush_sets" else "sculpt_sets"}\"],[\"tools\"],[\"tool_settings\"]]", drawer()!!.getJSONArray("columns").toString())
+                    shot("sketch-$id-${choice.getString("icon")}-$theme")
+                    tap("header-control-$headerId"); waitFor("Sketch group drawer closes") { drawer() == null }
+                }
+            }
+        }
+    }
+
     @Test fun toolVariantCornersAndContextMenusShareRememberedChoices() {
+        device.landscape(scenario); idle()
         send(obj("type" to "switch", "id" to "builtin:workspace:photographer"))
         waitFor("Photo grouped tools published") {
             view().optString("id") == "builtin:workspace:photographer" && snapshot().array("panels").objects()
@@ -770,18 +941,7 @@ class AndroidTitleBarTest {
         val ribbonAnchor = obj("kind" to "tile", "panel" to "toolbar", "tile" to tileId)
         val headerAnchor = obj("kind" to "header", "id" to headerId)
         val stable = tile().getJSONObject("control").toString()
-        fun menu(anchor: JSONObject): JSONObject {
-            val done = java.util.concurrent.CountDownLatch(1)
-            var result: JSONObject? = null
-            instrumentation.runOnMainSync {
-                host.query(obj("type" to "context", "target" to obj("kind" to "tool_variants", "anchor" to anchor))) {
-                    result = it as? JSONObject; done.countDown()
-                }
-            }
-            assertTrue(done.await(10, java.util.concurrent.TimeUnit.SECONDS))
-            return checkNotNull(result)
-        }
-        fun rows(anchor: JSONObject) = menu(anchor).array("sections").values().flatMap { (it as JSONArray).objects() }
+        fun rows(anchor: JSONObject) = variantRows(anchor)
         fun sameChoice() {
             assertEquals(stable, tile().getJSONObject("control").toString())
             assertEquals(tile().getString("tooltip"), header().getString("label"))
@@ -811,7 +971,10 @@ class AndroidTitleBarTest {
                     assertEquals(choice.getString("label"), rows(anchor).first { it.optBoolean("selected") }.getString("label"))
                     action(obj("type" to "invoke", "command" to "eraser"))
                     tap(if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId")
-                    assertTrue(tile().getBoolean("selected")); assertTrue(header().getBoolean("selected"))
+                    host.awaitMain("remembered body choice activates", 15_000, {
+                        shot("failure-remembered-body-choice")
+                        "tile=${tile()}; header=${header()}; brush=${state().getJSONObject("brush")}; layer_tools=${state().objectOrNull("layer_tools")}"
+                    }) { tile().getBoolean("selected") && header().getBoolean("selected") }
                     sameChoice()
                     val body = if (anchor === headerAnchor) "header-control-$headerId" else "tile-toolbar-$tileId"
                     tap(body)

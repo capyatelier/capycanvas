@@ -1560,8 +1560,8 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 }
                 _ => false,
             };
-            let (choice,enabled,tooltip,resolved_control)=if let ToolbarControl::ToolSlot {slot}=tile.control {
-                state.resolve_slot(slot,DrawerAnchor::Tile {panel,tile:tile.id})
+            let (choice,enabled,tooltip,resolved_control)=if let Some(group)=state.resolve_group(tile.control,DrawerAnchor::Tile {panel,tile:tile.id}) {
+                group
             } else {
                 let tooltip=match tile.control {
                     ToolbarControl::Command {command}=>state.commands.iter().find(|c|c.id==command).map_or_else(||tooltip.to_string(),|c|c.tooltip.clone()),
@@ -1570,7 +1570,7 @@ pub(crate) fn panel_view(state: &UiState, panel: Panel, copy: &PanelCopy) -> Res
                 (choice,enabled,tooltip,tile.control)
             };
             Ok(TileView {
-                has_variants: matches!(tile.control,ToolbarControl::ToolSlot {..}),
+                has_variants: tile.control.has_variants(),
                 resolved_control,
                 id: tile.id,
                 component: state.toolbar_component(tile.control),

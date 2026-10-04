@@ -682,7 +682,7 @@ impl Header {
                     b.set_child(Some(&line));
                 }
                 let id = entry.id;
-                if matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::ToolSlot { .. } }) {
+                if matches!(entry.item, HeaderItem::Tool { control } if control.has_variants()) {
                     customization::tool_variations_button(w, &b, layer_ui::DrawerAnchor::Header { id });
                 }
                 let command = match entry.item {
@@ -1195,7 +1195,7 @@ impl Header {
                     selected(&button, active);
                 }
                 let id = *id;
-                if matches!(entry.item, HeaderItem::Tool { control: ToolbarControl::ToolSlot { .. } }) {
+                if matches!(entry.item, HeaderItem::Tool { control } if control.has_variants()) {
                     customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Header { id });
                 }
                 button.connect_clicked(glib::clone!(
@@ -1220,11 +1220,17 @@ impl Header {
         }
         let scroll = crate::input::pen_scroller(gtk::ScrolledWindow::builder()
             .hscrollbar_policy(gtk::PolicyType::Never)
+            .overlay_scrolling(false)
             .max_content_height(400)
             .propagate_natural_height(true)
             .child(&list)
             .build());
         popover.set_child(Some(&scroll));
+        scroll.connect_map(glib::clone!(#[weak] list, move |scroll| {
+            let width = list.measure(gtk::Orientation::Horizontal, -1).0
+                + scroll.vscrollbar().measure(gtk::Orientation::Horizontal, -1).0;
+            scroll.set_size_request(width, -1);
+        }));
         w.watch_popover(&popover);
         popover
     }

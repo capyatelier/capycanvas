@@ -4,16 +4,18 @@
 
 ## Tool variations
 
-Toolbar and title-bar controls can name a predefined `ToolSlotId` alongside
-individual commands and pinned brush presets. Shared definitions refer to the
-existing commands, figure shapes, ruler kinds and gradient variations. Workspaces
-choose which slots to expose; brush media (`ToolGroup`) and shortcut families
+Toolbar and title-bar controls derive their tool groups in shared Rust. A
+predefined `ToolSlotId` chooses workspace-specific siblings; a brush command
+exposes its media or presets, and Sketch's Brush, Sculpt and Select commands
+expose their existing sets. Figure, Ruler, Gradient, Move and Fill commands also
+expose their variations. Existing command controls gain this behavior without
+changing saved layouts. Brush media (`ToolGroup`) and shortcut families
 (`ToolFamily`) keep their own meanings.
 
-Clicking an inactive slot selects its remembered variation immediately. Clicking
-an active slot opens its full drawer, and clicking again closes it; this does
+Clicking an inactive group selects its remembered variation immediately. Clicking
+an active group opens its full drawer, and clicking again closes it; this does
 not wait for a double-click timer. With a tool drawer already open, selecting
-another slot switches the drawer. Eyedropper and Color Picker keep their existing
+another group switches the drawer. Eyedropper and Color Picker keep their existing
 return-to-paint behavior.
 
 Secondary click opens variations above the existing customization actions. The
@@ -23,21 +25,31 @@ closes a held menu and suppresses the following click. Menus show icons, checked
 choices, availability and shortcut hints. An unavailable remembered tool keeps
 its variations reachable.
 
-Tool groups use the same bottom-right triangle in Paint and Photo, in both
-toolbars and the title bar. GTK, Web, Android and Windows render the shared
-`tool-group` icon. The triangle means tool variations are available; individual
-tools and pinned brush presets have no group marker.
+Every tool group uses the same softly rounded bottom-right triangle in Paint,
+Photo and Sketch, in both toolbars and the title bar. GTK, Web, Android and
+Windows render the shared `tool-group` icon. Brush categories remain groups even
+when they contain only one preset; pinned brush presets and individual leaf
+tools have no group marker.
+Title-bar overflow keeps group corners reachable in scrolling lists; see
+[the window bar](window-bar.md).
 
-The tile icon and accessible name follow the current variation. Brush size,
-opacity and individual presets do not change that identity. The full grouped
-drawer presents sibling variations, the active tool's media and presets or
-modes, and its settings. `ContentDrawer.tool_set` reuses `ToolSetView`; docked
-Tool Set panels keep their existing active-tool projection. Choosing a sibling
-updates the retained drawer at the same origin. Tool Options uses this same
-complete projection through More tool options.
+The tile icon follows the remembered variation, including brush media such as
+Marker, Pastel, Watercolor, Oil and Spray. Brush category tooltips also name the
+remembered medium. Brush size and opacity do not change that identity. The full
+grouped drawer presents sibling variations, the active tool's presets or modes,
+and its settings.
+`ContentDrawer.tool_set` reuses `ToolSetView`. Selection menus, drawers and docked
+Tool Set panels use the same membership: Paint's five manual selection tools
+stay separate from its two automatic tools, and Photo's Marquee and Lasso
+pairs stay separate. Sketch's single Select group contains all eight selection
+tools. Choosing a sibling updates the retained drawer at the same origin.
+Sketch's Brush and Sculpt retain their three-column drawers. Tool Options uses
+the same complete projection through More tool options.
 
 `WorkspaceWorkingState.tool_slots` remembers choices by stable tile or header
-identity, outside layout and document history. Moving keeps identity; duplicating
+identity for explicit slots and grouped nonbrush commands, outside layout and
+document history. Brush groups use existing `WorkspaceToolMemory` without a
+second saved choice. Moving keeps identity; duplicating
 copies remembered choices. Permanent selections through shortcuts, drawers and
 panels update matching slots. Temporary held tools do not replace these choices
 or the saved permanent tool. Layout undo restores removed controls; memory is

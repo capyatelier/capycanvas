@@ -634,11 +634,13 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
                     _ => (true, false, ""),
                 };
                 let (label,enabled,selected,icon,resolved_control,has_variants)=match entry.item {
-                    HeaderItem::Tool {control:ToolbarControl::ToolSlot {slot}}=>{
-                        let (choice,enabled,tooltip,control)=state.resolve_slot(slot,DrawerAnchor::Header {id:entry.id});
-                        (tooltip,enabled,choice.selected,choice.icon,Some(control),true)
+                    HeaderItem::Tool {control}=>{
+                        if let Some((choice,enabled,tooltip,resolved))=state.resolve_group(control,DrawerAnchor::Header {id:entry.id}) {
+                            (tooltip,enabled,choice.selected,choice.icon,Some(resolved),control.has_variants())
+                        } else {
+                            (self.header_item_label(entry.item),enabled,selected,icon,Some(control),control.has_variants())
+                        }
                     },
-                    HeaderItem::Tool {control}=>(self.header_item_label(entry.item),enabled,selected,icon,Some(control),false),
                     _=>(self.header_item_label(entry.item),enabled,selected,icon,None,false),
                 };
                 HeaderItemView {
@@ -962,7 +964,7 @@ impl<R: layer_render::CanvasRenderer> UiSession<R> {
         control: ToolbarControl,
         anchor: DrawerAnchor,
     ) -> Result<UiChange, String> {
-        if let ToolbarControl::ToolSlot {slot}=control {return self.activate_tool_slot(slot,anchor);}
+        if let Some(slot)=control.slot_group() {return self.activate_tool_slot(slot,anchor);}
         if control == ToolbarControl::Divider {
             return Ok(UiChange::default());
         }

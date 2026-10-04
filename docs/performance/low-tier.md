@@ -64,7 +64,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Panel or column resize | 60 | Current lifecycle binary unmeasured. Earlier Web checkpoint: width changes 11.93–13.49 Hz; nine retained-resource/geometry checks pass | Web workspace diagnostic below; no tier qualification |
 | Drawer open and close | 60 | | |
 | Grouped tool menus, drawer switching and tile drag | 60 | Not measured on reference hardware | [Tool variations](../ui/panel-customization.md#tool-variations); functional checks do not qualify this tier |
-| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 59.02–59.52 Hz, maximum p99 33.31 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
+| Grouped Drawing drawer scrolling | 60 | **Met**, UI FrameMetrics 58.68–59.52 Hz, maximum p99 33.32 ms | [Grouped tool drawer scrolling](#grouped-tool-drawer-scrolling) below |
 | Colour wheel or picker drag | 60 | **Unqualified.** Committed-wheel diagnostic: mouse 48.24–51.16 UI Hz, touch 52.80–54.39; maximum p99 49.98 ms (2048 × 1536) | [Live paint icon diagnostic](#live-paint-icon-diagnostic) below |
 | Slider scrub: size, opacity, flow | 60 | | |
 | Canvas action bar show, hide and move | 60 | **Not met.** UI frame p50/p95: 32.9/41.7 ms moving the bar, 11.6/21.0 ms show and hide (2048 × 1536) | Canvas-bar `ui-bar-move` and `ui-bar-show-hide`, 2026-09-27 |
@@ -81,13 +81,13 @@ Measured on the TCL reference tablet on 2026-10-03, thermal status 0 before and
 after, 60 Hz default display settings. The 4248 × 2832 Sony photo has one empty
 paint layer at Fit (25.5508%), default Photo panels and glass. The grouped Drawing
 drawer receives one priming gesture and three six-second native finger gestures.
-Actual moving windows span 5.964–5.981 seconds.
+Actual moving windows span 5.948–5.981 seconds.
 
 | Run | Moving UI FrameMetrics, Hz | Interval p99, ms | Moving draws / matched distinct vsyncs | Maximum draw-to-vsync lag, ms |
 | --- | ---: | ---: | ---: | ---: |
-| 1 | 59.02 | 33.31 | 353 / 353 | 12.08 |
-| 2 | 59.52 | 16.76 | 357 / 357 | 12.12 |
-| 3 | 59.52 | 16.74 | 356 / 356 | 12.41 |
+| 1 | 58.68 | 33.30 | 350 / 350 | 15.35 |
+| 2 | 59.52 | 16.77 | 357 / 357 | 6.31 |
+| 3 | 59.02 | 33.32 | 354 / 354 | 13.13 |
 
 Only draws with changed scroll offsets count. Their monotonic timestamps match
 the nearest preceding `FrameMetrics` vsync; duplicate callbacks count once.
@@ -97,11 +97,14 @@ These UI FrameMetrics meet the 57 Hz floor and 33.333 ms p99 limit. No
 SurfaceFlinger trace was collected; drawer opening, sibling switching, menus,
 tile dragging and other tiers remain unqualified.
 
-The unminified benchmark variant uses release Rust from `65e514761`.
+The unminified benchmark variant uses release Rust from `613ff17a8` plus the
+all-tool-groups working tree, identified by exact source hashes in the evidence.
 App APK SHA-256:
-`8a695ee0e8ad77209f06ad685e88aa012d647e003ca482f75d6577d8fbde70f2`.
+`81f2ee806046a4f8d70e55ef2b429d877b0e7306173188d781236d51075bdff7`.
 Raw gestures, thermal records, fixture, exact hashes and the reproducible report
-are retained in `artifacts/tool-variations-evidence/android-grouped-drawer-low-tier/`.
+are retained in `artifacts/all-tool-groups/android/benchmark/`.
+The Sony downscale JPEG hash differs from the earlier tool-variations fixture;
+this run establishes current scrolling performance, not a matched comparison.
 
 ## Live paint icon diagnostic
 

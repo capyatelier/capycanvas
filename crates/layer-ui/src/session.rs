@@ -765,6 +765,10 @@ impl<R: CanvasRenderer> UiSession<R> {
     }
     pub(crate) fn header_tool_label(&self, control: ToolbarControl) -> String {
         if let ToolbarControl::Command { command } = control {
+            if self.tools.command_preset(command).is_some()
+                && let Some(view) = self.state.commands.iter().find(|c| c.id == command) {
+                return view.tooltip.clone();
+            }
             return self.command_label(command).to_string();
         }
         let mut copy = self.customization_copy.borrow_mut();
@@ -2190,14 +2194,15 @@ impl<R: CanvasRenderer> UiSession<R> {
     pub fn command(&self, id: CommandId) -> CommandState {
         let (enabled, selected) = self.command_flags(id);
         let label = self.command_label(id);
+        let icon = self.command_icon(id);
         let retained = self.state.commands.iter().find(|command| command.id == id);
-        let tooltip = retained.filter(|command| command.label == label).map_or_else(
-            || self.state.settings.action_tooltip_localized(&label, &UiAction::Invoke { command: id }, self.state.platform, &self.state.localization),
+        let tooltip = retained.filter(|command| command.label == label && command.icon == icon).map_or_else(
+            || self.command_tooltip(id, &label),
             |command| command.tooltip.clone(),
         );
         CommandState {
             checkable: id.is_toggle(),
-            icon: self.command_icon(id),
+            icon,
             id,
             label,
             tooltip,
@@ -2207,6 +2212,10 @@ impl<R: CanvasRenderer> UiSession<R> {
             bindings: retained.map_or_else(|| self.state.settings.command_keys(id), |command| command.bindings.clone()),
             shortcut: retained.map_or_else(|| self.state.settings.action_shortcut_localized(&UiAction::Invoke { command: id }, self.state.platform, &self.state.localization), |command| command.shortcut.clone()),
         }
+    }
+    fn command_tooltip(&self, id: CommandId, label: &str) -> String {
+        let label = self.tools.tooltip_label(id, label, &self.state.brush, self.layer_interaction.tool, &self.state.localization);
+        self.state.settings.action_tooltip_localized(&label, &UiAction::Invoke { command: id }, self.state.platform, &self.state.localization)
     }
     fn command_label(&self, id: CommandId) -> std::sync::Arc<str> {
         if id == CommandId::ResetLayout && self.managed_workspace.is_some() {
@@ -2228,11 +2237,9 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn command_icon(&self, id: CommandId) -> Option<&'static str> {
         match id {
             CommandId::Select => self.selection_tools.options.tool.command().icon(),
-            CommandId::DrawingBrush => Some(tools::group(self.tools.drawing()).icon()),
-            CommandId::Sculpt => Some(tools::group(self.tools.sculpt()).icon()),
             CommandId::ZenMode => Some(self.state.settings.zen_icon.icon()),
             CommandId::Fullscreen if self.state.fullscreen => Some("fullscreen-exit"),
-            _ => id.icon(),
+            _ => self.tools.command_preset_in(id, &self.state.brush, self.layer_interaction.tool).map(|preset| tools::group(preset).icon()).or_else(||id.icon()),
         }
     }
     /// Escape leaves layer-mask editing only when it has nothing else to close
@@ -3841,6 +3848,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             changed |= DOCUMENT;
         }
         if choosing_tool { self.remember_tool_slots(); }
+        if changing_slot_layout && changed & (LAYOUT | CUSTOMIZATION) != 0
+            && self.layer_interaction.tool.selection_tool().is_some() {
+            self.refresh_tools();
+            changed |= BRUSH;
+        }
         if (choosing_tool || tool_before != (self.state.brush.tool,self.layer_interaction.tool)
             || changed & LAYOUT != 0 && changing_slot_layout)
             && self.update_slot_drawer() { changed |= CUSTOMIZATION; }
@@ -5184,7 +5196,6 @@ impl<R: CanvasRenderer> UiSession<R> {
     fn select_brush(&mut self, id: u32) -> Result<(), String> {
         let preset = preset(id)?;
         self.cancel_layer_gesture()?;
-        self.tools.remember(self.state.brush.preset);
         let brush = self.tools.brush_in(preset, self.engine.document().color.space);
         self.engine.set_brush(brush.clone()).map_err(error)?;
         self.layer_interaction.tool = LayerCanvasTool::Paint;
@@ -5215,7 +5226,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         self.engine.set_brush(brush).map_err(error)?;
         self.engine.set_paint_color(self.state.colors.definition());
         self.engine.set_tool(tool);
-        self.tools.remember(self.state.brush.preset);
+        if !self.temporary_tool() { self.tools.remember(self.state.brush.preset); }
         self.refresh_tools();
         Ok(())
     }
@@ -5293,7 +5304,11 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         self.sync_retouch();
         self.state.tool_set = if let Some(tool) = self.layer_interaction.tool.selection_tool() {
-            selection_tools::tool_set(tool, &self.state.localization)
+            let mut view = selection_tools::tool_set(tool, &self.state.localization);
+            if let Some(slot) = self.selection_slot(tool) {
+                view.subtools.retain(|item| matches!(item.action, UiAction::Invoke { command } if slot.variants().contains(&ToolVariant::Command { command })));
+            }
+            view
         } else { tools::view(&self.state.brush, self.layer_interaction.tool, &self.state.localization) };
         self.state.tool_set.subtools.retain(|i| !matches!(i.action,UiAction::Invoke {command} if !command.available_on(self.state.platform)));
         if let Some(tool) = self.layer_interaction.tool.selection_tool() {
@@ -5529,6 +5544,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 };
                 let steady_reason = steady && !previous.enabled;
                 let reason = (!enabled && !steady_reason).then(|| self.disabled_reason_unchecked(id));
+                let tooltip = (previous.label != label || previous.icon != icon).then(|| self.command_tooltip(id, &label));
                 let previous = &mut self.state.commands[index];
                 if !steady_reason && previous.disabled_reason != reason {
                     previous.disabled_reason = reason;
@@ -5539,14 +5555,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     || previous.icon != icon
                     || previous.label != label
                 {
-                    if previous.label != label {
-                        previous.tooltip = self.state.settings.action_tooltip_localized(
-                            &label,
-                            &UiAction::Invoke { command: id },
-                            self.state.platform,
-                            &self.state.localization,
-                        );
-                    }
+                    if let Some(tooltip) = tooltip { previous.tooltip = tooltip; }
                     previous.enabled = enabled;
                     previous.selected = selected;
                     previous.icon = icon;
@@ -5567,8 +5576,9 @@ impl<R: CanvasRenderer> UiSession<R> {
         if bindings_changed {
             self.customization_copy.borrow_mut().color_picker_buttons.clear();
             for command in &mut self.state.commands {
+                let label = self.tools.tooltip_label(command.id, &command.label, &self.state.brush, self.layer_interaction.tool, &self.state.localization);
                 command.tooltip = self.state.settings.action_tooltip_localized(
-                    &command.label,
+                    &label,
                     &UiAction::Invoke {
                         command: command.id,
                     },

@@ -24,7 +24,7 @@ impl TileWidget {
             return Self::Component(Component::new(w, config.id, tile, choice));
         }
         let button = customization::tile_button(w, config, tile, style, choice);
-        if matches!(tile.control, ToolbarControl::ToolSlot { .. }) {
+        if tile.control.has_variants() {
             customization::tool_variations_button(w, &button, layer_ui::DrawerAnchor::Tile {
                 panel: config.id,
                 tile: tile.id,
