@@ -7,7 +7,7 @@ pending.** This plan separates paint clipping from effect attachment while
 retaining one contextual button. It records the intended behavior, implementation
 boundaries and acceptance criteria; it does not describe a completed feature.
 
-The code baseline is `origin/main` at `2e54808f6`, including the authored-model
+The code baseline is `origin/main` at `b5c96cbce`, including the authored-model
 application cutover in `b3f6f8e51`. Implement against the live
 [authored model](../reference/authored-model.md) and
 [package contract](../reference/capy-package.md). The remaining qualification in
@@ -33,6 +33,9 @@ wait for.
 | Scene scopes | [Scene access](../../crates/layer-core/src/authored/scene.rs) includes `SceneScope::Prefix` and `effective_clipped`; partial snapshots and queries depend on the existing clipping interpretation. |
 | Composition | [Stack composition](../../crates/layer-render-wgpu/src/scene/stack.rs) walks bottom to top. A clipped adjustment processes the accumulated clipping run; it is not an effect owned by one content occurrence. |
 | Alpha | [EffectAlpha](../../crates/layer-core/src/effects.rs) distinguishes preserving and filtering alpha, but the clipped path in [effect shader construction](../../crates/layer-render-wgpu/src/effects.rs) and [effect blending](../../crates/layer-render-wgpu/src/effects_color.wgsl) preserves input coverage. |
+| Incremental filters | [Image stages](../../crates/layer-render-wgpu/src/scene_images.rs) already track input dependencies, parameter-based sampling radii and pass work. Structural changes set a shared reset, and changed effect metadata can invalidate the entire evaluation window. Retain the dependency machinery while narrowing invalidation to the changed chain. |
+| Sparse composition | [Frame submission](../../crates/layer-render-wgpu/src/lib.rs) permits its sparse `composite_tiles` path only when every effect is nonanimated and has no image boundary. An unrelated spatial effect therefore disables this path; transformed paint can then fall back to full-document damage. Attachment alone does not fix this. |
+| Display caches | The [display graph](../../crates/layer-render-wgpu/src/scene/scale/graph.rs) invalidates retained pages by dependency damage and expands filter footprints. Its damage unions and image-stage changes use enclosing rectangles, which can include untouched space between distant edits. Preserve sparse regions through the affected paths. |
 | Groups | `Occurrence::passes_through` excludes clipped groups. The compositor isolates a clipped Pass Through group while its stored blend mode still says Pass Through. Remove that mismatch. |
 | Structural edits | [Occurrence edits](../../crates/layer-core/src/authored/occurrence_edits.rs) already use typed record batches, preserve placement during reparenting, and protect unrelated clipping bases. Extend this shared planner. |
 | UI | [Layer commands](../../crates/layer-ui/src/art_layers.rs) expose one clip action and paint-only alpha lock. [LayerState](../../crates/layer-ui/src/lib.rs) publishes `clipped`, without effect-owner or rail-endpoint metadata. |
@@ -360,7 +363,9 @@ Extend the existing stack evaluator to evaluate each content unit's own effect
 chain before compositing that unit into its clipping run. Compose attached
 effects once. Cache intermediate results by owner, effect order/values, source
 and mask revisions, geometry, color domain and captured evaluation context.
-Keep unaffected units reusable after a local edit.
+Track source and mask damage within those dependencies; a revision change does
+not by itself evict every cached page. Keep unaffected units reusable after a
+local edit.
 
 Use the existing premultiplied filter path for alpha-changing output. Preserve
 pointwise fusion where valid, and the existing image/fusion boundaries for
@@ -376,6 +381,77 @@ analysis because they consume clipping/effect inputs. Captures retain immutable
 owners and frozen effect phases; later edits cannot retarget an accepted job.
 Expanded effects must retain out-of-frame source content and respect the output
 frame without baking or copying pixels on the UI/input thread.
+
+### Incremental composition contract
+
+Local edits must cost work proportional to their dependency footprint and
+required sampling support, rather than the whole document or every attached
+chain. This is an acceptance condition for M1, not an optimization deferred
+until host qualification. Reuse the existing scene, page and effect machinery;
+do not add a second compositor or allocate a full-canvas image for every owner.
+
+For Paint clipped to a Base with an attached Blur, the dependencies are:
+
+```text
+Base + its mask -> Blur -> processed Base ----+
+                                             +-> clipping composition -> stack
+Paint + its mask -> Paint's own effects ------+
+```
+
+Painting Paint does not dirty Base or rerun its Blur. Painting Base updates its
+Blur and the dependent clipping output, including newly changed clip coverage;
+it does not dirty Paint's source or invalidate Paint's own cached effects.
+Clipping may need to reblend several members in the changed region without
+reprocessing their unchanged effect chains. Blending into the surrounding stack
+is a separate downstream dependency; backdrop-dependent effects still receive
+the changes they actually consume.
+
+Implement these rules in shared rendering and damage planning:
+
+- **Follow actual dependencies.** Carry the changed source/mask identity and
+  regions into owner inputs, effect steps, clipping runs and containing stacks.
+  Include every occurrence of a shared source at its own placement. Preserve
+  cache identity for unrelated owners across sibling insertion and reordering;
+  stack indices and a global document revision are not sufficient cache keys.
+  A local edit must not set a document-wide reset simply because attachments
+  exist. Rebuild relationship metadata on structural edits, not on every dab.
+- **Separate output damage from input reads.** Pointwise filters preserve the
+  dirty footprint; spatial filters expand it by their declared current support.
+  Propagate that expansion only along dependent paths. Reconstruct the input
+  halo needed to calculate changed output separately, using existing pass
+  dependency planning. Reading an unchanged halo does not make that input dirty.
+  Chain support accumulates through successive filters, including pass and
+  reduced-resolution sampling support. Account for both offset and blur support
+  if a shadow is implemented. Unknown/document-wide sampling may legitimately
+  invalidate the effect's full evaluation domain and its downstream consumers.
+- **Keep separate regions separate.** Preserve disjoint damage regions or sparse
+  page sets through spatial effects, composition, mip updates and Navigator.
+  Expand pixel regions before mapping to destination pages; do not repeatedly
+  enlarge tile-rounded damage at each effect. Deduplicate overlapping pages.
+  Batching may merge nearby work where measured dispatch savings justify it,
+  but must not silently turn widely separated contacts into one large rectangle.
+  Transforms include interpolation support and world placement without promoting
+  ordinary local transformed paint to full-document damage.
+- **Invalidate old and new output.** Moving, deleting, hiding, reattaching or
+  shrinking a blur requires removing old output as well as drawing new output.
+  Use conservative old/new rendered bounds, including effect expansion, and
+  propagate both through their old/new dependents. Parameter changes can affect
+  an owner's entire output even when there is no paint damage; this is distinct
+  from a small source edit. Include changed effect order, mask state, opacity,
+  group isolation and undo/redo. Unknown output bounds require a safe fallback;
+  cached input bounds must never crop expanded output.
+- **Retain unaffected stages.** Reuse valid upstream spatial results after a
+  downstream parameter edit, and independent owner results after a structural
+  edit. Preserve pointwise fusion rather than requiring a texture per effect.
+  Treat warm-cache invalidation separately from cold start, eviction, changed
+  view resolution and renderer recreation. Keep memory bounded by the existing
+  cache/window budgets, with no blocking GPU readback to discover dirty bounds.
+- **Propagate to every consumer.** Apply the same dependency rules to native
+  evaluation, reduced-resolution previews, mip levels, exact windows, thumbnails
+  and Navigator. A global animated effect can update its dependent domain each
+  frame; an unrelated animated chain must not invalidate static owner caches.
+  Selection, renaming, expansion and connector presentation alone do not dirty
+  artwork pixels, although visible UI and thumbnail requests can require work.
 
 ### Shared presentation and hosts
 
@@ -401,8 +477,8 @@ without each behavior change and reuse existing harnesses.
 
 | Milestone | Complete result and acceptance gate |
 | --- | --- |
-| M1: shared semantics | Change authored relationships, group state, codec/admission, scene scopes, compositor and affected shared commands as one coherent switch. Save/reopen, undo/redo, actual pixels and exact consumers agree on the three decision-9 examples. Paint/group target capabilities are shared. Remove superseded boolean semantics. |
-| M2: structural editing | Relationship-aware reorder, attach/release, grouping, duplication and permitted merge/delete operations preserve unrelated owners and placement. A base moves with its run. Preview and commit match, and each completed operation has one undo step. |
+| M1: shared semantics | Change authored relationships, group state, codec/admission, scene scopes, compositor and affected shared commands as one coherent switch. Save/reopen, undo/redo, actual pixels and exact consumers agree on the three decision-9 examples. Paint/group target capabilities are shared. Pass the incremental pixel/work gates and measure affected frame paths before accepting the compositor switch. Remove superseded boolean semantics. |
+| M2: structural editing | Relationship-aware reorder, attach/release, grouping, duplication and permitted merge/delete operations preserve unrelated owners and placement. A base moves with its run. Preview and commit match, and each completed operation has one undo step. Old/new damage clears removed output while preserving unrelated caches; measure drag-preview and commit responsiveness. |
 | M3: GTK interaction | Implement contextual button copy/icons, group indication and swipe, extended rails and vertical chain links at existing dimensions. Review narrow/wide layouts in both themes with mouse, touch and pen. Follow the existing [GTK-first review gate](../ui/README.md#rules-for-ui-changes) before porting the visual implementation. |
 | M4: host parity | Port the reviewed GTK presentation to Web, then Android, Apple and Windows through their shared view/action boundaries. Verify identical targets and pixels, native gesture arbitration, accessibility and retained row updates. |
 | M5: qualification | Finish cross-host user journeys, exact-output/capture coverage and affected performance rows on reference hardware. Move completed contracts into current guides and retire this plan only after the acceptance gates pass. |
@@ -449,7 +525,48 @@ crate and host, including shared model/UI tests, hardware GPU tests, GTK/Web
 consumer checks, package fixtures and localization checks. New behavior tests
 must exist before their names are used as command filters.
 
-### Real user journeys and performance
+### Incremental pixels and work
+
+Pixel equality alone cannot catch a correct renderer that recomputes everything.
+For each fixture, compare incremental output with an independent full render,
+then assert affected regions and actual work. Record source uploads, composed
+pages/pixels, effect input updates and per-pass pixels/dispatches, cache reuse,
+mip work and Navigator work separately. Existing image stages expose
+`input_updates`, `pass_updates` and `pass_pixels`; extend existing diagnostics
+where owner/page attribution is missing rather than adding test-only production
+switches. Count temporary intermediate writes and input reads separately from
+final output damage.
+
+Work assertions use warmed resident caches and a fixed viewport/level, with
+unrelated branches fitting the cache budget. Specify expected regions from the
+fixture geometry and declared filter support, independently of the production
+damage helper. Permit documented sampling/alignment conservatism, not arbitrary
+full-window invalidation. Run cold/evicted-cache cases separately for correctness
+and bounded memory; they cannot establish the warm-cache work bound.
+
+Include a numerical sparse-work fixture at native resolution: on a 2048 × 2048
+canvas with 256 × 256 pages, change `[120,136) × [120,136)` and
+`[1656,1672) × [1656,1672)`. For a filter with known single-pass support of 16 px,
+only output pages `(0,0)` and `(6,6)` require updating, rather than the 49 pages
+in their enclosing tile rectangle. Assert the actual scheduled output pages;
+account for input reads and any intermediate pass work separately.
+
+| Fixture or edit | Required work and edge coverage |
+| --- | --- |
+| Paint above blurred Base | Zero Base blur dispatches after painting Paint. The changed Paint region reaches clipping and final composition; no unrelated owner is invalidated. |
+| Paint Base under clipped members | Base's effects update within their supported footprint. Clipping uses the new alpha there; independent member source uploads and cached member-effect dispatches remain zero. Include erasing to empty and fractional edge alpha. |
+| Two distant contacts in one frame | Dirty output covers the two supported regions without filling their untouched gap. Include a fast curved stroke and multiple source targets in one frame. |
+| Unrelated spatial effect | Adding a resident effect in another isolated group does not broaden the edited owner's damage or trigger that effect. Repeat with translated, rotated and scaled paint/masks to detect the current full-document fallback. |
+| Tile and document edges | Test inside a page, at an edge and at a four-page corner, odd canvas sizes, out-of-frame source pixels and partially captured windows. No stale seam, missing halo or write outside the supported output pages. |
+| Long local chain | Test one, two and four effects, including noncommuting pointwise/spatial combinations. Support expands only along the chain; changing a late effect preserves cached upstream spatial results. Fused pointwise steps need no artificial intermediate cache. |
+| Radius/offset/visibility changes | Increase and decrease support, bypass a middle effect, hide/show the owner, detach/delete and undo/redo. Old output disappears and new output appears; no unrelated chain resets. Test offset support when a shadow is available, without adding a filter just for this milestone. |
+| Mask and group edits | Paint owner and effect masks separately; change opacity, nested isolation and clipping-base coverage. Correct downstream scope and old/new bounds without invalidating independent groups. |
+| Structural edits and shared sources | Reorder/reattach/reparent within and between groups, move a base with its run, and edit a source used by multiple occurrences. Every true dependent updates at its placement; shifted row indices do not invalidate unrelated effects. |
+| Preview correction and refinement | Replacing/cancelling predicted strokes removes old predicted halos. Settled output matches the exact render. New input interrupts refinement without losing damage or reusing stale mip/thumbnail/Navigator pixels. |
+| Global/animated dependency | A genuinely document-wide filter updates its required domain; independent owners retain their caches. Freeze phases when comparing pixels. Hiding animation stops its pixel work without retargeting attachments. |
+| No artwork change | After settling, a no-op frame, row selection, rename or group expansion causes zero artwork recomposition and effect dispatches. Keep UI drawing and requested thumbnail work separate. |
+
+### Real user journeys
 
 On every affected host, create a painted base, add an expanding attached blur,
 clip paint above it, add another clipped layer with its own effects, and reorder
@@ -470,14 +587,62 @@ drag near list edges, source removal, stale destinations, cancellation and captu
 loss. Reserve devices and use private test installs/displays under the
 [device rules](devices.md). Physical pen checks remain separate from injection.
 
-Measure painting through attached chains, effect slider motion, navigation with
-Navigator, nested-group composition, layer-list scrolling, swipes and drag
-previews against [performance targets](../PERFORMANCE_TARGETS.md), following
-[measurement rules](../performance/measuring.md). Qualify low/mid/top at their
-12/24/61 MP canvases and 60/90/120 Hz targets with at least three 5-10 second
-moving gestures. Separate fresh completed updates, presentation, input latency,
-settling and memory; check that refinement yields to new input. Record current
-hardware results in the tier tables. This plan claims no measured target passes.
+### Performance qualification gates
+
+Follow [performance targets](../PERFORMANCE_TARGETS.md) and the
+[measurement rules](../performance/measuring.md); they remain authoritative.
+The attachment workloads must meet the same motion gates:
+
+| Reference device | Canvas | Brush completed updates/s | Display-paced presented frames/s on the tier-rate panel | Maximum p99 completion/presentation gap |
+| --- | --- | --- | --- | --- |
+| TCL TAB 11 Gen 2 | 12 MP, 4248 × 2832 | 60 | 57 (95% of 60 Hz) | 33.3 ms |
+| Wacom MovinkPad 11 | 24 MP, 6000 × 4000 | 90 | 85.5 (95% of 90 Hz) | 22.2 ms |
+| Wacom MovinkPad Pro 14 | 61 MP, 9504 × 6336 | 120 | 114 (95% of 120 Hz) | 16.7 ms |
+
+Keep fresh input-consuming update rates and p99 gaps visible alongside total
+completed updates; prediction/refinement updates cannot stand in for new input.
+Use the existing CPU input/update/submission budgets of 4/3/2 ms and GPU
+painting/composition/presentation budgets of 12/8/6 ms as engineering guides,
+not substitutes for completed and presented frame measurements.
+
+Extend the existing [brush and motion harnesses](../performance/measuring.md#how-to-measure)
+with reproducible authored fixtures for the cases below. The benchmark document,
+owner being edited, chain order, effect parameters, active sampling support,
+brush size, camera and cache state must be recorded; the default photo-plus-paint
+benchmark alone does not exercise attachment.
+
+| Workload | Comparison and required observation |
+| --- | --- |
+| No effects and ordinary clipping | Preserve the existing brush guarantees at each tier's sizes. Compare matched baseline/new builds to detect overhead imposed on unaffected documents. |
+| Paint above blurred Base; paint Base itself | Separate the two dependency directions. Use a small 32 px brush diameter to expose excess dirty work and the tier's guaranteed simple-brush size for sustained load; include seam crossings and distant contacts. |
+| Owner-local chains | One, two and four supported effects, including mixed pointwise/spatial chains. Exercise small and broad valid radii, recording actual declared support rather than assuming slider radius equals total halo. |
+| Independent owner scaling | Compare 1, 10 and 100 small visible isolated owners with resident local chains. Only one owner receives input; dirty-page sets and unrelated-effect dispatches must not grow with owner count. Measure CPU traversal/submission separately. Run cache-pressure variants separately. |
+| Nested clipping/groups and structural motion | Paint inside a clipped isolated group; drag/reorder/reattach a chain and its base; scrub opacity, masks and spatial parameters. Measure motion and commit latency, including removal of old expanded output. |
+| Navigation and refinement | Fit and 100% zoom, pan/zoom/rotate, Navigator open, warm and evicted caches, then resume painting during pending refinement. Measure mip/Navigator work, memory peaks and fresh-input delay. |
+| Layer presentation | Scroll long layer lists, swipe groups and preview drops with the new connectors. Isolate UI frame cost from canvas recomposition and ensure presentation-only changes do not dirty artwork. |
+
+Use matched release/benchmark profiles, hardware, thermals, inputs and viewport;
+warm up, then run at least three 5-10 second gestures per measured case. Compare
+before/after fresh-update throughput, p99 gaps, CPU/GPU time, dispatches,
+source/output/pass pixels and resident/peak memory. Equivalent workloads must
+have no reproducible regression beyond measured run-to-run variation; rerun
+borderline comparisons rather than inferring a pass from averages alone. New
+alpha-expanding behavior can require additional legitimate work: compare an
+equivalent grouped reference where possible, otherwise account for the extra
+pixels/passes explicitly and still meet the applicable tier gate.
+
+No work-count bound is waived merely because a fast desktop meets its frame
+target. Conversely, correct bounded tile work does not prove a hardware target.
+Investigate costs above 1.5 times the calibrated workload estimate under the
+existing measurement rules. Full-domain effect changes may use the established
+display-resolution preview and exact refinement; the full-screen-filter soft
+target applies only with its required hardware arithmetic and absence of a valid
+approximation. Refinement must yield to fresh input.
+
+Record measured values, date and commit in the tier tables, with raw traces in
+`artifacts/`. Existing baseline misses remain open and cannot be relabeled as
+passes because this change is no slower. Missing reference-hardware evidence
+leaves qualification open. This plan defines gates and claims no measured passes.
 
 ## Research basis
 
