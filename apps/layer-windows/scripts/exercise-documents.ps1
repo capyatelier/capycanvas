@@ -391,6 +391,7 @@ $hash=(Get-FileHash -LiteralPath $first).Hash
 Remove-Item -LiteralPath $imageSource
 Draw
 $exported=Join-Path $run 'Export 日本語.png'
+if(((Model).state.commands|Where-Object id -eq 'export_again').enabled){throw 'Export Again was available before the first export'}
 File-Command 'export_document';Picker 'Save As';Picker-Button '2';Idle
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
     throw 'Cancelled export changed the project checkpoint'
@@ -406,6 +407,24 @@ if($png.Length -lt 45 -or [Convert]::ToHexString($png[0..7]) -ne '89504E470D0A1A
 if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){
     throw 'PNG export incorrectly acknowledged a project save'
 }
+if((Model).state.document_file.export_uri -ne $exported){throw 'A finished export did not become the Export Again destination'}
+function Export-Again {
+    $script:scope=$root;$written=(Get-Item -LiteralPath $exported).LastWriteTimeUtc
+    File-Command 'export_again'
+    Wait-Until {(Get-Item -LiteralPath $exported).LastWriteTimeUtc -gt $written} 'Export Again did not rewrite its destination' 45
+    Idle
+    if(Find-Name 'Save As' ([System.Windows.Automation.ControlType]::Window)){throw 'Export Again asked for a destination it can still write'}
+}
+$hash=(Get-FileHash -LiteralPath $exported).Hash
+Export-Again
+if((Get-FileHash -LiteralPath $exported).Hash -ne $hash){throw 'Export Again did not rewrite identical pixels'}
+Draw
+Export-Again
+if((Get-FileHash -LiteralPath $exported).Hash -eq $hash){throw 'Export Again did not export the current pixels'}
+if(!(Model).state.document_file.modified -or (Model).state.document_file.location.uri -ne $first){throw 'Export Again acknowledged a project save'}
+Remove-Item -LiteralPath $exported
+$script:scope=$root;File-Command 'export_again';Picker 'Save As';$moved=Join-Path $run 'Export again.png';Choose-Path $moved;Idle
+Wait-Until {(Test-Path -LiteralPath $moved) -and (Model).state.document_file.export_uri -eq $moved} 'Export Again did not fall back to choosing a new destination'
 $webp=Join-Path $run 'Export.webp'
 File-Command 'export_document' {
     Combo-Select (Find-Id 'export-format') {$_.Current.Name -like 'WebP*'}

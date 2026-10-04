@@ -348,7 +348,7 @@ fn d3d12_windows_hdr_documents_delivery_history_cancellation_and_recovery() {
                 copy: false,
             },
         );
-        assert!(raster.prepare_owner(&host).unwrap());
+        assert!(raster.prepare_owner(&mut host).unwrap().is_some());
         ready(&mut raster, Action::Compare);
         raster.commit(&mut host).unwrap();
         drop(raster);

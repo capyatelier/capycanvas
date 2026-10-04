@@ -275,15 +275,8 @@ fn export_preview(view:&layer_ui::PackageView,path:&std::path::Path,original:Opt
     check_cancelled(cancel)?;
     if !view.capabilities().export {return Err("This package has no verified preview".into());}
     if !path.extension().and_then(|extension|extension.to_str()).is_some_and(|extension|extension.eq_ignore_ascii_case("png")) {return Err("Choose a new PNG destination".into());}
-    if let Some(original)=original {
-        let resolve=|path:&std::path::Path|->Result<PathBuf,String> {
-            std::fs::canonicalize(path).or_else(|_|{
-                let parent=path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;let name=path.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
-                std::fs::canonicalize(parent).map(|parent|parent.join(name))
-            }).map_err(|e|io_error("locate preview destination",e))
-        };
-        let original=resolve(original)?;let destination=resolve(path)?;
-        if destination.to_string_lossy().eq_ignore_ascii_case(&original.to_string_lossy()) {return Err("Choose a preview destination different from the original package".into());}
+    if let Some(original)=original && crate::document_io::same_file(original,path)? {
+        return Err("Choose a preview destination different from the original package".into());
     }
     let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e|io_error("create preview",e))?;
     let result=view.export_preview(&mut file,cancel).and_then(|()|file.sync_all().map_err(|e|io_error("flush preview",e))).and_then(|()|check_cancelled(cancel));
@@ -338,6 +331,7 @@ fn prepare(
 pub(crate) fn prepare_package(environment:OpenEnvironment,path:PathBuf,cancel:&AtomicBool)->Result<Box<UiSession<Renderer>>,String>{
     match prepare(environment,Source::Open(path),cancel)?{
         Completed::Prepared(candidate)=>Ok(candidate),
+        Completed::Package(view)=>Err(format!("The package did not admit an editable drawing: {}",serde_json::to_string(&view.summary(&layer_ui::Localizer::shared(layer_ui::UiLanguage::English))).unwrap_or_default())),
         _=>Err("The package did not admit an editable drawing".into()),
     }
 }
@@ -654,6 +648,10 @@ impl DocumentService {
                 crate::document_workflows::Action::Commit => task.commit(host),
                 crate::document_workflows::Action::PasteClip { nonce } => self.paste_clip(host, id, &nonce).or_else(|error| Self::complete(host, id, Err(error))),
                 other => {
+                    if let crate::document_workflows::Action::ExportWrite { path } = &other
+                        && let Err(error) = task.prepare_write(host, path) {
+                        task.fail(error);self.workflow=Some(task);host.invalidate_snapshot();return Ok(());
+                    }
                     self.workflow_running = true;
                     self.worker.submit(Job::Workflow { task, action: other });
                     host.invalidate_snapshot();
@@ -882,9 +880,9 @@ impl DocumentService {
                 self.worker.retire_workflow(task);
             } else {
                 match task.prepare_owner(host) {
-                    Ok(true) => { self.workflow_running = true; let action = if task.stage == "proof_preserve" { crate::document_workflows::Action::ProofPreserve } else { crate::document_workflows::Action::Compare }; self.worker.submit(Job::Workflow { task, action }); return Ok(()); }
+                    Ok(Some(action)) => { self.workflow_running = true; self.worker.submit(Job::Workflow { task, action }); return Ok(()); }
                     Err(error) => { task.fail(error); }
-                    _ => {}
+                    Ok(None) => {}
                 }
                 // Placement begins only after the native progress sheet has closed.
                 // Its queued focus-loss event must precede the shared placement.

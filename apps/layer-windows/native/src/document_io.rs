@@ -33,6 +33,16 @@ pub(crate) fn location(path: &str) -> Result<DocumentLocation, String> {
         name: name.into(),
     })
 }
+pub(crate) fn same_file(first: &Path, second: &Path) -> Result<bool, String> {
+    let resolve = |path: &Path| -> Result<PathBuf, String> {
+        fs::canonicalize(path).or_else(|_| {
+            let parent = path.parent().ok_or(std::io::ErrorKind::InvalidInput)?;
+            let name = path.file_name().ok_or(std::io::ErrorKind::InvalidInput)?;
+            fs::canonicalize(parent).map(|parent| parent.join(name))
+        }).map_err(|e| io_error("locate the destination", e))
+    };
+    Ok(resolve(first)?.to_string_lossy().eq_ignore_ascii_case(&resolve(second)?.to_string_lossy()))
+}
 pub(crate) fn check_cancelled(cancel: &AtomicBool) -> Result<(), String> {
     if cancel.load(Ordering::Acquire) {
         Err("Document operation cancelled".into())

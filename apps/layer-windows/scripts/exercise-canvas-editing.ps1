@@ -40,7 +40,7 @@ function Value([string]$Id){((Model).state.tool_settings|Where-Object id -eq $Id
 function Body-Point{$m=Model;$a=$m.state.canvas_bar.anchor;$c=$m.state.camera;$r=(Control 'drawing-canvas').Current.BoundingRectangle
  @([int]($r.X+$c.translation[0]+$c.zoom*($a[0]+3*$a[2])/4),[int]($r.Y+$c.translation[1]+$c.zoom*($a[1]+3*$a[3])/4))}
 function Origin{Wait-Until {$null -ne (Value 'transform_x') -and $null -ne (Value 'transform_y')} 'Transform position was not published';$script:x0=Value 'transform_x';$script:y0=Value 'transform_y'}
-function Signature {$m=Model;@($m.state.document_file,@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 25 -Compress}
+function Signature {$m=Model;@(($m.state.document_file|Select-Object -Property * -ExcludeProperty export_uri),@($m.state.layers|Select-Object id,paint_revision,mask_revision))|ConvertTo-Json -Depth 25 -Compress}
 function Pixels {
  $rect=[CapyEditingCapture+Rect]::new();$origin=[CapyEditingCapture+Point]::new()
  if(![CapyEditingCapture]::GetClientRect($handle,[ref]$rect) -or ![CapyEditingCapture]::ClientToScreen($handle,[ref]$origin)){throw 'Cannot locate canvas pixels'}
@@ -67,7 +67,8 @@ function Export-Png([string]$Name) {
  if($Name -notmatch '^[a-z0-9-]+$'){throw 'Invalid owned export name'}
  $path=Join-Path $run ($Name+'.png');if(Test-Path -LiteralPath $path){throw 'Export must use a fresh artifact path'}
  # Export waits for pending raster work; its cache identity can change without a new edit.
- $before=(Model).state.document_file|ConvertTo-Json -Compress
+ function Checkpoint{(Model).state.document_file|Select-Object -Property * -ExcludeProperty export_uri|ConvertTo-Json -Compress}
+ $before=Checkpoint
  Wait-Until {((Model).state.commands|Where-Object id -eq 'export_document').enabled} 'Export stayed disabled'
  & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'File';Invoke 'export_document'
  Invoke 'Preview Output' -Name
@@ -92,7 +93,8 @@ function Export-Png([string]$Name) {
  [CapyEditingCapture]::GetWindowThreadProcessId($button,[ref]$owner)|Out-Null
  if($owner -ne $review.Id -or ![CapyEditingCapture]::PostMessage($button,245,[UIntPtr]::Zero,[IntPtr]::Zero)){throw 'Cannot invoke owned export Save button'}
  Wait-Until {(Test-Path -LiteralPath $path) -and !(Model).state.document_file.busy -and (Control 'drawing-canvas').Current.IsEnabled} 'PNG export did not complete' 45
- if(((Model).state.document_file|ConvertTo-Json -Compress) -ne $before){throw 'PNG export changed the document checkpoint'}
+ if((Checkpoint) -ne $before){throw 'PNG export changed the document checkpoint'}
+ if((Model).state.document_file.export_uri -ne $path){throw 'PNG export did not become the Export Again destination'}
  $bitmap=[Drawing.Bitmap]::new($path)
  try{
   $document=(Model).state.tabs[0]

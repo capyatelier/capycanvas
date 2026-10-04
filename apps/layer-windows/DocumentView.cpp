@@ -395,6 +395,10 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         if(!stopping)send(to_string(O({{L"operation",S(L"package")},{L"id",N(id)},{L"action",S(action)},{L"path",action!=L"close"?S(destination):JsonValue::CreateNullValue()}}).Stringify()));
         showing=false;changed();
     }
+    winrt::Windows::Foundation::IAsyncOperation<Pickers::PickFileResult> exportDestination(J const& details){
+        Pickers::FileSavePicker save(window.AppWindow().Id());auto extension=L"."+str(details,L"extension");save.DefaultFileExtension(extension);save.SuggestedFileName(str(details,L"suggested_name"));
+        save.FileTypeChoices().Insert(str(details,L"format_name"),single_threaded_vector<hstring>({extension}));return save.PickSaveFileAsync();
+    }
     fire_and_forget workflow(J request){
         auto lifetime=shared_from_this();auto id=uint32_t(num(request,L"id"));
         if(str(request,L"kind")==L"copy"&&str(request,L"stage")==L"commit"){copied(request);co_return;}
@@ -404,6 +408,13 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
         showing=true;changed();
         auto kind=str(request,L"kind"),stage=str(request,L"stage");auto details=object(request,L"details");
         if((kind==L"place"||kind==L"paste")&&stage==L"options"){showing=false;pickImages(request);co_return;}
+        if(kind==L"export"&&stage==L"repeat_pick"){
+            J chosen=O({{L"op",S(L"cancel")}});
+            try{picker=exportDestination(details);auto selected=co_await picker;if(selected)chosen=O({{L"op",S(L"export_write")},{L"path",S(selected.Path())}});}
+            catch(hresult_canceled const&){}catch(hresult_error const& e){if(!stopping)report(to_string(e.message()));}
+            picker=nullptr;if(!stopping)send(to_string(O({{L"operation",S(L"workflow")},{L"id",N(id)},{L"action",chosen}}).Stringify()));
+            showing=false;changed();co_return;
+        }
         J action=O({{L"op",S(L"cancel")}});
         auto scripted=std::make_shared<J>();std::shared_ptr<ExportFormView> exportForm;std::shared_ptr<ProofFormView> proofForm;ComboBox profileList;A profileChoices;std::function<void()> updateProfileVisibility;
         if(kind==L"proof"&&proofRequest!=id){proofRequest=id;proofDraft=J();proofProfileId=L"";proofManaging=false;}
@@ -574,8 +585,7 @@ struct DocumentView::Impl : std::enable_shared_from_this<Impl> {
                 }else if(kind==L"export"&&stage==L"options"){
                     action=O({{L"op",S(L"export_options")},{L"recipe",exportForm->current()},{L"profile_id",exportForm->profileId.empty()?JsonValue::CreateNullValue():S(exportForm->profileId)}});
                 }else if(kind==L"export"&&stage==L"preview"){
-                    Pickers::FileSavePicker save(window.AppWindow().Id());auto extension=L"."+str(details,L"extension");save.DefaultFileExtension(extension);save.SuggestedFileName(str(details,L"suggested_name"));
-                    save.FileTypeChoices().Insert(str(details,L"format_name"),single_threaded_vector<hstring>({extension}));picker=save.PickSaveFileAsync();
+                    picker=exportDestination(details);
                     auto selected=co_await picker;if(selected)action=O({{L"op",S(L"export_write")},{L"path",S(selected.Path())}});
                 }else if(stage==L"preview"){
                     if(flag(details,L"copy")){

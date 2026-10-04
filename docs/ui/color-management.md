@@ -536,7 +536,7 @@ output route, not measured screen brightness.
 
 ## Export Again
 
-On GTK, Web, Android, macOS and iPadOS, **File → Export Again** sits beside Export and becomes
+**File → Export Again** sits beside Export and becomes
 available after a successful export from that drawing. It exports the current
 artwork with the last successful recipe and destination, without reopening the
 options dialog. Each open drawing remembers its own export for the session;

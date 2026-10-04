@@ -111,6 +111,9 @@ enum Payload {
         task: Box<ExportTask>,
         destination: usize,
         notice: Option<layer_ui::ColorFeatureError>,
+        owner: u64,
+        repeat: Option<layer_ui::ExportRepeat>,
+        master: Option<std::path::PathBuf>,
     },
     Import(Import),
     Clip(Clip),
@@ -177,15 +180,15 @@ impl Task {
         let (kind, payload) = match request {
             HostRequestKind::SoftProofSetup => ("proof", Payload::Proof(Box::new(proof::Task::capture(session, id).map_err(|reason|reason.proof_message(session.localization()))?))),
             HostRequestKind::Document {
-                request: DocumentRequest::Export { name, .. },
-            } => (
-                "export",
-                Payload::Export {
-                    task: Box::new(ExportTask::capture(session, id, name, RgbSpace::Srgb)?),
-                    destination: 0,
-                    notice: None,
-                },
-            ),
+                request: DocumentRequest::Export { name, owner, repeat, .. },
+            } => {
+                let mut task = Box::new(ExportTask::capture(session, id, name, RgbSpace::Srgb)?);
+                if let Some(repeat) = repeat {
+                    task.configure(repeat.recipe.clone()).map_err(|reason| FeatureFailure::Color(reason).message(session.localization()))?;
+                }
+                let master = session.state().document_file.location.as_ref().map(|location| std::path::PathBuf::from(&location.uri));
+                ("export", Payload::Export { task, destination: 0, notice: None, owner: *owner, repeat: repeat.clone(), master })
+            }
             HostRequestKind::Document {
                 request: DocumentRequest::Place | DocumentRequest::Paste { .. },
             } => {
@@ -446,6 +449,14 @@ impl Task {
                     self.stage = "commit";
                     self.describe()
                 }
+                Action::Describe if self.stage == "options" && matches!(self.payload, Payload::Export { repeat: Some(_), .. }) => {
+                    let Payload::Export { task, repeat: Some(repeat), .. } = &self.payload else { return Err("No export is pending".into()) };
+                    let writable = std::fs::OpenOptions::new().write(true).open(&repeat.location.uri).is_ok();
+                    self.details = task.details_localized(&self.localization)?;
+                    self.details["feature_copy"] = self.feature_copy.clone();
+                    self.stage = if writable { "repeat_write" } else { "repeat_pick" };
+                    Ok(())
+                }
                 Action::Describe => self.describe(),
                 Action::ProfileImport { path } => {
                     crate::color_storage::import(
@@ -491,34 +502,42 @@ impl Task {
                     self.describe()
                 }
                 Action::ExportWrite { path } => {
-                    if self.stage != "preview" {
+                    if !matches!(self.stage, "preview" | "repeat_pick" | "repeat_write") {
                         return Err("Preview the export first".into());
                     }
                     let Payload::Export {
                         task,
                         destination,
                         notice,
+                        repeat,
+                        master,
+                        ..
                     } = &mut self.payload
                     else {
                         return Err("No export is pending".into());
                     };
                     crate::document_io::location(&path)?;
+                    if let Some(master) = master && crate::document_io::same_file(master, std::path::Path::new(&path))? {
+                        return Err(layer_ui::color_feature_copy::DocumentColorCopy::new(&self.localization).choose_different.to_string());
+                    }
                     crate::document_io::atomic_write_seek(
                         std::path::Path::new(&path),
                         self.control.cancellation_flag(),
                         |file| task.write(file, self.control.clone()).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Color(reason),&self.localization)),
                     )?;
-                    let remember = layer_ui::ExportPresetAction::Remember {
-                        index: (*destination).min(3),
-                        recipe: task.recipe().clone(),
-                    };
-                    if let Err(error) = crate::color_storage::presets(
-                        remember,
-                        task.document(),
-                        self.control.cancellation_flag(),
-                        &self.localization,
-                    ) {
-                        *notice = Some(error);
+                    if repeat.is_none() {
+                        let remember = layer_ui::ExportPresetAction::Remember {
+                            index: (*destination).min(3),
+                            recipe: task.recipe().clone(),
+                        };
+                        if let Err(error) = crate::color_storage::presets(
+                            remember,
+                            task.document(),
+                            self.control.cancellation_flag(),
+                            &self.localization,
+                        ) {
+                            *notice = Some(error);
+                        }
                     }
                     self.stage = "saved";
                     Ok(())
@@ -700,29 +719,42 @@ impl Task {
         matches!(&self.payload, Payload::Clip(clip) if !clip.large)
     }
     pub fn progress_title(&self, host: &NativeHost) -> Option<String> {
+        if matches!(self.payload, Payload::Export { repeat: Some(_), .. }) {
+            return Some(layer_ui::color_feature_copy::ExportCopy::new(host.session.localization()).exporting.to_string());
+        }
         if !matches!(self.payload, Payload::Clip(_)) { return None; }
         host.session.document_request(self.id).ok().map(|request| request.title(host.session.localization()).to_string())
+    }
+    pub fn prepare_write(&self, host: &mut NativeHost, path: &str) -> Result<(), String> {
+        let Payload::Export { task, owner, .. } = &self.payload else { return Ok(()) };
+        host.session.prepare_export(self.id, *owner, task.recipe().clone(), crate::document_io::location(path)?)
     }
     pub fn take_clip(&mut self) -> Option<layer_ui::PixelClip> {
         match &mut self.payload { Payload::Clip(clip) => clip.clip.take().map(|clip| *clip), _ => None }
     }
-    pub fn prepare_owner(&mut self, host: &NativeHost) -> Result<bool, String> {
+    pub fn prepare_owner(&mut self, host: &mut NativeHost) -> Result<Option<Action>, String> {
         if self.stage == "proof_candidate" {
             self.error_reason=None;
             let Payload::Proof(task) = &mut self.payload else { return Err("No proof candidate".into()); };
             task.validate(host, &self.control).map_err(|reason| retain_failure(&mut self.error_reason,FeatureFailure::Proof(reason),&self.localization))?;
             self.stage = "proof_preserve";
-            return Ok(true);
+            return Ok(Some(Action::ProofPreserve));
+        }
+        if self.stage == "repeat_write" {
+            let Payload::Export { repeat: Some(repeat), .. } = &self.payload else { return Err("No export is pending".into()); };
+            let path = repeat.location.uri.clone();
+            self.prepare_write(host, &path)?;
+            return Ok(Some(Action::ExportWrite { path }));
         }
         if self.stage != "source_candidate" {
-            return Ok(false);
+            return Ok(None);
         }
         self.error_reason=None;
         let Payload::Source(task) = &mut self.payload else {
             return Err("No source candidate".into());
         };
         task.prepare(host, self.control.is_cancelled())?;
-        Ok(true)
+        Ok(Some(Action::Compare))
     }
     pub fn commit(&mut self, host: &mut NativeHost) -> Result<(), String> {
         self.error_reason=None;
@@ -875,7 +907,7 @@ mod tests {
         let mut task=Task::capture(&mut host,id).unwrap();
         task.work(Action::ProofOptions {settings:layer_ui::proof_panel::PrintProofSettings::default(),profile_id:None});
         assert_eq!(task.error_reason,Some(FeatureFailure::Proof(layer_ui::ColorFeatureError::ProofChoosePrintProfile)));
-        assert!(!task.prepare_owner(&host).unwrap());
+        assert!(task.prepare_owner(&mut host).unwrap().is_none());
         let reason=task.error_reason.clone().unwrap();
         let checkpoint=host.session.engine().checkpoint();
         for language in layer_ui::UiLanguage::ALL {
@@ -1217,7 +1249,7 @@ mod tests {
                     copy: false,
                 },
             );
-            assert!(task.prepare_owner(&host).unwrap());
+            assert!(task.prepare_owner(&mut host).unwrap().is_some());
             ready(&mut task, Action::Compare);
             task.commit(&mut host).unwrap();
             drop(task);
@@ -1266,7 +1298,7 @@ mod tests {
             settings: layer_ui::proof_panel::PrintProofSettings::from_recipe(&embedded).unwrap(),
             profile_id: None,
         });
-        assert!(setup.prepare_owner(&host).unwrap());
+        assert!(setup.prepare_owner(&mut host).unwrap().is_some());
         ready(&mut setup, Action::ProofPreserve);
         setup.commit(&mut host).unwrap();
         let mut view = layer_ui::proof_workflow::ProofView::default();
@@ -1297,7 +1329,7 @@ mod tests {
             settings: layer_ui::proof_panel::PrintProofSettings::from_recipe(&replacement_recipe).unwrap(), profile_id: None,
         });
         assert!(replacement.commit(&mut host).is_err());
-        assert!(replacement.prepare_owner(&host).unwrap());
+        assert!(replacement.prepare_owner(&mut host).unwrap().is_some());
         ready(&mut replacement, Action::ProofPreserve);
         assert!(crate::color_storage::list(&cancel).unwrap().iter().any(|p| p.id == id));
         replacement.commit(&mut host).unwrap();
