@@ -156,7 +156,8 @@ a development build never opens an installed app's files or windows. The MSIX
 holds that same build; with package identity it writes only to its package
 folders, so MSIX file-system virtualization never redirects its files and cannot
 split the workspace database from its `-wal` and `-shm` files. Uninstalling the
-Store app deletes its folders; deleting a ZIP or installer build leaves them.
+Store app deletes its folders; deleting the ZIP's folder or uninstalling the
+installer build leaves them.
 Nothing is written beside the executable; opt-in trace files go to the working
 directory.
 
@@ -231,6 +232,36 @@ working directory and an isolated profile.
 Deployment follows Microsoft's
 [self-contained Windows App SDK guidance](https://learn.microsoft.com/en-us/windows/apps/package-and-deploy/self-contained-deploy/deploy-self-contained-apps)
 and [Visual C++ redistribution guidance](https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files).
+
+### Installer
+
+Convert a portable build into a per-user setup program for direct downloads,
+then install it, check that a `.capy` drawing starts the installed app, and
+uninstall it on an unlocked desktop:
+
+```powershell
+./apps/layer-windows/scripts/package-installer.ps1 -PortableResultFile <portable-result.json> -Version 1.0.0.0 -TestIdentity
+./apps/layer-windows/scripts/test-installer.ps1 -ResultFile <installer-result.json>
+```
+
+[`installer.nsi`](../../apps/layer-windows/scripts/installer.nsi) installs into
+`%LOCALAPPDATA%\Programs\Capy Canvas` without administrator rights, adds a Start
+menu shortcut and an Apps entry, and opens `.capy` drawings with the app. Setup
+replaces an earlier version in place and asks the painter to close a running
+app first; uninstalling removes the program, its shortcut and file type, and
+keeps preferences, workspaces and editing sessions. The packager downloads the
+pinned NSIS 3.11 release into `artifacts/windows/tools` and checks its SHA-256.
+The installer uses NSIS's zlib/libpng-licensed stub and zlib compression, not
+the LZMA module, which is under the Common Public License. It builds the setup
+program twice and requires identical bytes. `-TestIdentity` gives the program,
+uninstall entry and file type a separate name so a test never replaces an
+installed app; `test-installer.ps1` refuses any other installer. It checks the
+installed files against the manifest, the Apps entry, shortcut and `.capy`
+association, that setup refuses to replace a running app and upgrades a closed
+one in place, and that uninstalling leaves nothing behind. Opening the drawing
+itself needs a hardware GPU; `exercise-file-activation.ps1` covers it. Like the
+ZIP, the setup program is unsigned; sign it before distribution so SmartScreen
+can identify the publisher.
 
 ### MSIX
 

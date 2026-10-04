@@ -1,4 +1,4 @@
-param([Parameter(Mandatory)][string]$Destination)
+param([Parameter(Mandatory)][string]$Destination,[string]$Icon)
 $ErrorActionPreference='Stop'
 Add-Type -AssemblyName PresentationCore,WindowsBase
 if([Threading.Thread]::CurrentThread.GetApartmentState() -ne 'STA'){throw 'Generate package logos from an STA PowerShell session.'}
@@ -9,7 +9,7 @@ if($paths.Count -ne 1 -or $paths[0].LocalName -ne 'path' -or $paths[0].GetAttrib
 $view=@($svg.DocumentElement.GetAttribute('viewBox').Split(' ')|ForEach-Object {[double]::Parse($_,[Globalization.CultureInfo]::InvariantCulture)})
 if($view.Count -ne 4 -or $view[2] -ne $view[3]){throw 'Expected a square brand viewBox.'}
 [IO.Directory]::CreateDirectory($Destination)|Out-Null
-foreach($size in @(44,50,150)){
+function Render([int]$size){
     # Match the shared GTK app icon's background, padding and symbolic ink.
     $visual=[Windows.Media.DrawingVisual]::new();$draw=$visual.RenderOpen()
     try{
@@ -26,6 +26,21 @@ foreach($size in @(44,50,150)){
     $bitmap.Render($visual)
     $encoder=[Windows.Media.Imaging.PngBitmapEncoder]::new()
     $encoder.Frames.Add([Windows.Media.Imaging.BitmapFrame]::Create($bitmap))
-    $stream=[IO.File]::Create((Join-Path $Destination ("Logo"+$size+'.png')))
-    try{$encoder.Save($stream)}finally{$stream.Dispose()}
+    $stream=[IO.MemoryStream]::new()
+    try{$encoder.Save($stream);,$stream.ToArray()}finally{$stream.Dispose()}
+}
+foreach($size in @(44,50,150)){[IO.File]::WriteAllBytes((Join-Path $Destination ("Logo"+$size+'.png')),(Render $size))}
+if($Icon){
+    $frames=@(foreach($size in @(16,24,32,48,64,256)){,@($size,(Render $size))})
+    $stream=[IO.File]::Create($Icon);$writer=[IO.BinaryWriter]::new($stream)
+    try{
+        $writer.Write([uint16]0);$writer.Write([uint16]1);$writer.Write([uint16]$frames.Count)
+        $offset=6+16*$frames.Count
+        foreach($frame in $frames){
+            $writer.Write([byte]($frame[0]%256));$writer.Write([byte]($frame[0]%256));$writer.Write([byte]0);$writer.Write([byte]0)
+            $writer.Write([uint16]1);$writer.Write([uint16]32);$writer.Write([uint32]$frame[1].Length);$writer.Write([uint32]$offset)
+            $offset+=$frame[1].Length
+        }
+        foreach($frame in $frames){$writer.Write([byte[]]$frame[1])}
+    }finally{$writer.Dispose();$stream.Dispose()}
 }

@@ -125,7 +125,7 @@ $inputPayload=Join-Path $inputRoot 'payload'
 [IO.Directory]::CreateDirectory($inputPayload)|Out-Null
 [IO.File]::WriteAllText((Join-Path $inputPayload 'file.txt'),'package input fixture')
 $inputFile=[ordered]@{path='file.txt';bytes=(Get-Item -LiteralPath (Join-Path $inputPayload 'file.txt')).Length;sha256=(Get-FileHash -LiteralPath (Join-Path $inputPayload 'file.txt')).Hash}
-$inputManifest=[ordered]@{schema=1;architecture='x64';source_commit=$result.source_commit;files=@($inputFile)}
+$inputManifest=[ordered]@{schema=1;architecture='x64';release_identity=$true;source_commit=$result.source_commit;files=@($inputFile)}
 $inputResult=Join-Path $inputRoot 'result.json'
 [ordered]@{payload=$inputPayload;source_commit=$result.source_commit}|ConvertTo-Json|Set-Content -LiteralPath $inputResult
 function Reject-Input([string]$Expected,[hashtable]$Arguments=@{}){
