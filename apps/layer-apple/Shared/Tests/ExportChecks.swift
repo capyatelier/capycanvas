@@ -131,6 +131,16 @@ extension XCTestCase {
         XCTAssertNotNil(image.colorSpace?.copyICCData())
         XCTAssertEqual(try Data(contentsOf: photo), original); XCTAssertEqual(try Data(contentsOf: profile), icc)
         XCTAssertEqual(editorPixels(in: app), before)
+        func modified() -> Date? { (try? FileManager.default.attributesOfItem(atPath: output.path))?[.modificationDate] as? Date }
+        let exported = try XCTUnwrap(modified())
+        editorMenu(in: app, menu: "File", id: "export_again", label: "Export Again")
+        expectation(for: NSPredicate { _, _ in modified().map { $0 > exported } == true }, evaluatedWith: app)
+        waitForExpectations(timeout: 30)
+        XCTAssertFalse(app.buttons["export-choose-file"].exists, "Export Again reuses the recipe without its options")
+        XCTAssertFalse(save.exists, "Export Again reuses this session's destination")
+        let again = try XCTUnwrap(CGImageSourceCreateImageAtIndex(try XCTUnwrap(CGImageSourceCreateWithURL(output as CFURL, nil)), 0, nil))
+        XCTAssertEqual(again.bitsPerComponent, 16); XCTAssertEqual(again.width, 64)
+        XCTAssertEqual(try Data(contentsOf: photo), original)
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
 }

@@ -634,7 +634,7 @@ command_ids! {
 impl CommandId {
     pub fn available_on(self, platform: Platform) -> bool {
         match self {
-            Self::ExportAgain => matches!(platform, Platform::Gtk | Platform::Web | Platform::Android),
+            Self::ExportAgain => platform != Platform::Windows,
             Self::Waveform => Panel::Waveform.available_on(platform),
             Self::Fullscreen => matches!(platform, Platform::Gtk | Platform::Web | Platform::Mac | Platform::Windows),
             Self::NewWindow => platform.native_windows(),

@@ -536,7 +536,7 @@ output route, not measured screen brightness.
 
 ## Export Again
 
-On GTK, Web and Android, **File → Export Again** sits beside Export and becomes
+On GTK, Web, Android, macOS and iPadOS, **File → Export Again** sits beside Export and becomes
 available after a successful export from that drawing. It exports the current
 artwork with the last successful recipe and destination, without reopening the
 options dialog. Each open drawing remembers its own export for the session;
@@ -544,7 +544,8 @@ closing and reopening the drawing starts fresh. There is no default shortcut.
 
 If the previous file is missing or access has expired, the existing file chooser
 asks for a destination. Browsers without reusable file access repeat a named
-download and its confirmation. Cancellation or failure keeps the previous
+download and its confirmation; the iPad export picker grants no lasting access,
+so it asks again with the remembered name. Cancellation or failure keeps the previous
 successful recipe and destination. Export Again does not save the editable
 master, change its location or clear unsaved edits, and refuses that master as
 its output destination.

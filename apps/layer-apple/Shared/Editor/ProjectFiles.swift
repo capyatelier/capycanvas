@@ -107,7 +107,9 @@ import UIKit
             }
             if let create = dialogs?.create { create(newDocumentSpec, completed) }
             else { creationError = nil; creationCompletion = completed; creating = true }
-        case "export": beginExport(name: document["name"].string)
+        case "export":
+            if document["repeat"].isNull { beginExport(name: document["name"].string, owner: document["owner"]) }
+            else { exportAgain(name: document["name"].string, owner: document["owner"], repeating: document["repeat"]) }
         case "open":
             if let item = externalOpen?.item { externalOpen = nil; openItem(item) }
             else { chooseOpen { [weak self] urls in
@@ -304,7 +306,65 @@ import UIKit
             }
         }
     }
-    private func beginExport(name: String) {
+    private func exportFilename(_ name: String, recipe: JSON) -> String {
+        URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent + "." + Self.exportExtension(recipe["format"].string)
+    }
+    private func exportDestination(_ url: URL, owner: JSON, recipe: JSON, completion: @escaping (Bool) -> Void) {
+        guard let id = requestID, let store else { completion(false); return }
+        store.edit(["type": "prepare_export", "id": id, "owner": owner.raw, "recipe": recipe.raw,
+            "location": ["uri": url.absoluteString, "name": url.lastPathComponent]]) { [weak self] error in
+            if let error { self?.report(error) }
+            completion(error == nil)
+        }
+    }
+    private func exportAgain(name: String, owner: JSON, repeating: JSON) {
+        guard let id = requestID, let native = store?.native else { fail("The canvas is unavailable"); return }
+        let recipe = repeating["recipe"]
+        native.exportTask(id: id) { [weak self] task, error in
+            DispatchQueue.main.async {
+                guard let self, self.requestID == id else { task?.cancel(); return }
+                guard let task else { self.fail(error ?? "The drawing is unavailable"); return }
+                self.activeTask = task
+                NativeProjectTask.io.async { [weak self] in
+                    do {
+                        try task.configureExport(recipe)
+                        if recipe["format"].string.contains("Hdr") {
+                            try task.compare()
+                            if try task.details()["range_blocked"].bool {
+                                throw HostFailure(message: "Some colors exceed the selected HDR output range. Enable Clip to output HDR range, or choose SDR output.")
+                            }
+                        }
+                        DispatchQueue.main.async { self?.deliverAgain(task, name: name, owner: owner, recipe: recipe,
+                            remembered: URL(string: repeating["location"]["uri"].string)) }
+                    } catch { let message = error.localizedDescription
+                        DispatchQueue.main.async { self?.fail(message) }
+                    }
+                }
+            }
+        }
+    }
+    private func deliverAgain(_ task: NativeProjectTask, name: String, owner: JSON, recipe: JSON, remembered: URL?) {
+        let filename = remembered?.lastPathComponent ?? exportFilename(name, recipe: recipe)
+        let choose = { [weak self] in
+            guard let self else { return }
+            self.deliver(task, name: filename, type: Self.exportType(recipe["format"].string), prepare: { [weak self] url, ready in
+                self?.exportDestination(url, owner: owner, recipe: recipe, completion: ready) ?? ready(false)
+            }) { [weak self] url in self?.finish(url != nil) }
+        }
+        guard !usesExportPicker, let remembered, remembered.isFileURL,
+            FileManager.default.isWritableFile(atPath: remembered.path) else { choose(); return }
+        exportDestination(remembered, owner: owner, recipe: recipe) { [weak self] ready in
+            guard let self else { return }
+            guard ready else { finish(); return }
+            NativeProjectTask.io.async { [weak self] in
+                do {
+                    try task.write(to: remembered)
+                    DispatchQueue.main.async { self?.finish(true) }
+                } catch { DispatchQueue.main.async { choose() } }
+            }
+        }
+    }
+    private func beginExport(name: String, owner: JSON) {
         guard let id = requestID, let native = store?.native else { fail("The canvas is unavailable"); return }
         let editor = ExportController(native: native, request: id, preferences: preferences) { [weak self] task, recipe, destination, color in
             guard let self, self.requestID == id else { task?.cancel(); return }
@@ -312,12 +372,14 @@ import UIKit
             guard let task else { self.finish(); return }
             self.activeTask = task
             let type = Self.exportType(recipe["format"].string)
-            let filename = URL(fileURLWithPath: name).deletingPathExtension().lastPathComponent + "." + Self.exportExtension(recipe["format"].string)
+            let filename = self.exportFilename(name, recipe: recipe)
             self.exportDelivery = { [weak self] in
                 guard let self else { return }
                 if self.cancelled { self.finish(); return }
                 self.blocksEditor = false
-                self.deliver(task, name: filename, type: type) { [weak self] url in
+                self.deliver(task, name: filename, type: type, prepare: { [weak self] url, ready in
+                    self?.exportDestination(url, owner: owner, recipe: recipe, completion: ready) ?? ready(false)
+                }) { [weak self] url in
                     guard let self else { return }
                     guard url != nil else { self.finish(); return }
                     guard self.preferences.canSave else { self.finish(true); return }
@@ -353,16 +415,20 @@ import UIKit
         #endif
     }
     /// Share destination and staging behavior for projects and profiled images.
-    private func deliver(_ task: NativeProjectTask, name: String, type: UTType, previewOnly: Bool = false, completion: @escaping (URL?) -> Void) {
+    private func deliver(_ task: NativeProjectTask, name: String, type: UTType, previewOnly: Bool = false,
+        prepare: ((URL, @escaping (Bool) -> Void) -> Void)? = nil, completion: @escaping (URL?) -> Void) {
         let original = previewOnly ? packageSource : nil
         let destinationError = packageSummary?["destination_error"].string ?? ""
         if !usesExportPicker {
             chooseSave(name: name, type: type) { [weak self] url in
                 guard let self, let url else { completion(nil); return }
-                NativeProjectTask.io.async {
-                    do { try task.write(to: url, previewOnly: previewOnly, original: original, destinationError: destinationError); DispatchQueue.main.async { completion(url) } }
-                    catch { let message = error.localizedDescription
-                        DispatchQueue.main.async { self.report(message); completion(nil) }
+                (prepare ?? { $1(true) })(url) { ready in
+                    guard ready else { completion(nil); return }
+                    NativeProjectTask.io.async {
+                        do { try task.write(to: url, previewOnly: previewOnly, original: original, destinationError: destinationError); DispatchQueue.main.async { completion(url) } }
+                        catch { let message = error.localizedDescription
+                            DispatchQueue.main.async { self.report(message); completion(nil) }
+                        }
                     }
                 }
             }
@@ -376,7 +442,11 @@ import UIKit
                     DispatchQueue.main.async {
                         guard let self else { Self.removeStaging(staging); return }
                         if self.cancelled { Self.removeStaging(staging); completion(nil); return }
-                        let completed: (URL?) -> Void = { url in Self.removeStaging(staging); completion(url) }
+                        let completed: (URL?) -> Void = { url in
+                            Self.removeStaging(staging)
+                            guard let url, let prepare else { completion(url); return }
+                            prepare(url) { completion($0 ? url : nil) }
+                        }
                         if let export = self.dialogs?.export { export(staging, completed) }
                         else { self.pickerCompletion = { completed($0.first) }; self.picker = Picker(export: staging, types: []) }
                     }
