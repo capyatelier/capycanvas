@@ -43,9 +43,7 @@ if [[ -d "$gtk_build/deps/usr" ]]; then
     export PATH="$gtk_build/deps/usr/bin:$PATH"
     export LD_LIBRARY_PATH="$gtk_build/deps/usr/lib64${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 fi
-gtk_config=()
-if [[ -f "$gtk_build/build/build.ninja" ]]; then gtk_config+=(--reconfigure); fi
-meson setup "${gtk_config[@]}" "$gtk_build/build" "$gtk_build/gtk-4.22.4" \
+python3 "$gtk_recipe/configure.py" "$gtk_build/build" "$gtk_build/gtk-4.22.4" \
     --buildtype=release -Dc_args=-fPIC --wrap-mode=nofallback --force-fallback-for=libtiff,libjpeg-turbo \
     -Dlibtiff:default_library=static -Dlibtiff:jbig=disabled -Dlibtiff:lerc=disabled \
     -Dlibtiff:lzma=disabled -Dlibtiff:webp=disabled -Dlibtiff:zstd=disabled \
@@ -60,7 +58,7 @@ cp "$gtk_build/build/gtk/libgtk-4.so.1.2200.4" "$gtk_prefix/lib/libgtk-4.so.1.ne
 mv -f "$gtk_prefix/lib/libgtk-4.so.1.new" "$gtk_prefix/lib/libgtk-4.so.1"
 cp "$gtk_build/gtk-4.22.4/COPYING" "$gtk_docs/COPYING"
 cp "$gtk_build/$gtk_archive" "$gtk_docs/sources/"
-cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/build.sh" "$gtk_docs/"
+cp "$gtk_recipe/pad-event-surface.patch" "$gtk_recipe/tablet-proximity-cursor.patch" "$gtk_recipe/build.sh" "$gtk_recipe/configure.py" "$gtk_docs/"
 python3 - "$gtk_prefix" "$gtk_build/gtk-4.22.4/subprojects" <<'PY'
 import configparser, hashlib, json, pathlib, shutil, sys
 p = pathlib.Path(sys.argv[1])
@@ -69,7 +67,8 @@ docs = p / 'share/doc/capycanvas-gtk'
 files = ['lib/libgtk-4.so.1', 'share/doc/capycanvas-gtk/COPYING',
          'share/doc/capycanvas-gtk/sources/gtk-4.22.4.tar.xz',
          'share/doc/capycanvas-gtk/pad-event-surface.patch',
-         'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch', 'share/doc/capycanvas-gtk/build.sh']
+         'share/doc/capycanvas-gtk/tablet-proximity-cursor.patch', 'share/doc/capycanvas-gtk/build.sh',
+         'share/doc/capycanvas-gtk/configure.py']
 dependencies = {}
 for name in ['libtiff', 'libjpeg-turbo']:
     wrap = configparser.ConfigParser(interpolation=None)

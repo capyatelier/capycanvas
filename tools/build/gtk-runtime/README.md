@@ -18,6 +18,7 @@ departure before any motion:
 python3 tools/build/gtk-runtime/test-tablet-entry.py target/gtk-runtime/gtk-4.22.4
 python3 tools/build/gtk-runtime/test-runtime.py \
   target/gtk-runtime/prefix target/gtk-runtime/gtk-4.22.4/subprojects
+python3 tools/build/gtk-runtime/test-configure.py
 ```
 
 The source archive is pinned by SHA-256. TIFF and JPEG use GTK's checksum-pinned
@@ -38,6 +39,10 @@ package cache from these shipped sources, so they need no codec downloads.
 library using an executable-relative path that survives relocation and symlinks.
 Applications can replace the local library with a compatible rebuilt version.
 GTK's other shared dependencies and libadwaita remain system requirements.
+When a recipe introduces options absent from a configured cache, setup uses
+Meson's `--wipe`; known options use incremental reconfiguration. The installed
+library stays intact until the replacement finishes. The shipped rebuild script
+includes the same `configure.py` helper.
 
 From a relocated package, rebuild the supplied source without a network fetch:
 
