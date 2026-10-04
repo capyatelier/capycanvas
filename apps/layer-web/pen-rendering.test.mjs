@@ -39,6 +39,17 @@ export async function checkPenRendering({ call, evaluate, settle }) {
   assert.equal(await evaluate("layerApp.state().settings.hide_cursor_while_drawing"), false);
   await action({ type: "preferences", action: { type: "reset", id: "hide_cursor_while_drawing" } });
   assert.equal(await evaluate("document.querySelector('#setting-hide-cursor-while-drawing').checked"), true);
+  for (const [label, mode] of [["Tool", "tool"], ["Tool and brush size", "tool_brush_size"]]) {
+    await inPage(() => document.querySelector('.preference-choice:has(#setting-cursor) summary').click());
+    await settle();
+    assert.equal(await evaluate("document.querySelectorAll('.preference-choice:has(#setting-cursor) [role=option] svg').length"), 12);
+    const index = await evaluate(`layerApp.app.preferences().pages.flatMap(p=>p.groups).flatMap(g=>g.rows).find(r=>r.id==='cursor').kind.options.indexOf(${JSON.stringify(label)})`);
+    assert.ok(index >= 0);
+    await inPage(index => document.querySelector(`.preference-choice:has(#setting-cursor) [data-choice="${index}"]`).click(), index);
+    await settle();
+    assert.equal(await evaluate("layerApp.state().settings.cursor"), mode);
+  }
+  await action({ type: "preferences", action: { type: "reset", id: "cursor" } });
   await action({ type: "close_settings" });
   const point = await inPage(() => {
     const camera = layerApp.app.camera(), rect = layerApp.canvas.getBoundingClientRect(), area = camera.work_area;
@@ -76,7 +87,25 @@ export async function checkPenRendering({ call, evaluate, settle }) {
       window.penFeatures = { proto, original, calls: 0 };
       proto.has = function(...args) { penFeatures.calls++; return original.apply(this, args); };
     });
-    for (const pointerType of ["mouse", "pen"]) {
+    for (const theme of ["light", "dark"]) for (const pointerType of ["mouse", "pen"]) {
+      await action({ type: "set_theme", theme });
+      for (const cursor of ["tool", "tool_brush_size"]) {
+        await action({ type: "restore_settings", settings: { ...saved, theme, cursor, hide_cursor_while_drawing: true, feedback: false } });
+        const icons = [];
+        for (const command of ["pen", "pencil", "brush", "eraser", "lasso", "rectangle_select"]) {
+          await action({ type: "invoke", command });
+          await away(pointerType);
+          const empty = await pixels();
+          await send({ type: "mouseMoved", pointerType, ...point, buttons: 0 });
+          const icon = await pixels();
+          assert.ok(difference(empty, icon) > 4, `${pointerType} ${cursor} ${command}: visible tool cursor`);
+          for (const previous of icons) assert.ok(difference(previous, icon) > 4, `${command}: distinct tool cursor`);
+          icons.push(icon);
+        }
+      }
+      await action({ type: "select_brush", id: 1 });
+      await action({ type: "set_brush_size", value: 18 });
+      await action({ type: "restore_settings", settings: { ...saved, theme, cursor: "brush_size", hide_cursor_while_drawing: true, feedback: false } });
       await send({ type: "mouseMoved", pointerType, ...point, buttons: 0 });
       assert.ok(difference(before, await pixels()) > 4, `${pointerType} cursor reaches GPU pixels`);
       await away(pointerType);

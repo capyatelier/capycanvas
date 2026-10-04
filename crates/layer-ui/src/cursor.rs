@@ -18,6 +18,8 @@ pub enum CursorMode {
     Sight,
     BrushSizeDot,
     BrushSizeSinglePixelDot,
+    Tool,
+    ToolBrushSize,
 }
 impl CursorMode {
     pub const CHOICES: &'static [(Self, &'static str)] = &[
@@ -27,6 +29,8 @@ impl CursorMode {
         (Self::Dot, "Dot"),
         (Self::SinglePixelDot, "Single-pixel dot"),
         (Self::Sight, "Sight"),
+        (Self::Tool, "Tool"),
+        (Self::ToolBrushSize, "Tool and brush size"),
         (Self::BrushSize, "Brush size"),
         (Self::BrushSizeCross, "Brush size and cross"),
         (Self::BrushSizeDot, "Brush size and dot"),
@@ -43,7 +47,12 @@ impl CursorMode {
                 | Self::BrushSizeCross
                 | Self::BrushSizeDot
                 | Self::BrushSizeSinglePixelDot
+                | Self::ToolBrushSize
         )
+    }
+
+    pub const fn has_tool(self) -> bool {
+        matches!(self, Self::Tool | Self::ToolBrushSize)
     }
 
     pub const fn icon(self) -> &'static str {
@@ -58,6 +67,8 @@ impl CursorMode {
             Self::BrushSizeCross => "cursor-brush-cross",
             Self::BrushSizeDot => "cursor-brush-dot",
             Self::BrushSizeSinglePixelDot => "cursor-brush-single-pixel-dot",
+            Self::Tool => "cursor-tool",
+            Self::ToolBrushSize => "cursor-tool-brush",
         }
     }
 }
@@ -87,6 +98,7 @@ impl Cursor {
         camera: &Camera,
         scale: f32,
         mode: CursorMode,
+        icon: &'static str,
         view: &mut CanvasCursor,
     ) {
         view.mode = mode;
@@ -97,6 +109,19 @@ impl Cursor {
             ];
         }
         let [cx, cy] = view.center;
+        if mode.has_tool() {
+            if let Some(marker) = layer_render::tool_cursor_marker(icon) {
+                let [x, y] = layer_render::TOOL_CURSOR_HOTSPOTS[marker as usize - 7];
+                let from = [cx - x - 2., cy - y - 2.];
+                view.segments.push(CursorSegment {
+                    from,
+                    to: from.map(|v| v + 20.),
+                    distance: 0.,
+                    marker,
+                    scale: 1.,
+                });
+            }
+        }
         match mode {
             CursorMode::Cross | CursorMode::BrushSizeCross => {
                 view.mark([cx, cy], 5.0, 4.0, scale);

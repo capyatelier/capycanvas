@@ -36,6 +36,7 @@ current-source results.
 
 | Operation | Target | Measured | Source |
 | --- | --- | --- | --- |
+| Tool cursor hover, with and without brush size | 120 | Renderer 119.3–119.6 submissions/s; submission interval p99 15.0–15.6 ms. Presentation unqualified. | [Tool cursors](#tool-cursors) |
 | Pan: Hand tool, one or two fingers | 120 | Met on a small document: 118.8 fps, interval p50/p99 8.3/12.0 ms (1024 px document; not yet at 61 MP) | [Android development](../development/android.md#benchmarks), 2026-09-27 |
 | Pinch zoom | 120 | **Met.** 119.3 fps on the 61 MP photo; 117.7 fps, p99 15.6 ms on a 1024 px document | 2026-09-22; `2c3cb244`, 2026-09-27 |
 | Two-finger rotate | 120 | | |
@@ -1678,3 +1679,23 @@ Median projection cost remains 0.8–0.9 ms. These Web counts measure CPU previe
 work, not presented frames. Raw records are in
 `artifacts/photo-editing-color/p28-gtk/final-0af58/` and
 `artifacts/photo-editing-color/p28-web/final-matrix/`.
+
+## Tool cursors
+
+The Wacom MovinkPad Pro 14 runs three five-second hover gestures on the
+9504 × 6336 Sony photo with one empty paint layer at Fit zoom, the default
+workspace and Navigator, thermal status 0, and 120 Hz input. The benchmark build
+is based on `0516be628` with shared tool cursors, measured 2026-10-04.
+
+| Cursor | Brush diameter | Renderer submissions/s | Submission interval p99 | Viewport GPU p99 |
+| --- | --- | --- | --- | --- |
+| Tool | 18 px | 119.3 | 15.57 ms | 0.237 ms |
+| Tool and brush size | 18 px | 119.5 | 14.98 ms | 0.240 ms |
+| Tool and brush size | 2048 px | 119.6 | 14.84 ms | 1.312 ms |
+| Brush size baseline | 2048 px | 119.8 | 14.33 ms | 1.315 ms |
+
+These are renderer submissions, not display presentation, so they do not qualify
+the 120 fps target. Hover leaves the artwork revision unchanged. Raw records and
+the report are in `artifacts/tool-cursors/viewport-final/` and
+`artifacts/tool-cursors/viewport-report.json`. Low and mid reference tablets
+remain unmeasured for these cursor modes.

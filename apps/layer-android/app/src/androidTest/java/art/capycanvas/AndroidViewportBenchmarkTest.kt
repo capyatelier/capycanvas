@@ -37,7 +37,9 @@ class AndroidViewportBenchmarkTest {
         val languageSwitches = args.getString("languageSwitches")?.split(',').orEmpty()
         val motion = args.getString("motion", "stroke")!!
         val blending = args.getString("blending")
-        check(motion in listOf("stroke", "pan", "pinch"))
+        check(motion in listOf("stroke", "hover", "pan", "pinch"))
+        val cursor = args.getString("cursor")
+        val retainedMotion = motion in listOf("stroke", "hover")
         val passThrough = args.getString("passThrough", "false") == "true"
         val navigator = args.getString("navigator", "true") == "true"
         val artworkQueries = args.getString("artworkQueries", "false") == "true"
@@ -89,6 +91,8 @@ class AndroidViewportBenchmarkTest {
                 host.dispatch(obj("type" to "set_brush_size", "value" to brushSize))
                 host.preference(obj("type" to "edit", "id" to "feedback", "value" to prediction))
                 host.preference(obj("type" to "edit", "id" to "platform_prediction", "value" to false))
+                cursor?.let { mode -> host.dispatch(obj("type" to "restore_settings", "settings" to
+                    JSONObject(host.snapshot!!.getJSONObject("state").getJSONObject("settings").toString()).put("cursor", mode))) }
                 host.dispatch(obj("type" to "customize", "action" to obj("type" to "set_panel_visible", "panel" to "navigator", "visible" to navigator)))
                 transparency?.let { host.preference(obj("type" to "edit", "id" to "transparency", "value" to it)) }
                 if (passThrough) {
@@ -127,7 +131,7 @@ class AndroidViewportBenchmarkTest {
                 languageRequested = System.nanoTime()
                 scenario.onActivity { host.preference(obj("type" to "edit", "id" to "language", "value" to index)) }
             }
-            fun stroke(run: Int, milliseconds: Int) {
+            fun stroke(run: Int, milliseconds: Int, hover: Boolean = false) {
                 val count = (milliseconds / interval).toInt()
                 val began = System.nanoTime()
                 val down = SystemClock.uptimeMillis()
@@ -148,14 +152,14 @@ class AndroidViewportBenchmarkTest {
                         coords[0].x = x.toFloat() + host.surfaceOrigin.x
                         coords[0].y = y.toFloat() + host.surfaceOrigin.y
                         coords[0].pressure = if (i == count) 0f else p.toFloat()
-                        val action = if (i == 0) android.view.MotionEvent.ACTION_DOWN else if (i == count) android.view.MotionEvent.ACTION_UP else android.view.MotionEvent.ACTION_MOVE
+                        val action = if (hover) android.view.MotionEvent.ACTION_HOVER_MOVE else if (i == 0) android.view.MotionEvent.ACTION_DOWN else if (i == count) android.view.MotionEvent.ACTION_UP else android.view.MotionEvent.ACTION_MOVE
                         val event = android.view.MotionEvent.obtain(down, SystemClock.uptimeMillis(), action, 1,
                             properties, coords, 0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_STYLUS, 0)
                         try { check(instrumentation.uiAutomation.injectInputEvent(event, false)) } finally { event.recycle() }
                     } else {
                         val records = host.pointerBuffer(9)
                         doubleArrayOf(x, y, p, 0.0, 0.0, 0.0, 0.0, System.nanoTime().toDouble(),
-                            (if (i == 0) 1 else if (i == count) 3 else 2).toDouble()).copyInto(records)
+                            (if (hover) 0 else if (i == 0) 1 else if (i == count) 3 else 2).toDouble()).copyInto(records)
                         host.pointer((9300 + run).toLong(), 0, 0, records, 9)
                     }
                     if (i % 120 == 119 && activePresent != null) native {
@@ -202,7 +206,8 @@ class AndroidViewportBenchmarkTest {
             waitFor { !native { Native.renderingPending(it) } }
             host.drain(obj("type" to "invoke", "command" to "undo"))
             SystemClock.sleep(800)
-            if (motion != "stroke") {
+            if (motion == "hover") stroke(0, 1500, true)
+            if (!retainedMotion) {
                 gesture(1500)
                 scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
                 SystemClock.sleep(800)
@@ -211,8 +216,8 @@ class AndroidViewportBenchmarkTest {
             val info = obj("radii" to JSONArray(listOf(radiusX, radiusY)), "navigator" to navigator, "label" to label, "photo" to (args.getString("photo") ?: "generated"), "motion" to motion, "repeats" to repeats, "os_input" to osInput, "prediction" to prediction, "interval_ms" to interval, "duration_ms" to duration, "pressure" to pressure, "speed" to speed, "state" to state,
                 "display" to native { JSONObject(Native.displayStatus(it)) })
             File(output, "$label-info.json").writeText(info.toString(2))
-            assertEquals(if (motion == "stroke") "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
-            assertEquals(motion == "stroke", info.getJSONObject("display").getBoolean("retained_target"))
+            assertEquals(if (retainedMotion) "SharedDemandRefresh" else "Fifo", info.getJSONObject("display").getString("present_mode"))
+            assertEquals(retainedMotion, info.getJSONObject("display").getBoolean("retained_target"))
             assertEquals("Navigator visibility after adoption", navigator, info.getJSONObject("display").getInt("overview_count") > 0)
             native { Native.presentationTimings(it, true) }
             repeat(repeats) { run ->
@@ -243,7 +248,7 @@ class AndroidViewportBenchmarkTest {
                         queryResults.put(result.put("begin_ns", start).put("end_ns", System.nanoTime()))
                     }
                 }
-                if (motion == "stroke") stroke(run + 1, duration) else gesture(duration)
+                if (retainedMotion) stroke(run + 1, duration, motion == "hover") else gesture(duration)
                 val ended = System.nanoTime()
                 val endedBoot = SystemClock.elapsedRealtimeNanos()
                 try { queryFuture.get(180, java.util.concurrent.TimeUnit.SECONDS) } finally { queryPool.shutdownNow() }
@@ -262,6 +267,7 @@ class AndroidViewportBenchmarkTest {
                 assertNull(host.failure)
                 assertNull(host.actionError)
                 if (motion == "stroke") assertTrue("Replay must commit actual paint", afterRevision > beforeRevision)
+                if (motion == "hover") assertEquals("Hover never paints", beforeRevision, afterRevision)
                 val data = host.measurementReport(false).put("presentation", present).put("completions", completions).put("begin_ns", began).put("end_ns", ended)
                     .put("artwork_queries", queryResults)
                     .put("statistics_preview", statisticsPreview)
@@ -289,7 +295,7 @@ class AndroidViewportBenchmarkTest {
                 }
                 File(output, "$label-$run.json").writeText(data.toString())
                 println("VIEWPORT $label run=$run frames=${data.getJSONArray("frames").length()} renderer=${data.getJSONObject("renderer").getJSONArray("rows")}")
-                if (motion != "stroke") {
+                if (!retainedMotion) {
                     scenario.onActivity { host.invoke("fit_canvas"); repeat(zoomSteps) { host.invoke("zoom_in") } }
                     SystemClock.sleep(1500)
                 }

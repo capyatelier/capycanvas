@@ -60,6 +60,7 @@ settings-triangle = สามเหลี่ยม
 settings-dot = จุด
 settings-single-pixel-dot = จุดพิกเซลเดียว
 settings-sight = เป้าเล็ง
+settings-tool-and-brush-size = เครื่องมือและขนาดแปรง
 settings-brush-size = ขนาดพู่กัน
 settings-brush-size-and-cross = ขนาดพู่กันและกากบาท
 settings-brush-size-and-dot = ขนาดพู่กันและจุด

@@ -61,6 +61,7 @@ settings-triangle = 三角
 settings-dot = 点
 settings-single-pixel-dot = 1ピクセルの点
 settings-sight = 照準
+settings-tool-and-brush-size = ツールとブラシサイズ
 settings-brush-size = ブラシサイズ
 settings-brush-size-and-cross = ブラシサイズと十字
 settings-brush-size-and-dot = ブラシサイズと点

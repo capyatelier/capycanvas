@@ -884,7 +884,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             && if painting { self.engine.document().drawing_target().is_none() }
                 else { self.engine.document().drawing_content().is_none() } };
         let contact = self.interaction.pointer.is_some_and(|p| p.paint);
-        let mode = if !painting {
+        let mode = if !painting && self.state.settings.cursor.has_tool() {
+            CursorMode::Tool
+        } else if !painting {
             CursorMode::Cross
         } else if self.state.settings.cursor == CursorMode::None
             && !contact
@@ -921,7 +923,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             return true;
         }
         let selection_brush = self.selection_brush_active();
-        let dabs = if selection_brush || self.selection_masks.target().is_some() { self.selection_brush_cursor(event) }
+        let icon = if self.layer_interaction.tool == LayerCanvasTool::Paint && erasing { "eraser" }
+            else if self.layer_interaction.tool == LayerCanvasTool::Paint { tools::group(self.state.brush.preset).icon() }
+            else { ToolVariant::active(&self.state).map_or("eyedropper", |tool| tool.icon_in(&self.state)) };
+        let dabs = if !mode.has_brush_size() { Vec::new() }
+        else if selection_brush || self.selection_masks.target().is_some() { self.selection_brush_cursor(event) }
         else if self.layer_interaction.tool == LayerCanvasTool::Paint {
             self.engine
                 .cursor_contacts(event, &mut self.cursor.hover, self.cursor.origin_ns)
@@ -935,6 +941,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             &self.state.camera,
             scale,
             mode,
+            icon,
             view,
         );
         true
@@ -14738,6 +14745,7 @@ mod tests {
                         | CursorMode::BrushSizeCross
                         | CursorMode::BrushSizeDot
                         | CursorMode::BrushSizeSinglePixelDot
+                        | CursorMode::ToolBrushSize
                 );
                 for kind in [PointerKind::Mouse, PointerKind::Pen] {
                     for hide in [true, false] {
@@ -14833,6 +14841,60 @@ mod tests {
     }
 
     #[test]
+    fn tool_cursors_follow_medium_selection_shape_and_eraser_changes() {
+        use sha2::{Digest, Sha256};
+        for (name, hash) in layer_render::TOOL_CURSOR_ICONS {
+            let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(format!("../../apps/layer-web/icons/layer-{name}-symbolic.svg"));
+            assert_eq!(format!("{:x}", Sha256::digest(std::fs::read(path).unwrap())), *hash,
+                "Regenerate the tool cursor bank after changing {name}");
+        }
+        for platform in Platform::ALL {
+            let mut s = session(platform);
+            s.state.settings.cursor = CursorMode::Tool;
+            for group in ToolGroup::ALL {
+                invoke(&mut s, group.tool().command());
+                s.dispatch(UiAction::SelectToolGroup { group }).unwrap();
+                s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.)));
+                let cursor = s.canvas_cursor().unwrap();
+                assert_eq!(cursor.segments.len(), 1);
+                assert_eq!(cursor.segments[0].marker, layer_render::tool_cursor_marker(group.icon()).unwrap());
+                s.state.settings.cursor = CursorMode::BrushSize;
+                let outline = s.canvas_cursor().unwrap().segments;
+                s.state.settings.cursor = CursorMode::ToolBrushSize;
+                let combined = s.canvas_cursor().unwrap();
+                assert_eq!(&combined.segments[..combined.segments.len() - 1], outline);
+                assert_eq!(&combined.segments[combined.segments.len() - 1..], cursor.segments);
+                s.state.settings.cursor = CursorMode::Tool;
+            }
+            invoke(&mut s, CommandId::Eraser);
+            for kind in SelectionTool::ALL {
+                s.dispatch(UiAction::Layer { action: LayerAction::Tool { tool: kind.canvas_tool(RegionSource::Visible) } }).unwrap();
+                s.cursor_input(Some(event(&s, 1, PenPhase::Hover, 0.)));
+                let cursor = s.canvas_cursor().unwrap();
+                assert_eq!(cursor.segments[0].marker, layer_render::tool_cursor_marker(kind.command().icon().unwrap()).unwrap());
+                s.state.settings.cursor = CursorMode::ToolBrushSize;
+                let combined = s.canvas_cursor().unwrap();
+                assert_eq!(combined.segments.iter().any(|segment| segment.marker == 0.), kind == SelectionTool::Brush);
+                s.state.settings.cursor = CursorMode::Tool;
+            }
+            for shape in [FigureShape::Line, FigureShape::Rectangle, FigureShape::Ellipse] {
+                s.dispatch(UiAction::Layer { action: LayerAction::Tool { tool: LayerCanvasTool::Figure { shape, paint: FigurePaint::Outline } } }).unwrap();
+                let icon = ToolVariant::Figure { shape }.icon();
+                assert_eq!(s.canvas_cursor().unwrap().segments[0].marker, layer_render::tool_cursor_marker(icon).unwrap());
+            }
+            invoke(&mut s, CommandId::Pen);
+            let restored_icon = s.canvas_cursor().unwrap().segments[0].marker;
+            s.cursor_input(Some(PenEvent { tool: ToolKind::Eraser, ..event(&s, 2, PenPhase::Hover, 0.) }));
+            assert_eq!(s.canvas_cursor().unwrap().segments[0].marker, layer_render::tool_cursor_marker("eraser").unwrap());
+            s.cursor_input(Some(event(&s, 3, PenPhase::Hover, 0.)));
+            assert_eq!(s.canvas_cursor().unwrap().segments[0].marker, restored_icon);
+            s.frame(4, 4).unwrap();
+            assert_eq!(s.engine.backend().dabs, 0);
+        }
+    }
+
+    #[test]
     fn cursor_markers_keep_their_size_and_outline_at_fractional_dpi() {
         let mut s = session(Platform::Gtk);
         for pixels in [500, 750, 1000, 1500] {
@@ -14874,6 +14936,14 @@ mod tests {
                         assert_eq!(markers.len(), 1);
                         assert_eq!(markers[0].marker, 4.0);
                         assert_eq!(markers[0].to[0] - markers[0].from[0], 3.0);
+                    }
+                    CursorMode::Tool | CursorMode::ToolBrushSize => {
+                        assert_eq!(markers.len(), 1);
+                        assert_eq!(markers[0].marker, layer_render::tool_cursor_marker("pen").unwrap());
+                        for axis in 0..2 {
+                            assert!((markers[0].from[axis] + 2. + layer_render::TOOL_CURSOR_HOTSPOTS[0][axis] - cursor.center[axis]).abs() < 0.001);
+                            assert!((markers[0].to[axis] - markers[0].from[axis] - 20.).abs() < 0.001);
+                        }
                     }
                     _ => assert!(markers.is_empty()),
                 }

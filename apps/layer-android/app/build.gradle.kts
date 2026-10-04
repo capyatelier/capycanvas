@@ -69,7 +69,7 @@ androidComponents.onVariants { variant ->
         commandLine(listOf("cargo", "ndk") + capyAbis.flatMap { listOf("-t", it) } +
             listOf("--platform", "29", "-o", jniDirectory.get().asFile.absolutePath,
                 "build", "--locked", "--profile", profile, "-p", "layer-android-link"))
-        inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/Cargo.toml") })
+        inputs.files(fileTree(rootDir.resolve("../../crates")) { include("**/*.rs", "**/*.wgsl", "**/*.pgm", "**/*.png", "**/*.bin", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("../../vendor")) { include("**/*.rs", "**/*.wgsl", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("native")) { include("**/*.rs", "**/Cargo.toml") })
         inputs.files(fileTree(rootDir.resolve("../../assets/filters")))

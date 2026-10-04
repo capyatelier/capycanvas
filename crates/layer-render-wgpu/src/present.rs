@@ -75,6 +75,7 @@ pub struct ViewportPresenter {
     corner_radius: f32,
     picker: crate::present_picker::Picker,
     cursor_pipeline: wgpu::RenderPipeline,
+    cursor_icons: wgpu::BindGroup,
     cursor_buffer: wgpu::Buffer,
     cursor_vertices: Vec<CursorSegment>,
     uploads: Uploads,
@@ -347,7 +348,7 @@ impl ViewportPresenter {
 
     /// Shares the renderer's optional startup cache with presentation shaders.
     pub fn for_renderer(renderer: &WgpuRasterizer, format: wgpu::TextureFormat) -> Self {
-        Self::with_device(&renderer.device, format, SdrSurfaceColor::Srgb)
+        Self::with_device(&renderer.device, &renderer.queue, format, SdrSurfaceColor::Srgb)
     }
 
     /// The host configures its surface with the matching, advertised color space.
@@ -358,7 +359,7 @@ impl ViewportPresenter {
         color: SdrSurfaceColor,
     ) -> Result<Self, GpuRasterError> {
         color.shader_encoding(format)?;
-        let mut presenter = Self::with_device(&renderer.device, format, color);
+        let mut presenter = Self::with_device(&renderer.device, &renderer.queue, format, color);
         presenter.set_hdr_view(
             renderer,
             renderer
@@ -382,6 +383,7 @@ impl ViewportPresenter {
 
     fn with_device(
         device: &crate::PipelineDevice,
+        queue: &wgpu::Queue,
         format: wgpu::TextureFormat,
         color: SdrSurfaceColor,
     ) -> Self {
@@ -490,7 +492,31 @@ impl ViewportPresenter {
         });
         let pipeline = ["fs_main", "fs_placed", "fs_mapped"].map(|entry|
             surface_pipeline(device, "viewport presentation", &pipeline_layout, &shader, ["vs_main", entry], None, format, None));
-        let cursor_pipeline = surface_pipeline(device, "display-only cursor", &pipeline_layout, &shader, ["cursor_vertex", "cursor_fragment"],
+        let cursor_icon_layout = crate::bindings::layout(device, "tool cursor icons", &[
+            crate::bindings::texture_of(0, wgpu::ShaderStages::FRAGMENT,
+                wgpu::TextureSampleType::Float { filterable: false }, wgpu::TextureViewDimension::D2Array),
+        ]);
+        let atlas = include_bytes!("tool-cursors.bin");
+        let extent = wgpu::Extent3d { width: 64, height: 64, depth_or_array_layers: layer_render::TOOL_CURSOR_ICONS.len() as u32 };
+        let cursor_icon_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("tool cursor signed distances"), size: extent,
+            mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST, view_formats: &[],
+        });
+        queue.write_texture(cursor_icon_texture.as_image_copy(), atlas,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(64), rows_per_image: Some(64) }, extent);
+        let cursor_icon_view = cursor_icon_texture.create_view(&wgpu::TextureViewDescriptor {
+            dimension: Some(wgpu::TextureViewDimension::D2Array), ..Default::default()
+        });
+        let cursor_icons = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("tool cursor icons"), layout: &cursor_icon_layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&cursor_icon_view) }],
+        });
+        let cursor_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("cursor layout"), bind_group_layouts: &[Some(&layout), Some(&cursor_icon_layout)], immediate_size: 0,
+        });
+        let cursor_pipeline = surface_pipeline(device, "display-only cursor", &cursor_layout, &shader, ["cursor_vertex", "cursor_fragment"],
             Some(wgpu::VertexBufferLayout {
                 array_stride: std::mem::size_of::<CursorSegment>() as u64,
                 step_mode: wgpu::VertexStepMode::Instance,
@@ -568,6 +594,7 @@ impl ViewportPresenter {
             corner_radius: 0.0,
             picker: Default::default(),
             cursor_pipeline,
+            cursor_icons,
             cursor_buffer,
             cursor_vertices: Vec::with_capacity(256),
             uploads: Uploads::new(device, 16 * 1024),
@@ -1206,6 +1233,7 @@ impl ViewportPresenter {
                 self.picker.draw(&mut pass);
                 if !self.cursor_vertices.is_empty() {
                     pass.set_pipeline(&self.cursor_pipeline);
+                    pass.set_bind_group(1, &self.cursor_icons, &[]);
                     pass.set_vertex_buffer(0, self.cursor_buffer.slice(..));
                     pass.draw(0..6, 0..self.cursor_vertices.len() as u32);
                 }

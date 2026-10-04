@@ -105,6 +105,51 @@ fn texture(r: &WgpuRasterizer, format: wgpu::TextureFormat) -> wgpu::Texture {
 }
 
 #[test]
+fn tool_cursor_bank_draws_distinct_dark_icons_with_light_surrounds_and_clears() {
+    let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
+    frame(&mut r, &mut source(RgbSpace::Srgb, [32768, 32768, 32768, 65535]));
+    let mut p = ViewportPresenter::for_surface(&r, wgpu::TextureFormat::Rgba8UnormSrgb, SdrSurfaceColor::Srgb).unwrap();
+    for scale in [1., 1.5, 2., 3.] {
+        let extent = (256. * scale) as u32;
+        let target = crate::create_target(r.device(), [extent; 2], wgpu::TextureFormat::Rgba8UnormSrgb, "tool cursor gallery").0;
+        let view = ViewState { width_px: extent, height_px: extent,
+            document_to_surface: [scale, 0., 0., scale, 0., 0.], ..view() };
+        p.set_cursor(r.device(), &[], scale);
+        p.present(&r, &target.create_view(&Default::default()), view, [0.2, 0.2, 0.2, 1.]).unwrap();
+        let before = crate::layer_tests::page_bytes(&r, &target);
+        let segments: Vec<_> = layer_render::TOOL_CURSOR_ICONS.iter().enumerate().map(|(i, (name, _))| {
+            let from = [8. + (i % 8) as f32 * 28., 8. + (i / 8) as f32 * 28.];
+            layer_render::CursorSegment { from, to: from.map(|v| v + 20.), distance: 0.,
+                marker: layer_render::tool_cursor_marker(name).unwrap(), scale: 1. }
+        }).collect();
+        p.set_cursor(r.device(), &segments, scale);
+        p.present(&r, &target.create_view(&Default::default()), view, [0.2, 0.2, 0.2, 1.]).unwrap();
+        let actual = crate::layer_tests::page_bytes(&r, &target);
+        if let Ok(directory) = std::env::var("LAYER_TEST_ARTIFACTS") {
+            let path = std::path::Path::new(&directory).join(format!("tool-cursors-{scale}.ppm"));
+            let mut bytes = format!("P6\n{extent} {extent}\n255\n").into_bytes();
+            bytes.extend(actual.chunks_exact(4).flat_map(|pixel| pixel[..3].iter().copied()));
+            std::fs::write(path, bytes).unwrap();
+        }
+        let mut icons = std::collections::HashSet::new();
+        for ((name, _), segment) in layer_render::TOOL_CURSOR_ICONS.iter().zip(&segments) {
+            let mut icon = Vec::new();
+            for y in (segment.from[1] * scale) as usize..(segment.to[1] * scale) as usize {
+                for x in (segment.from[0] * scale) as usize..(segment.to[0] * scale) as usize {
+                    icon.push(actual[(y * extent as usize + x) * 4]);
+                }
+            }
+            assert!(icon.iter().filter(|&&v| v < 96).count() > 3, "{name} at {scale}: dark silhouette");
+            assert!(icon.iter().filter(|&&v| v > 190).count() > 3, "{name} at {scale}: light surround");
+            assert!(icons.insert(icon), "{name} at {scale}: distinct tool silhouette");
+        }
+        p.set_cursor(r.device(), &[], scale);
+        p.present(&r, &target.create_view(&Default::default()), view, [0.2, 0.2, 0.2, 1.]).unwrap();
+        assert_eq!(crate::layer_tests::page_bytes(&r, &target), before);
+    }
+}
+
+#[test]
 fn presentation_wakes_for_visible_changes_and_skips_unchanged_frames() {
     let mut r = WgpuRasterizer::new_native_headless(DocumentColor::default()).unwrap();
     frame(&mut r, &mut source(RgbSpace::Srgb, [17000, 45000, 5000, 33000]));

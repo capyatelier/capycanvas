@@ -61,6 +61,7 @@ settings-triangle = Üçgen
 settings-dot = Nokta
 settings-single-pixel-dot = Tek piksellik nokta
 settings-sight = Nişangâh
+settings-tool-and-brush-size = Araç ve fırça boyutu
 settings-brush-size = Fırça boyutu
 settings-brush-size-and-cross = Fırça boyutu ve artı
 settings-brush-size-and-dot = Fırça boyutu ve nokta

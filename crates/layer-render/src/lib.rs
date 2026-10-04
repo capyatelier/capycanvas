@@ -14,6 +14,8 @@ use std::fmt;
 mod outline;
 mod telemetry;
 mod selection;
+mod cursor_icons;
+pub use cursor_icons::{TOOL_CURSOR_ICONS, TOOL_CURSOR_HOTSPOTS, tool_cursor_marker};
 pub use selection::{SelectionGradient, SelectionOverlay, SelectionPaint, SelectionPaintMode, SelectionPaintResult};
 pub use outline::{TipOutline, mask_outline};
 pub use telemetry::{RendererTelemetry, TimingSamples};
@@ -54,7 +56,7 @@ pub struct CursorSegment {
     /// 0: dashed line, 1: solid line, 2: filled rectangular handle (`from`/`to`
     /// are opposite corners), 3: filled triangle in the `from`/`to` bounds with
     /// its tip at `from`, 4: dark cross, 5: dark sight with a center dot,
-    /// 6: red prohibited cursor.
+    /// 6: red prohibited cursor, 7+: shared tool icon index.
     /// Cross/sight bounds describe their outer size; their light surround is
     /// composited around the whole shape, never between intersecting strokes.
     /// Filled shapes have a one-pixel contrasting border.

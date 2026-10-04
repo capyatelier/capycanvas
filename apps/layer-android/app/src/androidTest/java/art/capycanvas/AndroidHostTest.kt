@@ -2605,7 +2605,22 @@ class AndroidHostTest {
             compose.onNodeWithTag("setting-choice-cursor").assertExists()
             capture("cursor-input-settings")
             action(obj("type" to "close_settings"))
-            for (tool in listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) {
+            for (theme in listOf("light", "dark")) for (tool in listOf(MotionEvent.TOOL_TYPE_STYLUS, MotionEvent.TOOL_TYPE_MOUSE)) {
+                action(obj("type" to "set_theme", "theme" to theme))
+                for (mode in listOf("tool", "tool_brush_size")) {
+                    action(obj("type" to "restore_settings", "settings" to JSONObject(saved.toString()).put("theme", theme).put("cursor", mode).put("feedback", false)))
+                    val icons = mutableListOf<IntArray>()
+                    for (command in listOf("pen", "pencil", "brush", "eraser", "lasso", "rectangle_select")) {
+                        action(obj("type" to "invoke", "command" to command))
+                        send(MotionEvent.ACTION_HOVER_MOVE, tool)
+                        val icon = pixels("$tool-$mode-$command")
+                        for (previous in icons) assertTrue("$command has a distinct tool cursor", difference(previous, icon) > 4)
+                        icons.add(icon)
+                    }
+                }
+                action(obj("type" to "select_brush", "id" to 1))
+                action(obj("type" to "set_brush_size", "value" to 48))
+                action(obj("type" to "restore_settings", "settings" to JSONObject(saved.toString()).put("theme", theme).put("cursor", "brush_size").put("feedback", false)))
                 send(MotionEvent.ACTION_HOVER_MOVE, tool)
                 val hover = pixels("$tool-hover")
                 preference("cursor", 0)

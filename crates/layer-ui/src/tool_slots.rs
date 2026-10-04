@@ -244,7 +244,7 @@ impl ToolVariant {
             Self::Gradient {shape}=>match shape {layer_core::GradientShape::Linear=>"gradient",layer_core::GradientShape::Radial=>"gradient-radial",layer_core::GradientShape::Reflected=>"gradient-reflected"},
         }
     }
-    fn icon_in(self, state: &UiState) -> &'static str {
+    pub(crate) fn icon_in(self, state: &UiState) -> &'static str {
         if let Self::Command { command } = self {
             state.commands.iter().find(|c| c.id == command).and_then(|c| c.icon).unwrap_or(self.icon())
         } else { self.icon() }
@@ -278,7 +278,7 @@ impl ToolVariant {
         };
         localization.text(id).to_string()
     }
-    fn active(state: &UiState) -> Option<Self> {
+    pub(crate) fn active(state: &UiState) -> Option<Self> {
         let tool = state.layer_tools.tool;
         Some(match tool {
             LayerCanvasTool::Figure { shape, .. } => Self::Figure { shape },

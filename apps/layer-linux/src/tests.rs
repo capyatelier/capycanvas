@@ -8541,6 +8541,8 @@ fn native_cursor_vectors() {
     let w = fixture_workspace(&app);
     w.window.present();
     pump(1800);
+    apply_fixture_theme(&w);
+    pump(200);
     std::fs::create_dir_all("../../artifacts/ui/cursors").unwrap();
     let scale = w.area.scale_factor() as f32;
     assert_eq!(
@@ -8571,11 +8573,31 @@ fn native_cursor_vectors() {
     toggle.set_active(false);
     assert!(!state(&w).settings.hide_cursor_while_drawing);
     toggle.set_active(true);
+    let choice = named::<adw::ComboRow>(w.window.upcast_ref(), "setting-cursor");
+    assert_eq!(choice.model().unwrap().n_items(), 12);
+    for mode in [layer_ui::CursorMode::Tool, layer_ui::CursorMode::ToolBrushSize] {
+        let index = layer_ui::CursorMode::CHOICES.iter().position(|&(item, _)| item == mode).unwrap();
+        choice.set_selected(index as u32);
+        assert_eq!(state(&w).settings.cursor, mode);
+    }
     capture_reference(&w, "../../artifacts/ui/cursors/gtk-input-settings.png", 1.0);
     w.dispatch(UiAction::CloseSettings);
     pump(200);
     w.cursor_input(Some(hover()));
     assert!(ui_session_mut(&w).canvas_cursor().is_some());
+    for mode in [layer_ui::CursorMode::Tool, layer_ui::CursorMode::ToolBrushSize] {
+        let index = layer_ui::CursorMode::CHOICES.iter().position(|&(item, _)| item == mode).unwrap();
+        w.dispatch(UiAction::Preferences { action: PreferenceAction::Edit { id: PreferenceId::Cursor, value: PreferenceValue::Choice(index as u32) } });
+        for command in [CommandId::Pen, CommandId::Pencil, CommandId::Brush, CommandId::Eraser, CommandId::Clone, CommandId::Lasso, CommandId::RectangleSelect] {
+            w.dispatch(UiAction::Invoke { command });
+            w.cursor_input(Some(hover()));
+            pump(150);
+            let cursor = ui_session_mut(&w).canvas_cursor().unwrap();
+            assert!(cursor.segments.iter().any(|segment| segment.marker >= 7.));
+            let theme = state(&w).theme;
+            capture_reference(&w, &format!("../../artifacts/ui/cursors/gtk-{theme:?}-{mode:?}-{command:?}.png"), 1.);
+        }
+    }
     w.cursor_input(None);
     assert!(
         ui_session_mut(&w)

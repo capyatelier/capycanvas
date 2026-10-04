@@ -306,6 +306,11 @@ most magnified transform pose.
 
 ## Benchmarks
 
+`AndroidViewportBenchmarkTest` accepts `motion=hover` and `cursor=tool` or
+`cursor=tool_brush_size` to measure moving tool cursors without depositing ink.
+Use the tier photo, release or benchmark build, and three five-second gestures
+under the [measurement rules](../performance/measuring.md).
+
 The `benchmark` build type inherits `release`, is not debuggable, and is signed
 with the debug key. `-PcapyBenchmark` makes it the build type of the test APK.
 Make performance decisions with it, never with a debug build. Reinstall the

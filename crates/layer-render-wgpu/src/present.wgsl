@@ -322,6 +322,11 @@ struct CursorVertex {
     @location(0) local: vec2<f32>,
     @location(1) @interpolate(flat) line: vec4<f32>,
 };
+@group(1) @binding(0) var tool_cursor_distances: texture_2d_array<f32>;
+fn tool_cursor_distance(icon: u32, point: vec2<i32>) -> f32 {
+    let p = clamp(point, vec2(0), vec2(63));
+    return (textureLoad(tool_cursor_distances, p, i32(icon), 0).r * 255. - 128.) / 16.;
+}
 @vertex fn cursor_vertex(@builtin(vertex_index) vertex: u32,
     @location(0) start_point: vec2<f32>, @location(1) end_point: vec2<f32>,
     @location(2) offset: f32, @location(3) marker: f32, @location(4) scale: f32) -> CursorVertex {
@@ -341,6 +346,17 @@ struct CursorVertex {
     return CursorVertex(surface_clip(point), local, vec4<f32>(extent, offset, marker, scale));
 }
 @fragment fn cursor_fragment(v: CursorVertex) -> @location(0) vec4<f32> {
+    if v.line.z > 6.5 {
+        let point = (v.local / v.line.w + vec2(10.)) * 3.2 - .5;
+        let p = vec2<i32>(floor(point));
+        let f = fract(point);
+        let icon = u32(v.line.z - 7.);
+        let d = mix(mix(tool_cursor_distance(icon, p), tool_cursor_distance(icon, p + vec2(1, 0)), f.x),
+            mix(tool_cursor_distance(icon, p + vec2(0, 1)), tool_cursor_distance(icon, p + vec2(1, 1)), f.x), f.y) * v.line.w;
+        let ink = clamp(.5 - d, 0., 1.);
+        let halo = clamp(.75 * v.line.w + .5 - d, 0., 1.);
+        return view_store(vec4(vec3(halo - ink), halo) * window_coverage(logical_surface(v.position.xy)));
+    }
     let distance = length(vec2<f32>(max(max(-v.local.x, v.local.x-v.line.x), 0.0), v.local.y));
     let scale = v.line.w;
     var alpha = clamp(select(0.5, 1.5, v.line.z > 0.5) * scale + 0.5 - distance, 0.0, 1.0);

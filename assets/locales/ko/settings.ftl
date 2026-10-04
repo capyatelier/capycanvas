@@ -61,6 +61,7 @@ settings-triangle = 삼각형
 settings-dot = 점
 settings-single-pixel-dot = 1픽셀 점
 settings-sight = 조준점
+settings-tool-and-brush-size = 도구 및 브러시 크기
 settings-brush-size = 브러시 크기
 settings-brush-size-and-cross = 브러시 크기와 십자
 settings-brush-size-and-dot = 브러시 크기와 점

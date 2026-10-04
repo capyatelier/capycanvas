@@ -61,6 +61,7 @@ settings-triangle = Tam giác
 settings-dot = Chấm
 settings-single-pixel-dot = Chấm một pixel
 settings-sight = Tâm ngắm
+settings-tool-and-brush-size = Công cụ và kích thước cọ
 settings-brush-size = Kích thước cọ
 settings-brush-size-and-cross = Kích thước cọ và chữ thập
 settings-brush-size-and-dot = Kích thước cọ và chấm

@@ -61,6 +61,7 @@ settings-triangle = Dreieck
 settings-dot = Punkt
 settings-single-pixel-dot = Ein-Pixel-Punkt
 settings-sight = Fadenkreuz
+settings-tool-and-brush-size = Werkzeug und Pinselgröße
 settings-brush-size = Pinselgröße
 settings-brush-size-and-cross = Pinselgröße und Kreuz
 settings-brush-size-and-dot = Pinselgröße und Punkt

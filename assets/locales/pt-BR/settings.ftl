@@ -61,6 +61,7 @@ settings-triangle = Triângulo
 settings-dot = Ponto
 settings-single-pixel-dot = Ponto de um pixel
 settings-sight = Mira
+settings-tool-and-brush-size = Ferramenta e tamanho do pincel
 settings-brush-size = Tamanho do pincel
 settings-brush-size-and-cross = Tamanho do pincel e cruz
 settings-brush-size-and-dot = Tamanho do pincel e ponto

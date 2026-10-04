@@ -61,6 +61,7 @@ settings-triangle = Треугольник
 settings-dot = Точка
 settings-single-pixel-dot = Точка в один пиксель
 settings-sight = Прицел
+settings-tool-and-brush-size = Инструмент и размер кисти
 settings-brush-size = Размер кисти
 settings-brush-size-and-cross = Размер кисти и крест
 settings-brush-size-and-dot = Размер кисти и точка

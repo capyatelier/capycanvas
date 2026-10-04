@@ -121,6 +121,7 @@ settings-single-pixel-dot = Titik satu piksel
 
 settings-sight = Bidikan
 
+settings-tool-and-brush-size = Alat dan ukuran kuas
 settings-brush-size = Ukuran kuas
 
 settings-brush-size-and-cross = Ukuran kuas dan silang

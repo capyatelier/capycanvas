@@ -61,6 +61,7 @@ settings-triangle = Triangle
 settings-dot = Dot
 settings-single-pixel-dot = Single-pixel dot
 settings-sight = Sight
+settings-tool-and-brush-size = Tool and brush size
 settings-brush-size = Brush size
 settings-brush-size-and-cross = Brush size and cross
 settings-brush-size-and-dot = Brush size and dot

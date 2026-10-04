@@ -838,6 +838,8 @@ fn cursor_label(value: CursorMode, localizer: &Localizer) -> String {
         CursorMode::BrushSizeCross => MessageId::SETTINGS_BRUSH_SIZE_AND_CROSS,
         CursorMode::BrushSizeDot => MessageId::SETTINGS_BRUSH_SIZE_AND_DOT,
         CursorMode::BrushSizeSinglePixelDot => MessageId::SETTINGS_BRUSH_SIZE_AND_SINGLE_PIXEL_DOT,
+        CursorMode::Tool => MessageId::SETTINGS_TOOL,
+        CursorMode::ToolBrushSize => MessageId::SETTINGS_TOOL_AND_BRUSH_SIZE,
     }).to_string()
 }
 fn zen_label(value: ZenIcon, localizer: &Localizer) -> String {
@@ -2303,6 +2305,8 @@ mod copy_tests {
                 "sight",
                 "brush_size_dot",
                 "brush_size_single_pixel_dot",
+                "tool",
+                "tool_brush_size",
             ] {
                 let mut settings: Settings =
                     serde_json::from_value(serde_json::json!({ "cursor": saved })).unwrap();
@@ -2316,7 +2320,7 @@ mod copy_tests {
                 else {
                     panic!()
                 };
-                assert_eq!(options.len(), 10);
+                assert_eq!(options.len(), 12);
                 assert_eq!(icons.len(), options.len());
                 assert_eq!(CursorMode::CHOICES[selected as usize].0, settings.cursor);
                 settings

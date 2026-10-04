@@ -61,6 +61,7 @@ settings-triangle = 三角形
 settings-dot = 圆点
 settings-single-pixel-dot = 单像素点
 settings-sight = 准星
+settings-tool-and-brush-size = 工具和画笔大小
 settings-brush-size = 画笔大小
 settings-brush-size-and-cross = 画笔大小与十字
 settings-brush-size-and-dot = 画笔大小与圆点

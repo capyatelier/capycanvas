@@ -37,14 +37,22 @@ cannot disagree about whether a setting is valid.
 About ends with a read-only two-column row, Dedicated to / Nagu, after Source
 code. Application license shows its value without a description.
 
-**Cursor shape** is one shared setting for painting tools, with None first,
-followed by Cross, Triangle, Dot, Single-pixel dot, Sight, and brush-size
+**Cursor shape** is one shared setting for canvas tools, with None first,
+followed by Cross, Triangle, Dot, Single-pixel dot, Sight, Tool, Tool and brush
+size, and brush-size
 outlines with no center marker, a cross, a dot, or a single-pixel dot. The
 brush-size options retain the resolved brush-tip shape and dynamics. Existing
 saved cursor modes remain valid, and Reset still selects the brush-size outline.
 Single-pixel markers occupy one physical display pixel at any host scale.
 Dot is a tiny cross. Cross, Dot, and Sight use dark strokes with a light surround;
 Sight also has a center dot. Their silhouettes match the shared dropdown icons.
+
+Tool shows the active tool's shared icon with its working point at the pointer:
+the pen nib, brush bristles or eraser edge. Geometric shapes use their center.
+It follows the selected medium, selection tool and figure or gradient shape, and shows the
+Eraser when erasing. Tool and brush size adds the resolved brush-tip outline for
+brush tools; other tools keep their icon. Tool icons stay the same screen size
+while zooming and have dark silhouettes with a light surround on either theme.
 
 With None selected, mouse and trackpad hover still show Sight. Confirmed
 screenless tablet pens do too; display pens and pens whose device type is unknown
