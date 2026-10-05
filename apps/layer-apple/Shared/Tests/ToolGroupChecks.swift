@@ -31,4 +31,27 @@ extension XCTestCase {
         attachEditor(in: app, name: "tool-groups-chosen-\(theme)")
         XCTAssertFalse(app.staticTexts["Canvas error"].exists)
     }
+    @MainActor func checkEncloseFillTool(in app: XCUIApplication) {
+        app.launch(); capturePaintEditor(in: app)
+        editorTool("Fill", in: app)
+        editorChoice("Lasso fill", group: true, in: app)
+        editorChoice("Enclose and Fill", in: app)
+        let tile = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "toolbar-tile-", "Enclose and Fill")).firstMatch
+        XCTAssertTrue(tile.waitForExistence(timeout: 10), "The Fill tile follows Enclose and Fill")
+        for id in ["tolerance", "smoothing"] {
+            XCTAssertTrue(app.buttons["number-value-tool-" + id].waitForExistence(timeout: 10), "Enclose and Fill shares Fill's \(id)")
+        }
+        for id in ["gap_closing", "expansion"] {
+            XCTAssertTrue(app.textFields["number-entry-tool-" + id].waitForExistence(timeout: 10), "Enclose and Fill shares Fill's \(id)")
+        }
+        let reference = app.buttons["tool-action-selection_reference"], visible = app.buttons["tool-action-selection_visible"]
+        revealEditorControl(reference, in: app.scrollViews.containing(.button, identifier: reference.identifier).firstMatch)
+        XCTAssertTrue(reference.isSelected, "Enclose and Fill samples reference layers by default")
+        workspaceActivate(visible)
+        expectation(for: NSPredicate(format: "selected == YES"), evaluatedWith: visible)
+        waitForExpectations(timeout: 5)
+        XCTAssertTrue(tile.exists, "Changing the source keeps Enclose and Fill")
+        attachEditor(in: app, name: "enclose-fill-tool")
+        XCTAssertFalse(app.staticTexts["Canvas error"].exists)
+    }
 }
