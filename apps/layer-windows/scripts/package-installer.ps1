@@ -46,7 +46,7 @@ Write-PackagedPayload $portable.source $payload $manifest $packaging {
     & (Join-Path $PSScriptRoot 'package-logos.ps1') -Destination (Join-Path $run 'logos') -Icon (Join-Path $payload 'CapyCanvas.ico')
     [IO.File]::WriteAllText((Join-Path $payload 'README.txt'),$readme.Replace(([string][char]13+[char]10),$lf)+$lf,$utf8)
 }
-$label='capycanvas-windows-x64'+$(if($TestIdentity){'-installer-test'}else{'-setup'})
+$label='capycanvas-'+$manifest.version+'-windows-x64'+$(if($TestIdentity){'-installer-test'}else{'-setup'})
 if($manifest.development){$label+='-development'}
 $installer=Join-Path $run ($label+'.exe');$repeat=Join-Path $run 'repeat.exe'
 foreach($path in @($installer,$repeat)){

@@ -110,7 +110,7 @@ all file sizes and SHA-256 hashes.
             }
         }finally{$zip.Dispose();$stream.Dispose()}
     }
-    $label='capycanvas-windows-x64'+$(if($dirty){'-development'}else{''})
+    $label='capycanvas-'+$version+'-windows-x64'+$(if($dirty){'-development'}else{''})
     $archive=Join-Path $run ($label+'.zip')
     Write-Archive $archive
     $repeat=Join-Path $run 'reproducibility-check.zip';Write-Archive $repeat

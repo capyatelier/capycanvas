@@ -40,16 +40,11 @@ the same scripts developers run and the Rust version pinned in the workflow:
 
 | Job | Script | Output |
 | --- | --- | --- |
-| Linux | `packaging/appimage/build.sh` in an Arch Linux container | `capycanvas-linux-x86_64.AppImage` and its `.zsync` file |
-| Web | `node apps/layer-web/package.mjs` | `capycanvas-web.zip` |
-| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-android.aab`; on a tag also the Play-signed universal `capycanvas-android.apk` |
+| Linux | `packaging/appimage/build.sh` in an Arch Linux container | `capycanvas-<version>-linux-x86_64.AppImage` and its `.zsync` file |
+| Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
+| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also the Play-signed universal `capycanvas-<version>-android.apk` |
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
-| macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-macos-arm64.dmg`; the iPad build goes to App Store Connect |
-
-File names stay the same in every release, so
-`https://github.com/capyatelier/capycanvas/releases/latest/download/<file name>`
-always serves the newest published release; the website's download links use
-these addresses. Each package records its version inside.
+| macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; the iPad build goes to App Store Connect |
 
 Run it from the Actions tab to build unsigned packages as workflow artifacts.
 Pushing a `v*` tag checks that the tag names the workspace version and is on
