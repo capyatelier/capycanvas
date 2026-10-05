@@ -65,8 +65,8 @@ and `macOS/`; files in `Tests/` folders go to the UI test targets. Every
 or removing a Swift file also changes the project, so commit that diff too.
 
 `scripts/prepare.py` fills the ignored `Generated/` directory with the shared
-icons and brush previews from `apps/layer-web` and the license files. Edit those
-sources, never `Generated/`.
+icons and brush previews from `apps/layer-web`, the iPad app icon from
+`iOS/AppIcon.png` and the license files. Edit those sources, never `Generated/`.
 
 ### Identity, sandbox and privacy
 

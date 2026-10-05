@@ -24,6 +24,7 @@ consumers must assess their actual dependency graph. See
 | `apps/layer-web/icons/*.svg`, except the Zen mark | Original generic vector assets, MIT OR Apache-2.0. No GNOME icon set is vendored. |
 | Four `apps/layer-web/icons/layer-zen-*-symbolic.svg` files listed in BRANDING.md | Vector traces of owner-supplied capybara artwork; covered by the separate Capy Canvas Branding License. Looking up is the default app mark. |
 | `assets/brushes/*.pgm` | First-party numeric brush masks introduced during brush-engine development; not a redistributed commercial or GPL brush pack. |
+| `apps/layer-apple/iOS/AppIcon.png` | The iPad App Store icon: the default mark in `#f6f5f4` at 880/1024 on `#767676`, the web icon's proportions, rendered with `resvg` and saved as RGB because the App Store rejects icons with an alpha channel. Covered by the Capy Canvas Branding License. |
 | `apps/layer-web/brush-previews/*.png` | Runtime assets rendered from project presets by `crates/layer-bench/src/previews.rs`. Regenerate with `cargo run --release -p layer-bench -- --brush-previews`. No external reference images or fonts are used by that generator. |
 | Oklab conversion functions | Adaptation of Björn Ottosson's MIT reference; exact notice and local modifications are recorded in `THIRD_PARTY_NOTICES.md`. |
 
@@ -68,9 +69,10 @@ Repeat these checks before publishing:
 reports, traces and historical baseline notes. Paths under that directory in
 design documents describe local outputs, not files included in a fresh clone.
 Build trees, generated Wasm bindings and local editor/agent state are
-also ignored. The runtime brush previews above are the intentional exception
-for generated images: both frontends need them without running a GPU generator
-at startup.
+also ignored. The runtime brush previews and the iPad icon above are the
+intentional exceptions for generated images: the frontends need the previews
+without running a GPU generator at startup, and Apple builds need the icon
+without an SVG renderer.
 
 ## Separate binary-release gate
 
