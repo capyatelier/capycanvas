@@ -314,7 +314,7 @@ export function createHeader({app, state, paintPair, workspace, element, button,
     bars.forEach((bar,i)=>{bar.hidden=!g.bars[i];if(g.bars[i])place(bar,g.bars[i].bounds);});
     const joined=new Set(g.bars.flatMap(b=>b.items));
     for(const [id,r] of records)r.root.classList.toggle('in-bar',joined.has(id));
-    overflow.forEach((node,i)=>node.classList.toggle('in-bar',g.bars.some(b=>b.overflow===i)));
+    overflow.forEach((node,i)=>node.classList.toggle('in-bar',g.bars.some(b=>b.overflow===BigInt(i))));
     g.overflow.forEach((b,i)=>{
       if(!b){overflow[i].open=false;if(overflow[i].contains(document.activeElement))focus=view.model.zones[i].map(e=>records.get(e.id)).find(r=>!r.root.hidden)?.content.querySelector('summary,button')||root;}
       overflow[i].hidden=!b;if(b)place(overflow[i],b);

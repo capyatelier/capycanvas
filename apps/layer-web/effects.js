@@ -231,7 +231,7 @@ export function createEffectPanels({app,wake,catalog,state,panels,element,button
       const [x,y]=curve.axes.map(axis=>axis.white);
       white.setAttribute('d',x==null?'':`M${200*x} 0V200M0 ${200-200*y}H200`);
       path.setAttribute('d',c.plot.map(([x,y],i)=>`${i?'L':'M'}${x*200} ${(1-y)*200}`).join(' '));
-      points.replaceChildren(...c.value.value.map(([x,y],index)=>svg('circle',{cx:x*200,cy:(1-y)*200,r:index===curve.selected?5:3.5,fill:index===curve.selected?'none':'currentColor',stroke:'currentColor','stroke-width':1.5})));
+      points.replaceChildren(...c.value.value.map(([x,y],index)=>{const selected=BigInt(index)===curve.selected;return svg('circle',{cx:x*200,cy:(1-y)*200,r:selected?5:3.5,fill:selected?'none':'currentColor',stroke:'currentColor','stroke-width':1.5});}));
       for(const {axis,number,ev} of coordinates){const value=curve[axis];number.update(value?.value??0,value?.text??'');number.setDisabled(!state().layer_properties.enabled||!value||value.read_only);ev.hidden=curve.domain.kind!=='log_hdr';ev.textContent=value?.ev??'';}
     }
     update(initial);

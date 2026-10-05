@@ -283,6 +283,7 @@ export async function checkCurves({call,evaluate,settle}) {
         view=await properties();const current=view.controls.find(c=>c.key===control.key);
         const index=current.value.value.findIndex(p=>p[0]>0&&p[0]<1);
         await send({type:'effect',action:{op:'curve_select_point',layer:view.layer,key:control.key,epoch:view.epoch,index}});
+        assert.equal(await evaluate(`document.querySelectorAll('.curve-editor circle')[${index}].getAttribute('fill')`),'none','The selected knot is drawn as a ring');
         const before=curves(await properties());
         const point=await graphPoint(index);
         await pointer('mousePressed',{x:point.x+3,y:point.y+2});await pointer('mouseReleased',{x:point.x+3,y:point.y+2});await settle();

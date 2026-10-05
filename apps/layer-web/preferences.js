@@ -169,7 +169,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   dialog.addEventListener("close", () => { if (!dialog.open && view()) close(); });
   dialog.addEventListener("cancel", (e) => { e.preventDefault(); if (view() && shortcutPage.title(view())) shortcutPage.back(view()); else close(); });
 
-  let searchSignature = "", searchFocus = 0, revealed = null;
+  let searchSignature = "", searchFocus = 0n, revealed = null;
   const shortcutPage = createShortcutPage({ app, element, button, icon, send, view, scroller: pages, settingsGroup, dropdown, copy:nativeCopy.shortcuts, common:bootstrap.common });
 
   const fields = new Map(), pageNodes = new Map(), tabs = new Map(), groups = [];
@@ -311,7 +311,7 @@ export function createPreferences({ app, element, button, icon, numberField, pan
   return function refresh(model) {
     if (!model) {
       dismissContext(); cancelHold();
-      searchFocus = 0;
+      searchFocus = 0n;
       revealed = null;
       shortcutPage.close();
       if (dialog.open) dialog.close();
