@@ -56,6 +56,24 @@ fn native_layer_thumbnail_squircles() {
             input.click([bounds.x() + 3., bounds.y() + 3.]);
             assert_eq!(state(&w).layer_tools.editing_layer.unwrap().mask_selected, mask == 1);
             input.perform(serde_json::json!([{"point":screen_point(w.area.upcast_ref(), &w.surface, [0.5, 0.2])}]));
+            assert!(button.has_css_class("layer-editing"));
+            let active = render(button.upcast_ref());
+            let mut download = gdk::TextureDownloader::new(&active);
+            download.set_format(gdk::MemoryFormat::R8g8b8a8);
+            let (active_pixels, active_stride) = download.download_bytes();
+            let border = button.height() as usize / 2 * active_stride;
+            let expected = state(&w).palette.accent.0;
+            for channel in 0..3 {
+                assert!(active_pixels[border + channel].abs_diff(expected[channel]) <= 1, "the outer edge uses the accent color");
+            }
+            let origin = picture.compute_bounds(button).unwrap();
+            for (x, y) in [(1usize, 14usize), (26, 14), (14, 1), (14, 26)] {
+                let source = y * stride + x * 4;
+                let target = (origin.y() as usize + y) * active_stride + (origin.x() as usize + x) * 4;
+                for channel in 0..4 {
+                    assert!(active_pixels[target + channel].abs_diff(pixels[source + channel]) <= 1, "the active border leaves preview edges unchanged at {x},{y}");
+                }
+            }
             if let Some(directory) = std::env::var_os("LAYER_TEST_ARTIFACTS") {
                 let directory = std::path::PathBuf::from(directory);
                 std::fs::create_dir_all(&directory).unwrap();

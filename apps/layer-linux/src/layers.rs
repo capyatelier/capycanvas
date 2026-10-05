@@ -75,9 +75,7 @@ struct Row {
     thumbnails: gtk::Box,
     content: gtk::Button,
     load_selection: gtk::Button,
-    content_frame: gtk::DrawingArea,
     mask: gtk::Button,
-    mask_frame: gtk::DrawingArea,
     link: gtk::Button,
     name: gtk::Label,
     name_stack: gtk::Stack,
@@ -105,7 +103,7 @@ fn row_state(item: &gtk::ListItem) -> Option<LayerState> {
             .clone(),
     )
 }
-fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::DrawingArea) {
+fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay) {
     let button = button("layer-image-symbolic", tooltip);
     button.add_css_class("layer-thumbnail");
     button.set_valign(gtk::Align::Center);
@@ -122,22 +120,8 @@ fn thumbnail(tooltip: &str) -> (gtk::Button, gtk::Picture, gtk::Overlay, gtk::Dr
     overlay.set_child(Some(&size));
     overlay.add_overlay(&picture);
     overlay.set_measure_overlay(&picture, false);
-    // Above the thumbnail, so opaque image pixels cannot obscure the marks.
-    let frame = gtk::DrawingArea::new();
-    frame.add_css_class("layer-thumbnail-target");
-    frame.set_can_target(false);
-    frame.set_draw_func(|area, cr, w, h| {
-        let (w, h) = (w as f64, h as f64);
-        let bounds = gtk::graphene::Rect::new(1.5, 1.5, (w - 3.) as f32, (h - 3.) as f32);
-        crate::squircle::rounded_rect(cr, &gtk::gsk::RoundedRect::from_rect(bounds, (w.min(h) - 3.) as f32 / 2.));
-        let ink = area.color();
-        cr.set_source_rgba(ink.red().into(), ink.green().into(), ink.blue().into(), ink.alpha().into());
-        cr.set_line_width(3.);
-        let _ = cr.stroke();
-    });
-    overlay.add_overlay(&frame);
     button.set_child(Some(&overlay));
-    (button, picture, overlay, frame)
+    (button, picture, overlay)
 }
 fn toggle(icon: &str, tooltip: &str) -> gtk::ToggleButton {
     let button = gtk::ToggleButton::new();
@@ -468,12 +452,11 @@ impl LayerPanel {
                 let gutter = gtk::Box::new(gtk::Orientation::Vertical, 0);
                 gutter.add_css_class("layer-connection-gutter");
                 thumbnails.append(&gutter);
-                let (content, content_image, content_preview, content_frame) =
+                let (content, content_image, content_preview) =
                     thumbnail(copy.borrow().layer.edit_content.as_ref());
                 let effect_icon = gtk::Image::new();
                 effect_icon.set_pixel_size(24);
                 effect_icon.set_can_target(false);
-                content_preview.remove_overlay(&content_frame);
                 content_preview.add_overlay(&effect_icon);
                 let pass_through = crate::icons::image("layer-group-pass-through-symbolic");
                 pass_through.set_pixel_size(12);
@@ -485,12 +468,11 @@ impl LayerPanel {
                 pass_through.add_css_class("layer-type-symbol");
                 pass_through.add_css_class("layer-group-pass-through");
                 content_preview.add_overlay(&pass_through);
-                content_preview.add_overlay(&content_frame);
                 thumbnails.append(&content);
                 let link = button("layer-link-symbolic", copy.borrow().layer.link_mask_to_layer.as_ref());
                 link.add_css_class("layer-link");
                 thumbnails.append(&link);
-                let (mask, mask_image, _, mask_frame) = thumbnail(copy.borrow().layer.edit_mask.as_ref());
+                let (mask, mask_image, _) = thumbnail(copy.borrow().layer.edit_mask.as_ref());
                 thumbnails.append(&mask);
                 root.append(&thumbnails);
                 let text = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -875,9 +857,7 @@ impl LayerPanel {
                         thumbnails,
                         content,
                         load_selection,
-                        content_frame,
                         mask,
-                        mask_frame,
                         link,
                         name,
                         name_stack,
@@ -1549,9 +1529,10 @@ impl Row {
         } else {
             self.root.remove_css_class("selected");
         }
-        self.content_frame
-            .set_visible(s.content_selected);
-        self.mask_frame.set_visible(s.mask_selected);
+        for (button, selected) in [(&self.content, s.content_selected), (&self.mask, s.mask_selected)] {
+            if selected { button.add_css_class("layer-editing"); }
+            else { button.remove_css_class("layer-editing"); }
+        }
         let drawing_target = s.drawing;
         crate::icons::set_button(&self.selection, s.selection_icon);
         caption(&self.selection, copy.layer.select_row_help.as_ref());

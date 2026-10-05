@@ -295,7 +295,7 @@ fn native_layer_hold_input() {
         w.dispatch(UiAction::SelectPanelTab { group: state(&w).workspace.layout.panel_group(Panel::Layers).unwrap(), panel: Panel::Layers }); pump(180);
         let effect = state(&w).layer_tools.editing_layer.unwrap().id;
         let thumbnail = find_css(&row(effect),"layer-thumbnail").unwrap();
-        assert!(!descendants::<gtk::DrawingArea>(&thumbnail).first().unwrap().is_visible(),"filter glyph has no editable-pixel corners");
+        assert!(!thumbnail.has_css_class("layer-editing"),"filter glyph has no editable-pixel border");
         capture(&mut input,theme,"filter-selected");
         w.dispatch(UiAction::Invoke { command: CommandId::Undo }); pump(180);
         layer(layer_ui::LayerAction::Select { id: before[0], mask: false });
