@@ -410,6 +410,22 @@ native-palettes-import-failed = Не удалось импортировать �
 
 native-palettes-export-failed = Не удалось экспортировать палитру
 
+native-palettes-menu-new = Новая палитра…
+
+native-palettes-menu-import = Импортировать палитру…
+
+native-palettes-menu-rename = Переименовать палитру…
+
+native-palettes-menu-export = Экспортировать палитру
+
+native-palettes-menu-remove = Удалить палитру…
+
+native-palettes-menu-rename-color = Переименовать цвет…
+
+native-palettes-menu-remove-color = Удалить цвет
+
+native-palettes-recently-used = Недавно использованный
+
 native-shortcuts-keymap = Раскладка сочетаний
 
 native-shortcuts-no-differences = Нет различий

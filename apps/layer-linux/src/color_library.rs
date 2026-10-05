@@ -371,6 +371,9 @@ impl PalettePanel {
             crate::text_language::visit(panel.root.upcast_ref(), &mut |widget| {
                 if widget.widget_name() == "palette-library-add" { widget.set_tooltip_text(Some(&copy.new_import)); }
             });
+            if let Some(library) = panel.library.borrow().as_ref() {
+                panel.populate_menu(&panel.library_menu, library.menu(PaletteMenuTarget::Library, localization).unwrap());
+            }
             true
         }));
         *self.workspace.borrow_mut() = Rc::downgrade(workspace);
@@ -582,7 +585,7 @@ impl PalettePanel {
                 let id = format!("{prefix}-{section}-{index}");
                 let Some(command) = item.command.clone() else {
                     group.append_submenu(
-                        Some(item.label),
+                        Some(&*item.label),
                         &self.menu_model(popup, actions, &item.sections, &id),
                     );
                     continue;
@@ -600,7 +603,7 @@ impl PalettePanel {
                     }
                 ));
                 actions.add_action(&action);
-                group.append(Some(item.label), Some(&format!("palette.{id}")));
+                group.append(Some(&*item.label), Some(&format!("palette.{id}")));
             }
             model.append_section(None, &group);
         }
@@ -656,7 +659,7 @@ impl PalettePanel {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
-        let menu = self.library.borrow().as_ref().map(|l| l.menu(target));
+        let menu = self.library.borrow().as_ref().map(|l| l.menu(target, &w.localization()));
         let Some(Ok(sections)) = menu else {
             return;
         };
@@ -852,13 +855,13 @@ impl PalettePanel {
             for (grid, expanded) in [(&self.history, false), (&self.expanded, true)] {
                 grid.clear();
                 for color in &library.history {
-                    grid.append(&self.tile(*color, "Recently used", None));
+                    grid.append(&self.tile(*color, &copy.recently_used, None));
                 }
                 if library.history.is_empty() {
                     for _ in 0..5 {
                         let placeholder = gtk::Box::new(gtk::Orientation::Vertical, 0);
                         placeholder.add_css_class("palette-empty");
-                        placeholder.set_tooltip_text(Some("Colors appear here after painting"));
+                        placeholder.set_tooltip_text(Some(&copy.history_empty));
                         grid.append(&placeholder);
                     }
                 }
@@ -869,9 +872,9 @@ impl PalettePanel {
                         "pan-down-symbolic"
                     },
                     if expanded {
-                        "Collapse color history"
+                        &copy.collapse_history
                     } else {
-                        "Expand color history"
+                        &copy.expand_history
                     },
                     if expanded {
                         "palette-history-collapse"
@@ -890,13 +893,13 @@ impl PalettePanel {
             }
         }
         if palettes_changed || display_changed {
-            self.rebuild_chooser(library);
+            self.rebuild_chooser(library, &workspace.localization());
         }
     }
-    fn rebuild_chooser(self: &Rc<Self>, library: &ColorLibrary) {
+    fn rebuild_chooser(self: &Rc<Self>, library: &ColorLibrary, localization: &layer_ui::Localizer) {
         self.populate_menu(
             &self.library_menu,
-            library.menu(PaletteMenuTarget::Library).unwrap(),
+            library.menu(PaletteMenuTarget::Library, localization).unwrap(),
         );
         while let Some(child) = self.list.first_child() {
             self.list.remove(&child);
@@ -1017,15 +1020,17 @@ impl PalettePanel {
         let Some(w) = self.workspace.borrow().upgrade() else {
             return;
         };
+        let localization = w.localization();
+        let copy = layer_ui::NativeCopy::new(&localization).palettes;
         let filter = gtk::FileFilter::new();
-        filter.set_name(Some("Palettes"));
+        filter.set_name(Some(&copy.title));
         for extension in PaletteFormat::IMPORT_EXTENSIONS {
             filter.add_suffix(extension);
         }
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Import Palette")
+            .title(&*copy.import)
             .filters(&filters)
             .build();
         glib::MainContext::default().spawn_local(glib::clone!(
@@ -1037,9 +1042,10 @@ impl PalettePanel {
                     Err(_) => return,
                 };
                 let Some(path) = file.path() else {
-                    panel.error(Some("Choose a local palette file"));
+                    panel.error(Some(&localization.text(layer_ui::MessageId::DOCUMENTS_ERROR_DEVICE_FILE)));
                     return;
                 };
+                let imported = localization.text(layer_ui::MessageId::CREATION_PALETTE_IMPORTED);
                 let result = gio::spawn_blocking(move || {
                     use std::io::Read;
                     let mut bytes = Vec::new();
@@ -1053,7 +1059,7 @@ impl PalettePanel {
                         &bytes,
                         path.file_stem()
                             .and_then(|s| s.to_str())
-                            .unwrap_or("Imported palette"),
+                            .unwrap_or(&imported),
                     )
                 })
                 .await;
@@ -1064,7 +1070,7 @@ impl PalettePanel {
                         }
                     }
                     Ok(Err(error)) => panel.error(Some(&error)),
-                    Err(_) => panel.error(Some("Could not read the palette file")),
+                    Err(_) => panel.error(Some(&copy.read_failed)),
                 }
             }
         ));
@@ -1114,7 +1120,7 @@ impl PalettePanel {
         let filters = gio::ListStore::new::<gtk::FileFilter>();
         filters.append(&filter);
         let dialog = gtk::FileDialog::builder()
-            .title("Export Palette")
+            .title(&*layer_ui::NativeCopy::new(&w.localization()).palettes.export)
             .filters(&filters)
             .default_filter(&filter)
             .initial_name(&export.file_name)

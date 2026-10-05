@@ -582,6 +582,8 @@ commands-help-merge-visible = Gabungkan semua lapisan terlihat menjadi satu, den
 
 commands-help-flatten-image = Gabungkan semua lapisan terlihat menjadi satu di atas kertas dan buang lapisan tersembunyi serta piksel di luar kanvas. Foto yang ditempatkan menjadi piksel dokumen.
 
+commands-flatten-discards-hidden-layers = Meratakan gambar akan membuang { $count } lapisan tersembunyi
+
 commands-help-stamp-visible = Tambah lapisan di paling atas yang berisi gabungan semua yang terlihat, dengan mempertahankan semua lapisan.
 
 commands-help-blend-perceptual = Gabungkan lapisan berdasarkan nilai terenkode dokumen, seperti Photoshop dan Clip Studio Paint. Piksel yang dilukis mempertahankan nilainya.

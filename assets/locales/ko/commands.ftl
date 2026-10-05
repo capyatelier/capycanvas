@@ -291,6 +291,7 @@ commands-help-merge-down = 활성 레이어를 아래 레이어와 병합합니�
 commands-help-merge-group = 활성 그룹을 그룹의 혼합 모드와 불투명도를 가진 하나의 레이어로 병합하고 숨긴 레이어는 삭제합니다. 배치한 사진은 문서 픽셀로 바뀝니다.
 commands-help-merge-visible = 보이는 레이어를 모두 하나로 병합하고 숨긴 레이어는 유지합니다. 배치한 사진은 문서 픽셀로 바뀝니다.
 commands-help-flatten-image = 보이는 레이어를 종이 위에 합성해 하나로 병합하고, 숨긴 레이어와 캔버스 밖의 픽셀은 삭제합니다. 배치한 사진은 문서 픽셀로 바뀝니다.
+commands-flatten-discards-hidden-layers = 병합하면 숨긴 레이어 { $count }개가 삭제됩니다.
 commands-help-stamp-visible = 보이는 내용을 모두 병합한 레이어를 맨 위에 추가하고 기존 레이어는 모두 유지합니다.
 commands-help-blend-perceptual = Photoshop과 Clip Studio Paint처럼 문서의 인코딩된 값을 기준으로 레이어를 합성합니다. 그린 픽셀의 값은 유지합니다.
 commands-help-blend-linear = 빛의 물리적 특성에 따른 선형광으로 레이어를 합성합니다. 그린 픽셀의 값은 유지합니다.

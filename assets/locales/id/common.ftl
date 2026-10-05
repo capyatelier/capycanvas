@@ -465,6 +465,22 @@ native-palettes-import-failed = Tidak dapat mengimpor palet
 
 native-palettes-export-failed = Tidak dapat mengekspor palet
 
+native-palettes-menu-new = Palet Baru…
+
+native-palettes-menu-import = Impor Palet…
+
+native-palettes-menu-rename = Ubah Nama Palet…
+
+native-palettes-menu-export = Ekspor Palet
+
+native-palettes-menu-remove = Hapus Palet…
+
+native-palettes-menu-rename-color = Ubah Nama Warna…
+
+native-palettes-menu-remove-color = Hapus Warna
+
+native-palettes-recently-used = Baru digunakan
+
 native-shortcuts-keymap = Pemetaan tombol
 
 native-shortcuts-no-differences = Tidak ada perbedaan

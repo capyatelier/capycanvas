@@ -91,6 +91,7 @@ copy_struct! { PaletteCopy {
     collapse_history: NATIVE_PALETTES_COLLAPSE_HISTORY,
     recent: NATIVE_PALETTES_RECENT,
     history_help: NATIVE_PALETTES_HISTORY_HELP,
+    recently_used: NATIVE_PALETTES_RECENTLY_USED,
     saved: NATIVE_PALETTES_SAVED,
     new_import: NATIVE_PALETTES_NEW_IMPORT,
     add_current: NATIVE_PALETTES_ADD_CURRENT,

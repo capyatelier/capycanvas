@@ -291,6 +291,7 @@ commands-help-merge-down = Etkin katmanı altındaki katmanla birleştirin. Kır
 commands-help-merge-group = Etkin grubu grubun karıştırma modu ve opaklığıyla tek katmana birleştirin, gizli katmanlarını atın. Yerleştirilmiş fotoğraflar belge piksellerine dönüşür.
 commands-help-merge-visible = Gizli katmanları koruyarak tüm görünür katmanları tek katmanda birleştirin. Yerleştirilmiş fotoğraflar belge piksellerine dönüşür.
 commands-help-flatten-image = Tüm görünür katmanları kâğıdın üzerinde tek katmana birleştirin; gizli katmanları ve tuval dışındaki pikselleri atın. Yerleştirilmiş fotoğraflar belge piksellerine dönüşür.
+commands-flatten-discards-hidden-layers = Düzleştirme { $count } gizli katmanı atar
 commands-help-stamp-visible = Tüm katmanları koruyarak en üste görünür her şeyin birleştirildiği bir katman ekleyin.
 commands-help-blend-perceptual = Photoshop ve Clip Studio Paint gibi, katmanları belgenin kodlanmış değerleriyle birleştirin. Boyanan pikseller değerlerini korur.
 commands-help-blend-linear = Katmanları fiziksel temelli doğrusal ışıkta birleştirin. Boyanan pikseller değerlerini korur.

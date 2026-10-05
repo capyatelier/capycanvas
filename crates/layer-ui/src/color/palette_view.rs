@@ -22,13 +22,13 @@ pub enum PaletteMenuTarget {
 
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct PaletteMenuItem {
-    pub label: &'static str,
+    pub label: std::sync::Arc<str>,
     pub enabled: bool,
     pub command: Option<PaletteCommand>,
     pub sections: Vec<Vec<PaletteMenuItem>>,
 }
 impl PaletteMenuItem {
-    fn new(label: &'static str, command: PaletteCommand, enabled: bool) -> Self {
+    fn new(label: std::sync::Arc<str>, command: PaletteCommand, enabled: bool) -> Self {
         Self {
             label,
             enabled,
@@ -192,17 +192,18 @@ impl ColorLibrary {
             palette.swatches[index].color
         })
     }
-    pub fn menu(&self, target: PaletteMenuTarget) -> Result<Vec<Vec<PaletteMenuItem>>, String> {
+    pub fn menu(&self, target: PaletteMenuTarget, localizer: &crate::Localizer) -> Result<Vec<Vec<PaletteMenuItem>>, String> {
         use PaletteCommand as C;
+        let text = |message| localizer.text(message);
         Ok(match target {
             PaletteMenuTarget::Library => vec![vec![
                 PaletteMenuItem::new(
-                    "New Palette…",
+                    text(crate::MessageId::NATIVE_PALETTES_MENU_NEW),
                     C::NewPalette,
                     self.palettes.len() < Self::MAX_PALETTES,
                 ),
                 PaletteMenuItem::new(
-                    "Import Palette…",
+                    text(crate::MessageId::NATIVE_PALETTES_MENU_IMPORT),
                     C::ImportPalette,
                     self.palettes.len() < Self::MAX_PALETTES,
                 ),
@@ -212,20 +213,20 @@ impl ColorLibrary {
                     return Err("Palette no longer exists".into());
                 }
                 let formats = PaletteFormat::ALL.map(|format| {
-                    PaletteMenuItem::new(format.label(), C::ExportPalette { id, format }, true)
+                    PaletteMenuItem::new(format.label().into(), C::ExportPalette { id, format }, true)
                 });
                 vec![
                     vec![
-                        PaletteMenuItem::new("Rename Palette…", C::RenamePalette { id }, true),
+                        PaletteMenuItem::new(text(crate::MessageId::NATIVE_PALETTES_MENU_RENAME), C::RenamePalette { id }, true),
                         PaletteMenuItem {
-                            label: "Export Palette",
+                            label: text(crate::MessageId::NATIVE_PALETTES_MENU_EXPORT),
                             enabled: true,
                             command: None,
                             sections: vec![formats[..1].to_vec(), formats[1..].to_vec()],
                         },
                     ],
                     vec![PaletteMenuItem::new(
-                        "Remove Palette…",
+                        text(crate::MessageId::NATIVE_PALETTES_MENU_REMOVE),
                         C::RemovePalette { id },
                         self.palettes.len() > 1,
                     )],
@@ -241,21 +242,21 @@ impl ColorLibrary {
                 let library = |action| C::Library { action };
                 vec![
                     vec![
-                        PaletteMenuItem::new("Rename Color…", C::RenameColor { id }, true),
+                        PaletteMenuItem::new(text(crate::MessageId::NATIVE_PALETTES_MENU_RENAME_COLOR), C::RenameColor { id }, true),
                         PaletteMenuItem::new(
-                            "Remove Color",
+                            text(crate::MessageId::NATIVE_PALETTES_MENU_REMOVE_COLOR),
                             library(ColorLibraryAction::Remove { id }),
                             true,
                         ),
                     ],
                     vec![
                         PaletteMenuItem::new(
-                            "Undo Color Reorder",
+                            text(crate::MessageId::COMMANDS_UNDO_COLOR_REORDER),
                             library(ColorLibraryAction::UndoReorder { palette }),
                             self.can_undo_reorder(palette, false),
                         ),
                         PaletteMenuItem::new(
-                            "Redo Color Reorder",
+                            text(crate::MessageId::COMMANDS_REDO_COLOR_REORDER),
                             library(ColorLibraryAction::RedoReorder { palette }),
                             self.can_undo_reorder(palette, true),
                         ),
@@ -276,6 +277,7 @@ impl PalettePanelView {
         let current = colors.definition();
         let palette = library.active_palette();
         let selected = selected_swatch(palette, current, library.selected);
+        let recently_used = localizer.text(crate::MessageId::NATIVE_PALETTES_RECENTLY_USED);
         let tile = |id, name: &str, color: RgbColor| PaletteTileView {
             id,
             detail: ColorLibrary::tile_detail(name, color),
@@ -295,7 +297,7 @@ impl PalettePanelView {
             history: library
                 .history
                 .iter()
-                .map(|c| tile(None, "Recently used", *c))
+                .map(|c| tile(None, &recently_used, *c))
                 .collect(),
             palettes: library
                 .palettes
@@ -350,6 +352,7 @@ mod tests {
 
     #[test]
     fn menus_and_views_follow_library_state() {
+        let english = crate::Localizer::shared(crate::UiLanguage::English);
         let mut library = ColorLibrary::canonical();
         let color = RgbColor::new(RgbSpace::DisplayP3, [1., 0.2, 0.1, 1.]).unwrap();
         for name in ["Red", "Also red"] {
@@ -362,7 +365,7 @@ mod tests {
                 .unwrap();
         }
         let [first, second] = [0, 1].map(|i| library.palettes[0].swatches[i].id);
-        let items = library.menu(PaletteMenuTarget::Palette { id: 1 }).unwrap();
+        let items = library.menu(PaletteMenuTarget::Palette { id: 1 }, &english).unwrap();
         assert!(!items[1][0].enabled, "the last palette cannot be removed");
         let formats: Vec<_> = items[0][1]
             .sections
@@ -379,7 +382,7 @@ mod tests {
             }
         );
         let colors = library
-            .menu(PaletteMenuTarget::Color { id: first })
+            .menu(PaletteMenuTarget::Color { id: first }, &english)
             .unwrap();
         assert!(!colors[1][0].enabled && !colors[1][1].enabled);
         library
@@ -390,7 +393,7 @@ mod tests {
             })
             .unwrap();
         let colors = library
-            .menu(PaletteMenuTarget::Color { id: first })
+            .menu(PaletteMenuTarget::Color { id: first }, &english)
             .unwrap();
         assert_eq!(
             colors[1][0].command,
@@ -399,7 +402,15 @@ mod tests {
             })
         );
         assert!(colors[1][0].enabled);
-        assert!(library.menu(PaletteMenuTarget::Color { id: 999 }).is_err());
+        assert!(library.menu(PaletteMenuTarget::Color { id: 999 }, &english).is_err());
+        let german = crate::Localizer::shared(crate::UiLanguage::German);
+        let labels = |localizer: &crate::Localizer| [PaletteMenuTarget::Library, PaletteMenuTarget::Palette { id: 1 }, PaletteMenuTarget::Color { id: first }]
+            .into_iter().flat_map(|target| library.menu(target, localizer).unwrap()).flatten().map(|item| item.label).collect::<Vec<_>>();
+        let expected = [crate::MessageId::NATIVE_PALETTES_MENU_NEW, crate::MessageId::NATIVE_PALETTES_MENU_IMPORT, crate::MessageId::NATIVE_PALETTES_MENU_RENAME,
+            crate::MessageId::NATIVE_PALETTES_MENU_EXPORT, crate::MessageId::NATIVE_PALETTES_MENU_REMOVE, crate::MessageId::NATIVE_PALETTES_MENU_RENAME_COLOR,
+            crate::MessageId::NATIVE_PALETTES_MENU_REMOVE_COLOR, crate::MessageId::COMMANDS_UNDO_COLOR_REORDER, crate::MessageId::COMMANDS_REDO_COLOR_REORDER];
+        assert_eq!(labels(&german), expected.map(|message| german.text(message)));
+        assert_ne!(labels(&german), labels(&english), "menu items follow the selected language");
 
         let mut state = ColorState::default();
         state.set_color(color).unwrap();

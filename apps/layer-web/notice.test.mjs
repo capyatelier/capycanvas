@@ -74,6 +74,17 @@ test("the action accepts its notice once, without taking focus", () => {
   assert.equal(h.notice.root.hidden, true, "the core clears an accepted notice; a republished id is not shown again");
 });
 
+test("a relocalized notice updates its text in place without restarting it", () => {
+  const h = harness();
+  h.notice.publish(offer(4n));
+  const timers = h.pending().length;
+  h.notice.publish({ id: 4n, text: "Dieses Werkzeug nutzt Referenzebenen", action: { label: "Foto als Referenz verwenden" } });
+  assert.equal(h.text.textContent, "Dieses Werkzeug nutzt Referenzebenen");
+  assert.equal(h.action.textContent, "Foto als Referenz verwenden");
+  assert.equal(h.pending().length, timers, "the same notice keeps its timeout");
+  assert.deepEqual(h.answers, []);
+});
+
 test("the timeout hides the notice and declines it", () => {
   const h = harness();
   h.notice.publish(offer(5n));

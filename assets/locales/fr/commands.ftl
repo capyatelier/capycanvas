@@ -291,6 +291,10 @@ commands-help-merge-down = Fusionner le calque actif avec celui du dessous. Une 
 commands-help-merge-group = Fusionner le groupe actif en un seul calque avec son mode de fusion et son opacité, en supprimant ses calques masqués. Les photos placées deviennent des pixels du document.
 commands-help-merge-visible = Fusionner tous les calques visibles en un seul, en conservant les calques masqués. Les photos placées deviennent des pixels du document.
 commands-help-flatten-image = Fusionner tous les calques visibles en un seul au-dessus du papier et supprimer les calques masqués et les pixels hors de la toile. Les photos placées deviennent des pixels du document.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] L’aplatissement supprime { $count } calque masqué
+   *[other] L’aplatissement supprime { $count } calques masqués
+    }
 commands-help-stamp-visible = Ajouter un calque au sommet avec tout le contenu visible fusionné, en conservant tous les calques.
 commands-help-blend-perceptual = Combiner les calques selon les valeurs encodées du document, comme Photoshop et Clip Studio Paint. Les pixels peints conservent leurs valeurs.
 commands-help-blend-linear = Combiner les calques en lumière linéaire, selon la physique. Les pixels peints conservent leurs valeurs.

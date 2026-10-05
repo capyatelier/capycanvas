@@ -291,6 +291,7 @@ commands-help-merge-down = 将当前图层合并到下方图层。剪贴底层�
 commands-help-merge-group = 将当前图层组合并为一个图层，使用组的混合模式和不透明度，丢弃组内隐藏的图层。置入照片会变成文档像素。
 commands-help-merge-visible = 将所有可见图层合并为一个，保留隐藏的图层。置入照片会变成文档像素。
 commands-help-flatten-image = 将所有可见图层合并为纸张上的一个图层，丢弃隐藏图层和画布外的像素。置入照片会变成文档像素。
+commands-flatten-discards-hidden-layers = 拼合会丢弃 { $count } 个隐藏图层
 commands-help-stamp-visible = 在顶部添加一个图层，将所有可见内容合并到其中，保留所有原有图层。
 commands-help-blend-perceptual = 使用文档编码后的数值合成图层，与 Photoshop 和 Clip Studio Paint 相同。已绘制像素的数值保持不变。
 commands-help-blend-linear = 在线性光中合成图层，符合光的物理规律。已绘制像素的数值保持不变。

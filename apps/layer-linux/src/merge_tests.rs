@@ -74,7 +74,7 @@ fn native_flatten_image_confirms_discarding_hidden_layers() {
     assert_eq!(state(&w).notice.unwrap().text, "Flattening discards 1 hidden layer");
     assert!(document(&w).scene().occurrence(hidden).is_some(), "nothing changes before it is accepted");
     let button = find_named(w.notice.root.upcast_ref(), "canvas-notice-action").and_downcast::<gtk::Button>().unwrap();
-    assert_eq!(button.label().as_deref(), Some("Flatten"));
+    assert_eq!(button.label().as_deref(), Some("Flatten Image"));
     input.click(screen_point(button.upcast_ref(), &w.window, [0.5, 0.5]));
     until(
         || document(&w).scene().order().len() - document(&w).scene().constant_backdrop().len() == 1,

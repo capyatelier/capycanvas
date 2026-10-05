@@ -291,6 +291,10 @@ commands-help-merge-down = Unisci il livello attivo a quello sottostante. Una ba
 commands-help-merge-group = Unisci il gruppo attivo in un solo livello con metodo di fusione e opacità del gruppo, scartandone i livelli nascosti. Le foto inserite diventano pixel del documento.
 commands-help-merge-visible = Unisci tutti i livelli visibili in uno, mantenendo quelli nascosti. Le foto inserite diventano pixel del documento.
 commands-help-flatten-image = Unisci tutti i livelli visibili in uno sopra la carta e scarta livelli nascosti e pixel fuori dalla tela. Le foto inserite diventano pixel del documento.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] L'appiattimento scarta { $count } livello nascosto
+   *[other] L'appiattimento scarta { $count } livelli nascosti
+    }
 commands-help-stamp-visible = Aggiungi in cima un livello con tutto il contenuto visibile unito, mantenendo tutti i livelli.
 commands-help-blend-perceptual = Combina i livelli usando i valori codificati del documento, come Photoshop e Clip Studio Paint. I pixel dipinti mantengono i propri valori.
 commands-help-blend-linear = Combina i livelli in luce lineare, basata sulla fisica. I pixel dipinti mantengono i propri valori.

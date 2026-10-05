@@ -291,6 +291,7 @@ commands-help-merge-down = 編集中のレイヤーを下のレイヤーに結�
 commands-help-merge-group = 編集中のグループを、その合成モードと不透明度のまま1枚のレイヤーに結合し、非表示のレイヤーを破棄します。配置した写真はドキュメントの画素になります。
 commands-help-merge-visible = 表示中のすべてのレイヤーを1枚に結合します。非表示のレイヤーは保持します。配置した写真はドキュメントの画素になります。
 commands-help-flatten-image = 表示中のすべてのレイヤーを用紙の上で1枚に結合し、非表示のレイヤーとキャンバス外の画素を破棄します。配置した写真はドキュメントの画素になります。
+commands-flatten-discards-hidden-layers = 統合すると、非表示のレイヤー{ $count }個が破棄されます。
 commands-help-stamp-visible = すべてのレイヤーを保持し、表示中の内容を結合した新しいレイヤーを最上部に追加します。
 commands-help-blend-perceptual = PhotoshopやClip Studio Paintと同様に、ドキュメントの符号化された色の値でレイヤーを合成します。描画済みの画素の値は変わりません。
 commands-help-blend-linear = 物理的な光に基づくリニアライトでレイヤーを合成します。描画済みの画素の値は変わりません。

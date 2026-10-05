@@ -21,7 +21,7 @@ pub struct NoticeAction {
 }
 
 #[derive(Clone)]
-enum NoticeCopy { Drawing(DrawingRefusal), Stroke(StrokeRefusal), Message(MessageId), Reference { message: MessageId, name: std::sync::Arc<str> } }
+enum NoticeCopy { Drawing(DrawingRefusal), Stroke(StrokeRefusal), Message(MessageId), Reference { message: MessageId, name: std::sync::Arc<str> }, Flatten { hidden: usize } }
 
 impl NoticeCopy {
     fn text(&self, localization: &Localizer) -> String {
@@ -29,6 +29,10 @@ impl NoticeCopy {
             Self::Drawing(reason) => drawing_refusal_text(*reason, localization),
             Self::Stroke(reason) => stroke_refusal_text(*reason, localization),
             Self::Message(message) | Self::Reference { message, .. } => localization.text(*message),
+            Self::Flatten { hidden } => {
+                let mut args = FluentArgs::new(); args.set("count", *hidden);
+                localization.format(MessageId::COMMANDS_FLATTEN_DISCARDS_HIDDEN_LAYERS, &args).into()
+            }
         }.to_string()
     }
     fn action_label(&self, localization: &Localizer) -> Option<String> {
@@ -38,6 +42,7 @@ impl NoticeCopy {
                 let mut args = FluentArgs::new(); args.set("name", name.as_ref());
                 Some(localization.format(MessageId::RESOURCES_REFERENCE_USE_LAYER, &args))
             }
+            Self::Flatten { .. } => Some(CommandId::FlattenImage.localized_label(localization).to_string()),
             _ => None,
         }
     }
@@ -262,6 +267,13 @@ impl<R: CanvasRenderer> UiSession<R> {
         } else {
             self.raise_message_notice(MessageId::RESOURCES_REFERENCE_TOOL_MARK_FIRST);
         }
+    }
+
+    pub(super) fn offer_flatten(&mut self, hidden: usize) {
+        let copy = NoticeCopy::Flatten { hidden };
+        let label = copy.action_label(self.localization()).unwrap();
+        self.raise_notice(copy.text(self.localization()), Some((label, UiAction::Layer { action: LayerAction::Flatten })));
+        self.notices.copy = Some(copy);
     }
 
     fn offer_reference_below(&mut self, message: MessageId) {

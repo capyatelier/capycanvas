@@ -291,6 +291,10 @@ commands-help-merge-down = Die aktive Ebene mit der darunterliegenden Ebene vere
 commands-help-merge-group = Die aktive Gruppe mit ihrem Verrechnungsmodus und ihrer Deckkraft zu einer Ebene vereinen und ihre ausgeblendeten Ebenen verwerfen. Platzierte Fotos werden zu Dokumentpixeln.
 commands-help-merge-visible = Alle sichtbaren Ebenen zu einer Ebene vereinen und ausgeblendete Ebenen behalten. Platzierte Fotos werden zu Dokumentpixeln.
 commands-help-flatten-image = Alle sichtbaren Ebenen über dem Papier zu einer Ebene vereinen; ausgeblendete Ebenen und Pixel außerhalb der Leinwand verwerfen. Platzierte Fotos werden zu Dokumentpixeln.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] Beim Reduzieren wird { $count } ausgeblendete Ebene verworfen
+   *[other] Beim Reduzieren werden { $count } ausgeblendete Ebenen verworfen
+    }
 commands-help-stamp-visible = Oben eine Ebene mit dem vereinten sichtbaren Inhalt hinzufügen und alle Ebenen behalten.
 commands-help-blend-perceptual = Ebenen mit den kodierten Dokumentwerten verrechnen, wie in Photoshop und Clip Studio Paint. Gemalte Pixel behalten ihre Werte.
 commands-help-blend-linear = Ebenen physikalisch basiert in linearem Licht verrechnen. Gemalte Pixel behalten ihre Werte.

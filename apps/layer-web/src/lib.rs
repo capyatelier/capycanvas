@@ -222,7 +222,7 @@ impl WebApp {
                 .session
                 .state()
                 .color_library
-                .menu(target)
+                .menu(target, self.session.localization())
                 .map_err(js)?,
         )
     }

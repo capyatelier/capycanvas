@@ -68,11 +68,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         if hidden == 0 {
             return self.bake(kind);
         }
-        let text = match hidden {
-            1 => "Flattening discards 1 hidden layer".into(),
-            n => format!("Flattening discards {n} hidden layers"),
-        };
-        self.raise_notice(text, Some(("Flatten".into(), UiAction::Layer { action: LayerAction::Flatten })));
+        self.offer_flatten(hidden);
         Ok(())
     }
 

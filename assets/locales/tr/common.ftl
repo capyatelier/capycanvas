@@ -410,6 +410,22 @@ native-palettes-import-failed = Palet içe aktarılamadı
 
 native-palettes-export-failed = Palet dışa aktarılamadı
 
+native-palettes-menu-new = Yeni palet…
+
+native-palettes-menu-import = Paleti içe aktar…
+
+native-palettes-menu-rename = Paleti yeniden adlandır…
+
+native-palettes-menu-export = Paleti dışa aktar
+
+native-palettes-menu-remove = Paleti kaldır…
+
+native-palettes-menu-rename-color = Rengi yeniden adlandır…
+
+native-palettes-menu-remove-color = Rengi kaldır
+
+native-palettes-recently-used = Son kullanılan
+
 native-shortcuts-keymap = Tuş eşlemesi
 
 native-shortcuts-no-differences = Fark yok

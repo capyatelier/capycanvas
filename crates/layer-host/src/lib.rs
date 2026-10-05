@@ -924,7 +924,7 @@ impl NativeHost {
                 json!(recorder.status())
             }
             Query::PaletteMenu { target } => {
-                json!(self.session.state().color_library.menu(target)?)
+                json!(self.session.state().color_library.menu(target, self.session.localization())?)
             }
             Query::SwatchSheet { query, current } => {
                 let state = self.session.state();

@@ -410,6 +410,22 @@ native-palettes-import-failed = Không thể nhập bảng màu
 
 native-palettes-export-failed = Không thể xuất bảng màu
 
+native-palettes-menu-new = Bảng màu mới…
+
+native-palettes-menu-import = Nhập bảng màu…
+
+native-palettes-menu-rename = Đổi tên bảng màu…
+
+native-palettes-menu-export = Xuất bảng màu
+
+native-palettes-menu-remove = Xóa bảng màu…
+
+native-palettes-menu-rename-color = Đổi tên màu…
+
+native-palettes-menu-remove-color = Xóa màu
+
+native-palettes-recently-used = Dùng gần đây
+
 native-shortcuts-keymap = Sơ đồ phím
 
 native-shortcuts-no-differences = Không có khác biệt

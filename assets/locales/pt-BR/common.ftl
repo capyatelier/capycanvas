@@ -410,6 +410,22 @@ native-palettes-import-failed = Não foi possível importar a paleta
 
 native-palettes-export-failed = Não foi possível exportar a paleta
 
+native-palettes-menu-new = Nova paleta…
+
+native-palettes-menu-import = Importar paleta…
+
+native-palettes-menu-rename = Renomear paleta…
+
+native-palettes-menu-export = Exportar paleta
+
+native-palettes-menu-remove = Remover paleta…
+
+native-palettes-menu-rename-color = Renomear cor…
+
+native-palettes-menu-remove-color = Remover cor
+
+native-palettes-recently-used = Usada recentemente
+
 native-shortcuts-keymap = Mapa de atalhos
 
 native-shortcuts-no-differences = Sem diferenças

@@ -291,6 +291,10 @@ commands-help-merge-down = Combinar la capa activa con la inferior. Una base de 
 commands-help-merge-group = Combinar el grupo activo en una capa con el modo de mezcla y opacidad del grupo, descartando sus capas ocultas. Las fotos colocadas se convierten en píxeles del documento.
 commands-help-merge-visible = Combinar todas las capas visibles en una y conservar las ocultas. Las fotos colocadas se convierten en píxeles del documento.
 commands-help-flatten-image = Combinar todas las capas visibles en una sobre el papel y descartar las capas ocultas y los píxeles fuera del lienzo. Las fotos colocadas se convierten en píxeles del documento.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] Al acoplar se descarta { $count } capa oculta
+   *[other] Al acoplar se descartan { $count } capas ocultas
+    }
 commands-help-stamp-visible = Añadir una capa encima con todo lo visible combinado, conservando todas las capas.
 commands-help-blend-perceptual = Combinar capas con los valores codificados del documento, como Photoshop y Clip Studio Paint. Los píxeles pintados conservan sus valores.
 commands-help-blend-linear = Combinar capas en luz lineal, basada en la física. Los píxeles pintados conservan sus valores.

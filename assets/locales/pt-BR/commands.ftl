@@ -291,6 +291,10 @@ commands-help-merge-down = Mesclar a camada ativa com a camada abaixo. Uma base 
 commands-help-merge-group = Mesclar o grupo ativo em uma camada com o modo de mesclagem e a opacidade do grupo, descartando suas camadas ocultas. Fotos inseridas tornam-se pixels do documento.
 commands-help-merge-visible = Mesclar todas as camadas visíveis em uma só, mantendo as camadas ocultas. Fotos inseridas tornam-se pixels do documento.
 commands-help-flatten-image = Mesclar todas as camadas visíveis em uma só sobre o papel e descartar camadas ocultas e pixels fora da tela. Fotos inseridas tornam-se pixels do documento.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] Achatar descarta { $count } camada oculta
+   *[other] Achatar descarta { $count } camadas ocultas
+    }
 commands-help-stamp-visible = Adicionar uma camada no topo com tudo que está visível mesclado, mantendo todas as camadas.
 commands-help-blend-perceptual = Combinar camadas usando os valores codificados do documento, como fazem Photoshop e Clip Studio Paint. Os pixels pintados mantêm seus valores.
 commands-help-blend-linear = Combinar camadas em luz linear, com base na física. Os pixels pintados mantêm seus valores.

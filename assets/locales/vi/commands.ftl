@@ -291,6 +291,7 @@ commands-help-merge-down = Gộp lớp hiện tại vào lớp bên dưới. L�
 commands-help-merge-group = Gộp nhóm hiện tại thành một lớp với chế độ hòa trộn và độ đục của nhóm, bỏ các lớp ẩn trong nhóm. Ảnh đã đặt trở thành pixel tài liệu.
 commands-help-merge-visible = Gộp mọi lớp hiển thị thành một lớp, giữ các lớp ẩn. Ảnh đã đặt trở thành pixel tài liệu.
 commands-help-flatten-image = Gộp mọi lớp hiển thị thành một lớp trên giấy, bỏ các lớp ẩn và pixel ngoài khung vẽ. Ảnh đã đặt trở thành pixel tài liệu.
+commands-flatten-discards-hidden-layers = Gộp phẳng sẽ bỏ { $count } lớp ẩn
 commands-help-stamp-visible = Thêm lớp trên cùng chứa mọi nội dung hiển thị đã gộp, giữ nguyên mọi lớp.
 commands-help-blend-perceptual = Kết hợp các lớp theo giá trị mã hóa của tài liệu, như Photoshop và Clip Studio Paint. Pixel đã vẽ giữ nguyên giá trị.
 commands-help-blend-linear = Kết hợp các lớp trong ánh sáng tuyến tính theo quy luật vật lý. Pixel đã vẽ giữ nguyên giá trị.

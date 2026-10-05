@@ -41,11 +41,11 @@ export function createNotice({ workspace, element, button, answer, layout, bar,
   }
   function publish(notice) {
     if (!notice) { hide(); shown = null; return; }
-    if (shown === notice.id) return;
-    const id = shown = notice.id;
     text.textContent = notice.text;
     action.textContent = notice.action?.label ?? "";
     action.hidden = !notice.action;
+    if (shown === notice.id) return;
+    const id = shown = notice.id;
     root.hidden = false;
     place();
     clearTimer(timer);

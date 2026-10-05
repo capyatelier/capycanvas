@@ -291,6 +291,10 @@ commands-help-merge-down = Merge the active layer into the layer below. A clippi
 commands-help-merge-group = Merge the active group into one layer with the group's blend mode and opacity, discarding its hidden layers. Placed photos become document pixels.
 commands-help-merge-visible = Merge every visible layer into one, keeping hidden layers. Placed photos become document pixels.
 commands-help-flatten-image = Merge every visible layer into one over the paper and discard hidden layers and pixels outside the canvas. Placed photos become document pixels.
+commands-flatten-discards-hidden-layers = { $count ->
+    [one] Flattening discards { $count } hidden layer
+   *[other] Flattening discards { $count } hidden layers
+    }
 commands-help-stamp-visible = Add a layer on top with everything visible merged into it, keeping every layer.
 commands-help-blend-perceptual = Combine layers on the document's encoded values, as Photoshop and Clip Studio Paint do. Painted pixels keep their values.
 commands-help-blend-linear = Combine layers in linear light, which is physically based. Painted pixels keep their values.

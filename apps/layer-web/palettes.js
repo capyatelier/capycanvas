@@ -5,7 +5,7 @@ const css = rgba => `rgba(${rgba.slice(0, 3).map(v => Math.round(Math.min(1, Mat
 const paint = (node, rgba) => { node.style.background = `linear-gradient(${css(rgba)},${css(rgba)}),repeating-conic-gradient(#ccc 0 25%,#8c8c8c 0 50%) 0 0 / 10px 10px`; };
 
 export function createPalettes({ app, state, workspace, element, button, icon, panelFrame, applyChange, rasterWorker, dismissContext, contentChanged }) {
-  const copy=liveCopy(app,"catalog").native_copy.palettes;
+  const copy=liveCopy(app,"catalog").native_copy.palettes,common=liveCopy(app,"bootstrap_view").common;
   const chevron = up => { const glyph = icon("chevron-down"); glyph.classList.toggle("palette-chevron-up", up); return glyph; };
   const instances = new Set();
   let view = null, viewKey = "", seen = [];
@@ -66,7 +66,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     if (text) root.append(element("p", "", text));
     let input;
     if (value != null) {
-      const label = element("label", "", "Name"); input = element("input"); input.value = value; input.maxLength = 64;
+      const label = element("label", "", () => copy.palette_name); input = element("input"); input.value = value; input.maxLength = 64;
       bindCopy(input,()=>copy.name,"ariaLabel"); input.dataset.paletteName = ""; label.append(input); root.append(label);
     }
     const ok = button(confirm, () => {
@@ -75,7 +75,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     }, destructive ? "destructive-action" : "suggested-action");
     const validate = () => { const message = check?.(input.value); ok.disabled = !!message; error.textContent = message || ""; };
     if (input) { input.oninput = validate; validate(); input.onkeydown = e => { if (e.key === "Enter") { e.preventDefault(); if (!ok.disabled) ok.click(); } }; }
-    footer.append(button("Cancel", () => root.close()), ok); root.append(error, footer);
+    footer.append(button(() => common.cancel, () => root.close()), ok); root.append(error, footer);
     root.addEventListener("close", () => root.remove());
     document.body.append(root); root.showModal(); input?.select();
   }
@@ -84,7 +84,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     const body = element("div", "palette-body"), normal = element("div", "palette-normal");
     const divider = () => element("hr", "palette-divider");
     const history = element("div", "palette-grid palette-history"), scroll = element("div", "palette-scroll"), grid = element("div", "palette-grid palette-swatches");
-    history.title = "Recent colors — added only when used in artwork";
+    bindCopy(history,()=>copy.history_help,"title");
     scroll.append(grid); normal.append(history, divider(), panelFrame(scroll));
     const expanded = element("div", "palette-grid palette-expanded palette-cover"), chooser = element("div", "palette-chooser palette-cover");
     expanded.hidden = chooser.hidden = true;
@@ -95,9 +95,9 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       more.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: r.left, clientY: r.bottom + 2 }));
     }, "palette-icon palette-library-add");
     more.append(icon("plus")); bindCopy(more,()=>copy.new_import,"title"); bindCopy(more,()=>copy.new_import,"ariaLabel");
-    more.dataset.context = "{}"; more.menuModel = () => ({ title: "Palettes", sections: app.palette_menu({ kind: "library" }) }); more.menuCommand = run;
+    more.dataset.context = "{}"; more.menuModel = () => ({ title: copy.title, sections: app.palette_menu({ kind: "library" }) }); more.menuCommand = run;
     const searchRow = element("div", "palette-search-row"); searchRow.append(search, more);
-    const list = element("div", "palette-list"), empty = element("p", "palette-no-results", "No matching palettes");
+    const list = element("div", "palette-list"), empty = element("p", "palette-no-results", () => copy.no_matches);
     list.setAttribute("role", "listbox"); bindCopy(list,()=>copy.title,"ariaLabel"); empty.hidden = true;
     const results = panelFrame(list); results.append(empty); chooser.append(searchRow, results);
     chooser.addEventListener("mousedown", e => { if (e.target.closest("button")) e.preventDefault(); });
@@ -106,14 +106,14 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
     selector.append(selectorLabel, chevron(true));
     const info = element("div", "palette-info"), name = button("", () => editName(), "palette-name"), nameLabel = element("span");
     name.append(nameLabel);
-    const editor = element("input", "palette-entry palette-editor"); editor.maxLength = 64; editor.hidden = true; editor.setAttribute("aria-label", "Color name");
+    const editor = element("input", "palette-entry palette-editor"); editor.maxLength = 64; editor.hidden = true; bindCopy(editor,()=>copy.name,"ariaLabel");
     const detail = element("span", "palette-detail");
-    detail.title = "sRGB hex preview; saved colors retain their original color space, alpha and HDR intensity";
+    bindCopy(detail,()=>copy.hex_help,"title");
     info.append(name, editor, detail);
     const footer = element("div", "palette-footer"); footer.append(selector, info);
     const note = element("p", "palette-message"); note.hidden = true; note.setAttribute("role", "status");
     const add = button("", addColor, "palette-tile palette-add");
-    add.append(icon("plus")); add.title = "Add current color to this palette"; add.setAttribute("aria-label", add.title);
+    add.append(icon("plus")); bindCopy(add,()=>copy.add_current,"title"); bindCopy(add,()=>copy.add_current,"ariaLabel");
     root.classList.add("palettes-panel");
     root.replaceChildren(body, divider(), footer, note);
 
@@ -175,7 +175,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
           const id = command.command === "rename_palette" ? command.id : null;
           if (id != null && paletteName(id) == null) return;
           const action = value => id != null ? { op: "rename_palette", id, name: value } : { op: "create_palette", name: value };
-          form({ title: id != null ? "Rename Palette" : "New Palette", value: id != null ? paletteName(id) : "", confirm: "Save",
+          form({ title: id != null ? () => copy.rename_title : () => copy.new_title, value: id != null ? paletteName(id) : "", confirm: () => common.save,
             check: value => app.palette_action_error(action(value)),
             submit: value => { let failure = null; if (library(action(value), text => { failure = text; })) browse(false); return failure; } });
           return;
@@ -184,7 +184,7 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
         case "export_palette": exportPalette(command.id, command.format, item?.label, report); return;
         case "remove_palette": {
           const title = paletteName(command.id); if (title == null) return;
-          form({ title: "Remove Palette?", text: `Remove “${title}” and its saved colors?`, confirm: "Remove", destructive: true,
+          form({ title: () => copy.remove_title, text: () => app.native_caption({ type: "remove_palette", name: title }), confirm: () => common.remove, destructive: true,
             submit: () => { let failure = null; library({ op: "remove_palette", id: command.id }, text => { failure = text; }); return failure; } });
           return;
         }
@@ -228,7 +228,8 @@ export function createPalettes({ app, state, workspace, element, button, icon, p
       if (!nodes.length) for (let i = 0; i < 5; i++) { const node = element("div", "palette-empty"); bindCopy(node,()=>copy.history_empty,"title"); nodes.push(node); }
       const toggle = button("", () => expand(!expandedGrid), "palette-toggle");
       toggle.append(chevron(expandedGrid));
-      toggle.title = expandedGrid ? "Collapse color history" : "Expand color history"; toggle.setAttribute("aria-label", toggle.title);
+      const toggleLabel = () => expandedGrid ? copy.collapse_history : copy.expand_history;
+      bindCopy(toggle,toggleLabel,"title"); bindCopy(toggle,toggleLabel,"ariaLabel");
       toggle.dataset.paletteHistory = expandedGrid ? "collapse" : "expand";
       target.replaceChildren(...nodes, toggle);
     }
