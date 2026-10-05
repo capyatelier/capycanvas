@@ -604,3 +604,6 @@ menu-rotation = Поворот
 menu-reset-rotation = Сбросить поворот
 menu-lock-rotation = Заблокировать поворот
 menu-lock-zoom = Заблокировать масштаб
+
+command-enclose-fill = Обвести и залить
+commands-help-enclose-fill = Обведите контур, чтобы залить замкнутые прозрачные области внутри него.

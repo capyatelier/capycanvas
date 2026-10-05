@@ -1289,7 +1289,7 @@ fn retained_outer_mesh_document_reads_and_linked_mask_thumbnail_match_independen
     let edit = pollster::block_on(r.snapshot_gpu().transform_pixels(plan,Default::default())).unwrap();
     let mut baked = document.clone(); baked.apply(edit).unwrap();
     let coverage=|r:&mut WgpuRasterizer,id| crate::test_support::receive_request(r,RegionRequest {
-        request_id:1,source:RegionSource::Coverage(id),position:[0;2],contiguous:false,
+        enclosure: None, request_id:1,source:RegionSource::Coverage(id),position:[0;2],contiguous:false,
         tolerance:0.,refinement:Default::default(),selection:Some(layer_render::SelectionRefinement {
             resize:0,mode:layer_core::SelectionMode::New,antialias:true,feather:0.,previous:None,
             source_to_document:Affine::IDENTITY,keep_canvas_edges:false

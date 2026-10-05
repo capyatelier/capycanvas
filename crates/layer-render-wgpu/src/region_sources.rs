@@ -479,7 +479,7 @@ impl RawRegions {
                     fallback[3].to_bits(),
                     request.tolerance.to_bits(),
                     f32::from(has_tile(*coordinate)).to_bits(),
-                    f32::from(coverage).to_bits(),
+                    (if request.enclosure.is_some() { 3.0f32 } else { f32::from(coverage) }).to_bits(),
                     0,
                 ];
                 for (word, value) in uniforms[batch * stride as usize + i * 64..][..64]
@@ -741,7 +741,7 @@ mod tests {
             for channel in 0..4 { assert!((pixel[channel]-expected[channel]).abs()<0.0005, "{pixel:?}"); }
         }
         let result = crate::test_support::receive_request(&mut r, RegionRequest {
-            request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
+            enclosure: None, request_id:42,source:RegionSource::Scene {snapshot:normalized,scope},position:[63,63],tolerance:0.,
             contiguous:true,selection:None,refinement:Default::default(),limit:None,
         });
         assert_eq!(result.pixels.extent(),extent);

@@ -80,6 +80,30 @@ fn reopen_v(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroup
     morph(mask_word_id(id, groups), false, false, -(gap+1)/2, gap/2, true);
 }
 @compute @workgroup_size(64)
+fn exclude_exterior(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
+    let word = mask_word_id(id, groups);
+    let p = vec2<u32>((word % mask_stride()) * 32u, word / mask_stride());
+    let extent = params.extent_seed.xy;
+    if p.y >= extent.y { return; }
+    for (var i = 0u; i < 32u && p.x+i < extent.x; i++) {
+        let q = p + vec2<u32>(i, 0u);
+        if any(q == vec2<u32>(0)) || any(q+vec2<u32>(1) == extent)
+            || brush_selection_at(vec2<f32>(q)+.5) < 1. {
+            let label = root(q.y*extent.x+q.x);
+            if label != NONE { atomicOr(&coverage.values[label/32u], 1u << (label%32u)); }
+        }
+    }
+}
+fn selected_component(index: u32, selected: u32) -> bool {
+    if params.input.y != 0u { return atomicLoad(&parents[index]) != NONE; }
+    let label = root(index);
+    if label == NONE { return false; }
+    if params.input.z != 0u {
+        return (atomicLoad(&coverage.values[label/32u]) & (1u << (label%32u))) == 0u;
+    }
+    return label == selected;
+}
+@compute @workgroup_size(64)
 fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_workgroups) groups: vec3<u32>) {
     let word = mask_word_id(id, groups);
     let p = vec2<u32>((word % mask_stride()) * 32u, word / mask_stride());
@@ -87,8 +111,7 @@ fn component_mask(@builtin(global_invocation_id) id: vec3<u32>, @builtin(num_wor
     let selected = root(params.extent_seed.w * params.extent_seed.x + params.extent_seed.z);
     var packed = 0u;
     for (var i = 0u; i < 32u && p.x+i < params.extent_seed.x; i++) {
-        if (params.input.y != 0u && atomicLoad(&parents[p.y*params.extent_seed.x+p.x+i]) != NONE)
-            || (params.input.y == 0u && selected != NONE && root(p.y*params.extent_seed.x+p.x+i) == selected) { packed |= 1u << i; }
+        if selected_component(p.y*params.extent_seed.x+p.x+i, selected) { packed |= 1u << i; }
     }
     region_mask[word] = packed;
 }

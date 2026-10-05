@@ -305,6 +305,10 @@ manual save checkpoints and undo/redo after an actual process death.
   themes. Native drag capture respects panel stacking: a drawer blocks covered
   resize handles while its own controls remain interactive.
 - `AndroidRasterTest`: document, file and GPU lifecycle.
+  - `#encloseFillNativeContactsControlsAndHistory` uses Android stylus events
+    with Reference source in both themes. It checks the edge controls, fills
+    two enclosed transparent areas, leaves open and partly enclosed areas
+    intact, and verifies cancellation and exact undo/redo.
   - `#drawingTabsRestoreMultipleInactiveDrawingsWithoutPrompt` restores order,
     active tab, camera, saved checkpoints and independent undo/redo history.
     `#failedInactiveSessionRetriesWithoutLosingNewDrawing` preserves a failed

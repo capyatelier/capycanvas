@@ -571,6 +571,7 @@ command_ids! {
     EditLayerMask,
     EditLayerContent,
     LassoFill,
+    EncloseFill,
     CanvasSize,
     CropCanvasToSelection,
     GrowSelection,
@@ -825,7 +826,7 @@ impl CommandId {
             Self::LayerMaskEnabled => "eye",
             Self::ApplyLayerMask | Self::EditLayerMask => "mask",
             Self::EditLayerContent => "brush",
-            Self::LassoFill => "lasso-fill",
+            Self::LassoFill | Self::EncloseFill => "lasso-fill",
             Self::CanvasSize => "canvas-size",
             Self::CropCanvasToSelection | Self::Crop => "crop",
             Self::GrowSelection => "selection-grow",
@@ -879,7 +880,7 @@ impl CommandId {
             Self::FrequencySeparation => "frequency-separation",
         })
     }
-    pub const TOOLS: [Self; 32] = [
+    pub const TOOLS: [Self; 33] = [
         Self::SelectionBrush,
         Self::TonalSelect,
         Self::DrawingBrush,
@@ -897,6 +898,7 @@ impl CommandId {
         Self::SpotHeal,
         Self::Lasso,
         Self::LassoFill,
+        Self::EncloseFill,
         Self::Select,
         Self::RectangleSelect,
         Self::EllipseSelect,
@@ -1089,6 +1091,7 @@ impl CommandId {
             Self::EditLayerMask => MessageId::COMMAND_EDIT_LAYER_MASK,
             Self::EditLayerContent => MessageId::COMMAND_EDIT_LAYER_CONTENT,
             Self::LassoFill => MessageId::COMMAND_LASSO_FILL,
+            Self::EncloseFill => MessageId::COMMAND_ENCLOSE_FILL,
             Self::CanvasSize => MessageId::COMMAND_CANVAS_SIZE,
             Self::CropCanvasToSelection => MessageId::COMMAND_CROP_CANVAS_TO_SELECTION,
             Self::GrowSelection => MessageId::COMMAND_GROW_SELECTION,

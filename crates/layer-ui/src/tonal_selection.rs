@@ -226,7 +226,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             draft.mode = mode;
         }
         let request = RegionRequest {
-            request_id: 0,
+            enclosure: None, request_id: 0,
             source: layer_render::RegionSource::Tonal(Box::new(TonalRequest {
                 source: layer_render::RegionSource::Scene {snapshot:doc.snapshot(),scope:layer_core::authored::SceneScope::All},
                 bands: vec![self.selection_tools.options.tonal.band()],

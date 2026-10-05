@@ -604,3 +604,6 @@ menu-rotation = Rotação
 menu-reset-rotation = Redefinir rotação
 menu-lock-rotation = Bloquear rotação
 menu-lock-zoom = Bloquear zoom
+
+command-enclose-fill = Contornar e preencher
+commands-help-enclose-fill = Desenhe um contorno para preencher as regiões transparentes fechadas em seu interior.

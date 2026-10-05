@@ -569,7 +569,8 @@ impl SelectionModify {
 }
 #[derive(Clone, Debug)]
 pub struct RegionRequest {
-    /// Limit matching colors to the connected component containing the seed.
+    pub enclosure: Option<std::sync::Arc<layer_core::Selection>>,
+    /// Join neighboring eligible pixels; without an enclosure, keep the seed component.
     pub contiguous: bool,
     /// Optional edge processing and combination, returning document-space byte coverage.
     pub selection: Option<SelectionRefinement>,
@@ -581,7 +582,7 @@ pub struct RegionRequest {
     /// Optional limit, expressed in the source's coordinates.
     pub limit: Option<std::sync::Arc<layer_core::Selection>>,
 }
-/// Optional GPU morphology after fixed-seed color classification. Distances use
+/// GPU morphology around component discovery. Distances use
 /// document pixels, independently of zoom and the color tolerance.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct RegionRefinement {

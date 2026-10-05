@@ -191,6 +191,7 @@ first matching row and its error check, or leaves the default journey to the hos
 | Area | Selectors |
 | --- | --- |
 | Editor smoke, drawing, pen | `--editor`, `--pen`, `--prediction`, `--raster`, `--color-mixing` |
+| Enclose and Fill | `--enclose-fill` |
 | Canvas bar, notices, footer zoom | `--canvas-bar`, `--notices`, `--zoom-controls`, `--zoom-readout`, `--move-selection` |
 | Retouching | `--clone`, `--heal` |
 | Color | `--color-panel`, `--color-wheel-resize`, `--color-picker`, `--palettes`, `--scopes-smoke`, `--scopes`, `--tonal-controls` |
@@ -207,6 +208,12 @@ menus and secondary menus, retained icons and sibling choices in active-tool
 drawers, Paint's command categories and remembered media icons, Sketch's header
 groups, separate manual and automatic selection menus and Tool Set rows,
 and mouse/touch/pen hold-to-reorder with one layout undo/redo in both themes.
+
+`--enclose-fill` checks real pointer contacts in both themes against transparent
+reference ink. Two fully enclosed holes fill a separate paint layer; a hole
+crossed by the lasso stays empty. Shared export previews check actual GPU pixels,
+and saved raster identities check untouched references, one-step Undo/Redo and
+Escape cancellation.
 
 `--language-switching` visits all shipped languages in light and dark themes,
 checks retained Preferences and dirty size-entry identity, focus and selection,

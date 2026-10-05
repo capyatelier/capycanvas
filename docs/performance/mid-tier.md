@@ -59,6 +59,7 @@ current-source results.
 | Selection transform, full canvas | 90 | Renderer 217 submissions/s (handle and Distort); worst frame after release 16.4–27.1 ms | `6fcc6fba`, 2026-09-27 |
 | Move tool layer drag | 90 | | |
 | Marquee, Lasso or Polygon drag | 90 | | |
+| Enclose and Fill: loop drag and navigation during completion | 90 | Unmeasured on the reference tablet | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
 | Selection Brush or Quick Mask, 1536 px | 90 | | |
 | Grow, Shrink or Feather drag, full canvas | 90, soft | | |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 90, soft | | |

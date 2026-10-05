@@ -319,7 +319,7 @@ Canvas gestures that would change nothing say why through `UiState.notice`,
 published under `regions::HOST`:
 - Move on a locked layer, and Move over a selection on a group,
   an effect layer or a layer with no pixels;
-- Fill, Gradient, Figure and Lasso Fill with no paint content to act on;
+- Fill, Gradient, Figure, Lasso Fill and Enclose and Fill with no paint content to act on;
 - brushes with no paint target, and erasing under alpha lock;
 - a layer-mask stroke that paints dry coverage instead of the brush's wet or
   blending behavior, once per mask-editing session;

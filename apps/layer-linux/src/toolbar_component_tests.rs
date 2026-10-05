@@ -211,7 +211,7 @@ fn paint_slot_variations(d: &mut Driver, theme: Theme) {
         (ToolSlotId::ManualSelection, vec![CommandId::Lasso, CommandId::RectangleSelect,
             CommandId::EllipseSelect, CommandId::PolygonSelect, CommandId::SelectionBrush]),
         (ToolSlotId::AutomaticSelection, vec![CommandId::AutoSelect, CommandId::ColorSelect]),
-        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill]),
+        (ToolSlotId::Fill, vec![CommandId::Fill, CommandId::LassoFill, CommandId::EncloseFill]),
         (ToolSlotId::Blend, vec![CommandId::Blend, CommandId::Clone]),
     ] {
         let anchor = slot_anchor(d, slot);

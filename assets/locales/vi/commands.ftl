@@ -604,3 +604,6 @@ menu-rotation = Xoay
 menu-reset-rotation = Đặt lại góc xoay
 menu-lock-rotation = Khóa xoay
 menu-lock-zoom = Khóa thu phóng
+
+command-enclose-fill = Khoanh và tô
+commands-help-enclose-fill = Vẽ một đường bao để tô các vùng trong suốt khép kín bên trong.

@@ -59,6 +59,7 @@ current-source results.
 | Selection transform, full canvas | 120 | | |
 | Move tool layer drag | 120 | | |
 | Marquee, Lasso or Polygon drag | 120 | Met on a small document: in-stroke interval p50/p99 4.2/6.9 ms with the canvas bar shown, p99 8.8 ms with it off (2048 × 1536) | `ba9483a8`, 2026-09-27 |
+| Enclose and Fill: loop drag and navigation during completion | 120 | Unmeasured on the reference tablet; 61 MP completion exceeds the current 128 MiB component-buffer binding limit | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
 | Selection Brush or Quick Mask, 2048 px | 120 | | |
 | Grow, Shrink or Feather drag, full canvas | 120, soft | **Not met.** Feather: 14.9 updates/s on 6000 × 4000; 72.5 updates/s on 2048 × 1536 | Canvas-bar `refine-feather-drag`, 2026-09-27 |
 | Pointwise adjustment slider: Levels, Curves, Exposure, Hue/Saturation, Color Balance, White Balance, Black & White | 120, soft | **Not met for Hue.** Master 102.54–109.43, Range 106.57–111.08 presents/s | [Photo color adjustments](#photo-color-adjustments), 2026-10-03 |

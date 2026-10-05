@@ -615,6 +615,95 @@ class AndroidRasterTest {
         println("PASS native selection geometry, polygon completion, undo/redo, feathered GPU masks and disconnected color islands")
     }
 
+    @Test fun encloseFillNativeContactsControlsAndHistory() {
+        fun ui(value: JSONObject) { host.drain(value, 10); compose.waitForIdle() }
+        val reference = File(files, "enclose-reference.png")
+        val bitmap = android.graphics.Bitmap.createBitmap(256, 128, android.graphics.Bitmap.Config.ARGB_8888)
+        try {
+            val boxes = listOf(intArrayOf(20, 20, 64, 100), intArrayOf(80, 20, 124, 100),
+                intArrayOf(144, 20, 176, 100), intArrayOf(192, 20, 236, 100))
+            for ((index, box) in boxes.withIndex()) for (y in box[1] until box[3]) for (x in box[0] until box[2]) {
+                val edge = x < box[0] + 3 || x >= box[2] - 3 || y < box[1] + 3 || y >= box[3] - 3
+                if (edge && !(index == 2 && y < box[1] + 3 && x in 157..162)) bitmap.setPixel(x, y, android.graphics.Color.BLACK)
+            }
+            reference.outputStream().use { assertTrue(bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it)) }
+        } finally { bitmap.recycle() }
+        val recipe = builtinRecipe(2).put("format", "Png").put("depth", "U8")
+        fun pixels(name: String): IntArray {
+            val bytes = png(name, recipe)
+            val image = android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size,
+                android.graphics.BitmapFactory.Options().apply { inPremultiplied = false })!!
+            try {
+                assertEquals(256, image.width); assertEquals(128, image.height)
+                return IntArray(256 * 128).also { image.getPixels(it, 0, 256, 0, 0, 256, 128) }
+            } finally { image.recycle() }
+        }
+        fun loop(cancel: Boolean) {
+            val camera = native { state(it).getJSONObject("camera") }
+            val pan = camera.getJSONArray("translation"); val zoom = camera.getDouble("zoom")
+            val origin = host.surfaceOrigin; val start = SystemClock.uptimeMillis()
+            val path = listOf(12 to 12, 216 to 12, 216 to 112, 12 to 112, 12 to 12)
+            for ((index, point) in path.withIndex()) {
+                val phase = when (index) {
+                    0 -> android.view.MotionEvent.ACTION_DOWN
+                    path.lastIndex -> if (cancel) android.view.MotionEvent.ACTION_CANCEL else android.view.MotionEvent.ACTION_UP
+                    else -> android.view.MotionEvent.ACTION_MOVE
+                }
+                val properties = arrayOf(android.view.MotionEvent.PointerProperties().apply { id = 7; toolType = android.view.MotionEvent.TOOL_TYPE_STYLUS })
+                val coordinates = arrayOf(android.view.MotionEvent.PointerCoords().apply {
+                    x = (origin.x + pan.getDouble(0) + point.first * zoom).toFloat()
+                    y = (origin.y + pan.getDouble(1) + point.second * zoom).toFloat()
+                    pressure = if (index == path.lastIndex) 0f else .7f
+                })
+                val event = android.view.MotionEvent.obtain(start, SystemClock.uptimeMillis(), phase, 1, properties, coordinates,
+                    0, 0, 1f, 1f, 0, 0, android.view.InputDevice.SOURCE_STYLUS, 0)
+                try { assertTrue(instrumentation.uiAutomation.injectInputEvent(event, true)) } finally { event.recycle() }
+                SystemClock.sleep(40)
+            }
+            compose.waitUntil(60_000) { !tick() }; refresh()
+        }
+        for (theme in listOf("light", "dark")) {
+            open(reference); refresh(); invoke("fit_canvas")
+            val owner = native { state(it).getJSONObject("layer_tools").getJSONObject("editing_layer").getLong("id") }
+            send(obj("type" to "layer", "action" to obj("op" to "reference", "id" to owner)))
+            invoke("add_layer"); send(obj("type" to "layer", "action" to obj("op" to "cancel_rename")))
+            ui(obj("type" to "set_theme", "theme" to theme))
+            ui(obj("type" to "invoke", "command" to "enclose_fill"))
+            ui(obj("type" to "invoke", "command" to "selection_reference"))
+            val group = host.snapshot!!.getJSONObject("layout").array("groups").objects().first { "tool_settings" in it.array("panels").values() }.getInt("id")
+            ui(obj("type" to "select_panel_tab", "group" to group, "panel" to "tool_settings"))
+            for (id in listOf("tolerance", "gap_closing", "expansion", "smoothing")) {
+                compose.onNode(hasTestTag("tool-setting-$id") and hasAnyAncestor(hasTestTag("panel-body-tool_settings"))).performScrollTo().assertIsDisplayed()
+                ui(obj("type" to "set_tool_setting", "id" to id, "value" to 0))
+            }
+            ui(obj("type" to "customize", "action" to obj("type" to "close_expanded")))
+            compose.waitUntil(10_000) { host.snapshot!!.getJSONObject("state").getJSONObject("customization").isNull("expanded") }
+            SystemClock.sleep(300)
+            val command = native { state(it).array("commands").objects().first { c -> c.getString("id") == "enclose_fill" } }
+            assertTrue(command.getBoolean("selected")); assertEquals("Enclose and Fill", command.getString("label"))
+            ui(obj("type" to "set_color", "rgba" to org.json.JSONArray(listOf(1.0, 0.0, 0.0, 1.0))))
+            ui(obj("type" to "set_brush_opacity", "value" to 1.0))
+            invoke("fit_canvas"); refresh()
+            val before = pixels("enclose-$theme-before.png")
+            loop(true); assertArrayEquals("Cancelled enclosure leaves artwork intact", before, pixels("enclose-$theme-cancel.png"))
+            loop(false)
+            val filled = pixels("enclose-$theme-filled.png")
+            for (x in listOf(40, 100)) {
+                val color = filled[60 * 256 + x]
+                assertTrue("$theme enclosed area $x is filled", android.graphics.Color.red(color) > 240 && android.graphics.Color.green(color) < 20 && android.graphics.Color.alpha(color) > 240)
+            }
+            for (x in listOf(8, 72, 160, 204, 248)) assertEquals("$theme open and partly enclosed areas stay intact at $x", before[60 * 256 + x], filled[60 * 256 + x])
+            assertFalse(native { state(it).getJSONObject("layer_tools").getBoolean("has_selection") })
+            invoke("undo"); assertArrayEquals(before, pixels("enclose-$theme-undo.png"))
+            invoke("redo"); assertArrayEquals(filled, pixels("enclose-$theme-redo.png"))
+            instrumentation.uiAutomation.takeScreenshot()?.let { image ->
+                try { File(activity.getExternalFilesDir(null), "enclose-fill-$theme.png").outputStream().use { image.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, it) } }
+                finally { image.recycle() }
+            }
+        }
+        assertNull(host.failure); assertNull(host.actionError)
+    }
+
     @Test fun tonal61MpRecoveryAndInteraction() {
         // Stream a generated RGB photo; never read an artist's image or workspace.
         val width=9504; val height=6336

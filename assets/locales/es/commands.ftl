@@ -603,3 +603,6 @@ menu-rotation = Rotación
 menu-reset-rotation = Restablecer rotación
 menu-lock-rotation = Bloquear rotación
 menu-lock-zoom = Bloquear zoom
+
+command-enclose-fill = Rodear y rellenar
+commands-help-enclose-fill = Dibuja un contorno para rellenar las regiones transparentes cerradas de su interior.

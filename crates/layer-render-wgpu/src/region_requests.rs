@@ -169,6 +169,9 @@ impl RegionRequests {
                     | layer_render::RegionSource::Coverage(_)
                     | layer_render::RegionSource::Tonal(_)
             ) && request.selection.is_none())
+            || request.enclosure.as_ref().is_some_and(|area| area.validate().is_err()
+                || !request.contiguous || request.limit.is_some()
+                || !matches!(request.source, layer_render::RegionSource::Composite | layer_render::RegionSource::Source(_) | layer_render::RegionSource::Scene { .. }))
             || (mapped && (request.selection.is_some() || request.limit.is_some()))
         {
             return Err(GpuRasterError::InvalidExtent);
@@ -189,7 +192,7 @@ impl RegionRequests {
                 ready &= self.raw.prepare_tonal(&startup.compiler);
             } else if !matches!(request.source, layer_render::RegionSource::Selection(_)) {
                 if !matches!(request.source, layer_render::RegionSource::Coverage(_)) {
-                    ready &= self.flood.prepare(&startup.compiler, request.refinement);
+                    ready &= self.flood.prepare(&startup.compiler, request.refinement, request.enclosure.is_some());
                 }
                 ready &= self.raw.prepare(&startup.compiler);
             }
@@ -200,7 +203,7 @@ impl RegionRequests {
                     .unwrap()
                     .prepare(&startup.compiler, [&Stage::refinement(options)], false);
             }
-            if request.limit.is_some() || request.selection.is_some() {
+            if request.limit.is_some() || request.enclosure.is_some() || request.selection.is_some() {
                 ready &= startup
                     .compiler
                     .require(r.selection_clip.pipelines(), startup::BRUSH);
@@ -252,16 +255,20 @@ impl RegionRequests {
                     bounds_offset: 0,
                 }
             } else {
+                if let Some(enclosure) = &request.enclosure {
+                    r.selection_clip.prepare(&r.device, &mut encoder, extent, enclosure)?;
+                }
                 self.flood.encode_input(
                     &r.device,
                     &mut encoder,
                     extent,
                     request.position,
                     request.tolerance,
-                    request.limit.as_ref().and(r.selection_clip.buffer.as_ref()),
+                    request.enclosure.as_ref().or(request.limit.as_ref()).and(r.selection_clip.buffer.as_ref()),
                     request.refinement,
                     &classified,
                     request.contiguous,
+                    request.enclosure.is_some(),
                 )?
             }
         };

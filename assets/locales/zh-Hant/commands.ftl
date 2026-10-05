@@ -602,3 +602,6 @@ menu-rotation = 旋轉
 menu-reset-rotation = 重設旋轉
 menu-lock-rotation = 鎖定旋轉
 menu-lock-zoom = 鎖定縮放
+
+command-enclose-fill = 圍住填色
+commands-help-enclose-fill = 畫一個圈，填滿圈內封閉的透明區域。

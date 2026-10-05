@@ -239,7 +239,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         };
         draft.job = Some((draft.view.radius, exact));
         self.queue_refine_region(RegionRequest {
-            request_id: 0,
+            enclosure: None, request_id: 0,
             contiguous: false,
             source: layer_render::RegionSource::Modify(Arc::new(modify)),
             position: [0, 0],

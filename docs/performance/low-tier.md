@@ -91,6 +91,7 @@ make this a memory diagnostic, not frame-rate qualification. Records are under
 | Move selected pixels: partial selection | 60 | Screen 59.4 presents/s, p99 16.8 ms; renderer 134.2 completed updates/s | Two-page-refinement qualification below, `move-part-drag` |
 | Move selected pixels: Leave Copy | 60 | Screen 59.3 presents/s, p99 16.7 ms; renderer 131.1 completed updates/s | Two-page-refinement qualification below, `move-part-leave-copy-drag` |
 | Marquee, Lasso or Polygon drag | 60 | | |
+| Enclose and Fill: loop drag and navigation during completion | 60 | Unmeasured on the reference tablet | Shared lasso overlay; GPU region discovery starts on release. Desktop checks do not qualify this tier |
 | Selection Brush or Quick Mask, 1024 px | 60 | | |
 | Grow, Shrink or Feather drag, full canvas | 60, soft | | |
 | Pointwise adjustment slider: Exposure | 60, soft | **Not met.** Current M3 12.131–32.686 completed updates/s; completion gap p99 63.347–281.970 ms; presentation unmeasured | [BUILD20 selected canvas comparison](#build20-selected-canvas-comparison) |

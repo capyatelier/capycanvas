@@ -773,7 +773,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 self.queue_mask_region(
                     SelectionTarget::Current,
                     layer_render::RegionRequest {
-                        request_id: 0,
+                        enclosure: None, request_id: 0,
                         contiguous: false,
                         source: layer_render::RegionSource::Coverage(target),
                         position: [0, 0],
@@ -809,7 +809,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     self.queue_mask_region(
                         SelectionTarget::Current,
                         layer_render::RegionRequest {
-                            request_id: 0,
+                            enclosure: None, request_id: 0,
                             contiguous: false,
                             source: layer_render::RegionSource::Selection(Arc::new(selection)),
                             position: [0, 0],

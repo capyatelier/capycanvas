@@ -18,7 +18,7 @@ fn sample_seed() { seed = raw_color(0u, batch.tiles[0].position); }
 @compute @workgroup_size(64)
 fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
     let tile = batch.tiles[id.z];
-    if tile.options.z > .5 {
+    if tile.options.z > .5 && tile.options.z < 2.5 {
         let stride = (tile.size.x + 3u)/4u;
         let p = vec2<u32>((id.x%stride)*4u,id.x/stride);
         if p.y >= tile.size.y { return; }
@@ -46,7 +46,8 @@ fn classify_tile(@builtin(global_invocation_id) id: vec3<u32>) {
         // and exclude even the seed itself at zero tolerance.
         let same = all(value == seed);
         let color = comparison_color(value);
-        if (same || all(abs(color - comparison_color(seed)) <= vec4<f32>(tile.options.x)))
+        if select(same || all(abs(color - comparison_color(seed)) <= vec4<f32>(tile.options.x)),
+            value.a <= tile.options.x, tile.options.z > 2.5)
             && brush_selection_at(vec2<f32>(world) + .5) > 0. {
             packed |= 1u << i;
         }

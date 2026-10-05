@@ -602,3 +602,6 @@ menu-rotation = การหมุน
 menu-reset-rotation = รีเซ็ตการหมุน
 menu-lock-rotation = ล็อกการหมุน
 menu-lock-zoom = ล็อกการซูม
+
+command-enclose-fill = ล้อมแล้วเติมสี
+commands-help-enclose-fill = วาดเส้นล้อมเพื่อเติมสีในพื้นที่โปร่งใสที่ปิดอยู่ภายใน

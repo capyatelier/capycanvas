@@ -603,3 +603,6 @@ menu-rotation = Döndürme
 menu-reset-rotation = Döndürmeyi sıfırla
 menu-lock-rotation = Döndürmeyi kilitle
 menu-lock-zoom = Yakınlaştırmayı kilitle
+
+command-enclose-fill = Çevrele ve doldur
+commands-help-enclose-fill = İçindeki kapalı saydam alanları doldurmak için bir çevre çiz.

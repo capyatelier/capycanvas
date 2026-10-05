@@ -262,6 +262,10 @@ and the toolbar component mouse/touch, pen and value-control journeys. They cove
 both themes, editing, slider feedback, popovers and toolbar allocation.
 Tool-settings journeys share `tool_settings_workspace` for toolbar commands and
 panel placement; restore actions, waits and interaction assertions stay in callers.
+`native_enclose_fill_pointer_workflow` checks Enclose and Fill with native mouse
+contacts in both themes: two fully enclosed reference holes fill a separate paint
+layer, a hole crossed by the lasso stays empty, and the reference stays exact.
+It also checks the shared Fill controls, one-step Undo/Redo and Escape cancellation.
 Artifact helpers preserve literal paths and each capture's warm-up wait; held
 warm textures and theme loops remain in their callers.
 Docking and ink checks retain pressure editing, native wrapping and GPU pixels.

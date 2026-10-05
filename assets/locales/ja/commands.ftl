@@ -602,3 +602,6 @@ menu-rotation = 回転
 menu-reset-rotation = 回転をリセット
 menu-lock-rotation = 回転をロック
 menu-lock-zoom = ズームをロック
+
+command-enclose-fill = 囲って塗る
+commands-help-enclose-fill = 囲んだ範囲内の閉じた透明領域を塗りつぶします。

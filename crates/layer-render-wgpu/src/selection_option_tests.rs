@@ -50,7 +50,7 @@ fn receive_refined(r: &mut WgpuRasterizer, incoming: Selection, options: Selecti
     let reply = crate::test_support::receive_request(
         r,
         RegionRequest {
-            request_id: 42,
+            enclosure: None, request_id: 42,
             source: RegionSource::Selection(Arc::new(incoming)),
             contiguous: false,
             selection: Some(options),
@@ -352,7 +352,7 @@ fn smooth_fills_notches_removes_spikes_and_keeps_the_canvas_edges() {
 
 fn modify_request(selection: Selection, steps: &[ModifyStep], preview: Option<f32>) -> RegionRequest {
     RegionRequest {
-        request_id: 7,
+        enclosure: None, request_id: 7,
         source: RegionSource::Modify(Arc::new(SelectionModify { selection: Arc::new(selection), steps: steps.to_vec(), preview })),
         contiguous: false,
         selection: None,

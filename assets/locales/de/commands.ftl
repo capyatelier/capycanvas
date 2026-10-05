@@ -603,3 +603,6 @@ menu-rotation = Drehung
 menu-reset-rotation = Drehung zurücksetzen
 menu-lock-rotation = Drehung sperren
 menu-lock-zoom = Zoom sperren
+
+command-enclose-fill = Umranden und füllen
+commands-help-enclose-fill = Zeichne eine Umrandung, um geschlossene transparente Bereiche darin zu füllen.

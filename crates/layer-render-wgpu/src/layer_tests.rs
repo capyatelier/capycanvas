@@ -9,6 +9,8 @@ use layer_render::{DabStyle, ViewState};
 mod tonal_selection;
 #[path = "selection_option_tests.rs"]
 mod selection_options;
+#[path = "enclose_fill_tests.rs"]
+mod enclose_fill;
 #[path = "selection_paint_tests.rs"]
 mod selection_painting;
 #[path = "submission_tests.rs"]
@@ -295,7 +297,7 @@ fn connected_and_global_regions_select_painted_disks() {
     submit(&mut r, document.scene(), &[left, right], &[disks], true);
     for contiguous in [true, false] {
         let result = crate::test_support::receive_request(&mut r, RegionRequest {
-            contiguous,
+            enclosure: None, contiguous,
             selection: None,
             request_id: 1,
             source: RegionSource::Source(target(&document)),

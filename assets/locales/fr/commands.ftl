@@ -603,3 +603,6 @@ menu-rotation = Rotation
 menu-reset-rotation = Réinitialiser la rotation
 menu-lock-rotation = Verrouiller la rotation
 menu-lock-zoom = Verrouiller le zoom
+
+command-enclose-fill = Entourer et remplir
+commands-help-enclose-fill = Tracez un contour pour remplir les zones transparentes fermées à l’intérieur.

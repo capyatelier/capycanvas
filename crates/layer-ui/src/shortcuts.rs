@@ -502,6 +502,7 @@ pub(crate) fn tool_command(action: &UiAction) -> Option<CommandId> {
         tool if tool.picks_color() => CommandId::Eyedropper,
         LayerCanvasTool::Select => CommandId::Lasso,
         LayerCanvasTool::LassoFill => CommandId::LassoFill,
+        LayerCanvasTool::EncloseFill { .. } => CommandId::EncloseFill,
         LayerCanvasTool::Move => CommandId::Move,
         _ => return None,
     })

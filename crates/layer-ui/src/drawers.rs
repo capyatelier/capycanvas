@@ -348,6 +348,7 @@ impl ToolbarControl {
                             | CommandId::Figure
                             | CommandId::Ruler
                             | CommandId::Fill
+                            | CommandId::EncloseFill
                     ) =>
             {
                 Some(vec![vec![Panel::Brushes], vec![Panel::ToolSettings]])

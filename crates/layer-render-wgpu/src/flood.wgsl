@@ -134,7 +134,7 @@ fn pack(@builtin(global_invocation_id) id: vec3<u32>, @builtin(local_invocation_
     let word = id.x + id.y * groups.x * 64u;
     let y = word/stride;
     let x = (word%stride)*8u;
-    let refined = params.options.z != 0. || params.options.w != 0.;
+    let refined = params.input.z != 0u || params.options.z != 0. || params.options.w != 0.;
     var selected = NONE;
     if !refined { selected = root(params.extent_seed.w * extent.x + params.extent_seed.z); }
     var packed = 0u;

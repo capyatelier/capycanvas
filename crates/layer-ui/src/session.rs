@@ -2316,7 +2316,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                         layer_core::SelectionTarget::Saved(layer) => id == CommandId::LoadSelectionLayer || !document.is_locked(layer),
                     })
             }
-            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::LassoFill | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
+            CommandId::ScaleRotate | CommandId::ClearLayer | CommandId::Figure | CommandId::Move | CommandId::LassoFill | CommandId::EncloseFill | CommandId::FillSelection | CommandId::RepairSourceProfile | CommandId::RasterizeSource
             | CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask
                 if self.selection_masks.target().is_some() => false,
             CommandId::InvertLayerMask | CommandId::LayerMaskEnabled | CommandId::ApplyLayerMask => {
@@ -2441,9 +2441,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                         l.kind() != LayerKind::Selection
                     })
             }
-            CommandId::SelectionVisible => idle && self.layer_interaction.tool.selection_tool().is_some(),
+            CommandId::SelectionVisible => idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some()),
             CommandId::SelectionEditing | CommandId::SelectionReference => {
-                idle && (self.layer_interaction.tool.selection_tool().is_some() || self.retouching())
+                idle && (self.layer_interaction.tool.selection_tool().is_some() || self.layer_interaction.tool.region().is_some() || self.retouching())
             }
             CommandId::CloneSourceArm
             | CommandId::CloneAligned
@@ -2523,6 +2523,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             CommandId::DeleteLayer => idle && self.can_delete_layer_rows(self.selected_layers()),
             CommandId::RaiseLayer | CommandId::LowerLayer => idle && self.layer_step_edit(id == CommandId::RaiseLayer).is_ok(),
+            CommandId::EncloseFill => idle && !matches!(document.working.target, Some(SourceTarget::Coverage(_))),
             CommandId::FitCanvas
             | CommandId::ActualPixels
             | CommandId::LassoFill
@@ -2568,9 +2569,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             })
             || blending::blend_space(id).is_some_and(|space| document.composition().blend == space)
             || matches!((id, self.layer_interaction.tool.region()),
-                (CommandId::SelectionVisible, Some((false, RegionSource::Visible, _)))
-                | (CommandId::SelectionEditing, Some((false, RegionSource::Editing, _)))
-                | (CommandId::SelectionReference, Some((false, RegionSource::Reference, _))))
+                (CommandId::SelectionVisible, Some((_, RegionSource::Visible, _)))
+                | (CommandId::SelectionEditing, Some((_, RegionSource::Editing, _)))
+                | (CommandId::SelectionReference, Some((_, RegionSource::Reference, _))))
             || (self.layer_interaction.tool == LayerCanvasTool::Paint
             && ((id == CommandId::DrawingBrush && tools::is_drawing(self.state.brush.tool))
                 || (id == CommandId::Sculpt && tools::is_sculpt(self.state.brush.tool))
@@ -2579,6 +2580,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 (id, self.layer_interaction.tool),
                 (CommandId::Lasso, LayerCanvasTool::Select)
                     | (CommandId::LassoFill, LayerCanvasTool::LassoFill)
+                    | (CommandId::EncloseFill, LayerCanvasTool::EncloseFill { .. })
                     | (
                         CommandId::Move,
                         LayerCanvasTool::Move | LayerCanvasTool::Transform
@@ -3981,7 +3983,8 @@ impl<R: CanvasRenderer> UiSession<R> {
             if event.phase == PenPhase::Down { self.notify("Choose a dry brush, eraser, fill, gradient, or Hand for selection mask editing"); }
             return Ok(());
         }
-        if self.layer_interaction.tool.region().is_some() {
+        if self.layer_interaction.tool.region().is_some()
+            && !matches!(self.layer_interaction.tool, LayerCanvasTool::EncloseFill { .. }) {
             self.region_pen(event);
             return Ok(());
         }
@@ -4763,6 +4766,10 @@ impl<R: CanvasRenderer> UiSession<R> {
                 })?;
                 Ok((DOCUMENT | BRUSH | COMMANDS, true))
             }
+            CommandId::EncloseFill => {
+                self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::EncloseFill { source: self.region_tools.enclose_source } })?;
+                Ok((DOCUMENT | BRUSH | COMMANDS, true))
+            }
             CommandId::LassoFill => {
                 self.layer_action(LayerAction::Tool { tool: LayerCanvasTool::LassoFill })?;
                 Ok((BRUSH | DOCUMENT, true))
@@ -4879,8 +4886,12 @@ impl<R: CanvasRenderer> UiSession<R> {
                     CommandId::SelectionEditing => RegionSource::Editing,
                     _ => RegionSource::Reference,
                 };
-                let kind = self.layer_interaction.tool.selection_tool().ok_or("Choose a selection tool first")?;
-                self.layer_action(LayerAction::Tool { tool: kind.canvas_tool(source) })?;
+                let tool = match self.layer_interaction.tool {
+                    LayerCanvasTool::EncloseFill { .. } => LayerCanvasTool::EncloseFill { source },
+                    LayerCanvasTool::Region { fill, .. } => LayerCanvasTool::Region { fill, source },
+                    tool => tool.selection_tool().ok_or("Choose a region tool first")?.canvas_tool(source),
+                };
+                self.layer_action(LayerAction::Tool { tool })?;
                 Ok((BRUSH | COMMANDS, false))
             }
             CommandId::AutoSelect | CommandId::Fill => {
@@ -6249,6 +6260,7 @@ mod tests {
     include!("session_source_tests.rs");
     include!("layer_relationship_tests.rs");
     include!("selection_tests.rs");
+    include!("enclose_fill_tests.rs");
     include!("selection_pixel_tests.rs");
     include!("merge_tests.rs");
     include!("selection_refine_tests.rs");

@@ -403,6 +403,7 @@ fn action_description(action: &UiAction, l: &Localizer) -> String {
             EditLayerMask => l.text(MessageId::COMMANDS_HELP_EDIT_LAYER_MASK).to_string(),
             EditLayerContent => l.text(MessageId::COMMANDS_HELP_EDIT_LAYER_CONTENT).to_string(),
             LassoFill => l.text(MessageId::COMMANDS_HELP_LASSO_FILL).to_string(),
+            EncloseFill => l.text(MessageId::COMMANDS_HELP_ENCLOSE_FILL).to_string(),
             CanvasSize => l.text(MessageId::COMMANDS_HELP_CANVAS_SIZE).to_string(),
             CropCanvasToSelection => l.text(MessageId::COMMANDS_HELP_CROP_CANVAS_TO_SELECTION).to_string(),
             GrowSelection => l.text(MessageId::COMMANDS_HELP_GROW_SELECTION).to_string(),
@@ -499,7 +500,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             T::PickVisible | T::PickLayer => ToolCategory::ColorSampling,
             T::Move | T::Transform | T::Crop => ToolCategory::MoveTransform,
             T::Figure { .. } | T::Ruler { .. } => ToolCategory::ShapesRulers,
-            T::Gradient { .. } | T::LassoFill | T::Region { fill: true, .. } => {
+            T::Gradient { .. } | T::LassoFill | T::EncloseFill { .. } | T::Region { fill: true, .. } => {
                 ToolCategory::FillGradient
             }
             _ => ToolCategory::Selection,
@@ -1095,6 +1096,7 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::Figure
             | C::Move
             | C::LassoFill
+            | C::EncloseFill
             | C::FillSelection
             | C::RepairSourceProfile
             | C::RasterizeSource
@@ -1103,6 +1105,9 @@ impl<R: CanvasRenderer> UiSession<R> {
             | C::ApplyLayerMask
                 if mask_target.is_some() =>
             {
+                l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST)
+            }
+            C::EncloseFill if matches!(document.working.target, Some(layer_core::authored::SourceTarget::Coverage(_))) => {
                 l.text(MessageId::COMMANDS_RETURN_TO_THE_ARTWORK_FIRST)
             }
             C::InvertLayerMask | C::LayerMaskEnabled | C::ApplyLayerMask | C::EditLayerMask

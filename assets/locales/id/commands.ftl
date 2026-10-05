@@ -1185,3 +1185,6 @@ menu-rotation = Rotasi
 menu-reset-rotation = Atur ulang rotasi
 menu-lock-rotation = Kunci rotasi
 menu-lock-zoom = Kunci zoom
+
+command-enclose-fill = Lingkari dan Isi
+commands-help-enclose-fill = Gambar lingkaran untuk mengisi area transparan tertutup di dalamnya.

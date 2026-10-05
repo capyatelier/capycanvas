@@ -67,7 +67,7 @@ Paint keeps 17 tool positions: Pen, Pencil, Brush,
 Eraser, Airbrush, Decoration, Blend, Liquify; Selection, Auto select, Fill,
 Gradient; Operation, Figure, Ruler, Hand and Eyedropper. The color selector is
 separate. Selection contains Lasso, Rectangle, Ellipse, Polygon and Paint
-Selection; Auto select includes Select by Color; Fill includes Lasso Fill; Blend
+Selection; Auto select includes Select by Color; Fill includes Lasso Fill and Enclose and Fill; Blend
 includes Clone. Operation, Figure, Ruler and Gradient expose their existing
 variations in the same positions. Pen and Pencil remain separate. Pen exposes
 Pen and Marker; Pencil exposes Pencil and Pastel; Brush exposes Paint,

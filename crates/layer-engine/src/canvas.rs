@@ -618,7 +618,7 @@ impl<B: CanvasRenderer> CanvasEngine<B> {
                 && s.needs_resample(&preview.transform.placement)
         })?;
         Some(layer_render::RegionRequest {
-            contiguous: false,
+            enclosure: None, contiguous: false,
             selection: None,
             request_id,
             source: layer_render::RegionSource::TransformedSelection {

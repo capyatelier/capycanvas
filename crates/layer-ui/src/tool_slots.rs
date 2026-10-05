@@ -134,10 +134,11 @@ impl ToolSlotId {
                         V::Gradient {shape:layer_core::GradientShape::Reflected},
                         command(C::Fill),
                         command(C::LassoFill),
+                        command(C::EncloseFill),
                     ]
                 }
             }
-            Self::Fill => const { &[command(C::Fill), command(C::LassoFill)] },
+            Self::Fill => const { &[command(C::Fill), command(C::LassoFill), command(C::EncloseFill)] },
             Self::Blend => const { &[command(C::Blend), command(C::Clone)] },
             Self::Operation => const { &[command(C::Move), command(C::ScaleRotate)] },
             Self::Figure => {
@@ -293,6 +294,7 @@ impl ToolVariant {
                     LayerCanvasTool::Transform => CommandId::ScaleRotate,
                     LayerCanvasTool::Region { fill: true, .. } => CommandId::Fill,
                     LayerCanvasTool::LassoFill => CommandId::LassoFill,
+                    LayerCanvasTool::EncloseFill { .. } => CommandId::EncloseFill,
                     LayerCanvasTool::Crop => CommandId::Crop,
                     LayerCanvasTool::Hand => CommandId::Hand,
                     _ => return None,

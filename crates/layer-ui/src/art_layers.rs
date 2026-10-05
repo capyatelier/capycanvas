@@ -72,6 +72,7 @@ pub enum LayerCanvasTool {
     Selection { kind: SelectionTool },
     SelectColor { source: RegionSource },
     LassoFill,
+    EncloseFill { source: RegionSource },
     Hand,
     PickVisible,
     PickLayer,
@@ -100,6 +101,7 @@ impl LayerCanvasTool {
     pub fn region(self) -> Option<(bool, RegionSource, bool)> {
         match self {
             Self::Region { fill, source } => Some((fill, source, true)),
+            Self::EncloseFill { source } => Some((true, source, true)),
             Self::SelectColor { source } => Some((false, source, false)),
             _ => None,
         }
@@ -117,7 +119,7 @@ impl LayerCanvasTool {
         matches!(self, Self::PickVisible | Self::PickLayer)
     }
     pub fn draws(self) -> bool {
-        matches!(self, Self::Paint | Self::LassoFill | Self::Region { fill: true, .. }
+        matches!(self, Self::Paint | Self::LassoFill | Self::EncloseFill { .. } | Self::Region { fill: true, .. }
             | Self::Gradient { .. } | Self::Figure { .. })
     }
 }
@@ -950,7 +952,11 @@ impl<R: CanvasRenderer> UiSession<R> {
             }
             LayerAction::Tool { tool } => {
                 if tool.selection_tool().is_some() && tool.selection_tool()!=Some(SelectionTool::Tonal) { self.return_to_artwork()?; }
-                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::Figure { .. }) {
+                if self.selection_masks.target().is_some() && matches!(tool, LayerCanvasTool::Transform | LayerCanvasTool::Crop | LayerCanvasTool::Move | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Figure { .. }) {
+                    return Err("Return to artwork to use this tool".into());
+                }
+                if matches!(tool, LayerCanvasTool::EncloseFill { .. })
+                    && matches!(self.engine.document().working.target, Some(SourceTarget::Coverage(_))) {
                     return Err("Return to artwork to use this tool".into());
                 }
                 if tool.picks_color() {
@@ -982,7 +988,9 @@ impl<R: CanvasRenderer> UiSession<R> {
                 if let Some(kind) = tool.selection_tool() {
                     self.selection_tools.options.tool = kind;
                 }
-                if let Some((fill, source, _)) = tool.region() {
+                if let LayerCanvasTool::EncloseFill { source } = tool {
+                    self.region_tools.enclose_source = source;
+                } else if let Some((fill, source, _)) = tool.region() {
                     self.region_tools.source[usize::from(fill)] = source;
                 }
                 if let LayerCanvasTool::Gradient {shape}=tool {
@@ -1644,7 +1652,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                 let id = doc.working.occurrence.ok_or("Unknown layer")?;
                 let layer = doc.scene().occurrence(id).ok_or("Unknown layer")?;
                 match self.layer_interaction.tool {
-                    LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
+                    LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Gradient { .. } | LayerCanvasTool::Figure { .. }
                         if doc.drawing_content().is_none() && self.selection_masks.target().is_none() =>
                     {
                         self.notify_drawing_refusal();
@@ -1720,7 +1728,7 @@ impl<R: CanvasRenderer> UiSession<R> {
                     }
                     if matches!(
                         self.layer_interaction.tool,
-                        LayerCanvasTool::Select | LayerCanvasTool::LassoFill
+                        LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. }
                     ) {
                         let mut points = std::mem::take(&mut self.layer_interaction.path);
                         points.dedup();
@@ -1730,6 +1738,8 @@ impl<R: CanvasRenderer> UiSession<R> {
                             let selection = Selection::polygon(points).map_err(error)?;
                             if self.layer_interaction.tool == LayerCanvasTool::Select {
                                 self.commit_tool_selection(selection)?;
+                            } else if matches!(self.layer_interaction.tool, LayerCanvasTool::EncloseFill { .. }) {
+                                self.enclose_fill(selection);
                             } else {
                                 self.fill_selection(selection)?;
                             }
@@ -1911,7 +1921,7 @@ impl<R: CanvasRenderer> UiSession<R> {
         }
         if matches!(
             self.layer_interaction.tool,
-            LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::Gradient { .. }
+            LayerCanvasTool::Select | LayerCanvasTool::LassoFill | LayerCanvasTool::EncloseFill { .. } | LayerCanvasTool::Gradient { .. }
         ) {
             path(
                 &self.layer_interaction.path,

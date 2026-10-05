@@ -602,3 +602,6 @@ menu-rotation = 회전
 menu-reset-rotation = 회전 초기화
 menu-lock-rotation = 회전 잠금
 menu-lock-zoom = 확대/축소 잠금
+
+command-enclose-fill = 둘러싸서 채우기
+commands-help-enclose-fill = 선을 둘러 그려 안쪽의 닫힌 투명 영역을 채웁니다.

@@ -25,7 +25,7 @@ fn receive(
     receive_request(
         r,
         RegionRequest {
-            request_id: 73,
+            enclosure: None, request_id: 73,
             contiguous: false,
             position: [0, 0],
             tolerance: 0.,
@@ -362,7 +362,7 @@ fn tonal_61mp_performance() {
     let feathered = receive_request(
         &mut r,
         RegionRequest {
-            request_id: 74,
+            enclosure: None, request_id: 74,
             contiguous: false,
             position: [0, 0],
             tolerance: 0.,

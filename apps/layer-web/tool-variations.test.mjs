@@ -79,6 +79,7 @@ export async function checkToolVariations({call,evaluate,settle}) {
       const tile=tiles.find(t=>t.control.slot===slot);assert.ok(tile,slot);
       const selector=`.toolbar-controls[data-panel="toolbar"] > [data-tile="${tile.id}"]`,anchor={kind:'tile',panel:'toolbar',tile:tile.id};
       const variants=await model({kind:'tool_variants',anchor}),rows=variants.sections.flat();assert.ok(rows.length>1);
+      if(slot==='fill')assert.deepEqual(rows.map(row=>row.label),['Fill','Lasso fill','Enclose and Fill']);
       await markerPoint(anchor,selector);
       assert.ok(rows.every(r=>r.action&&r.icon));
       const target={kind:'tile',panel:'toolbar',tile:tile.id},full=await model(target);

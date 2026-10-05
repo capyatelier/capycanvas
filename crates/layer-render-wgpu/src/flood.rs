@@ -11,22 +11,24 @@ pub(super) struct Flood {
     capacity: u64,
     empty: wgpu::Buffer,
 }
-const STAGES: [&str; 10] = [
+const STAGES: [&str; 11] = [
     "close_h",
     "close_v",
     "reopen_h",
     "reopen_v",
     "initialize",
     "merge",
+    "exclude_exterior",
     "component_mask",
     "expand_h",
     "expand_v",
     "pack",
 ];
-fn stages(refinement: RegionRefinement) -> impl Iterator<Item = &'static str> {
+fn stages(refinement: RegionRefinement, enclosed: bool) -> impl Iterator<Item = &'static str> {
     STAGES.into_iter().filter(move |entry| match *entry {
         "close_h" | "close_v" | "reopen_h" | "reopen_v" => refinement.gap_closing != 0,
-        "component_mask" => refinement.expansion != 0 || refinement.smoothing != 0.,
+        "exclude_exterior" => enclosed,
+        "component_mask" => enclosed || refinement.expansion != 0 || refinement.smoothing != 0.,
         "expand_h" | "expand_v" => refinement.expansion != 0,
         _ => true,
     })
@@ -80,8 +82,8 @@ impl Flood {
     pub fn pipelines(&self) -> impl Iterator<Item = &Deferred<wgpu::ComputePipeline>> {
         STAGES.into_iter().map(|entry| &self.pipelines[entry])
     }
-    pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement) -> bool {
-        compiler.require(stages(refinement).map(|entry| &self.pipelines[entry]), startup::BRUSH)
+    pub fn prepare(&self, compiler: &startup::Compiler, refinement: RegionRefinement, enclosed: bool) -> bool {
+        compiler.require(stages(refinement, enclosed).map(|entry| &self.pipelines[entry]), startup::BRUSH)
     }
     #[allow(clippy::too_many_arguments)]
     pub fn encode_input(
@@ -95,6 +97,7 @@ impl Flood {
         refinement: RegionRefinement,
         classified: &wgpu::Buffer,
         contiguous: bool,
+        enclosed: bool,
     ) -> Result<Region, GpuRasterError> {
         let [w, h] = extent;
         if w == 0
@@ -153,7 +156,7 @@ impl Flood {
             (refinement.gap_closing as f32).to_bits(),
             (refinement.expansion as f32).to_bits(),
             refinement.smoothing.to_bits(),
-            1, u32::from(!contiguous), 0, 0,
+            1, u32::from(!contiguous), u32::from(enclosed), 0,
         ];
         let data: Vec<_> = params.into_iter().flat_map(u32::to_ne_bytes).collect();
         let uniform = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -190,7 +193,7 @@ impl Flood {
             timestamp_writes: None,
         });
         pass.set_bind_group(0, &group, &[]);
-        for entry in stages(refinement) {
+        for entry in stages(refinement, enclosed) {
             pass.set_pipeline(&self.pipelines[entry]);
             if entry == "merge" && !contiguous { continue; }
             if entry == "initialize" {

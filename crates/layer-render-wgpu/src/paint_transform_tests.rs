@@ -472,7 +472,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
             selection.inverted = inverted;
             let id = 70 + n as u64 * 2 + u64::from(inverted);
             let request = RegionRequest {
-                contiguous: false,
+                enclosure: None, contiguous: false,
                 selection: None,
                 request_id: id,
                 source: RegionSource::TransformedSelection {
@@ -520,7 +520,7 @@ fn mapped_pixel_selections_resample_through_perspective_like_a_cpu_reference() {
         }
     }
     let contours = RegionRequest {
-        contiguous: false,
+        enclosure: None, contiguous: false,
         selection: None,
         request_id: 80,
         source: RegionSource::TransformedSelection {
@@ -687,7 +687,7 @@ fn pixel_selections_resample_through_warps_like_their_affine() {
     };
     let resample = |r: &mut WgpuRasterizer, id: u64, map: LayerPlacement| {
         let request = RegionRequest {
-            contiguous: false,
+            enclosure: None, contiguous: false,
             selection: None,
             request_id: id,
             source: RegionSource::TransformedSelection {

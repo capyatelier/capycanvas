@@ -62,8 +62,46 @@ included layouts and preserves working settings; customized history is retained.
 The new icons use the existing SVG bank, and native tool/header/toolbar buttons
 retain the application drag and reorder convention.
 
+## Enclose and Fill
+
+The Fill group includes **Enclose and Fill** beside Bucket and Lasso Fill.
+Draw a loose loop around closed transparent regions in line art, then release
+it to paint those regions in the active paint layer. Lasso Fill continues to
+paint the loop's entire interior. Enclose and Fill paints all eligible regions
+in one undo step; an empty result makes no edit. Escape, focus loss, a tool
+change or pointer cancellation discards the unfinished loop.
+
+The existing Source choices select visible artwork, the editing layer or marked
+reference layers. Enclose and Fill starts with Reference and remembers its choice
+separately from Bucket. With no marked references, the existing notice explains
+how to mark one and offers a suitable layer below when available. For flats on a separate layer, mark the transparent line-art
+layer as a reference, select a destination paint layer beneath it and choose Reference.
+An opaque paper/background layer in the sampled source hides transparent holes;
+exclude it by choosing the line-art reference. This version targets transparency,
+not white or arbitrary colors, and does not write to masks or selections.
+
+Tolerance sets the maximum eligible alpha. Gap closing seals small breaks before
+region discovery. Expansion and Smoothing refine the resulting edges. Components
+that reach the canvas boundary or extend outside the loop are excluded. Expansion
+stays inside the loop, and the active selection clips the final paint without
+creating new closed regions. Source pixels are never changed by discovery.
+
+`RegionRequest::enclosure` uses the existing GPU classification and connected
+component pipeline. Classification covers the source before the enclosure is
+applied; an extra pass marks exterior components. The coverage buffer holds these
+flags until the selected components are packed. The shared asynchronous region
+queue owns source snapshots, cancellation, stale-result rejection and publication.
+No canvas pixels are read back to classify regions. Like Bucket, component
+labeling needs four bytes per canvas pixel in one storage binding. A 128 MiB
+binding limit admits at most 33,554,432 pixels; the 9504 × 6336 target canvas
+exceeds that limit even when the loop is small.
+
 ## Verification
 
+- Enclosure tests: shared `enclose_fill_checks` covers source defaults, geometry,
+  selection clipping, cancellation and history. GPU `layer_tests::enclose_fill`
+  compares complete masks with an independent component oracle, including partial
+  enclosures, canvas edges, alpha thresholds, gap closing and expansion.
 - Shared UI tests cover geometry, transforms, fixed size/ratio, modifier keys,
   empty gestures, polygon editing, cancel/focus loss, undo/redo, workspace memory,
   stale color results, sources, and platform gating.
