@@ -81,7 +81,8 @@ view. The current drawing remains open. The view presents the shared package
 status, available output names and bounded preview, with Copy Original, Export
 Preview and Close actions. Copy Original writes the retained package bytes on the
 document worker. Export Preview appears when the package has a verified preview
-and writes those exact PNG bytes to a new destination on the document worker.
+and writes those exact PNG bytes on the document worker, refusing the package's
+own path. Both replace the save picker's placeholder file atomically.
 Unsupported portable packages remain in that view.
 
 Language changes prepare shared copy on the profile worker, then update retained

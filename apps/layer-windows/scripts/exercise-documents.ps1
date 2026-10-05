@@ -211,6 +211,10 @@ function Package-View {
     Wait-Until {(Model).windows_document.type -eq 'package' -and (Find-Id 'package-view')} 'The package view did not appear' 45
     (Model).windows_document.summary
 }
+function Package-Action([string]$Name) {
+    $script:scope=Find-Id 'package-view'
+    try{Invoke-Control $Name}finally{$script:scope=$root}
+}
 function Stroke-InkPixels {
     $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
     try {
@@ -565,17 +569,17 @@ File-Command 'open_document';Picker 'Open';Choose-Path $preserved
 $summary=Package-View
 if(!$summary.capabilities.export -or $summary.capabilities.edit -or $summary.capabilities.save){throw 'The package view offered the wrong actions'}
 Capture 'package-view' -WithModel
-Invoke-Control $summary.copy_original
+Package-Action $summary.copy_original
 $copy=Join-Path $run 'Copied package.capy'
 Picker 'Save As';Choose-Path $copy
-$summary=Package-View
-if((Get-FileHash -LiteralPath $copy).Hash -ne $packageHash){throw 'Copy Original changed the package bytes'}
-Invoke-Control $summary.export_preview
+$summary=Package-View;Idle
+Wait-Until {try{(Test-Path -LiteralPath $copy) -and (Get-FileHash -LiteralPath $copy -ErrorAction Stop).Hash -eq $packageHash}catch{$false}} 'Copy Original did not write the package bytes' 20
+Package-Action $summary.export_preview
 $exported=Join-Path $run 'Package preview.png'
 Picker 'Save As';Choose-Path $exported
-$summary=Package-View
-if([Convert]::ToBase64String([IO.File]::ReadAllBytes($exported)) -ne [Convert]::ToBase64String($previewBytes)){throw 'Export Preview changed the embedded preview'}
-Invoke-Control $summary.close
+$summary=Package-View;Idle
+Wait-Until {try{(Test-Path -LiteralPath $exported) -and [Convert]::ToBase64String([IO.File]::ReadAllBytes($exported)) -eq [Convert]::ToBase64String($previewBytes)}catch{$false}} 'Export Preview did not write the embedded preview bytes' 20
+Package-Action $summary.close
 Wait-Until {(Model).windows_document.type -ne 'package'} 'Close did not leave the package view'
 if((Model).state.document_file.epoch -ne $epoch -or (Model).state.document_file.location.uri -ne $second){throw 'The package view replaced the live drawing'}
 if((Get-FileHash -LiteralPath $preserved).Hash -ne $packageHash){throw 'The package view changed its original'}

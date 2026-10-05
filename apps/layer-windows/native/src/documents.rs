@@ -290,11 +290,7 @@ fn export_preview(view:&layer_ui::PackageView,path:&std::path::Path,original:Opt
     if let Some(original)=original && crate::document_io::same_file(original,path)? {
         return Err(refusal.into());
     }
-    let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e|io_error("create preview",e))?;
-    let result=view.export_preview(&mut file,cancel).and_then(|()|file.sync_all().map_err(|e|io_error("flush preview",e))).and_then(|()|check_cancelled(cancel));
-    drop(file);
-    if result.is_err() {let _=std::fs::remove_file(path);}
-    result
+    atomic_write(path,cancel,|mut file|view.export_preview(&mut file,cancel))
 }
 
 fn prepare(
@@ -1084,7 +1080,7 @@ mod tests {
                 assert_eq!(f.service.status().unwrap()["type"],"package_busy");assert_eq!(f.service.status().unwrap()["title"],status["summary"]["export_preview"]);
                 f.finish();let exported=std::fs::read(&png).unwrap();assert_eq!(exported,view.preview().unwrap().encoded().as_ref());
                 assert_eq!(Preview::decode(exported.clone().into()).unwrap().pixels().as_ref(),&[16,32,48,255]);
-                assert!(export_preview(&view,std::path::Path::new(&png),None,"refused",&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&png).unwrap(),exported);
+                std::fs::write(&png,b"").unwrap();export_preview(&view,std::path::Path::new(&png),None,"refused",&AtomicBool::new(false)).unwrap();assert_eq!(std::fs::read(&png).unwrap(),exported);
                 let original=f.path("original.png");std::fs::write(&original,bytes).unwrap();assert_eq!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),"refused",&AtomicBool::new(false)).unwrap_err(),"refused");assert_eq!(std::fs::read(&original).unwrap(),bytes);std::fs::remove_file(&original).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),"refused",&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&original).exists());
                 assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);
             } else {
