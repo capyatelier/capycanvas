@@ -7,8 +7,6 @@ sed -i '/^NoExtract/d' /etc/pacman.conf
 pacman -Syu --noconfirm $(pacman -Qq)
 pacman -S --noconfirm --needed base-devel patchelf wget zsync "${depends[@]}" "${makedepends[@]}"
 version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
-grep -q "<release version=\"$version\"" apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml ||
-  { echo "Add a $version release to the AppStream metainfo" >&2; exit 1; }
 node apps/layer-linux/package.mjs
 cp -a dist/capycanvas-linux/{bin,lib,share} /usr/
 wget -qO target/quick-sharun https://raw.githubusercontent.com/pkgforge-dev/Anylinux-AppImages/cb3a7cc48eba770d3eedab02bb63eaff7e8fe572/useful-tools/quick-sharun.sh

@@ -17,10 +17,25 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       version: ${{ steps.version.outputs.version }}
+      notes: ${{ steps.version.outputs.notes }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: version
-        run: echo "version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)" >> "$GITHUB_OUTPUT"
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          {
+            echo 'notes<<NOTES'
+            python3 - "$version" <<'PY'
+          import sys, xml.etree.ElementTree as ET
+          notes = ET.parse("apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml").find(f"releases/release[@version='{sys.argv[1]}']/description")
+          if notes is None:
+              sys.exit(f"Describe the {sys.argv[1]} release in the AppStream metainfo")
+          text = lambda element: " ".join("".join(element.itertext()).split())
+          print("\n\n".join(text(block) if block.tag == "p" else "\n".join(f"- {text(item)}" for item in block) for block in notes))
+          PY
+            echo NOTES
+          } >> "$GITHUB_OUTPUT"
       - uses: EmbarkStudios/cargo-deny-action@3c6349835b2b7b196a839186cb8b78e02f7b5f25 # v2.1.1
         with:
           arguments: --locked
@@ -247,4 +262,5 @@ jobs:
           subject-path: dist/*
       - env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --generate-notes --title "Capy Canvas ${{ needs.version.outputs.version }}"
+          NOTES: ${{ needs.version.outputs.notes }}
+        run: gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --draft --verify-tag --notes "$NOTES" --generate-notes --title "Capy Canvas ${{ needs.version.outputs.version }}"

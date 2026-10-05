@@ -17,7 +17,20 @@
   <url type="vcs-browser">https://github.com/capyatelier/capycanvas</url>
   <content_rating type="oars-1.1"/>
   <releases>
-    <release version="1.0.3" date="2026-10-04"/>
+    <release version="1.0.3" date="2026-10-04">
+      <description>
+        <p>The first public beta of Capy Canvas, for Linux, Windows, macOS, iPad, Android tablets and the web.</p>
+        <ul>
+          <li>Enclose and Fill, under Lasso Fill, fills the empty areas inside a loop you draw.</li>
+          <li>Edit Color has a new layout on Windows, macOS and iPad, with color values you can type, drag to adjust and copy.</li>
+          <li>On macOS and iPad, tap a color fill's thumbnail, Paper included, to change its color.</li>
+          <li>Layer thumbnails have rounded corners everywhere, and filters use the same effects icon throughout.</li>
+          <li>Windows reopens all your windows at launch and asks about any drawing it could not restore.</li>
+          <li>The Windows color wheel stays smooth while panels resize, and Export Preview on Windows works again.</li>
+          <li>The Windows app and setup program are signed, and the Mac app is notarized by Apple.</li>
+        </ul>
+      </description>
+    </release>
     <release version="1.0.2" date="2026-10-04"/>
     <release version="1.0.1" date="2026-10-04"/>
     <release version="1.0.0" date="2026-10-04"/>

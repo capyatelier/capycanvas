@@ -23,7 +23,10 @@ its own numbers from it at build time:
   `cargo update --workspace --offline` and `python3 apps/layer-apple/scripts/project.py`,
   add a matching `<release>` entry to
   `apps/layer-linux/art.capycanvas.CapyCanvas.metainfo.xml`, and commit the
-  results together. The AppImage build refuses a version without that entry.
+  results together. The entry's `<description>` holds the release notes: a
+  short paragraph and a list of what changed, in words a painter knows. Linux
+  software centers show it, the GitHub Release starts with it, and the release
+  workflow refuses a version without it.
 
 ## Continuous integration
 
@@ -50,8 +53,8 @@ Run it from the Actions tab to build unsigned packages as workflow artifacts.
 Pushing a `v*` tag checks that the tag names the workspace version and is on
 `main` and runs `cargo deny`, then signs with the protected `release`
 environment, uploads the iPad build to TestFlight and the Android bundle to
-Play's internal track, and creates a draft GitHub Release holding every
-download, `SHA256SUMS` and build provenance attestations.
+Play's internal track, and creates a draft GitHub Release holding the release
+notes, every download, `SHA256SUMS` and build provenance attestations.
 
 ### Linux AppImage
 
