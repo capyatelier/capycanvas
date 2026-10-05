@@ -285,8 +285,10 @@ workspace version with a fourth part of 0, and the Store requires a nonzero majo
 part; `-AllowDirty` works as for the ZIP.
 MakeAppx writes wall-clock ZIP timestamps, so `normalize-msix.ps1` rewrites only
 their date and time fields and refuses signed packages. Never normalize after
-signing. The default identity is `CapyAtelier.CapyCanvas`, publisher
-`CN=Capy Atelier`; pass `-Publisher` to match the signing certificate's subject.
+signing. The default identity is the one Partner Center assigned the Store app:
+`CapyAtelier.CapyCanvas`, publisher `CN=25C3FE75-9C78-42B1-91A5-2D7CD498E9E7`.
+The Store signs uploads; to sign elsewhere, pass `-Publisher` to match the
+certificate's subject.
 The package must be
 [signed before distribution](https://learn.microsoft.com/en-us/windows/msix/package/signing-package-overview).
 

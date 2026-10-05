@@ -1,6 +1,6 @@
 param(
     [Parameter(Mandatory)][string]$PortableResultFile,
-    [ValidateNotNullOrEmpty()][string]$Publisher='CN=Capy Atelier',
+    [ValidateNotNullOrEmpty()][string]$Publisher='CN=25C3FE75-9C78-42B1-91A5-2D7CD498E9E7',
     [ValidatePattern('^[A-Za-z0-9][A-Za-z0-9.-]{2,49}$')][string]$IdentityName='CapyAtelier.CapyCanvas',
     [switch]$UnsignedTestIdentity,
     [switch]$AllowDirty
