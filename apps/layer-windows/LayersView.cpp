@@ -212,6 +212,12 @@ void LayersView::refresh(){
     connections();
 }
 void LayersView::connections(){
+    if(connectionFrame)return;
+    connectionFrame=CompositionTarget::Rendering(auto_revoke,[weak=weak_from_this()](auto&&,auto&&){
+        if(auto self=weak.lock()){self->connectionFrame.revoke();self->layoutConnections();}
+    });
+}
+void LayersView::layoutConnections(){
     if(!list.IsLoaded()||list.Visibility()!=Visibility::Visible)return;
     auto layers=array(data->state,L"layers");std::map<double,std::pair<uint32_t,double>> order;
     for(uint32_t i=0;i<layers.Size();i++)order[num(layers.GetObjectAt(i),L"id")]={i,num(layers.GetObjectAt(i),L"depth")};
@@ -235,17 +241,27 @@ void LayersView::connections(){
         if(!top||!bottom||*bottom<=*top||*bottom<0||*top>height)continue;
         shapes.Append(O({{L"effect",B(effect)},{L"x",N(column+std::min(num(edge,L"depth")*8,24.))},{L"top",N(*top)},{L"bottom",N(*bottom)}}));
     }
-    auto key=data->theme()+shapes.Stringify();if(connectionKey==key)return;connectionKey=key;connectionOverlay.Children().Clear();
-    auto line=[&](double x,double top,double bottom,bool effect){
-        Shapes::Line item;item.X1(x);item.X2(x);item.Y1(top);item.Y2(bottom);item.StrokeThickness(effect?1:2);
-        item.Stroke(data->brush(effect?L"text":L"relationship"));item.StrokeStartLineCap(PenLineCap::Round);item.StrokeEndLineCap(PenLineCap::Round);connectionOverlay.Children().Append(item);
-    };
+    auto key=data->theme()+shapes.Stringify();if(connectionKey==key)return;connectionKey=key;
+    if(connectionTheme!=data->theme()){connectionTheme=data->theme();connectionOverlay.Children().Clear();connectionLines.clear();connectionGlyphs.clear();}
+    struct Segment{double x,top,bottom;bool effect;};std::vector<Segment> segments;std::vector<Windows::Foundation::Point> glyphs;
     for(auto value:shapes){auto shape=value.GetObject();bool effect=flag(shape,L"effect");double x=num(shape,L"x"),top=num(shape,L"top"),bottom=num(shape,L"bottom");
-        if(!effect){line(x-3.5,top,bottom,false);continue;}
+        if(!effect){segments.push_back({x-3.5,top,bottom,false});continue;}
         double center=x+15,y=(top+bottom)*.5;
-        if(y-top>6)line(center,top,y-6,true);if(bottom-y>6)line(center,y+6,bottom,true);
-        auto glyph=icon(L"effect-link",data->theme(),12);Canvas::SetLeft(glyph,center-6);Canvas::SetTop(glyph,y-6);connectionOverlay.Children().Append(glyph);
+        if(y-top>6)segments.push_back({center,top,y-6,true});if(bottom-y>6)segments.push_back({center,y+6,bottom,true});
+        glyphs.push_back({float(center-6),float(y-6)});
     }
+    auto remove=[this](UIElement const& item){uint32_t at;if(connectionOverlay.Children().IndexOf(item,at))connectionOverlay.Children().RemoveAt(at);};
+    while(connectionLines.size()>segments.size()){remove(connectionLines.back());connectionLines.pop_back();}
+    while(connectionLines.size()<segments.size()){
+        Shapes::Line item;item.StrokeStartLineCap(PenLineCap::Round);item.StrokeEndLineCap(PenLineCap::Round);connectionOverlay.Children().Append(item);connectionLines.push_back(item);
+    }
+    for(size_t i=0;i<segments.size();i++){
+        auto const& [x,top,bottom,effect]=segments[i];auto const& item=connectionLines[i];
+        item.X1(x);item.X2(x);item.Y1(top);item.Y2(bottom);item.StrokeThickness(effect?1:2);item.Stroke(data->brush(effect?L"text":L"relationship"));
+    }
+    while(connectionGlyphs.size()>glyphs.size()){remove(connectionGlyphs.back());connectionGlyphs.pop_back();}
+    while(connectionGlyphs.size()<glyphs.size()){auto glyph=icon(L"effect-link",data->theme(),12);connectionOverlay.Children().Append(glyph);connectionGlyphs.push_back(glyph);}
+    for(size_t i=0;i<glyphs.size();i++){Canvas::SetLeft(connectionGlyphs[i],glyphs[i].X);Canvas::SetTop(connectionGlyphs[i],glyphs[i].Y);}
 }
 void LayersView::preview(){
     if(!root.IsLoaded()||!root.XamlRoot()||!root.XamlRoot().IsHostVisible()||list.ActualHeight()<=0)return;

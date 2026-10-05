@@ -187,6 +187,9 @@ function Test-LayerRelationships{
         if($ids[$at+1] -ne $top -or $ids[$at+2] -ne $blur -or $ids[$at+3] -ne $owner){throw 'Saved Selection split the effect chain'}
         Relationship-Drop $top $blur 'row' .875 $owner 'above'
         Relationship-Undo
+        Relationship-Drop $blur $top 'row' .125 $top 'above'
+        if($null -ne (Relationship-Layer $blur).relationship){throw 'A drop above the chain kept the effect attached'}
+        Relationship-Undo
         $extra=Relationship-Insert 'Tone' 'Exposure'
         foreach($theme in 1..2){
             Relationship-Reveal "layer-$owner-mask"

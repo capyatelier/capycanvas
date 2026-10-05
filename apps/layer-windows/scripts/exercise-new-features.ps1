@@ -211,6 +211,24 @@ try {
         }
         Write-Output 'PASS: Accessible deletion of Paper and the last layer, empty canvas and Undo'
     }
+    function Filter-Fill([string]$Name){
+        & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Filter'
+        (Control 'Fill' -Name -Type ([System.Windows.Automation.ControlType]::MenuItem)).GetCurrentPattern([System.Windows.Automation.ExpandCollapsePattern]::Pattern).Expand()
+        Invoke $Name -Name
+    }
+    function Command-Enabled([string]$Id){[bool]((Model).state.commands|Where-Object id -eq $Id).enabled}
+    $before=@((Model).state.layers).Count
+    Filter-Fill 'Solid Color'
+    Wait-Until {@((Model).state.layers).Count -eq $before+1} 'Filter Fill did not add a fill layer'
+    if(@((Model).state.layers|Where-Object selected)[0].has_mask){throw 'A fill without a selection gained a mask'}
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Select';Invoke 'select_all'
+    Wait-Until {Command-Enabled 'deselect'} 'Select All did not create a selection'
+    Filter-Fill 'Gradient Fill'
+    Wait-Until {@((Model).state.layers).Count -eq $before+2} 'Filter Fill did not add a fill layer from the selection'
+    if(!@((Model).state.layers|Where-Object selected)[0].has_mask -or (Command-Enabled 'deselect')){throw 'A fill did not take the selection as its mask'}
+    & (Join-Path $PSScriptRoot 'open-application-menu.ps1') -Root $root -Name 'Edit';Invoke 'Undo' -Name
+    Wait-Until {@((Model).state.layers).Count -eq $before+1 -and (Command-Enabled 'deselect')} 'One Undo did not remove the fill and restore the selection'
+    Write-Output 'PASS: Filter Fill without and with a selection, and one Undo'
     [CapyRowPointer]::Dispose()
     # Use this review's atomic snapshot; ui-state.json can be read mid-write.
     $null=$review.CloseMainWindow();$lastDecision=$null

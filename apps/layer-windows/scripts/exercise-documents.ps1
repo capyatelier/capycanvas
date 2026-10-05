@@ -3,6 +3,7 @@ if($RecoverGpu -and $FailGpu){throw "Choose successful recovery or exhausted rec
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'CapyUia.ps1')
 Add-Type -Path (Join-Path $PSScriptRoot 'RowPointerDriver.cs')
+Add-Type -Path (Join-Path $PSScriptRoot 'PackageFixture.cs')
 $CapyCacheModel=$true
 $CapyPopups=$true
 $drawIndex=0
@@ -186,6 +187,29 @@ function Choose-Path([string]$Path) {
     if($entry.Current.ProcessId -ne $review.Id){throw 'Wrong picker filename owner'}
     [CapyDocumentControls]::TypeText([IntPtr]$entry.Current.NativeWindowHandle,$Path)
     Picker-Button '1'
+}
+function Write-PreservedPackage([string]$Destination,[byte[]]$Preview) {
+    $members=[CapyPackageFixture]::Read((Join-Path $repo 'crates/layer-core/src/package/codec/fixtures/authored-filters.capy'))
+    $manifest=[Text.Encoding]::UTF8.GetString(@($members|Where-Object Key -eq 'manifest.json')[0].Value)|ConvertFrom-Json -Depth 100
+    @($manifest.objects|Where-Object type -eq 'capy.occurrence/2')[0].data|Add-Member -Force blend 'future-package-blend'
+    foreach($record in @($manifest.objects|Where-Object type -eq 'capy.output/1')){
+        $record.data|Add-Member -Force name 'Package preview output'
+        $record.data.PSObject.Properties.Remove('representation')
+        if($record.id -eq $manifest.default_output.ref){$record.data|Add-Member representation ([ordered]@{member='preview.png';size=@(2,1);color='srgb'})}
+    }
+    $archive=[Collections.Generic.List[Collections.Generic.KeyValuePair[string,byte[]]]]::new()
+    foreach($member in $members){
+        if($member.Key -eq 'preview.png'){continue}
+        $bytes=if($member.Key -eq 'manifest.json'){[Text.Encoding]::UTF8.GetBytes(($manifest|ConvertTo-Json -Depth 100 -Compress))}else{$member.Value}
+        $archive.Add([Collections.Generic.KeyValuePair[string,byte[]]]::new($member.Key,$bytes))
+    }
+    $archive.Add([Collections.Generic.KeyValuePair[string,byte[]]]::new('preview.png',$Preview))
+    [CapyPackageFixture]::Write($Destination,$archive)
+}
+function Package-View {
+    $script:scope=$root
+    Wait-Until {(Model).windows_document.type -eq 'package' -and (Find-Id 'package-view')} 'The package view did not appear' 45
+    (Model).windows_document.summary
 }
 function Stroke-InkPixels {
     $context=[CapyDocumentControls]::SetThreadDpiAwarenessContext([IntPtr](-4))
@@ -532,6 +556,29 @@ $epoch=(Model).state.document_file.epoch
 File-Command 'open_document';Picker 'Open';Choose-Path $corrupt;Idle
 Wait-Until {(Model).state.host_error -or (Model).error} 'Corrupt Open did not report failure'
 if((Model).state.document_file.epoch -ne $epoch -or (Model).state.document_file.location.uri -ne $second){throw 'Corrupt Open replaced the live drawing'}
+$preserved=Join-Path $run 'Preserved package.capy'
+$previewImage=[Drawing.Bitmap]::new(2,1,[Drawing.Imaging.PixelFormat]::Format32bppArgb)
+try{$previewImage.SetPixel(0,0,[Drawing.Color]::FromArgb(255,16,32,48));$previewImage.SetPixel(1,0,[Drawing.Color]::FromArgb(255,16,32,48));$stream=[IO.MemoryStream]::new();$previewImage.Save($stream,[Drawing.Imaging.ImageFormat]::Png);$previewBytes=$stream.ToArray()}finally{$previewImage.Dispose()}
+Write-PreservedPackage $preserved $previewBytes
+$packageHash=(Get-FileHash -LiteralPath $preserved).Hash
+File-Command 'open_document';Picker 'Open';Choose-Path $preserved
+$summary=Package-View
+if(!$summary.capabilities.export -or $summary.capabilities.edit -or $summary.capabilities.save){throw 'The package view offered the wrong actions'}
+Capture 'package-view' -WithModel
+Invoke-Control $summary.copy_original
+$copy=Join-Path $run 'Copied package.capy'
+Picker 'Save As';Choose-Path $copy
+$summary=Package-View
+if((Get-FileHash -LiteralPath $copy).Hash -ne $packageHash){throw 'Copy Original changed the package bytes'}
+Invoke-Control $summary.export_preview
+$exported=Join-Path $run 'Package preview.png'
+Picker 'Save As';Choose-Path $exported
+$summary=Package-View
+if([Convert]::ToBase64String([IO.File]::ReadAllBytes($exported)) -ne [Convert]::ToBase64String($previewBytes)){throw 'Export Preview changed the embedded preview'}
+Invoke-Control $summary.close
+Wait-Until {(Model).windows_document.type -ne 'package'} 'Close did not leave the package view'
+if((Model).state.document_file.epoch -ne $epoch -or (Model).state.document_file.location.uri -ne $second){throw 'The package view replaced the live drawing'}
+if((Get-FileHash -LiteralPath $preserved).Hash -ne $packageHash){throw 'The package view changed its original'}
 Draw
 $drawingCount=@((Model).windows_tabs.tabs).Count
 File-Command 'new_document';New-Dialog;Invoke-Control 'Cancel';Idle
@@ -629,6 +676,7 @@ if($FailGpu){
     new_document_blending_survives_float='passed'
     image_picker_draft_cancel_and_error_recovery='passed'
     image_layer_thumbnail_undo_redo_and_embedded_reopen='passed'
+    package_view_copy_export_and_close='passed'
     save_cancel_and_unicode_path='passed'
     png_export_cancel_dimensions_and_checkpoint='passed'
     lossless_webp_export='passed'

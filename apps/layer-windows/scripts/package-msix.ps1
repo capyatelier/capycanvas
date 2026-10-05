@@ -8,7 +8,8 @@ param(
 $ErrorActionPreference='Stop'
 $repo=(Resolve-Path (Join-Path $PSScriptRoot '../../..')).Path
 . (Join-Path $PSScriptRoot 'PortablePackage.ps1')
-$packager=Get-PackagingSource $repo @('apps/layer-windows/scripts/package-msix.ps1','apps/layer-windows/scripts/PortablePackage.ps1','apps/layer-windows/scripts/normalize-msix.ps1','apps/layer-windows/scripts/package-logos.ps1','apps/layer-web/icons/layer-zen-looking-up-symbolic.svg') -AllowDirty:$AllowDirty
+$packager=Get-PackagingSource $repo @('apps/layer-windows/scripts/package-msix.ps1','apps/layer-windows/scripts/PortablePackage.ps1','apps/layer-windows/scripts/normalize-msix.ps1','apps/layer-windows/scripts/package-logos.ps1','apps/layer-web/icons/layer-zen-looking-up-symbolic.svg','crates/layer-ui/src/localization.rs','crates/layer-ui/src/localization_languages.rs') -AllowDirty:$AllowDirty
+$resources=(Get-ShippedLanguages $repo|ForEach-Object {'<Resource Language="'+[Security.SecurityElement]::Escape($_)+'" />'}) -join ''
 $displayName='Capy Canvas'
 if($Publisher.Contains('OID.2.25.311729368913984317654407730594956997722')){throw 'Use -UnsignedTestIdentity to request the isolated test publisher.'}
 if($UnsignedTestIdentity){
@@ -38,7 +39,7 @@ $xml=@"
  IgnorableNamespaces="uap uap10 rescap">
  <Identity Name="$identity" Publisher="$publisherXml" Version="$Version" ProcessorArchitecture="x64" />
  <Properties><DisplayName>$displayXml</DisplayName><PublisherDisplayName>Capy Atelier</PublisherDisplayName><Logo>PackageAssets\Logo50.png</Logo></Properties>
- <Resources><Resource Language="en-US" /></Resources>
+ <Resources>$resources</Resources>
  <Dependencies><TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.22000.0" MaxVersionTested="10.0.26100.0" /></Dependencies>
  <Applications><Application Id="App" Executable="CapyCanvas.exe" uap10:RuntimeBehavior="packagedClassicApp" uap10:TrustLevel="mediumIL">
   <uap:VisualElements DisplayName="$displayXml" Description="Native drawing and painting" Square150x150Logo="PackageAssets\Logo150.png" Square44x44Logo="PackageAssets\Logo44.png" BackgroundColor="transparent" />

@@ -82,7 +82,7 @@ enum Source {
     Open(PathBuf),
 }
 enum Job {
-    WritePackage {view:layer_ui::PackageView,action:layer_ui::PackageAction,original:Option<PathBuf>,path:PathBuf,cancelled:Arc<AtomicBool>},
+    WritePackage {view:layer_ui::PackageView,action:layer_ui::PackageAction,original:Option<PathBuf>,path:PathBuf,refusal:Arc<str>,cancelled:Arc<AtomicBool>},
     Activate(Box<layer_host::window::Activation>),
     Spill { tiles: layer_core::raster_storage::RetainedTiles },
     Workflow { task: Box<crate::document_workflows::Task>, action: crate::document_workflows::Action },
@@ -241,10 +241,10 @@ impl Drop for Worker {
 fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
     check_cancelled(cancel)?;
     match job {
-        Job::WritePackage {view,action,original,path,cancelled} => {
+        Job::WritePackage {view,action,original,path,refusal,cancelled} => {
             match action {
                 layer_ui::PackageAction::CopyOriginal=>atomic_write(&path,&cancelled,|mut file|view.copy_original(&mut file,&cancelled))?,
-                layer_ui::PackageAction::ExportPreview=>export_preview(&view,&path,original.as_deref(),&cancelled)?,
+                layer_ui::PackageAction::ExportPreview=>export_preview(&view,&path,original.as_deref(),&refusal,&cancelled)?,
                 layer_ui::PackageAction::Close=>return Err("Closing a package does not write a file".into()),
             }
             Ok(Completed::PackageWritten)
@@ -285,12 +285,10 @@ fn execute(job: Job, cancel: &AtomicBool) -> Result<Completed, String> {
         } => prepare(*environment, source, &cancelled),
     }
 }
-fn export_preview(view:&layer_ui::PackageView,path:&std::path::Path,original:Option<&std::path::Path>,cancel:&AtomicBool)->Result<(),String> {
+fn export_preview(view:&layer_ui::PackageView,path:&std::path::Path,original:Option<&std::path::Path>,refusal:&str,cancel:&AtomicBool)->Result<(),String> {
     check_cancelled(cancel)?;
-    if !view.capabilities().export {return Err("This package has no verified preview".into());}
-    if !path.extension().and_then(|extension|extension.to_str()).is_some_and(|extension|extension.eq_ignore_ascii_case("png")) {return Err("Choose a new PNG destination".into());}
     if let Some(original)=original && crate::document_io::same_file(original,path)? {
-        return Err("Choose a preview destination different from the original package".into());
+        return Err(refusal.into());
     }
     let mut file=std::fs::OpenOptions::new().write(true).create_new(true).open(path).map_err(|e|io_error("create preview",e))?;
     let result=view.export_preview(&mut file,cancel).and_then(|()|file.sync_all().map_err(|e|io_error("flush preview",e))).and_then(|()|check_cancelled(cancel));
@@ -583,7 +581,8 @@ impl DocumentService {
                     if action==layer_ui::PackageAction::ExportPreview&&!package.view.capabilities().export {return Err("This package has no verified preview".into());}
                     let path=path.ok_or("Choose a destination for the package file")?;location(&path)?;
                     package.serial=package.serial.wrapping_add(1);package.writing=Some(action);package.cancelled=Arc::new(AtomicBool::new(false));
-                    self.worker.submit(Job::WritePackage {view:package.view.clone(),action,original:package.original.clone(),path:PathBuf::from(path),cancelled:package.cancelled.clone()});
+                    let refusal=package.view.summary(host.session.localization()).destination_error;
+                    self.worker.submit(Job::WritePackage {view:package.view.clone(),action,original:package.original.clone(),path:PathBuf::from(path),refusal,cancelled:package.cancelled.clone()});
                 },
             }
             host.invalidate_snapshot();return Ok(());
@@ -1078,21 +1077,21 @@ mod tests {
             assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);assert!(f.service.active.is_none());assert!(f.host.session.state().requests.iter().all(|r|r.id!=id));
             let status=f.service.status().unwrap();let id=status["id"].as_u64().unwrap() as u32;assert_eq!(status["type"],"package");assert_eq!(status["summary"]["capabilities"]["edit"],false);assert_eq!(status["summary"]["capabilities"]["save"],false);assert_eq!(status["summary"]["capabilities"]["export"],disposition!=2);assert_eq!(f.service.preview(id,0).is_ok(),disposition!=2);
             let destination=f.path("copied.capy");f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::CopyOriginal,path:Some(destination.clone())});assert_eq!(f.service.status().unwrap()["type"],"package_busy");f.finish();assert_eq!(std::fs::read(&destination).unwrap(),bytes);assert_eq!(f.host.session.engine().document(),&before);
-            let cancelled=Arc::new(AtomicBool::new(true));let view=f.service.package.as_ref().unwrap().view.clone();assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::CopyOriginal,original:None,path:PathBuf::from(destination.clone()),cancelled},&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(destination).unwrap(),bytes);
+            let cancelled=Arc::new(AtomicBool::new(true));let view=f.service.package.as_ref().unwrap().view.clone();assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::CopyOriginal,original:None,path:PathBuf::from(destination.clone()),refusal:"refused".into(),cancelled},&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(destination).unwrap(),bytes);
             let view=f.service.package.as_ref().unwrap().view.clone();let png=f.path("preview.png");
             if disposition!=2 {
                 f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::ExportPreview,path:Some(png.clone())});
                 assert_eq!(f.service.status().unwrap()["type"],"package_busy");assert_eq!(f.service.status().unwrap()["title"],status["summary"]["export_preview"]);
                 f.finish();let exported=std::fs::read(&png).unwrap();assert_eq!(exported,view.preview().unwrap().encoded().as_ref());
                 assert_eq!(Preview::decode(exported.clone().into()).unwrap().pixels().as_ref(),&[16,32,48,255]);
-                assert!(export_preview(&view,std::path::Path::new(&png),None,&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&png).unwrap(),exported);
-                let original=f.path("original.png");std::fs::write(&original,bytes).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&original).unwrap(),bytes);std::fs::remove_file(&original).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&original).exists());
+                assert!(export_preview(&view,std::path::Path::new(&png),None,"refused",&AtomicBool::new(false)).is_err());assert_eq!(std::fs::read(&png).unwrap(),exported);
+                let original=f.path("original.png");std::fs::write(&original,bytes).unwrap();assert_eq!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),"refused",&AtomicBool::new(false)).unwrap_err(),"refused");assert_eq!(std::fs::read(&original).unwrap(),bytes);std::fs::remove_file(&original).unwrap();assert!(export_preview(&view,std::path::Path::new(&original),Some(std::path::Path::new(&original)),"refused",&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&original).exists());
                 assert_eq!(f.host.session.engine().document(),&before);assert_eq!(f.host.session.state().document_file.epoch,epoch);
             } else {
                 assert!(f.service.dispatch(&mut f.host,DocumentAction::Package{id,action:layer_ui::PackageAction::ExportPreview,path:Some(png.clone())}).is_err());
-                assert!(export_preview(&view,std::path::Path::new(&png),None,&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&png).exists());
+                assert!(export_preview(&view,std::path::Path::new(&png),None,"refused",&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&png).exists());
             }
-            let cancelled_png=f.path("cancelled.png");assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::ExportPreview,original:None,path:PathBuf::from(&cancelled_png),cancelled:Arc::new(AtomicBool::new(true))},&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&cancelled_png).exists());
+            let cancelled_png=f.path("cancelled.png");assert!(execute(Job::WritePackage{view,action:layer_ui::PackageAction::ExportPreview,original:None,path:PathBuf::from(&cancelled_png),refusal:"refused".into(),cancelled:Arc::new(AtomicBool::new(true))},&AtomicBool::new(false)).is_err());assert!(!std::path::Path::new(&cancelled_png).exists());
             f.act(DocumentAction::Package{id,action:layer_ui::PackageAction::Close,path:None});assert!(f.service.package.is_none());assert_eq!(f.host.session.engine().document(),&before);
         }
     }

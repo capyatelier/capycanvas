@@ -72,7 +72,7 @@ try {
     Invoke 'panel-tab-stats'
     Wait-Until {(Layout) -ne $saved} 'Fixture layout did not change'
     $oldSize=(Model).state.brush.diameter
-    (Control 'Brush size slider' -Name -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.61)
+    (Control 'tool-setting-size-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.61)
     Wait-Until {(Model).state.brush.diameter -ne $oldSize} 'First workspace tool edit did not apply'
     Wait-Until {!(Model).windows_workspace.dirty -and !(Model).windows_workspace.saving} 'Fixture edits did not autosave'
     $size=(Model).state.brush.diameter;$before=Layout
@@ -158,7 +158,7 @@ try {
     foreach($id in @($painter,$original,'builtin:workspace:photographer')){
         if((HeaderChoice $id).GetCurrentPattern([System.Windows.Automation.TogglePattern]::Pattern).Current.ToggleState -ne [System.Windows.Automation.ToggleState]::Off){throw 'Custom workspace must leave all header choices off'}
     }
-    (Control 'Brush size slider' -Name -Type ([System.Windows.Automation.ControlType]::Slider)).GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.28)
+    (Control 'tool-setting-size-slider').GetCurrentPattern([System.Windows.Automation.RangeValuePattern]::Pattern).SetValue(.28)
     Wait-Until {(Model).state.brush.diameter -ne $size} 'Second workspace tool edit did not apply'
     $otherSize=(Model).state.brush.diameter
     Menu 'Manage Workspaces…'
@@ -166,7 +166,8 @@ try {
     $null=Select-Row $original
     if((Model).windows_workspace.name -ne 'Painting' -or (Model).state.brush.diameter -ne $otherSize){throw 'Selection switched before confirmation'}
     Choose 'Switch to Workspace';Closed
-    if((Model).windows_workspace.name -ne $originalName -or (Model).state.brush.diameter -ne $size){throw 'Switch did not restore workspace tool settings'}
+    if((Model).windows_workspace.name -ne $originalName -or (Model).state.brush.diameter -ne $otherSize){throw 'Switching workspaces changed the shared brush settings'}
+    $size=$otherSize
     Menu 'Manage Workspaces…'
     Invoke ('workspace-manager-options-'+$painting);Invoke 'workspace-manager-rename'
     Wait-Until {(Manager).prompt.title -eq 'Rename'} 'Rename prompt did not open'
@@ -205,7 +206,7 @@ try {
     Choose 'Cancel';Closed
     Write-Output 'Manager actions and restart passed; checking the five-second final process exit.'
     Close
-    [pscustomobject]@{included_workspaces='passed';header_switcher='passed';preview_cancel='passed';explicit_apply='passed';enter_previews_only='passed';retained_rows='passed';history_escape_restore='passed';starting_layout_preview='passed';starting_layout_undo_redo='passed';name_only_create='passed';explicit_switch='passed';rename_delete='passed';reset_brushes='passed';restart='passed';zero_exit='passed';scope='native UI Automation and guarded OS keys; physical pointer and performance acceptance remain separate'}|ConvertTo-Json
+    [pscustomobject]@{included_workspaces='passed';header_switcher='passed';preview_cancel='passed';explicit_apply='passed';enter_previews_only='passed';retained_rows='passed';history_escape_restore='passed';starting_layout_preview='passed';starting_layout_undo_redo='passed';name_only_create='passed';explicit_switch='passed';shared_editing_state='passed';rename_delete='passed';reset_brushes='passed';restart='passed';zero_exit='passed';scope='native UI Automation and guarded OS keys; physical pointer and performance acceptance remain separate'}|ConvertTo-Json
 }catch{
     if($review -and !$review.HasExited){try{Capture 'failure'}catch{}}
     [IO.File]::WriteAllText((Join-Path $run 'failure.txt'),($_|Out-String)+$_.ScriptStackTrace);throw

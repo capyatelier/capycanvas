@@ -45,6 +45,8 @@ if($identity.Name -cne $result.identity -or $identity.Publisher -cne $result.pub
 $application=$appx.Package.Applications.Application
 $uap10='http://schemas.microsoft.com/appx/manifest/uap/windows10/10'
 if($application.Executable -ne 'CapyCanvas.exe' -or $application.GetAttribute('RuntimeBehavior',$uap10) -ne 'packagedClassicApp' -or $application.GetAttribute('TrustLevel',$uap10) -ne 'mediumIL'){throw 'Unexpected MSIX activation contract.'}
+. (Join-Path $PSScriptRoot 'PortablePackage.ps1')
+if((@($appx.Package.Resources.Resource|ForEach-Object Language) -join ',') -cne ((Get-ShippedLanguages $repo) -join ',')){throw 'MSIX languages differ from the shared shipping inventory.'}
 $fileType=$application.Extensions.Extension.FileTypeAssociation.SupportedFileTypes.FileType
 if($fileType.InnerText -ne '.capy' -or $fileType.ContentType -ne 'application/vnd.capycanvas'){throw 'MSIX does not associate the Capy drawing identity.'}
 $oid='OID.2.25.311729368913984317654407730594956997722=1'

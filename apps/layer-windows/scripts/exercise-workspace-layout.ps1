@@ -68,6 +68,9 @@ try{
     Invoke 'about'
     Wait-Until {$null -ne (Model).preferences -and (Model).preferences.page -eq 'about'} 'About did not open shared settings page'
     $dialog=Control 'Preferences' -Name -Type ([System.Windows.Automation.ControlType]::Window)
+    $about=(Model).preferences|ConvertTo-Json -Depth 40 -Compress
+    if($about.IndexOf('"dedication"') -le $about.IndexOf('"source_code"') -or $about -notmatch 'Nagu'){throw 'About did not end with the dedication'}
+    if(!$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,[System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::NameProperty,'Dedicated to'))){throw 'About did not show the dedication row'}
     $close=$dialog.FindFirst([System.Windows.Automation.TreeScope]::Descendants,
         [System.Windows.Automation.AndCondition]::new(
             [System.Windows.Automation.PropertyCondition]::new([System.Windows.Automation.AutomationElement]::AutomationIdProperty,'CloseButton'),

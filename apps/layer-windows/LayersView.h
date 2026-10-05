@@ -64,7 +64,10 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     std::shared_ptr<WorkspaceData> data;
     Grid root,values,footerFrame,listFrame;
     Canvas connectionOverlay;
-    hstring connectionKey;
+    hstring connectionKey,connectionTheme;
+    std::vector<Shapes::Line> connectionLines;
+    std::vector<Image> connectionGlyphs;
+    CompositionTarget::Rendering_revoker connectionFrame;
     UIElement outsideSurface{nullptr};
     PointerEventHandler outsidePress{nullptr};
     StackPanel header,tools,footer;
@@ -95,6 +98,7 @@ struct LayersView : std::enable_shared_from_this<LayersView> {
     void preview();
     void connections();
     void showMenu(J spec, FrameworkElement const& anchor);
+    void layoutConnections();
     void context(double id,bool mask,UIElement const& anchor,
         std::optional<Windows::Foundation::Point> at={},bool holding=false,bool blendMenu=false);
 };

@@ -285,7 +285,9 @@ from an STA PowerShell session (Windows PowerShell 5.1 or PowerShell 7):
 
 The app runs as a `packagedClassicApp` at `mediumIL` with `runFullTrust` and
 keeps its files in the package's [app data](#where-files-live); the converter
-refuses a portable build without the release identity. Output
+refuses a portable build without the release identity. The manifest declares the
+languages in the shared shipping inventory (`SHIPPED_LANGUAGES`), and
+`test-msix.ps1` checks that they match. Output
 stays under ignored `artifacts/windows/msix`. The package version is the
 workspace version with a fourth part of 0, and the Store requires a nonzero major
 part; `-AllowDirty` works as for the ZIP.

@@ -23,6 +23,16 @@ function Assert-PackagingSourceUnchanged([string]$Repo,$Source) {
     foreach($generator in $Source.generators){if((Get-FileHash -LiteralPath (Join-Path $Repo $generator.path)).Hash -ne $generator.sha256){throw 'A packaging generator changed during assembly.'}}
 }
 
+function Get-ShippedLanguages([string]$Repo) {
+    $inventory=[regex]::Match([IO.File]::ReadAllText((Join-Path $Repo 'crates/layer-ui/src/localization.rs')),'pub const SHIPPED_LANGUAGES[^;]+;').Value
+    $tags=[ordered]@{}
+    foreach($match in [regex]::Matches([IO.File]::ReadAllText((Join-Path $Repo 'crates/layer-ui/src/localization_languages.rs')),'\("(\w+)", "([^"\n]+)",')){$tags[$match.Groups[1].Value]=$match.Groups[2].Value}
+    $names=@([regex]::Matches($inventory,'UiLanguage::(\w+)')|ForEach-Object {$_.Groups[1].Value})
+    if(($names -join ',') -eq 'ALL'){$names=@($tags.Keys)}
+    $languages=@($names|ForEach-Object {$tags[$_]})
+    if(!$languages.Count -or $languages -contains $null){throw 'The shared shipping language inventory could not be read.'}
+    $languages
+}
 # The payload of a portable release build, after checking every file against its manifest.
 function Read-PortablePackage([string]$ResultFile) {
     $result=Get-Content -LiteralPath (Resolve-Path -LiteralPath $ResultFile).Path -Raw|ConvertFrom-Json
