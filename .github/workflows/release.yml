@@ -96,6 +96,8 @@ jobs:
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+          token_format: access_token
+          access_token_scopes: https://www.googleapis.com/auth/androidpublisher
       - if: env.SIGNED == 'true'
         uses: r0adkll/upload-google-play@e738b9dd8f2476ea806d921b64aacd24f34515a5 # v1.1.5
         with:
@@ -104,10 +106,26 @@ jobs:
           releaseFiles: dist/*.aab
           tracks: internal
           status: ${{ vars.PLAY_RELEASE_STATUS || 'draft' }}
+      - if: env.SIGNED == 'true'
+        env:
+          TOKEN: ${{ steps.google.outputs.access_token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          IFS=. read -r major minor patch <<< "$VERSION"
+          code=$((major * 1000000 + minor * 1000 + patch))
+          api="https://androidpublisher.googleapis.com/androidpublisher/v3/applications/art.capycanvas.editor/generatedApks/$code"
+          for _ in $(seq 30); do
+            id=$(curl -fsS -H "Authorization: Bearer $TOKEN" "$api" | jq -r '.generatedApks[0].generatedUniversalApk.downloadId // empty')
+            [ -n "$id" ] && break
+            sleep 20
+          done
+          apk="dist/capycanvas-$VERSION-android.apk"
+          curl -fsS -H "Authorization: Bearer $TOKEN" -o "$apk" "$api/downloads/${id:?Play generated no universal APK}:download?alt=media"
+          "$ANDROID_HOME"/build-tools/37.0.0/aapt2 dump badging "$apk" | grep -q "^package: name='art.capycanvas.editor' versionCode='$code' versionName='$VERSION'"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: android
-          path: dist/*.aab
+          path: dist/*
           if-no-files-found: error
 
   windows:

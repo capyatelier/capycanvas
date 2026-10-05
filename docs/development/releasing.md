@@ -42,7 +42,7 @@ the same scripts developers run and the Rust version pinned in the workflow:
 | --- | --- | --- |
 | Linux | `apps/layer-linux/appimage.sh` in an Arch Linux container | `capycanvas-<version>-linux-x86_64.AppImage` and its `.zsync` file |
 | Web | `node apps/layer-web/package.mjs` | `capycanvas-<version>-web.zip` |
-| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab` |
+| Android | `./gradlew :app:bundleRelease -PcapyAbi=arm64-v8a` | `capycanvas-<version>-android.aab`; on a tag also the Play-signed universal `capycanvas-<version>-android.apk` |
 | Windows | `package.ps1`, `package-msix.ps1`, `test-msix.ps1` and `package-installer.ps1` | Portable ZIP, setup program and Store MSIX |
 | macOS, iPadOS | `apps/layer-apple/scripts/release.sh mac` and `ipad` | `capycanvas-<version>-macos-arm64.dmg`; the iPad build goes to App Store Connect |
 
