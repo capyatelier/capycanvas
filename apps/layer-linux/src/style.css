@@ -155,8 +155,8 @@ button.flat.status-bubble:active { background-image: image(alpha(var(--window-fg
 .layer-connection-gutter { min-width: 3px; }
 .layer-connections { color: var(--capy-relationship); }
 .layer-name-entry { min-width: 0; padding: 0 2px; min-height: 24px; }
-.layers-panel button.layer-link { min-width: 12px; }
-.layer-link image { -gtk-icon-size: 12px; }
+.layers-panel button.layer-link { min-width: 10px; }
+.layer-link image { -gtk-icon-size: 10px; }
 .layer-drop-before { box-shadow: inset 0 2px var(--accent-color); }
 .layer-drop-after { box-shadow: inset 0 -2px var(--accent-color); }
 .layer-drop-into { box-shadow: inset 0 0 0 2px var(--accent-color); }
